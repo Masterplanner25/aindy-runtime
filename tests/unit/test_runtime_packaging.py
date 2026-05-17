@@ -17,11 +17,19 @@ def test_runtime_package_metadata_declares_console_entrypoints():
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["name"] == "aindy-runtime"
+    assert pyproject["project"]["dynamic"] == ["version"]
     assert pyproject["project"]["scripts"] == {
         "aindy-runtime": "AINDY.runtime_only:main",
         "aindy-runtime-api": "AINDY.main:main",
     }
+    assert pyproject["project"]["urls"]["Homepage"].startswith("https://")
+    assert pyproject["project"]["urls"]["Documentation"].startswith("https://")
+    assert pyproject["project"]["urls"]["Source"].startswith("https://")
     assert pyproject["tool"]["setuptools"]["package-data"]["AINDY"] == ["*.json"]
+    assert pyproject["project"]["optional-dependencies"]["release"] == [
+        "build==1.3.0",
+        "twine==6.2.0",
+    ]
 
 
 def test_default_app_manifest_prefers_working_directory_for_installed_runtime(monkeypatch, tmp_path):

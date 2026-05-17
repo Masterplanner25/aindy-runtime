@@ -1,0 +1,62 @@
+name: Runtime Release Staging
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-runtime-artifacts:
+    name: Build Runtime Artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      DATABASE_URL: sqlite:///:memory:
+      AINDY_ALLOW_SQLITE: "true"
+      AINDY_SKIP_MONGO_PING: "true"
+      SKIP_MONGO_PING: "true"
+      MONGO_URL: ""
+      OPENAI_API_KEY: sk-test-placeholder
+      DEEPSEEK_API_KEY: ds-test-placeholder
+      SECRET_KEY: release-staging-secret
+      PERMISSION_SECRET: release-staging-permission-secret
+      AINDY_API_KEY: release-staging-api-key
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: python -m pip install -e .[release] --no-deps --no-build-isolation
+
+      - name: Verify staged version metadata
+        run: |
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          from AINDY._version import __version__
+          from AINDY.platform_layer.runtime_compatibility import runtime_repo_compatibility_metadata
+
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          assert pyproject["project"]["name"] == "aindy-runtime"
+          metadata = runtime_repo_compatibility_metadata()
+          assert metadata["runtime_package"]["version"] == __version__
+          assert metadata["apps_repo_contract"]["recommended_runtime_requirement"] == ">=1.0,<2.0"
+          print({"runtime_version": __version__, "compatibility": metadata["apps_repo_contract"]})
+          PY
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Verify artifacts
+        run: |
+          python -m twine check dist/*
+          ls -la dist
+
+      - name: Upload staged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aindy-runtime-dist
+          path: dist/*

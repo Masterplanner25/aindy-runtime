@@ -79,6 +79,13 @@ When the runtime repo releases a new version:
 3. if the apps repo needs newly introduced runtime features, it widens or bumps
    its lower bound deliberately
 
+During staged release preparation before publication:
+
+1. the runtime repo builds artifacts and runs `twine check`
+2. the runtime repo verifies `/api/version` compatibility metadata for the new version
+3. the apps repo confirms its bounded dependency declaration still matches the
+   recommended runtime requirement shape for that MAJOR series
+
 When the runtime crosses a MAJOR version boundary:
 
 - the runtime must document the breaking change

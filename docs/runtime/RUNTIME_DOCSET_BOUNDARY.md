@@ -7,17 +7,17 @@ owner: "platform-team"
 ---
 # Runtime Docset Boundary
 
-This document defines the documentation boundary for the future
-`aindy-runtime` and `aindy-apps-monolith` repo split.
+This document defines the documentation boundary between the extracted
+`aindy-runtime` and `aindy-apps-monolith` repos.
 
-Use it as the ownership map for the current combined repo:
+Use it as the ownership map for the split repos:
 
 - docs listed under **Move To `aindy-runtime`** should travel with the runtime
   repo and avoid app-monolith assumptions
 - docs listed under **Move To `aindy-apps-monolith`** are app-owned and should
   not be treated as runtime contracts
-- docs listed under **Shared Or Split Later** are still useful in the monolith
-  but either span both repos or need a later editorial split
+- docs listed under **Shared Or Split Later** still span both repos or need a
+  later editorial split
 
 The runtime-only operating contract remains
 [Runtime-Only Deployment](./RUNTIME_ONLY_DEPLOYMENT.md).
@@ -61,9 +61,9 @@ Apps-repo rule:
 
 ## Shared Or Split Later
 
-These docs are still useful in the combined repo, but they span both runtime
-and app concerns and should either remain duplicated intentionally or be split
-later into runtime-owned and app-owned companions.
+These docs still span both runtime and app concerns and should either remain
+duplicated intentionally or be split later into runtime-owned and app-owned
+companions.
 
 - [../architecture/BOOT_PROFILES.md](../architecture/BOOT_PROFILES.md)
 - [../architecture/ARCHITECTURE_MAP.md](../architecture/ARCHITECTURE_MAP.md)

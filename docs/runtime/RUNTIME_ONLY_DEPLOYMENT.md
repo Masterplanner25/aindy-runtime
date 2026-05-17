@@ -12,7 +12,7 @@ This is the authoritative contract for running AINDY without loading any
 
 Repository ownership:
 
-- this document belongs to the future `aindy-runtime` repo
+- this document belongs to `aindy-runtime`
 - the broader documentation split map lives in
   [Runtime Docset Boundary](./RUNTIME_DOCSET_BOUNDARY.md)
 
@@ -55,7 +55,7 @@ Manifest ownership and selection are separate from profile selection:
 - Startup remains strict for explicitly requested non-empty profiles.
 - No `apps/*` bootstrap module is loaded in runtime-only mode.
 
-This means the future runtime repo can boot on its own as long as it ships the
+This means the runtime repo can boot on its own as long as it ships the
 runtime manifest, even if no app manifest exists beside it.
 
 ## Packaged Runtime Use
@@ -74,7 +74,7 @@ Canonical generic API entrypoint after installation:
 
 - `aindy-runtime-api`
 
-When a future apps repo depends on the installed runtime, app-profile boot
+When an apps repo depends on the installed runtime, app-profile boot
 should either:
 
 - provide `aindy_plugins.json` in the working tree the process starts from, or
@@ -193,7 +193,7 @@ These are outside the supported runtime-only contract:
 
 - `runtime-only` is the supported operator-facing mode and resolves to the `platform-only` profile.
 - `default-apps` is the modular-monolith profile that loads `apps.bootstrap`.
-- in the future split, `platform-only` belongs to the runtime repo manifest and
+- `platform-only` belongs to the runtime repo manifest and
   `default-apps` belongs to the apps repo manifest
 
 Do not infer app behavior from runtime-only success, and do not describe

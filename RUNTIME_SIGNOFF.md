@@ -3,6 +3,9 @@
 Date: 2026-05-17
 Operator: Codex
 Runtime repo path: `C:\dev\aindy-runtime`
+Validated extraction commit: `0d5d38271668648929a60515d18349c7eb5c596a`
+Working-tree state at signoff refresh: not clean; subsequent local CI/release-staging
+and documentation edits exist outside the validated extraction commit.
 
 ## Structure
 
@@ -22,6 +25,11 @@ Runtime repo path: `C:\dev\aindy-runtime`
   - `aindy-runtime-api -> AINDY.main:main`
 - editable install with test extras succeeded:
   - `python -m pip install -e .[test] --no-build-isolation`
+- `/api/version` compatibility metadata present and coherent with the packaged
+  runtime version:
+  - `runtime_package.name = aindy-runtime`
+  - `runtime_package.version = 1.0.0`
+  - `apps_repo_contract.recommended_runtime_requirement = >=1.0,<2.0`
 
 ## Runtime Boundary
 
@@ -73,6 +81,13 @@ Result:
 - Passed: `17`
 - Failed: `0`
 - Skipped: `0`
+
+Validation basis:
+
+- this signoff records the validated extraction baseline at commit
+  `0d5d38271668648929a60515d18349c7eb5c596a`
+- later local changes in the runtime repo were not part of the original repo-cut
+  validation run and should be validated separately before a new signoff is cut
 
 ## Remaining Cautions
 
