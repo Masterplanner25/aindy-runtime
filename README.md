@@ -83,13 +83,23 @@ python -m pytest \
   -m runtime_only -q
 ```
 
-Runtime CI scope in `.github/workflows/runtime-ci.yml` is intentionally narrow:
+Runtime CI scope in `.github/workflows/runtime-ci.yml` now covers the
+runtime-owned push/PR baseline:
 
+- lint runtime-owned Python code with Ruff
+- validate runtime-doc frontmatter under `docs/runtime/`
 - install the runtime package and test extras in editable mode
 - assert runtime code does not import `apps.*`
 - verify `aindy-runtime` and `aindy-runtime-api` console scripts
 - smoke `GET /health` and `GET /api/version` in runtime-only mode
-- run only the extracted runtime-owned pytest suite
+- run the full extracted runtime-owned pytest suite (`tests -m runtime_only`)
+- build wheel and sdist artifacts and run `twine check`
+
+GitHub Actions note:
+
+- `runtime-ci.yml` is the automatic push/PR check for `main`
+- `release-staging.yml` is intentionally manual-only (`workflow_dispatch`) and
+  will not appear as a normal push/PR status check until it is dispatched
 
 Staged release flow in `.github/workflows/release-staging.yml` is intentionally
 non-publishing:
@@ -99,11 +109,22 @@ non-publishing:
 - run `twine check`
 - upload artifacts for inspection
 
+Checks intentionally left out of the runtime repo because they remain
+app- or monolith-owned:
+
+- app bootstrap and app-profile tests
+- cross-app import boundary checks
+- Alembic migration execution for the deployed app database
+- frontend, Playwright, and client build checks
+- Docker image and full monolith service-matrix validation
+
 ## Docs
 
 Runtime-owned documentation lives under `docs/runtime/`.
 
 Release staging guidance lives in `docs/runtime/RELEASE_STAGING.md`.
+
+CI ownership guidance lives in `docs/runtime/CI_OWNERSHIP.md`.
 
 ## Validated Split Check
 

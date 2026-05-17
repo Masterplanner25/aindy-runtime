@@ -3,6 +3,9 @@ name: Runtime Release Staging
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-runtime-artifacts:
     name: Build Runtime Artifacts
