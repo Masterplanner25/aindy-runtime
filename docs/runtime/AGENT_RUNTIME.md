@@ -1,0 +1,273 @@
+---
+title: "Agent Runtime"
+last_verified: "2026-05-09"
+api_version: "1.0"
+status: current
+owner: "platform-team"
+---
+# Agent Runtime
+
+This document describes the agent runtime subsystem in `AINDY/agents/`. It
+covers the execution contract, public API surface, capability enforcement model,
+and recovery behavior. For the app-layer Agentics feature (gap analysis,
+completion roadmap, Nodus integration plan) see
+[docs/apps/AGENTICS.md](../apps/AGENTICS.md).
+
+Repository ownership:
+
+- this document belongs to the future `aindy-runtime` repo
+- app-enrichment planning belongs in `docs/apps/AGENTICS.md`
+- the broader documentation split map lives in
+  [Runtime Docset Boundary](./RUNTIME_DOCSET_BOUNDARY.md)
+
+The authoritative repo-split import boundary for app code lives in
+[Runtime Public API Contract](./PUBLIC_API_CONTRACT.md). Treat that document as
+the source of truth for which `AINDY.*` modules apps may import.
+
+---
+
+## 1. What the Agent Runtime Is
+
+The agent runtime is a domain-agnostic execution subsystem in `AINDY/agents/`.
+It owns:
+
+- plan generation (GPT-4o structured planner)
+- the approval trust gate
+- per-run capability token minting
+- deterministic step execution via `PersistentFlowRunner`
+- per-step retry with configurable high-risk no-retry policy
+- run lifecycle persistence (`AgentRun`, `AgentStep`, `AgentEvent`)
+- stuck-run recovery at startup
+- replay from a prior run's plan
+
+The runtime does not own domain logic. Tool implementations that call tasks,
+memory, ARM, or the Infinity Loop live in `apps/` and are invoked through the
+registered tool registry. The agent HTTP exposure is also runtime-owned now:
+`AINDY/routes/agent_router.py` serves the `/apps/agent/*` surface while keeping
+tool implementations app-owned behind registries.
+
+Baseline runtime behavior is intentionally generic:
+- generic planner prompt
+- runtime-owned memory tools (`memory.recall`, `memory.write`)
+- trigger evaluation with no domain assumptions
+- no-op completion hook
+- empty suggestion output unless a plugin registers a suggestion provider
+
+The supported runtime-only deployment surface for that baseline is defined in
+[Runtime-Only Deployment](./RUNTIME_ONLY_DEPLOYMENT.md).
+
+App-enriched behavior is optional:
+- KPI-aware planner prompt enrichment
+- richer suggestion generation from analytics or persisted loop state
+- post-run Infinity orchestration
+- additional app-owned tools such as task, ARM, search, and masterplan actions
+
+Current classification:
+- baseline runtime contract: generic planner context, runtime memory tools, default trigger evaluator, empty suggestions, no-op completion hook
+- optional plugin/app enrichment: KPI-aware planner context, suggestion providers, Infinity-style completion hooks, extra app-owned tools
+- ambiguous and should be refactored: domain-agnostic memory-context prompt enrichment is currently bundled into the app planner extension; KPI suggestion heuristics are duplicated across provider and syscall paths; post-run analytics enrichment currently mutates generic run results through a broad completion-hook slot
+
+---
+
+## 2. Execution Lifecycle
+
+```
+POST /agent/run  (create)
+│
+├─ agent_runtime.create_agent_run()
+│   └─ GPT-4o structured plan generation
+│
+├─ POST /agent/run/{id}/approve  (trust gate)
+│   └─ agent_runtime.approve_agent_run()
+│       └─ capability tokens minted for this run
+│
+├─ agent_runtime.execute_agent_run()
+│   ├─ NodusAgentAdapter wraps PersistentFlowRunner
+│   ├─ per-step: check capability token, execute tool, persist AgentStep
+│   ├─ per-step retry: transient failures retry; high-risk steps do not retry
+│   └─ emit AgentEvent for each step outcome
+│
+└─ post-execution
+    ├─ memory capture (memory_capture_engine)
+    └─ optional plugin completion hook such as Infinity orchestration
+```
+
+A run that is rejected at the trust gate writes a `REJECTED` AgentRun record
+and stops. It does not execute any steps.
+
+---
+
+## 3. Public API Surface
+
+All public functions are in `AINDY/agents/agent_runtime.py`. Functions prefixed
+`_` are private — do not call them from outside this module.
+
+| Function | Description |
+|---|---|
+| `create_agent_run(user_id, goal, db)` | Generate plan, persist AgentRun with PENDING status |
+| `approve_agent_run(run_id, db)` | Validate plan, mint capability tokens, transition to APPROVED |
+| `reject_agent_run(run_id, reason, db)` | Persist rejection reason, transition to REJECTED |
+| `execute_agent_run(run_id, db)` | Execute the approved plan through NodusAgentAdapter |
+| `recover_agent_run(run_id, db)` | Restart a STUCK run from the last completed step |
+| `replay_agent_run(run_id, db)` | Create a new run from a prior run's plan |
+| `run_to_dict(run)` | Serialize an AgentRun to dict for API responses |
+
+`run_to_dict` is the canonical serializer for `AgentRun` objects. It is used by
+`AINDY/routes/agent_router.py` and `automation_flows.py`. Do not call `_run_to_dict` directly
+— use `run_to_dict`.
+
+---
+
+## 4. Capability Enforcement
+
+Each approved run receives a scoped `CapabilityToken` listing the tools it is
+allowed to call. Enforcement happens at two points:
+
+1. **Before flow execution** — `capability_service.validate_run_scope()` checks
+   that the plan's required tools are all within the approved token.
+2. **Before each tool call** — `capability_service.check_tool_permission()` is
+   called inside each node function before the tool executes.
+
+A tool call that fails either check raises `CapabilityViolation`. This is
+treated as a non-retryable `FAILURE` step — the run halts immediately.
+
+The capability token is stored on the `AgentRun` record and does not change
+after approval. Modifying the token post-approval is not permitted.
+
+---
+
+## 5. Per-Step Retry Policy
+
+The runtime uses `AINDY/runtime/RETRY_POLICY.md` for all retry decisions.
+The agent-specific rules are:
+
+- **Transient failures** (network timeout, downstream 5xx): retry up to 3 times
+  with exponential backoff.
+- **High-risk steps** (tool metadata `high_risk: true`): no retry regardless of
+  failure type. The step fails immediately and the run halts.
+- **Capability violations**: no retry. Treated as a fatal configuration error.
+- **Plan exhausted**: if all steps complete successfully the run transitions to
+  `COMPLETED`.
+
+Each step outcome is persisted as an `AgentStep` row before the retry decision
+is made, so the full attempt history is always visible.
+
+---
+
+## 6. Recovery and Replay
+
+### Startup recovery
+
+`scan_and_recover_stuck_runs()` is called in `main.py lifespan()` after
+`load_plugins()`. It queries for any `AgentRun` rows in `RUNNING` state and
+calls `recover_agent_run()` on each. This handles server crashes during
+execution.
+
+A recovered run resumes from the last persisted `AgentStep` — it does not
+re-execute completed steps.
+
+### Manual recovery
+
+`POST /agent/run/{id}/recover` calls `recover_agent_run()` directly. Returns
+`409 Conflict` if the run is already in a terminal state.
+
+### Replay
+
+`POST /agent/run/{id}/replay` calls `replay_agent_run()`. This creates a new
+`AgentRun` with status `PENDING` using the original run's plan verbatim. The
+new run must go through the normal approve → execute path. The new run stores
+`replayed_from_run_id` pointing to the source run.
+
+---
+
+## 7. AgentRun State Machine
+
+```
+PENDING → APPROVED → RUNNING → COMPLETED
+                             → FAILED
+       → REJECTED
+RUNNING → STUCK  (detected at startup or via /recover endpoint)
+STUCK   → RUNNING (via recover)
+COMPLETED → (new PENDING via replay)
+```
+
+The only terminal states are `COMPLETED`, `FAILED`, and `REJECTED`. Runs in
+these states cannot be transitioned further — create a new run or replay.
+
+---
+
+## 8. Event Persistence
+
+Every state transition emits an `AgentEvent` row via `emit_event()`. Events
+are also broadcast to Redis pub/sub for cross-instance observability.
+
+Key event types:
+
+| Event | Trigger |
+|---|---|
+| `agent.run.created` | `create_agent_run()` completes |
+| `agent.run.approved` | `approve_agent_run()` completes |
+| `agent.run.rejected` | `reject_agent_run()` completes |
+| `agent.step.completed` | each step finishes successfully |
+| `agent.step.failed` | each step fails (all retry attempts exhausted) |
+| `agent.run.completed` | final step succeeds |
+| `agent.run.failed` | a non-retryable failure halts the run |
+| `agent.run.recovered` | `recover_agent_run()` transitions STUCK → RUNNING |
+
+The `AgentEvent` timeline is accessible at
+`GET /agent/run/{id}/timeline`.
+
+---
+
+## 9. Boundary Rules
+
+Hard rule:
+- code under `AINDY/` must not directly import `apps.*`
+- runtime may interact with plugins only through runtime-owned registries, interfaces, and contracts
+- plugin implementations remain app-owned, but runtime must not import plugin modules directly
+
+The agent runtime therefore uses explicit runtime-owned plugin contracts for:
+- planner context providers
+- run tool providers
+- capability definition providers
+- trigger evaluators
+- agent completion hooks
+- tool suggestion providers
+
+Interpret these contracts narrowly:
+- planner context provider: runtime guarantees a generic default provider; KPI-aware or analytics-aware context remains plugin-owned
+- tool suggestion provider: runtime guarantees only an empty fallback; suggestion logic remains plugin-owned
+- agent completion hook: runtime guarantees only a no-op fallback; post-run score/orchestration behavior remains plugin-owned
+- run tool provider: runtime defaults expose only runtime memory tools; app tools remain optional plugin enrichments
+
+Agent lifecycle persistence is runtime-owned:
+- `AINDY/db/models/agent_run.py` defines `AgentRun`, `AgentStep`, and `AgentTrustSettings`
+- `AINDY/db/models/agent_event.py` defines `AgentEvent`
+- runtime code imports these models from `AINDY.db.models`, not from `apps.agent.models.*`
+
+That statement still applies specifically to the runtime side. The runtime now
+owns the user-facing agent HTTP surface and helper API layer. App plugins still
+own agent tools, plugin registration, and app-specific extensions.
+
+No-plugin behavior is fail-safe at the runtime boundary:
+- runtime defaults provide a generic planner context
+- runtime defaults provide the memory tool catalog
+- no app suggestion provider -> empty suggestion list
+- no app completion hook -> runtime no-op completion
+- no additional run tool provider -> runtime-only tool list remains available
+- no capability provider beyond runtime defaults -> only runtime default capabilities are granted
+
+App plugins may replace or extend these defaults through registry registration,
+but the runtime must continue to start and answer requests without assuming any
+specific app such as analytics is present.
+
+So today:
+- platform boot is still registry-driven
+- agent runtime persistence and execution code are aligned on runtime-owned models
+- platform full operation is not yet independent from app-owned components
+- runtime must not import plugins directly
+
+See [PLUGIN_REGISTRY_PATTERN.md](../architecture/PLUGIN_REGISTRY_PATTERN.md)
+for the registration model and
+[CROSS_DOMAIN_COUPLING.md](../architecture/CROSS_DOMAIN_COUPLING.md) for the
+coupling rules that apply to the Infinity Loop post-execution integration.
