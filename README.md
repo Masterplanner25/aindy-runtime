@@ -70,6 +70,16 @@ It does not own app deployment assets such as:
 
 Those belong in `aindy-apps-monolith`.
 
+## Branch And PR Model
+
+Active contribution model for this repo:
+
+- protected branch: `main`
+- pull requests should target: `main`
+- feature work should branch from the current `main`
+
+This repo does not use the archived monolith `develop`-targeting flow.
+
 ## Verify
 
 ```bash
@@ -125,6 +135,9 @@ Runtime-owned documentation lives under `docs/runtime/`.
 Release staging guidance lives in `docs/runtime/RELEASE_STAGING.md`.
 
 CI ownership guidance lives in `docs/runtime/CI_OWNERSHIP.md`.
+
+Manual GitHub branch-protection and review settings guidance lives in
+`docs/runtime/GITHUB_SETTINGS_CHECKLIST.md`.
 
 ## Validated Split Check
 

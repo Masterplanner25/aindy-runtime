@@ -1,0 +1,17 @@
+# Default ownership for the runtime repo
+* @Masterplanner25
+
+# Repo governance and automation
+/.github/ @Masterplanner25
+
+# Runtime implementation and packaging
+/AINDY/ @Masterplanner25
+/pyproject.toml @Masterplanner25
+/MANIFEST.in @Masterplanner25
+/pytest.ini @Masterplanner25
+
+# Runtime-owned docs and tests
+/docs/runtime/ @Masterplanner25
+/README.md @Masterplanner25
+/RUNTIME_SIGNOFF.md @Masterplanner25
+/tests/ @Masterplanner25
