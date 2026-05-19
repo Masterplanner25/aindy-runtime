@@ -19,6 +19,10 @@ For repo-split purposes, `AINDY.kernel.syscall_dispatcher` and
 `AINDY.kernel.syscall_registry` are approved public runtime imports under the
 [Runtime Public API Contract](./PUBLIC_API_CONTRACT.md).
 
+For stability tiers across the public runtime surface, including which syscall
+families are stable versus experimental, use
+[Public Runtime Surfaces](./PUBLIC_RUNTIME_SURFACES.md).
+
 A.I.N.D.Y. syscalls are the single gated interface between Nodus scripts and host services. All cross-boundary calls — memory reads, flow executions, event emissions — route through the syscall dispatcher. No Nodus code touches a DB session or a service function directly.
 
 ---
@@ -110,9 +114,9 @@ Steps executed in order for every call:
 | 1 | Parse `sys.{version}.{action}` from name | error if malformed |
 | 2 | Resolve version; optional fallback (`SYSCALL_VERSION_FALLBACK`) | error if unresolvable |
 | 3 | Look up entry in `SYSCALL_REGISTRY` | error if not found |
-| 4 | Enforce capability from `SyscallContext.capabilities` | error if denied |
+| 4 | Enforce exact capability membership from `SyscallContext.capabilities` | error if denied |
 | 5 | Enforce non-empty `user_id` (tenant isolation) | error if absent |
-| 6 | Resource quota check via `ResourceManager` | error if over quota |
+| 6 | Resource quota check via `ResourceManager` | error if over quota; quota subsystem failures are fail-open with warning |
 | 7 | Input validation against `entry.input_schema` | error if invalid |
 | 8 | Deprecation check — set `warning` in envelope | non-fatal, continues |
 | 9 | Execute handler | error if handler raises |
@@ -250,6 +254,9 @@ Called before the handler. Missing required fields or wrong types → error enve
 ### Output Validation (non-fatal)
 
 Called after the handler. Schema mismatch → warning logged, result still returned.
+The handler return contract is stricter than schema validation: handlers must
+return a plain `dict`. A non-dict return is treated as a syscall handler
+contract violation and becomes an error envelope.
 
 ---
 
@@ -348,7 +355,18 @@ def _run_flow_direct(flow_name, state, db, user_id) -> dict:
 
 ### DB session threading
 
-Routes pass a managed SQLAlchemy session to `run_flow()`. The proxy forwards it as `context.metadata["_db"]`. The handler reads `external_db = context.metadata.get("_db")` and uses it without closing. If absent, the handler opens and owns its own session. This preserves transaction boundaries across the syscall boundary.
+Routes pass a managed SQLAlchemy session to `run_flow()`. The proxy forwards it as `context.metadata["_db"]`.
+
+Runtime-owned handler contract:
+
+- If `context.metadata["_db"]` is present, the caller owns that SQLAlchemy session.
+- The handler may use that session but must not commit, rollback, or close it.
+- If no session is provided, the handler opens and owns its own `SessionLocal()`.
+- Handler-owned write sessions commit or rollback locally.
+- Caller-owned write sessions may `flush()` but leave transaction ownership to the caller.
+
+This preserves transaction boundaries across the syscall boundary while still
+allowing syscall handlers to run safely in standalone contexts.
 
 ### Converged entry points
 

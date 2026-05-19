@@ -1,0 +1,151 @@
+"""Shared extension trust policy helpers.
+
+This module does not provide sandboxing. Any Python module imported into the
+runtime still executes with full interpreter privileges.
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import os
+from urllib.parse import urlparse
+
+_DEFAULT_TRUSTED_BOOTSTRAP_PREFIXES = ("AINDY.", "apps.")
+_DEFAULT_EXTERNAL_BOOTSTRAP_PREFIXES: tuple[str, ...] = ()
+_PRIVATE_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
+OWNER_RUNTIME_BUILTIN = "runtime-built-in"
+OWNER_FIRST_PARTY_APP = "first-party-app"
+OWNER_EXTERNAL_THIRD_PARTY = "external-third-party"
+ALLOWED_EXTENSION_OWNER_CLASSES = {
+    OWNER_RUNTIME_BUILTIN,
+    OWNER_FIRST_PARTY_APP,
+    OWNER_EXTERNAL_THIRD_PARTY,
+}
+
+
+def trusted_bootstrap_prefixes() -> tuple[str, ...]:
+    configured = os.getenv("AINDY_TRUSTED_BOOTSTRAP_PREFIXES", "").strip()
+    if not configured:
+        return _DEFAULT_TRUSTED_BOOTSTRAP_PREFIXES
+    prefixes = tuple(
+        value.strip()
+        for value in configured.split(",")
+        if value.strip()
+    )
+    return prefixes or _DEFAULT_TRUSTED_BOOTSTRAP_PREFIXES
+
+
+def external_bootstrap_prefixes() -> tuple[str, ...]:
+    configured = os.getenv("AINDY_EXTERNAL_BOOTSTRAP_PREFIXES", "").strip()
+    if not configured:
+        return _DEFAULT_EXTERNAL_BOOTSTRAP_PREFIXES
+    prefixes = tuple(
+        value.strip()
+        for value in configured.split(",")
+        if value.strip()
+    )
+    return prefixes or _DEFAULT_EXTERNAL_BOOTSTRAP_PREFIXES
+
+
+def infer_bootstrap_owner_class(module_name: str) -> str:
+    cleaned = str(module_name or "").strip()
+    if cleaned.startswith("AINDY."):
+        return OWNER_RUNTIME_BUILTIN
+    if cleaned.startswith("apps."):
+        return OWNER_FIRST_PARTY_APP
+    return OWNER_EXTERNAL_THIRD_PARTY
+
+
+def validate_extension_owner_class(owner_class: str) -> str:
+    cleaned = str(owner_class or "").strip()
+    if cleaned not in ALLOWED_EXTENSION_OWNER_CLASSES:
+        raise ValueError(
+            f"owner_class must be one of {sorted(ALLOWED_EXTENSION_OWNER_CLASSES)!r}, got {owner_class!r}"
+        )
+    return cleaned
+
+
+def validate_bootstrap_module_name(
+    module_name: str,
+    *,
+    owner_class: str | None = None,
+    manifest_owner: str | None = None,
+) -> str:
+    if not isinstance(module_name, str) or not module_name.strip():
+        raise ValueError("plugin module name must be a non-empty string")
+    cleaned = module_name.strip()
+    if any(token in cleaned for token in ("/", "\\", ":", "..")) or cleaned.startswith("."):
+        raise ValueError(f"plugin module name contains illegal path syntax: {module_name!r}")
+    parts = cleaned.split(".")
+    if not all(part.isidentifier() for part in parts):
+        raise ValueError(f"plugin module name must contain only Python identifiers: {module_name!r}")
+    resolved_owner_class = validate_extension_owner_class(owner_class or infer_bootstrap_owner_class(cleaned))
+    if resolved_owner_class == OWNER_RUNTIME_BUILTIN and not cleaned.startswith("AINDY."):
+        raise ValueError(
+            f"runtime-built-in bootstrap modules must live under 'AINDY.', got {module_name!r}"
+        )
+    if resolved_owner_class == OWNER_FIRST_PARTY_APP and not cleaned.startswith("apps."):
+        raise ValueError(
+            f"first-party-app bootstrap modules must live under 'apps.', got {module_name!r}"
+        )
+    if resolved_owner_class == OWNER_EXTERNAL_THIRD_PARTY:
+        prefixes = external_bootstrap_prefixes()
+        if not prefixes or not any(cleaned.startswith(prefix) for prefix in prefixes):
+            raise ValueError(
+                f"external-third-party bootstrap module {module_name!r} is outside allowed prefixes "
+                f"{prefixes!r}"
+            )
+    if resolved_owner_class != OWNER_EXTERNAL_THIRD_PARTY and not any(
+        cleaned.startswith(prefix) for prefix in trusted_bootstrap_prefixes()
+    ):
+        raise ValueError(
+            f"plugin module {module_name!r} is outside trusted bootstrap prefixes "
+            f"{trusted_bootstrap_prefixes()!r}"
+        )
+    if manifest_owner == "runtime" and resolved_owner_class != OWNER_RUNTIME_BUILTIN:
+        raise ValueError(
+            f"runtime-owned manifests may only declare runtime-built-in extensions, got {resolved_owner_class!r} for {module_name!r}"
+        )
+    return resolved_owner_class
+
+
+def _private_extension_targets_allowed() -> bool:
+    return os.getenv("AINDY_ALLOW_PRIVATE_EXTENSION_TARGETS", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def validate_outbound_extension_url(url: str, *, field_name: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"{field_name} must use http:// or https://")
+    if not parsed.hostname:
+        raise ValueError(f"{field_name} must include a hostname")
+    if parsed.username or parsed.password:
+        raise ValueError(f"{field_name} must not embed credentials")
+
+    hostname = parsed.hostname.strip().lower()
+    if hostname in _PRIVATE_HOST_ALIASES and not _private_extension_targets_allowed():
+        raise ValueError(
+            f"{field_name} targets a private/loopback host {hostname!r}. "
+            "Set AINDY_ALLOW_PRIVATE_EXTENSION_TARGETS=true only for explicitly trusted environments."
+        )
+
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return
+
+    if (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+    ) and not _private_extension_targets_allowed():
+        raise ValueError(
+            f"{field_name} targets private or non-routable address {hostname!r}. "
+            "Set AINDY_ALLOW_PRIVATE_EXTENSION_TARGETS=true only for explicitly trusted environments."
+        )

@@ -68,6 +68,8 @@ _REGISTRY_STATE_EMPTY = {
     "_loaded_plugins": set(),
     "_registered_apps": [],
     "_bootstrap_dependencies": {},
+    "_loaded_extension_records": {},
+    "_bootstrap_registrations": {},
     "_core_domains": [],
     "_degraded_domains": [],
     "_health_checks": {},

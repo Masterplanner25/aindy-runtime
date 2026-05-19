@@ -18,6 +18,7 @@ from AINDY.core.execution_signal_helper import queue_system_event
 from AINDY.agents.autonomous_controller import build_decision_response
 from AINDY.agents.autonomous_controller import evaluate_live_trigger
 from AINDY.agents.autonomous_controller import record_decision
+from AINDY.agents.runtime_guardrails import build_autonomous_submission_key, has_active_autonomous_duplicate
 from AINDY.core.distributed_queue import QueueSaturatedError
 from AINDY.core.execution_envelope import error as execution_error
 from AINDY.core.execution_envelope import success as execution_success
@@ -773,43 +774,79 @@ def submit_autonomous_async_job(
                 source=source,
                 decision=decision,
             )
-    finally:
-        if _owns_db:
-            db.close()
 
-    payload_with_autonomy = dict(payload)
-    payload_with_autonomy["__autonomy"] = {
-        "trigger_type": trigger_type,
-        "source": source,
-        "context": dict(trigger_context or {}),
-    }
-    if decision["decision"] == "defer":
-        log_id = defer_async_job(
+        submission_key = build_autonomous_submission_key(
+            task_name=task_name,
+            payload=payload,
+            user_id=str(user_id) if user_id is not None else None,
+            source=source,
+            trigger_context=context,
+        )
+        if has_active_autonomous_duplicate(
+            db,
+            task_name=task_name,
+            user_id=str(user_id) if user_id is not None else None,
+            source=source,
+            submission_key=submission_key,
+        ):
+            duplicate_decision = {
+                **decision,
+                "decision": "ignore",
+                "reason": "Duplicate autonomous submission suppressed by runtime guardrails.",
+                "guardrail_code": "duplicate_autonomous_submission",
+            }
+            record_decision(
+                db=db,
+                trigger=trigger,
+                evaluation=duplicate_decision,
+                user_id=user_id,
+                trace_id=trace_id,
+                context=context,
+            )
+            return build_ignored_response(
+                trace_id=trace_id,
+                task_name=task_name,
+                source=source,
+                decision=duplicate_decision,
+            )
+
+        payload_with_autonomy = dict(payload)
+        payload_with_autonomy["__runtime_submission_key"] = submission_key
+        payload_with_autonomy["__autonomy"] = {
+            "trigger_type": trigger_type,
+            "source": source,
+            "context": dict(trigger_context or {}),
+        }
+        if decision["decision"] == "defer":
+            log_id = defer_async_job(
+                task_name=task_name,
+                payload=payload_with_autonomy,
+                user_id=user_id,
+                source=source,
+                decision=decision,
+            )
+            return build_deferred_response(
+                log_id,
+                task_name=task_name,
+                source=source,
+                decision=decision,
+            )
+
+        log_id = submit_async_job(
             task_name=task_name,
             payload=payload_with_autonomy,
             user_id=user_id,
             source=source,
-            decision=decision,
+            max_attempts=max_attempts,
         )
-        return build_deferred_response(
+        return build_queued_response(
             log_id,
             task_name=task_name,
             source=source,
-            decision=decision,
         )
-
-    log_id = submit_async_job(
-        task_name=task_name,
-        payload=payload_with_autonomy,
-        user_id=user_id,
-        source=source,
-        max_attempts=max_attempts,
-    )
-    return build_queued_response(
-        log_id,
-        task_name=task_name,
-        source=source,
-    )
+    finally:
+        if _owns_db:
+            db.close()
 
 
 def process_deferred_jobs(limit: int = 25) -> int:

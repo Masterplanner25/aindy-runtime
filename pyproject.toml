@@ -5,12 +5,22 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aindy-runtime"
 dynamic = ["version"]
-description = "Installable AINDY runtime package"
+description = "Installable AINDY runtime infrastructure package"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "platform-team" }]
 keywords = ["runtime", "fastapi", "agents", "plugins"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Framework :: FastAPI",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Application Frameworks",
+  "Topic :: System :: Distributed Computing",
+]
 dependencies = [
   "annotated-types==0.7.0",
   "anyio==4.11.0",
@@ -75,9 +85,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://example.invalid/aindy-runtime"
-Documentation = "https://example.invalid/aindy-runtime/docs/runtime"
-Source = "https://example.invalid/aindy-runtime/repo"
+Homepage = "https://github.com/Masterplanner25/aindy-runtime"
+Documentation = "https://github.com/Masterplanner25/aindy-runtime/tree/main/docs/runtime"
+Source = "https://github.com/Masterplanner25/aindy-runtime"
+Issues = "https://github.com/Masterplanner25/aindy-runtime/issues"
 
 [project.optional-dependencies]
 test = [
@@ -108,4 +119,4 @@ exclude = ["AINDY.tests*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"AINDY" = ["*.json"]
+"AINDY" = ["*.json", "**/*.json"]

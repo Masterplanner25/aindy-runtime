@@ -25,6 +25,42 @@ from AINDY.services.auth_service import get_current_user
 router = APIRouter()
 
 
+def _execute_nodus(
+    request: Request,
+    route_name: str,
+    handler,
+    *,
+    user_id: str,
+    db: Session | None = None,
+    input_payload=None,
+    success_status_code: int = 200,
+):
+    metadata = {"source": "platform.nodus"}
+    if db is not None:
+        metadata["db"] = db
+    result = execute_with_pipeline_sync(
+        request=request,
+        route_name=route_name,
+        handler=handler,
+        user_id=user_id,
+        input_payload=input_payload or {},
+        metadata=metadata,
+        success_status_code=success_status_code,
+        return_result=True,
+    )
+    if not result.success:
+        detail = result.metadata.get("detail") or result.error or "Execution failed"
+        raise HTTPException(
+            status_code=int(result.metadata.get("status_code", 500)),
+            detail=detail,
+        )
+    data = result.data
+    if isinstance(data, dict):
+        data = dict(data)
+        data.pop("execution_envelope", None)
+    return data
+
+
 @router.post("/nodus/run", response_model=None)
 @limiter.limit("30/minute")
 def run_nodus_script(request: Request, body: NodusRunRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
@@ -64,34 +100,62 @@ def run_nodus_script(request: Request, body: NodusRunRequest, db: Session = Depe
 @limiter.limit("30/minute")
 def upload_nodus_script(request: Request, body: NodusScriptUpload, current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["sub"])
-    _validate_nodus_source(body.content, field="content")
-    if nodus_script_exists(body.name) and not body.overwrite:
-        raise HTTPException(status_code=409, detail={"error": "script_already_exists", "message": f"Script {body.name!r} already exists. Set overwrite=true to replace it."})
 
-    try:
-        _SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-        (_SCRIPTS_DIR / f"{body.name}.nodus").write_text(body.content, encoding="utf-8")
-    except OSError:
-        pass
-    now = datetime.now(timezone.utc).isoformat()
-    meta = save_nodus_script(
-        name=body.name,
-        content=body.content,
-        description=body.description,
-        uploaded_at=now,
-        uploaded_by=user_id,
+    def handler(ctx):
+        _validate_nodus_source(body.content, field="content")
+        if nodus_script_exists(body.name) and not body.overwrite:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "script_already_exists",
+                    "message": (
+                        f"Script {body.name!r} already exists. "
+                        "Set overwrite=true to replace it."
+                    ),
+                },
+            )
+
+        try:
+            _SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+            (_SCRIPTS_DIR / f"{body.name}.nodus").write_text(body.content, encoding="utf-8")
+        except OSError:
+            pass
+        now = datetime.now(timezone.utc).isoformat()
+        meta = save_nodus_script(
+            name=body.name,
+            content=body.content,
+            description=body.description,
+            uploaded_at=now,
+            uploaded_by=user_id,
+        )
+        return {
+            "name": meta["name"],
+            "description": meta["description"],
+            "size_bytes": meta["size_bytes"],
+            "uploaded_at": meta["uploaded_at"],
+            "uploaded_by": meta["uploaded_by"],
+        }
+
+    return _execute_nodus(
+        request,
+        "platform.nodus.upload",
+        handler,
+        user_id=user_id,
+        input_payload=body.model_dump(),
+        success_status_code=201,
     )
-    return {
-        "name": meta["name"],
-        "description": meta["description"],
-        "size_bytes": meta["size_bytes"],
-        "uploaded_at": meta["uploaded_at"],
-        "uploaded_by": meta["uploaded_by"],
-    }
 
 
 @router.get("/nodus/scripts", response_model=None)
 @limiter.limit("60/minute")
 def list_nodus_scripts(request: Request, current_user: dict = Depends(get_current_user)):
-    scripts = list_nodus_script_summaries()
-    return {"count": len(scripts), "scripts": scripts}
+    def handler(ctx):
+        scripts = list_nodus_script_summaries()
+        return {"count": len(scripts), "scripts": scripts}
+
+    return _execute_nodus(
+        request,
+        "platform.nodus.scripts.list",
+        handler,
+        user_id=str(current_user["sub"]),
+    )

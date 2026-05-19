@@ -10,13 +10,15 @@ import logging
 import os
 import sys
 
-from AINDY.config import settings
 from AINDY.core.distributed_queue import validate_queue_backend
-from AINDY.platform_layer.deployment_contract import publish_worker_runtime_state
+from AINDY.platform_layer.deployment_contract import (
+    PROCESS_ROLE_WORKER,
+    publish_worker_runtime_state,
+    validate_worker_deployment_profile,
+)
 from AINDY.platform_layer import scheduler_service
 from AINDY.platform_layer.registry import load_plugins
 from AINDY.worker import _wait_for_background_schema, lifecycle_services
-from AINDY.worker.health_server import start_health_server
 from AINDY.worker.worker_loop import run_worker_loop
 
 logger = logging.getLogger(__name__)
@@ -30,21 +32,21 @@ def main() -> None:
     )
 
     load_plugins()
+    deployment_profile = validate_worker_deployment_profile()
     publish_worker_runtime_state(
+        process_role=PROCESS_ROLE_WORKER,
         startup_complete=False,
         queue_ready=False,
         schema_ready=False,
         scheduler_role="disabled",
+        background_leadership_mode=deployment_profile["background_leadership_mode"],
+        deployment_profile=deployment_profile["name"],
+        deployment_profile_source=deployment_profile["source"],
     )
     scheduler_started = False
     lifecycle_started = False
 
     try:
-        if settings.EXECUTION_MODE != "distributed":
-            raise RuntimeError(
-                "Worker process requires EXECUTION_MODE=distributed. "
-                "Do not run the worker in thread mode."
-            )
         validate_queue_backend()
         publish_worker_runtime_state(queue_ready=True)
         schema_ready = _wait_for_background_schema()

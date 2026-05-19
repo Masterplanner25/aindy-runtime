@@ -293,6 +293,9 @@ class SyscallDispatcher:
         # Step 2c â€” resource quota check (syscall budget)
         # If _get_rm() or check_quota() raises, fail-open (log warning, allow execution).
         # Only a clean (False, reason) return blocks the syscall.
+        # Quota subsystem failures are fail-open so a broken quota transport
+        # does not become a global execution outage. Only a clean
+        # (False, reason) return blocks the syscall.
         try:
             rm = _get_rm()
             quota_ok, quota_reason = rm.check_quota(context.execution_unit_id)
@@ -383,8 +386,22 @@ class SyscallDispatcher:
                                         version=parsed_version)
 
         # Step 3b â€” output validation (non-fatal: log warning, never fail execution)
+        if not isinstance(data, dict):
+            logger.error(
+                "[SyscallDispatcher] handler contract violation for '%s': expected dict, got %s",
+                name,
+                type(data).__name__,
+            )
+            self._emit_syscall_event(name, context, "error")
+            return self._error_envelope(
+                name,
+                context,
+                f"Syscall handler contract violation: '{name}' returned {type(data).__name__}, expected dict",
+                t_start,
+                version=parsed_version,
+            )
         if entry.output_schema:
-            out_errors = validate_output(entry.output_schema, data if isinstance(data, dict) else {})
+            out_errors = validate_output(entry.output_schema, data)
             if out_errors:
                 logger.warning(
                     "[SyscallDispatcher] output schema mismatch for '%s': %s",

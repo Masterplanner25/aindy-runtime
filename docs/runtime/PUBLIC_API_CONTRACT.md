@@ -13,6 +13,10 @@ modules listed in **Public Runtime API Modules** are stable import targets.
 Everything else under `AINDY/` is internal unless it is listed under
 **Transitional App Imports To Remove Or Replace**.
 
+For HTTP/syscall/boot stability tiers, use
+[Public Runtime Surfaces](./PUBLIC_RUNTIME_SURFACES.md). This document covers
+import boundaries, not the full external platform surface.
+
 ## Contract Rules
 
 - Apps may import only the modules listed in **Public Runtime API Modules**.

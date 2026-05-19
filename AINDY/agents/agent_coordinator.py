@@ -6,6 +6,7 @@ from typing import Any
 from AINDY.db.models.agent_registry import AgentRegistry
 from AINDY.db.models.system_event import SystemEvent
 from AINDY.agents.agent_message_bus import publish_operation_request
+from AINDY.agents.runtime_guardrails import AgentRuntimeGuardrailViolation, enforce_delegation_guardrails
 from AINDY.platform_layer.registry import get_agent_ranking_strategy
 from AINDY.utils.uuid_utils import normalize_uuid
 
@@ -296,6 +297,12 @@ def dispatch_delegated_run(
         if not objective or getattr(parent_run, "user_id", None) is None:
             return None
 
+        enforce_delegation_guardrails(
+            db,
+            parent_run=parent_run,
+            selected_agent_id=selected_agent.get("agent_id"),
+            trace_id=trace_id or parent_run.trace_id,
+        )
         child_run_id = _uuid.uuid4()
         child_correlation_id = f"run_{_uuid.uuid4()}"
         selected_agent_id = normalize_uuid(selected_agent.get("agent_id"))
@@ -353,6 +360,8 @@ def dispatch_delegated_run(
             sender_agent_id=str(getattr(parent_run, "spawned_by_agent_id", None) or LOCAL_AGENT_ID),
         )
         return _serialize_delegated_run(child_run)
+    except AgentRuntimeGuardrailViolation:
+        raise
     except Exception as exc:
         import logging as _logging
 

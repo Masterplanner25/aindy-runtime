@@ -9,7 +9,7 @@ owner: "platform-team"
 
 This document describes the agent runtime subsystem in `AINDY/agents/`. It
 covers the execution contract, public API surface, capability enforcement model,
-and recovery behavior. For the app-layer Agentics feature (gap analysis,
+recovery behavior, and runtime-owned orchestration guardrails. For the app-layer Agentics feature (gap analysis,
 completion roadmap, Nodus integration plan) see
 [docs/apps/AGENTICS.md](../apps/AGENTICS.md).
 
@@ -34,6 +34,8 @@ It owns:
 - plan generation (GPT-4o structured planner)
 - the approval trust gate
 - per-run capability token minting
+- orchestration guardrails for run creation, delegation, replay, and autonomous
+  submission
 - deterministic step execution via `PersistentFlowRunner`
 - per-step retry with configurable high-risk no-retry policy
 - run lifecycle persistence (`AgentRun`, `AgentStep`, `AgentEvent`)
@@ -178,6 +180,24 @@ re-execute completed steps.
 new run must go through the normal approve → execute path. The new run stores
 `replayed_from_run_id` pointing to the source run.
 
+### Runtime guardrails
+
+The runtime enforces orchestration guardrails in infrastructure rather than
+relying on route or UI behavior:
+
+- trace-scoped run creation is bounded, and duplicate active objectives on the
+  same trace are rejected
+- delegation chains have a maximum depth
+- each parent run has a maximum child-run fan-out
+- delegation to an agent already present in the ancestor chain is rejected as a
+  loop
+- replay chains have a maximum depth
+- autonomous async submissions with the same runtime submission key are
+  suppressed while an active duplicate is already queued or running
+
+These checks do not provide sandboxing. They only bound recursive or
+self-amplifying behavior inside the existing in-process runtime.
+
 ---
 
 ## 7. AgentRun State Machine
@@ -197,6 +217,14 @@ these states cannot be transitioned further — create a new run or replay.
 ---
 
 ## 8. Event Persistence
+
+Current extracted-runtime status contract:
+- persisted statuses are `pending_approval`, `approved`, `executing`,
+  `delegated`, `completed`, `failed`, and `rejected`
+- delegation guardrail violations surface as explicit failed runs rather than
+  silent delegation no-ops
+- replay and autonomous submission guardrails reject or suppress recursive
+  amplification before a new execution is spawned
 
 Every state transition emits an `AgentEvent` row via `emit_event()`. Events
 are also broadcast to Redis pub/sub for cross-instance observability.

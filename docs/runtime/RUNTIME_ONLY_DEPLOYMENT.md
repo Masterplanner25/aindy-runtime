@@ -1,6 +1,6 @@
 ---
 title: Runtime-Only Deployment
-last_verified: "2026-05-10"
+last_verified: "2026-05-18"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -9,6 +9,11 @@ owner: "platform-team"
 
 This is the authoritative contract for running AINDY without loading any
 `apps/*` plugins.
+
+Stability: `stable` external boot contract.
+
+This document defines the runtime-only HTTP and extension surface. Deployment
+topology is a separate contract; see [Deployment Profiles](./DEPLOYMENT_PROFILES.md).
 
 Repository ownership:
 
@@ -46,6 +51,12 @@ Manifest ownership and selection are separate from profile selection:
 - when no explicit profile is requested, the monolith prefers the app manifest
   if present; otherwise startup falls back to the runtime manifest
 
+Ownership boundary:
+
+- the runtime-owned manifest may declare only `runtime-built-in` extensions
+- `first-party-app` and `external-third-party` extensions belong in app or
+  explicitly selected non-runtime manifests, not in the runtime-only profile
+
 ## Supported Boot Behavior
 
 - The selected boot mode is `runtime-only`.
@@ -81,6 +92,14 @@ should either:
 - set `AINDY_APP_PLUGIN_MANIFEST=/path/to/aindy_plugins.json`
 
 Runtime-only boot does not depend on that app manifest existing.
+
+Runtime-only boot can be paired with either supported API deployment profile:
+
+- `single-instance`
+- `distributed-api`
+
+It must not be confused with `distributed-worker`, which is a worker process
+role rather than an HTTP boot surface.
 
 ## Mounted Route Surface
 
@@ -168,6 +187,7 @@ silently proxying into an app layer.
 - runtime state reports `boot_mode=runtime-only`
 - runtime state reports `boot_profile=platform-only`
 - runtime state reports `boot_profile_source=AINDY_BOOT_MODE` when booted through the first-class mode selector
+- runtime state reports `deployment_profile` and `deployment_profile_source`
 - runtime state reports `app_plugins_loaded=false`
 - runtime state reports `app_plugin_count=0`
 

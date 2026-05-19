@@ -9,9 +9,13 @@ pytestmark = pytest.mark.runtime_only
 
 def test_version_route_includes_runtime_surface(runtime_only_client):
     publish_api_runtime_state(
+        process_role="api",
         boot_mode="runtime-only",
         boot_profile="platform-only",
         boot_profile_source="AINDY_BOOT_MODE",
+        deployment_profile="single-instance",
+        deployment_profile_source="AINDY_DEPLOYMENT_PROFILE",
+        background_leadership_mode="in-process",
         app_plugins_loaded=False,
         app_plugin_count=0,
     )
@@ -21,9 +25,13 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["runtime"] == {
+        "process_role": "api",
         "boot_mode": "runtime-only",
         "boot_profile": "platform-only",
         "boot_profile_source": "AINDY_BOOT_MODE",
+        "deployment_profile": "single-instance",
+        "deployment_profile_source": "AINDY_DEPLOYMENT_PROFILE",
+        "background_leadership_mode": "in-process",
         "app_plugins_loaded": False,
         "app_plugin_count": 0,
         "ui_mode": "runtime-only",
@@ -48,3 +56,12 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
             ),
         },
     }
+    assert payload["public_contract"]["schema_version"] == "2026-05-18"
+    assert payload["public_contract"]["api_major"] == "1"
+    stable_routes = {entry["route"] for entry in payload["public_contract"]["http"]["stable"]}
+    assert "GET /api/version" in stable_routes
+    assert "GET /platform/syscalls" in stable_routes
+    experimental_prefixes = {entry["route_prefix"] for entry in payload["public_contract"]["http"]["experimental"]}
+    assert "/apps/agent/" in experimental_prefixes
+    assert "/platform/nodes" in experimental_prefixes
+    assert response.headers["X-API-Version"] == payload["api_version"]

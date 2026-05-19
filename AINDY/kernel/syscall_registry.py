@@ -23,8 +23,10 @@ Handler contract
 ----------------
 Every handler must accept (payload: dict, context: SyscallContext) -> dict.
 Handlers may raise — the dispatcher catches and wraps all exceptions.
-Handlers must open their own DB sessions (never receive one as an argument)
-so they remain safe across execution contexts and tests.
+Handlers may reuse a caller-provided SQLAlchemy session via
+``context.metadata["_db"]``. If no session is provided, the handler opens and
+owns its own session. Caller-owned sessions must never be committed, rolled
+back, or closed by the handler.
 
 ABI contract
 ------------
@@ -74,6 +76,50 @@ class SyscallContext:
     @property
     def db(self):
         return self.metadata.get("_db")
+
+
+def _acquire_handler_db(context: SyscallContext) -> tuple[Any, bool]:
+    """Return (db, owns_session) for a syscall handler.
+
+    Contract:
+    - If ``context.metadata["_db"]`` is present, the caller owns that session.
+      Handlers may use it but must not close it and must not commit/rollback it.
+    - Otherwise the handler opens ``SessionLocal()`` and owns cleanup.
+    """
+    external_db = context.metadata.get("_db")
+    if external_db is not None:
+        return external_db, False
+
+    from AINDY.db.database import SessionLocal
+
+    return SessionLocal(), True
+
+
+def _finish_handler_write(db: Any, *, owns_session: bool, success: bool) -> None:
+    """Finalize DB state for write-capable handlers.
+
+    Caller-owned sessions keep transaction ownership outside the syscall
+    boundary: handlers only ``flush()`` on success and never close.
+    Handler-owned sessions commit/rollback and close locally.
+    """
+    if owns_session:
+        try:
+            if success:
+                db.commit()
+            else:
+                db.rollback()
+        finally:
+            db.close()
+        return
+
+    if success:
+        db.flush()
+        return
+
+    try:
+        db.rollback()
+    except Exception:
+        logger.debug("[syscall_registry] rollback on external DB session failed", exc_info=True)
 
 
 # ── Capability constants ──────────────────────────────────────────────────────
@@ -240,7 +286,8 @@ class VersionedSyscallRegistry(MutableMapping):
 # Each handler:
 #   - Accepts (payload: dict, context: SyscallContext)
 #   - Returns a plain dict (becomes the "data" field in the response envelope)
-#   - Opens its own SessionLocal — never receives a DB session as an argument
+#   - May reuse context.metadata["_db"] when the caller owns the transaction;
+#     otherwise the handler opens and owns its own SessionLocal().
 #   - May raise ValueError for bad payload; other exceptions = handler failure
 
 
@@ -254,7 +301,6 @@ def _handle_memory_read(payload: dict, context: SyscallContext) -> dict:
         limit     (int)        — max results, default 5
         node_type (str)        — filter by node_type
     """
-    from AINDY.db.database import SessionLocal
     from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
 
     path: str | None = payload.get("path")
@@ -263,7 +309,7 @@ def _handle_memory_read(payload: dict, context: SyscallContext) -> dict:
     limit: int = int(payload.get("limit", 5))
     node_type: str | None = payload.get("node_type")
 
-    db = SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         dao = MemoryNodeDAO(db)
         if path:
@@ -284,7 +330,8 @@ def _handle_memory_read(payload: dict, context: SyscallContext) -> dict:
             )
         return {"nodes": nodes, "count": len(nodes)}
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 
 def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
@@ -299,7 +346,6 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
         namespace    (str)        — optional namespace segment
         addr_type    (str)        — optional sub-category segment
     """
-    from AINDY.db.database import SessionLocal
     from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
     from AINDY.memory.memory_address_space import path_from_write_payload
 
@@ -318,7 +364,7 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
     from AINDY.memory.memory_address_space import parent_path_of
     parent_path = parent_path_of(full_path)
 
-    db = SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         dao = MemoryNodeDAO(db)
         node = dao.save(
@@ -334,9 +380,12 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
             addr_type=addr_type,
             parent_path=parent_path,
         )
-        return {"node": node, "path": full_path}
-    finally:
-        db.close()
+        result = {"node": node, "path": full_path}
+    except Exception:
+        _finish_handler_write(db, owns_session=owns_session, success=False)
+        raise
+    _finish_handler_write(db, owns_session=owns_session, success=True)
+    return result
 
 
 def _handle_memory_search(payload: dict, context: SyscallContext) -> dict:
@@ -347,7 +396,6 @@ def _handle_memory_search(payload: dict, context: SyscallContext) -> dict:
         limit  (int) — max results, default 5
         path   (str) — optional MAS path prefix to scope the search
     """
-    from AINDY.db.database import SessionLocal
     from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
 
     query: str = payload.get("query", "")
@@ -356,7 +404,7 @@ def _handle_memory_search(payload: dict, context: SyscallContext) -> dict:
     limit: int = int(payload.get("limit", 5))
     path: str | None = payload.get("path")
 
-    db = SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         dao = MemoryNodeDAO(db)
         if path:
@@ -374,7 +422,8 @@ def _handle_memory_search(payload: dict, context: SyscallContext) -> dict:
             )
         return {"nodes": nodes, "count": len(nodes)}
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 
 def _handle_memory_list(payload: dict, context: SyscallContext) -> dict:
@@ -384,7 +433,6 @@ def _handle_memory_list(payload: dict, context: SyscallContext) -> dict:
         path      (str) — required; MAS prefix (use /* for one level, /** for recursive)
         limit     (int) — max results, default 50
     """
-    from AINDY.db.database import SessionLocal
     from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
 
     path: str = payload.get("path", "")
@@ -392,13 +440,14 @@ def _handle_memory_list(payload: dict, context: SyscallContext) -> dict:
         raise ValueError("sys.v1.memory.list requires 'path'")
     limit: int = int(payload.get("limit", 50))
 
-    db = SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         dao = MemoryNodeDAO(db)
         nodes = dao.query_path(path_expr=path, user_id=context.user_id, limit=limit)
         return {"nodes": nodes, "count": len(nodes), "path": path}
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 
 def _handle_memory_tree(payload: dict, context: SyscallContext) -> dict:
@@ -408,7 +457,6 @@ def _handle_memory_tree(payload: dict, context: SyscallContext) -> dict:
         path  (str) — required; MAS prefix
         limit (int) — max nodes to fetch before building tree, default 200
     """
-    from AINDY.db.database import SessionLocal
     from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
     from AINDY.memory.memory_address_space import build_tree, wildcard_prefix, is_exact, normalize_path
 
@@ -417,7 +465,7 @@ def _handle_memory_tree(payload: dict, context: SyscallContext) -> dict:
         raise ValueError("sys.v1.memory.tree requires 'path'")
     limit: int = int(payload.get("limit", 200))
 
-    db = SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         dao = MemoryNodeDAO(db)
         if is_exact(path):
@@ -427,7 +475,8 @@ def _handle_memory_tree(payload: dict, context: SyscallContext) -> dict:
         tree = build_tree(nodes)
         return {"tree": tree, "node_count": len(nodes), "path": path}
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 
 def _handle_memory_trace(payload: dict, context: SyscallContext) -> dict:
@@ -437,7 +486,6 @@ def _handle_memory_trace(payload: dict, context: SyscallContext) -> dict:
         path   (str) — required; exact MAS path to start from
         depth  (int) — max hops to follow, default 5
     """
-    from AINDY.db.database import SessionLocal
     from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
 
     path: str = payload.get("path", "")
@@ -445,13 +493,14 @@ def _handle_memory_trace(payload: dict, context: SyscallContext) -> dict:
         raise ValueError("sys.v1.memory.trace requires 'path'")
     depth: int = int(payload.get("depth", 5))
 
-    db = SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         dao = MemoryNodeDAO(db)
         chain = dao.causal_trace(path=path, depth=depth, user_id=context.user_id)
         return {"chain": chain, "depth": len(chain), "path": path}
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 
 def _handle_flow_run(payload: dict, context: SyscallContext) -> dict:
@@ -468,7 +517,6 @@ def _handle_flow_run(payload: dict, context: SyscallContext) -> dict:
                boundary is preserved. When absent the handler opens and closes
                its own session.
     """
-    from AINDY.db.database import SessionLocal
     from AINDY.runtime.flow_engine import FLOW_REGISTRY, PersistentFlowRunner
 
     flow_name: str = payload.get("flow_name", "")
@@ -485,9 +533,7 @@ def _handle_flow_run(payload: dict, context: SyscallContext) -> dict:
     initial_state: dict = payload.get("initial_state") or {}
     workflow_type: str = payload.get("workflow_type", flow_name)
 
-    external_db = context.metadata.get("_db")
-    owns_session = external_db is None
-    db = external_db if external_db is not None else SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         runner = PersistentFlowRunner(
             flow=flow,
@@ -509,7 +555,6 @@ def _handle_event_emit(payload: dict, context: SyscallContext) -> dict:
         event_type (str)  — required; e.g. "operation.completed"
         payload    (dict) — optional; merged into the event payload
     """
-    from AINDY.db.database import SessionLocal
     from AINDY.core.system_event_service import emit_system_event
 
     event_type: str = payload.get("event_type", "")
@@ -518,7 +563,7 @@ def _handle_event_emit(payload: dict, context: SyscallContext) -> dict:
 
     event_payload: dict = payload.get("payload") or {}
 
-    db = SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         event_id = emit_system_event(
             db=db,
@@ -531,13 +576,12 @@ def _handle_event_emit(payload: dict, context: SyscallContext) -> dict:
                 "execution_unit_id": context.execution_unit_id,
             },
         )
-        db.commit()
-        return {"event_id": str(event_id) if event_id else None}
+        result = {"event_id": str(event_id) if event_id else None}
     except Exception:
-        db.rollback()
+        _finish_handler_write(db, owns_session=owns_session, success=False)
         raise
-    finally:
-        db.close()
+    _finish_handler_write(db, owns_session=owns_session, success=True)
+    return result
 
 
 # ── Example v2 handler ────────────────────────────────────────────────────────
@@ -554,7 +598,6 @@ def _handle_memory_read_v2(payload: dict, context: SyscallContext) -> dict:
     All v1 payload keys remain valid.  If *filters* is absent the response is
     identical to sys.v1.memory.read.
     """
-    from AINDY.db.database import SessionLocal
     from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
 
     path: str | None = payload.get("path")
@@ -564,7 +607,7 @@ def _handle_memory_read_v2(payload: dict, context: SyscallContext) -> dict:
     node_type: str | None = payload.get("node_type")
     filters: dict = payload.get("filters") or {}
 
-    db = SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         dao = MemoryNodeDAO(db)
         if path:
@@ -586,7 +629,8 @@ def _handle_memory_read_v2(payload: dict, context: SyscallContext) -> dict:
 
         return {"nodes": nodes[:limit], "count": min(len(nodes), limit), "version": "v2"}
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 
 # ── Execution entry-point handlers ───────────────────────────────────────────
@@ -604,15 +648,11 @@ def _handle_flow_execute_intent(payload: dict, context: SyscallContext) -> dict:
     Context metadata keys (internal use):
         _db — caller-provided SQLAlchemy Session (transaction preserved).
     """
-    from AINDY.db.database import SessionLocal
-
     intent_data: dict = payload.get("intent_data") or {}
     if not intent_data:
         raise ValueError("sys.v1.flow.execute_intent requires non-empty 'intent_data'")
 
-    external_db = context.metadata.get("_db")
-    owns_session = external_db is None
-    db = external_db if external_db is not None else SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         from AINDY.runtime.flow_engine import _execute_intent_direct
         result = _execute_intent_direct(
@@ -641,8 +681,6 @@ def _handle_nodus_execute(payload: dict, context: SyscallContext) -> dict:
         _db                 — caller-provided SQLAlchemy Session.
         _extra_initial_state — extra keys merged into initial flow state.
     """
-    from AINDY.db.database import SessionLocal
-
     script: str = payload.get("script", "")
     if not script:
         raise ValueError("sys.v1.nodus.execute requires 'script'")
@@ -654,9 +692,7 @@ def _handle_nodus_execute(payload: dict, context: SyscallContext) -> dict:
     node_max_retries = payload.get("node_max_retries")
     extra_initial_state: dict | None = context.metadata.get("_extra_initial_state")
 
-    external_db = context.metadata.get("_db")
-    owns_session = external_db is None
-    db = external_db if external_db is not None else SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         from AINDY.runtime.nodus_execution_service import _run_nodus_via_flow_direct
         result = _run_nodus_via_flow_direct(
@@ -715,15 +751,11 @@ def _handle_agent_execute(payload: dict, context: SyscallContext) -> dict:
     Context metadata keys (internal use):
         _db — caller-provided SQLAlchemy Session.
     """
-    from AINDY.db.database import SessionLocal
-
     run_id: str = payload.get("run_id", "")
     if not run_id:
         raise ValueError("sys.v1.agent.execute requires 'run_id'")
 
-    external_db = context.metadata.get("_db")
-    owns_session = external_db is None
-    db = external_db if external_db is not None else SessionLocal()
+    db, owns_session = _acquire_handler_db(context)
     try:
         from AINDY.agents.agent_runtime import execute_run
         result = execute_run(run_id=run_id, user_id=context.user_id, db=db)
@@ -738,24 +770,25 @@ def _handle_agent_count_runs(payload: dict, context: SyscallContext) -> dict:
     from AINDY.platform_layer.user_ids import parse_user_id
     from AINDY.db.models import AgentRun
 
-    db = context.db
-    if db is None:
-        return {"count": 0}
-
+    db, owns_session = _acquire_handler_db(context)
     requested_user_id = payload.get("user_id")
-    query = db.query(AgentRun.id)
-    if requested_user_id is not None:
-        normalized_user_id = parse_user_id(requested_user_id)
-        if normalized_user_id is None:
-            return {"count": 0}
-        query = query.filter(AgentRun.user_id == normalized_user_id)
+    try:
+        query = db.query(AgentRun.id)
+        if requested_user_id is not None:
+            normalized_user_id = parse_user_id(requested_user_id)
+            if normalized_user_id is None:
+                return {"count": 0}
+            query = query.filter(AgentRun.user_id == normalized_user_id)
 
-    status_filter = payload.get("status")
-    if status_filter:
-        statuses = status_filter if isinstance(status_filter, list) else [status_filter]
-        query = query.filter(AgentRun.status.in_(statuses))
+        status_filter = payload.get("status")
+        if status_filter:
+            statuses = status_filter if isinstance(status_filter, list) else [status_filter]
+            query = query.filter(AgentRun.status.in_(statuses))
 
-    return {"count": query.count()}
+        return {"count": query.count()}
+    finally:
+        if owns_session:
+            db.close()
 
 
 def _handle_agent_list_recent_durations(payload: dict, context: SyscallContext) -> dict:
@@ -763,34 +796,35 @@ def _handle_agent_list_recent_durations(payload: dict, context: SyscallContext) 
     from AINDY.platform_layer.user_ids import parse_user_id
     from AINDY.db.models import AgentRun
 
-    db = context.metadata.get("_db") or context.db
-    if db is None:
-        return {"durations": [], "count": 0}
-
+    db, owns_session = _acquire_handler_db(context)
     window_hours = int(payload.get("window_hours", 1))
-    window_start = datetime.now(timezone.utc) - timedelta(hours=window_hours)
-    query = db.query(AgentRun).filter(AgentRun.created_at >= window_start)
+    try:
+        window_start = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+        query = db.query(AgentRun).filter(AgentRun.created_at >= window_start)
 
-    requested_user_id = payload.get("user_id")
-    if requested_user_id is not None:
-        normalized_user_id = parse_user_id(requested_user_id)
-        if normalized_user_id is None:
-            return {"durations": [], "count": 0}
-        query = query.filter(AgentRun.user_id == normalized_user_id)
+        requested_user_id = payload.get("user_id")
+        if requested_user_id is not None:
+            normalized_user_id = parse_user_id(requested_user_id)
+            if normalized_user_id is None:
+                return {"durations": [], "count": 0}
+            query = query.filter(AgentRun.user_id == normalized_user_id)
 
-    rows = query.all()
-    durations = [
-        {
-            "started_at": (row.started_at or row.created_at).isoformat()
-            if (row.started_at or row.created_at)
-            else None,
-            "completed_at": (row.completed_at or row.started_at or row.created_at).isoformat()
-            if (row.completed_at or row.started_at or row.created_at)
-            else None,
-        }
-        for row in rows
-    ]
-    return {"durations": durations, "count": len(durations)}
+        rows = query.all()
+        durations = [
+            {
+                "started_at": (row.started_at or row.created_at).isoformat()
+                if (row.started_at or row.created_at)
+                else None,
+                "completed_at": (row.completed_at or row.started_at or row.created_at).isoformat()
+                if (row.completed_at or row.started_at or row.created_at)
+                else None,
+            }
+            for row in rows
+        ]
+        return {"durations": durations, "count": len(durations)}
+    finally:
+        if owns_session:
+            db.close()
 
 
 def _handle_agent_list_recent_runs(payload: dict, context: SyscallContext) -> dict:
@@ -799,23 +833,24 @@ def _handle_agent_list_recent_runs(payload: dict, context: SyscallContext) -> di
     from AINDY.platform_layer.user_ids import parse_user_id
     from AINDY.db.models import AgentRun
 
-    db = context.db
-    if db is None:
-        return {"runs": []}
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        normalized_user_id = parse_user_id(payload.get("user_id"))
+        if normalized_user_id is None:
+            return {"runs": []}
 
-    normalized_user_id = parse_user_id(payload.get("user_id"))
-    if normalized_user_id is None:
-        return {"runs": []}
-
-    limit = int(payload.get("limit", 10))
-    rows = (
-        db.query(AgentRun)
-        .filter(AgentRun.user_id == normalized_user_id)
-        .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
-        .limit(limit)
-        .all()
-    )
-    return {"runs": [run_to_dict(row) for row in rows]}
+        limit = int(payload.get("limit", 10))
+        rows = (
+            db.query(AgentRun)
+            .filter(AgentRun.user_id == normalized_user_id)
+            .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+            .limit(limit)
+            .all()
+        )
+        return {"runs": [run_to_dict(row) for row in rows]}
+    finally:
+        if owns_session:
+            db.close()
 
 
 def _handle_agent_ensure_initial_run(payload: dict, context: SyscallContext) -> dict:
@@ -823,36 +858,43 @@ def _handle_agent_ensure_initial_run(payload: dict, context: SyscallContext) -> 
     from AINDY.platform_layer.user_ids import parse_user_id
     from AINDY.db.models import AgentRun
 
-    db = context.db
-    if db is None:
-        return {"run_id": None, "created": False}
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        normalized_user_id = parse_user_id(payload.get("user_id"))
+        if normalized_user_id is None:
+            return {"run_id": None, "created": False}
 
-    normalized_user_id = parse_user_id(payload.get("user_id"))
-    if normalized_user_id is None:
-        return {"run_id": None, "created": False}
-
-    existing = (
-        db.query(AgentRun)
-        .filter(
-            AgentRun.user_id == normalized_user_id,
-            AgentRun.goal == "Initial agent context",
+        existing = (
+            db.query(AgentRun)
+            .filter(
+                AgentRun.user_id == normalized_user_id,
+                AgentRun.goal == "Initial agent context",
+            )
+            .first()
         )
-        .first()
-    )
-    if existing:
-        return {"run_id": str(existing.id), "created": False}
+        if existing:
+            return {"run_id": str(existing.id), "created": False}
 
-    run = AgentRun(
-        user_id=normalized_user_id,
-        goal="Initial agent context",
-        status="completed",
-        overall_risk="low",
-        steps_total=0,
-    )
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-    return {"run_id": str(run.id), "created": True}
+        run = AgentRun(
+            user_id=normalized_user_id,
+            goal="Initial agent context",
+            status="completed",
+            overall_risk="low",
+            steps_total=0,
+        )
+        db.add(run)
+        if owns_session:
+            db.commit()
+        else:
+            db.flush()
+        db.refresh(run)
+        return {"run_id": str(run.id), "created": True}
+    except Exception:
+        _finish_handler_write(db, owns_session=owns_session, success=False)
+        raise
+    finally:
+        if owns_session:
+            db.close()
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -899,7 +941,7 @@ SYSCALL_REGISTRY["sys.v1.memory.write"] = SyscallEntry(
 )
 SYSCALL_REGISTRY["sys.v1.memory.search"] = SyscallEntry(
     handler=_handle_memory_search,
-    capability="memory.search",
+    capability="memory.read",
     description="Semantic search over user memory nodes.",
     input_schema={
         "required": ["query"],
@@ -916,7 +958,7 @@ SYSCALL_REGISTRY["sys.v1.memory.search"] = SyscallEntry(
 )
 SYSCALL_REGISTRY["sys.v1.memory.list"] = SyscallEntry(
     handler=_handle_memory_list,
-    capability="memory.list",
+    capability="memory.read",
     description="List nodes at a MAS path prefix.",
     input_schema={
         "required": ["path"],
@@ -930,7 +972,7 @@ SYSCALL_REGISTRY["sys.v1.memory.list"] = SyscallEntry(
 )
 SYSCALL_REGISTRY["sys.v1.memory.tree"] = SyscallEntry(
     handler=_handle_memory_tree,
-    capability="memory.tree",
+    capability="memory.read",
     description="Return a hierarchical tree of nodes under a path.",
     input_schema={
         "required": ["path"],
@@ -944,7 +986,7 @@ SYSCALL_REGISTRY["sys.v1.memory.tree"] = SyscallEntry(
 )
 SYSCALL_REGISTRY["sys.v1.memory.trace"] = SyscallEntry(
     handler=_handle_memory_trace,
-    capability="memory.trace",
+    capability="memory.read",
     description="Follow the causal chain from a node at a path.",
     input_schema={
         "required": ["path"],

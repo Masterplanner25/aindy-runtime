@@ -416,6 +416,8 @@ def _build_memory_backend(
 
 
 def _fallback_to_memory_backend(exc: Exception) -> "InMemoryQueueBackend":
+    from AINDY.platform_layer.deployment_contract import set_api_runtime_condition
+
     if getattr(settings, "AINDY_REQUIRE_REDIS", False):
         raise RuntimeError(
             f"AINDY_REQUIRE_REDIS=true but Redis is unavailable: {exc}. "
@@ -428,6 +430,13 @@ def _fallback_to_memory_backend(exc: Exception) -> "InMemoryQueueBackend":
         "In multi-instance mode, jobs will NOT be shared across instances. "
         "Set AINDY_REQUIRE_REDIS=true to prevent degraded-mode startup.",
         exc,
+    )
+    set_api_runtime_condition(
+        code="queue_backend_fallback",
+        component="queue",
+        classification="unsafe_degraded" if settings.EXECUTION_MODE == "distributed" else "safe_degraded",
+        detail=str(exc),
+        production_behavior="startup-fatal" if settings.EXECUTION_MODE == "distributed" else "explicitly degraded",
     )
     backend = _build_memory_backend(degraded=True, fallback_reason=str(exc))
     _emit_queue_backend_event(
@@ -1210,6 +1219,12 @@ def attempt_queue_backend_reconnect() -> bool:
 
     _refresh_queue_metrics(candidate.backend_name, candidate.get_metrics())
     _update_queue_backend_mode_metric(candidate)
+    try:
+        from AINDY.platform_layer.deployment_contract import clear_api_runtime_condition
+
+        clear_api_runtime_condition("queue_backend_fallback")
+    except Exception:
+        pass
     logger.info("[DistributedQueue] Redis connection restored - queue backend switched to Redis.")
     _emit_queue_backend_event(
         "system.queue.backend_recovered",

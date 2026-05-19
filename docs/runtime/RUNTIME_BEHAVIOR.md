@@ -1,6 +1,6 @@
 ---
 title: "Runtime Behavior"
-last_verified: "2026-04-22"
+last_verified: "2026-05-18"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -14,17 +14,17 @@ This document describes the current runtime behavior of the FastAPI backend as i
 - The FastAPI app is created with a single `lifespan` context manager. Deprecated `@app.on_event("startup")` handlers are no longer used.
 - Startup sequence:
   1. Reset runtime state and publish initial startup status.
-  2. Enforce `SECRET_KEY`, Redis, and event-bus deployment guards where required.
+  2. Resolve and validate the active deployment profile, then enforce `SECRET_KEY`, Redis, and event-bus guards required by that profile.
   3. Initialize cache backend via `AINDY_CACHE_BACKEND`.
-  4. Verify Mongo connectivity when Mongo-backed features require it.
-  5. Validate queue backend and worker expectations when distributed execution is configured.
+  4. Verify Mongo connectivity and record explicit degraded state when Mongo-backed features are optional but unavailable.
+  5. Validate queue backend and worker expectations when distributed execution is configured, and fail fast in production if the queue falls back to an unsafe in-memory mode.
   6. Bootstrap the runtime-owned schema on a blank database, then enforce the
      runtime schema contract when `AINDY_ENFORCE_SCHEMA=true`.
   7. Acquire background-task leadership through the startup event path and start APScheduler only on the leader.
   8. Register syscall handlers, canonical flow nodes, and flows.
-  9. Restore dynamic platform registrations from the DB.
-  10. Start the event-bus subscriber.
-  11. Rehydrate waiting execution state.
+  9. Restore dynamic platform registrations from the DB and surface incomplete restore as an explicit unsafe degraded state.
+  10. Start the event-bus subscriber and record whether WAIT/RESUME propagation is cross-instance or local-only.
+  11. Rehydrate waiting execution state and fail fast in production if rehydration cannot complete safely.
   12. Publish final startup-complete state.
 - Router registration occurs through the route modules under `AINDY/routes/` and the runtime registry wiring.
 - `main.py` now serves only the root route directly; domain endpoints are router-backed.
@@ -32,6 +32,10 @@ This document describes the current runtime behavior of the FastAPI backend as i
 ## 2. Background Task Lifecycle
 - Background execution is no longer driven by daemon threads in `main.py`.
 - Background leadership is determined through the startup event path plus the DB lease used by the scheduler/background task services.
+- The leadership mode depends on deployment profile:
+  - `single-instance` -> `in-process`
+  - `distributed-api` -> `lease-elected`
+  - `distributed-worker` -> `lease-elected`
 - Leader election is backed by the `background_task_leases` database table.
 - Only the lease leader starts APScheduler jobs; a missing APScheduler dependency means background jobs are disabled but the API remains responsive for tests or constrained environments.
 - Lease timestamps are normalized to timezone-aware UTC in Python before comparison or persistence.
@@ -45,6 +49,18 @@ This document describes the current runtime behavior of the FastAPI backend as i
 - Startup and shutdown logic in `main.py` uses explicit `SessionLocal()` blocks with `try/finally`.
 - Request metrics middleware creates its own short-lived session to persist `RequestMetric` rows.
 - MongoDB uses a process-level client singleton in `AINDY/db/mongo_setup.py`; shutdown now attempts to close the client in the lifespan shutdown path.
+- `/health` now includes `runtime_conditions`, which lists active degraded runtime states with a concrete classification:
+  - `safe_degraded`
+  - `unsafe_degraded`
+  - `startup_fatal`
+- Runtime state also reports:
+  - `process_role`
+  - `deployment_profile`
+  - `deployment_profile_source`
+  - `background_leadership_mode`
+- `/ready` now fails when required infrastructure is down or when any active runtime condition is classified as `unsafe_degraded` or `startup_fatal`.
+- See `docs/runtime/DEGRADED_RUNTIME_MODES.md` for the current degraded-mode contract.
+- See `docs/runtime/DEPLOYMENT_PROFILES.md` for the supported deployment topology contract.
 
 ## 3.1 Runtime-Owned Schema Contract
 - The extracted runtime no longer depends on repo-root `alembic.ini` or
@@ -140,8 +156,11 @@ This document describes the current runtime behavior of the FastAPI backend as i
 
 ## 7. Runtime Risks That Still Exist
 - External model calls are still synchronous in several request paths and can increase request latency.
-- MongoDB is a startup requirement in the normal runtime path. Missing or unreachable `MONGO_URL` fails fast during lifespan initialization unless the explicit skip flag (`AINDY_SKIP_MONGO_PING` / `SKIP_MONGO_PING`) is enabled for tests or constrained local runs.
+- Mongo-backed features are optional unless `MONGO_REQUIRED=true`. When Mongo is optional and unavailable, the runtime now stays up in an explicitly degraded state instead of failing silently.
 - Request metrics persistence is best-effort; failures are logged and swallowed.
 - The app is still a monolith: API, scheduler leadership, orchestration, and some execution logic share the same process.
+- Manifest bootstrap modules and in-process dynamic plugin nodes remain trusted
+  code execution, not sandboxed extensions. See
+  `docs/runtime/EXTENSION_TRUST_MODEL.md`.
 - Memory auto-link enrichment is now cross-dialect aware: PostgreSQL uses native tag containment, while SQLite/non-PostgreSQL verification falls back to Python-side tag filtering.
 - Not every domain has a first-class execution-record model yet, even though trace propagation and `SystemEvent` coverage are much stronger.

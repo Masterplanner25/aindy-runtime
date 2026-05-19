@@ -15,6 +15,7 @@ from AINDY.agents.agent_runtime import (
     run_to_dict,
     to_execution_response,
 )
+from AINDY.agents.runtime_guardrails import AgentRuntimeGuardrailViolation
 from AINDY.agents.agent_tools import TOOL_REGISTRY, suggest_tools
 from AINDY.agents.autonomous_controller import (
     build_decision_response,
@@ -103,12 +104,13 @@ def _decision_or_defer_response(
 def create_agent_run_runtime(*, goal: str, db, user_id):
     goal = goal.strip()
     if async_heavy_execution_enabled():
-        trigger_context = {"goal": goal, "importance": 0.95}
+        trace_id = ensure_trace_id()
+        trigger_context = {"goal": goal, "importance": 0.95, "trace_id": trace_id}
         return {
             "_http_status": 202,
             "_http_response": submit_autonomous_async_job(
                 task_name="agent.create_run",
-                payload={"goal": goal, "user_id": str(user_id)},
+                payload={"goal": goal, "user_id": str(user_id), "trace_id": trace_id},
                 user_id=user_id,
                 source="agent_router",
                 trigger_type="user",
@@ -136,7 +138,10 @@ def create_agent_run_runtime(*, goal: str, db, user_id):
     if decision is not None:
         return decision
 
-    run = create_run(goal=goal, user_id=user_id, db=db)
+    try:
+        run = create_run(goal=goal, user_id=user_id, db=db)
+    except AgentRuntimeGuardrailViolation as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     if not run:
         raise HTTPException(status_code=500, detail="Failed to generate plan")
     if run["status"] == "approved":
@@ -214,7 +219,10 @@ def recover_agent_run_runtime(*, db, user_id, run_id: str, force: bool = False):
 
 
 def replay_agent_run_runtime(*, db, user_id, run_id: str):
-    new_run = replay_run(run_id=run_id, user_id=user_id, db=db)
+    try:
+        new_run = replay_run(run_id=run_id, user_id=user_id, db=db)
+    except AgentRuntimeGuardrailViolation as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     if not new_run:
         raise HTTPException(status_code=404, detail="Run not found or not replayable")
     return to_execution_response(new_run, db)

@@ -27,18 +27,22 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import importlib
 import json
 import logging
-import os
-import sys
 import threading
 import uuid
 from datetime import datetime, timezone
+from importlib import util as importlib_util
 from pathlib import Path
 from typing import Any, Callable
+import inspect
 
 from sqlalchemy.orm import Session
+from AINDY.platform_layer.extension_policy import (
+    OWNER_EXTERNAL_THIRD_PARTY,
+    validate_extension_owner_class,
+    validate_outbound_extension_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,7 @@ _WEBHOOK_MAX_TIMEOUT = 30
 
 # Plugins are restricted to this directory (relative to this file's parent).
 _PLUGINS_DIR = Path(__file__).parent.parent / "plugins" / "nodes"
+_PLUGIN_MODULE_NAMESPACE = "AINDY.plugins.nodes"
 
 
 # ---------------------------------------------------------------------------
@@ -189,31 +194,36 @@ def _load_plugin_node(handler: str) -> Callable:
     # Block path traversal
     if ".." in module_part or module_part.startswith("."):
         raise ValueError(f"plugin handler contains illegal path component: {handler!r}")
+    module_parts = module_part.split(".")
+    if not all(part.isidentifier() for part in module_parts):
+        raise ValueError(f"plugin handler module must use Python identifiers: {handler!r}")
+    if not func_name.isidentifier():
+        raise ValueError(f"plugin handler function name must be an identifier: {handler!r}")
 
     # Ensure plugins directory exists
     if not _PLUGINS_DIR.is_dir():
         _PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
         (_PLUGINS_DIR / "__init__.py").touch()
 
-    # Add plugins/nodes to sys.path once so relative imports work
-    plugins_str = str(_PLUGINS_DIR)
-    if plugins_str not in sys.path:
-        sys.path.insert(0, plugins_str)
+    module_path = _PLUGINS_DIR.joinpath(*module_parts)
+    package_init = module_path / "__init__.py"
+    module_file = module_path.with_suffix(".py")
+    if package_init.is_file():
+        source_path = package_init
+    elif module_file.is_file():
+        source_path = module_file
+    else:
+        raise ValueError(f"plugin module {module_part!r} was not found under {_PLUGINS_DIR}")
 
+    qualified_name = f"{_PLUGIN_MODULE_NAMESPACE}.{module_part}"
+    spec = importlib_util.spec_from_file_location(qualified_name, source_path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"cannot load plugin module {module_part!r} from {source_path}")
+    module = importlib_util.module_from_spec(spec)
     try:
-        module = importlib.import_module(module_part)
-    except ImportError as exc:
+        spec.loader.exec_module(module)
+    except Exception as exc:
         raise ValueError(f"cannot import plugin module {module_part!r}: {exc}") from exc
-
-    # Verify the module actually lives under the plugins directory
-    module_file = getattr(module, "__file__", None)
-    if module_file:
-        try:
-            Path(module_file).resolve().relative_to(_PLUGINS_DIR.resolve())
-        except ValueError:
-            raise ValueError(
-                f"plugin module {module_part!r} resolves outside the plugins directory"
-            )
 
     fn = getattr(module, func_name, None)
     if fn is None:
@@ -224,7 +234,37 @@ def _load_plugin_node(handler: str) -> Callable:
         raise ValueError(
             f"{module_part}:{func_name} is not callable"
         )
+    _validate_plugin_callable(fn, handler)
     return fn
+
+
+def _validate_plugin_callable(fn: Callable, handler: str) -> None:
+    signature = inspect.signature(fn)
+    parameters = list(signature.parameters.values())
+    required_positional = [
+        param
+        for param in parameters
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        and param.default is inspect.Signature.empty
+    ]
+    required_extra = [
+        param.name
+        for param in required_positional[2:]
+    ]
+    if len(required_positional) < 2 and not any(
+        param.kind == inspect.Parameter.VAR_POSITIONAL
+        for param in parameters
+    ):
+        raise ValueError(
+            f"plugin node {handler!r} must accept at least (state, context)"
+        )
+    if required_extra:
+        raise ValueError(
+            f"plugin node {handler!r} requires unsupported positional arguments {required_extra!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +279,7 @@ def register_external_node(
     timeout_seconds: int = 10,
     secret: str | None = None,
     user_id: str | None = None,
+    owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
     overwrite: bool = False,
     db: Session | None = None,
 ) -> dict[str, Any]:
@@ -271,12 +312,10 @@ def register_external_node(
         raise ValueError(f"type must be 'webhook' or 'plugin', got {node_type!r}")
     if not handler or not handler.strip():
         raise ValueError("handler must be a non-empty string")
+    owner_class = validate_extension_owner_class(owner_class)
 
     if node_type == "webhook":
-        if not (handler.startswith("http://") or handler.startswith("https://")):
-            raise ValueError(
-                f"webhook handler must be an http:// or https:// URL, got {handler!r}"
-            )
+        validate_outbound_extension_url(handler, field_name="webhook handler")
         timeout_seconds = max(1, min(int(timeout_seconds), _WEBHOOK_MAX_TIMEOUT))
 
     # â”€â”€ Build the node function â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -299,6 +338,8 @@ def register_external_node(
         meta: dict[str, Any] = {
             "name": name,
             "type": node_type,
+            "owner_class": owner_class,
+            "trust_class": "external-webhook" if node_type == "webhook" else "in-process-plugin",
             "handler": handler,
             "timeout_seconds": timeout_seconds if node_type == "webhook" else None,
             "signed": secret is not None if node_type == "webhook" else None,

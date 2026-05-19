@@ -7,6 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from AINDY.agents.capability_service import mint_token
+from AINDY.agents.runtime_guardrails import AgentRuntimeGuardrailViolation, enforce_run_creation_guardrails
 from AINDY.core.execution_signal_helper import record_agent_event
 from AINDY.core.system_event_service import emit_error_event
 from AINDY.platform_layer.trace_context import get_parent_event_id, get_trace_id
@@ -26,6 +27,12 @@ def create_run(
 
         objective_text = compat._resolve_objective(objective, values)
         user_db_id = compat._db_user_id(user_id)
+        enforce_run_creation_guardrails(
+            db,
+            user_id=str(user_db_id) if user_db_id is not None else None,
+            objective=objective_text,
+            trace_id=get_trace_id(),
+        )
         plan = compat.generate_plan(objective=objective_text, user_id=user_db_id, db=db)
         if not plan:
             failure_reason = getattr(compat._plan_failure, "reason", "unknown failure")
@@ -118,6 +125,8 @@ def create_run(
             required=True,
         )
         return compat._run_to_dict(run)
+    except AgentRuntimeGuardrailViolation:
+        raise
     except Exception as exc:
         compat = get_runtime_compat_module()
 
@@ -150,6 +159,12 @@ def _create_run_from_plan(
 
         objective_text = compat._resolve_objective(objective, values)
         plan = plan or {}
+        enforce_run_creation_guardrails(
+            db,
+            user_id=str(user_id) if user_id is not None else None,
+            objective=objective_text,
+            trace_id=get_trace_id(),
+        )
         overall_risk = plan.get("overall_risk", "high")
         needs_approval = compat._requires_approval(overall_risk, user_id, db)
         status = "pending_approval" if needs_approval else "approved"
@@ -202,6 +217,8 @@ def _create_run_from_plan(
             status,
         )
         return compat._run_to_dict(run)
+    except AgentRuntimeGuardrailViolation:
+        raise
     except Exception as exc:
         logger.warning("[AgentRuntime] _create_run_from_plan failed: %s", exc)
         return None

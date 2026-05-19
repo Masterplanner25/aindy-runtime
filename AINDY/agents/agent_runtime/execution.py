@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from AINDY.agents.agent_coordinator import decide_execution_mode, register_or_update_agent
+from AINDY.agents.runtime_guardrails import AgentRuntimeGuardrailViolation
 from AINDY.core.execution_signal_helper import record_agent_event
 from AINDY.core.system_event_service import emit_error_event
 from AINDY.platform_layer.trace_context import get_parent_event_id, get_trace_id, reset_parent_event_id, set_parent_event_id
@@ -81,24 +82,70 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
         if coordination["mode"] in {"delegate", "collaborate"}:
             from AINDY.agents.agent_coordinator import dispatch_delegated_run
 
-            child_run = dispatch_delegated_run(
-                db,
-                parent_run=run,
-                selected_agent=coordination["selected_agent"],
-                delegation_mode=coordination["mode"],
-                user_id=str(user_db_id),
-                trace_id=run.trace_id or get_trace_id(),
-            )
+            try:
+                child_run = dispatch_delegated_run(
+                    db,
+                    parent_run=run,
+                    selected_agent=coordination["selected_agent"],
+                    delegation_mode=coordination["mode"],
+                    user_id=str(user_db_id),
+                    trace_id=run.trace_id or get_trace_id(),
+                )
+            except AgentRuntimeGuardrailViolation as exc:
+                run.status = "failed"
+                run.completed_at = datetime.now(timezone.utc)
+                run.error_message = str(exc)
+                run.result = {
+                    "coordination_mode": coordination["mode"],
+                    "selected_agent": coordination["selected_agent"],
+                    "candidates": coordination["candidates"],
+                    "guardrail_code": exc.code,
+                    "child_dispatched": False,
+                }
+                db.commit()
+                record_agent_event(
+                    run_id=str(run.id),
+                    user_id=user_db_id,
+                    event_type="DELEGATION_BLOCKED",
+                    db=db,
+                    correlation_id=getattr(run, "correlation_id", None),
+                    payload={"coordination": coordination, "guardrail_code": exc.code, "error": str(exc)},
+                    required=True,
+                )
+                return compat._run_to_dict(run)
+
+            if child_run is None:
+                run.status = "failed"
+                run.completed_at = datetime.now(timezone.utc)
+                run.error_message = "Delegation dispatch failed before a child run was created."
+                run.result = {
+                    "coordination_mode": coordination["mode"],
+                    "selected_agent": coordination["selected_agent"],
+                    "candidates": coordination["candidates"],
+                    "child_dispatched": False,
+                }
+                db.commit()
+                record_agent_event(
+                    run_id=str(run.id),
+                    user_id=user_db_id,
+                    event_type="DELEGATION_BLOCKED",
+                    db=db,
+                    correlation_id=getattr(run, "correlation_id", None),
+                    payload={"coordination": coordination, "error": run.error_message},
+                    required=True,
+                )
+                return compat._run_to_dict(run)
+
             run.result = {
                 "coordination_mode": coordination["mode"],
                 "selected_agent": coordination["selected_agent"],
                 "candidates": coordination["candidates"],
-                "child_run_id": child_run["run_id"] if child_run else None,
-                "child_dispatched": child_run is not None,
+                "child_run_id": child_run["run_id"],
+                "child_dispatched": True,
                 "next_action": {
                     "type": coordination["mode"],
                     "selected_agent": coordination["selected_agent"],
-                    "child_run_id": child_run["run_id"] if child_run else None,
+                    "child_run_id": child_run["run_id"],
                 },
             }
             run.status = "delegated"
@@ -114,7 +161,7 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
                 correlation_id=getattr(run, "correlation_id", None),
                 payload={
                     "coordination": coordination,
-                    "child_run_id": child_run["run_id"] if child_run else None,
+                    "child_run_id": child_run["run_id"],
                 },
                 required=True,
             )

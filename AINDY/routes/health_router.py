@@ -15,6 +15,7 @@ from AINDY.core.execution_signal_helper import queue_system_event
 from AINDY.core.system_event_service import emit_system_event
 from AINDY.db.database import SessionLocal, get_pool_status
 from AINDY.platform_layer.domain_health import domain_health_registry
+from AINDY.platform_layer.deployment_contract import redis_required, worker_required
 from AINDY.platform_layer.registry import get_degraded_domains
 from AINDY.platform_layer.rate_limiter import limiter
 
@@ -45,7 +46,7 @@ def _cache_payload() -> dict:
     return {
         "backend": settings.AINDY_CACHE_BACKEND,
         "redis_configured": bool(settings.REDIS_URL),
-        "requires_redis": settings.requires_redis,
+        "requires_redis": redis_required(),
     }
 
 
@@ -86,6 +87,7 @@ def _testing_health_payload() -> dict:
         get_domain_health,
         get_memory_ingest_queue_status,
     )
+    from AINDY.platform_layer.deployment_contract import get_api_runtime_conditions
     from AINDY.runtime import get_engine_status
 
     domains = get_domain_health()
@@ -107,6 +109,7 @@ def _testing_health_payload() -> dict:
         "platform": platform,
         "domains": domains,
         "dependencies": {},
+        "runtime_conditions": get_api_runtime_conditions(),
         "db_pool": db_pool,
         "flow_engines": get_engine_status(),
         "async_jobs": _async_jobs_payload(),
@@ -265,10 +268,10 @@ def _check_flow_registry_status() -> dict:
 
 
 def _check_worker_health() -> dict:
-    if settings.EXECUTION_MODE != "distributed":
-        return {"status": "not_applicable", "detail": "EXECUTION_MODE=thread"}
+    if not worker_required():
+        return {"status": "not_applicable", "detail": "worker process not required by active deployment profile"}
     if not settings.REDIS_URL:
-        return {"status": "error", "detail": "EXECUTION_MODE=distributed but REDIS_URL not set"}
+        return {"status": "error", "detail": "worker profile requires REDIS_URL but it is not configured"}
     try:
         import redis as _redis
 

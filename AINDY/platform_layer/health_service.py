@@ -18,6 +18,7 @@ from AINDY.config import settings
 from AINDY.platform_layer.deployment_contract import (
     deployment_contract_summary,
     event_bus_required,
+    get_api_runtime_conditions,
     get_api_runtime_state,
     queue_backend_required,
     redis_required,
@@ -52,6 +53,7 @@ class SystemHealth:
         domains = get_domain_health()
         degraded_domains = _merge_degraded_domains(domains)
         platform = build_platform_status(self.dependencies)
+        runtime_conditions = get_api_runtime_conditions()
         return {
             "status": derive_public_status(self.tier, platform, domains),
             "tier": self.tier,
@@ -63,6 +65,7 @@ class SystemHealth:
             "domains": domains,
             "memory_ingest_queue": get_memory_ingest_queue_status(),
             "deployment_contract": deployment_contract_summary(),
+            "runtime_conditions": runtime_conditions,
             "dependencies": {
                 dep.name: {
                     "status": dep.status,
@@ -149,6 +152,7 @@ def build_platform_status(dependencies: list[DependencyStatus]) -> dict[str, str
     queue = dep_by_name.get("queue")
     redis = dep_by_name.get("redis")
     mongo = dep_by_name.get("mongo")
+    event_bus = dep_by_name.get("event_bus")
 
     database_ok = (
         postgres is not None
@@ -171,6 +175,13 @@ def build_platform_status(dependencies: list[DependencyStatus]) -> dict[str, str
     if mongo is not None:
         mongo_ok = mongo.status == "ok"
 
+    event_bus_ok = True
+    if event_bus is not None:
+        if event_bus.critical:
+            event_bus_ok = event_bus.status == "ok"
+        else:
+            event_bus_ok = event_bus.status in {"ok", "degraded"}
+
     scheduler_ok = True
     try:
         from AINDY.platform_layer import scheduler_service
@@ -189,6 +200,7 @@ def build_platform_status(dependencies: list[DependencyStatus]) -> dict[str, str
         "database": "ok" if database_ok else "degraded",
         "cache": "ok" if cache_ok else "degraded",
         "mongodb": "ok" if mongo_ok else "degraded",
+        "event_bus": "ok" if event_bus_ok else "degraded",
     }
 
 
@@ -406,6 +418,51 @@ def check_queue() -> DependencyStatus:
         )
 
 
+def check_event_bus() -> DependencyStatus:
+    try:
+        from AINDY.kernel.event_bus import get_event_bus
+
+        status = get_event_bus().get_status()
+        mode = status.get("mode", "unknown")
+        if mode == "cross-instance":
+            return DependencyStatus(
+                name="event_bus",
+                status="ok",
+                critical=event_bus_required(),
+                metadata=status,
+            )
+        if mode == "local-only":
+            return DependencyStatus(
+                name="event_bus",
+                status="unavailable" if event_bus_required() else "degraded",
+                detail="WAIT/RESUME propagation is local-only",
+                critical=event_bus_required(),
+                metadata=status,
+            )
+        if mode == "disabled":
+            return DependencyStatus(
+                name="event_bus",
+                status="unavailable" if event_bus_required() else "degraded",
+                detail="Event bus is disabled",
+                critical=event_bus_required(),
+                metadata=status,
+            )
+        return DependencyStatus(
+            name="event_bus",
+            status="unavailable" if event_bus_required() else "degraded",
+            detail=f"Event bus mode is {mode}",
+            critical=event_bus_required(),
+            metadata=status,
+        )
+    except Exception as exc:
+        return DependencyStatus(
+            name="event_bus",
+            status="unavailable" if event_bus_required() else "degraded",
+            detail=str(exc),
+            critical=event_bus_required(),
+        )
+
+
 def check_mongo(timeout: float = 2.0) -> DependencyStatus:
     start = time.monotonic()
     try:
@@ -528,18 +585,25 @@ def get_system_health(*, force: bool = False) -> SystemHealth:
         check_postgres(),
         check_redis(),
         check_queue(),
+        check_event_bus(),
         check_mongo(),
         check_schema(),
         check_ai_providers(),
     ]
 
     degraded_domains = get_degraded_domains()
+    runtime_conditions = get_api_runtime_conditions()
+    unsafe_conditions = [
+        condition
+        for condition in runtime_conditions
+        if condition.get("classification") in {"unsafe_degraded", "startup_fatal"}
+    ]
     critical_down = any(dep.status == "unavailable" and dep.critical for dep in deps)
-    any_degraded = bool(degraded_domains) or any(
+    any_degraded = bool(runtime_conditions) or bool(degraded_domains) or any(
         dep.status in ("unavailable", "degraded") for dep in deps
     )
 
-    if critical_down:
+    if critical_down or unsafe_conditions:
         tier = "critical"
         http_status = 503
     elif any_degraded:
@@ -578,11 +642,22 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
     dependency_by_name = {dep.name: dep for dep in health.dependencies}
 
     checks: dict[str, Any] = {
+        "process_role": api_state.get("process_role", "api"),
+        "deployment_profile": api_state.get("deployment_profile", "unknown"),
+        "deployment_profile_source": api_state.get(
+            "deployment_profile_source",
+            "unknown",
+        ),
         "startup_complete": bool(api_state.get("startup_complete")),
         "scheduler_role": api_state.get("scheduler_role", "disabled"),
+        "background_leadership_mode": api_state.get(
+            "background_leadership_mode",
+            "unknown",
+        ),
         "background_enabled": bool(api_state.get("background_enabled")),
         "event_bus_ready": bool(api_state.get("event_bus_ready")),
         "degraded_domains": get_degraded_domains(),
+        "runtime_conditions": get_api_runtime_conditions(),
     }
 
     failures: list[str] = []
@@ -614,6 +689,14 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         if queue_backend_required() and queue.status != "ok":
             failures.append("queue")
 
+    event_bus = dependency_by_name.get("event_bus")
+    if event_bus is not None:
+        checks["event_bus"] = event_bus.status
+        if event_bus.detail:
+            checks["event_bus_detail"] = event_bus.detail
+        if event_bus_required() and event_bus.status != "ok":
+            failures.append("event_bus")
+
     if checks["background_enabled"] and checks["scheduler_role"] == "leader":
         try:
             from AINDY.platform_layer import scheduler_service
@@ -628,10 +711,6 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
     else:
         checks["scheduler"] = checks["scheduler_role"]
 
-    if event_bus_required():
-        if not checks["event_bus_ready"]:
-            failures.append("event_bus")
-
     if worker_required():
         worker = _check_worker_heartbeat()
         checks["worker"] = worker["status"]
@@ -642,6 +721,11 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
     else:
         checks["worker"] = "not_required"
 
+    for condition in checks["runtime_conditions"]:
+        if condition.get("classification") in {"unsafe_degraded", "startup_fatal"}:
+            failures.append(str(condition.get("code")))
+
+    failures = list(dict.fromkeys(failures))
     status_code = 200 if not failures else 503
     return status_code, {
         "status": "ready" if not failures else "not_ready",

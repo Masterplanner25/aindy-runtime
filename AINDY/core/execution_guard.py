@@ -16,6 +16,7 @@ _EXEMPT_PREFIXES = (
     "/health",
     "/ready",
     "/readiness",
+    "/metrics",
 )
 
 
@@ -41,7 +42,7 @@ def validate_execution_contract(request: Request, response: Response | None = No
         return
     if response is not None and int(getattr(response, "status_code", 200)) >= 400:
         return
-    message = "ExecutionContract violation: route bypassed execution pipeline"
+    message = f"ExecutionContract violation: route bypassed execution pipeline for {request.method} {request.url.path}"
     if settings.ENFORCE_EXECUTION_CONTRACT:
         raise RuntimeError(message)
     logger.warning(message, extra={"path": request.url.path})

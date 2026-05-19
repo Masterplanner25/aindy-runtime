@@ -9,13 +9,13 @@ runtime-owned documentation, and the runtime contract test suite. It does not in
 ## Install
 
 ```bash
-python -m pip install -e . --no-deps --no-build-isolation
+python -m pip install -e .
 ```
 
 For staged release builds:
 
 ```bash
-python -m pip install -e .[release] --no-deps --no-build-isolation
+python -m pip install -e .[release]
 ```
 
 ## Run
@@ -29,13 +29,21 @@ aindy-runtime
 Minimum runtime environment:
 
 ```bash
-DATABASE_URL=sqlite://
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DBNAME
 AINDY_BOOT_MODE=runtime-only
 SECRET_KEY=...
-AINDY_API_KEY=...
-PERMISSION_SECRET=...
 OPENAI_API_KEY=sk-...
-DEEPSEEK_API_KEY=ds-...
+```
+
+For local smoke tests only, SQLite remains opt-in and must be declared
+explicitly:
+
+```bash
+DATABASE_URL=sqlite://
+AINDY_ALLOW_SQLITE=1
+AINDY_BOOT_MODE=runtime-only
+SECRET_KEY=runtime-local-secret-key
+OPENAI_API_KEY=sk-test-placeholder
 ```
 
 Equivalent module and ASGI forms:
@@ -50,6 +58,9 @@ Generic API entrypoint:
 ```bash
 aindy-runtime-api
 ```
+
+`aindy-runtime-api` starts the generic API entrypoint. Pair it with
+`AINDY_BOOT_MODE=runtime-only` when you want the runtime-only HTTP surface.
 
 ## Deployment Ownership
 
@@ -147,6 +158,8 @@ Runtime-owned documentation lives under `docs/runtime/`.
 Release staging guidance lives in `docs/runtime/RELEASE_STAGING.md`.
 
 CI ownership guidance lives in `docs/runtime/CI_OWNERSHIP.md`.
+
+Deployment topology guidance lives in `docs/runtime/DEPLOYMENT_PROFILES.md`.
 
 Manual GitHub branch-protection and review settings guidance lives in
 `docs/runtime/GITHUB_SETTINGS_CHECKLIST.md`.

@@ -165,6 +165,12 @@ def handle_agent_run_completed(context: dict[str, Any]) -> None:
 def register() -> None:
     from AINDY.platform_layer import registry
 
+    registry.publish_bootstrap_registration(
+        "runtime-agent-defaults",
+        owner_class="runtime-built-in",
+        module_name=__name__,
+    )
+
     if "memory.recall" not in TOOL_REGISTRY:
         register_tool(
             "memory.recall",

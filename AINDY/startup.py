@@ -26,12 +26,18 @@ from AINDY.platform_layer import scheduler_service
 from AINDY.platform_layer import registry
 from AINDY.platform_layer.bootstrap_contract import validate_bootstrap_manifest
 from AINDY.platform_layer.deployment_contract import (
+    PROCESS_ROLE_API,
     background_tasks_enabled,
+    background_leadership_mode_for_profile,
+    clear_api_runtime_condition,
     event_bus_required,
     publish_api_runtime_state,
     reset_runtime_state,
     resolve_boot_mode_for_profile,
+    resolve_api_deployment_profile,
     RUNTIME_ONLY_BOOT_MODE,
+    set_api_runtime_condition,
+    validate_api_deployment_profile,
 )
 from AINDY.platform_layer.cache_backend import NoOpCacheBackend
 from AINDY.platform_layer.rate_limiter import limiter
@@ -101,14 +107,62 @@ logger = logging.getLogger("AINDY.main")
 _OPENAI_PROJECT_KEY_PREFIX = "sk-" + "proj-"
 _pool_was_near_exhaustion: bool = False
 
+_SAFE_DEGRADED = "safe_degraded"
+_UNSAFE_DEGRADED = "unsafe_degraded"
+_STARTUP_FATAL = "startup_fatal"
+
+
+def _record_runtime_condition(
+    *,
+    code: str,
+    component: str,
+    classification: str,
+    detail: str,
+    production_behavior: str,
+) -> None:
+    set_api_runtime_condition(
+        code=code,
+        component=component,
+        classification=classification,
+        detail=detail,
+        production_behavior=production_behavior,
+    )
+
+
+def _handle_runtime_degradation(
+    *,
+    code: str,
+    component: str,
+    classification: str,
+    detail: str,
+    production_message: str | None = None,
+) -> None:
+    production_behavior = "startup-fatal" if classification != _SAFE_DEGRADED else "explicitly degraded"
+    _record_runtime_condition(
+        code=code,
+        component=component,
+        classification=classification,
+        detail=detail,
+        production_behavior=production_behavior,
+    )
+    if settings.is_prod and classification != _SAFE_DEGRADED:
+        raise RuntimeError(production_message or detail)
+
 def _publish_boot_runtime_state() -> None:
     active_profile = get_active_plugin_profile()
     boot_mode = resolve_boot_mode_for_profile(active_profile)
+    deployment_profile, deployment_profile_source = resolve_api_deployment_profile()
     app_plugin_count = len(get_registered_apps())
     publish_api_runtime_state(
+        process_role=PROCESS_ROLE_API,
         boot_mode=boot_mode,
         boot_profile=active_profile,
         boot_profile_source=get_active_plugin_profile_source(),
+        deployment_profile=deployment_profile,
+        deployment_profile_source=deployment_profile_source,
+        background_leadership_mode=background_leadership_mode_for_profile(
+            deployment_profile
+        ),
         app_plugins_loaded=app_plugin_count > 0,
         app_plugin_count=app_plugin_count,
     )
@@ -234,7 +288,7 @@ def _check_redis_available() -> bool:
 def _enforce_redis_startup_guard() -> None:
     if settings.is_testing:
         return
-    if not settings.requires_redis:
+    if not event_bus_required():
         return
     if not settings.REDIS_URL:
         raise RuntimeError(
@@ -297,7 +351,7 @@ def _enforce_cache_backend_coherence() -> None:
             )
 
 
-def _check_worker_presence(log) -> None:
+def _check_worker_presence(log) -> bool:
     """
     Warn at startup when EXECUTION_MODE=distributed but no worker heartbeat is detected.
 
@@ -311,7 +365,7 @@ def _check_worker_presence(log) -> None:
             "[startup] EXECUTION_MODE=distributed requires REDIS_URL. "
             "Jobs will fail to enqueue. Set REDIS_URL or change EXECUTION_MODE=thread."
         )
-        return
+        return False
 
     heartbeat_key = "aindy:worker:heartbeat"
     try:
@@ -327,16 +381,19 @@ def _check_worker_presence(log) -> None:
                 "WORKER_CONCURRENCY=1 python -m AINDY.worker.worker_loop",
                 heartbeat_key,
             )
+            return False
         else:
             log.info(
                 "[startup] Worker heartbeat detected (last_beat=%s).", last_beat.decode()
             )
+            return True
     except Exception as exc:
         log.warning(
             "[startup] Could not check worker heartbeat (Redis error: %s). "
             "If EXECUTION_MODE=distributed, ensure a worker process is running.",
             exc,
         )
+        return False
 
 
 def _check_nodus_importable() -> tuple[bool, str]:
@@ -651,6 +708,13 @@ def _initialize_cache_backend() -> str:
 
 
 def _validate_startup_config() -> None:
+    deployment_profile = validate_api_deployment_profile()
+    publish_api_runtime_state(
+        process_role=PROCESS_ROLE_API,
+        deployment_profile=deployment_profile["name"],
+        deployment_profile_source=deployment_profile["source"],
+        background_leadership_mode=deployment_profile["background_leadership_mode"],
+    )
     # SECRET_KEY guard Ã¢â‚¬â€ reject insecure placeholder outside local dev/test
     _placeholder = "dev-secret-change-in-production"
     if settings.SECRET_KEY == _placeholder:
@@ -682,18 +746,31 @@ def _validate_startup_config() -> None:
     _enforce_event_bus_startup_guard()
     _enforce_cache_backend_coherence()
     if not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
-        if not settings.REDIS_URL and not settings.requires_redis:
+        if not settings.REDIS_URL and not event_bus_required():
+            _record_runtime_condition(
+                code="redis_single_instance_mode",
+                component="redis",
+                classification=_SAFE_DEGRADED,
+                detail=(
+                    "REDIS_URL is unset. The runtime is operating in single-instance mode "
+                    "and cross-instance coordination is unavailable."
+                ),
+                production_behavior="explicitly degraded",
+            )
             logger.warning(
                 "[startup] Redis is not configured (REDIS_URL is unset). "
                 "Running in single-instance mode. WAIT/RESUME events will not "
                 "propagate across multiple instances. Set REDIS_URL and "
                 "AINDY_REQUIRE_REDIS=true for multi-instance deployments."
             )
+        else:
+            clear_api_runtime_condition("redis_single_instance_mode")
     logger.info(
-        "Startup config: ENV=%s requires_redis=%s execution_mode=%s cache=%s",
+        "Startup config: ENV=%s deployment_profile=%s execution_mode=%s redis_required=%s cache=%s",
         settings.ENV,
-        settings.requires_redis,
+        deployment_profile["name"],
         settings.EXECUTION_MODE,
+        event_bus_required(),
         settings.AINDY_CACHE_BACKEND,
     )
 
@@ -703,11 +780,27 @@ def _init_mongodb() -> None:
         ensure_mongo_ready(required=settings.MONGO_REQUIRED)
         mongo_status = ping_mongo()
         if mongo_status.get("status") != "ok":
+            _record_runtime_condition(
+                code="mongo_optional_unavailable",
+                component="mongo",
+                classification=_SAFE_DEGRADED,
+                detail=str(mongo_status.get("reason") or "MongoDB unavailable"),
+                production_behavior="explicitly degraded",
+            )
             logger.warning(
                 "MongoDB unavailable at startup â€” social features degraded: %s",
                 mongo_status.get("reason"),
             )
+        else:
+            clear_api_runtime_condition("mongo_optional_unavailable")
     except Exception as exc:
+        _handle_runtime_degradation(
+            code="mongo_required_unavailable" if settings.MONGO_REQUIRED else "mongo_optional_unavailable",
+            component="mongo",
+            classification=_STARTUP_FATAL if settings.MONGO_REQUIRED else _SAFE_DEGRADED,
+            detail=str(exc),
+            production_message="MongoDB is required in production and could not be initialized.",
+        )
         logger.warning("MongoDB init failed â€” social features degraded: %s", exc)
 
 
@@ -723,13 +816,45 @@ def _validate_queue_and_workers() -> None:
         )
 
     if not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
-        validate_queue_backend()
+        backend = validate_queue_backend()
+        if getattr(backend, "degraded", False):
+            detail = str(
+                getattr(backend, "fallback_reason", None)
+                or "Queue backend is running in degraded fallback mode."
+            )
+            _handle_runtime_degradation(
+                code="queue_backend_fallback",
+                component="queue",
+                classification=_UNSAFE_DEGRADED if event_bus_required() else _SAFE_DEGRADED,
+                detail=detail,
+                production_message=(
+                    "Queue backend fell back to an in-memory transport. "
+                    "Production requires the configured durable backend before startup."
+                ),
+            )
+        else:
+            clear_api_runtime_condition("queue_backend_fallback")
     if (
         not settings.is_testing
         and not os.getenv("PYTEST_CURRENT_TEST")
-        and settings.EXECUTION_MODE == "distributed"
+        and event_bus_required()
     ):
-        _check_worker_presence(logger)
+        if not _check_worker_presence(logger):
+            _handle_runtime_degradation(
+                code="distributed_worker_unavailable",
+                component="worker",
+                classification=_UNSAFE_DEGRADED,
+                detail=(
+                    "Distributed API profile requires at least one healthy worker heartbeat "
+                    "before startup."
+                ),
+                production_message=(
+                    "Distributed API startup blocked: no worker heartbeat detected. "
+                    "Start a worker process before bringing the API into service."
+                ),
+            )
+        else:
+            clear_api_runtime_condition("distributed_worker_unavailable")
     try:
         from AINDY.kernel.resource_manager import get_resource_manager as _get_rm
         from AINDY.platform_layer.metrics import quota_redis_mode as _quota_mode
@@ -775,7 +900,13 @@ def _enforce_schema_guard(db_factory) -> None:
 
 def _start_background_services(db_factory) -> bool:
     enable_background = background_tasks_enabled()
-    publish_api_runtime_state(background_enabled=enable_background)
+    deployment_profile, _deployment_profile_source = resolve_api_deployment_profile()
+    publish_api_runtime_state(
+        background_enabled=enable_background,
+        background_leadership_mode=background_leadership_mode_for_profile(
+            deployment_profile
+        ),
+    )
 
     startup_results = emit_event(
         "system.startup",
@@ -897,6 +1028,16 @@ async def _restore_dynamic_registry(db_factory) -> None:
                 _loader_stats.get("webhooks_loaded", 0),
             )
         except Exception as _loader_exc:
+            _handle_runtime_degradation(
+                code="dynamic_registry_restore_failed",
+                component="plugin_restore",
+                classification=_UNSAFE_DEGRADED,
+                detail=str(_loader_exc),
+                production_message=(
+                    "Dynamic registry restore failed. Runtime extensions were not restored "
+                    "from the database."
+                ),
+            )
             logger.warning("Dynamic registry restore failed (non-fatal): %s", _loader_exc)
         finally:
             _loader_db.close()
@@ -913,9 +1054,27 @@ async def _restore_dynamic_registry(db_factory) -> None:
                 _restore_result["webhooks"]["db_count"],
             )
             if not _restore_result["all_ok"]:
+                _handle_runtime_degradation(
+                    code="dynamic_registry_restore_incomplete",
+                    component="plugin_restore",
+                    classification=_UNSAFE_DEGRADED,
+                    detail=(
+                        "Persisted registry state did not fully restore: "
+                        f"flows={_restore_result['flows']['registry_count']}/{_restore_result['flows']['db_count']} "
+                        f"nodes={_restore_result['nodes']['registry_count']}/{_restore_result['nodes']['db_count']} "
+                        f"webhooks={_restore_result['webhooks']['registry_count']}/{_restore_result['webhooks']['db_count']}"
+                    ),
+                    production_message=(
+                        "Dynamic registry restore is incomplete. Refusing production startup "
+                        "with missing runtime extensions."
+                    ),
+                )
                 logger.error(
                     "Registry restore INCOMPLETE â€” some capabilities were not restored"
                 )
+            if _restore_result["all_ok"]:
+                clear_api_runtime_condition("dynamic_registry_restore_failed")
+                clear_api_runtime_condition("dynamic_registry_restore_incomplete")
         finally:
             _restore_verify_db.close()
 
@@ -977,12 +1136,20 @@ def _start_event_bus() -> None:
             from AINDY.kernel.event_bus import get_event_bus
             get_event_bus().start_subscriber()
             publish_api_runtime_state(event_bus_ready=True)
+            clear_api_runtime_condition("event_bus_subscriber_unavailable")
         except Exception as _bus_exc:
             publish_api_runtime_state(event_bus_ready=False)
             if event_bus_required():
                 raise RuntimeError(
                     f"Event bus subscriber failed to start: {_bus_exc}"
                 ) from _bus_exc
+            _record_runtime_condition(
+                code="event_bus_subscriber_unavailable",
+                component="event_bus",
+                classification=_SAFE_DEGRADED,
+                detail=str(_bus_exc),
+                production_behavior="explicitly degraded",
+            )
             logger.warning(
                 "[startup] Event bus subscriber failed to start (non-fatal): %s", _bus_exc
             )
@@ -991,7 +1158,17 @@ def _start_event_bus() -> None:
 
             _bus = get_event_bus()
             _bus_status = _bus.get_status()
-            if _bus_status.get("mode") == "local-only" and not settings.requires_redis:
+            if _bus_status.get("mode") == "local-only" and not event_bus_required():
+                _record_runtime_condition(
+                    code="event_bus_local_only",
+                    component="event_bus",
+                    classification=_SAFE_DEGRADED,
+                    detail=(
+                        "WAIT/RESUME propagation is local-only. Cross-instance resume delivery "
+                        "is unavailable without Redis."
+                    ),
+                    production_behavior="explicitly degraded",
+                )
                 logger.warning(
                     "[startup] WAIT/RESUME is operating in LOCAL-ONLY mode. "
                     "Flows that enter WAIT on one instance CANNOT be resumed by "
@@ -1000,6 +1177,7 @@ def _start_event_bus() -> None:
                     "the event bus subscriber is running (AINDY_EVENT_BUS_ENABLED=true)."
                 )
             elif _bus_status.get("mode") == "cross-instance":
+                clear_api_runtime_condition("event_bus_local_only")
                 logger.info(
                     "[startup] WAIT/RESUME propagation: cross-instance (Redis pub/sub active)."
                 )
@@ -1018,7 +1196,17 @@ def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
             _n_rehydrated = rehydrate_waiting_eus(_rehydrate_db)
             if _n_rehydrated:
                 logger.info("[startup] WAIT rehydration registered %d EU(s)", _n_rehydrated)
+            clear_api_runtime_condition("wait_eus_rehydration_failed")
         except Exception as _rehydrate_exc:
+            _handle_runtime_degradation(
+                code="wait_eus_rehydration_failed",
+                component="rehydration",
+                classification=_UNSAFE_DEGRADED,
+                detail=str(_rehydrate_exc),
+                production_message=(
+                    "WAIT execution-unit rehydration failed. Pending waits may be stranded."
+                ),
+            )
             emit_recovery_failure("wait_eus", _rehydrate_exc, _rehydrate_db, logger=logger)
         finally:
             _rehydrate_db.close()
@@ -1037,7 +1225,17 @@ def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
                 logger.info(
                     "[startup] FlowRun rehydration registered %d run(s)", _n_flow_rehydrated
                 )
+            clear_api_runtime_condition("flow_run_rehydration_failed")
         except Exception as _flow_rehydrate_exc:
+            _handle_runtime_degradation(
+                code="flow_run_rehydration_failed",
+                component="rehydration",
+                classification=_UNSAFE_DEGRADED,
+                detail=str(_flow_rehydrate_exc),
+                production_message=(
+                    "FlowRun rehydration failed. Waiting flows may not resume safely."
+                ),
+            )
             emit_recovery_failure(
                 "flow_runs", _flow_rehydrate_exc, _flow_rehydrate_db, logger=logger
             )
@@ -1050,7 +1248,17 @@ def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
             from AINDY.kernel.event_bus import get_event_bus
             get_scheduler_engine().mark_rehydration_complete()
             get_event_bus().drain_buffered_events()
+            clear_api_runtime_condition("event_bus_rehydration_drain_failed")
         except Exception as _drain_exc:
+            _handle_runtime_degradation(
+                code="event_bus_rehydration_drain_failed",
+                component="rehydration",
+                classification=_UNSAFE_DEGRADED,
+                detail=str(_drain_exc),
+                production_message=(
+                    "Buffered event drain after rehydration failed. Resume events may be lost."
+                ),
+            )
             emit_recovery_failure("event_drain", _drain_exc, None, logger=logger)
     else:
         try:
@@ -1076,14 +1284,21 @@ def _run_startup_hooks(db_factory) -> None:
 async def lifespan(app: FastAPI):
     # --- Startup ---
     reset_runtime_state()
+    deployment_profile, deployment_profile_source = resolve_api_deployment_profile()
     publish_api_runtime_state(
+        process_role=PROCESS_ROLE_API,
         startup_complete=False,
         background_enabled=False,
         scheduler_role="disabled",
+        background_leadership_mode=background_leadership_mode_for_profile(
+            deployment_profile
+        ),
         event_bus_ready=False,
         boot_mode=resolve_boot_mode_for_profile(get_active_plugin_profile()),
         boot_profile=get_active_plugin_profile(),
         boot_profile_source=get_active_plugin_profile_source(),
+        deployment_profile=deployment_profile,
+        deployment_profile_source=deployment_profile_source,
         app_plugins_loaded=bool(get_registered_apps()),
         app_plugin_count=len(get_registered_apps()),
     )

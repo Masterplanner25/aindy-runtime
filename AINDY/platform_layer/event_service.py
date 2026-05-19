@@ -40,6 +40,11 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from AINDY.config import settings
+from AINDY.platform_layer.extension_policy import (
+    OWNER_EXTERNAL_THIRD_PARTY,
+    validate_extension_owner_class,
+    validate_outbound_extension_url,
+)
 from AINDY.platform_layer.metrics import (
     event_handler_duration_seconds,
     event_handler_timeouts_total,
@@ -231,6 +236,7 @@ def subscribe_webhook(
     *,
     secret: str | None = None,
     user_id: str | None = None,
+    owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
     db: Session | None = None,
 ) -> dict[str, Any]:
     """
@@ -244,12 +250,8 @@ def subscribe_webhook(
     """
     if not event_type or not event_type.strip():
         raise ValueError("event_type must be a non-empty string")
-    if not callback_url or not (
-        callback_url.startswith("http://") or callback_url.startswith("https://")
-    ):
-        raise ValueError(
-            f"callback_url must be an http:// or https:// URL, got {callback_url!r}"
-        )
+    validate_outbound_extension_url(callback_url, field_name="callback_url")
+    owner_class = validate_extension_owner_class(owner_class)
 
     subscription_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
@@ -257,6 +259,7 @@ def subscribe_webhook(
         "id": subscription_id,
         "event_type": event_type,
         "callback_url": callback_url,
+        "owner_class": owner_class,
         "signed": secret is not None,
         "_secret": secret,           # stored but excluded from list/get responses
         "created_at": now.isoformat(),

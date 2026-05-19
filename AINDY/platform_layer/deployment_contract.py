@@ -1,14 +1,26 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from AINDY.config import settings
 
 BOOT_MODE_ENV_VAR = "AINDY_BOOT_MODE"
+DEPLOYMENT_PROFILE_ENV_VAR = "AINDY_DEPLOYMENT_PROFILE"
 RUNTIME_ONLY_BOOT_MODE = "runtime-only"
 APP_PROFILE_BOOT_MODE = "app-profile"
 RUNTIME_ONLY_BOOT_PROFILE = "platform-only"
+PROCESS_ROLE_API = "api"
+PROCESS_ROLE_WORKER = "worker"
+DEPLOYMENT_PROFILE_SINGLE_INSTANCE = "single-instance"
+DEPLOYMENT_PROFILE_DISTRIBUTED_API = "distributed-api"
+DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER = "distributed-worker"
+SUPPORTED_DEPLOYMENT_PROFILES = (
+    DEPLOYMENT_PROFILE_SINGLE_INSTANCE,
+    DEPLOYMENT_PROFILE_DISTRIBUTED_API,
+    DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER,
+)
 RUNTIME_ONLY_REQUIRED_ROUTES = (
     "/health",
     "/ready",
@@ -98,22 +110,31 @@ RUNTIME_ONLY_INTENTIONALLY_UNAVAILABLE = (
 )
 
 _api_runtime_state: dict[str, Any] = {
+    "process_role": PROCESS_ROLE_API,
     "startup_complete": False,
     "background_enabled": False,
     "scheduler_role": "disabled",
+    "background_leadership_mode": "unknown",
     "event_bus_ready": False,
     "boot_mode": "unknown",
     "boot_profile": "unknown",
     "boot_profile_source": "unknown",
+    "deployment_profile": "unknown",
+    "deployment_profile_source": "unknown",
     "app_plugins_loaded": False,
     "app_plugin_count": 0,
+    "runtime_conditions": {},
 }
 
 _worker_runtime_state: dict[str, Any] = {
+    "process_role": PROCESS_ROLE_WORKER,
     "startup_complete": False,
     "queue_ready": False,
     "schema_ready": False,
     "scheduler_role": "disabled",
+    "background_leadership_mode": "unknown",
+    "deployment_profile": "unknown",
+    "deployment_profile_source": "unknown",
 }
 
 
@@ -122,9 +143,16 @@ def runtime_ui_surface_state() -> dict[str, Any]:
     boot_mode = api_state.get("boot_mode", "unknown")
     runtime_only = boot_mode == RUNTIME_ONLY_BOOT_MODE
     return {
+        "process_role": api_state.get("process_role", PROCESS_ROLE_API),
         "boot_mode": boot_mode,
         "boot_profile": api_state.get("boot_profile", "unknown"),
         "boot_profile_source": api_state.get("boot_profile_source", "unknown"),
+        "deployment_profile": api_state.get("deployment_profile", "unknown"),
+        "deployment_profile_source": api_state.get("deployment_profile_source", "unknown"),
+        "background_leadership_mode": api_state.get(
+            "background_leadership_mode",
+            "unknown",
+        ),
         "app_plugins_loaded": bool(api_state.get("app_plugins_loaded", False)),
         "app_plugin_count": int(api_state.get("app_plugin_count", 0) or 0),
         "ui_mode": RUNTIME_ONLY_BOOT_MODE if runtime_only else APP_PROFILE_BOOT_MODE,
@@ -143,12 +171,210 @@ def background_tasks_enabled() -> bool:
     }
 
 
+def _deployment_profile_contracts() -> dict[str, dict[str, Any]]:
+    return {
+        DEPLOYMENT_PROFILE_SINGLE_INSTANCE: {
+            "name": DEPLOYMENT_PROFILE_SINGLE_INSTANCE,
+            "process_role": PROCESS_ROLE_API,
+            "stability": "stable",
+            "summary": (
+                "Single-process API runtime. Thread-mode execution, optional Redis, "
+                "no separate worker requirement."
+            ),
+            "execution_mode": "thread",
+            "required_dependencies": {
+                "postgres": True,
+                "schema_enforcement": True,
+                "redis": False,
+                "event_bus": False,
+                "queue_backend": False,
+                "worker_process": False,
+            },
+            "background_leadership_mode": "in-process",
+            "supports_runtime_only_boot": True,
+        },
+        DEPLOYMENT_PROFILE_DISTRIBUTED_API: {
+            "name": DEPLOYMENT_PROFILE_DISTRIBUTED_API,
+            "process_role": PROCESS_ROLE_API,
+            "stability": "stable",
+            "summary": (
+                "API process in a distributed topology. Requires Redis-backed queue, "
+                "cross-instance event bus, and at least one worker process."
+            ),
+            "execution_mode": "distributed",
+            "required_dependencies": {
+                "postgres": True,
+                "schema_enforcement": True,
+                "redis": True,
+                "event_bus": True,
+                "queue_backend": True,
+                "worker_process": True,
+            },
+            "background_leadership_mode": "lease-elected",
+            "supports_runtime_only_boot": True,
+        },
+        DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER: {
+            "name": DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER,
+            "process_role": PROCESS_ROLE_WORKER,
+            "stability": "stable",
+            "summary": (
+                "Distributed async worker. Requires Redis-backed queue and the "
+                "runtime-owned schema; participates in lease-based background leadership."
+            ),
+            "execution_mode": "distributed",
+            "required_dependencies": {
+                "postgres": True,
+                "schema_enforcement": True,
+                "redis": True,
+                "event_bus": False,
+                "queue_backend": True,
+                "worker_process": False,
+            },
+            "background_leadership_mode": "lease-elected",
+            "supports_runtime_only_boot": False,
+        },
+    }
+
+
+def get_deployment_profile_contract(profile_name: str) -> dict[str, Any]:
+    contracts = _deployment_profile_contracts()
+    if profile_name not in contracts:
+        raise ValueError(
+            f"Unsupported deployment profile {profile_name!r}. "
+            f"Supported values: {', '.join(SUPPORTED_DEPLOYMENT_PROFILES)}."
+        )
+    return dict(contracts[profile_name])
+
+
+def list_supported_deployment_profiles(*, process_role: str | None = None) -> list[dict[str, Any]]:
+    profiles = list(_deployment_profile_contracts().values())
+    if process_role is not None:
+        profiles = [profile for profile in profiles if profile["process_role"] == process_role]
+    return [dict(profile) for profile in profiles]
+
+
+def get_requested_deployment_profile() -> str | None:
+    value = os.getenv(DEPLOYMENT_PROFILE_ENV_VAR, "").strip()
+    if not value:
+        return None
+    if value not in SUPPORTED_DEPLOYMENT_PROFILES:
+        raise ValueError(
+            f"Unsupported {DEPLOYMENT_PROFILE_ENV_VAR} value {value!r}. "
+            f"Supported values: {', '.join(SUPPORTED_DEPLOYMENT_PROFILES)}."
+        )
+    return value
+
+
+def infer_api_deployment_profile() -> str:
+    if settings.EXECUTION_MODE == "distributed":
+        return DEPLOYMENT_PROFILE_DISTRIBUTED_API
+    return DEPLOYMENT_PROFILE_SINGLE_INSTANCE
+
+
+def infer_worker_deployment_profile() -> str:
+    return DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER
+
+
+def resolve_api_deployment_profile() -> tuple[str, str]:
+    requested = get_requested_deployment_profile()
+    if requested is not None:
+        if requested not in {
+            DEPLOYMENT_PROFILE_SINGLE_INSTANCE,
+            DEPLOYMENT_PROFILE_DISTRIBUTED_API,
+        }:
+            raise ValueError(
+                f"{DEPLOYMENT_PROFILE_ENV_VAR}={requested!r} is not valid for API startup. "
+                f"Supported API values: {DEPLOYMENT_PROFILE_SINGLE_INSTANCE!r}, "
+                f"{DEPLOYMENT_PROFILE_DISTRIBUTED_API!r}."
+            )
+        return requested, DEPLOYMENT_PROFILE_ENV_VAR
+    return infer_api_deployment_profile(), "derived:EXECUTION_MODE"
+
+
+def resolve_worker_deployment_profile() -> tuple[str, str]:
+    requested = get_requested_deployment_profile()
+    if requested is not None:
+        if requested != DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER:
+            raise ValueError(
+                f"{DEPLOYMENT_PROFILE_ENV_VAR}={requested!r} is not valid for worker startup. "
+                f"Workers support only {DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER!r}."
+            )
+        return requested, DEPLOYMENT_PROFILE_ENV_VAR
+    return infer_worker_deployment_profile(), "worker-default"
+
+
+def background_leadership_mode_for_profile(profile_name: str) -> str:
+    return str(get_deployment_profile_contract(profile_name)["background_leadership_mode"])
+
+
+def validate_api_deployment_profile() -> dict[str, Any]:
+    profile_name, source = resolve_api_deployment_profile()
+    errors: list[str] = []
+    if profile_name == DEPLOYMENT_PROFILE_SINGLE_INSTANCE:
+        if settings.EXECUTION_MODE != "thread":
+            errors.append(
+                "single-instance profile requires EXECUTION_MODE=thread"
+            )
+    elif profile_name == DEPLOYMENT_PROFILE_DISTRIBUTED_API:
+        if settings.EXECUTION_MODE != "distributed":
+            errors.append(
+                "distributed-api profile requires EXECUTION_MODE=distributed"
+            )
+        if not settings.REDIS_URL:
+            errors.append(
+                "distributed-api profile requires REDIS_URL for queue and event-bus coordination"
+            )
+    if profile_name == DEPLOYMENT_PROFILE_DISTRIBUTED_API:
+        if os.getenv("AINDY_EVENT_BUS_ENABLED", "true").lower() in {"0", "false", "no", "off"}:
+            errors.append(
+                "distributed-api profile requires AINDY_EVENT_BUS_ENABLED=true"
+            )
+        if str(settings.AINDY_CACHE_BACKEND).lower() == "memory":
+            errors.append(
+                "distributed-api profile does not permit AINDY_CACHE_BACKEND=memory"
+            )
+    if errors:
+        raise RuntimeError(
+            f"Invalid deployment profile {profile_name!r}: " + "; ".join(errors)
+        )
+    contract = get_deployment_profile_contract(profile_name)
+    contract["source"] = source
+    return contract
+
+
+def validate_worker_deployment_profile() -> dict[str, Any]:
+    profile_name, source = resolve_worker_deployment_profile()
+    errors: list[str] = []
+    if settings.EXECUTION_MODE != "distributed":
+        errors.append(
+            "distributed-worker profile requires EXECUTION_MODE=distributed"
+        )
+    if not settings.REDIS_URL:
+        errors.append(
+            "distributed-worker profile requires REDIS_URL for the durable queue backend"
+        )
+    if errors:
+        raise RuntimeError(
+            f"Invalid deployment profile {profile_name!r}: " + "; ".join(errors)
+        )
+    contract = get_deployment_profile_contract(profile_name)
+    contract["source"] = source
+    return contract
+
+
 def redis_required() -> bool:
-    return settings.requires_redis
+    try:
+        profile_name, _ = resolve_api_deployment_profile()
+    except Exception:
+        return settings.requires_redis
+    return profile_name == DEPLOYMENT_PROFILE_DISTRIBUTED_API
 
 
 def worker_required() -> bool:
-    return not settings.is_testing and settings.EXECUTION_MODE == "distributed"
+    return (
+        not settings.is_testing
+        and redis_required()
+    )
 
 
 def event_bus_required() -> bool:
@@ -156,7 +382,7 @@ def event_bus_required() -> bool:
 
 
 def queue_backend_required() -> bool:
-    return worker_required()
+    return redis_required()
 
 
 def schema_enforcement_required() -> bool:
@@ -172,6 +398,39 @@ def get_api_runtime_state() -> dict[str, Any]:
     return dict(_api_runtime_state)
 
 
+def set_api_runtime_condition(
+    *,
+    code: str,
+    component: str,
+    classification: str,
+    detail: str,
+    production_behavior: str,
+) -> dict[str, Any]:
+    conditions = dict(_api_runtime_state.get("runtime_conditions") or {})
+    conditions[code] = {
+        "code": code,
+        "component": component,
+        "classification": classification,
+        "detail": detail,
+        "production_behavior": production_behavior,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _api_runtime_state["runtime_conditions"] = conditions
+    return dict(conditions[code])
+
+
+def clear_api_runtime_condition(code: str) -> None:
+    conditions = dict(_api_runtime_state.get("runtime_conditions") or {})
+    if code in conditions:
+        conditions.pop(code, None)
+        _api_runtime_state["runtime_conditions"] = conditions
+
+
+def get_api_runtime_conditions() -> list[dict[str, Any]]:
+    conditions = _api_runtime_state.get("runtime_conditions") or {}
+    return [conditions[key] for key in sorted(conditions)]
+
+
 def publish_worker_runtime_state(**updates: Any) -> dict[str, Any]:
     _worker_runtime_state.update(updates)
     return dict(_worker_runtime_state)
@@ -185,30 +444,40 @@ def reset_runtime_state() -> None:
     _api_runtime_state.clear()
     _api_runtime_state.update(
         {
+            "process_role": PROCESS_ROLE_API,
             "startup_complete": False,
             "background_enabled": False,
             "scheduler_role": "disabled",
+            "background_leadership_mode": "unknown",
             "event_bus_ready": False,
             "boot_mode": "unknown",
             "boot_profile": "unknown",
             "boot_profile_source": "unknown",
+            "deployment_profile": "unknown",
+            "deployment_profile_source": "unknown",
             "app_plugins_loaded": False,
             "app_plugin_count": 0,
+            "runtime_conditions": {},
         }
     )
     _worker_runtime_state.clear()
     _worker_runtime_state.update(
         {
+            "process_role": PROCESS_ROLE_WORKER,
             "startup_complete": False,
             "queue_ready": False,
             "schema_ready": False,
             "scheduler_role": "disabled",
+            "background_leadership_mode": "unknown",
+            "deployment_profile": "unknown",
+            "deployment_profile_source": "unknown",
         }
     )
 
 
 def runtime_only_deployment_contract() -> dict[str, Any]:
     return {
+        "stability": "stable",
         "boot_mode": RUNTIME_ONLY_BOOT_MODE,
         "boot_profile": RUNTIME_ONLY_BOOT_PROFILE,
         "activation": {
@@ -241,9 +510,20 @@ def runtime_only_deployment_contract() -> dict[str, Any]:
 
 
 def deployment_contract_summary() -> dict[str, Any]:
+    active_profile_name, active_profile_source = resolve_api_deployment_profile()
+    active_profile = get_deployment_profile_contract(active_profile_name)
     return {
         "environment": settings.ENV,
         "execution_mode": settings.EXECUTION_MODE,
+        "process_role": PROCESS_ROLE_API,
+        "active_profile": {
+            "name": active_profile_name,
+            "source": active_profile_source,
+            "background_leadership_mode": active_profile["background_leadership_mode"],
+        },
+        "supported_profiles": list_supported_deployment_profiles(
+            process_role=PROCESS_ROLE_API
+        ),
         "runtime_only_support": runtime_only_deployment_contract(),
         "requires": {
             "redis": redis_required(),

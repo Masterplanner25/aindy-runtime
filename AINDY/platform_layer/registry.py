@@ -12,6 +12,7 @@ import json
 import logging
 import os
 from collections import defaultdict
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -48,6 +49,13 @@ from AINDY.platform_layer.registry_contracts import (
     validate_symbols,
     validate_syscall_handler,
     validate_trigger_evaluator,
+)
+from AINDY.platform_layer.extension_policy import validate_bootstrap_module_name
+from AINDY.platform_layer.extension_policy import (
+    OWNER_EXTERNAL_THIRD_PARTY,
+    OWNER_FIRST_PARTY_APP,
+    OWNER_RUNTIME_BUILTIN,
+    infer_bootstrap_owner_class,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,6 +106,8 @@ _symbols: dict[str, Any] = {}
 _loaded_plugins: set[str] = set()
 _registered_apps: list[str] = []
 _bootstrap_dependencies: dict[str, list[str]] = {}
+_loaded_extension_records: dict[str, dict[str, Any]] = {}
+_bootstrap_registrations: dict[str, dict[str, Any]] = {}
 _core_domains: list[str] = []
 _degraded_domains: list[str] = []
 _health_checks: dict[str, Callable[[], dict[str, Any]]] = {}
@@ -108,6 +118,10 @@ _APP_PLUGIN_MANIFEST_ENV_VAR = "AINDY_APP_PLUGIN_MANIFEST"
 _active_plugin_profile: str | None = None
 _active_plugin_profile_source: str | None = None
 _runtime_agent_defaults_loaded = False
+_bootstrap_extension_ctx: ContextVar[dict[str, Any] | None] = ContextVar(
+    "_bootstrap_extension_ctx",
+    default=None,
+)
 
 
 def register_router(router: Any, *, root: bool = False, legacy_root: bool = False) -> Any:
@@ -668,17 +682,36 @@ def get_all_health_checks() -> dict[str, Callable[[], dict[str, Any]]]:
     return dict(_health_checks)
 
 
-def publish_bootstrap_registration(app_name: str, dependencies: list[str] | None = None) -> str:
+def publish_bootstrap_registration(
+    app_name: str,
+    dependencies: list[str] | None = None,
+    *,
+    owner_class: str | None = None,
+    module_name: str | None = None,
+) -> str:
     normalized = str(app_name or "").strip()
     if not normalized:
         raise ValueError("app_name must be a non-empty string")
-    if normalized not in _registered_apps:
+    current_extension = _bootstrap_extension_ctx.get() or {}
+    resolved_module_name = str(module_name or current_extension.get("module_name") or "").strip() or None
+    resolved_owner_class = str(
+        owner_class
+        or current_extension.get("owner_class")
+        or infer_bootstrap_owner_class(resolved_module_name or normalized)
+    ).strip()
+    if resolved_owner_class == OWNER_FIRST_PARTY_APP and normalized not in _registered_apps:
         _registered_apps.append(normalized)
     _bootstrap_dependencies[normalized] = [
         str(dependency).strip()
         for dependency in (dependencies or [])
         if str(dependency).strip()
     ]
+    _bootstrap_registrations[normalized] = {
+        "name": normalized,
+        "owner_class": resolved_owner_class,
+        "module_name": resolved_module_name,
+        "dependencies": list(_bootstrap_dependencies[normalized]),
+    }
     return normalized
 
 
@@ -697,6 +730,14 @@ def publish_core_domains(domains: Iterable[str]) -> list[str]:
 
 def get_registered_apps() -> list[str]:
     return list(_registered_apps)
+
+
+def get_loaded_extensions() -> list[dict[str, Any]]:
+    return [dict(_loaded_extension_records[key]) for key in sorted(_loaded_extension_records)]
+
+
+def get_bootstrap_registrations() -> dict[str, dict[str, Any]]:
+    return {name: dict(metadata) for name, metadata in _bootstrap_registrations.items()}
 
 
 def get_bootstrap_dependencies() -> dict[str, list[str]]:
@@ -788,7 +829,13 @@ def _read_plugin_manifest(manifest_path: str | Path | None = None) -> tuple[Path
     return path, data
 
 
-def _normalize_plugin_profile_plugins(plugins: Any, *, profile_name: str, path: Path) -> list[str]:
+def _normalize_plugin_profile_plugins(
+    plugins: Any,
+    *,
+    profile_name: str,
+    path: Path,
+    manifest_owner: str,
+) -> list[dict[str, str]]:
     if plugins is None:
         return []
     if not isinstance(plugins, list):
@@ -796,18 +843,38 @@ def _normalize_plugin_profile_plugins(plugins: Any, *, profile_name: str, path: 
             f"Plugin profile {profile_name!r} in {path} must declare a list of plugins"
         )
 
-    normalized: list[str] = []
+    normalized: list[dict[str, str]] = []
     seen: set[str] = set()
-    for module_name in plugins:
-        if not isinstance(module_name, str):
+    for plugin_entry in plugins:
+        if isinstance(plugin_entry, str):
+            cleaned = plugin_entry.strip()
+            owner_class = infer_bootstrap_owner_class(cleaned)
+        elif isinstance(plugin_entry, dict):
+            module_value = plugin_entry.get("module")
+            if not isinstance(module_value, str):
+                raise ValueError(
+                    f"Plugin profile {profile_name!r} in {path} contains a plugin entry without string 'module'"
+                )
+            cleaned = module_value.strip()
+            owner_class = str(plugin_entry.get("owner_class") or infer_bootstrap_owner_class(cleaned)).strip()
+        else:
             raise ValueError(
-                f"Plugin profile {profile_name!r} in {path} contains a non-string plugin entry"
+                f"Plugin profile {profile_name!r} in {path} contains an invalid plugin entry {plugin_entry!r}"
             )
-        cleaned = module_name.strip()
         if not cleaned or cleaned in seen:
             continue
+        resolved_owner_class = validate_bootstrap_module_name(
+            cleaned,
+            owner_class=owner_class,
+            manifest_owner=manifest_owner,
+        )
         seen.add(cleaned)
-        normalized.append(cleaned)
+        normalized.append(
+            {
+                "module_name": cleaned,
+                "owner_class": resolved_owner_class,
+            }
+        )
     return normalized
 
 
@@ -844,7 +911,7 @@ def _resolve_plugin_profile_selection(
     manifest_path: str | Path | None = None,
     *,
     profile: str | None = None,
-) -> tuple[str, list[str], bool, str]:
+) -> tuple[str, list[dict[str, str]], bool, str]:
     path, manifest_source, manifest_owner = _resolve_manifest_path(
         manifest_path,
         profile=profile,
@@ -877,6 +944,7 @@ def _resolve_plugin_profile_selection(
             legacy_plugins,
             profile_name="__legacy__",
             path=path,
+            manifest_owner=manifest_owner,
         ), False, "legacy-manifest"
 
     profiles = data.get("profiles")
@@ -921,6 +989,7 @@ def _resolve_plugin_profile_selection(
         profile_entry.get("plugins"),
         profile_name=selected_profile,
         path=path,
+        manifest_owner=manifest_owner,
     ), explicitly_selected, selection_source
 
 
@@ -929,11 +998,23 @@ def resolve_plugin_profile(
     *,
     profile: str | None = None,
 ) -> tuple[str, list[str]]:
-    selected_profile, plugins, _explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
+    selected_profile, plugin_entries, _explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
         manifest_path,
         profile=profile,
     )
-    return selected_profile, plugins
+    return selected_profile, [entry["module_name"] for entry in plugin_entries]
+
+
+def resolve_plugin_profile_entries(
+    manifest_path: str | Path | None = None,
+    *,
+    profile: str | None = None,
+) -> tuple[str, list[dict[str, str]]]:
+    selected_profile, plugin_entries, _explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
+        manifest_path,
+        profile=profile,
+    )
+    return selected_profile, [dict(entry) for entry in plugin_entries]
 
 
 def get_active_plugin_profile(manifest_path: str | Path | None = None) -> str:
@@ -965,11 +1046,11 @@ def get_plugin_boot_order(
         manifest_path,
         profile=profile,
     )
-    profile_name, plugin_modules, explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
+    profile_name, plugin_entries, explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
         manifest_path,
         profile=profile,
     )
-    if not plugin_modules:
+    if not plugin_entries:
         if profile_name == "missing":
             return []
         if explicitly_selected or manifest_owner == "runtime":
@@ -981,7 +1062,8 @@ def get_plugin_boot_order(
         )
 
     boot_order: list[str] = []
-    for module_name in plugin_modules:
+    for plugin_entry in plugin_entries:
+        module_name = plugin_entry["module_name"]
         try:
             module = importlib.import_module(module_name)
         except Exception as exc:
@@ -1026,6 +1108,12 @@ def load_plugins(
     list or the profile format:
 
     ``{"default_profile": "default-apps", "profiles": {"platform-only": {"plugins": []}, ...}}``
+
+    Each plugin entry may be either:
+
+    - a legacy string module name such as ``"apps.bootstrap"``
+    - an explicit object such as
+      ``{"module": "apps.bootstrap", "owner_class": "first-party-app"}``
     """
 
     path, _manifest_source, manifest_owner = _resolve_manifest_path(
@@ -1033,7 +1121,7 @@ def load_plugins(
         profile=profile,
     )
     global _active_plugin_profile, _active_plugin_profile_source
-    active_profile, plugin_modules, explicitly_selected, selection_source = _resolve_plugin_profile_selection(
+    active_profile, plugin_entries, explicitly_selected, selection_source = _resolve_plugin_profile_selection(
         manifest_path if manifest_path is not None else path,
         profile=profile,
     )
@@ -1043,7 +1131,7 @@ def load_plugins(
         return []
     _active_plugin_profile = active_profile
     _active_plugin_profile_source = selection_source
-    if not plugin_modules:
+    if not plugin_entries:
         if not explicitly_selected and manifest_owner != "runtime":
             raise _plugin_boot_failure(
                 path=path,
@@ -1056,12 +1144,23 @@ def load_plugins(
         )
         return []
     loaded: list[str] = []
-    for module_name in plugin_modules:
+    for plugin_entry in plugin_entries:
+        module_name = plugin_entry["module_name"]
+        owner_class = plugin_entry["owner_class"]
         if module_name in _loaded_plugins:
             continue
+        bootstrap_token = _bootstrap_extension_ctx.set(
+            {
+                "module_name": module_name,
+                "owner_class": owner_class,
+                "manifest_owner": manifest_owner,
+                "profile_name": active_profile,
+            }
+        )
         try:
             module = importlib.import_module(module_name)
         except Exception as exc:
+            _bootstrap_extension_ctx.reset(bootstrap_token)
             raise _plugin_boot_failure(
                 path=path,
                 profile_name=active_profile,
@@ -1073,13 +1172,21 @@ def load_plugins(
             try:
                 bootstrap()
             except Exception as exc:
+                _bootstrap_extension_ctx.reset(bootstrap_token)
                 raise _plugin_boot_failure(
                     path=path,
                     profile_name=active_profile,
                     module_name=module_name,
                     reason=f"bootstrap raised {exc.__class__.__name__}: {exc}",
                 ) from exc
+        _bootstrap_extension_ctx.reset(bootstrap_token)
         _loaded_plugins.add(module_name)
+        _loaded_extension_records[module_name] = {
+            "module_name": module_name,
+            "owner_class": owner_class,
+            "manifest_owner": manifest_owner,
+            "profile_name": active_profile,
+        }
         loaded.append(module_name)
     if loaded:
         logger.info(

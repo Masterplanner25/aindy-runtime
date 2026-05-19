@@ -4,6 +4,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from AINDY.agents.runtime_guardrails import AgentRuntimeGuardrailViolation, enforce_replay_guardrails
 from AINDY.core.execution_signal_helper import record_agent_event
 from AINDY.core.system_event_service import emit_error_event
 from AINDY.platform_layer.trace_context import get_parent_event_id, get_trace_id
@@ -24,6 +25,7 @@ def replay_run(run_id: str, user_id: str, db: Session, mode: str = "same_plan") 
         if not compat._user_matches(original.user_id, user_id):
             logger.warning("[AgentRuntime] replay_run: owner mismatch for %s", run_id)
             return None
+        enforce_replay_guardrails(db, original_run=original)
 
         if mode == "new_plan":
             original_objective = compat._run_objective(original)
@@ -55,6 +57,8 @@ def replay_run(run_id: str, user_id: str, db: Session, mode: str = "same_plan") 
             required=True,
         )
         return new_run
+    except AgentRuntimeGuardrailViolation:
+        raise
     except Exception as exc:
         compat = get_runtime_compat_module()
         logger.warning("[AgentRuntime] replay_run failed for %s: %s", run_id, exc)

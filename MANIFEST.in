@@ -1,1 +1,2 @@
 recursive-include AINDY *.json
+recursive-include docs/runtime *.md
