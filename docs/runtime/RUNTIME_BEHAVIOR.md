@@ -18,7 +18,8 @@ This document describes the current runtime behavior of the FastAPI backend as i
   3. Initialize cache backend via `AINDY_CACHE_BACKEND`.
   4. Verify Mongo connectivity when Mongo-backed features require it.
   5. Validate queue backend and worker expectations when distributed execution is configured.
-  6. Enforce schema drift guard when `AINDY_ENFORCE_SCHEMA=true`.
+  6. Bootstrap the runtime-owned schema on a blank database, then enforce the
+     runtime schema contract when `AINDY_ENFORCE_SCHEMA=true`.
   7. Acquire background-task leadership through the startup event path and start APScheduler only on the leader.
   8. Register syscall handlers, canonical flow nodes, and flows.
   9. Restore dynamic platform registrations from the DB.
@@ -44,6 +45,21 @@ This document describes the current runtime behavior of the FastAPI backend as i
 - Startup and shutdown logic in `main.py` uses explicit `SessionLocal()` blocks with `try/finally`.
 - Request metrics middleware creates its own short-lived session to persist `RequestMetric` rows.
 - MongoDB uses a process-level client singleton in `AINDY/db/mongo_setup.py`; shutdown now attempts to close the client in the lifespan shutdown path.
+
+## 3.1 Runtime-Owned Schema Contract
+- The extracted runtime no longer depends on repo-root `alembic.ini` or
+  monolith migration scripts to make its own tables available.
+- `AINDY/db/schema_contract.py` is the runtime-owned schema authority.
+- The contract is derived from packaged runtime ORM models under
+  `AINDY/db/models/` plus runtime memory persistence tables.
+- Startup and worker boot allow one safe bootstrap path: when none of the
+  runtime-owned tables exist yet, the runtime creates them from packaged
+  metadata.
+- Once any runtime-owned table already exists, the runtime treats the database
+  as initialized and switches to strict validation. Missing tables, missing
+  columns, or incompatible column shape are treated as schema drift.
+- This preserves fail-fast behavior for partial or stale production schemas
+  while still allowing a fresh runtime-only deployment to self-host.
 
 ## 4. Execution Registration
 - Canonical flow execution is registered during startup from `runtime.flow_definitions`.

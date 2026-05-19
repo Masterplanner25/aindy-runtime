@@ -136,6 +136,8 @@ Expected split behavior without a migration-system rewrite:
 
 - `aindy-runtime` owns runtime model definitions and the contract for their
   tables
+- `aindy-runtime` also owns blank-database bootstrap for those runtime tables
+  through packaged ORM metadata in `AINDY/db/schema_contract.py`
 - `aindy-apps-monolith` owns the deployment-specific Alembic tree for the
   combined application database
 - runtime schema changes should be consumed by the apps repo as a dependency
@@ -145,6 +147,15 @@ Expected split behavior without a migration-system rewrite:
 
 This keeps one migration authority per deployed database while avoiding a
 premature multi-repo Alembic split.
+
+Important extracted-runtime nuance:
+
+- the runtime repo is self-hostable for runtime-owned tables without importing
+  monolith migration artifacts
+- that bootstrap path is intentionally narrow: it only applies when the runtime
+  schema is completely absent
+- once any runtime-owned table exists, the runtime switches to strict contract
+  validation and fails fast on drift instead of silently mutating a live schema
 
 ## Migration Authoring Rules
 

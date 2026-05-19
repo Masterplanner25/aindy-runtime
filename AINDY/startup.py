@@ -74,6 +74,7 @@ from AINDY.platform_layer.trace_context import (
     set_current_request,
     set_current_trace_id,
 )
+from AINDY.db.schema_contract import ensure_runtime_schema
 
 try:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -87,33 +88,6 @@ except ImportError:
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
-
-def _import_installed_alembic():
-    """
-    Import the site-packages Alembic package even though this repo also has
-    repo-local alembic/ for migration scripts, which otherwise shadows the package.
-    """
-    app_dir = os.path.abspath(os.path.dirname(__file__))
-    removed: list[tuple[int, str]] = []
-    for index in range(len(sys.path) - 1, -1, -1):
-        path = sys.path[index]
-        normalized = os.path.abspath(path or os.getcwd())
-        if normalized in {app_dir, ROOT_DIR}:
-            removed.append((index, path))
-            sys.path.pop(index)
-    try:
-        from alembic.config import Config  # type: ignore
-        from alembic.script import ScriptDirectory  # type: ignore
-        from alembic.runtime.migration import MigrationContext  # type: ignore
-        return Config, ScriptDirectory, MigrationContext
-    except Exception:
-        return None, None, None
-    finally:
-        for index, path in sorted(removed, key=lambda item: item[0]):
-            sys.path.insert(index, path)
-
-
-Config, ScriptDirectory, MigrationContext = _import_installed_alembic()
 
 
 # For in-memory caching
@@ -177,33 +151,17 @@ def _initialize_runtime_bootstrap() -> None:
 _initialize_runtime_bootstrap()
 
 
-def _check_alembic_head() -> None:
-    """Warn at startup if DB schema is behind the latest Alembic migration."""
-    if not (Config and ScriptDirectory and MigrationContext):
-        logger.warning("Schema guard unavailable: alembic not installed.")
-        return
-
+def _check_runtime_schema() -> None:
+    """Warn at startup if the runtime-owned schema does not match packaged metadata."""
     try:
         engine = create_engine(settings.DATABASE_URL)
-        with engine.connect() as conn:
-            context = MigrationContext.configure(conn)
-            current_rev = context.get_current_revision()
-
-        alembic_cfg = Config("alembic.ini")
-        alembic_cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
-        script = ScriptDirectory.from_config(alembic_cfg)
-        head_rev = script.get_current_head()
-
-        if current_rev != head_rev:
-            logger.warning(
-                "[startup] Alembic schema is not at head (db=%s head=%s).",
-                current_rev,
-                head_rev,
-            )
+        report = ensure_runtime_schema(engine, allow_bootstrap=False)
+        if report.ok:
+            logger.info("[startup] Runtime-owned schema matches packaged metadata.")
         else:
-            logger.info("[startup] Alembic schema is at head.")
+            logger.warning("[startup] Runtime schema check failed: %s", report.summary())
     except Exception as exc:
-        logger.warning("[startup] Could not verify Alembic schema: %s", exc)
+        logger.warning("[startup] Could not verify runtime schema: %s", exc)
 
 def _ensure_dev_api_key():
     try:
@@ -788,35 +746,29 @@ def _enforce_schema_guard(db_factory) -> None:
         raise RuntimeError(
             "AINDY_ENFORCE_SCHEMA=false is not permitted in production (ENV=production). "
             "Schema enforcement is a required safety gate. "
-            "To deploy with a schema change, run: alembic upgrade head"
+            "Initialize or reconcile the runtime-owned schema before deployment."
         )
     if enforce_schema and not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
-        if not (Config and ScriptDirectory and MigrationContext):
-            logger.error("Schema guard unavailable: alembic not installed.")
-            raise RuntimeError("Schema guard unavailable: alembic not installed.")
         db = db_factory()
         try:
-            conn = db.connection()
-            context = MigrationContext.configure(conn)
-            current_rev = context.get_current_revision()
-
-            alembic_cfg = Config("alembic.ini")
-            script = ScriptDirectory.from_config(alembic_cfg)
-            heads = script.get_heads()
-
-            if not current_rev or (current_rev not in heads):
+            report = ensure_runtime_schema(db, allow_bootstrap=True)
+            if report.bootstrapped:
+                logger.info("Bootstrapped runtime-owned schema from packaged metadata.")
+            if not report.ok:
                 logger.error(
-                    "Schema drift detected. current=%s heads=%s",
-                    current_rev,
-                    heads,
+                    "Schema drift detected against runtime-owned metadata: %s",
+                    report.summary(),
                 )
-                raise RuntimeError("Schema drift detected. Run alembic upgrade head.")
+                raise RuntimeError(
+                    "Schema drift detected against runtime-owned metadata. "
+                    "Reconcile the database schema before startup."
+                )
         finally:
             db.close()
     elif not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
         logger.warning(
             "[startup] Schema enforcement is DISABLED (AINDY_ENFORCE_SCHEMA=false). "
-            "The server will start even if the database schema is behind migrations. "
+            "The server will start even if the runtime-owned schema is not ready. "
             "This is only safe for development. Do not use in production."
         )
 
@@ -1147,12 +1099,12 @@ async def lifespan(app: FastAPI):
     logger.info("Cache behavior mode: %s", cache_mode)
     # Phase 3: initialize MongoDB and warn on degraded mode.
     _init_mongodb()
-    # Phase 4: bootstrap development API key state.
-    _bootstrap_dev_api_key()
-    # Phase 5: validate queue backend and worker capacity.
+    # Phase 4: validate queue backend and worker capacity.
     _validate_queue_and_workers()
-    # Phase 6: enforce schema drift guard.
+    # Phase 5: bootstrap or validate the runtime-owned schema before DB writes.
     _enforce_schema_guard(SessionLocal)
+    # Phase 6: bootstrap development API key state.
+    _bootstrap_dev_api_key()
     # Phase 7: start background services and determine background role.
     _start_background_services(SessionLocal)
     enable_background = background_tasks_enabled()

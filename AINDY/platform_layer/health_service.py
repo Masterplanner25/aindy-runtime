@@ -24,6 +24,7 @@ from AINDY.platform_layer.deployment_contract import (
     worker_required,
 )
 from AINDY.platform_layer.registry import get_degraded_domains
+from AINDY.db.schema_contract import ensure_runtime_schema
 from AINDY.platform_layer.registry import get_all_health_checks
 
 logger = logging.getLogger(__name__)
@@ -245,29 +246,6 @@ def invalidate_redis_health_cache() -> None:
         _redis_health_checked_at = 0.0
 
 
-def _import_installed_alembic():
-    app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-    root_dir = os.path.abspath(os.path.join(app_dir, os.pardir))
-    removed: list[tuple[int, str]] = []
-    for index in range(len(sys.path) - 1, -1, -1):
-        path = sys.path[index]
-        normalized = os.path.abspath(path or os.getcwd())
-        if normalized in {app_dir, root_dir}:
-            removed.append((index, path))
-            sys.path.pop(index)
-    try:
-        from alembic.config import Config  # type: ignore
-        from alembic.script import ScriptDirectory  # type: ignore
-        from alembic.runtime.migration import MigrationContext  # type: ignore
-
-        return Config, ScriptDirectory, MigrationContext
-    except Exception:
-        return None, None, None
-    finally:
-        for index, path in sorted(removed, key=lambda item: item[0]):
-            sys.path.insert(index, path)
-
-
 def _postgres_probe_engine(timeout: float):
     url = make_url(settings.DATABASE_URL)
     connect_args: dict[str, object] = {}
@@ -479,41 +457,24 @@ def check_mongo(timeout: float = 2.0) -> DependencyStatus:
 
 
 def check_schema() -> DependencyStatus:
-    Config, ScriptDirectory, MigrationContext = _import_installed_alembic()
-    if not (Config and ScriptDirectory and MigrationContext):
-        return DependencyStatus(
-            name="schema",
-            status="degraded",
-            detail="Schema check unavailable: alembic not installed",
-            critical=False,
-        )
-
     engine = None
     try:
         engine = create_engine(settings.DATABASE_URL)
-        with engine.connect() as conn:
-            context = MigrationContext.configure(conn)
-            current = context.get_current_revision()
-
-        cfg = Config("alembic.ini")
-        cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
-        script = ScriptDirectory.from_config(cfg)
-        heads = set(script.get_heads())
-
-        if current in heads:
+        report = ensure_runtime_schema(engine, allow_bootstrap=False)
+        if report.ok:
             return DependencyStatus(name="schema", status="ok", critical=True)
 
         return DependencyStatus(
             name="schema",
             status="unavailable",
-            detail=f"DB at {current!r}, head is {sorted(heads)!r}",
+            detail=report.summary(),
             critical=True,
         )
     except Exception as exc:
         return DependencyStatus(
             name="schema",
             status="degraded",
-            detail=f"Schema check unavailable: {exc}",
+            detail=f"Runtime schema check unavailable: {exc}",
             critical=False,
         )
     finally:

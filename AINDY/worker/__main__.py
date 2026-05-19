@@ -64,8 +64,8 @@ def main() -> None:
                 logger.info("Worker started without scheduler leadership")
         else:
             raise RuntimeError(
-                "Worker startup blocked: required schema is not ready "
-                "(background_task_leases missing). Run migrations before starting the worker."
+                "Worker startup blocked: required runtime-owned schema is not ready. "
+                "Initialize or reconcile the packaged runtime schema before starting the worker."
             )
 
         concurrency = int(os.getenv("WORKER_CONCURRENCY", "1"))

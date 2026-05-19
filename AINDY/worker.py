@@ -2,10 +2,8 @@ import logging
 import signal
 import time
 
-from sqlalchemy import inspect
-from sqlalchemy.exc import SQLAlchemyError
-
 from AINDY.db.database import SessionLocal
+from AINDY.db.schema_contract import ensure_runtime_schema
 from AINDY.platform_layer import scheduler_service
 from AINDY.platform_layer.registry import emit_event, load_plugins
 logger = logging.getLogger(__name__)
@@ -36,9 +34,11 @@ def _stop(*_args):
 def _background_schema_ready() -> bool:
     db = SessionLocal()
     try:
-        inspector = inspect(db.bind)
-        return inspector.has_table("background_task_leases")
-    except SQLAlchemyError as exc:
+        report = ensure_runtime_schema(db, allow_bootstrap=True)
+        if not report.ok:
+            logger.warning("Worker schema readiness check failed: %s", report.summary())
+        return report.ok
+    except Exception as exc:
         logger.warning("Worker schema readiness check failed: %s", exc)
         return False
     finally:
@@ -50,7 +50,7 @@ def _wait_for_background_schema(timeout_seconds: int = 60) -> bool:
     while _RUNNING and time.time() < deadline:
         if _background_schema_ready():
             return True
-        logger.info("Worker waiting for migrated schema: background_task_leases not ready yet")
+        logger.info("Worker waiting for runtime-owned schema to become ready")
         time.sleep(2)
     return _background_schema_ready()
 

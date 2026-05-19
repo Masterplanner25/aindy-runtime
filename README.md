@@ -124,9 +124,21 @@ app- or monolith-owned:
 
 - app bootstrap and app-profile tests
 - cross-app import boundary checks
-- Alembic migration execution for the deployed app database
+- app-database Alembic migration execution for app-owned tables
 - frontend, Playwright, and client build checks
 - Docker image and full monolith service-matrix validation
+
+## Runtime Schema Bootstrap
+
+The extracted runtime is self-hostable for its own database surface.
+
+- startup, worker boot, and readiness checks use packaged runtime ORM metadata
+  as the schema contract
+- on a blank database, the runtime bootstraps runtime-owned tables directly from
+  that packaged metadata
+- on a partially initialized or drifted database, startup fails fast when
+  `AINDY_ENFORCE_SCHEMA=true`
+- app-owned tables and the monolith Alembic history remain app-repo concerns
 
 ## Docs
 
