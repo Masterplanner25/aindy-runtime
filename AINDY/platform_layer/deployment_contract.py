@@ -513,6 +513,14 @@ def deployment_contract_summary() -> dict[str, Any]:
     active_profile_name, active_profile_source = resolve_api_deployment_profile()
     active_profile = get_deployment_profile_contract(active_profile_name)
     return {
+        "release_posture": {
+            "support_tier": "trusted-internal",
+            "readiness_scope": (
+                "Readiness reflects required dependencies and unsafe runtime conditions "
+                "for the active deployment profile. It does not certify extension "
+                "isolation or third-party code trust."
+            ),
+        },
         "environment": settings.ENV,
         "execution_mode": settings.EXECUTION_MODE,
         "process_role": PROCESS_ROLE_API,

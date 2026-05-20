@@ -63,6 +63,7 @@ def create_flow(request: Request, body: FlowDefinition, db: Session = Depends(ge
                 start=body.start,
                 end=body.end,
                 user_id=user_id,
+                owner_class=body.owner_class,
                 overwrite=body.overwrite,
                 db=db,
             )

@@ -1,6 +1,6 @@
 ---
 title: "Runtime Behavior"
-last_verified: "2026-05-18"
+last_verified: "2026-05-20"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -18,8 +18,9 @@ This document describes the current runtime behavior of the FastAPI backend as i
   3. Initialize cache backend via `AINDY_CACHE_BACKEND`.
   4. Verify Mongo connectivity and record explicit degraded state when Mongo-backed features are optional but unavailable.
   5. Validate queue backend and worker expectations when distributed execution is configured, and fail fast in production if the queue falls back to an unsafe in-memory mode.
-  6. Bootstrap the runtime-owned schema on a blank database, then enforce the
-     runtime schema contract when `AINDY_ENFORCE_SCHEMA=true`.
+  6. Bootstrap the runtime-owned schema on a blank database, enforce the
+     runtime schema contract when `AINDY_ENFORCE_SCHEMA=true`, and allow
+     additive-safe reconciliation only when `AINDY_SCHEMA_RECONCILE=true`.
   7. Acquire background-task leadership through the startup event path and start APScheduler only on the leader.
   8. Register syscall handlers, canonical flow nodes, and flows.
   9. Restore dynamic platform registrations from the DB and surface incomplete restore as an explicit unsafe degraded state.
@@ -68,14 +69,21 @@ This document describes the current runtime behavior of the FastAPI backend as i
 - `AINDY/db/schema_contract.py` is the runtime-owned schema authority.
 - The contract is derived from packaged runtime ORM models under
   `AINDY/db/models/` plus runtime memory persistence tables.
-- Startup and worker boot allow one safe bootstrap path: when none of the
-  runtime-owned tables exist yet, the runtime creates them from packaged
-  metadata.
-- Once any runtime-owned table already exists, the runtime treats the database
-  as initialized and switches to strict validation. Missing tables, missing
-  columns, or incompatible column shape are treated as schema drift.
-- This preserves fail-fast behavior for partial or stale production schemas
-  while still allowing a fresh runtime-only deployment to self-host.
+- Startup and worker boot classify runtime-owned schema into four states:
+  - `blank_bootstrap`
+  - `compatible`
+  - `upgrade_required`
+  - `incompatible_manual`
+- Blank databases are bootstrapped automatically from packaged metadata.
+- Already-initialized schemas are never mutated implicitly.
+- `upgrade_required` means the runtime has detected an additive-safe reconcile
+  path, but it still requires explicit operator intent through
+  `AINDY_SCHEMA_RECONCILE=true`.
+- `incompatible_manual` means the runtime found unsafe drift such as type,
+  nullability, or primary-key mismatch and will fail closed.
+- `/health` exposes `schema_state`, whether reconcile is supported, and the
+  operator action the runtime expects.
+- See `docs/runtime/SCHEMA_LIFECYCLE.md` for the operator workflow.
 
 ## 4. Execution Registration
 - Canonical flow execution is registered during startup from `runtime.flow_definitions`.

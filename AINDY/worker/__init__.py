@@ -4,6 +4,7 @@
 # exposes SessionLocal, _background_schema_ready, main, etc.
 
 import logging
+import os
 import signal
 import time
 
@@ -40,7 +41,20 @@ def _stop(*_args):
 def _background_schema_ready() -> bool:
     db = SessionLocal()
     try:
-        report = ensure_runtime_schema(db, allow_bootstrap=True)
+        allow_reconcile = os.getenv("AINDY_SCHEMA_RECONCILE", "false").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        report = ensure_runtime_schema(
+            db,
+            allow_bootstrap=True,
+            allow_reconcile=allow_reconcile,
+        )
+        if report.bootstrapped:
+            logger.info("Worker bootstrapped runtime-owned schema from packaged metadata.")
+        if report.reconciled:
+            logger.info("Worker reconciled runtime-owned schema to packaged metadata.")
         if not report.ok:
             logger.warning("Worker schema readiness check failed: %s", report.summary())
         return report.ok

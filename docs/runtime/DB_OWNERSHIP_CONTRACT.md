@@ -1,6 +1,6 @@
 ---
 title: "Database Ownership Contract"
-last_verified: "2026-05-10"
+last_verified: "2026-05-20"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -152,10 +152,12 @@ Important extracted-runtime nuance:
 
 - the runtime repo is self-hostable for runtime-owned tables without importing
   monolith migration artifacts
-- that bootstrap path is intentionally narrow: it only applies when the runtime
-  schema is completely absent
-- once any runtime-owned table exists, the runtime switches to strict contract
-  validation and fails fast on drift instead of silently mutating a live schema
+- blank-database bootstrap is automatic from packaged metadata
+- additive-safe upgrade reconciliation is runtime-owned, but explicit:
+  operators must opt into it with `AINDY_SCHEMA_RECONCILE=true`
+- once the runtime detects unsafe drift, it fails closed and requires manual
+  intervention instead of silently mutating a live schema
+- see `docs/runtime/SCHEMA_LIFECYCLE.md` for the current operator workflow
 
 ## Migration Authoring Rules
 

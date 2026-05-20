@@ -175,7 +175,17 @@ def register_dynamic_flow(
         _DYNAMIC_META[name] = meta
 
     if db is not None:
-        _persist_flow(name, nodes, edges, start, end, user_id=user_id, overwrite=overwrite, db=db)
+        _persist_flow(
+            name,
+            nodes,
+            edges,
+            start,
+            end,
+            user_id=user_id,
+            owner_class=owner_class,
+            overwrite=overwrite,
+            db=db,
+        )
 
     logger.info("platform: dynamic flow registered: %s (nodes=%d)", name, len(nodes))
     return meta
@@ -189,6 +199,7 @@ def _persist_flow(
     end: list[str],
     *,
     user_id: str | None,
+    owner_class: str,
     overwrite: bool,
     db: Session,
 ) -> None:
@@ -207,6 +218,7 @@ def _persist_flow(
         existing = db.query(DynamicFlow).filter(DynamicFlow.name == name).first()
         if existing:
             existing.definition_json = definition
+            existing.owner_class = owner_class
             existing.is_active = True
             existing.updated_at = now
         else:
@@ -215,6 +227,7 @@ def _persist_flow(
                     id=uuid.uuid4(),
                     name=name,
                     definition_json=definition,
+                    owner_class=owner_class,
                     created_by=str(user_id) if user_id else None,
                     created_at=now,
                     updated_at=now,

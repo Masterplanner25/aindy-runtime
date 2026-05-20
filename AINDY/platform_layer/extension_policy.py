@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 _DEFAULT_TRUSTED_BOOTSTRAP_PREFIXES = ("AINDY.", "apps.")
 _DEFAULT_EXTERNAL_BOOTSTRAP_PREFIXES: tuple[str, ...] = ()
 _PRIVATE_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
+_EXTERNAL_PYTHON_OVERRIDE_ENV_VAR = "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS"
 OWNER_RUNTIME_BUILTIN = "runtime-built-in"
 OWNER_FIRST_PARTY_APP = "first-party-app"
 OWNER_EXTERNAL_THIRD_PARTY = "external-third-party"
@@ -63,6 +64,44 @@ def validate_extension_owner_class(owner_class: str) -> str:
             f"owner_class must be one of {sorted(ALLOWED_EXTENSION_OWNER_CLASSES)!r}, got {owner_class!r}"
         )
     return cleaned
+
+
+def external_python_extensions_trusted() -> bool:
+    return os.getenv(_EXTERNAL_PYTHON_OVERRIDE_ENV_VAR, "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def python_extension_trust_class(owner_class: str) -> str:
+    resolved = validate_extension_owner_class(owner_class)
+    if resolved == OWNER_RUNTIME_BUILTIN:
+        return "trusted-runtime-python"
+    if resolved == OWNER_FIRST_PARTY_APP:
+        return "trusted-first-party-python"
+    if external_python_extensions_trusted():
+        return "trusted-external-python-override"
+    return "blocked-external-python"
+
+
+def assert_python_extension_allowed(
+    owner_class: str,
+    *,
+    surface: str,
+    identifier: str,
+) -> str:
+    resolved = validate_extension_owner_class(owner_class)
+    if resolved != OWNER_EXTERNAL_THIRD_PARTY:
+        return python_extension_trust_class(resolved)
+    if external_python_extensions_trusted():
+        return python_extension_trust_class(resolved)
+    raise ValueError(
+        f"external-third-party {surface} {identifier!r} is blocked by default because "
+        "the runtime does not sandbox in-process Python extensions. "
+        f"Use a contract-driven webhook integration instead, or set "
+        f"{_EXTERNAL_PYTHON_OVERRIDE_ENV_VAR}=true only for explicitly trusted deployments."
+    )
 
 
 def validate_bootstrap_module_name(

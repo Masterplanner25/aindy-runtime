@@ -23,7 +23,7 @@ def _ctx(*, capabilities: list[str] | None = None, metadata: dict | None = None)
     )
 
 
-def test_dispatcher_quota_transport_failure_is_fail_open(monkeypatch, dispatcher):
+def test_dispatcher_quota_transport_failure_is_fail_open_in_development(monkeypatch, dispatcher):
     calls: list[str] = []
     name = "sys.v1.test.fail_open"
     syscall_registry.SYSCALL_REGISTRY[name] = syscall_registry.SyscallEntry(
@@ -39,6 +39,9 @@ def test_dispatcher_quota_transport_failure_is_fail_open(monkeypatch, dispatcher
             return None
 
     monkeypatch.setattr(syscall_dispatcher, "_get_rm", lambda: _BrokenRm())
+    monkeypatch.setattr(syscall_dispatcher.settings, "ENV", "development")
+    monkeypatch.setattr(syscall_dispatcher.settings, "TESTING", False)
+    monkeypatch.setattr(syscall_dispatcher.settings, "TEST_MODE", False)
     try:
         result = dispatcher.dispatch(name, {}, _ctx())
     finally:
@@ -47,6 +50,35 @@ def test_dispatcher_quota_transport_failure_is_fail_open(monkeypatch, dispatcher
     assert calls == ["ran"]
     assert result["status"] == "success"
     assert result["data"] == {"ok": True}
+
+
+def test_dispatcher_quota_transport_failure_fails_closed_in_production(monkeypatch, dispatcher):
+    calls: list[str] = []
+    name = "sys.v1.test.fail_closed"
+    syscall_registry.SYSCALL_REGISTRY[name] = syscall_registry.SyscallEntry(
+        handler=lambda payload, context: calls.append("ran") or {"ok": True},
+        capability="test.capability",
+    )
+
+    class _BrokenRm:
+        def check_quota(self, execution_unit_id):
+            raise RuntimeError("quota backend offline")
+
+        def record_usage(self, execution_unit_id, usage):
+            return None
+
+    monkeypatch.setattr(syscall_dispatcher, "_get_rm", lambda: _BrokenRm())
+    monkeypatch.setattr(syscall_dispatcher.settings, "ENV", "production")
+    monkeypatch.setattr(syscall_dispatcher.settings, "TESTING", False)
+    monkeypatch.setattr(syscall_dispatcher.settings, "TEST_MODE", False)
+    try:
+        result = dispatcher.dispatch(name, {}, _ctx())
+    finally:
+        syscall_registry.SYSCALL_REGISTRY.pop(name, None)
+
+    assert calls == []
+    assert result["status"] == "error"
+    assert "Quota backend unavailable" in result["error"]
 
 
 def test_dispatcher_rejects_non_dict_handler_output(monkeypatch, dispatcher):
@@ -73,12 +105,40 @@ def test_dispatcher_rejects_non_dict_handler_output(monkeypatch, dispatcher):
     assert "returned list, expected dict" in result["error"]
 
 
-def test_dispatcher_output_schema_mismatch_is_warning_only(monkeypatch, dispatcher, caplog):
+def test_dispatcher_stable_output_schema_mismatch_fails_closed(monkeypatch, dispatcher, caplog):
+    name = "sys.v1.test.output_stable"
+    syscall_registry.SYSCALL_REGISTRY[name] = syscall_registry.SyscallEntry(
+        handler=lambda payload, context: {"present": True},
+        capability="test.capability",
+        output_schema={"required": ["missing"]},
+        stable=True,
+    )
+
+    class _OkRm:
+        def check_quota(self, execution_unit_id):
+            return True, None
+
+        def record_usage(self, execution_unit_id, usage):
+            return None
+
+    monkeypatch.setattr(syscall_dispatcher, "_get_rm", lambda: _OkRm())
+    try:
+        result = dispatcher.dispatch(name, {}, _ctx())
+    finally:
+        syscall_registry.SYSCALL_REGISTRY.pop(name, None)
+
+    assert result["status"] == "error"
+    assert "Stable syscall output validation failed" in result["error"]
+    assert "stable output schema mismatch" in caplog.text
+
+
+def test_dispatcher_experimental_output_schema_mismatch_is_warning_only(monkeypatch, dispatcher, caplog):
     name = "sys.v1.test.output_warning"
     syscall_registry.SYSCALL_REGISTRY[name] = syscall_registry.SyscallEntry(
         handler=lambda payload, context: {"present": True},
         capability="test.capability",
         output_schema={"required": ["missing"]},
+        stable=False,
     )
 
     class _OkRm:
@@ -96,7 +156,7 @@ def test_dispatcher_output_schema_mismatch_is_warning_only(monkeypatch, dispatch
 
     assert result["status"] == "success"
     assert result["data"] == {"present": True}
-    assert "output schema mismatch" in caplog.text
+    assert "experimental" in caplog.text
 
 
 class _FakeQuery:
@@ -188,6 +248,36 @@ def test_agent_ensure_initial_run_preserves_external_db_transaction(monkeypatch)
     assert fake_db.close_calls == 0
 
 
+def test_agent_ensure_initial_run_owns_and_closes_internal_session(monkeypatch):
+    fake_db = _FakeDb()
+
+    class _FakeAgentRun:
+        user_id = "user_id"
+        goal = "goal"
+
+        def __init__(self, user_id, goal, status, overall_risk, steps_total):
+            self.id = None
+            self.user_id = user_id
+            self.goal = goal
+            self.status = status
+            self.overall_risk = overall_risk
+            self.steps_total = steps_total
+
+    monkeypatch.setattr("AINDY.platform_layer.user_ids.parse_user_id", lambda user_id: user_id)
+    monkeypatch.setattr("AINDY.db.models.AgentRun", _FakeAgentRun)
+    monkeypatch.setattr("AINDY.db.database.SessionLocal", lambda: fake_db)
+
+    result = syscall_registry._handle_agent_ensure_initial_run(
+        {"user_id": "user-1"},
+        _ctx(capabilities=["agent.write"]),
+    )
+
+    assert result == {"run_id": "run-created", "created": True}
+    assert fake_db.commit_calls == 1
+    assert fake_db.flush_calls == 0
+    assert fake_db.close_calls == 1
+
+
 def test_event_emit_reuses_external_db_without_committing(monkeypatch):
     fake_db = _FakeDb()
     event_calls: list[dict] = []
@@ -214,3 +304,15 @@ def test_memory_read_family_uses_memory_read_capability():
     assert syscall_registry.SYSCALL_REGISTRY["sys.v1.memory.list"].capability == "memory.read"
     assert syscall_registry.SYSCALL_REGISTRY["sys.v1.memory.tree"].capability == "memory.read"
     assert syscall_registry.SYSCALL_REGISTRY["sys.v1.memory.trace"].capability == "memory.read"
+
+
+def test_agent_read_helpers_reject_cross_tenant_user_id(monkeypatch):
+    fake_db = _FakeDb()
+
+    monkeypatch.setattr("AINDY.platform_layer.user_ids.parse_user_id", lambda user_id: user_id)
+
+    with pytest.raises(PermissionError, match="TENANT_VIOLATION"):
+        syscall_registry._handle_agent_count_runs(
+            {"user_id": "other-user"},
+            _ctx(capabilities=["agent.read"], metadata={"_db": fake_db}),
+        )

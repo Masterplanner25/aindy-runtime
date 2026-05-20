@@ -1,5 +1,5 @@
 """
-db/models/dynamic_node.py — Persisted dynamic node registrations.
+db/models/dynamic_node.py - Persisted dynamic node registrations.
 
 Stores every node registered via POST /platform/nodes/register.
 On startup the platform loader reads all active rows and rebuilds each
@@ -11,10 +11,11 @@ handler_config schema:
     plugin:   {"handler": "my_module:my_function"}
 
 The signing secret for webhook nodes is stored in the separate `secret`
-column (plaintext) because it is an *outgoing* signing credential — the
-value is needed to sign delivery requests, not just to verify one.
+column (plaintext) because it is an outgoing signing credential. The
+owner_class is persisted separately so restart restore paths keep the same
+trust boundary that applied at registration time.
 
-Deletion is soft — is_active=False.
+Deletion is soft - is_active=False.
 """
 import uuid
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from sqlalchemy import Boolean, Column, DateTime, String
 from sqlalchemy.dialects.postgresql import JSON, UUID
 
 from AINDY.db.database import Base
+from AINDY.platform_layer.extension_policy import OWNER_EXTERNAL_THIRD_PARTY
 
 
 class DynamicNode(Base):
@@ -30,17 +32,10 @@ class DynamicNode(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(256), nullable=False, unique=True, index=True)
-
-    # "webhook" | "plugin"
     node_type = Column(String(32), nullable=False)
-
-    # Type-specific config — no secrets here
+    owner_class = Column(String(64), nullable=False, default=OWNER_EXTERNAL_THIRD_PARTY)
     handler_config = Column(JSON, nullable=False)
-
-    # Webhook-only outgoing signing secret.  Stored plaintext because it is
-    # used to sign every outgoing delivery request.
     secret = Column(String(512), nullable=True)
-
     created_by = Column(String(256), nullable=True)
     created_at = Column(
         DateTime(timezone=True),
@@ -53,5 +48,4 @@ class DynamicNode(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
-
     is_active = Column(Boolean, nullable=False, default=True)

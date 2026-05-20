@@ -22,6 +22,16 @@ def test_runtime_public_contract_marks_only_selected_http_surfaces_stable():
     assert "/platform/nodes" in experimental_prefixes
 
 
+def test_runtime_public_contract_publishes_trusted_internal_release_posture():
+    metadata = runtime_public_contract_metadata()
+
+    posture = metadata["release_posture"]
+    assert posture["support_tier"] == "trusted-internal"
+    assert "third-party extension isolation" in posture["not_claimed"]
+    assert "runtime-only internal deployments" in posture["suitable_for"]
+    assert "do not certify" in posture["operator_scope"]
+
+
 def test_runtime_public_contract_reports_syscall_stability_inventory():
     metadata = runtime_public_contract_metadata()
 
@@ -39,6 +49,7 @@ def test_runtime_only_boot_contract_is_marked_stable():
     assert metadata["runtime_only_boot"]["stability"] == "stable"
     assert metadata["runtime_only_boot"]["boot_mode"] == "runtime-only"
     assert "/platform/syscalls" in metadata["runtime_only_boot"]["required_routes"]
+    assert "does not imply third-party extension isolation" in metadata["runtime_only_boot"]["notes"]
 
 
 def test_runtime_public_contract_marks_extension_registration_surfaces_experimental():

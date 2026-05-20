@@ -80,7 +80,11 @@ from AINDY.platform_layer.trace_context import (
     set_current_request,
     set_current_trace_id,
 )
-from AINDY.db.schema_contract import ensure_runtime_schema
+from AINDY.db.schema_contract import (
+    SCHEMA_STATE_INCOMPATIBLE_MANUAL,
+    SCHEMA_STATE_UPGRADE_REQUIRED,
+    ensure_runtime_schema,
+)
 
 try:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -867,6 +871,11 @@ def _validate_queue_and_workers() -> None:
 
 def _enforce_schema_guard(db_factory) -> None:
     enforce_schema = os.getenv("AINDY_ENFORCE_SCHEMA", "true").lower() in {"1", "true", "yes"}
+    allow_reconcile = os.getenv("AINDY_SCHEMA_RECONCILE", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     if not enforce_schema and settings.is_prod:
         raise RuntimeError(
             "AINDY_ENFORCE_SCHEMA=false is not permitted in production (ENV=production). "
@@ -876,18 +885,37 @@ def _enforce_schema_guard(db_factory) -> None:
     if enforce_schema and not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
         db = db_factory()
         try:
-            report = ensure_runtime_schema(db, allow_bootstrap=True)
+            report = ensure_runtime_schema(
+                db,
+                allow_bootstrap=True,
+                allow_reconcile=allow_reconcile,
+            )
             if report.bootstrapped:
                 logger.info("Bootstrapped runtime-owned schema from packaged metadata.")
+            if report.reconciled:
+                logger.info("Reconciled runtime-owned schema to packaged metadata.")
             if not report.ok:
-                logger.error(
-                    "Schema drift detected against runtime-owned metadata: %s",
-                    report.summary(),
-                )
-                raise RuntimeError(
-                    "Schema drift detected against runtime-owned metadata. "
-                    "Reconcile the database schema before startup."
-                )
+                if report.state == SCHEMA_STATE_UPGRADE_REQUIRED:
+                    logger.error(
+                        "Runtime-owned schema upgrade required: %s",
+                        report.summary(),
+                    )
+                    raise RuntimeError(
+                        "Runtime-owned schema requires an explicit additive reconcile. "
+                        "Set AINDY_SCHEMA_RECONCILE=true for startup-time reconcile, or "
+                        "upgrade the database out of band before startup."
+                    )
+                if report.state == SCHEMA_STATE_INCOMPATIBLE_MANUAL:
+                    logger.error(
+                        "Runtime-owned schema is incompatible with packaged metadata: %s",
+                        report.summary(),
+                    )
+                    raise RuntimeError(
+                        "Runtime-owned schema is incompatible with packaged metadata. "
+                        "Manual intervention is required before startup."
+                    )
+                logger.error("Runtime-owned schema is not ready: %s", report.summary())
+                raise RuntimeError(report.summary())
         finally:
             db.close()
     elif not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):

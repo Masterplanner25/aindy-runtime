@@ -56,8 +56,10 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
             ),
         },
     }
-    assert payload["public_contract"]["schema_version"] == "2026-05-18"
+    assert payload["public_contract"]["schema_version"] == "2026-05-20"
     assert payload["public_contract"]["api_major"] == "1"
+    assert payload["public_contract"]["release_posture"]["support_tier"] == "trusted-internal"
+    assert "third-party extension isolation" in payload["public_contract"]["release_posture"]["not_claimed"]
     stable_routes = {entry["route"] for entry in payload["public_contract"]["http"]["stable"]}
     assert "GET /api/version" in stable_routes
     assert "GET /platform/syscalls" in stable_routes

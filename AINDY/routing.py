@@ -4,7 +4,7 @@ from fastapi import Depends
 from prometheus_client import make_asgi_app as _make_metrics_asgi
 
 from AINDY.core.execution_guard import require_execution_context
-from AINDY.core.route_execution_guard import validate_registered_route_execution
+from AINDY.core.route_execution_guard import enforce_registered_route_execution
 from AINDY.platform_layer.metrics import REGISTRY as _METRICS_REGISTRY
 from AINDY.platform_layer.registry import get_legacy_root_routers, get_routers
 from AINDY.routes.version_router import router as version_router
@@ -50,4 +50,4 @@ def register_routes(app) -> None:
         for route in LEGACY_ROOT_ROUTERS:
             app.include_router(route, dependencies=[Depends(require_execution_context)])
 
-    validate_registered_route_execution(app)
+    enforce_registered_route_execution(app)

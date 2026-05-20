@@ -1,12 +1,13 @@
-"""Runtime-owned database schema bootstrap and validation helpers."""
+"""Runtime-owned database schema bootstrap, validation, and reconciliation."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session
+from sqlalchemy.schema import CreateColumn
 
 from AINDY.db.database import Base
 
@@ -18,6 +19,14 @@ import AINDY.memory.memory_persistence  # noqa: F401
 _RUNTIME_MODEL_PREFIXES = ("AINDY.db.models.",)
 _RUNTIME_MODEL_MODULES = {"AINDY.memory.memory_persistence"}
 
+SCHEMA_STATE_BLANK_DATABASE = "blank_database"
+SCHEMA_STATE_BLANK_BOOTSTRAP = "blank_bootstrap"
+SCHEMA_STATE_COMPATIBLE = "compatible"
+SCHEMA_STATE_UPGRADE_REQUIRED = "upgrade_required"
+SCHEMA_STATE_INCOMPATIBLE_MANUAL = "incompatible_manual"
+
+_SAFE_RECONCILE_CODES = {"missing_table", "missing_column"}
+
 
 @dataclass(frozen=True)
 class SchemaIssue:
@@ -25,19 +34,33 @@ class SchemaIssue:
     detail: str
     table: str | None = None
     column: str | None = None
+    reconcile_supported: bool = False
 
 
 @dataclass(frozen=True)
 class SchemaReport:
     ok: bool
     bootstrapped: bool
+    reconciled: bool
+    state: str
+    reconcile_supported: bool
+    operator_action: str
     issues: tuple[SchemaIssue, ...]
 
     def summary(self) -> str:
-        if self.ok:
-            if self.bootstrapped:
-                return "Runtime-owned schema bootstrapped from packaged metadata."
+        if self.state == SCHEMA_STATE_BLANK_BOOTSTRAP:
+            return "Runtime-owned schema bootstrapped from packaged metadata."
+        if self.state == SCHEMA_STATE_COMPATIBLE:
+            if self.reconciled:
+                return "Runtime-owned schema reconciled and now matches packaged metadata."
             return "Runtime-owned schema matches packaged metadata."
+        if self.state == SCHEMA_STATE_BLANK_DATABASE:
+            return "Runtime-owned schema is absent and requires blank-database bootstrap."
+        if self.state == SCHEMA_STATE_UPGRADE_REQUIRED:
+            return (
+                "Runtime-owned schema requires an explicit additive reconcile: "
+                + "; ".join(issue.detail for issue in self.issues)
+            )
         return "; ".join(issue.detail for issue in self.issues)
 
 
@@ -78,9 +101,14 @@ def _resolve_bind(bind: Engine | Connection | Session):
     return bind
 
 
-def validate_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport:
-    resolved = _resolve_bind(bind)
+def _inspect_schema_issues(
+    resolved: Engine | Connection,
+) -> tuple[tuple[str, ...], tuple[SchemaIssue, ...]]:
     inspector = inspect(resolved)
+    expected_tables = runtime_owned_table_names()
+    existing_runtime_tables = tuple(
+        table_name for table_name in expected_tables if inspector.has_table(table_name)
+    )
     issues: list[SchemaIssue] = []
 
     for table in _runtime_owned_tables():
@@ -91,6 +119,7 @@ def validate_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport
                     code="missing_table",
                     table=table_name,
                     detail=f"Missing required runtime table {table_name!r}.",
+                    reconcile_supported=True,
                 )
             )
             continue
@@ -110,6 +139,7 @@ def validate_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport
                             f"Runtime table {table_name!r} is missing required column "
                             f"{expected_column.name!r}."
                         ),
+                        reconcile_supported=_column_reconcile_supported(expected_column),
                     )
                 )
                 continue
@@ -162,27 +192,150 @@ def validate_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport
                     )
                 )
 
-    return SchemaReport(ok=not issues, bootstrapped=False, issues=tuple(issues))
+    return existing_runtime_tables, tuple(issues)
+
+
+def _column_reconcile_supported(column) -> bool:
+    if bool(column.primary_key):
+        return False
+    if getattr(column, "foreign_keys", None):
+        return False
+    if column.server_default is not None:
+        return True
+    return bool(column.nullable)
+
+
+def _classify_schema_state(
+    existing_runtime_tables: tuple[str, ...],
+    issues: tuple[SchemaIssue, ...],
+) -> tuple[str, bool, str]:
+    if not existing_runtime_tables:
+        return (
+            SCHEMA_STATE_BLANK_DATABASE,
+            True,
+            "bootstrap",
+        )
+    if not issues:
+        return (
+            SCHEMA_STATE_COMPATIBLE,
+            False,
+            "none",
+        )
+    reconcile_supported = all(
+        issue.code in _SAFE_RECONCILE_CODES and issue.reconcile_supported
+        for issue in issues
+    )
+    if reconcile_supported:
+        return (
+            SCHEMA_STATE_UPGRADE_REQUIRED,
+            True,
+            "explicit_reconcile",
+        )
+    return (
+        SCHEMA_STATE_INCOMPATIBLE_MANUAL,
+        False,
+        "manual_intervention",
+    )
+
+
+def inspect_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport:
+    resolved = _resolve_bind(bind)
+    existing_runtime_tables, issues = _inspect_schema_issues(resolved)
+    state, reconcile_supported, operator_action = _classify_schema_state(
+        existing_runtime_tables,
+        issues,
+    )
+    return SchemaReport(
+        ok=state == SCHEMA_STATE_COMPATIBLE,
+        bootstrapped=False,
+        reconciled=False,
+        state=state,
+        reconcile_supported=reconcile_supported,
+        operator_action=operator_action,
+        issues=issues,
+    )
+
+
+def validate_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport:
+    return inspect_runtime_schema(bind)
+
+
+def _execute_ddl(bind: Engine | Connection, sql: str) -> None:
+    if isinstance(bind, Engine):
+        with bind.begin() as conn:
+            conn.execute(text(sql))
+        return
+    bind.execute(text(sql))
+
+
+def _render_add_column_sql(bind: Engine | Connection, table, column) -> str:
+    compiled = str(CreateColumn(column).compile(dialect=bind.dialect)).strip()
+    table_name = bind.dialect.identifier_preparer.format_table(table)
+    return f"ALTER TABLE {table_name} ADD COLUMN {compiled}"
+
+
+def reconcile_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport:
+    resolved = _resolve_bind(bind)
+    report = inspect_runtime_schema(resolved)
+
+    if report.state == SCHEMA_STATE_BLANK_DATABASE:
+        Base.metadata.create_all(bind=resolved, tables=_runtime_owned_tables(), checkfirst=True)
+        validated = inspect_runtime_schema(resolved)
+        return SchemaReport(
+            ok=validated.ok,
+            bootstrapped=validated.ok,
+            reconciled=False,
+            state=SCHEMA_STATE_BLANK_BOOTSTRAP if validated.ok else validated.state,
+            reconcile_supported=validated.reconcile_supported,
+            operator_action=validated.operator_action,
+            issues=validated.issues,
+        )
+
+    if report.state != SCHEMA_STATE_UPGRADE_REQUIRED:
+        return report
+
+    for table in _runtime_owned_tables():
+        if not inspect(resolved).has_table(table.name):
+            table.create(bind=resolved, checkfirst=True)
+            continue
+
+        actual_columns = {
+            column["name"]: column for column in inspect(resolved).get_columns(table.name)
+        }
+        for expected_column in table.columns:
+            if expected_column.name in actual_columns:
+                continue
+            if not _column_reconcile_supported(expected_column):
+                continue
+            sql = _render_add_column_sql(resolved, table, expected_column)
+            _execute_ddl(resolved, sql)
+
+    validated = inspect_runtime_schema(resolved)
+    return SchemaReport(
+        ok=validated.ok,
+        bootstrapped=False,
+        reconciled=validated.ok,
+        state=validated.state,
+        reconcile_supported=validated.reconcile_supported,
+        operator_action=validated.operator_action,
+        issues=validated.issues,
+    )
 
 
 def ensure_runtime_schema(
     bind: Engine | Connection | Session,
     *,
     allow_bootstrap: bool = True,
+    allow_reconcile: bool = False,
 ) -> SchemaReport:
-    resolved = _resolve_bind(bind)
-    inspector = inspect(resolved)
-    expected_tables = runtime_owned_table_names()
-    existing_runtime_tables = {
-        table_name for table_name in expected_tables if inspector.has_table(table_name)
-    }
-    bootstrapped = False
+    report = inspect_runtime_schema(bind)
 
-    if allow_bootstrap and not existing_runtime_tables:
-        Base.metadata.create_all(bind=resolved, tables=_runtime_owned_tables(), checkfirst=True)
-        bootstrapped = True
+    if report.state == SCHEMA_STATE_BLANK_DATABASE:
+        if allow_bootstrap:
+            return reconcile_runtime_schema(bind)
+        return report
 
-    report = validate_runtime_schema(resolved)
-    if report.ok:
-        return SchemaReport(ok=True, bootstrapped=bootstrapped, issues=report.issues)
-    return SchemaReport(ok=False, bootstrapped=bootstrapped, issues=report.issues)
+    if report.state == SCHEMA_STATE_UPGRADE_REQUIRED and allow_reconcile:
+        return reconcile_runtime_schema(bind)
+
+    return report

@@ -53,6 +53,7 @@ def register_node(request: Request, body: NodeRegistration, db: Session = Depend
                 timeout_seconds=body.timeout_seconds,
                 secret=body.secret,
                 user_id=user_id,
+                owner_class=body.owner_class,
                 overwrite=body.overwrite,
                 db=db,
             )

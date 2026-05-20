@@ -122,6 +122,33 @@ def _finish_handler_write(db: Any, *, owns_session: bool, success: bool) -> None
         logger.debug("[syscall_registry] rollback on external DB session failed", exc_info=True)
 
 
+def _resolve_tenant_user_id(context: SyscallContext, payload: dict[str, Any]) -> str | None:
+    """Return the tenant-scoped user_id a handler may operate on.
+
+    The caller context is authoritative. Handlers may accept an optional
+    ``payload["user_id"]`` only when it matches the caller's tenant.
+    """
+    from AINDY.platform_layer.user_ids import parse_user_id
+
+    context_user_id = parse_user_id(context.user_id)
+    if context_user_id is None:
+        return None
+
+    requested_user_id = payload.get("user_id")
+    if requested_user_id is None:
+        return context_user_id
+
+    normalized_requested = parse_user_id(requested_user_id)
+    if normalized_requested is None:
+        return None
+    if normalized_requested != context_user_id:
+        raise PermissionError(
+            f"TENANT_VIOLATION: syscall may not access user_id {requested_user_id!r} "
+            f"from tenant context {context.user_id!r}"
+        )
+    return context_user_id
+
+
 # ── Capability constants ──────────────────────────────────────────────────────
 
 # Default capability set granted to all Nodus script executions.
@@ -767,18 +794,15 @@ def _handle_agent_execute(payload: dict, context: SyscallContext) -> dict:
 
 def _handle_agent_count_runs(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.agent.count_runs - count AgentRun rows for a user, optionally filtered by status."""
-    from AINDY.platform_layer.user_ids import parse_user_id
     from AINDY.db.models import AgentRun
 
     db, owns_session = _acquire_handler_db(context)
-    requested_user_id = payload.get("user_id")
     try:
         query = db.query(AgentRun.id)
-        if requested_user_id is not None:
-            normalized_user_id = parse_user_id(requested_user_id)
-            if normalized_user_id is None:
-                return {"count": 0}
-            query = query.filter(AgentRun.user_id == normalized_user_id)
+        normalized_user_id = _resolve_tenant_user_id(context, payload)
+        if normalized_user_id is None:
+            return {"count": 0}
+        query = query.filter(AgentRun.user_id == normalized_user_id)
 
         status_filter = payload.get("status")
         if status_filter:
@@ -793,7 +817,6 @@ def _handle_agent_count_runs(payload: dict, context: SyscallContext) -> dict:
 
 def _handle_agent_list_recent_durations(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.agent.list_recent_durations - list recent AgentRun timing fields for duration calculations."""
-    from AINDY.platform_layer.user_ids import parse_user_id
     from AINDY.db.models import AgentRun
 
     db, owns_session = _acquire_handler_db(context)
@@ -802,12 +825,10 @@ def _handle_agent_list_recent_durations(payload: dict, context: SyscallContext) 
         window_start = datetime.now(timezone.utc) - timedelta(hours=window_hours)
         query = db.query(AgentRun).filter(AgentRun.created_at >= window_start)
 
-        requested_user_id = payload.get("user_id")
-        if requested_user_id is not None:
-            normalized_user_id = parse_user_id(requested_user_id)
-            if normalized_user_id is None:
-                return {"durations": [], "count": 0}
-            query = query.filter(AgentRun.user_id == normalized_user_id)
+        normalized_user_id = _resolve_tenant_user_id(context, payload)
+        if normalized_user_id is None:
+            return {"durations": [], "count": 0}
+        query = query.filter(AgentRun.user_id == normalized_user_id)
 
         rows = query.all()
         durations = [
@@ -830,12 +851,11 @@ def _handle_agent_list_recent_durations(payload: dict, context: SyscallContext) 
 def _handle_agent_list_recent_runs(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.agent.list_recent_runs - list recent AgentRun rows for a user as plain dicts."""
     from AINDY.agents.agent_runtime import run_to_dict
-    from AINDY.platform_layer.user_ids import parse_user_id
     from AINDY.db.models import AgentRun
 
     db, owns_session = _acquire_handler_db(context)
     try:
-        normalized_user_id = parse_user_id(payload.get("user_id"))
+        normalized_user_id = _resolve_tenant_user_id(context, payload)
         if normalized_user_id is None:
             return {"runs": []}
 
@@ -855,12 +875,11 @@ def _handle_agent_list_recent_runs(payload: dict, context: SyscallContext) -> di
 
 def _handle_agent_ensure_initial_run(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.agent.ensure_initial_run - find or create the initial signup AgentRun sentinel for a user."""
-    from AINDY.platform_layer.user_ids import parse_user_id
     from AINDY.db.models import AgentRun
 
     db, owns_session = _acquire_handler_db(context)
     try:
-        normalized_user_id = parse_user_id(payload.get("user_id"))
+        normalized_user_id = _resolve_tenant_user_id(context, payload)
         if normalized_user_id is None:
             return {"run_id": None, "created": False}
 
@@ -883,18 +902,12 @@ def _handle_agent_ensure_initial_run(payload: dict, context: SyscallContext) -> 
             steps_total=0,
         )
         db.add(run)
-        if owns_session:
-            db.commit()
-        else:
-            db.flush()
+        _finish_handler_write(db, owns_session=owns_session, success=True)
         db.refresh(run)
         return {"run_id": str(run.id), "created": True}
     except Exception:
         _finish_handler_write(db, owns_session=owns_session, success=False)
         raise
-    finally:
-        if owns_session:
-            db.close()
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────

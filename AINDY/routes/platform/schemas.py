@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
+from AINDY.platform_layer.extension_policy import OWNER_EXTERNAL_THIRD_PARTY
 from AINDY.platform_layer.nodus_script_store import (
     _NODUS_SCRIPT_REGISTRY,
     _SCRIPTS_DIR,
@@ -15,6 +16,7 @@ class FlowDefinition(BaseModel):
     edges: Dict[str, List[str]] = Field(default_factory=dict)
     start: str = Field(...)
     end: List[str] = Field(..., min_length=1)
+    owner_class: str = Field(OWNER_EXTERNAL_THIRD_PARTY)
     overwrite: bool = Field(False)
 
 
@@ -28,6 +30,7 @@ class NodeRegistration(BaseModel):
     handler: str = Field(...)
     timeout_seconds: int = Field(10, ge=1, le=30)
     secret: Optional[str] = Field(None)
+    owner_class: str = Field(OWNER_EXTERNAL_THIRD_PARTY)
     overwrite: bool = Field(False)
 
 
@@ -35,6 +38,7 @@ class WebhookSubscription(BaseModel):
     event_type: str = Field(...)
     callback_url: str = Field(...)
     secret: Optional[str] = Field(None)
+    owner_class: str = Field(OWNER_EXTERNAL_THIRD_PARTY)
 
 
 class NodusRunRequest(BaseModel):

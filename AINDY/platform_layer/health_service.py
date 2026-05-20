@@ -518,14 +518,27 @@ def check_schema() -> DependencyStatus:
     try:
         engine = create_engine(settings.DATABASE_URL)
         report = ensure_runtime_schema(engine, allow_bootstrap=False)
+        metadata = {
+            "schema_state": report.state,
+            "reconcile_supported": report.reconcile_supported,
+            "operator_action": report.operator_action,
+            "bootstrapped": report.bootstrapped,
+            "reconciled": report.reconciled,
+        }
         if report.ok:
-            return DependencyStatus(name="schema", status="ok", critical=True)
+            return DependencyStatus(
+                name="schema",
+                status="ok",
+                critical=True,
+                metadata=metadata,
+            )
 
         return DependencyStatus(
             name="schema",
             status="unavailable",
             detail=report.summary(),
             critical=True,
+            metadata=metadata,
         )
     except Exception as exc:
         return DependencyStatus(
@@ -635,6 +648,10 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
             "checks": {"testing_mode": True},
             "required_failures": [],
             "deployment_contract": deployment_contract_summary(),
+            "readiness_scope": (
+                "Testing-mode readiness bypasses runtime dependency enforcement and "
+                "must not be used as an operator health signal."
+            ),
         }
 
     health = get_system_health(force=True)
@@ -673,6 +690,10 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
     schema = dependency_by_name.get("schema")
     if schema is not None:
         checks["schema"] = schema.status
+        if schema.metadata.get("schema_state"):
+            checks["schema_state"] = schema.metadata["schema_state"]
+        if schema.metadata.get("operator_action"):
+            checks["schema_operator_action"] = schema.metadata["operator_action"]
         if schema.critical and schema.status != "ok":
             failures.append("schema")
 
@@ -733,6 +754,12 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         "checks": checks,
         "required_failures": failures,
         "deployment_contract": deployment_contract_summary(),
+        "readiness_scope": (
+            "Ready means the runtime currently satisfies dependency and unsafe-condition "
+            "checks for the active deployment profile. It does not imply extension "
+            "sandboxing, third-party code trust, or a stable contract outside the "
+            "declared public surfaces."
+        ),
     }
 
 

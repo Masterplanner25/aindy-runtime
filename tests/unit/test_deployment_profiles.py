@@ -115,6 +115,7 @@ def test_readiness_reports_active_deployment_profile(monkeypatch):
     assert status_code == 200
     assert payload["checks"]["deployment_profile"] == DEPLOYMENT_PROFILE_SINGLE_INSTANCE
     assert payload["checks"]["background_leadership_mode"] == "in-process"
+    assert "does not imply extension sandboxing" in payload["readiness_scope"]
 
 
 def test_deployment_contract_summary_reports_active_profile(monkeypatch):
@@ -125,3 +126,4 @@ def test_deployment_contract_summary_reports_active_profile(monkeypatch):
 
     assert summary["active_profile"]["name"] == DEPLOYMENT_PROFILE_SINGLE_INSTANCE
     assert summary["active_profile"]["source"] == "AINDY_DEPLOYMENT_PROFILE"
+    assert summary["release_posture"]["support_tier"] == "trusted-internal"

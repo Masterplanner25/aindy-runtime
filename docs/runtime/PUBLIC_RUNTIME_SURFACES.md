@@ -1,6 +1,6 @@
 ---
 title: "Public Runtime Surfaces"
-last_verified: "2026-05-18"
+last_verified: "2026-05-20"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -21,6 +21,17 @@ Meanings:
 The machine-readable form of this contract is exposed in `GET /api/version`
 under `public_contract`.
 
+Release posture:
+
+- support tier: `trusted-internal`
+- not claimed:
+  - third-party extension isolation
+  - sandboxed in-process plugin execution
+  - fully frozen semantics outside the declared stable surfaces
+- operator meaning of `ready`:
+  - dependency and unsafe-condition checks for the active deployment profile passed
+  - this is not a certification of extension trust or isolation
+
 ## Stable HTTP Surfaces
 
 - `GET /api/version`
@@ -30,7 +41,8 @@ under `public_contract`.
   Returns operator-visible liveness and degraded-runtime conditions.
 - `GET /ready`
   Returns operator-visible readiness with strict dependency and unsafe-degraded
-  checks.
+  checks for the active deployment profile. It does not certify extension
+  isolation or third-party code trust.
 - `GET /platform/syscalls`
   Returns the versioned syscall catalog with per-entry `stable` and
   `deprecated` markers.
@@ -117,7 +129,7 @@ third-party ownership classes must stay out of the runtime-only profile.
 
 ## Stable Boot Contract
 
-`runtime-only` boot is a stable external contract.
+`runtime-only` boot is a stable external boot contract.
 
 Stable invariants:
 
@@ -125,6 +137,12 @@ Stable invariants:
 - the resolved boot profile is `platform-only`
 - runtime-only boot still enforces schema, readiness, and degraded-mode safety
 - the baseline agent/tool surface remains limited to runtime-owned capabilities
+
+Important scope limit:
+
+- the stable claim applies to boot selection and runtime-owned baseline behavior
+- it does not promote experimental extension surfaces into a hardened external
+  platform contract
 
 Use [RUNTIME_ONLY_DEPLOYMENT.md](./RUNTIME_ONLY_DEPLOYMENT.md) for the full
 bootstrap contract and [PUBLIC_API_CONTRACT.md](./PUBLIC_API_CONTRACT.md) for

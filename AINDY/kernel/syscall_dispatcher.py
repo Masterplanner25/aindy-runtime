@@ -50,11 +50,13 @@ Usage
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid as _uuid
 from contextvars import ContextVar
 from typing import Any
 
+from AINDY.config import settings
 from AINDY.kernel.circuit_breaker import CircuitOpenError
 # Re-export SyscallContext so callers only need one import.
 from AINDY.kernel.syscall_registry import (  # noqa: F401
@@ -113,6 +115,10 @@ def _get_rm():
     return get_resource_manager()
 
 logger = logging.getLogger(__name__)
+
+
+def _quota_backend_failure_may_fail_open() -> bool:
+    return bool(settings.is_testing or settings.is_dev)
 
 
 class SyscallDispatcher:
@@ -291,16 +297,24 @@ class SyscallDispatcher:
             )
 
         # Step 2c â€” resource quota check (syscall budget)
-        # If _get_rm() or check_quota() raises, fail-open (log warning, allow execution).
-        # Only a clean (False, reason) return blocks the syscall.
-        # Quota subsystem failures are fail-open so a broken quota transport
-        # does not become a global execution outage. Only a clean
-        # (False, reason) return blocks the syscall.
+        # Quota hard denials always fail closed. Quota backend failures only
+        # fail open in development/test environments; production blocks
+        # execution until quota enforcement recovers.
         try:
             rm = _get_rm()
             quota_ok, quota_reason = rm.check_quota(context.execution_unit_id)
-        except Exception as _rm_exc:
-            logger.warning("[SyscallDispatcher] resource quota check skipped: %s", _rm_exc)
+        except Exception as quota_exc:
+            if _quota_backend_failure_may_fail_open():
+                logger.warning("[SyscallDispatcher] resource quota check skipped: %s", quota_exc)
+            else:
+                logger.error("[SyscallDispatcher] resource quota check failed closed: %s", quota_exc)
+                return self._error_envelope(
+                    name,
+                    context,
+                    "Quota backend unavailable: syscall execution is blocked until quota enforcement recovers.",
+                    t_start,
+                    version=parsed_version,
+                )
         else:
             if not quota_ok:
                 return self._error_envelope(name, context, quota_reason, t_start,
@@ -403,9 +417,25 @@ class SyscallDispatcher:
         if entry.output_schema:
             out_errors = validate_output(entry.output_schema, data)
             if out_errors:
+                detail = "; ".join(out_errors)
+                if entry.stable:
+                    logger.error(
+                        "[SyscallDispatcher] stable output schema mismatch for '%s': %s",
+                        name,
+                        detail,
+                    )
+                    self._emit_syscall_event(name, context, "error")
+                    return self._error_envelope(
+                        name,
+                        context,
+                        f"Stable syscall output validation failed for {name!r}: {detail}",
+                        t_start,
+                        version=parsed_version,
+                    )
                 logger.warning(
-                    "[SyscallDispatcher] output schema mismatch for '%s': %s",
-                    name, "; ".join(out_errors),
+                    "[SyscallDispatcher] output schema mismatch for experimental '%s': %s",
+                    name,
+                    detail,
                 )
 
         # Step 4 â€” record syscall usage in ResourceManager (non-fatal)

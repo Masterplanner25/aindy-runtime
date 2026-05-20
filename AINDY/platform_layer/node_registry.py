@@ -40,6 +40,7 @@ import inspect
 from sqlalchemy.orm import Session
 from AINDY.platform_layer.extension_policy import (
     OWNER_EXTERNAL_THIRD_PARTY,
+    assert_python_extension_allowed,
     validate_extension_owner_class,
     validate_outbound_extension_url,
 )
@@ -321,7 +322,13 @@ def register_external_node(
     # â”€â”€ Build the node function â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     if node_type == "webhook":
         node_fn = _make_webhook_node(name, handler, timeout_seconds, secret)
+        trust_class = "contract-driven-webhook"
     else:
+        trust_class = assert_python_extension_allowed(
+            owner_class,
+            surface="dynamic plugin node",
+            identifier=handler,
+        )
         node_fn = _load_plugin_node(handler)  # raises ValueError on failure
 
     # â”€â”€ Register (thread-safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -339,7 +346,7 @@ def register_external_node(
             "name": name,
             "type": node_type,
             "owner_class": owner_class,
-            "trust_class": "external-webhook" if node_type == "webhook" else "in-process-plugin",
+            "trust_class": trust_class,
             "handler": handler,
             "timeout_seconds": timeout_seconds if node_type == "webhook" else None,
             "signed": secret is not None if node_type == "webhook" else None,
@@ -350,9 +357,17 @@ def register_external_node(
         _DYNAMIC_NODE_META[name] = meta
 
     if db is not None:
-        _persist_node(name, node_type, handler, secret=secret,
-                      timeout_seconds=timeout_seconds, user_id=user_id,
-                      overwrite=overwrite, db=db)
+        _persist_node(
+            name,
+            node_type,
+            handler,
+            secret=secret,
+            timeout_seconds=timeout_seconds,
+            user_id=user_id,
+            owner_class=owner_class,
+            overwrite=overwrite,
+            db=db,
+        )
 
     logger.info(
         "platform: dynamic node registered: %s (type=%s)", name, node_type
@@ -368,6 +383,7 @@ def _persist_node(
     secret: str | None,
     timeout_seconds: int,
     user_id: str | None,
+    owner_class: str,
     overwrite: bool,
     db: Session,
 ) -> None:
@@ -385,6 +401,7 @@ def _persist_node(
         existing = db.query(DynamicNode).filter(DynamicNode.name == name).first()
         if existing:
             existing.node_type = node_type
+            existing.owner_class = owner_class
             existing.handler_config = handler_config
             existing.secret = secret
             existing.is_active = True
@@ -394,6 +411,7 @@ def _persist_node(
                 id=uuid.uuid4(),
                 name=name,
                 node_type=node_type,
+                owner_class=owner_class,
                 handler_config=handler_config,
                 secret=secret,
                 created_by=str(user_id) if user_id else None,

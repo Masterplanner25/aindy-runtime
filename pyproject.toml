@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aindy-runtime"
 dynamic = ["version"]
-description = "Installable AINDY runtime infrastructure package"
+description = "Installable AINDY runtime infrastructure package for trusted internal deployments"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

@@ -1,10 +1,17 @@
 # aindy-runtime
 
-`aindy-runtime` is the standalone runtime package extracted from the former monolith.
+`aindy-runtime` is the extracted runtime infrastructure package from the former monolith.
 
 It contains the runtime code under `AINDY/`, the runtime-only manifests and entrypoints,
 runtime-owned documentation, and the runtime contract test suite. It does not include
 `apps/`, `apps.bootstrap`, or app-profile-only tests and docs.
+
+Current release posture:
+
+- suitable for trusted internal runtime deployments
+- stable only for the explicitly declared public surfaces under `docs/runtime/`
+- not a hardened third-party extension platform
+- does not provide in-process sandboxing for trusted Python extensions
 
 ## Install
 
@@ -81,6 +88,18 @@ It does not own app deployment assets such as:
 
 Those belong in `aindy-apps-monolith`.
 
+## Supported Use Today
+
+- runtime-only HTTP deployment with the documented deployment profiles
+- first-party app integration through the documented trust and ownership model
+- operator-managed use of experimental extension and orchestration surfaces
+
+Not claimed by this repo today:
+
+- third-party extension isolation
+- sandboxed in-process plugin execution
+- fully frozen external semantics for experimental HTTP, syscall-adjacent, or extension surfaces
+
 ## Branch And PR Model
 
 Active contribution model for this repo:
@@ -147,8 +166,9 @@ The extracted runtime is self-hostable for its own database surface.
   as the schema contract
 - on a blank database, the runtime bootstraps runtime-owned tables directly from
   that packaged metadata
-- on a partially initialized or drifted database, startup fails fast when
-  `AINDY_ENFORCE_SCHEMA=true`
+- on an additive-safe but out-of-date schema, startup requires explicit
+  `AINDY_SCHEMA_RECONCILE=true` before mutating an initialized database
+- on incompatible drift, startup fails closed when `AINDY_ENFORCE_SCHEMA=true`
 - app-owned tables and the monolith Alembic history remain app-repo concerns
 
 ## Docs

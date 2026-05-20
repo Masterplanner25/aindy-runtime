@@ -1,22 +1,26 @@
-"""Validate that registered runtime routes enter the execution pipeline."""
+"""Strong runtime enforcement for managed route execution."""
 
 from __future__ import annotations
 
 import ast
 import inspect
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
+from typing import Any
 
+from fastapi import Request
 from fastapi.routing import APIRoute
 
 from AINDY.core.execution_guard import is_execution_exempt_path
 
 _PIPELINE_CALLS = {"execute_with_pipeline", "execute_with_pipeline_sync"}
+_ROUTE_WRAPPED_ATTR = "_aindy_execution_wrapped"
+_ROUTE_ENDPOINT_ATTR = "_aindy_original_endpoint"
 
 
-class RouteExecutionViolation(Exception):
-    """Raised when a registered route handler bypasses the execution pipeline."""
+class RouteExecutionViolation(RuntimeError):
+    """Raised when a registered route bypasses the execution pipeline."""
 
 
 @dataclass(frozen=True)
@@ -96,15 +100,98 @@ def _analyse_module(module_path: str) -> _ModuleAnalysis:
 
 
 def _route_uses_execution_pipeline(route: APIRoute) -> bool:
-    endpoint = inspect.unwrap(route.endpoint)
+    endpoint = inspect.unwrap(getattr(route, _ROUTE_ENDPOINT_ATTR, route.endpoint))
     module = inspect.getmodule(endpoint)
     source_file = inspect.getsourcefile(endpoint)
-    if module is None or source_file is None:
-        return False
-    if not source_file.endswith(".py"):
+    if module is None or source_file is None or not source_file.endswith(".py"):
         return False
     analysis = _analyse_module(source_file)
     return analysis.function_uses_pipeline(endpoint.__name__)
+
+
+def _route_request_parameter_name(route: APIRoute) -> str | None:
+    return getattr(route.dependant, "request_param_name", None)
+
+
+def _resolve_request_argument(
+    route: APIRoute,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Request | None:
+    request_param_name = _route_request_parameter_name(route)
+    if request_param_name:
+        value = kwargs.get(request_param_name)
+        if isinstance(value, Request):
+            return value
+    for value in args:
+        if isinstance(value, Request):
+            return value
+    for value in kwargs.values():
+        if isinstance(value, Request):
+            return value
+    return None
+
+
+def _route_violation_message(route: APIRoute) -> str:
+    endpoint = inspect.unwrap(getattr(route, _ROUTE_ENDPOINT_ATTR, route.endpoint))
+    methods = ",".join(sorted(route.methods or []))
+    return (
+        "ExecutionContract violation: registered route bypassed execution pipeline "
+        f"for {methods} {route.path} -> {endpoint.__module__}.{endpoint.__name__}"
+    )
+
+
+def _assert_execution_context_entered(route: APIRoute, request: Request | None) -> None:
+    if request is None:
+        raise RouteExecutionViolation(
+            f"{_route_violation_message(route)} (managed routes must receive a Request parameter)"
+        )
+    if hasattr(request.state, "execution_context"):
+        return
+    raise RouteExecutionViolation(_route_violation_message(route))
+
+
+def _wrap_route_call(route: APIRoute, endpoint):
+    if inspect.iscoroutinefunction(endpoint):
+
+        @wraps(endpoint)
+        async def wrapped(*args, **kwargs):
+            request = _resolve_request_argument(route, args, kwargs)
+            result = await endpoint(*args, **kwargs)
+            _assert_execution_context_entered(route, request)
+            return result
+
+        return wrapped
+
+    @wraps(endpoint)
+    def wrapped(*args, **kwargs):
+        request = _resolve_request_argument(route, args, kwargs)
+        result = endpoint(*args, **kwargs)
+        _assert_execution_context_entered(route, request)
+        return result
+
+    return wrapped
+
+
+def enforce_registered_route_execution(app) -> None:
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if is_execution_exempt_path(route.path):
+            continue
+        if getattr(route, _ROUTE_WRAPPED_ATTR, False):
+            continue
+        if _route_request_parameter_name(route) is None:
+            raise RouteExecutionViolation(
+                f"{_route_violation_message(route)} (managed routes must declare a Request parameter)"
+            )
+        original_endpoint = route.endpoint
+        wrapped_endpoint = _wrap_route_call(route, original_endpoint)
+        setattr(route, _ROUTE_ENDPOINT_ATTR, original_endpoint)
+        setattr(wrapped_endpoint, _ROUTE_ENDPOINT_ATTR, original_endpoint)
+        route.endpoint = wrapped_endpoint
+        route.dependant.call = wrapped_endpoint
+        setattr(route, _ROUTE_WRAPPED_ATTR, True)
 
 
 def validate_registered_route_execution(app) -> None:
@@ -117,7 +204,7 @@ def validate_registered_route_execution(app) -> None:
             continue
         if _route_uses_execution_pipeline(route):
             continue
-        endpoint = inspect.unwrap(route.endpoint)
+        endpoint = inspect.unwrap(getattr(route, _ROUTE_ENDPOINT_ATTR, route.endpoint))
         methods = ",".join(sorted(route.methods or []))
         violations.append(
             f"{methods} {route.path} -> {endpoint.__module__}.{endpoint.__name__}"
@@ -126,6 +213,6 @@ def validate_registered_route_execution(app) -> None:
     if not violations:
         return
 
-    message = ["RouteExecutionViolation: registered routes bypass execution pipeline:"]
+    message = ["RouteExecutionViolation: registered routes bypass execution pipeline heuristics:"]
     message.extend(f"  {line}" for line in violations)
     raise RouteExecutionViolation("\n".join(message))

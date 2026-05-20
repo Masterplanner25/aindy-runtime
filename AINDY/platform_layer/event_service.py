@@ -260,6 +260,7 @@ def subscribe_webhook(
         "event_type": event_type,
         "callback_url": callback_url,
         "owner_class": owner_class,
+        "trust_class": "contract-driven-webhook",
         "signed": secret is not None,
         "_secret": secret,           # stored but excluded from list/get responses
         "created_at": now.isoformat(),
@@ -280,6 +281,7 @@ def subscribe_webhook(
                 id=uuid.UUID(subscription_id),
                 event_type=event_type,
                 callback_url=callback_url,
+                owner_class=owner_class,
                 secret=secret,
                 created_by=str(user_id) if user_id else None,
                 created_at=now,
@@ -305,6 +307,7 @@ def _load_subscription(
     secret: str | None,
     user_id: str | None,
     created_at: str,
+    owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
 ) -> None:
     """
     Internal: restore a persisted subscription into _SUBSCRIPTIONS without
@@ -320,6 +323,8 @@ def _load_subscription(
             "id": subscription_id,
             "event_type": event_type,
             "callback_url": callback_url,
+            "owner_class": validate_extension_owner_class(owner_class),
+            "trust_class": "contract-driven-webhook",
             "signed": secret is not None,
             "_secret": secret,
             "created_at": created_at,
@@ -345,6 +350,7 @@ def restore_webhook_subscription(
     secret: str | None,
     user_id: str | None,
     created_at: str,
+    owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
 ) -> bool:
     """
     Restore one persisted subscription into the runtime in-memory dispatcher.
@@ -354,6 +360,7 @@ def restore_webhook_subscription(
     """
     if has_loaded_webhook_subscription(subscription_id):
         return False
+    validate_outbound_extension_url(callback_url, field_name="callback_url")
     _load_subscription(
         subscription_id=subscription_id,
         event_type=event_type,
@@ -361,6 +368,7 @@ def restore_webhook_subscription(
         secret=secret,
         user_id=user_id,
         created_at=created_at,
+        owner_class=owner_class,
     )
     return True
 

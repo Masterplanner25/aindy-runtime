@@ -58,6 +58,7 @@ def create_webhook(request: Request, body: WebhookSubscription, db: Session = De
                 callback_url=body.callback_url,
                 secret=body.secret,
                 user_id=str(current_user["sub"]),
+                owner_class=body.owner_class,
                 db=db,
             )
         except ValueError as exc:

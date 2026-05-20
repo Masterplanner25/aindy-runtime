@@ -1,6 +1,6 @@
 ---
 title: Runtime-Only Deployment
-last_verified: "2026-05-18"
+last_verified: "2026-05-20"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -11,6 +11,14 @@ This is the authoritative contract for running AINDY without loading any
 `apps/*` plugins.
 
 Stability: `stable` external boot contract.
+
+Scope limit:
+
+- this is a stable runtime boot contract, not a claim that every mounted route
+  or extension surface is stable
+- extension isolation is not provided for trusted Python code
+- experimental route and extension surfaces keep their experimental status even
+  when they are reachable in runtime-only mode
 
 This document defines the runtime-only HTTP and extension surface. Deployment
 topology is a separate contract; see [Deployment Profiles](./DEPLOYMENT_PROFILES.md).
@@ -135,8 +143,9 @@ Runtime-only mode is presented intentionally in the shipped client shell:
 - the standalone `/platform` app no longer depends on `identity/boot` just to
   render its operator shell
 
-This means runtime-only mode should appear as a deliberate platform surface,
-not as a partially broken monolith UI.
+This means runtime-only mode should appear as a deliberate runtime operator
+surface, not as a partially broken monolith UI. It should not be described as a
+fully hardened third-party platform.
 
 ## Baseline Agent Capability
 
@@ -193,8 +202,15 @@ silently proxying into an app layer.
 
 Health and readiness still honor the broader deployment contract for required
 infrastructure such as PostgreSQL, Redis, worker mode, schema enforcement, and
-event-bus requirements. Runtime-only means “no app plugins loaded”, not “skip
-platform safety checks”.
+event-bus requirements. Runtime-only means "no app plugins loaded", not "skip
+platform safety checks".
+
+Readiness scope:
+
+- `/ready` means the runtime currently satisfies dependency and unsafe-condition
+  checks for the active deployment profile
+- it does not imply third-party extension trust, sandboxing, or a guarantee
+  that every experimental surface is production-hardened
 
 ## Intentionally Unavailable Without Apps
 

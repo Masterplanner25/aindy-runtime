@@ -50,7 +50,11 @@ from AINDY.platform_layer.registry_contracts import (
     validate_syscall_handler,
     validate_trigger_evaluator,
 )
-from AINDY.platform_layer.extension_policy import validate_bootstrap_module_name
+from AINDY.platform_layer.extension_policy import (
+    assert_python_extension_allowed,
+    python_extension_trust_class,
+    validate_bootstrap_module_name,
+)
 from AINDY.platform_layer.extension_policy import (
     OWNER_EXTERNAL_THIRD_PARTY,
     OWNER_FIRST_PARTY_APP,
@@ -699,6 +703,10 @@ def publish_bootstrap_registration(
         or current_extension.get("owner_class")
         or infer_bootstrap_owner_class(resolved_module_name or normalized)
     ).strip()
+    trust_class = str(
+        current_extension.get("trust_class")
+        or python_extension_trust_class(resolved_owner_class)
+    ).strip()
     if resolved_owner_class == OWNER_FIRST_PARTY_APP and normalized not in _registered_apps:
         _registered_apps.append(normalized)
     _bootstrap_dependencies[normalized] = [
@@ -709,6 +717,7 @@ def publish_bootstrap_registration(
     _bootstrap_registrations[normalized] = {
         "name": normalized,
         "owner_class": resolved_owner_class,
+        "trust_class": trust_class,
         "module_name": resolved_module_name,
         "dependencies": list(_bootstrap_dependencies[normalized]),
     }
@@ -1147,12 +1156,18 @@ def load_plugins(
     for plugin_entry in plugin_entries:
         module_name = plugin_entry["module_name"]
         owner_class = plugin_entry["owner_class"]
+        trust_class = assert_python_extension_allowed(
+            owner_class,
+            surface="manifest bootstrap module",
+            identifier=module_name,
+        )
         if module_name in _loaded_plugins:
             continue
         bootstrap_token = _bootstrap_extension_ctx.set(
             {
                 "module_name": module_name,
                 "owner_class": owner_class,
+                "trust_class": trust_class,
                 "manifest_owner": manifest_owner,
                 "profile_name": active_profile,
             }
@@ -1184,6 +1199,7 @@ def load_plugins(
         _loaded_extension_records[module_name] = {
             "module_name": module_name,
             "owner_class": owner_class,
+            "trust_class": trust_class,
             "manifest_owner": manifest_owner,
             "profile_name": active_profile,
         }

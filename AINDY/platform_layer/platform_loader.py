@@ -155,6 +155,7 @@ def _load_nodes(db: Session, stats: dict[str, int]) -> None:
                 timeout_seconds=timeout,
                 secret=row.secret,
                 user_id=row.created_by,
+                owner_class=getattr(row, "owner_class", None) or cfg.get("owner_class") or "external-third-party",
                 overwrite=False,
                 db=None,   # â† do NOT re-persist; we're reading from DB
             )
@@ -192,6 +193,7 @@ def _load_flows(db: Session, stats: dict[str, int]) -> None:
                 start=defn.get("start", ""),
                 end=defn.get("end", []),
                 user_id=row.created_by,
+                owner_class=getattr(row, "owner_class", None) or "external-third-party",
                 overwrite=False,
                 db=None,   # â† do NOT re-persist
             )
@@ -231,6 +233,7 @@ def _load_webhooks(db: Session, stats: dict[str, int]) -> None:
                 secret=row.secret,
                 user_id=row.created_by,
                 created_at=row.created_at.isoformat() if row.created_at else "",
+                owner_class=getattr(row, "owner_class", None) or "external-third-party",
             )
             stats["webhooks_loaded"] += 1
             logger.debug(

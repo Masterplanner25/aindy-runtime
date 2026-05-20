@@ -1,6 +1,6 @@
 ---
 title: Deployment Profiles
-last_verified: "2026-05-18"
+last_verified: "2026-05-20"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -16,6 +16,13 @@ Boot mode and deployment profile are separate axes:
 
 `AINDY_BOOT_MODE=runtime-only` selects the runtime-only surface.
 `AINDY_DEPLOYMENT_PROFILE` selects the deployment topology.
+
+Operator scope note:
+
+- profile enforcement covers dependency and runtime-condition guarantees for the
+  declared topology
+- it does not imply extension isolation, third-party code trust, or a broader
+  platform security certification
 
 If `AINDY_DEPLOYMENT_PROFILE` is unset:
 

@@ -81,7 +81,7 @@ def _copy_registry_value(value):
 
 
 @pytest.fixture
-def clean_registry_state(monkeypatch):
+def clean_registry_state():
     snapshot = {
         name: _copy_registry_value(getattr(registry, name))
         for name in _REGISTRY_STATE_EMPTY
@@ -158,7 +158,39 @@ def test_runtime_owned_manifest_rejects_non_runtime_extension_entries(monkeypatc
         registry.resolve_plugin_profile_entries(profile="platform-only")
 
 
-def test_load_plugins_records_first_party_and_external_ownership(monkeypatch, tmp_path, clean_registry_state):
+def test_load_plugins_allows_runtime_built_in_manifest_module(monkeypatch, tmp_path, clean_registry_state):
+    manifest = tmp_path / "runtime_plugins.json"
+    manifest.write_text(
+        """
+{
+  "default_profile": "platform-only",
+  "profiles": {
+    "platform-only": {
+      "plugins": [
+        {"module": "AINDY.platform_layer.runtime_agent_defaults", "owner_class": "runtime-built-in"}
+      ]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loaded = registry.load_plugins(manifest_path=manifest, profile="platform-only")
+
+    assert loaded == ["AINDY.platform_layer.runtime_agent_defaults"]
+    assert registry.get_loaded_extensions() == [
+        {
+            "module_name": "AINDY.platform_layer.runtime_agent_defaults",
+            "owner_class": OWNER_RUNTIME_BUILTIN,
+            "trust_class": "trusted-runtime-python",
+            "manifest_owner": "explicit",
+            "profile_name": "platform-only",
+        }
+    ]
+
+
+def test_load_plugins_allows_first_party_trusted_integrations(monkeypatch, tmp_path, clean_registry_state):
     apps_dir = tmp_path / "apps"
     apps_dir.mkdir()
     (apps_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -172,6 +204,50 @@ def bootstrap():
         encoding="utf-8",
     )
 
+    manifest = tmp_path / "aindy_plugins.json"
+    manifest.write_text(
+        """
+{
+  "default_profile": "default-apps",
+  "profiles": {
+    "default-apps": {
+      "plugins": [
+        {"module": "apps.test_bootstrap", "owner_class": "first-party-app"}
+      ]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    loaded = registry.load_plugins(manifest_path=manifest, profile="default-apps")
+
+    assert loaded == ["apps.test_bootstrap"]
+    assert registry.get_registered_apps() == ["demo-app"]
+    assert registry.get_loaded_extensions() == [
+        {
+            "module_name": "apps.test_bootstrap",
+            "owner_class": OWNER_FIRST_PARTY_APP,
+            "trust_class": "trusted-first-party-python",
+            "manifest_owner": "explicit",
+            "profile_name": "default-apps",
+        }
+    ]
+    assert registry.get_bootstrap_registrations() == {
+        "demo-app": {
+            "name": "demo-app",
+            "owner_class": OWNER_FIRST_PARTY_APP,
+            "trust_class": "trusted-first-party-python",
+            "module_name": "apps.test_bootstrap",
+            "dependencies": [],
+        }
+    }
+
+
+def test_load_plugins_blocks_external_python_bootstrap_by_default(monkeypatch, tmp_path, clean_registry_state):
     vendor_dir = tmp_path / "vendor"
     vendor_dir.mkdir()
     (vendor_dir / "__init__.py").write_text("", encoding="utf-8")
@@ -193,7 +269,6 @@ def bootstrap():
   "profiles": {
     "default-apps": {
       "plugins": [
-        {"module": "apps.test_bootstrap", "owner_class": "first-party-app"},
         {"module": "vendor.ext_bootstrap", "owner_class": "external-third-party"}
       ]
     }
@@ -205,45 +280,16 @@ def bootstrap():
 
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setenv("AINDY_EXTERNAL_BOOTSTRAP_PREFIXES", "vendor.")
+    monkeypatch.delenv("AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS", raising=False)
 
-    loaded = registry.load_plugins(manifest_path=manifest, profile="default-apps")
-
-    assert loaded == ["apps.test_bootstrap", "vendor.ext_bootstrap"]
-    assert registry.get_registered_apps() == ["demo-app"]
-    assert registry.get_loaded_extensions() == [
-        {
-            "module_name": "apps.test_bootstrap",
-            "owner_class": OWNER_FIRST_PARTY_APP,
-            "manifest_owner": "explicit",
-            "profile_name": "default-apps",
-        },
-        {
-            "module_name": "vendor.ext_bootstrap",
-            "owner_class": OWNER_EXTERNAL_THIRD_PARTY,
-            "manifest_owner": "explicit",
-            "profile_name": "default-apps",
-        },
-    ]
-    assert registry.get_bootstrap_registrations() == {
-        "demo-app": {
-            "name": "demo-app",
-            "owner_class": OWNER_FIRST_PARTY_APP,
-            "module_name": "apps.test_bootstrap",
-            "dependencies": [],
-        },
-        "vendor-demo": {
-            "name": "vendor-demo",
-            "owner_class": OWNER_EXTERNAL_THIRD_PARTY,
-            "module_name": "vendor.ext_bootstrap",
-            "dependencies": [],
-        },
-    }
+    with pytest.raises(ValueError, match="blocked by default"):
+        registry.load_plugins(manifest_path=manifest, profile="default-apps")
 
 
 def test_runtime_only_profile_stays_free_of_app_and_external_bootstrap(clean_registry_state):
     import AINDY.startup as startup
 
-    importlib.reload(startup)
+    startup = importlib.reload(startup)
 
     assert registry.get_active_plugin_profile() == "platform-only"
     assert registry.get_registered_apps() == []

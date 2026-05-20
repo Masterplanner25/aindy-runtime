@@ -5,7 +5,7 @@ from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY
 from AINDY.platform_layer.deployment_contract import runtime_only_deployment_contract
 
 
-PUBLIC_CONTRACT_SCHEMA_VERSION = "2026-05-18"
+PUBLIC_CONTRACT_SCHEMA_VERSION = "2026-05-20"
 STABILITY_STABLE = "stable"
 STABILITY_EXPERIMENTAL = "experimental"
 
@@ -13,6 +13,7 @@ STABILITY_EXPERIMENTAL = "experimental"
 def runtime_public_contract_metadata() -> dict[str, object]:
     return {
         "schema_version": PUBLIC_CONTRACT_SCHEMA_VERSION,
+        "release_posture": _release_posture_contract(),
         "policy": (
             "Stable surfaces are expected to remain compatible within the current "
             "runtime and API MAJOR series. Experimental surfaces may change in "
@@ -23,6 +24,27 @@ def runtime_public_contract_metadata() -> dict[str, object]:
         "syscalls": _syscall_surface_contract(),
         "extensions": _extension_surface_contract(),
         "runtime_only_boot": _runtime_only_boot_surface_contract(),
+    }
+
+
+def _release_posture_contract() -> dict[str, object]:
+    return {
+        "support_tier": "trusted-internal",
+        "not_claimed": [
+            "third-party extension isolation",
+            "sandboxed in-process plugin execution",
+            "fully frozen external platform semantics outside declared stable surfaces",
+        ],
+        "suitable_for": [
+            "runtime-only internal deployments",
+            "first-party app integrations under the documented trust model",
+            "operator-managed deployments that accept explicit experimental surfaces",
+        ],
+        "operator_scope": (
+            "Health and readiness report dependency state for the active deployment "
+            "profile. They do not certify plugin isolation, third-party code trust, "
+            "or generalized multi-tenant platform hardening."
+        ),
     }
 
 
@@ -39,7 +61,11 @@ def _http_surface_contract() -> dict[str, object]:
             },
             {
                 "route": "GET /ready",
-                "notes": "Operator readiness surface with fail-fast dependency checks.",
+                "notes": (
+                    "Operator readiness surface with fail-fast dependency checks for the "
+                    "active deployment profile. Ready does not imply sandboxing or "
+                    "third-party extension trust."
+                ),
             },
             {
                 "route": "GET /platform/syscalls",
@@ -106,7 +132,9 @@ def _syscall_surface_contract() -> dict[str, object]:
         "notes": (
             "The syscall ABI is versioned. Per-entry stability is authoritative: "
             "clients must inspect the stable marker from /platform/syscalls "
-            "instead of assuming every syscall in a stable version is itself stable."
+            "instead of assuming every syscall in a stable version is itself stable. "
+            "Stable syscall status does not imply that every surrounding orchestration "
+            "or extension surface is equally stable."
         ),
     }
 
@@ -158,7 +186,9 @@ def _runtime_only_boot_surface_contract() -> dict[str, object]:
         "required_routes": contract["mounted_routes"]["required_routes"],
         "baseline_tools": contract["baseline_agent_capabilities"]["tools"],
         "notes": (
-            "Runtime-only boot is a supported external contract. It remains strict "
-            "about schema, readiness, and dependency safety checks."
+            "Runtime-only boot is a supported external boot contract for the runtime "
+            "surface. It remains strict about schema, readiness, and dependency "
+            "checks, but it does not imply third-party extension isolation or a "
+            "fully frozen external platform beyond the declared stable surfaces."
         ),
     }

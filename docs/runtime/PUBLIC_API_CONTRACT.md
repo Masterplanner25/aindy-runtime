@@ -1,6 +1,6 @@
 ---
 title: "Runtime Public API Contract"
-last_verified: "2026-05-09"
+last_verified: "2026-05-20"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -12,6 +12,13 @@ This document is the authoritative import contract between the runtime in
 modules listed in **Public Runtime API Modules** are stable import targets.
 Everything else under `AINDY/` is internal unless it is listed under
 **Transitional App Imports To Remove Or Replace**.
+
+Release posture note:
+
+- this import contract is for trusted internal integration between the runtime
+  repo and first-party apps
+- it is not a claim that every promoted module is suitable as a hardened
+  third-party extension SDK
 
 For HTTP/syscall/boot stability tiers, use
 [Public Runtime Surfaces](./PUBLIC_RUNTIME_SURFACES.md). This document covers

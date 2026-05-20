@@ -116,11 +116,11 @@ Steps executed in order for every call:
 | 3 | Look up entry in `SYSCALL_REGISTRY` | error if not found |
 | 4 | Enforce exact capability membership from `SyscallContext.capabilities` | error if denied |
 | 5 | Enforce non-empty `user_id` (tenant isolation) | error if absent |
-| 6 | Resource quota check via `ResourceManager` | error if over quota; quota subsystem failures are fail-open with warning |
+| 6 | Resource quota check via `ResourceManager` | error if over quota; quota backend failures fail open only in development/test and fail closed otherwise |
 | 7 | Input validation against `entry.input_schema` | error if invalid |
 | 8 | Deprecation check — set `warning` in envelope | non-fatal, continues |
 | 9 | Execute handler | error if handler raises |
-| 10 | Output validation against `entry.output_schema` | non-fatal, logs warning |
+| 10 | Output validation against `entry.output_schema` | error for stable syscalls; warning-only for experimental syscalls |
 | 11 | Record syscall usage in `ResourceManager` | non-fatal |
 | 12 | Emit `SYSCALL_EXECUTED` system event | non-fatal |
 | 13 | Return success envelope; reset ContextVar tokens | — |
@@ -141,7 +141,7 @@ class SyscallEntry:
     capability:     str          # required capability name
     description:    str
     input_schema:   dict | None  # JSON schema for input validation
-    output_schema:  dict | None  # JSON schema for output validation (non-fatal)
+    output_schema:  dict | None  # JSON schema for output validation
     stable:         bool         # False = experimental
     deprecated:     bool
     deprecated_since: str | None # e.g. "v2"
@@ -251,9 +251,14 @@ Supported types: `string`, `integer`, `float`, `boolean`, `list`, `dict`.
 
 Called before the handler. Missing required fields or wrong types → error envelope returned, handler never runs.
 
-### Output Validation (non-fatal)
+### Output Validation
 
-Called after the handler. Schema mismatch → warning logged, result still returned.
+Called after the handler.
+
+- Stable syscall schema mismatch → error envelope returned.
+- Experimental syscall schema mismatch → warning logged, result still returned.
+- Handler return type mismatch → error envelope returned regardless of stability.
+
 The handler return contract is stricter than schema validation: handlers must
 return a plain `dict`. A non-dict return is treated as a syscall handler
 contract violation and becomes an error envelope.
@@ -361,9 +366,9 @@ Runtime-owned handler contract:
 
 - If `context.metadata["_db"]` is present, the caller owns that SQLAlchemy session.
 - The handler may use that session but must not commit, rollback, or close it.
+- Caller-owned write handlers may `flush()` successful writes but must leave transaction ownership to the caller.
 - If no session is provided, the handler opens and owns its own `SessionLocal()`.
 - Handler-owned write sessions commit or rollback locally.
-- Caller-owned write sessions may `flush()` but leave transaction ownership to the caller.
 
 This preserves transaction boundaries across the syscall boundary while still
 allowing syscall handlers to run safely in standalone contexts.
