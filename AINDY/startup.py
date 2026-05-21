@@ -72,7 +72,6 @@ from AINDY.core.observability_events import emit_observability_event, emit_recov
 from AINDY.kernel.circuit_breaker import CircuitOpenError
 from AINDY.kernel.errors import BootstrapDependencyError
 from AINDY.platform_layer.extension_policy import (
-    external_python_override_production_acknowledged,
     external_python_override_state,
 )
 from AINDY.platform_layer.extension_runtime_inventory import (
@@ -210,26 +209,19 @@ def _enforce_external_python_override_policy() -> None:
         component="extension_policy",
         classification=_SAFE_DEGRADED,
         detail=(
-            "External third-party Python execution override is enabled. Any "
-            "allowlisted external bootstrap module or plugin node runs in-process "
-            "with full interpreter privileges. This is trusted-code execution, not "
-            "sandboxing."
+            "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS is set, but external third-party "
+            "Python no longer executes in-process. Manifest bootstrap remains blocked, "
+            "and third-party plugin nodes must use the isolated plugin-host boundary."
         ),
         production_behavior=(
-            "requires explicit production acknowledgement and remains operator-visible"
+            "operator-visible legacy configuration with no direct in-process effect"
         ),
     )
-    if settings.is_prod and not external_python_override_production_acknowledged():
-        raise RuntimeError(
-            "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true enables unsandboxed external "
-            "third-party Python execution. Production startup requires "
-            "AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true as an explicit operator "
-            "acknowledgement of trusted in-process code execution."
-        )
     logger.warning(
-        "[startup] External third-party Python override is enabled. External "
-        "Python extensions are executing in-process with full interpreter "
-        "privileges. This mode is trusted-code execution, not isolation."
+        "[startup] AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS is set, but external "
+        "third-party Python does not execute in-process. Third-party manifest "
+        "bootstrap remains unsupported, and plugin nodes use the isolated "
+        "plugin-host boundary."
     )
 
 

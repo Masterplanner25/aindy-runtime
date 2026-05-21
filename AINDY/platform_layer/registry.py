@@ -16,12 +16,23 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
+import hashlib
 
 from AINDY.platform_layer.agent_plugin_contracts import CapabilityProviderBundle
 from AINDY.platform_layer.deployment_contract import (
     BOOT_MODE_ENV_VAR,
     get_requested_boot_mode,
     resolve_profile_for_boot_mode,
+)
+from AINDY.platform_layer.extension_abi import (
+    LEGACY_UNVERSIONED_MANIFEST,
+    SURFACE_MANIFEST,
+    extension_surface_stability,
+    manifest_effective_abi_version,
+    validate_extension_manifest_document,
+)
+from AINDY.platform_layer.extension_boundary import (
+    sanitize_extension_context,
 )
 from AINDY.platform_layer.registry_contracts import (
     validate_agent_event,
@@ -63,6 +74,9 @@ from AINDY.platform_layer.extension_policy import (
     OWNER_FIRST_PARTY_APP,
     OWNER_RUNTIME_BUILTIN,
     infer_bootstrap_owner_class,
+)
+from AINDY.platform_layer.extension_provenance import (
+    derive_python_extension_provenance,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,6 +144,10 @@ _bootstrap_extension_ctx: ContextVar[dict[str, Any] | None] = ContextVar(
     "_bootstrap_extension_ctx",
     default=None,
 )
+
+
+def _sanitized_extension_input(context: dict[str, Any] | None) -> dict[str, Any]:
+    return sanitize_extension_context(context or {})
 
 
 def register_router(router: Any, *, root: bool = False, legacy_root: bool = False) -> Any:
@@ -264,7 +282,7 @@ def get_event_types() -> set[str]:
 def emit_event(event_type: str, context: dict[str, Any] | None = None) -> list[Any]:
     """Dispatch a generic registry event to app-registered handlers."""
     load_plugins()
-    payload = context or {}
+    payload = _sanitized_extension_input(context)
     results: list[Any] = []
     handlers = tuple(_event_handlers.get(event_type, ())) + tuple(_event_handlers.get("*", ()))
     for handler in handlers:
@@ -344,7 +362,7 @@ def register_startup_hook(handler: Handler) -> Handler:
 
 def run_startup_hooks(context: dict[str, Any] | None = None) -> list[Any]:
     load_plugins()
-    payload = context or {}
+    payload = _sanitized_extension_input(context)
     results: list[Any] = []
     for handler in tuple(_startup_hooks):
         results.append(handler(payload))
@@ -437,7 +455,7 @@ def get_planner_context(run_type: str, context: dict[str, Any] | None = None) ->
     handler = _agent_planner_contexts.get(run_type) or _agent_planner_contexts.get("default")
     if handler is None:
         return {}
-    value = handler(context or {})
+    value = handler(_sanitized_extension_input(context))
     return value if isinstance(value, dict) else {}
 
 
@@ -456,7 +474,7 @@ def get_tools_for_run(run_type: str, context: dict[str, Any] | None = None) -> l
     handler = _agent_run_tools.get(run_type) or _agent_run_tools.get("default")
     if handler is None:
         return []
-    value = handler(context or {})
+    value = handler(_sanitized_extension_input(context))
     return value if isinstance(value, list) else []
 
 
@@ -473,11 +491,12 @@ def register_agent_completion_hook(run_type: str, handler: Handler) -> Handler:
 def run_agent_completion_hooks(run_type: str, context: dict[str, Any]) -> list[Any]:
     _ensure_runtime_agent_defaults()
     results: list[Any] = []
+    payload = _sanitized_extension_input(context)
     handlers = tuple(_agent_completion_hooks.get(run_type, ())) + tuple(
         _agent_completion_hooks.get("default", ()) if run_type != "default" else ()
     )
     for handler in handlers:
-        results.append(handler(context))
+        results.append(handler(payload))
     return results
 
 
@@ -489,8 +508,9 @@ def register_agent_event(event_name: str, handler: Handler) -> Handler:
 
 def emit_agent_event(event_name: str, context: dict[str, Any]) -> list[Any]:
     results: list[Any] = []
+    payload = _sanitized_extension_input(context)
     for handler in tuple(_agent_event_emitters.get(event_name, ())):
-        results.append(handler(context))
+        results.append(handler(payload))
     return results
 
 
@@ -737,6 +757,10 @@ def publish_bootstrap_registration(
     ]
     _bootstrap_registrations[normalized] = {
         "name": normalized,
+        "abi_surface": current_extension.get("abi_surface") or SURFACE_MANIFEST,
+        "abi_version": current_extension.get("abi_version") or LEGACY_UNVERSIONED_MANIFEST,
+        "abi_stability": current_extension.get("abi_stability")
+        or extension_surface_stability(SURFACE_MANIFEST),
         "owner_class": resolved_owner_class,
         "trust_class": trust_class,
         "execution_model": execution_metadata["execution_model"],
@@ -748,6 +772,7 @@ def publish_bootstrap_registration(
         "manifest_owner": current_extension.get("manifest_owner"),
         "profile_name": current_extension.get("profile_name"),
         "dependencies": list(_bootstrap_dependencies[normalized]),
+        "provenance": dict(current_extension.get("provenance") or {}),
     }
     return normalized
 
@@ -861,8 +886,7 @@ def _read_plugin_manifest(manifest_path: str | Path | None = None) -> tuple[Path
     if not path.exists():
         return path, None
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError(f"Plugin manifest at {path} must be a JSON object")
+    validate_extension_manifest_document(data, path=path)
     return path, data
 
 
@@ -886,6 +910,7 @@ def _normalize_plugin_profile_plugins(
         if isinstance(plugin_entry, str):
             cleaned = plugin_entry.strip()
             owner_class = infer_bootstrap_owner_class(cleaned)
+            declared_provenance = None
         elif isinstance(plugin_entry, dict):
             module_value = plugin_entry.get("module")
             if not isinstance(module_value, str):
@@ -894,6 +919,11 @@ def _normalize_plugin_profile_plugins(
                 )
             cleaned = module_value.strip()
             owner_class = str(plugin_entry.get("owner_class") or infer_bootstrap_owner_class(cleaned)).strip()
+            declared_provenance = (
+                dict(plugin_entry.get("provenance"))
+                if isinstance(plugin_entry.get("provenance"), dict)
+                else None
+            )
         else:
             raise ValueError(
                 f"Plugin profile {profile_name!r} in {path} contains an invalid plugin entry {plugin_entry!r}"
@@ -906,12 +936,54 @@ def _normalize_plugin_profile_plugins(
             manifest_owner=manifest_owner,
         )
         seen.add(cleaned)
-        normalized.append(
-            {
-                "module_name": cleaned,
-                "owner_class": resolved_owner_class,
-            }
+        normalized_entry = {
+            "module_name": cleaned,
+            "owner_class": resolved_owner_class,
+        }
+        if declared_provenance is not None:
+            normalized_entry["provenance"] = declared_provenance
+        normalized.append(normalized_entry)
+    return normalized
+
+
+def _normalize_plugin_profile_extensions(
+    extensions: Any,
+    *,
+    profile_name: str,
+    path: Path,
+) -> list[dict[str, Any]]:
+    if extensions is None:
+        return []
+    if not isinstance(extensions, list):
+        raise ValueError(
+            f"Plugin profile {profile_name!r} in {path} must declare a list of extensions"
         )
+
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for extension_entry in extensions:
+        if not isinstance(extension_entry, dict):
+            raise ValueError(
+                f"Plugin profile {profile_name!r} in {path} contains an invalid extension entry {extension_entry!r}"
+            )
+        kind = str(extension_entry.get("kind") or "").strip()
+        if kind == "dynamic-node":
+            identifier = f"dynamic-node:{str(extension_entry.get('name') or '').strip()}"
+        elif kind == "webhook-subscription":
+            identifier = (
+                f"webhook-subscription:{str(extension_entry.get('event_type') or '').strip()}:"
+                f"{str(extension_entry.get('callback_url') or '').strip()}"
+            )
+        elif kind == "dynamic-flow":
+            identifier = f"dynamic-flow:{str(extension_entry.get('name') or '').strip()}"
+        else:
+            raise ValueError(
+                f"Plugin profile {profile_name!r} in {path} contains unsupported declarative extension kind {kind!r}"
+            )
+        if not identifier or identifier in seen:
+            continue
+        seen.add(identifier)
+        normalized.append(dict(extension_entry))
     return normalized
 
 
@@ -948,7 +1020,7 @@ def _resolve_plugin_profile_selection(
     manifest_path: str | Path | None = None,
     *,
     profile: str | None = None,
-) -> tuple[str, list[dict[str, str]], bool, str]:
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], bool, str]:
     path, manifest_source, manifest_owner = _resolve_manifest_path(
         manifest_path,
         profile=profile,
@@ -972,23 +1044,22 @@ def _resolve_plugin_profile_selection(
                 profile_name=profile_name,
                 reason=reason,
             )
-        return "missing", [], False, "missing-manifest"
+        return "missing", [], [], False, "missing-manifest"
 
     requested_profile, requested_profile_source = _resolve_requested_plugin_profile(profile)
+    effective_abi_version = manifest_effective_abi_version(data)
     legacy_plugins = data.get("plugins")
-    if isinstance(legacy_plugins, list):
+    if effective_abi_version == LEGACY_UNVERSIONED_MANIFEST and isinstance(legacy_plugins, list):
         return "__legacy__", _normalize_plugin_profile_plugins(
             legacy_plugins,
             profile_name="__legacy__",
             path=path,
             manifest_owner=manifest_owner,
-        ), False, "legacy-manifest"
+        ), [], False, "legacy-manifest"
 
     profiles = data.get("profiles")
     if not isinstance(profiles, dict) or not profiles:
-        raise ValueError(
-            f"Plugin manifest at {path} must declare either top-level 'plugins' or 'profiles'"
-        )
+        raise ValueError(f"Plugin manifest at {path} must declare non-empty 'profiles'")
 
     if requested_profile:
         selected_profile = requested_profile
@@ -1022,12 +1093,22 @@ def _resolve_plugin_profile_selection(
             f"Plugin profile {selected_profile!r} in {path} must be a JSON object"
         )
 
-    return selected_profile, _normalize_plugin_profile_plugins(
-        profile_entry.get("plugins"),
-        profile_name=selected_profile,
-        path=path,
-        manifest_owner=manifest_owner,
-    ), explicitly_selected, selection_source
+    return (
+        selected_profile,
+        _normalize_plugin_profile_plugins(
+            profile_entry.get("plugins"),
+            profile_name=selected_profile,
+            path=path,
+            manifest_owner=manifest_owner,
+        ),
+        _normalize_plugin_profile_extensions(
+            profile_entry.get("extensions"),
+            profile_name=selected_profile,
+            path=path,
+        ),
+        explicitly_selected,
+        selection_source,
+    )
 
 
 def resolve_plugin_profile(
@@ -1035,7 +1116,7 @@ def resolve_plugin_profile(
     *,
     profile: str | None = None,
 ) -> tuple[str, list[str]]:
-    selected_profile, plugin_entries, _explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
+    selected_profile, plugin_entries, _extension_entries, _explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
         manifest_path,
         profile=profile,
     )
@@ -1047,18 +1128,30 @@ def resolve_plugin_profile_entries(
     *,
     profile: str | None = None,
 ) -> tuple[str, list[dict[str, str]]]:
-    selected_profile, plugin_entries, _explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
+    selected_profile, plugin_entries, _extension_entries, _explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
         manifest_path,
         profile=profile,
     )
     return selected_profile, [dict(entry) for entry in plugin_entries]
 
 
+def resolve_plugin_profile_declarative_extensions(
+    manifest_path: str | Path | None = None,
+    *,
+    profile: str | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    selected_profile, _plugin_entries, extension_entries, _explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
+        manifest_path,
+        profile=profile,
+    )
+    return selected_profile, [dict(entry) for entry in extension_entries]
+
+
 def get_active_plugin_profile(manifest_path: str | Path | None = None) -> str:
     global _active_plugin_profile, _active_plugin_profile_source
     if isinstance(_active_plugin_profile, str) and _active_plugin_profile.strip():
         return _active_plugin_profile
-    profile_name, _plugin_modules, _explicitly_selected, selection_source = _resolve_plugin_profile_selection(
+    profile_name, _plugin_modules, _extension_entries, _explicitly_selected, selection_source = _resolve_plugin_profile_selection(
         manifest_path
     )
     _active_plugin_profile = profile_name
@@ -1083,12 +1176,14 @@ def get_plugin_boot_order(
         manifest_path,
         profile=profile,
     )
-    profile_name, plugin_entries, explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
+    profile_name, plugin_entries, extension_entries, explicitly_selected, _selection_source = _resolve_plugin_profile_selection(
         manifest_path,
         profile=profile,
     )
     if not plugin_entries:
         if profile_name == "missing":
+            return []
+        if extension_entries:
             return []
         if explicitly_selected or manifest_owner == "runtime":
             return []
@@ -1101,6 +1196,19 @@ def get_plugin_boot_order(
     boot_order: list[str] = []
     for plugin_entry in plugin_entries:
         module_name = plugin_entry["module_name"]
+        owner_class = plugin_entry["owner_class"]
+        if owner_class == OWNER_EXTERNAL_THIRD_PARTY:
+            raise _plugin_boot_failure(
+                path=path,
+                profile_name=profile_name,
+                module_name=module_name,
+                reason=(
+                    "external-third-party bootstrap modules are not supported because "
+                    "bootstrap import/registration is an in-process operation. Use "
+                    "runtime-built-in or first-party bootstrap code, or move the "
+                    "extension behind a webhook or isolated plugin-node boundary."
+                ),
+            )
         try:
             module = importlib.import_module(module_name)
         except Exception as exc:
@@ -1128,6 +1236,102 @@ def get_plugin_boot_order(
     return boot_order
 
 
+def _manifest_declarative_extension_record_key(entry: dict[str, Any]) -> str:
+    kind = str(entry.get("kind") or "").strip()
+    if kind == "dynamic-node":
+        return f"manifest-extension:dynamic-node:{entry['name']}"
+    if kind == "dynamic-flow":
+        return f"manifest-extension:dynamic-flow:{entry['name']}"
+    if kind == "webhook-subscription":
+        callback_url = str(entry.get("callback_url") or "")
+        hashed = hashlib.sha256(callback_url.encode("utf-8")).hexdigest()[:16]
+        return f"manifest-extension:webhook-subscription:{entry['event_type']}:{hashed}"
+    raise ValueError(f"unsupported declarative extension kind {kind!r}")
+
+
+def _load_manifest_declarative_extensions(
+    extension_entries: list[dict[str, Any]],
+    *,
+    path: Path,
+    manifest_owner: str,
+    active_profile: str,
+) -> list[str]:
+    if not extension_entries:
+        return []
+
+    from AINDY.platform_layer.event_service import subscribe_webhook
+    from AINDY.platform_layer.node_registry import register_external_node
+    from AINDY.runtime.flow_registry import register_dynamic_flow
+
+    loaded: list[str] = []
+    for extension_entry in extension_entries:
+        kind = str(extension_entry.get("kind") or "").strip()
+        record_key = _manifest_declarative_extension_record_key(extension_entry)
+        if record_key in _loaded_extension_records:
+            continue
+        owner_class = str(extension_entry.get("owner_class") or "").strip()
+        if kind == "dynamic-node":
+            meta = register_external_node(
+                name=str(extension_entry["name"]),
+                node_type=str(extension_entry["type"]),
+                handler=str(extension_entry["handler"]),
+                timeout_seconds=int(extension_entry.get("timeout_seconds", 10)),
+                secret=extension_entry.get("secret"),
+                owner_class=owner_class,
+                capabilities=list(extension_entry.get("capabilities") or []),
+                provenance=dict(extension_entry["provenance"]) if isinstance(extension_entry.get("provenance"), dict) else None,
+                overwrite=bool(extension_entry.get("overwrite", False)),
+                db=None,
+            )
+        elif kind == "webhook-subscription":
+            meta = subscribe_webhook(
+                event_type=str(extension_entry["event_type"]),
+                callback_url=str(extension_entry["callback_url"]),
+                secret=extension_entry.get("secret"),
+                owner_class=owner_class,
+                provenance=dict(extension_entry["provenance"]) if isinstance(extension_entry.get("provenance"), dict) else None,
+                db=None,
+            )
+        elif kind == "dynamic-flow":
+            meta = register_dynamic_flow(
+                name=str(extension_entry["name"]),
+                nodes=list(extension_entry["nodes"]),
+                edges={str(src): list(targets) for src, targets in dict(extension_entry.get("edges") or {}).items()},
+                start=str(extension_entry["start"]),
+                end=list(extension_entry["end"]),
+                owner_class=owner_class,
+                provenance=dict(extension_entry["provenance"]) if isinstance(extension_entry.get("provenance"), dict) else None,
+                overwrite=bool(extension_entry.get("overwrite", False)),
+                db=None,
+            )
+        else:
+            raise ValueError(f"unsupported declarative extension kind {kind!r}")
+
+        _loaded_extension_records[record_key] = {
+            "record_key": record_key,
+            "abi_surface": SURFACE_MANIFEST,
+            "abi_version": manifest_effective_abi_version(json.loads(path.read_text(encoding="utf-8"))),
+            "abi_stability": extension_surface_stability(SURFACE_MANIFEST),
+            "owner_class": owner_class,
+            "trust_class": meta.get("trust_class"),
+            "execution_model": meta.get("execution_model") or meta.get("authority_model"),
+            "sandboxing": meta.get("sandboxing"),
+            "trusted_override_active": False,
+            "execution_surface": "manifest-declarative-registration",
+            "manifest_owner": manifest_owner,
+            "profile_name": active_profile,
+            "declarative_kind": kind,
+            "extension_name": meta.get("name") or meta.get("id") or meta.get("event_type"),
+            "source_ref": meta.get("source_ref") or meta.get("callback_url"),
+            "provenance": meta.get("provenance"),
+            "bootstrap_callable_present": False,
+            "bootstrap_executed": False,
+            "loaded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        loaded.append(record_key)
+    return loaded
+
+
 def load_plugins(
     manifest_path: str | Path | None = None,
     *,
@@ -1141,8 +1345,12 @@ def load_plugins(
     - app-profile boot selects the app-owned manifest
     - the monolith defaults to the app manifest when present
 
-    Supported manifest shapes are either the legacy ``{"plugins": [...]}``
-    list or the profile format:
+    Supported manifest shapes are:
+
+    - the stable versioned manifest ABI
+      ``{"kind": "aindy-extension-manifest", "abi_version": "aindy.extension.manifest/v1", ...}``
+    - the legacy unversioned ``{"plugins": [...]}`` list
+    - the unversioned profile format:
 
     ``{"default_profile": "default-apps", "profiles": {"platform-only": {"plugins": []}, ...}}``
 
@@ -1158,7 +1366,7 @@ def load_plugins(
         profile=profile,
     )
     global _active_plugin_profile, _active_plugin_profile_source
-    active_profile, plugin_entries, explicitly_selected, selection_source = _resolve_plugin_profile_selection(
+    active_profile, plugin_entries, extension_entries, explicitly_selected, selection_source = _resolve_plugin_profile_selection(
         manifest_path if manifest_path is not None else path,
         profile=profile,
     )
@@ -1166,9 +1374,11 @@ def load_plugins(
     if data is None:
         logger.info("No plugin manifest found at %s", path)
         return []
+    manifest_abi_version = manifest_effective_abi_version(data)
+    manifest_abi_stability = extension_surface_stability(SURFACE_MANIFEST)
     _active_plugin_profile = active_profile
     _active_plugin_profile_source = selection_source
-    if not plugin_entries:
+    if not plugin_entries and not extension_entries:
         if not explicitly_selected and manifest_owner != "runtime":
             raise _plugin_boot_failure(
                 path=path,
@@ -1184,6 +1394,7 @@ def load_plugins(
     for plugin_entry in plugin_entries:
         module_name = plugin_entry["module_name"]
         owner_class = plugin_entry["owner_class"]
+        declared_provenance = plugin_entry.get("provenance")
         trust_class = assert_python_extension_allowed(
             owner_class,
             surface="manifest bootstrap module",
@@ -1198,6 +1409,9 @@ def load_plugins(
                 "trust_class": trust_class,
                 "manifest_owner": manifest_owner,
                 "profile_name": active_profile,
+                "abi_surface": SURFACE_MANIFEST,
+                "abi_version": manifest_abi_version,
+                "abi_stability": manifest_abi_stability,
             }
         )
         try:
@@ -1212,6 +1426,14 @@ def load_plugins(
             ) from exc
         module_origin = str(getattr(module, "__file__", "")).strip() or None
         bootstrap = getattr(module, "bootstrap", None)
+        resolved_provenance = derive_python_extension_provenance(
+            owner_class=owner_class,
+            surface="manifest-bootstrap",
+            extension_name=module_name,
+            module_name=module_name,
+            source_path=module_origin,
+            declared=declared_provenance,
+        )
         _bootstrap_extension_ctx.set(
             {
                 "module_name": module_name,
@@ -1220,6 +1442,10 @@ def load_plugins(
                 "trust_class": trust_class,
                 "manifest_owner": manifest_owner,
                 "profile_name": active_profile,
+                "abi_surface": SURFACE_MANIFEST,
+                "abi_version": manifest_abi_version,
+                "abi_stability": manifest_abi_stability,
+                "provenance": resolved_provenance,
             }
         )
         if callable(bootstrap):
@@ -1238,6 +1464,9 @@ def load_plugins(
         execution_metadata = python_extension_execution_metadata(owner_class)
         _loaded_extension_records[module_name] = {
             "module_name": module_name,
+            "abi_surface": SURFACE_MANIFEST,
+            "abi_version": manifest_abi_version,
+            "abi_stability": manifest_abi_stability,
             "owner_class": owner_class,
             "trust_class": trust_class,
             "execution_model": execution_metadata["execution_model"],
@@ -1247,11 +1476,20 @@ def load_plugins(
             "module_origin": module_origin,
             "manifest_owner": manifest_owner,
             "profile_name": active_profile,
+            "source_ref": resolved_provenance.get("source_ref"),
+            "provenance": resolved_provenance,
             "bootstrap_callable_present": callable(bootstrap),
             "bootstrap_executed": callable(bootstrap),
             "loaded_at": datetime.now(timezone.utc).isoformat(),
         }
         loaded.append(module_name)
+    declarative_loaded = _load_manifest_declarative_extensions(
+        extension_entries,
+        path=path,
+        manifest_owner=manifest_owner,
+        active_profile=active_profile,
+    )
+    loaded.extend(declarative_loaded)
     if loaded:
         logger.info(
             "Loaded platform plugins from profile %s: %s",

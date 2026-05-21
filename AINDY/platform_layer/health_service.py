@@ -28,6 +28,10 @@ from AINDY.platform_layer.registry import get_degraded_domains
 from AINDY.platform_layer.extension_runtime_inventory import (
     trusted_python_execution_inventory,
 )
+from AINDY.platform_layer.extension_provenance_inventory import (
+    extension_provenance_inventory,
+)
+from AINDY.platform_layer.plugin_host import plugin_host_inventory
 from AINDY.db.schema_contract import ensure_runtime_schema
 from AINDY.db.schema_contract import runtime_schema_contract_metadata
 from AINDY.platform_layer.registry import get_all_health_checks
@@ -52,12 +56,14 @@ class SystemHealth:
     tier: Literal["healthy", "degraded", "critical"]
     http_status: int
     dependencies: list[DependencyStatus] = field(default_factory=list)
+    plugin_hosts: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         domains = get_domain_health()
         degraded_domains = _merge_degraded_domains(domains)
         platform = build_platform_status(self.dependencies)
         runtime_conditions = get_api_runtime_conditions()
+        host_inventory = self.plugin_hosts or plugin_host_inventory(probe=True)
         return {
             "status": derive_public_status(self.tier, platform, domains),
             "tier": self.tier,
@@ -67,6 +73,8 @@ class SystemHealth:
             "degraded_apps": degraded_domains,
             "platform": platform,
             "trusted_python_execution": trusted_python_execution_inventory(),
+            "extension_provenance": extension_provenance_inventory(),
+            "plugin_hosts": host_inventory,
             "domains": domains,
             "memory_ingest_queue": get_memory_ingest_queue_status(),
             "deployment_contract": deployment_contract_summary(),
@@ -615,6 +623,7 @@ def get_system_health(*, force: bool = False) -> SystemHealth:
         check_schema(),
         check_ai_providers(),
     ]
+    plugin_hosts = plugin_host_inventory(probe=True)
 
     degraded_domains = get_degraded_domains()
     runtime_conditions = get_api_runtime_conditions()
@@ -638,6 +647,9 @@ def get_system_health(*, force: bool = False) -> SystemHealth:
         tier = "healthy"
         http_status = 200
 
+    if plugin_hosts["overall_status"] != "ok" and tier == "healthy":
+        tier = "degraded"
+
     try:
         from AINDY.platform_layer.metrics import system_health_tier
 
@@ -645,7 +657,12 @@ def get_system_health(*, force: bool = False) -> SystemHealth:
     except Exception:
         pass
 
-    result = SystemHealth(tier=tier, http_status=http_status, dependencies=deps)
+    result = SystemHealth(
+        tier=tier,
+        http_status=http_status,
+        dependencies=deps,
+        plugin_hosts=plugin_hosts,
+    )
     with _health_cache_lock:
         _health_cache = result
         _health_cache_checked_at = now
@@ -655,12 +672,15 @@ def get_system_health(*, force: bool = False) -> SystemHealth:
 def get_readiness_report() -> tuple[int, dict[str, Any]]:
     if settings.is_testing:
         inventory = trusted_python_execution_inventory()
+        hosts = plugin_host_inventory(probe=True)
         return 200, {
             "status": "ready",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "checks": {
                 "testing_mode": True,
                 "trusted_python_execution": inventory,
+                "extension_provenance": extension_provenance_inventory(),
+                "plugin_hosts": hosts,
             },
             "required_failures": [],
             "deployment_contract": deployment_contract_summary(),
@@ -673,6 +693,7 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
     health = get_system_health(force=True)
     api_state = get_api_runtime_state()
     dependency_by_name = {dep.name: dep for dep in health.dependencies}
+    plugin_hosts = health.plugin_hosts or plugin_host_inventory(probe=True)
 
     checks: dict[str, Any] = {
         "process_role": api_state.get("process_role", "api"),
@@ -701,6 +722,8 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         "degraded_domains": get_degraded_domains(),
         "runtime_conditions": get_api_runtime_conditions(),
         "trusted_python_execution": trusted_python_execution_inventory(),
+        "extension_provenance": extension_provenance_inventory(),
+        "plugin_hosts": plugin_hosts,
     }
 
     failures: list[str] = []
@@ -780,6 +803,10 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
     else:
         checks["worker"] = "not_required"
 
+    checks["plugin_hosts_overall_status"] = plugin_hosts.get("overall_status", "ok")
+    if plugin_hosts.get("present") and plugin_hosts.get("overall_status") != "ok":
+        failures.append("plugin_hosts")
+
     for condition in checks["runtime_conditions"]:
         if condition.get("classification") in {"unsafe_degraded", "startup_fatal"}:
             failures.append(str(condition.get("code")))
@@ -790,6 +817,7 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         "status": "ready" if not failures else "not_ready",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
+        "plugin_hosts": plugin_hosts,
         "required_failures": failures,
         "deployment_contract": deployment_contract_summary(),
         "readiness_scope": (

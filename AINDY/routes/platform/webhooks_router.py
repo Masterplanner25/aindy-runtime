@@ -59,6 +59,7 @@ def create_webhook(request: Request, body: WebhookSubscription, db: Session = De
                 secret=body.secret,
                 user_id=str(current_user["sub"]),
                 owner_class=body.owner_class,
+                provenance=body.provenance.model_dump() if body.provenance else None,
                 db=db,
             )
         except ValueError as exc:

@@ -135,6 +135,8 @@ def test_generate_plan_uses_backend_selected_by_runtime_configuration(
     assert plan is not None
     assert plan["overall_risk"] == "low"
     assert captured["backend"].objective == "Find the relevant memory"
+    assert not hasattr(captured["backend"], "db")
+    assert callable(captured["backend"].runtime_api.openai_chat_completion)
     assert "Available tools:" in captured["backend"].system_prompt
 
 
@@ -256,15 +258,15 @@ def test_openai_compat_backend_remains_available_as_explicit_adapter(
 
     monkeypatch.setattr(settings, "AINDY_AGENT_PLANNER_BACKEND", "openai_chat_compat")
     monkeypatch.setattr(
-        "AINDY.agents.agent_runtime.planner_backends.perform_external_call",
+        "AINDY.agents.agent_runtime.planning.perform_external_call",
         fake_external_call,
     )
     monkeypatch.setattr(
-        "AINDY.agents.agent_runtime.planner_backends.get_openai_client",
+        "AINDY.agents.agent_runtime.planning.get_openai_client",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "AINDY.agents.agent_runtime.planner_backends.chat_completion",
+        "AINDY.agents.agent_runtime.planning.chat_completion",
         lambda *args, **kwargs: object(),
     )
 

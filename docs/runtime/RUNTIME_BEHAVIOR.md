@@ -56,8 +56,9 @@ This document describes the current runtime behavior of the FastAPI backend as i
   - `startup_fatal`
 - when `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true`, the runtime records
   `external_python_override_enabled` as an explicit operator-visible degraded
-  condition. This indicates trusted in-process third-party Python execution,
-  not sandboxing.
+  condition. This now marks a legacy configuration flag; third-party Python
+  still does not import into the runtime process and must execute through the
+  isolated plugin-host boundary.
 - Runtime state also reports:
   - `process_role`
   - `deployment_profile`
@@ -66,11 +67,17 @@ This document describes the current runtime behavior of the FastAPI backend as i
 - `/api/version`, `/health`, and `/ready` now publish trusted-Python execution
   state explicitly:
   - manifest bootstrap modules loaded into the interpreter
+  - declarative manifest extension registrations loaded without bootstrap code
   - bootstrap registrations those modules published
   - trusted dynamic plugin nodes
   - per-owner-class counts distinguishing runtime-owned from first-party app-owned code
 - This reporting is for operator auditability only. It does not create an
   isolation boundary or downgrade trusted Python to untrusted execution.
+- External third-party plugin nodes now run with explicit runtime capabilities:
+  - default runtime capabilities: none
+  - no live DB/session/runtime objects are passed into the isolated worker
+  - internal `AINDY.*` imports are blocked except the runtime-owned extension API
+  - outbound network is blocked unless `outbound.http` is granted
 - `/ready` now fails when required infrastructure is down or when any active runtime condition is classified as `unsafe_degraded` or `startup_fatal`.
 - The external Python override is intentionally not treated as a dependency
   failure by itself, but it remains visible in `/ready` and `/api/version`.
@@ -190,8 +197,12 @@ This document describes the current runtime behavior of the FastAPI backend as i
 - Mongo-backed features are optional unless `MONGO_REQUIRED=true`. When Mongo is optional and unavailable, the runtime now stays up in an explicitly degraded state instead of failing silently.
 - Request metrics persistence is best-effort; failures are logged and swallowed.
 - The app is still a monolith: API, scheduler leadership, orchestration, and some execution logic share the same process.
-- Manifest bootstrap modules and in-process dynamic plugin nodes remain trusted
-  code execution, not sandboxed extensions. See
+- Manifest bootstrap modules and trusted in-process dynamic plugin nodes remain
+  trusted code execution, not sandboxed extensions. Third-party plugin nodes
+  now execute through a subprocess boundary instead of being imported into the
+  runtime process, and third-party manifest onboarding should use declarative
+  manifest entries or runtime registration APIs instead of Python bootstrap.
+  See
   `docs/runtime/EXTENSION_TRUST_MODEL.md`.
 - Memory auto-link enrichment is now cross-dialect aware: PostgreSQL uses native tag containment, while SQLite/non-PostgreSQL verification falls back to Python-side tag filtering.
 - Not every domain has a first-class execution-record model yet, even though trace propagation and `SystemEvent` coverage are much stronger.

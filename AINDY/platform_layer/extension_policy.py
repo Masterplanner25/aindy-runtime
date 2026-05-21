@@ -93,13 +93,21 @@ def external_python_override_state() -> dict[str, object]:
             external_python_override_production_acknowledged() if enabled else False
         ),
         "execution_model": (
-            "trusted-in-process-python" if enabled else "external-python-blocked"
+            "isolated-plugin-host-required"
+            if enabled
+            else "external-python-blocked"
         ),
-        "sandboxing": "none",
+        "sandboxing": (
+            "subprocess-boundary"
+            if enabled
+            else "not-applicable"
+        ),
         "operator_warning": (
-            "External third-party Python, when enabled, runs in-process with full "
-            "interpreter privileges. This is trusted-code execution, not isolation."
+            "External third-party Python does not execute in-process. Dynamic plugin "
+            "nodes must use the isolated plugin-host boundary, and manifest "
+            "bootstrap modules remain unsupported for third-party code."
         ),
+        "legacy_override_has_effect": False,
     }
 
 
@@ -109,12 +117,14 @@ def python_extension_trust_class(owner_class: str) -> str:
         return "trusted-runtime-python"
     if resolved == OWNER_FIRST_PARTY_APP:
         return "trusted-first-party-python"
-    if external_python_extensions_trusted():
-        return "trusted-external-python-override"
-    return "blocked-external-python"
+    return "isolated-third-party-python"
 
 
-def python_extension_execution_metadata(owner_class: str) -> dict[str, object]:
+def python_extension_execution_metadata(
+    owner_class: str,
+    *,
+    surface: str | None = None,
+) -> dict[str, object]:
     resolved = validate_extension_owner_class(owner_class)
     trust_class = python_extension_trust_class(resolved)
     metadata: dict[str, object] = {
@@ -126,11 +136,12 @@ def python_extension_execution_metadata(owner_class: str) -> dict[str, object]:
         "trusted_override_env_var": None,
     }
     if resolved == OWNER_EXTERNAL_THIRD_PARTY:
-        if trust_class == "trusted-external-python-override":
-            metadata["trusted_override_active"] = True
-            metadata["trusted_override_env_var"] = _EXTERNAL_PYTHON_OVERRIDE_ENV_VAR
+        if surface == "dynamic plugin node":
+            metadata["execution_model"] = "isolated-plugin-host"
+            metadata["sandboxing"] = "subprocess-boundary"
         else:
             metadata["execution_model"] = "blocked-external-python"
+            metadata["sandboxing"] = "not-applicable"
     return metadata
 
 
@@ -143,13 +154,12 @@ def assert_python_extension_allowed(
     resolved = validate_extension_owner_class(owner_class)
     if resolved != OWNER_EXTERNAL_THIRD_PARTY:
         return python_extension_trust_class(resolved)
-    if external_python_extensions_trusted():
-        return python_extension_trust_class(resolved)
+    if surface == "dynamic plugin node":
+        return "isolated-third-party-python"
     raise ValueError(
-        f"external-third-party {surface} {identifier!r} is blocked by default because "
-        "the runtime does not sandbox in-process Python extensions. "
-        f"Use a contract-driven webhook integration instead, or set "
-        f"{_EXTERNAL_PYTHON_OVERRIDE_ENV_VAR}=true only for explicitly trusted deployments."
+        f"external-third-party {surface} {identifier!r} is not supported in-process because "
+        "the runtime does not sandbox bootstrap imports or direct Python execution. "
+        "Use a contract-driven webhook integration or an isolated dynamic plugin node instead."
     )
 
 

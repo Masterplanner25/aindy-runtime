@@ -142,6 +142,8 @@ def test_runtime_owned_manifest_rejects_non_runtime_extension_entries(monkeypatc
     manifest.write_text(
         """
 {
+  "kind": "aindy-extension-manifest",
+  "abi_version": "aindy.extension.manifest/v1",
   "default_profile": "platform-only",
   "profiles": {
     "platform-only": {
@@ -167,6 +169,8 @@ def test_load_plugins_allows_runtime_built_in_manifest_module(monkeypatch, tmp_p
     manifest.write_text(
         """
 {
+  "kind": "aindy-extension-manifest",
+  "abi_version": "aindy.extension.manifest/v1",
   "default_profile": "platform-only",
   "profiles": {
     "platform-only": {
@@ -187,6 +191,9 @@ def test_load_plugins_allows_runtime_built_in_manifest_module(monkeypatch, tmp_p
     assert len(records) == 1
     record = records[0]
     assert record["module_name"] == "AINDY.platform_layer.runtime_agent_defaults"
+    assert record["abi_surface"] == "manifest"
+    assert record["abi_version"] == "aindy.extension.manifest/v1"
+    assert record["abi_stability"] == "stable"
     assert record["owner_class"] == OWNER_RUNTIME_BUILTIN
     assert record["trust_class"] == "trusted-runtime-python"
     assert record["execution_model"] == "trusted-in-process-python"
@@ -199,6 +206,8 @@ def test_load_plugins_allows_runtime_built_in_manifest_module(monkeypatch, tmp_p
     assert record["bootstrap_callable_present"] is False
     assert record["bootstrap_executed"] is False
     assert isinstance(record["loaded_at"], str) and record["loaded_at"]
+    assert record["provenance"]["verification"] == "runtime-derived"
+    assert record["provenance"]["source_type"] == "runtime-package"
 
 
 def test_load_plugins_allows_first_party_trusted_integrations(monkeypatch, tmp_path, clean_registry_state):
@@ -250,11 +259,15 @@ def bootstrap():
     assert record["manifest_owner"] == "explicit"
     assert record["profile_name"] == "default-apps"
     assert record["module_origin"].endswith("apps\\test_bootstrap.py") or record["module_origin"].endswith("apps/test_bootstrap.py")
+    assert record["provenance"]["verification"] == "runtime-derived"
+    assert record["provenance"]["source_type"] == "first-party-source-tree"
 
     registrations = registry.get_bootstrap_registrations()
     assert set(registrations) == {"demo-app"}
     registration = registrations["demo-app"]
     assert registration["name"] == "demo-app"
+    assert registration["abi_surface"] == "manifest"
+    assert registration["abi_stability"] == "stable"
     assert registration["owner_class"] == OWNER_FIRST_PARTY_APP
     assert registration["trust_class"] == "trusted-first-party-python"
     assert registration["execution_model"] == "trusted-in-process-python"
@@ -266,6 +279,7 @@ def bootstrap():
     assert registration["manifest_owner"] == "explicit"
     assert registration["profile_name"] == "default-apps"
     assert registration["dependencies"] == []
+    assert registration["provenance"]["extension_id"] == "apps.test_bootstrap"
 
 
 def test_load_plugins_blocks_external_python_bootstrap_by_default(monkeypatch, tmp_path, clean_registry_state):
@@ -301,13 +315,11 @@ def bootstrap():
 
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setenv("AINDY_EXTERNAL_BOOTSTRAP_PREFIXES", "vendor.")
-    monkeypatch.delenv("AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS", raising=False)
-
-    with pytest.raises(ValueError, match="blocked by default"):
+    with pytest.raises(ValueError, match="not supported in-process"):
         registry.load_plugins(manifest_path=manifest, profile="default-apps")
 
 
-def test_load_plugins_allows_external_python_only_with_explicit_override(
+def test_load_plugins_rejects_external_python_bootstrap_even_with_legacy_override(
     monkeypatch, tmp_path, clean_registry_state
 ):
     vendor_dir = tmp_path / "vendor"
@@ -344,29 +356,8 @@ def bootstrap():
     monkeypatch.setenv("AINDY_EXTERNAL_BOOTSTRAP_PREFIXES", "vendor.")
     monkeypatch.setenv("AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS", "true")
 
-    loaded = registry.load_plugins(manifest_path=manifest, profile="default-apps")
-
-    assert loaded == ["vendor.ext_bootstrap"]
-    records = registry.get_loaded_extensions()
-    assert len(records) == 1
-    record = records[0]
-    assert record["module_name"] == "vendor.ext_bootstrap"
-    assert record["owner_class"] == OWNER_EXTERNAL_THIRD_PARTY
-    assert record["trust_class"] == "trusted-external-python-override"
-    assert record["trusted_override_active"] is True
-    assert record["execution_surface"] == "manifest-bootstrap"
-    assert record["bootstrap_callable_present"] is True
-    assert record["bootstrap_executed"] is True
-
-    registrations = registry.get_bootstrap_registrations()
-    assert set(registrations) == {"vendor-demo"}
-    registration = registrations["vendor-demo"]
-    assert registration["owner_class"] == OWNER_EXTERNAL_THIRD_PARTY
-    assert registration["trust_class"] == "trusted-external-python-override"
-    assert registration["trusted_override_active"] is True
-    assert registration["execution_surface"] == "manifest-bootstrap"
-    assert registration["module_name"] == "vendor.ext_bootstrap"
-    assert registration["dependencies"] == []
+    with pytest.raises(ValueError, match="not supported in-process"):
+        registry.load_plugins(manifest_path=manifest, profile="default-apps")
 
 
 def test_runtime_only_profile_stays_free_of_app_and_external_bootstrap(clean_registry_state):

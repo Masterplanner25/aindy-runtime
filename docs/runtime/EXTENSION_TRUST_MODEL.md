@@ -10,6 +10,13 @@ owner: "platform-team"
 This document defines the runtime extension trust and ownership boundary as it
 exists today.
 
+The versioned extension ABI policy is documented separately in
+[EXTENSION_ABI.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_ABI.md).
+The explicit capability model is documented separately in
+[EXTENSION_CAPABILITIES.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_CAPABILITIES.md).
+The provenance and integrity contract is documented separately in
+[EXTENSION_PROVENANCE.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_PROVENANCE.md).
+
 Important limitation:
 
 - `aindy-runtime` does not provide true in-process sandboxing for Python extensions.
@@ -31,9 +38,13 @@ The runtime now distinguishes three ownership classes:
   profile.
 - `external-third-party`
   Third-party or non-monolith extensions. These are never treated as
-  runtime-owned. Python bootstrap/import paths in this class require explicit
-  prefix allowlisting through `AINDY_EXTERNAL_BOOTSTRAP_PREFIXES`, and remain
-  blocked from in-process execution unless explicitly trusted.
+  runtime-owned. Third-party manifest bootstrap modules remain unsupported,
+  and third-party plugin nodes execute only through the isolated
+  plugin-host boundary. External onboarding should use declarative manifest
+  entries or the runtime registration APIs for webhook nodes, webhook
+  subscriptions, dynamic flows, or isolated plugin nodes. The plugin-host
+  boundary enforces runtime-owned socket and standard file-API restrictions,
+  but it is still not a full OS sandbox.
 
 Ownership is separate from trust:
 
@@ -50,6 +61,9 @@ These extension classes are trusted code execution:
 - manifest bootstrap modules loaded by
   [AINDY/platform_layer/registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/registry.py)
   when `owner_class` is `runtime-built-in` or `first-party-app`
+- manifest declarative extension entries loaded by
+  [AINDY/platform_layer/registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/registry.py)
+  for external onboarding without Python bootstrap execution
 - dynamic plugin nodes loaded by
   [AINDY/platform_layer/node_registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/node_registry.py)
   when `owner_class` is `runtime-built-in` or `first-party-app`
@@ -67,18 +81,16 @@ Current hardening:
   `AINDY_TRUSTED_BOOTSTRAP_PREFIXES`)
 - runtime-owned manifests may declare only `runtime-built-in` bootstrap entries
 - external third-party Python bootstrap entries require explicit prefixes from
-  `AINDY_EXTERNAL_BOOTSTRAP_PREFIXES`
-- external third-party Python bootstrap modules are blocked from import and
-  bootstrap execution by default, even when their prefix is allowlisted
-- external third-party dynamic plugin nodes are blocked from in-process loading
-  by default
-- the only override is `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true`, which
-  marks the deployment as explicitly trusting that external Python code
-- production use of that override also requires
-  `AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true`
-- when the override is active, `/health`, `/ready`, and `/api/version` expose
-  that state explicitly so operators can see that unsandboxed external Python
-  execution is enabled
+  `AINDY_EXTERNAL_BOOTSTRAP_PREFIXES`, but bootstrap import/execution remains
+  unsupported because it is inherently in-process
+- external third-party dynamic plugin nodes no longer import into the runtime
+  process; they validate and execute through `AINDY.platform_layer.extension_worker`
+  over a subprocess request/response boundary
+- external third-party dynamic plugin nodes receive no ambient runtime
+  capabilities by default; allowed runtime interactions must be granted
+  explicitly and go through the runtime extension API
+- `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` is now only a legacy operator
+  marker; it does not re-enable third-party in-process imports
 - `/health`, `/ready`, and `/api/version` also publish a live trusted-Python
   inventory covering:
   - loaded manifest bootstrap modules
@@ -126,8 +138,8 @@ Current hardening:
 - [AINDY/platform_layer/node_registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/node_registry.py)
   Dynamic node registration path. Risk: in-process Python import, historical
   `sys.path` mutation, unsafe webhook targets. Hardening: file-bound module
-  loading, callable-shape validation, webhook URL policy, and blocking of
-  external third-party plugin-node imports by default.
+  loading for trusted code, isolated subprocess execution for third-party
+  plugin nodes, callable-shape validation, and webhook URL policy.
 - [AINDY/platform_layer/event_service.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/event_service.py)
   Outbound webhook subscription dispatch. Risk: SSRF or accidental delivery into
   private control planes. Hardening: outbound target validation on both create
@@ -149,12 +161,9 @@ Current hardening:
   classes:
   runtime-built-in code is runtime-owned infrastructure code;
   first-party-app code is trusted app-owned code loaded into the same process.
-- Treat external third-party Python extensions as blocked by default unless the
-  deployment owner explicitly sets `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true`.
-- Treat that override as an operator exception, not a normal production mode.
-  It enables trusted in-process code execution and does not create isolation.
-- In production, pair the override with
-  `AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true` or startup will fail closed.
+- Treat external third-party manifest bootstrap as unsupported.
+- Treat external third-party plugin nodes as isolated subprocess work, not
+  trusted in-process imports.
 - Prefer webhook nodes or dynamic flows when a use case can stay data-driven.
 - If you need real isolation for untrusted extension code, it must be moved out
   of process into a separately sandboxed execution environment.

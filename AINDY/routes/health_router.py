@@ -91,6 +91,10 @@ def _testing_health_payload() -> dict:
     from AINDY.platform_layer.extension_runtime_inventory import (
         trusted_python_execution_inventory,
     )
+    from AINDY.platform_layer.extension_provenance_inventory import (
+        extension_provenance_inventory,
+    )
+    from AINDY.platform_layer.plugin_host import plugin_host_inventory
     from AINDY.runtime import get_engine_status
 
     domains = get_domain_health()
@@ -111,6 +115,8 @@ def _testing_health_payload() -> dict:
         "degraded_apps": degraded_domains,
         "platform": platform,
         "trusted_python_execution": trusted_python_execution_inventory(),
+        "extension_provenance": extension_provenance_inventory(),
+        "plugin_hosts": plugin_host_inventory(probe=True),
         "domains": domains,
         "dependencies": {},
         "runtime_conditions": get_api_runtime_conditions(),

@@ -21,6 +21,13 @@ Meanings:
 The machine-readable form of this contract is exposed in `GET /api/version`
 under `public_contract`.
 
+Extension ABI policy is documented in
+[EXTENSION_ABI.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_ABI.md).
+Extension capability policy is documented in
+[EXTENSION_CAPABILITIES.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_CAPABILITIES.md).
+Extension provenance policy is documented in
+[EXTENSION_PROVENANCE.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_PROVENANCE.md).
+
 Release posture:
 
 - support tier: `trusted-internal`
@@ -32,24 +39,27 @@ Release posture:
   - dependency and unsafe-condition checks for the active deployment profile passed
   - this is not a certification of extension trust or isolation
 - external Python override note:
-  - `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` is a trusted-code override
-  - it does not create sandboxing for third-party Python
-  - production use also requires `AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true`
+  - `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` is now only a legacy
+    operator-visible setting
+  - it does not re-enable third-party in-process Python imports
+  - third-party plugin nodes still execute only through the isolated
+    plugin-host boundary
 
 ## Stable HTTP Surfaces
 
 - `GET /api/version`
   Returns package compatibility metadata, API version metadata, runtime-only
-  surface state, the live trusted-Python execution summary, and the
+  surface state, the live trusted-Python execution summary, the extension
+  provenance summary, and the
   machine-readable public contract inventory.
 - `GET /health`
-  Returns operator-visible liveness, degraded-runtime conditions, and the live
-  trusted-Python execution inventory.
+  Returns operator-visible liveness, degraded-runtime conditions, the live
+  trusted-Python execution inventory, and the extension provenance summary.
 - `GET /ready`
   Returns operator-visible readiness with strict dependency and unsafe-degraded
   checks for the active deployment profile. It also reports the current
-  trusted-Python execution inventory. It does not certify extension isolation
-  or third-party code trust.
+  trusted-Python execution inventory and extension provenance summary. It does
+  not certify extension isolation or third-party code trust.
 - `GET /platform/syscalls`
   Returns the versioned syscall catalog with per-entry `stable` and
   `deprecated` markers.
@@ -110,6 +120,8 @@ These are externally consumable integration points, but they are still
 experimental:
 
 - manifest bootstrap modules loaded through `AINDY.platform_layer.registry`
+- manifest declarative extension entries loaded through
+  `AINDY.platform_layer.registry`
 - `AINDY.platform_layer.registry.register_*` helper shapes
 - `AINDY.agents.tool_registry.register_tool`
 - dynamic plugin nodes via
@@ -133,6 +145,8 @@ Ownership model:
 
 The runtime-owned manifest may load only `runtime-built-in` entries. App and
 third-party ownership classes must stay out of the runtime-only profile.
+External onboarding should use declarative manifest `extensions` entries or the
+runtime registration APIs instead of third-party bootstrap modules.
 
 Operator visibility:
 
@@ -142,9 +156,9 @@ Operator visibility:
   dependency readiness checks
 
 If the external Python override is enabled, the runtime surfaces that state as
-operator-visible degraded mode. Health and readiness still describe dependency
-state, but they also show that unsandboxed external Python execution has been
-explicitly enabled.
+operator-visible configuration state. Health and readiness still describe
+dependency state, but they also show that third-party execution remains behind
+the isolated worker boundary.
 
 ## Stable Boot Contract
 

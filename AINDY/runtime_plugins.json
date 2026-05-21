@@ -1,4 +1,6 @@
 {
+  "kind": "aindy-extension-manifest",
+  "abi_version": "aindy.extension.manifest/v1",
   "default_profile": "platform-only",
   "profiles": {
     "platform-only": {

@@ -557,8 +557,23 @@ def _handle_flow_run(payload: dict, context: SyscallContext) -> dict:
             f"not registered. Available: {sorted(FLOW_REGISTRY.keys())}"
         )
 
-    initial_state: dict = payload.get("initial_state") or {}
+    initial_state: dict = dict(payload.get("initial_state") or {})
     workflow_type: str = payload.get("workflow_type", flow_name)
+    extension_call = (
+        dict(context.metadata.get("_extension_call"))
+        if isinstance(context.metadata, dict) and isinstance(context.metadata.get("_extension_call"), dict)
+        else None
+    )
+    if extension_call is not None:
+        initial_state.setdefault(
+            "_runtime_extension_scope",
+            {
+                "tenant_user_id": str(context.user_id or ""),
+                "extension_name": str(extension_call.get("extension_name") or ""),
+                "owner_class": str(extension_call.get("owner_class") or ""),
+                "operation": str(extension_call.get("operation") or "flow.run"),
+            },
+        )
 
     db, owns_session = _acquire_handler_db(context)
     try:
@@ -588,7 +603,26 @@ def _handle_event_emit(payload: dict, context: SyscallContext) -> dict:
     if not event_type:
         raise ValueError("sys.v1.event.emit requires 'event_type'")
 
-    event_payload: dict = payload.get("payload") or {}
+    event_payload: dict = dict(payload.get("payload") or {})
+    extension_call = (
+        dict(context.metadata.get("_extension_call"))
+        if isinstance(context.metadata, dict) and isinstance(context.metadata.get("_extension_call"), dict)
+        else None
+    )
+    source = "syscall_dispatcher"
+    if extension_call is not None:
+        event_payload.setdefault(
+            "_runtime_extension_scope",
+            {
+                "tenant_user_id": str(context.user_id or ""),
+                "extension_name": str(extension_call.get("extension_name") or ""),
+                "owner_class": str(extension_call.get("owner_class") or ""),
+                "operation": str(extension_call.get("operation") or "event.emit"),
+            },
+        )
+        extension_name = str(extension_call.get("extension_name") or "").strip()
+        if extension_name:
+            source = f"extension:{extension_name}"
 
     db, owns_session = _acquire_handler_db(context)
     try:
@@ -597,7 +631,7 @@ def _handle_event_emit(payload: dict, context: SyscallContext) -> dict:
             event_type=event_type,
             user_id=context.user_id,
             trace_id=context.trace_id,
-            source="syscall_dispatcher",
+            source=source,
             payload={
                 **event_payload,
                 "execution_unit_id": context.execution_unit_id,

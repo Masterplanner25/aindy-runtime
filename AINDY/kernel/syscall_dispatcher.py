@@ -121,6 +121,27 @@ def _quota_backend_failure_may_fail_open() -> bool:
     return bool(settings.is_testing or settings.is_dev)
 
 
+def _validate_runtime_owned_call_metadata(context: SyscallContext) -> str | None:
+    metadata = context.metadata if isinstance(context.metadata, dict) else {}
+    extension_call = metadata.get("_extension_call")
+    if extension_call is None:
+        return None
+    if not isinstance(extension_call, dict):
+        return "TENANT_VIOLATION: extension runtime call metadata must be a dict"
+    tenant_user_id = str(extension_call.get("tenant_user_id") or "").strip()
+    extension_name = str(extension_call.get("extension_name") or "").strip()
+    if not tenant_user_id:
+        return "TENANT_VIOLATION: extension runtime call is missing tenant_user_id"
+    if not extension_name:
+        return "TENANT_VIOLATION: extension runtime call is missing extension_name"
+    if tenant_user_id != str(context.user_id or ""):
+        return (
+            f"TENANT_VIOLATION: extension runtime call tenant {tenant_user_id!r} "
+            f"does not match execution context {context.user_id!r}"
+        )
+    return None
+
+
 class SyscallDispatcher:
     """Routes sys.v1.* calls to registered handlers with capability enforcement.
 
@@ -292,6 +313,15 @@ class SyscallDispatcher:
             return self._error_envelope(
                 name, context,
                 "TENANT_VIOLATION: syscall requires authenticated tenant context",
+                t_start,
+                version=parsed_version,
+            )
+        metadata_error = _validate_runtime_owned_call_metadata(context)
+        if metadata_error:
+            return self._error_envelope(
+                name,
+                context,
+                metadata_error,
                 t_start,
                 version=parsed_version,
             )
@@ -515,6 +545,9 @@ class SyscallDispatcher:
                         "syscall_name": name,
                         "execution_unit_id": context.execution_unit_id,
                         "status": status,
+                        "extension_call": context.metadata.get("_extension_call")
+                        if isinstance(context.metadata, dict)
+                        else None,
                     },
                 )
                 db.commit()
@@ -570,10 +603,16 @@ def dispatch_syscall(
     db=None,
     user_id: str | None = None,
     capability: str | None = None,
+    trace_id: str | None = None,
+    execution_unit_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ctx = make_syscall_ctx_from_tool(
         str(user_id or ""),
+        run_id=str(execution_unit_id or trace_id or ""),
         capabilities=[capability or _infer_dispatch_capability(name)],
+        trace_id=str(trace_id or execution_unit_id or ""),
+        metadata=dict(metadata or {}),
     )
     if db is not None:
         ctx.metadata["_db"] = db
@@ -614,6 +653,8 @@ def make_syscall_ctx_from_tool(
     user_id: str,
     run_id: str = "",
     capabilities: list[str] | None = None,
+    trace_id: str = "",
+    metadata: dict | None = None,
 ) -> SyscallContext:
     """Build a SyscallContext for an agent tool call.
 
@@ -630,7 +671,8 @@ def make_syscall_ctx_from_tool(
         execution_unit_id=execution_unit_id,
         user_id=str(user_id or ""),
         capabilities=list(capabilities) if capabilities is not None else list(DEFAULT_NODUS_CAPABILITIES),
-        trace_id=execution_unit_id,
+        trace_id=str(trace_id or execution_unit_id),
+        metadata=dict(metadata or {}),
     )
 
 

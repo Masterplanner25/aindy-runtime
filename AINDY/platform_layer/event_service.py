@@ -40,10 +40,28 @@ from typing import Any, Callable
 from sqlalchemy.orm import Session
 
 from AINDY.config import settings
+from AINDY.platform_layer.extension_abi import (
+    SURFACE_WEBHOOK,
+    extension_surface_default_version,
+    extension_surface_stability,
+)
+from AINDY.platform_layer.extension_boundary import (
+    sanitize_extension_payload,
+)
+from AINDY.platform_layer.extension_capabilities import (
+    CAP_OUTBOUND_HTTP,
+    extension_authority_model,
+    extension_resource_access_summary,
+    normalize_extension_capabilities,
+)
 from AINDY.platform_layer.extension_policy import (
     OWNER_EXTERNAL_THIRD_PARTY,
     validate_extension_owner_class,
     validate_outbound_extension_url,
+)
+from AINDY.platform_layer.extension_provenance import (
+    SOURCE_WEBHOOK_INTEGRATION,
+    derive_structured_extension_provenance,
 )
 from AINDY.platform_layer.metrics import (
     event_handler_duration_seconds,
@@ -136,11 +154,10 @@ def dispatch_internal_event_handlers(
     event = {
         "event_id": event_id,
         "event_type": event_type,
-        "payload": payload or {},
+        "payload": sanitize_extension_payload(payload or {}),
         "user_id": user_id,
         "trace_id": trace_id,
         "source": source,
-        "db": db,
     }
     dispatched = 0
     timeout_seconds = max(0.0, float(settings.AINDY_EVENT_HANDLER_TIMEOUT_SECONDS))
@@ -237,6 +254,8 @@ def subscribe_webhook(
     secret: str | None = None,
     user_id: str | None = None,
     owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
+    provenance: dict[str, Any] | None = None,
+    allow_legacy_missing_provenance: bool = False,
     db: Session | None = None,
 ) -> dict[str, Any]:
     """
@@ -252,15 +271,49 @@ def subscribe_webhook(
         raise ValueError("event_type must be a non-empty string")
     validate_outbound_extension_url(callback_url, field_name="callback_url")
     owner_class = validate_extension_owner_class(owner_class)
+    granted_capabilities = normalize_extension_capabilities(
+        owner_class=owner_class,
+        surface="webhook-subscription",
+        requested=None,
+    )
+    resolved_provenance = derive_structured_extension_provenance(
+        owner_class=owner_class,
+        surface="webhook-subscription",
+        extension_name=event_type,
+        artifact_payload={
+            "abi_version": extension_surface_default_version(SURFACE_WEBHOOK),
+            "event_type": event_type,
+            "callback_url": callback_url,
+            "owner_class": owner_class,
+        },
+        source_type=SOURCE_WEBHOOK_INTEGRATION,
+        source_ref=callback_url,
+        declared=provenance,
+        allow_legacy_missing=allow_legacy_missing_provenance,
+    )
 
     subscription_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     meta: dict[str, Any] = {
         "id": subscription_id,
+        "abi_surface": SURFACE_WEBHOOK,
+        "abi_version": extension_surface_default_version(SURFACE_WEBHOOK),
+        "abi_stability": extension_surface_stability(SURFACE_WEBHOOK),
+        "authority_model": extension_authority_model(
+            owner_class=owner_class,
+            surface="webhook-subscription",
+        ),
+        "granted_capabilities": list(granted_capabilities or [CAP_OUTBOUND_HTTP]),
+        "resource_access": extension_resource_access_summary(
+            owner_class=owner_class,
+            surface="webhook-subscription",
+            granted_capabilities=granted_capabilities or [CAP_OUTBOUND_HTTP],
+        ),
         "event_type": event_type,
         "callback_url": callback_url,
         "owner_class": owner_class,
         "trust_class": "contract-driven-webhook",
+        "provenance": resolved_provenance,
         "signed": secret is not None,
         "_secret": secret,           # stored but excluded from list/get responses
         "created_at": now.isoformat(),
@@ -282,6 +335,7 @@ def subscribe_webhook(
                 event_type=event_type,
                 callback_url=callback_url,
                 owner_class=owner_class,
+                provenance=resolved_provenance,
                 secret=secret,
                 created_by=str(user_id) if user_id else None,
                 created_at=now,
@@ -308,6 +362,8 @@ def _load_subscription(
     user_id: str | None,
     created_at: str,
     owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
+    provenance: dict[str, Any] | None = None,
+    allow_legacy_missing_provenance: bool = False,
 ) -> None:
     """
     Internal: restore a persisted subscription into _SUBSCRIPTIONS without
@@ -321,10 +377,52 @@ def _load_subscription(
             return
         _SUBSCRIPTIONS[subscription_id] = {
             "id": subscription_id,
+            "abi_surface": SURFACE_WEBHOOK,
+            "abi_version": extension_surface_default_version(SURFACE_WEBHOOK),
+            "abi_stability": extension_surface_stability(SURFACE_WEBHOOK),
+            "authority_model": extension_authority_model(
+                owner_class=validate_extension_owner_class(owner_class),
+                surface="webhook-subscription",
+            ),
+            "granted_capabilities": list(
+                normalize_extension_capabilities(
+                    owner_class=owner_class,
+                    surface="webhook-subscription",
+                    requested=None,
+                )
+            ),
+            "resource_access": extension_resource_access_summary(
+                owner_class=owner_class,
+                surface="webhook-subscription",
+                granted_capabilities=normalize_extension_capabilities(
+                    owner_class=owner_class,
+                    surface="webhook-subscription",
+                    requested=None,
+                ),
+            ),
             "event_type": event_type,
             "callback_url": callback_url,
             "owner_class": validate_extension_owner_class(owner_class),
             "trust_class": "contract-driven-webhook",
+            "provenance": (
+                dict(provenance)
+                if isinstance(provenance, dict)
+                else derive_structured_extension_provenance(
+                    owner_class=owner_class,
+                    surface="webhook-subscription",
+                    extension_name=event_type,
+                    artifact_payload={
+                        "abi_version": extension_surface_default_version(SURFACE_WEBHOOK),
+                        "event_type": event_type,
+                        "callback_url": callback_url,
+                        "owner_class": owner_class,
+                    },
+                    source_type=SOURCE_WEBHOOK_INTEGRATION,
+                    source_ref=callback_url,
+                    declared=None,
+                    allow_legacy_missing=allow_legacy_missing_provenance,
+                )
+            ),
             "signed": secret is not None,
             "_secret": secret,
             "created_at": created_at,
@@ -351,6 +449,8 @@ def restore_webhook_subscription(
     user_id: str | None,
     created_at: str,
     owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
+    provenance: dict[str, Any] | None = None,
+    allow_legacy_missing_provenance: bool = False,
 ) -> bool:
     """
     Restore one persisted subscription into the runtime in-memory dispatcher.
@@ -369,6 +469,8 @@ def restore_webhook_subscription(
         user_id=user_id,
         created_at=created_at,
         owner_class=owner_class,
+        provenance=provenance,
+        allow_legacy_missing_provenance=allow_legacy_missing_provenance,
     )
     return True
 
@@ -439,7 +541,7 @@ def _build_request_body(
         "user_id": user_id,
         "trace_id": trace_id,
         "source": source,
-        "payload": payload,
+        "payload": sanitize_extension_payload(payload),
         "aindy_subscription_id": subscription_id,
     }
     return json.dumps(body, default=str).encode("utf-8")

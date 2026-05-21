@@ -17,9 +17,18 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
+from AINDY.platform_layer.extension_abi import (
+    SURFACE_FLOW,
+    extension_surface_default_version,
+    extension_surface_stability,
+)
 from AINDY.platform_layer.extension_policy import (
     OWNER_EXTERNAL_THIRD_PARTY,
     validate_extension_owner_class,
+)
+from AINDY.platform_layer.extension_provenance import (
+    SOURCE_DATA_REGISTRATION,
+    derive_structured_extension_provenance,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,6 +139,8 @@ def register_dynamic_flow(
     *,
     user_id: str | None = None,
     owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
+    provenance: dict[str, Any] | None = None,
+    allow_legacy_missing_provenance: bool = False,
     overwrite: bool = False,
     db: Session | None = None,
 ) -> dict[str, Any]:
@@ -148,6 +159,24 @@ def register_dynamic_flow(
     if errors:
         raise ValueError(errors)
     owner_class = validate_extension_owner_class(owner_class)
+    resolved_provenance = derive_structured_extension_provenance(
+        owner_class=owner_class,
+        surface="dynamic-flow",
+        extension_name=name,
+        artifact_payload={
+            "abi_version": extension_surface_default_version(SURFACE_FLOW),
+            "name": name,
+            "nodes": list(nodes),
+            "edges": {src: list(targets) for src, targets in edges.items()},
+            "start": start,
+            "end": list(end),
+            "owner_class": owner_class,
+        },
+        source_type=SOURCE_DATA_REGISTRATION,
+        source_ref=f"flow:{name}",
+        declared=provenance,
+        allow_legacy_missing=allow_legacy_missing_provenance,
+    )
 
     with _registry_lock:
         if name in FLOW_REGISTRY and not overwrite:
@@ -162,6 +191,9 @@ def register_dynamic_flow(
 
         meta: dict[str, Any] = {
             "name": name,
+            "abi_surface": SURFACE_FLOW,
+            "abi_version": extension_surface_default_version(SURFACE_FLOW),
+            "abi_stability": extension_surface_stability(SURFACE_FLOW),
             "nodes": list(nodes),
             "edges": {src: list(targets) for src, targets in edges.items()},
             "start": start,
@@ -171,6 +203,7 @@ def register_dynamic_flow(
             "dynamic": True,
             "owner_class": owner_class,
             "trust_class": "data-only-flow",
+            "provenance": resolved_provenance,
         }
         _DYNAMIC_META[name] = meta
 
@@ -183,6 +216,7 @@ def register_dynamic_flow(
             end,
             user_id=user_id,
             owner_class=owner_class,
+            provenance=resolved_provenance,
             overwrite=overwrite,
             db=db,
         )
@@ -200,6 +234,7 @@ def _persist_flow(
     *,
     user_id: str | None,
     owner_class: str,
+    provenance: dict[str, Any],
     overwrite: bool,
     db: Session,
 ) -> None:
@@ -219,6 +254,7 @@ def _persist_flow(
         if existing:
             existing.definition_json = definition
             existing.owner_class = owner_class
+            existing.provenance = provenance
             existing.is_active = True
             existing.updated_at = now
         else:
@@ -228,6 +264,7 @@ def _persist_flow(
                     name=name,
                     definition_json=definition,
                     owner_class=owner_class,
+                    provenance=provenance,
                     created_by=str(user_id) if user_id else None,
                     created_at=now,
                     updated_at=now,

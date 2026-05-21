@@ -25,13 +25,18 @@ class PlannerBackendDisabledError(PlannerBackendError):
 
 
 @dataclass(frozen=True)
+class PlannerRuntimeApi:
+    openai_chat_completion: Any
+
+
+@dataclass(frozen=True)
 class PlannerRequest:
     objective: str
     run_type: str
     user_id: str | None
-    db: Any
     system_prompt: str
     tools: tuple[dict[str, Any], ...] = ()
+    runtime_api: PlannerRuntimeApi | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -157,28 +162,19 @@ def runtime_local_planner_backend(request: PlannerRequest) -> dict[str, Any]:
 
 
 def openai_chat_compat_backend(request: PlannerRequest) -> dict[str, Any]:
-    response = perform_external_call(
-        service_name="openai",
-        db=request.db,
+    runtime_api = request.runtime_api
+    if runtime_api is None or not callable(getattr(runtime_api, "openai_chat_completion", None)):
+        raise PlannerBackendError(
+            "Planner runtime API does not provide openai_chat_completion."
+        )
+    response = runtime_api.openai_chat_completion(
+        system_prompt=request.system_prompt,
+        objective=request.objective,
         user_id=request.user_id,
-        endpoint="chat.completions.create",
-        model=settings.AINDY_AGENT_PLANNER_MODEL,
-        method="openai.chat",
-        extra={
+        metadata={
             "purpose": "agent_plan_generation",
             "planner_backend": OPENAI_COMPAT_PLANNER_BACKEND,
         },
-        operation=lambda: chat_completion(
-            get_openai_client(),
-            model=settings.AINDY_AGENT_PLANNER_MODEL,
-            messages=[
-                {"role": "system", "content": request.system_prompt},
-                {"role": "user", "content": f"Objective: {request.objective}"},
-            ],
-            temperature=settings.AINDY_AGENT_PLANNER_TEMPERATURE,
-            response_format={"type": "json_object"},
-            timeout=settings.OPENAI_CHAT_TIMEOUT_SECONDS,
-        ),
     )
     content = str(response.choices[0].message.content or "")
     plan = json.loads(content)

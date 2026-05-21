@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSON, UUID
 
 from AINDY.db.database import Base
 from AINDY.platform_layer.extension_policy import OWNER_EXTERNAL_THIRD_PARTY
@@ -30,6 +30,7 @@ class WebhookSubscription(Base):
     event_type = Column(String(256), nullable=False, index=True)
     callback_url = Column(String(2048), nullable=False)
     owner_class = Column(String(64), nullable=False, default=OWNER_EXTERNAL_THIRD_PARTY)
+    provenance = Column(JSON, nullable=True)
     secret = Column(String(512), nullable=True)
     created_by = Column(String(256), nullable=True)
     created_at = Column(

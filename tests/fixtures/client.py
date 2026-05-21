@@ -133,14 +133,21 @@ def _fresh_main_app(*, runtime_only: bool, require_apps: bool):
     set_runtime_only_boot_mode()
 
     from AINDY.agents.tool_registry import TOOL_REGISTRY
+    from AINDY.platform_layer import event_service, node_registry
+    from AINDY.platform_layer.plugin_host import reset_plugin_hosts
     from AINDY.platform_layer import registry
     from AINDY.platform_layer.deployment_contract import reset_runtime_state
+    from AINDY.runtime import flow_registry
     import AINDY.main as main_module
     import AINDY.startup as startup_module
 
     TOOL_REGISTRY.clear()
     for name, value in _EMPTY_REGISTRY_STATE.items():
         setattr(registry, name, _copy_registry_value(value))
+    node_registry._DYNAMIC_NODE_META.clear()
+    flow_registry._DYNAMIC_META.clear()
+    event_service._SUBSCRIPTIONS.clear()
+    reset_plugin_hosts()
     reset_runtime_state()
     registry.load_plugins()
 

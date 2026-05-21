@@ -38,12 +38,38 @@ from typing import Any, Callable
 import inspect
 
 from sqlalchemy.orm import Session
+from AINDY.platform_layer.extension_abi import (
+    SURFACE_DYNAMIC_NODE,
+    extension_surface_default_version,
+    extension_surface_stability,
+)
+from AINDY.platform_layer.extension_boundary import (
+    sanitize_extension_context,
+    sanitize_extension_payload,
+)
+from AINDY.platform_layer.extension_capabilities import (
+    CAP_OUTBOUND_HTTP,
+    extension_authority_model,
+    extension_resource_access_summary,
+    normalize_extension_capabilities,
+)
 from AINDY.platform_layer.extension_policy import (
     OWNER_EXTERNAL_THIRD_PARTY,
     assert_python_extension_allowed,
     python_extension_execution_metadata,
     validate_extension_owner_class,
     validate_outbound_extension_url,
+)
+from AINDY.platform_layer.extension_provenance import (
+    SOURCE_WEBHOOK_INTEGRATION,
+    derive_python_extension_provenance,
+    derive_structured_extension_provenance,
+)
+from AINDY.platform_layer.plugin_host import (
+    execute_plugin_host,
+    get_plugin_host,
+    shutdown_plugin_host,
+    start_plugin_host,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,12 +86,34 @@ _DYNAMIC_NODE_META: dict[str, dict] = {}
 # Valid values accepted in a node response's "status" field.
 _VALID_STATUSES = frozenset(["SUCCESS", "RETRY", "FAILURE", "WAIT"])
 
-# Maximum seconds to wait for a webhook response.
+# Maximum seconds to wait for a webhook response or plugin-host execution.
 _WEBHOOK_MAX_TIMEOUT = 30
 
 # Plugins are restricted to this directory (relative to this file's parent).
 _PLUGINS_DIR = Path(__file__).parent.parent / "plugins" / "nodes"
 _PLUGIN_MODULE_NAMESPACE = "AINDY.plugins.nodes"
+
+
+def _build_extension_context(
+    *,
+    extension_name: str,
+    runtime_context: dict[str, Any],
+    owner_class: str,
+    granted_capabilities: list[str],
+) -> dict[str, Any]:
+    return sanitize_extension_context(
+        {
+        "extension_name": extension_name,
+        "owner_class": owner_class,
+        "granted_capabilities": list(granted_capabilities),
+        "run_id": str(runtime_context.get("run_id") or ""),
+        "trace_id": str(runtime_context.get("trace_id") or ""),
+        "user_id": str(runtime_context.get("user_id") or ""),
+        "workflow_type": str(runtime_context.get("workflow_type") or ""),
+        "flow_name": str(runtime_context.get("flow_name") or ""),
+        "node_name": extension_name,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +298,94 @@ def _load_plugin_node(handler: str) -> Callable:
     return fn
 
 
+def _resolve_plugin_source(handler: str) -> tuple[str, str, Path]:
+    if ":" not in handler:
+        raise ValueError(
+            f"plugin handler must be 'module:function', got {handler!r}"
+        )
+    module_part, func_name = handler.rsplit(":", 1)
+    if ".." in module_part or module_part.startswith("."):
+        raise ValueError(f"plugin handler contains illegal path component: {handler!r}")
+    module_parts = module_part.split(".")
+    if not all(part.isidentifier() for part in module_parts):
+        raise ValueError(f"plugin handler module must use Python identifiers: {handler!r}")
+    if not func_name.isidentifier():
+        raise ValueError(f"plugin handler function name must be an identifier: {handler!r}")
+    if not _PLUGINS_DIR.is_dir():
+        _PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+        (_PLUGINS_DIR / "__init__.py").touch()
+    module_path = _PLUGINS_DIR.joinpath(*module_parts)
+    package_init = module_path / "__init__.py"
+    module_file = module_path.with_suffix(".py")
+    if package_init.is_file():
+        return module_part, func_name, package_init
+    if module_file.is_file():
+        return module_part, func_name, module_file
+    raise ValueError(f"plugin module {module_part!r} was not found under {_PLUGINS_DIR}")
+
+
+def _make_isolated_plugin_node(
+    name: str,
+    handler: str,
+    *,
+    owner_class: str,
+    granted_capabilities: list[str],
+    provenance: dict[str, Any] | None = None,
+) -> tuple[Callable, dict[str, Any]]:
+    resource_access = extension_resource_access_summary(
+        owner_class=owner_class,
+        surface="dynamic-plugin-node",
+        granted_capabilities=granted_capabilities,
+    )
+    try:
+        host = start_plugin_host(
+            name=name,
+            handler=handler,
+            plugin_root=str(_PLUGINS_DIR),
+            owner_class=owner_class,
+            granted_capabilities=granted_capabilities,
+            resource_access=resource_access,
+            provenance=provenance,
+            runtime_context=_build_extension_context(
+                extension_name=name,
+                runtime_context={},
+                owner_class=owner_class,
+                granted_capabilities=granted_capabilities,
+            ),
+        )
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+    provenance = dict(host.get("provenance") or {})
+
+    def isolated_plugin_node(state: dict, context: dict) -> dict:
+        try:
+            result = execute_plugin_host(
+                name=name,
+                state=sanitize_extension_payload(state or {}),
+                runtime_context=_build_extension_context(
+                    extension_name=name,
+                    runtime_context=context or {},
+                    owner_class=owner_class,
+                    granted_capabilities=granted_capabilities,
+                ),
+            )
+            return result
+        except Exception as exc:
+            logger.warning(
+                "[node_registry] isolated plugin node %r failed through plugin host: %s",
+                name,
+                exc,
+            )
+            return {
+                "status": "FAILURE",
+                "error": f"plugin host error: {exc}",
+            }
+
+    isolated_plugin_node.__name__ = name
+    isolated_plugin_node.__qualname__ = f"isolated_plugin_node[{name}]"
+    return isolated_plugin_node, provenance
+
+
 def _validate_plugin_callable(fn: Callable, handler: str) -> None:
     signature = inspect.signature(fn)
     parameters = list(signature.parameters.values())
@@ -292,6 +428,9 @@ def register_external_node(
     secret: str | None = None,
     user_id: str | None = None,
     owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
+    capabilities: list[str] | None = None,
+    provenance: dict[str, Any] | None = None,
+    allow_legacy_missing_provenance: bool = False,
     overwrite: bool = False,
     db: Session | None = None,
 ) -> dict[str, Any]:
@@ -325,7 +464,13 @@ def register_external_node(
     if not handler or not handler.strip():
         raise ValueError("handler must be a non-empty string")
     owner_class = validate_extension_owner_class(owner_class)
+    granted_capabilities = normalize_extension_capabilities(
+        owner_class=owner_class,
+        surface="webhook-node" if node_type == "webhook" else "dynamic-plugin-node",
+        requested=capabilities,
+    )
 
+    worker_provenance: dict[str, Any] = {}
     if node_type == "webhook":
         validate_outbound_extension_url(handler, field_name="webhook handler")
         timeout_seconds = max(1, min(int(timeout_seconds), _WEBHOOK_MAX_TIMEOUT))
@@ -334,23 +479,72 @@ def register_external_node(
     if node_type == "webhook":
         node_fn = _make_webhook_node(name, handler, timeout_seconds, secret)
         trust_class = "contract-driven-webhook"
+        source_provenance: dict[str, Any] = derive_structured_extension_provenance(
+            owner_class=owner_class,
+            surface="webhook-node",
+            extension_name=name,
+            artifact_payload={
+                "abi_version": extension_surface_default_version(SURFACE_DYNAMIC_NODE),
+                "type": node_type,
+                "handler": handler,
+                "timeout_seconds": timeout_seconds,
+                "owner_class": owner_class,
+                "capabilities": list(granted_capabilities),
+            },
+            source_type=SOURCE_WEBHOOK_INTEGRATION,
+            source_ref=handler,
+            declared=provenance,
+            allow_legacy_missing=allow_legacy_missing_provenance,
+        )
+        execution_metadata = {
+            "execution_model": "contract-driven-webhook",
+            "sandboxing": "network-boundary-only",
+            "trusted_override_active": False,
+        }
     else:
         trust_class = assert_python_extension_allowed(
             owner_class,
             surface="dynamic plugin node",
             identifier=handler,
         )
-        node_fn = _load_plugin_node(handler)  # raises ValueError on failure
-    provenance = getattr(node_fn, "__aindy_extension_provenance__", {})
-    execution_metadata = (
-        python_extension_execution_metadata(owner_class)
-        if node_type == "plugin"
-        else {
-            "execution_model": "contract-driven-webhook",
-            "sandboxing": "network-boundary-only",
-            "trusted_override_active": False,
-        }
-    )
+        if owner_class == OWNER_EXTERNAL_THIRD_PARTY:
+            module_name, function_name, source_path = _resolve_plugin_source(handler)
+            source_provenance = derive_python_extension_provenance(
+                owner_class=owner_class,
+                surface="dynamic-plugin-node",
+                extension_name=name,
+                module_name=module_name,
+                source_path=source_path,
+                declared=provenance,
+                allow_legacy_missing=allow_legacy_missing_provenance,
+            )
+            node_fn, worker_provenance = _make_isolated_plugin_node(
+                name,
+                handler,
+                owner_class=owner_class,
+                granted_capabilities=granted_capabilities,
+                provenance=source_provenance,
+            )
+            worker_provenance = dict(worker_provenance or {})
+            worker_provenance.setdefault("module_name", module_name)
+            worker_provenance.setdefault("function_name", function_name)
+            worker_provenance.setdefault("source_path", str(source_path))
+        else:
+            node_fn = _load_plugin_node(handler)  # raises ValueError on failure
+            worker_provenance = getattr(node_fn, "__aindy_extension_provenance__", {})
+            source_provenance = derive_python_extension_provenance(
+                owner_class=owner_class,
+                surface="dynamic-plugin-node",
+                extension_name=name,
+                module_name=str(worker_provenance.get("module_name") or name),
+                source_path=worker_provenance.get("source_path"),
+                declared=provenance,
+                allow_legacy_missing=allow_legacy_missing_provenance,
+            )
+        execution_metadata = python_extension_execution_metadata(
+            owner_class,
+            surface="dynamic plugin node",
+        )
 
     # â”€â”€ Register (thread-safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     with _node_lock:
@@ -365,8 +559,21 @@ def register_external_node(
 
         meta: dict[str, Any] = {
             "name": name,
+            "abi_surface": SURFACE_DYNAMIC_NODE,
+            "abi_version": extension_surface_default_version(SURFACE_DYNAMIC_NODE),
+            "abi_stability": extension_surface_stability(SURFACE_DYNAMIC_NODE),
             "type": node_type,
             "owner_class": owner_class,
+            "authority_model": extension_authority_model(
+                owner_class=owner_class,
+                surface="webhook-node" if node_type == "webhook" else "dynamic-plugin-node",
+            ),
+            "granted_capabilities": list(granted_capabilities),
+            "resource_access": extension_resource_access_summary(
+                owner_class=owner_class,
+                surface="webhook-node" if node_type == "webhook" else "dynamic-plugin-node",
+                granted_capabilities=granted_capabilities,
+            ),
             "trust_class": trust_class,
             "execution_model": execution_metadata["execution_model"],
             "sandboxing": execution_metadata["sandboxing"],
@@ -375,9 +582,19 @@ def register_external_node(
                 "dynamic-plugin-node" if node_type == "plugin" else "webhook-node"
             ),
             "handler": handler,
-            "module_name": provenance.get("module_name") if node_type == "plugin" else None,
-            "function_name": provenance.get("function_name") if node_type == "plugin" else None,
-            "source_path": provenance.get("source_path") if node_type == "plugin" else None,
+            "module_name": worker_provenance.get("module_name") if node_type == "plugin" else None,
+            "function_name": worker_provenance.get("function_name") if node_type == "plugin" else None,
+            "source_path": worker_provenance.get("source_path") if node_type == "plugin" else None,
+            "source_ref": source_provenance.get("source_ref"),
+            "provenance": source_provenance,
+            "transport": (
+                "plugin-host-rpc"
+                if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY
+                else None
+            ),
+            "plugin_host_name": (
+                name if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY else None
+            ),
             "timeout_seconds": timeout_seconds if node_type == "webhook" else None,
             "signed": secret is not None if node_type == "webhook" else None,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -395,6 +612,8 @@ def register_external_node(
             timeout_seconds=timeout_seconds,
             user_id=user_id,
             owner_class=owner_class,
+            capabilities=granted_capabilities,
+            provenance=source_provenance,
             overwrite=overwrite,
             db=db,
         )
@@ -414,6 +633,8 @@ def _persist_node(
     timeout_seconds: int,
     user_id: str | None,
     owner_class: str,
+    capabilities: list[str],
+    provenance: dict[str, Any],
     overwrite: bool,
     db: Session,
 ) -> None:
@@ -421,9 +642,13 @@ def _persist_node(
     from AINDY.db.models.dynamic_node import DynamicNode
 
     if node_type == "webhook":
-        handler_config: dict[str, Any] = {"url": handler, "timeout_seconds": timeout_seconds}
+        handler_config: dict[str, Any] = {
+            "url": handler,
+            "timeout_seconds": timeout_seconds,
+            "capabilities": list(capabilities),
+        }
     else:
-        handler_config = {"handler": handler}
+        handler_config = {"handler": handler, "capabilities": list(capabilities)}
 
     now = datetime.now(timezone.utc)
 
@@ -433,6 +658,7 @@ def _persist_node(
             existing.node_type = node_type
             existing.owner_class = owner_class
             existing.handler_config = handler_config
+            existing.provenance = provenance
             existing.secret = secret
             existing.is_active = True
             existing.updated_at = now
@@ -443,6 +669,7 @@ def _persist_node(
                 node_type=node_type,
                 owner_class=owner_class,
                 handler_config=handler_config,
+                provenance=provenance,
                 secret=secret,
                 created_by=str(user_id) if user_id else None,
                 created_at=now,
@@ -457,12 +684,25 @@ def _persist_node(
 
 def list_dynamic_nodes() -> list[dict[str, Any]]:
     """Return a snapshot of all dynamically registered node metadata."""
-    return list(_DYNAMIC_NODE_META.values())
+    return [_snapshot_node_meta(meta) for meta in _DYNAMIC_NODE_META.values()]
 
 
 def get_dynamic_node(name: str) -> dict[str, Any] | None:
     """Return metadata for one dynamic node, or None if not found."""
-    return _DYNAMIC_NODE_META.get(name)
+    meta = _DYNAMIC_NODE_META.get(name)
+    if meta is None:
+        return None
+    return _snapshot_node_meta(meta)
+
+
+def _snapshot_node_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    snapshot = dict(meta)
+    host_name = snapshot.get("plugin_host_name")
+    if host_name:
+        host = get_plugin_host(str(host_name))
+        if host is not None:
+            snapshot["plugin_host"] = host
+    return snapshot
 
 
 def delete_dynamic_node(name: str, *, db: Session | None = None) -> bool:
@@ -481,6 +721,7 @@ def delete_dynamic_node(name: str, *, db: Session | None = None) -> bool:
             return False
         NODE_REGISTRY.pop(name, None)
         _DYNAMIC_NODE_META.pop(name, None)
+    shutdown_plugin_host(name, remove=True)
 
     if db is not None:
         try:

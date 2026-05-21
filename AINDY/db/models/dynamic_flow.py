@@ -35,6 +35,7 @@ class DynamicFlow(Base):
     name = Column(String(256), nullable=False, unique=True, index=True)
     definition_json = Column(JSON, nullable=False)
     owner_class = Column(String(64), nullable=False, default=OWNER_EXTERNAL_THIRD_PARTY)
+    provenance = Column(JSON, nullable=True)
     created_by = Column(String(256), nullable=True)
     created_at = Column(
         DateTime(timezone=True),

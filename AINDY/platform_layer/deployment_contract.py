@@ -148,6 +148,9 @@ def runtime_ui_surface_state() -> dict[str, Any]:
     from AINDY.platform_layer.extension_runtime_inventory import (
         trusted_python_execution_summary,
     )
+    from AINDY.platform_layer.extension_provenance_inventory import (
+        extension_provenance_inventory,
+    )
 
     return {
         "process_role": api_state.get("process_role", PROCESS_ROLE_API),
@@ -172,6 +175,7 @@ def runtime_ui_surface_state() -> dict[str, Any]:
             )
         ),
         "trusted_python_execution": trusted_python_execution_summary(),
+        "extension_provenance": extension_provenance_inventory(),
         "ui_mode": RUNTIME_ONLY_BOOT_MODE if runtime_only else APP_PROFILE_BOOT_MODE,
         "default_route": "/memory" if runtime_only else "/dashboard",
         "platform_home": "/platform/agent",
@@ -458,6 +462,9 @@ def get_worker_runtime_state() -> dict[str, Any]:
 
 
 def reset_runtime_state() -> None:
+    from AINDY.platform_layer.plugin_host import reset_plugin_hosts
+
+    reset_plugin_hosts()
     _api_runtime_state.clear()
     _api_runtime_state.update(
         {

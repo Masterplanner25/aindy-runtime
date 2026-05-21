@@ -35,6 +35,7 @@ class DynamicNode(Base):
     node_type = Column(String(32), nullable=False)
     owner_class = Column(String(64), nullable=False, default=OWNER_EXTERNAL_THIRD_PARTY)
     handler_config = Column(JSON, nullable=False)
+    provenance = Column(JSON, nullable=True)
     secret = Column(String(512), nullable=True)
     created_by = Column(String(256), nullable=True)
     created_at = Column(

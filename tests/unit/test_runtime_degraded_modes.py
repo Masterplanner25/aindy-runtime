@@ -139,11 +139,11 @@ def test_external_python_override_is_operator_visible_but_not_readiness_fatal(mo
     )
     assert status_code == 200
     assert payload["checks"]["external_python_override_active"] is True
-    assert payload["checks"]["external_python_override_execution_model"] == "trusted-in-process-python"
+    assert payload["checks"]["external_python_override_execution_model"] == "isolated-plugin-host-required"
     assert payload["required_failures"] == []
 
 
-def test_external_python_override_requires_explicit_prod_ack(monkeypatch):
+def test_external_python_override_no_longer_requires_prod_ack(monkeypatch):
     import AINDY.startup as startup
 
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
@@ -153,8 +153,12 @@ def test_external_python_override_requires_explicit_prod_ack(monkeypatch):
     monkeypatch.setattr(startup.settings, "TESTING", False)
     monkeypatch.setattr(startup.settings, "TEST_MODE", False)
 
-    with pytest.raises(RuntimeError, match="AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true"):
-        startup._enforce_external_python_override_policy()
+    startup._enforce_external_python_override_policy()
+
+    assert any(
+        condition["code"] == "external_python_override_enabled"
+        for condition in get_api_runtime_conditions()
+    )
 
 
 def test_dynamic_registry_restore_is_runtime_condition_in_development(monkeypatch):

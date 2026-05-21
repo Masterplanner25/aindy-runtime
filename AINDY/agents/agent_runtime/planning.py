@@ -7,12 +7,15 @@ from sqlalchemy.orm import Session
 from AINDY.agents.agent_runtime.planner_backends import (
     DEFAULT_PLANNER_BACKEND,
     DISABLED_PLANNER_BACKEND,
+    PlannerRuntimeApi,
     PlannerBackendDisabledError,
     PlannerBackendError,
     PlannerRequest,
 )
 from AINDY.agents.agent_runtime.shared import get_runtime_compat_module, logger
 from AINDY.config import settings
+from AINDY.platform_layer.external_call_service import perform_external_call
+from AINDY.platform_layer.openai_client import chat_completion, get_openai_client
 
 PLANNER_SYSTEM_PROMPT = """You are a generic agent planner.
 
@@ -131,14 +134,36 @@ def _invoke_planner_backend(
     planner_context: dict[str, object],
 ) -> dict:
     backend = _get_planner_backend(backend_name)
+    runtime_api = PlannerRuntimeApi(
+        openai_chat_completion=lambda *, system_prompt, objective, user_id, metadata: perform_external_call(
+            service_name="openai",
+            db=db,
+            user_id=user_id,
+            endpoint="chat.completions.create",
+            model=settings.AINDY_AGENT_PLANNER_MODEL,
+            method="openai.chat",
+            extra=dict(metadata or {}),
+            operation=lambda: chat_completion(
+                get_openai_client(),
+                model=settings.AINDY_AGENT_PLANNER_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Objective: {objective}"},
+                ],
+                temperature=settings.AINDY_AGENT_PLANNER_TEMPERATURE,
+                response_format={"type": "json_object"},
+                timeout=settings.OPENAI_CHAT_TIMEOUT_SECONDS,
+            ),
+        )
+    )
     plan = backend(
         PlannerRequest(
             objective=objective_text,
             run_type=run_type,
             user_id=None if user_id is None else str(user_id),
-            db=db,
             system_prompt=system_prompt,
             tools=tuple(tools),
+            runtime_api=runtime_api,
             metadata={
                 "planner_backend": backend_name,
                 "planner_context_keys": sorted(planner_context.keys()),

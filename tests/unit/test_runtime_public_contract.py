@@ -54,11 +54,52 @@ def test_runtime_only_boot_contract_is_marked_stable():
 
 def test_runtime_public_contract_marks_extension_registration_surfaces_experimental():
     metadata = runtime_public_contract_metadata()
+    stable_surfaces = {entry["surface"] for entry in metadata["extensions"]["stable"]}
     extension_surfaces = {entry["surface"] for entry in metadata["extensions"]["experimental"]}
 
+    assert "extension manifest" in stable_surfaces
     assert "manifest bootstrap modules" in extension_surfaces
     assert "dynamic plugin nodes" in extension_surfaces
     assert "dynamic flows" in extension_surfaces
+
+
+def test_runtime_public_contract_publishes_extension_abi_policy():
+    metadata = runtime_public_contract_metadata()
+
+    abi = metadata["extensions"]["abi"]
+    assert abi["schema_version"] == "2026-05-20"
+    assert abi["surfaces"]["manifest"]["stability"] == "stable"
+    assert abi["surfaces"]["manifest"]["supported_versions"] == [
+        "aindy.extension.manifest/v1"
+    ]
+    assert abi["surfaces"]["manifest"]["legacy_accepted"] is True
+    assert abi["surfaces"]["dynamic-node-registration"]["stability"] == "experimental"
+
+
+def test_runtime_public_contract_publishes_extension_capability_model():
+    metadata = runtime_public_contract_metadata()
+
+    capability_model = metadata["extensions"]["capability_model"]
+    assert capability_model["policy_version"] == "2026-05-20"
+    assert "memory.read" in capability_model["capabilities"]
+    assert capability_model["surfaces"]["dynamic-plugin-node"]["authority_model"] == (
+        "isolated-explicit-capabilities"
+    )
+    assert capability_model["surfaces"]["dynamic-plugin-node"]["default_runtime_capabilities"] == []
+    assert capability_model["surfaces"]["dynamic-plugin-node"]["network_policy"]["capability_required"] == "outbound.http"
+    assert capability_model["surfaces"]["dynamic-plugin-node"]["filesystem_policy"]["default"] == "read-only-approved-roots"
+    assert capability_model["surfaces"]["dynamic-plugin-node"]["environment_policy"]["secret_injection"] == "none"
+    assert "secret.read" in capability_model["not_exposed"]
+
+
+def test_runtime_public_contract_publishes_extension_provenance_policy():
+    metadata = runtime_public_contract_metadata()
+
+    provenance = metadata["extensions"]["provenance_policy"]
+    assert provenance["policy_version"] == "2026-05-20"
+    assert provenance["signing"]["status"] == "unsupported"
+    assert provenance["trust_policies"]["runtime-built-in"] == "runtime-owned-derived"
+    assert "dynamic-plugin-node" in provenance["required_when"]["external-third-party"]
 
 
 def test_runtime_public_contract_describes_external_python_override_precisely():
@@ -67,9 +108,9 @@ def test_runtime_public_contract_describes_external_python_override_precisely():
     override = metadata["extensions"]["external_python_override"]
     assert override["env_var"] == "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS"
     assert override["production_ack_env_var"] == "AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON"
-    assert override["default"] == "blocked"
-    assert override["sandboxing"] == "none"
-    assert "trusted in-process Python execution" in override["effect_when_enabled"]
+    assert override["default"] == "no direct in-process effect"
+    assert override["sandboxing"] == "subprocess-boundary"
+    assert "isolated plugin-host boundary" in override["effect_when_enabled"]
 
 
 def test_runtime_public_contract_describes_trusted_in_process_python_precisely():

@@ -3,7 +3,10 @@ from __future__ import annotations
 from AINDY.config import settings
 from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY
 from AINDY.platform_layer.deployment_contract import runtime_only_deployment_contract
+from AINDY.platform_layer.extension_abi import extension_abi_policy
+from AINDY.platform_layer.extension_capabilities import extension_capability_policy
 from AINDY.platform_layer.extension_policy import external_python_override_state
+from AINDY.platform_layer.extension_provenance import extension_provenance_policy
 
 
 PUBLIC_CONTRACT_SCHEMA_VERSION = "2026-05-20"
@@ -142,8 +145,25 @@ def _syscall_surface_contract() -> dict[str, object]:
 
 def _extension_surface_contract() -> dict[str, object]:
     override_state = external_python_override_state()
+    abi_policy = extension_abi_policy()
+    capability_policy = extension_capability_policy()
     return {
-        "stable": [],
+        "stable": [
+            {
+                "surface": "extension manifest",
+                "entrypoint": "AINDY.platform_layer.registry.load_plugins()",
+                "abi_versions": abi_policy["surfaces"]["manifest"]["supported_versions"],
+                "notes": (
+                    "The manifest document shape is a stable ABI. It supports "
+                    "trusted bootstrap entries for internal code and declarative "
+                    "registration entries for external onboarding. It does not make "
+                    "every extension execution surface stable or safe by itself."
+                ),
+            }
+        ],
+        "abi": abi_policy,
+        "capability_model": capability_policy,
+        "provenance_policy": extension_provenance_policy(),
         "ownership_classes": [
             "runtime-built-in",
             "first-party-app",
@@ -165,26 +185,44 @@ def _extension_surface_contract() -> dict[str, object]:
                 "Runtime-built-in and first-party app Python extensions are treated "
                 "as trusted internal code. They execute in-process with full "
                 "interpreter privileges, and the runtime reports their live inventory "
-                "for audit visibility rather than claiming isolation."
+                "for audit visibility rather than claiming isolation or explicit "
+                "capability confinement."
             ),
         },
         "external_python_override": {
             "env_var": override_state["env_var"],
             "production_ack_env_var": override_state["production_ack_env_var"],
-            "default": "blocked",
-            "effect_when_enabled": "trusted in-process Python execution",
-            "sandboxing": "none",
+            "default": "no direct in-process effect",
+            "effect_when_enabled": "legacy configuration marker; third-party plugin nodes still require the isolated plugin-host boundary",
+            "sandboxing": "subprocess-boundary",
             "notes": (
-                "Enabling the override does not create a sandbox. It allows "
-                "explicitly trusted external third-party Python to run with full "
-                "interpreter privileges."
+                "Third-party manifest bootstrap modules remain unsupported. "
+                "Third-party plugin nodes execute over a runtime-owned plugin-host subprocess boundary "
+                "instead of being imported into the runtime process."
             ),
         },
         "experimental": [
             {
                 "surface": "manifest bootstrap modules",
                 "entrypoint": "AINDY.platform_layer.registry.load_plugins()",
-                "notes": "Bootstrap module naming and registration composition remain fluid.",
+                "abi_versions": abi_policy["surfaces"]["manifest"]["supported_versions"],
+                "notes": (
+                    "Manifest parsing is versioned. Manifest v1 is the stable manifest "
+                    "ABI, while bootstrap module naming and registration composition "
+                    "remain operationally constrained by the trust model."
+                ),
+            },
+            {
+                "surface": "manifest declarative extension entries",
+                "entrypoint": "AINDY.platform_layer.registry.load_plugins()",
+                "abi_versions": abi_policy["surfaces"]["manifest"]["supported_versions"],
+                "notes": (
+                    "External onboarding may use declarative manifest entries for "
+                    "dynamic nodes, webhook subscriptions, and dynamic flows without "
+                    "executing bootstrap code in the runtime process. The manifest "
+                    "container is stable, but the underlying registration surfaces "
+                    "remain experimental."
+                ),
             },
             {
                 "surface": "registry registration helpers",
@@ -194,22 +232,38 @@ def _extension_surface_contract() -> dict[str, object]:
             {
                 "surface": "agent tool registration",
                 "entrypoint": "AINDY.agents.tool_registry.register_tool",
-                "notes": "Tool metadata keys are validated but may still evolve.",
+                "abi_versions": abi_policy["surfaces"]["agent-tool-registration"]["supported_versions"],
+                "notes": "Tool metadata keys are validated but the registration surface may still evolve.",
             },
             {
                 "surface": "dynamic plugin nodes",
                 "entrypoint": "AINDY.platform_layer.node_registry.register_external_node(type='plugin')",
-                "notes": "Trusted in-process code loading remains experimental and intentionally unsandboxed.",
+                "abi_versions": abi_policy["surfaces"]["dynamic-node-registration"]["supported_versions"],
+                "notes": "Runtime-built-in and first-party plugin nodes are trusted in-process code; third-party plugin nodes use an isolated plugin-host boundary.",
             },
             {
                 "surface": "webhook nodes",
                 "entrypoint": "AINDY.platform_layer.node_registry.register_external_node(type='webhook')",
+                "abi_versions": abi_policy["surfaces"]["dynamic-node-registration"]["supported_versions"],
                 "notes": "Outbound node contract is supported but the registration surface is not frozen.",
             },
             {
                 "surface": "dynamic flows",
                 "entrypoint": "AINDY.runtime.flow_registry.register_dynamic_flow",
+                "abi_versions": abi_policy["surfaces"]["flow-registration"]["supported_versions"],
                 "notes": "Data-only flow registration is runtime-owned but still experimental.",
+            },
+            {
+                "surface": "webhook subscriptions",
+                "entrypoint": "AINDY.platform_layer.event_service.subscribe_webhook",
+                "abi_versions": abi_policy["surfaces"]["webhook-registration"]["supported_versions"],
+                "notes": "Webhook subscription payloads are versioned but still experimental.",
+            },
+            {
+                "surface": "planner backend registration",
+                "entrypoint": "AINDY.platform_layer.registry.register_agent_planner_backend",
+                "abi_versions": abi_policy["surfaces"]["planner-backend-registration"]["supported_versions"],
+                "notes": "Planner backend registration remains a code-level experimental contract.",
             },
         ],
     }

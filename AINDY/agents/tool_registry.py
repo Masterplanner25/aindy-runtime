@@ -6,6 +6,7 @@ import logging
 from typing import Callable
 
 from AINDY.core.execution_signal_helper import queue_system_event
+from AINDY.platform_layer.extension_boundary import sanitize_extension_context
 
 logger = logging.getLogger(__name__)
 
@@ -170,15 +171,15 @@ def suggest_tools(
     _ensure_tools_loaded()
     if suggestion_context is None and "kpi_snapshot" in legacy_kwargs:
         suggestion_context = legacy_kwargs["kpi_snapshot"]
+    sanitized_context = sanitize_extension_context(suggestion_context or {})
     for provider in tuple(_SUGGESTION_PROVIDERS):
         try:
             suggestions = provider(
-                suggestion_context=suggestion_context,
+                suggestion_context=sanitized_context,
                 user_id=user_id,
-                db=db,
             )
         except TypeError:
-            suggestions = provider(kpi_snapshot=suggestion_context, user_id=user_id, db=db)
+            suggestions = provider(kpi_snapshot=sanitized_context, user_id=user_id)
         except Exception as exc:
             logger.warning("[AgentTools] suggestion provider failed: %s", exc)
             continue

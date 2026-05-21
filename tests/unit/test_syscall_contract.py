@@ -316,3 +316,123 @@ def test_agent_read_helpers_reject_cross_tenant_user_id(monkeypatch):
             {"user_id": "other-user"},
             _ctx(capabilities=["agent.read"], metadata={"_db": fake_db}),
         )
+
+
+def test_dispatcher_rejects_extension_call_tenant_metadata_mismatch(monkeypatch, dispatcher):
+    name = "sys.v1.test.extension_tenant"
+    syscall_registry.SYSCALL_REGISTRY[name] = syscall_registry.SyscallEntry(
+        handler=lambda payload, context: {"ok": True},
+        capability="test.capability",
+    )
+
+    class _OkRm:
+        def check_quota(self, execution_unit_id):
+            return True, None
+
+        def record_usage(self, execution_unit_id, usage):
+            return None
+
+    monkeypatch.setattr(syscall_dispatcher, "_get_rm", lambda: _OkRm())
+    try:
+        result = dispatcher.dispatch(
+            name,
+            {},
+            _ctx(
+                metadata={
+                    "_extension_call": {
+                        "surface": "extension-runtime-api",
+                        "operation": "memory.read",
+                        "tenant_user_id": "other-user",
+                        "extension_name": "demo-plugin",
+                        "owner_class": "external-third-party",
+                    }
+                }
+            ),
+        )
+    finally:
+        syscall_registry.SYSCALL_REGISTRY.pop(name, None)
+
+    assert result["status"] == "error"
+    assert "TENANT_VIOLATION" in result["error"]
+
+
+def test_event_emit_adds_extension_scope_and_source(monkeypatch):
+    fake_db = _FakeDb()
+    event_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        "AINDY.core.system_event_service.emit_system_event",
+        lambda **kwargs: event_calls.append(kwargs) or "evt-1",
+    )
+
+    result = syscall_registry._handle_event_emit(
+        {"event_type": "test.event", "payload": {"x": 1}},
+        _ctx(
+            capabilities=["event.emit"],
+            metadata={
+                "_db": fake_db,
+                "_extension_call": {
+                    "surface": "extension-runtime-api",
+                    "operation": "event.emit",
+                    "tenant_user_id": "user-1",
+                    "extension_name": "demo-plugin",
+                    "owner_class": "external-third-party",
+                },
+            },
+        ),
+    )
+
+    assert result == {"event_id": "evt-1"}
+    assert event_calls[0]["source"] == "extension:demo-plugin"
+    assert event_calls[0]["payload"]["_runtime_extension_scope"] == {
+        "tenant_user_id": "user-1",
+        "extension_name": "demo-plugin",
+        "owner_class": "external-third-party",
+        "operation": "event.emit",
+    }
+
+
+def test_flow_run_injects_extension_scope_into_initial_state(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeRunner:
+        def __init__(self, *, flow, db, user_id, workflow_type):
+            captured["flow"] = flow
+            captured["db"] = db
+            captured["user_id"] = user_id
+            captured["workflow_type"] = workflow_type
+
+        def start(self, initial_state, *, flow_name):
+            captured["initial_state"] = initial_state
+            captured["flow_name"] = flow_name
+            return {"status": "ok"}
+
+    monkeypatch.setattr("AINDY.runtime.flow_engine.PersistentFlowRunner", _FakeRunner)
+    monkeypatch.setattr("AINDY.runtime.flow_engine.FLOW_REGISTRY", {"demo-flow": {"start": "alpha"}})
+
+    fake_db = _FakeDb()
+    result = syscall_registry._handle_flow_run(
+        {"flow_name": "demo-flow", "initial_state": {"x": 1}},
+        _ctx(
+            capabilities=["flow.run"],
+            metadata={
+                "_db": fake_db,
+                "_extension_call": {
+                    "surface": "extension-runtime-api",
+                    "operation": "flow.run",
+                    "tenant_user_id": "user-1",
+                    "extension_name": "demo-plugin",
+                    "owner_class": "external-third-party",
+                },
+            },
+        ),
+    )
+
+    assert result == {"flow_result": {"status": "ok"}}
+    assert captured["user_id"] == "user-1"
+    assert captured["initial_state"]["_runtime_extension_scope"] == {
+        "tenant_user_id": "user-1",
+        "extension_name": "demo-plugin",
+        "owner_class": "external-third-party",
+        "operation": "flow.run",
+    }

@@ -62,6 +62,8 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
             "privileges. This inventory is an audit surface, not a sandbox boundary."
         ),
     }
+    assert payload["runtime"]["extension_provenance"]["present"] is False
+    assert payload["runtime"]["extension_provenance"]["total_count"] == 0
     assert payload["compatibility"] == {
         "runtime_package": {
             "name": "aindy-runtime",
@@ -91,7 +93,17 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     assert "/apps/agent/" in experimental_prefixes
     assert "/platform/nodes" in experimental_prefixes
     assert payload["public_contract"]["extensions"]["external_python_override"]["env_var"] == "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS"
+    assert payload["public_contract"]["extensions"]["external_python_override"]["sandboxing"] == "subprocess-boundary"
+    assert "plugin-host" in payload["public_contract"]["extensions"]["external_python_override"]["effect_when_enabled"]
     assert payload["public_contract"]["extensions"]["trusted_in_process_python"]["sandboxing"] == "none"
+    assert payload["public_contract"]["extensions"]["abi"]["surfaces"]["manifest"]["supported_versions"] == [
+        "aindy.extension.manifest/v1"
+    ]
+    assert payload["public_contract"]["extensions"]["provenance_policy"]["policy_version"] == "2026-05-20"
+    assert payload["public_contract"]["extensions"]["provenance_policy"]["signing"]["status"] == "unsupported"
+    assert payload["public_contract"]["extensions"]["capability_model"]["surfaces"]["dynamic-plugin-node"]["authority_model"] == "isolated-explicit-capabilities"
+    assert payload["public_contract"]["extensions"]["capability_model"]["surfaces"]["dynamic-plugin-node"]["filesystem_policy"]["default"] == "read-only-approved-roots"
+    assert payload["public_contract"]["extensions"]["capability_model"]["surfaces"]["dynamic-plugin-node"]["filesystem_policy"]["writes"] == "deny"
     assert "GET /api/version" in payload["public_contract"]["extensions"]["trusted_in_process_python"]["operator_visibility"]
     assert response.headers["X-API-Version"] == payload["api_version"]
 
@@ -104,3 +116,5 @@ def test_health_route_reports_trusted_python_inventory(runtime_only_client):
     assert payload["trusted_python_execution"]["execution_model"] == "trusted-in-process-python"
     assert payload["trusted_python_execution"]["sandboxing"] == "none"
     assert payload["trusted_python_execution"]["present"] is False
+    assert payload["extension_provenance"]["present"] is False
+    assert payload["plugin_hosts"]["present"] is False

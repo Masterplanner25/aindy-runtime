@@ -64,6 +64,7 @@ def create_flow(request: Request, body: FlowDefinition, db: Session = Depends(ge
                 end=body.end,
                 user_id=user_id,
                 owner_class=body.owner_class,
+                provenance=body.provenance.model_dump() if body.provenance else None,
                 overwrite=body.overwrite,
                 db=db,
             )
