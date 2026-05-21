@@ -26,6 +26,16 @@ SCHEMA_STATE_UPGRADE_REQUIRED = "upgrade_required"
 SCHEMA_STATE_INCOMPATIBLE_MANUAL = "incompatible_manual"
 
 _SAFE_RECONCILE_CODES = {"missing_table", "missing_column"}
+REMEDIATION_BOOTSTRAP = "bootstrap"
+REMEDIATION_STARTUP_RECONCILE = "startup_reconcile"
+REMEDIATION_OFFLINE_MIGRATION = "offline_migration"
+REMEDIATION_MANUAL_REPAIR = "manual_repair"
+DRIFT_CLASS_ADDITIVE_MISSING_TABLE = "additive_missing_table"
+DRIFT_CLASS_ADDITIVE_MISSING_COLUMN = "additive_missing_column"
+DRIFT_CLASS_UNSUPPORTED_REQUIRED_COLUMN = "unsupported_required_column"
+DRIFT_CLASS_TYPE_MISMATCH = "column_type_mismatch"
+DRIFT_CLASS_NULLABILITY_MISMATCH = "column_nullability_mismatch"
+DRIFT_CLASS_PRIMARY_KEY_MISMATCH = "primary_key_mismatch"
 
 
 @dataclass(frozen=True)
@@ -35,6 +45,8 @@ class SchemaIssue:
     table: str | None = None
     column: str | None = None
     reconcile_supported: bool = False
+    drift_class: str = ""
+    remediation_category: str = REMEDIATION_MANUAL_REPAIR
 
 
 @dataclass(frozen=True)
@@ -46,6 +58,10 @@ class SchemaReport:
     reconcile_supported: bool
     operator_action: str
     issues: tuple[SchemaIssue, ...]
+    drift_classes: tuple[str, ...]
+    remediation_categories: tuple[str, ...]
+    offline_migration_required: bool
+    startup_reconcile_permitted: bool
 
     def summary(self) -> str:
         if self.state == SCHEMA_STATE_BLANK_BOOTSTRAP:
@@ -62,6 +78,54 @@ class SchemaReport:
                 + "; ".join(issue.detail for issue in self.issues)
             )
         return "; ".join(issue.detail for issue in self.issues)
+
+    def operator_workflow(self) -> dict[str, object]:
+        return {
+            "state": self.state,
+            "operator_action": self.operator_action,
+            "reconcile_supported": self.reconcile_supported,
+            "startup_reconcile_permitted": self.startup_reconcile_permitted,
+            "offline_migration_required": self.offline_migration_required,
+            "drift_classes": list(self.drift_classes),
+            "remediation_categories": list(self.remediation_categories),
+            "offline_migration": offline_migration_contract(
+                remediation_categories=self.remediation_categories,
+                drift_classes=self.drift_classes,
+            ),
+        }
+
+
+def offline_migration_contract(
+    *,
+    remediation_categories: tuple[str, ...] = (),
+    drift_classes: tuple[str, ...] = (),
+) -> dict[str, object]:
+    return {
+        "owned_by": "aindy-runtime",
+        "mode": "offline-manual",
+        "required_for_categories": [
+            REMEDIATION_OFFLINE_MIGRATION,
+            REMEDIATION_MANUAL_REPAIR,
+        ],
+        "startup_reconcile_scope": [
+            DRIFT_CLASS_ADDITIVE_MISSING_TABLE,
+            DRIFT_CLASS_ADDITIVE_MISSING_COLUMN,
+        ],
+        "not_performed_automatically": [
+            DRIFT_CLASS_TYPE_MISMATCH,
+            DRIFT_CLASS_NULLABILITY_MISMATCH,
+            DRIFT_CLASS_PRIMARY_KEY_MISMATCH,
+            DRIFT_CLASS_UNSUPPORTED_REQUIRED_COLUMN,
+        ],
+        "operator_steps": [
+            "Inspect reported drift_classes and issues from /health or startup logs.",
+            "Prepare an out-of-band SQL migration or schema repair that matches packaged runtime metadata.",
+            "Apply the change while the runtime is not serving traffic.",
+            "Restart the runtime with AINDY_ENFORCE_SCHEMA=true and verify schema_state=compatible.",
+        ],
+        "active_remediation_categories": list(remediation_categories),
+        "active_drift_classes": list(drift_classes),
+    }
 
 
 def _normalize_type_name(type_, *, dialect=None) -> str:
@@ -120,6 +184,8 @@ def _inspect_schema_issues(
                     table=table_name,
                     detail=f"Missing required runtime table {table_name!r}.",
                     reconcile_supported=True,
+                    drift_class=DRIFT_CLASS_ADDITIVE_MISSING_TABLE,
+                    remediation_category=REMEDIATION_STARTUP_RECONCILE,
                 )
             )
             continue
@@ -140,6 +206,16 @@ def _inspect_schema_issues(
                             f"{expected_column.name!r}."
                         ),
                         reconcile_supported=_column_reconcile_supported(expected_column),
+                        drift_class=(
+                            DRIFT_CLASS_ADDITIVE_MISSING_COLUMN
+                            if _column_reconcile_supported(expected_column)
+                            else DRIFT_CLASS_UNSUPPORTED_REQUIRED_COLUMN
+                        ),
+                        remediation_category=(
+                            REMEDIATION_STARTUP_RECONCILE
+                            if _column_reconcile_supported(expected_column)
+                            else REMEDIATION_OFFLINE_MIGRATION
+                        ),
                     )
                 )
                 continue
@@ -159,6 +235,8 @@ def _inspect_schema_issues(
                             f"Runtime table {table_name!r} column {expected_column.name!r} "
                             f"has type {actual_type!r}; expected {expected_type!r}."
                         ),
+                        drift_class=DRIFT_CLASS_TYPE_MISMATCH,
+                        remediation_category=REMEDIATION_OFFLINE_MIGRATION,
                     )
                 )
 
@@ -174,6 +252,8 @@ def _inspect_schema_issues(
                             f"nullable={actual_nullable!r}; expected "
                             f"{bool(expected_column.nullable)!r}."
                         ),
+                        drift_class=DRIFT_CLASS_NULLABILITY_MISMATCH,
+                        remediation_category=REMEDIATION_OFFLINE_MIGRATION,
                     )
                 )
 
@@ -189,6 +269,8 @@ def _inspect_schema_issues(
                             f"primary_key={actual_primary_key!r}; expected "
                             f"{bool(expected_column.primary_key)!r}."
                         ),
+                        drift_class=DRIFT_CLASS_PRIMARY_KEY_MISMATCH,
+                        remediation_category=REMEDIATION_MANUAL_REPAIR,
                     )
                 )
 
@@ -208,19 +290,29 @@ def _column_reconcile_supported(column) -> bool:
 def _classify_schema_state(
     existing_runtime_tables: tuple[str, ...],
     issues: tuple[SchemaIssue, ...],
-) -> tuple[str, bool, str]:
+) -> tuple[str, bool, str, tuple[str, ...], tuple[str, ...], bool]:
     if not existing_runtime_tables:
         return (
             SCHEMA_STATE_BLANK_DATABASE,
             True,
-            "bootstrap",
+            REMEDIATION_BOOTSTRAP,
+            (),
+            (REMEDIATION_BOOTSTRAP,),
+            False,
         )
     if not issues:
         return (
             SCHEMA_STATE_COMPATIBLE,
             False,
             "none",
+            (),
+            (),
+            False,
         )
+    drift_classes = tuple(sorted({issue.drift_class or issue.code for issue in issues}))
+    remediation_categories = tuple(
+        sorted({issue.remediation_category for issue in issues if issue.remediation_category})
+    )
     reconcile_supported = all(
         issue.code in _SAFE_RECONCILE_CODES and issue.reconcile_supported
         for issue in issues
@@ -229,19 +321,36 @@ def _classify_schema_state(
         return (
             SCHEMA_STATE_UPGRADE_REQUIRED,
             True,
-            "explicit_reconcile",
+            REMEDIATION_STARTUP_RECONCILE,
+            drift_classes,
+            remediation_categories,
+            False,
         )
     return (
         SCHEMA_STATE_INCOMPATIBLE_MANUAL,
         False,
-        "manual_intervention",
+        (
+            REMEDIATION_MANUAL_REPAIR
+            if REMEDIATION_MANUAL_REPAIR in remediation_categories
+            else REMEDIATION_OFFLINE_MIGRATION
+        ),
+        drift_classes,
+        remediation_categories,
+        True,
     )
 
 
 def inspect_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport:
     resolved = _resolve_bind(bind)
     existing_runtime_tables, issues = _inspect_schema_issues(resolved)
-    state, reconcile_supported, operator_action = _classify_schema_state(
+    (
+        state,
+        reconcile_supported,
+        operator_action,
+        drift_classes,
+        remediation_categories,
+        offline_migration_required,
+    ) = _classify_schema_state(
         existing_runtime_tables,
         issues,
     )
@@ -253,6 +362,10 @@ def inspect_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport:
         reconcile_supported=reconcile_supported,
         operator_action=operator_action,
         issues=issues,
+        drift_classes=drift_classes,
+        remediation_categories=remediation_categories,
+        offline_migration_required=offline_migration_required,
+        startup_reconcile_permitted=reconcile_supported,
     )
 
 
@@ -289,6 +402,10 @@ def reconcile_runtime_schema(bind: Engine | Connection | Session) -> SchemaRepor
             reconcile_supported=validated.reconcile_supported,
             operator_action=validated.operator_action,
             issues=validated.issues,
+            drift_classes=validated.drift_classes,
+            remediation_categories=validated.remediation_categories,
+            offline_migration_required=validated.offline_migration_required,
+            startup_reconcile_permitted=validated.startup_reconcile_permitted,
         )
 
     if report.state != SCHEMA_STATE_UPGRADE_REQUIRED:
@@ -319,6 +436,10 @@ def reconcile_runtime_schema(bind: Engine | Connection | Session) -> SchemaRepor
         reconcile_supported=validated.reconcile_supported,
         operator_action=validated.operator_action,
         issues=validated.issues,
+        drift_classes=validated.drift_classes,
+        remediation_categories=validated.remediation_categories,
+        offline_migration_required=validated.offline_migration_required,
+        startup_reconcile_permitted=validated.startup_reconcile_permitted,
     )
 
 

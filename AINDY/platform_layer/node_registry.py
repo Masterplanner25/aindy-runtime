@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 from AINDY.platform_layer.extension_policy import (
     OWNER_EXTERNAL_THIRD_PARTY,
     assert_python_extension_allowed,
+    python_extension_execution_metadata,
     validate_extension_owner_class,
     validate_outbound_extension_url,
 )
@@ -330,6 +331,15 @@ def register_external_node(
             identifier=handler,
         )
         node_fn = _load_plugin_node(handler)  # raises ValueError on failure
+    execution_metadata = (
+        python_extension_execution_metadata(owner_class)
+        if node_type == "plugin"
+        else {
+            "execution_model": "contract-driven-webhook",
+            "sandboxing": "network-boundary-only",
+            "trusted_override_active": False,
+        }
+    )
 
     # â”€â”€ Register (thread-safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     with _node_lock:
@@ -347,6 +357,9 @@ def register_external_node(
             "type": node_type,
             "owner_class": owner_class,
             "trust_class": trust_class,
+            "execution_model": execution_metadata["execution_model"],
+            "sandboxing": execution_metadata["sandboxing"],
+            "trusted_override_active": execution_metadata["trusted_override_active"],
             "handler": handler,
             "timeout_seconds": timeout_seconds if node_type == "webhook" else None,
             "signed": secret is not None if node_type == "webhook" else None,

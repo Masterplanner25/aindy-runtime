@@ -153,6 +153,7 @@ The runtime agent layer stays available in platform-only mode with the generic
 baseline only:
 
 - generic planner prompt
+- runtime-selected planner backend
 - runtime-owned `memory.recall`
 - runtime-owned `memory.write`
 - default trigger evaluator
@@ -162,6 +163,12 @@ baseline only:
 
 This baseline is domain-agnostic by design. KPI enrichment, Infinity behavior,
 and app-owned tools are not part of the runtime-only contract.
+
+Planner dependency note:
+
+- the planner contract is runtime-owned and provider-agnostic
+- the built-in compatibility backend may still call an external model provider
+- that external provider choice is configuration, not part of the core planner contract
 
 Agent enrichment boundary in runtime-only mode:
 

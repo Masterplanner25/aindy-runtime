@@ -54,12 +54,20 @@ This document describes the current runtime behavior of the FastAPI backend as i
   - `safe_degraded`
   - `unsafe_degraded`
   - `startup_fatal`
+- when `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true`, the runtime records
+  `external_python_override_enabled` as an explicit operator-visible degraded
+  condition. This indicates trusted in-process third-party Python execution,
+  not sandboxing.
 - Runtime state also reports:
   - `process_role`
   - `deployment_profile`
   - `deployment_profile_source`
   - `background_leadership_mode`
 - `/ready` now fails when required infrastructure is down or when any active runtime condition is classified as `unsafe_degraded` or `startup_fatal`.
+- The external Python override is intentionally not treated as a dependency
+  failure by itself, but it remains visible in `/ready` and `/api/version`.
+- In production, startup now fails closed if external Python override is enabled
+  without `AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true`.
 - See `docs/runtime/DEGRADED_RUNTIME_MODES.md` for the current degraded-mode contract.
 - See `docs/runtime/DEPLOYMENT_PROFILES.md` for the supported deployment topology contract.
 
@@ -83,6 +91,8 @@ This document describes the current runtime behavior of the FastAPI backend as i
   nullability, or primary-key mismatch and will fail closed.
 - `/health` exposes `schema_state`, whether reconcile is supported, and the
   operator action the runtime expects.
+- `/health` and `/ready` now also expose `schema_drift_classes`,
+  `schema_remediation_categories`, and whether offline migration is required.
 - See `docs/runtime/SCHEMA_LIFECYCLE.md` for the operator workflow.
 
 ## 4. Execution Registration

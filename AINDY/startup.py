@@ -71,6 +71,10 @@ from AINDY.core.distributed_queue import QueueSaturatedError, validate_queue_bac
 from AINDY.core.observability_events import emit_observability_event, emit_recovery_failure
 from AINDY.kernel.circuit_breaker import CircuitOpenError
 from AINDY.kernel.errors import BootstrapDependencyError
+from AINDY.platform_layer.extension_policy import (
+    external_python_override_production_acknowledged,
+    external_python_override_state,
+)
 from AINDY.platform_layer.health_service import check_redis_available
 from AINDY.platform_layer.otel import init_otel
 from AINDY.platform_layer.trace_context import (
@@ -157,6 +161,7 @@ def _publish_boot_runtime_state() -> None:
     boot_mode = resolve_boot_mode_for_profile(active_profile)
     deployment_profile, deployment_profile_source = resolve_api_deployment_profile()
     app_plugin_count = len(get_registered_apps())
+    override_state = external_python_override_state()
     publish_api_runtime_state(
         process_role=PROCESS_ROLE_API,
         boot_mode=boot_mode,
@@ -169,6 +174,56 @@ def _publish_boot_runtime_state() -> None:
         ),
         app_plugins_loaded=app_plugin_count > 0,
         app_plugin_count=app_plugin_count,
+        external_python_override_active=bool(override_state["enabled"]),
+        external_python_override_execution_model=str(
+            override_state["execution_model"]
+        ),
+    )
+
+
+def _enforce_external_python_override_policy() -> None:
+    override_state = external_python_override_state()
+    if not override_state["enabled"]:
+        clear_api_runtime_condition("external_python_override_enabled")
+        publish_api_runtime_state(
+            external_python_override_active=False,
+            external_python_override_execution_model=str(
+                override_state["execution_model"]
+            ),
+        )
+        return
+
+    publish_api_runtime_state(
+        external_python_override_active=True,
+        external_python_override_execution_model=str(
+            override_state["execution_model"]
+        ),
+    )
+    _record_runtime_condition(
+        code="external_python_override_enabled",
+        component="extension_policy",
+        classification=_SAFE_DEGRADED,
+        detail=(
+            "External third-party Python execution override is enabled. Any "
+            "allowlisted external bootstrap module or plugin node runs in-process "
+            "with full interpreter privileges. This is trusted-code execution, not "
+            "sandboxing."
+        ),
+        production_behavior=(
+            "requires explicit production acknowledgement and remains operator-visible"
+        ),
+    )
+    if settings.is_prod and not external_python_override_production_acknowledged():
+        raise RuntimeError(
+            "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true enables unsandboxed external "
+            "third-party Python execution. Production startup requires "
+            "AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true as an explicit operator "
+            "acknowledgement of trusted in-process code execution."
+        )
+    logger.warning(
+        "[startup] External third-party Python override is enabled. External "
+        "Python extensions are executing in-process with full interpreter "
+        "privileges. This mode is trusted-code execution, not isolation."
     )
 
 
@@ -720,6 +775,7 @@ def _validate_startup_config() -> None:
         background_leadership_mode=deployment_profile["background_leadership_mode"],
     )
     # SECRET_KEY guard Ã¢â‚¬â€ reject insecure placeholder outside local dev/test
+    _enforce_external_python_override_policy()
     _placeholder = "dev-secret-change-in-production"
     if settings.SECRET_KEY == _placeholder:
         if settings.requires_redis:
@@ -897,8 +953,9 @@ def _enforce_schema_guard(db_factory) -> None:
             if not report.ok:
                 if report.state == SCHEMA_STATE_UPGRADE_REQUIRED:
                     logger.error(
-                        "Runtime-owned schema upgrade required: %s",
+                        "Runtime-owned schema upgrade required: %s drift_classes=%s",
                         report.summary(),
+                        list(report.drift_classes),
                     )
                     raise RuntimeError(
                         "Runtime-owned schema requires an explicit additive reconcile. "
@@ -907,12 +964,16 @@ def _enforce_schema_guard(db_factory) -> None:
                     )
                 if report.state == SCHEMA_STATE_INCOMPATIBLE_MANUAL:
                     logger.error(
-                        "Runtime-owned schema is incompatible with packaged metadata: %s",
+                        "Runtime-owned schema is incompatible with packaged metadata: %s "
+                        "drift_classes=%s remediation_categories=%s",
                         report.summary(),
+                        list(report.drift_classes),
+                        list(report.remediation_categories),
                     )
                     raise RuntimeError(
                         "Runtime-owned schema is incompatible with packaged metadata. "
-                        "Manual intervention is required before startup."
+                        "Inspect schema_drift_classes and perform the required offline "
+                        "migration or manual repair before startup."
                     )
                 logger.error("Runtime-owned schema is not ready: %s", report.summary())
                 raise RuntimeError(report.summary())

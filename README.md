@@ -12,6 +12,7 @@ Current release posture:
 - stable only for the explicitly declared public surfaces under `docs/runtime/`
 - not a hardened third-party extension platform
 - does not provide in-process sandboxing for trusted Python extensions
+- `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` is a trusted-code override, not a safe third-party extension mode
 
 ## Install
 

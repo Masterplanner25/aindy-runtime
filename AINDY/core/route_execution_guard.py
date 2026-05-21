@@ -12,7 +12,11 @@ from typing import Any
 from fastapi import Request
 from fastapi.routing import APIRoute
 
-from AINDY.core.execution_guard import is_execution_exempt_path
+from AINDY.core.execution_guard import (
+    classify_execution_failure,
+    is_execution_exempt_path,
+    mark_execution_endpoint_entered,
+)
 
 _PIPELINE_CALLS = {"execute_with_pipeline", "execute_with_pipeline_sync"}
 _ROUTE_WRAPPED_ATTR = "_aindy_execution_wrapped"
@@ -151,13 +155,30 @@ def _assert_execution_context_entered(route: APIRoute, request: Request | None) 
     raise RouteExecutionViolation(_route_violation_message(route))
 
 
+def _route_exception_message(route: APIRoute, exc: Exception) -> str:
+    return (
+        f"{_route_violation_message(route)} "
+        f"(endpoint raised {exc.__class__.__name__} before pipeline entry: {exc})"
+    )
+
+
 def _wrap_route_call(route: APIRoute, endpoint):
     if inspect.iscoroutinefunction(endpoint):
 
         @wraps(endpoint)
         async def wrapped(*args, **kwargs):
             request = _resolve_request_argument(route, args, kwargs)
-            result = await endpoint(*args, **kwargs)
+            mark_execution_endpoint_entered(request)
+            try:
+                result = await endpoint(*args, **kwargs)
+            except RouteExecutionViolation:
+                raise
+            except Exception as exc:
+                if request is not None:
+                    classify_execution_failure(request, exc)
+                if request is not None and not hasattr(request.state, "execution_context"):
+                    raise RouteExecutionViolation(_route_exception_message(route, exc)) from exc
+                raise
             _assert_execution_context_entered(route, request)
             return result
 
@@ -166,7 +187,17 @@ def _wrap_route_call(route: APIRoute, endpoint):
     @wraps(endpoint)
     def wrapped(*args, **kwargs):
         request = _resolve_request_argument(route, args, kwargs)
-        result = endpoint(*args, **kwargs)
+        mark_execution_endpoint_entered(request)
+        try:
+            result = endpoint(*args, **kwargs)
+        except RouteExecutionViolation:
+            raise
+        except Exception as exc:
+            if request is not None:
+                classify_execution_failure(request, exc)
+            if request is not None and not hasattr(request.state, "execution_context"):
+                raise RouteExecutionViolation(_route_exception_message(route, exc)) from exc
+            raise
         _assert_execution_context_entered(route, request)
         return result
 

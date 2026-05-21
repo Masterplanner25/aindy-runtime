@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import Request
 
+from AINDY.core.execution_guard import mark_execution_pipeline_entered
 from AINDY.core.execution_pipeline import ExecutionContext, ExecutionPipeline
 from AINDY.core.response_adapter import adapt_response
 from AINDY.platform_layer.trace_context import get_current_request
@@ -41,6 +42,7 @@ async def execute_with_pipeline(
     if active_request is not None:
         active_request.state.user_id = resolved_user_id
         active_request.state.execution_context = ctx
+        mark_execution_pipeline_entered(active_request)
     pipeline = ExecutionPipeline()
     result = await pipeline.run(ctx, handler)
     if return_result:

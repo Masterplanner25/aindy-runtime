@@ -355,6 +355,16 @@ def validate_agent_planner_context(run_type: str, handler: Any) -> None:
     )
 
 
+def validate_agent_planner_backend(name: str, handler: Any) -> None:
+    _validate_non_empty_string("name", name, "Agent planner backend", name or "<unnamed>")
+    _validate_single_context_callable(
+        kind="Agent planner backend",
+        name=name,
+        handler=handler,
+        allowed_names={"request", "context"},
+    )
+
+
 def validate_agent_run_tools(run_type: str, handler: Any) -> None:
     _validate_non_empty_string("run_type", run_type, "Agent run tools", run_type or "<unnamed>")
     _validate_single_context_callable(

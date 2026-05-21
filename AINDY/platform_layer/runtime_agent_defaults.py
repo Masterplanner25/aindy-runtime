@@ -3,6 +3,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from AINDY.agents.agent_runtime.planner_backends import (
+    DEFAULT_PLANNER_BACKEND,
+    register_builtin_planner_backends,
+)
 from AINDY.agents.tool_registry import TOOL_REGISTRY, register_tool
 from AINDY.kernel.syscall_dispatcher import get_dispatcher, make_syscall_ctx_from_tool
 
@@ -39,6 +43,7 @@ def build_planner_context(context: dict[str, Any]) -> dict[str, str]:
     return {
         "system_prompt": _DEFAULT_PLANNER_PROMPT,
         "context_block": "",
+        "planner_backend": DEFAULT_PLANNER_BACKEND,
     }
 
 
@@ -164,6 +169,7 @@ def handle_agent_run_completed(context: dict[str, Any]) -> None:
 
 def register() -> None:
     from AINDY.platform_layer import registry
+    register_builtin_planner_backends()
 
     registry.publish_bootstrap_registration(
         "runtime-agent-defaults",

@@ -157,6 +157,9 @@ Important extracted-runtime nuance:
   operators must opt into it with `AINDY_SCHEMA_RECONCILE=true`
 - once the runtime detects unsafe drift, it fails closed and requires manual
   intervention instead of silently mutating a live schema
+- the runtime now also emits machine-readable drift classes and remediation
+  categories so operators can distinguish additive reconcile, offline
+  migration, and manual repair cases
 - see `docs/runtime/SCHEMA_LIFECYCLE.md` for the current operator workflow
 
 ## Migration Authoring Rules

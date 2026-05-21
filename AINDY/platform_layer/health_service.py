@@ -524,6 +524,11 @@ def check_schema() -> DependencyStatus:
             "operator_action": report.operator_action,
             "bootstrapped": report.bootstrapped,
             "reconciled": report.reconciled,
+            "drift_classes": list(report.drift_classes),
+            "remediation_categories": list(report.remediation_categories),
+            "offline_migration_required": report.offline_migration_required,
+            "startup_reconcile_permitted": report.startup_reconcile_permitted,
+            "offline_migration": report.operator_workflow()["offline_migration"],
         }
         if report.ok:
             return DependencyStatus(
@@ -673,6 +678,15 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         ),
         "background_enabled": bool(api_state.get("background_enabled")),
         "event_bus_ready": bool(api_state.get("event_bus_ready")),
+        "external_python_override_active": bool(
+            api_state.get("external_python_override_active")
+        ),
+        "external_python_override_execution_model": str(
+            api_state.get(
+                "external_python_override_execution_model",
+                "external-python-blocked",
+            )
+        ),
         "degraded_domains": get_degraded_domains(),
         "runtime_conditions": get_api_runtime_conditions(),
     }
@@ -694,6 +708,14 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
             checks["schema_state"] = schema.metadata["schema_state"]
         if schema.metadata.get("operator_action"):
             checks["schema_operator_action"] = schema.metadata["operator_action"]
+        if schema.metadata.get("drift_classes"):
+            checks["schema_drift_classes"] = schema.metadata["drift_classes"]
+        if schema.metadata.get("remediation_categories"):
+            checks["schema_remediation_categories"] = schema.metadata["remediation_categories"]
+        if "offline_migration_required" in schema.metadata:
+            checks["schema_offline_migration_required"] = bool(
+                schema.metadata["offline_migration_required"]
+            )
         if schema.critical and schema.status != "ok":
             failures.append("schema")
 

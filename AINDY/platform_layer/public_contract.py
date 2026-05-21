@@ -3,6 +3,7 @@ from __future__ import annotations
 from AINDY.config import settings
 from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY
 from AINDY.platform_layer.deployment_contract import runtime_only_deployment_contract
+from AINDY.platform_layer.extension_policy import external_python_override_state
 
 
 PUBLIC_CONTRACT_SCHEMA_VERSION = "2026-05-20"
@@ -140,8 +141,26 @@ def _syscall_surface_contract() -> dict[str, object]:
 
 
 def _extension_surface_contract() -> dict[str, object]:
+    override_state = external_python_override_state()
     return {
         "stable": [],
+        "ownership_classes": [
+            "runtime-built-in",
+            "first-party-app",
+            "external-third-party",
+        ],
+        "external_python_override": {
+            "env_var": override_state["env_var"],
+            "production_ack_env_var": override_state["production_ack_env_var"],
+            "default": "blocked",
+            "effect_when_enabled": "trusted in-process Python execution",
+            "sandboxing": "none",
+            "notes": (
+                "Enabling the override does not create a sandbox. It allows "
+                "explicitly trusted external third-party Python to run with full "
+                "interpreter privileges."
+            ),
+        },
         "experimental": [
             {
                 "surface": "manifest bootstrap modules",

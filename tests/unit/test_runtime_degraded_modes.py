@@ -105,6 +105,57 @@ def test_safe_runtime_degradation_keeps_readiness_green(monkeypatch):
     assert payload["required_failures"] == []
 
 
+def test_external_python_override_is_operator_visible_but_not_readiness_fatal(monkeypatch):
+    import AINDY.startup as startup
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS", "true")
+    monkeypatch.setattr(startup.settings, "ENV", "development")
+    monkeypatch.setattr(startup.settings, "TESTING", False)
+    monkeypatch.setattr(startup.settings, "TEST_MODE", False)
+    startup._enforce_external_python_override_policy()
+
+    monkeypatch.setattr(health_service.settings, "TESTING", False)
+    monkeypatch.setattr(health_service.settings, "TEST_MODE", False)
+    monkeypatch.setattr(health_service.settings, "ENV", "development")
+    publish_api_runtime_state(startup_complete=True, background_enabled=False, scheduler_role="disabled")
+    monkeypatch.setattr(health_service, "check_postgres", lambda: _ok_dependency("postgres", critical=True))
+    monkeypatch.setattr(health_service, "check_redis", lambda: _ok_dependency("redis"))
+    monkeypatch.setattr(health_service, "check_queue", lambda: _ok_dependency("queue"))
+    monkeypatch.setattr(health_service, "check_event_bus", lambda: _ok_dependency("event_bus"))
+    monkeypatch.setattr(health_service, "check_mongo", lambda: _ok_dependency("mongo"))
+    monkeypatch.setattr(health_service, "check_schema", lambda: _ok_dependency("schema", critical=True))
+    monkeypatch.setattr(health_service, "check_ai_providers", lambda: _ok_dependency("ai_providers"))
+    monkeypatch.setattr(health_service, "get_degraded_domains", lambda: [])
+
+    health = health_service.get_system_health(force=True)
+    status_code, payload = health_service.get_readiness_report()
+
+    assert health.tier == "degraded"
+    assert any(
+        condition["code"] == "external_python_override_enabled"
+        for condition in health.to_dict()["runtime_conditions"]
+    )
+    assert status_code == 200
+    assert payload["checks"]["external_python_override_active"] is True
+    assert payload["checks"]["external_python_override_execution_model"] == "trusted-in-process-python"
+    assert payload["required_failures"] == []
+
+
+def test_external_python_override_requires_explicit_prod_ack(monkeypatch):
+    import AINDY.startup as startup
+
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS", "true")
+    monkeypatch.delenv("AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON", raising=False)
+    monkeypatch.setattr(startup.settings, "ENV", "production")
+    monkeypatch.setattr(startup.settings, "TESTING", False)
+    monkeypatch.setattr(startup.settings, "TEST_MODE", False)
+
+    with pytest.raises(RuntimeError, match="AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true"):
+        startup._enforce_external_python_override_policy()
+
+
 def test_dynamic_registry_restore_is_runtime_condition_in_development(monkeypatch):
     import AINDY.startup as startup
     import AINDY.platform_layer.platform_loader as platform_loader

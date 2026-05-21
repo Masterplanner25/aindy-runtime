@@ -1,6 +1,6 @@
 ---
 title: "Agent Runtime"
-last_verified: "2026-05-09"
+last_verified: "2026-05-20"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -31,7 +31,7 @@ the source of truth for which `AINDY.*` modules apps may import.
 The agent runtime is a domain-agnostic execution subsystem in `AINDY/agents/`.
 It owns:
 
-- plan generation (GPT-4o structured planner)
+- plan generation through a runtime-owned planner backend contract
 - the approval trust gate
 - per-run capability token minting
 - orchestration guardrails for run creation, delegation, replay, and autonomous
@@ -50,6 +50,7 @@ tool implementations app-owned behind registries.
 
 Baseline runtime behavior is intentionally generic:
 - generic planner prompt
+- runtime-selected planner backend
 - runtime-owned memory tools (`memory.recall`, `memory.write`)
 - trigger evaluation with no domain assumptions
 - no-op completion hook
@@ -96,6 +97,47 @@ POST /agent/run  (create)
 
 A run that is rejected at the trust gate writes a `REJECTED` AgentRun record
 and stops. It does not execute any steps.
+
+---
+
+## 2.1 Planner Backend Contract
+
+The planner layer is runtime-owned and provider-agnostic.
+
+Current contract:
+
+- planner prompt and tool catalog come from runtime/plugin registries
+- planner backend selection is resolved by the runtime, not hard-coded in the
+  planner core
+- the selected backend receives a normalized planner request containing the
+  objective, run type, user id, composed system prompt, and injected tool
+  catalog
+
+Selection order:
+
+1. `settings.AINDY_AGENT_PLANNER_BACKEND`
+2. `planner_backend` returned by the planner-context provider
+3. the runtime default backend name
+
+Built-in backends:
+
+- `openai_chat_compat`
+  - compatibility adapter that preserves the previous external model behavior
+    through the runtime-owned planner contract
+- `disabled`
+  - deterministic no-planning mode with an explicit failure reason
+
+Configuration:
+
+- `AINDY_AGENT_PLANNER_BACKEND`
+- `AINDY_AGENT_PLANNER_MODEL`
+- `AINDY_AGENT_PLANNER_TEMPERATURE`
+
+Important boundary:
+
+- the planner core no longer hard-codes vendor or model names
+- external model dependency, when used, now lives in a backend adapter rather
+  than in the core planning contract
 
 ---
 
@@ -256,6 +298,7 @@ Hard rule:
 
 The agent runtime therefore uses explicit runtime-owned plugin contracts for:
 - planner context providers
+- planner backend providers
 - run tool providers
 - capability definition providers
 - trigger evaluators
@@ -264,6 +307,8 @@ The agent runtime therefore uses explicit runtime-owned plugin contracts for:
 
 Interpret these contracts narrowly:
 - planner context provider: runtime guarantees a generic default provider; KPI-aware or analytics-aware context remains plugin-owned
+- planner backend provider: runtime guarantees explicit backend selection and a
+  compatibility adapter, but not a built-in provider-independent model runtime
 - tool suggestion provider: runtime guarantees only an empty fallback; suggestion logic remains plugin-owned
 - agent completion hook: runtime guarantees only a no-op fallback; post-run score/orchestration behavior remains plugin-owned
 - run tool provider: runtime defaults expose only runtime memory tools; app tools remain optional plugin enrichments
@@ -279,6 +324,8 @@ own agent tools, plugin registration, and app-specific extensions.
 
 No-plugin behavior is fail-safe at the runtime boundary:
 - runtime defaults provide a generic planner context
+- runtime defaults register the built-in planner backends
+- runtime defaults select `openai_chat_compat` unless configuration overrides it
 - runtime defaults provide the memory tool catalog
 - no app suggestion provider -> empty suggestion list
 - no app completion hook -> runtime no-op completion

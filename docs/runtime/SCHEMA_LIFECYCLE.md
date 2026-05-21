@@ -42,6 +42,22 @@ The runtime distinguishes four operator-facing schema states:
     - missing non-null column without a safe DB-side default
   - startup fails closed and manual intervention is required
 
+In addition to `schema_state`, the runtime now emits machine-readable:
+
+- `schema_drift_classes`
+  - concrete drift categories such as `additive_missing_table`,
+    `additive_missing_column`, `unsupported_required_column`,
+    `column_type_mismatch`, `column_nullability_mismatch`, or
+    `primary_key_mismatch`
+- `schema_remediation_categories`
+  - `bootstrap`
+  - `startup_reconcile`
+  - `offline_migration`
+  - `manual_repair`
+- `schema_offline_migration_required`
+  - whether the runtime expects an out-of-band migration or repair before
+    restart
+
 ## Operator Workflow
 
 ### Blank database
@@ -74,7 +90,26 @@ already-initialized production schema.
 - Startup fails closed.
 - `/health` reports `schema_state=incompatible_manual`.
 - The runtime will not attempt to coerce the schema automatically.
-- Operators must repair the schema out of band before restart.
+- Inspect `schema_drift_classes` and `schema_remediation_categories`:
+  - `offline_migration` means prepare and apply an out-of-band SQL migration
+    while the runtime is stopped
+  - `manual_repair` means the drift is broad enough that the operator must
+    repair the schema shape directly before restart
+- Operators must complete that out-of-band work before restart.
+
+## Supported vs Unsupported Drift Classes
+
+- Supported at startup:
+  - `additive_missing_table`
+  - `additive_missing_column`
+- Supported only through explicit startup reconcile:
+  - the same additive classes above, and only when
+    `AINDY_SCHEMA_RECONCILE=true`
+- Unsupported for startup-time mutation:
+  - `unsupported_required_column`
+  - `column_type_mismatch`
+  - `column_nullability_mismatch`
+  - `primary_key_mismatch`
 
 ## Current Safety Boundary
 
@@ -93,6 +128,7 @@ What the runtime intentionally does not do:
 - coerce live column types
 - tighten nullability in place
 - rewrite primary-key shape
+- claim that unsupported drift can be fixed safely online
 
 ## Environment Controls
 

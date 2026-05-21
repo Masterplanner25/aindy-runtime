@@ -76,6 +76,7 @@ _EMPTY_REGISTRY_STATE = {
     "_startup_hooks": [],
     "_agent_tools": {},
     "_agent_planner_contexts": {},
+    "_agent_planner_backends": {},
     "_agent_run_tools": {},
     "_agent_completion_hooks": defaultdict(list),
     "_agent_event_emitters": defaultdict(list),

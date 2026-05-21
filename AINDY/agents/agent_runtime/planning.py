@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from AINDY.agents.agent_runtime.planner_backends import (
+    DEFAULT_PLANNER_BACKEND,
+    DISABLED_PLANNER_BACKEND,
+    PlannerBackendDisabledError,
+    PlannerBackendError,
+    PlannerRequest,
+)
 from AINDY.agents.agent_runtime.shared import get_runtime_compat_module, logger
+from AINDY.config import settings
 
 PLANNER_SYSTEM_PROMPT = """You are a generic agent planner.
 
@@ -72,6 +79,79 @@ def _legacy_planner_context_block_disabled(user_id: str, db: Session) -> str:
     return ""
 
 
+def _resolve_planner_backend_name(planner_context: dict[str, object]) -> tuple[str, str]:
+    explicit_backend = str(settings.AINDY_AGENT_PLANNER_BACKEND or "").strip()
+    if explicit_backend:
+        return explicit_backend, "settings.AINDY_AGENT_PLANNER_BACKEND"
+    context_backend = str(planner_context.get("planner_backend") or "").strip()
+    if context_backend:
+        return context_backend, "planner_context"
+    return DEFAULT_PLANNER_BACKEND, "runtime_default"
+
+
+def _build_planner_prompt(
+    *,
+    system_prompt: str,
+    planner_context: dict[str, object],
+    tools: list[dict],
+) -> str:
+    prompt = str(system_prompt or "")
+    context_block = str(planner_context.get("context_block") or "")
+    if context_block and context_block not in prompt:
+        prompt += context_block
+    if tools:
+        prompt += "\n\nAvailable tools:\n" + "\n".join(
+            f"- {tool.get('name')}: {tool.get('description', '')} (risk={tool.get('risk', 'unknown')})"
+            for tool in tools
+            if isinstance(tool, dict) and tool.get("name")
+        )
+    return prompt
+
+
+def _get_planner_backend(name: str):
+    from AINDY.platform_layer.registry import get_agent_planner_backend
+
+    backend = get_agent_planner_backend(name)
+    if backend is None:
+        raise PlannerBackendError(
+            f"Agent planner backend {name!r} is not registered."
+        )
+    return backend
+
+
+def _invoke_planner_backend(
+    *,
+    backend_name: str,
+    objective_text: str,
+    run_type: str,
+    user_id: str | None,
+    db: Session | None,
+    system_prompt: str,
+    tools: list[dict],
+    planner_context: dict[str, object],
+) -> dict:
+    backend = _get_planner_backend(backend_name)
+    plan = backend(
+        PlannerRequest(
+            objective=objective_text,
+            run_type=run_type,
+            user_id=None if user_id is None else str(user_id),
+            db=db,
+            system_prompt=system_prompt,
+            tools=tuple(tools),
+            metadata={
+                "planner_backend": backend_name,
+                "planner_context_keys": sorted(planner_context.keys()),
+            },
+        )
+    )
+    if not isinstance(plan, dict):
+        raise PlannerBackendError(
+            f"Agent planner backend {backend_name!r} returned {type(plan).__name__}, expected dict."
+        )
+    return plan
+
+
 def generate_plan(
     objective: str | None = None,
     user_id: str | None = None,
@@ -80,49 +160,35 @@ def generate_plan(
 ) -> Optional[dict]:
     try:
         compat = get_runtime_compat_module()
-        from AINDY.config import settings
 
         objective_text = compat._resolve_objective(objective, values)
         run_type = "default"
         planner_context = compat._get_planner_context(run_type, user_id=user_id, db=db)
         tools = compat._get_tools_for_run(run_type, user_id=user_id, db=db)
-        tool_block = ""
-        if tools:
-            tool_block = "\n\nAvailable tools:\n" + "\n".join(
-                f"- {tool.get('name')}: {tool.get('description', '')} (risk={tool.get('risk', 'unknown')})"
-                for tool in tools
-                if isinstance(tool, dict) and tool.get("name")
-            )
         system_prompt = str(planner_context.get("system_prompt") or "")
         if not system_prompt:
             logger.warning("[AgentRuntime] No planner context registered for %s", run_type)
             return None
-        context_block = compat._build_kpi_context_block(user_id=user_id, db=db)
-        if context_block and context_block not in system_prompt:
-            system_prompt += context_block
-        system_prompt += tool_block
-
-        response = compat.perform_external_call(
-            service_name="openai",
-            db=db,
-            user_id=user_id,
-            endpoint="chat.completions.create",
-            model="gpt-4o",
-            method="openai.chat",
-            extra={"purpose": "agent_plan_generation"},
-            operation=lambda: compat.chat_completion(
-                compat._get_client(),
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Objective: {objective_text}"},
-                ],
-                temperature=0.3,
-                response_format={"type": "json_object"},
-                timeout=settings.OPENAI_CHAT_TIMEOUT_SECONDS,
-            ),
+        backend_name, _backend_source = _resolve_planner_backend_name(planner_context)
+        if backend_name == DISABLED_PLANNER_BACKEND:
+            raise PlannerBackendDisabledError(
+                "Agent planner backend is disabled by configuration."
+            )
+        system_prompt = _build_planner_prompt(
+            system_prompt=system_prompt,
+            planner_context=planner_context,
+            tools=tools,
         )
-        plan = json.loads(response.choices[0].message.content)
+        plan = _invoke_planner_backend(
+            backend_name=backend_name,
+            objective_text=objective_text,
+            run_type=run_type,
+            user_id=user_id,
+            db=db,
+            system_prompt=system_prompt,
+            tools=tools,
+            planner_context=planner_context,
+        )
         if "steps" not in plan or "overall_risk" not in plan:
             logger.warning("[AgentRuntime] Plan missing required fields: %s", plan)
             return None

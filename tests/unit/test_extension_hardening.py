@@ -163,7 +163,43 @@ def handler(state, context):
 
     assert meta["owner_class"] == OWNER_FIRST_PARTY_APP
     assert meta["trust_class"] == "trusted-first-party-python"
+    assert meta["execution_model"] == "trusted-in-process-python"
+    assert meta["sandboxing"] == "none"
+    assert meta["trusted_override_active"] is False
     assert get_dynamic_node("first-party-plugin")["trust_class"] == "trusted-first-party-python"
+
+
+def test_dynamic_plugin_node_allows_external_python_only_with_explicit_override(
+    monkeypatch, tmp_path, clean_dynamic_runtime_state
+):
+    from AINDY.platform_layer.node_registry import get_dynamic_node, register_external_node
+
+    plugin_dir = tmp_path / "plugins" / "nodes"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
+    (plugin_dir / "safe_node.py").write_text(
+        """
+def handler(state, context):
+    return {"status": "SUCCESS"}
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
+    monkeypatch.setenv("AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS", "true")
+
+    meta = register_external_node(
+        "trusted-external-plugin",
+        "plugin",
+        "safe_node:handler",
+        overwrite=True,
+    )
+
+    assert meta["owner_class"] == "external-third-party"
+    assert meta["trust_class"] == "trusted-external-python-override"
+    assert meta["execution_model"] == "trusted-in-process-python"
+    assert meta["sandboxing"] == "none"
+    assert meta["trusted_override_active"] is True
+    assert get_dynamic_node("trusted-external-plugin")["trusted_override_active"] is True
 
 
 def test_webhook_extensions_reject_private_targets_by_default(monkeypatch):

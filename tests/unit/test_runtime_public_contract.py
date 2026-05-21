@@ -59,3 +59,14 @@ def test_runtime_public_contract_marks_extension_registration_surfaces_experimen
     assert "manifest bootstrap modules" in extension_surfaces
     assert "dynamic plugin nodes" in extension_surfaces
     assert "dynamic flows" in extension_surfaces
+
+
+def test_runtime_public_contract_describes_external_python_override_precisely():
+    metadata = runtime_public_contract_metadata()
+
+    override = metadata["extensions"]["external_python_override"]
+    assert override["env_var"] == "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS"
+    assert override["production_ack_env_var"] == "AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON"
+    assert override["default"] == "blocked"
+    assert override["sandboxing"] == "none"
+    assert "trusted in-process Python execution" in override["effect_when_enabled"]

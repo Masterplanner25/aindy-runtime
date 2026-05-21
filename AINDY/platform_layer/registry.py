@@ -24,6 +24,7 @@ from AINDY.platform_layer.deployment_contract import (
 )
 from AINDY.platform_layer.registry_contracts import (
     validate_agent_event,
+    validate_agent_planner_backend,
     validate_agent_planner_context,
     validate_agent_ranking_strategy,
     validate_agent_run_tools,
@@ -52,6 +53,7 @@ from AINDY.platform_layer.registry_contracts import (
 )
 from AINDY.platform_layer.extension_policy import (
     assert_python_extension_allowed,
+    python_extension_execution_metadata,
     python_extension_trust_class,
     validate_bootstrap_module_name,
 )
@@ -87,6 +89,7 @@ _execution_adapters: dict[str, Handler] = {}
 _startup_hooks: list[Handler] = []
 _agent_tools: dict[str, Any] = {}
 _agent_planner_contexts: dict[str, Handler] = {}
+_agent_planner_backends: dict[str, Handler] = {}
 _agent_run_tools: dict[str, Handler] = {}
 _agent_completion_hooks: dict[str, list[Handler]] = defaultdict(list)
 _agent_event_emitters: dict[str, list[Handler]] = defaultdict(list)
@@ -412,6 +415,22 @@ def register_planner_context_provider(run_type: str, handler: Handler) -> Handle
     return handler
 
 
+def register_agent_planner_backend(name: str, handler: Handler) -> Handler:
+    validate_agent_planner_backend(name, handler)
+    _agent_planner_backends[name] = handler
+    return handler
+
+
+def get_agent_planner_backend(name: str) -> Handler | None:
+    _ensure_runtime_agent_defaults()
+    return _agent_planner_backends.get(name)
+
+
+def list_agent_planner_backends() -> list[str]:
+    _ensure_runtime_agent_defaults()
+    return sorted(_agent_planner_backends)
+
+
 def get_planner_context(run_type: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
     _ensure_runtime_agent_defaults()
     handler = _agent_planner_contexts.get(run_type) or _agent_planner_contexts.get("default")
@@ -707,6 +726,7 @@ def publish_bootstrap_registration(
         current_extension.get("trust_class")
         or python_extension_trust_class(resolved_owner_class)
     ).strip()
+    execution_metadata = python_extension_execution_metadata(resolved_owner_class)
     if resolved_owner_class == OWNER_FIRST_PARTY_APP and normalized not in _registered_apps:
         _registered_apps.append(normalized)
     _bootstrap_dependencies[normalized] = [
@@ -718,6 +738,9 @@ def publish_bootstrap_registration(
         "name": normalized,
         "owner_class": resolved_owner_class,
         "trust_class": trust_class,
+        "execution_model": execution_metadata["execution_model"],
+        "sandboxing": execution_metadata["sandboxing"],
+        "trusted_override_active": execution_metadata["trusted_override_active"],
         "module_name": resolved_module_name,
         "dependencies": list(_bootstrap_dependencies[normalized]),
     }
@@ -1196,10 +1219,14 @@ def load_plugins(
                 ) from exc
         _bootstrap_extension_ctx.reset(bootstrap_token)
         _loaded_plugins.add(module_name)
+        execution_metadata = python_extension_execution_metadata(owner_class)
         _loaded_extension_records[module_name] = {
             "module_name": module_name,
             "owner_class": owner_class,
             "trust_class": trust_class,
+            "execution_model": execution_metadata["execution_model"],
+            "sandboxing": execution_metadata["sandboxing"],
+            "trusted_override_active": execution_metadata["trusted_override_active"],
             "manifest_owner": manifest_owner,
             "profile_name": active_profile,
         }

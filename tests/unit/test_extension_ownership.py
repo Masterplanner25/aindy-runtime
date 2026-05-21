@@ -46,6 +46,7 @@ _REGISTRY_STATE_EMPTY = {
     "_startup_hooks": [],
     "_agent_tools": {},
     "_agent_planner_contexts": {},
+    "_agent_planner_backends": {},
     "_agent_run_tools": {},
     "_agent_completion_hooks": defaultdict(list),
     "_agent_event_emitters": defaultdict(list),
@@ -184,6 +185,9 @@ def test_load_plugins_allows_runtime_built_in_manifest_module(monkeypatch, tmp_p
             "module_name": "AINDY.platform_layer.runtime_agent_defaults",
             "owner_class": OWNER_RUNTIME_BUILTIN,
             "trust_class": "trusted-runtime-python",
+            "execution_model": "trusted-in-process-python",
+            "sandboxing": "none",
+            "trusted_override_active": False,
             "manifest_owner": "explicit",
             "profile_name": "platform-only",
         }
@@ -232,6 +236,9 @@ def bootstrap():
             "module_name": "apps.test_bootstrap",
             "owner_class": OWNER_FIRST_PARTY_APP,
             "trust_class": "trusted-first-party-python",
+            "execution_model": "trusted-in-process-python",
+            "sandboxing": "none",
+            "trusted_override_active": False,
             "manifest_owner": "explicit",
             "profile_name": "default-apps",
         }
@@ -241,6 +248,9 @@ def bootstrap():
             "name": "demo-app",
             "owner_class": OWNER_FIRST_PARTY_APP,
             "trust_class": "trusted-first-party-python",
+            "execution_model": "trusted-in-process-python",
+            "sandboxing": "none",
+            "trusted_override_active": False,
             "module_name": "apps.test_bootstrap",
             "dependencies": [],
         }
@@ -284,6 +294,72 @@ def bootstrap():
 
     with pytest.raises(ValueError, match="blocked by default"):
         registry.load_plugins(manifest_path=manifest, profile="default-apps")
+
+
+def test_load_plugins_allows_external_python_only_with_explicit_override(
+    monkeypatch, tmp_path, clean_registry_state
+):
+    vendor_dir = tmp_path / "vendor"
+    vendor_dir.mkdir()
+    (vendor_dir / "__init__.py").write_text("", encoding="utf-8")
+    (vendor_dir / "ext_bootstrap.py").write_text(
+        """
+from AINDY.platform_layer.registry import publish_bootstrap_registration
+
+def bootstrap():
+    publish_bootstrap_registration("vendor-demo")
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = tmp_path / "aindy_plugins.json"
+    manifest.write_text(
+        """
+{
+  "default_profile": "default-apps",
+  "profiles": {
+    "default-apps": {
+      "plugins": [
+        {"module": "vendor.ext_bootstrap", "owner_class": "external-third-party"}
+      ]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("AINDY_EXTERNAL_BOOTSTRAP_PREFIXES", "vendor.")
+    monkeypatch.setenv("AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS", "true")
+
+    loaded = registry.load_plugins(manifest_path=manifest, profile="default-apps")
+
+    assert loaded == ["vendor.ext_bootstrap"]
+    assert registry.get_loaded_extensions() == [
+        {
+            "module_name": "vendor.ext_bootstrap",
+            "owner_class": OWNER_EXTERNAL_THIRD_PARTY,
+            "trust_class": "trusted-external-python-override",
+            "execution_model": "trusted-in-process-python",
+            "sandboxing": "none",
+            "trusted_override_active": True,
+            "manifest_owner": "explicit",
+            "profile_name": "default-apps",
+        }
+    ]
+    assert registry.get_bootstrap_registrations() == {
+        "vendor-demo": {
+            "name": "vendor-demo",
+            "owner_class": OWNER_EXTERNAL_THIRD_PARTY,
+            "trust_class": "trusted-external-python-override",
+            "execution_model": "trusted-in-process-python",
+            "sandboxing": "none",
+            "trusted_override_active": True,
+            "module_name": "vendor.ext_bootstrap",
+            "dependencies": [],
+        }
+    }
 
 
 def test_runtime_only_profile_stays_free_of_app_and_external_bootstrap(clean_registry_state):

@@ -45,6 +45,7 @@ _REGISTRY_STATE_EMPTY = {
     "_startup_hooks": [],
     "_agent_tools": {},
     "_agent_planner_contexts": {},
+    "_agent_planner_backends": {},
     "_agent_run_tools": {},
     "_agent_completion_hooks": defaultdict(list),
     "_agent_event_emitters": defaultdict(list),
@@ -196,12 +197,15 @@ def test_platform_only_registers_runtime_agent_defaults(platform_only_runtime):
     contract = runtime_only_deployment_contract()
 
     planner_context = registry.get_planner_context("default", {"user_id": "user-1", "db": object()})
+    planner_backends = registry.list_agent_planner_backends()
     tools = registry.get_tools_for_run("default", {"user_id": "user-1", "db": object()})
     evaluator = registry.get_trigger_evaluator("default")
     capabilities = registry.get_capability_definitions()
 
     assert planner_context["system_prompt"]
     assert isinstance(planner_context["context_block"], str)
+    assert planner_context["planner_backend"] == "openai_chat_compat"
+    assert {"disabled", "openai_chat_compat"} <= set(planner_backends)
     assert {tool["name"] for tool in tools} == set(contract["baseline_agent_capabilities"]["tools"])
     assert evaluator is not None
     assert evaluator({"trigger_type": "user", "trigger": {"importance": 0.9}, "context": {}})["decision"] == "execute"

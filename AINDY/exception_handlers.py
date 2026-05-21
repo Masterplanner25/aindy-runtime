@@ -10,6 +10,7 @@ from sqlalchemy.exc import TimeoutError as SATimeoutError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from AINDY.core.execution_guard import classify_execution_failure
 from AINDY.core.distributed_queue import QueueSaturatedError
 from AINDY.core.system_event_service import emit_error_event
 from AINDY.db.database import SessionLocal
@@ -20,6 +21,7 @@ logger = logging.getLogger("AINDY.main")
 
 
 async def http_exception_handler(request: Request, exc: HTTPException):
+    classify_execution_failure(request, exc)
     detail = exc.detail
     message = detail if isinstance(detail, str) else "Request failed"
     return JSONResponse(
@@ -34,6 +36,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 
 async def queue_saturated_exception_handler(request: Request, exc: QueueSaturatedError):
+    classify_execution_failure(request, exc)
     return JSONResponse(
         status_code=exc.status_code,
         headers={"Retry-After": str(exc.retry_after_seconds)},
@@ -44,6 +47,7 @@ async def queue_saturated_exception_handler(request: Request, exc: QueueSaturate
 async def mongo_unavailable_exception_handler(
     request: Request, exc: MongoUnavailableError
 ) -> JSONResponse:
+    classify_execution_failure(request, exc)
     return JSONResponse(
         status_code=503,
         content={
@@ -60,6 +64,7 @@ async def mongo_unavailable_exception_handler(
 async def db_unavailable_exception_handler(
     request: Request, exc: SAOperationalError
 ) -> JSONResponse:
+    classify_execution_failure(request, exc)
     logger.error(
         "[DB] OperationalError on %s %s: %s",
         request.method,
@@ -80,6 +85,7 @@ async def db_unavailable_exception_handler(
 async def db_pool_exhausted_exception_handler(
     request: Request, exc: SATimeoutError
 ) -> JSONResponse:
+    classify_execution_failure(request, exc)
     logger.error(
         "[DB] Pool exhausted on %s %s: %s",
         request.method,
@@ -101,6 +107,7 @@ async def db_pool_exhausted_exception_handler(
 
 
 async def circuit_open_exception_handler(request: Request, exc: CircuitOpenError):
+    classify_execution_failure(request, exc)
     logger.warning(
         "[CircuitBreaker] open circuit rejected request path=%s error=%s",
         request.url.path,
@@ -119,6 +126,7 @@ async def circuit_open_exception_handler(request: Request, exc: CircuitOpenError
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    classify_execution_failure(request, exc)
     return JSONResponse(
         status_code=422,
         content={
@@ -158,6 +166,7 @@ def _extract_user_id_from_request(request: Request):
 
 
 async def unhandled_exception_handler(request: Request, exc: Exception):
+    classify_execution_failure(request, exc)
     logger.error("Unhandled error: %s", exc)
     db = None
     if not isinstance(exc, (SAOperationalError, SATimeoutError)):

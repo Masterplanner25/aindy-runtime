@@ -31,6 +31,10 @@ Release posture:
 - operator meaning of `ready`:
   - dependency and unsafe-condition checks for the active deployment profile passed
   - this is not a certification of extension trust or isolation
+- external Python override note:
+  - `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` is a trusted-code override
+  - it does not create sandboxing for third-party Python
+  - production use also requires `AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true`
 
 ## Stable HTTP Surfaces
 
@@ -126,6 +130,11 @@ Ownership model:
 
 The runtime-owned manifest may load only `runtime-built-in` entries. App and
 third-party ownership classes must stay out of the runtime-only profile.
+
+If the external Python override is enabled, the runtime surfaces that state as
+operator-visible degraded mode. Health and readiness still describe dependency
+state, but they also show that unsandboxed external Python execution has been
+explicitly enabled.
 
 ## Stable Boot Contract
 

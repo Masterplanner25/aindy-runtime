@@ -18,6 +18,8 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
         background_leadership_mode="in-process",
         app_plugins_loaded=False,
         app_plugin_count=0,
+        external_python_override_active=False,
+        external_python_override_execution_model="external-python-blocked",
     )
 
     response = runtime_only_client.get("/api/version")
@@ -34,6 +36,8 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
         "background_leadership_mode": "in-process",
         "app_plugins_loaded": False,
         "app_plugin_count": 0,
+        "external_python_override_active": False,
+        "external_python_override_execution_model": "external-python-blocked",
         "ui_mode": "runtime-only",
         "default_route": "/memory",
         "platform_home": "/platform/agent",
@@ -66,4 +70,5 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     experimental_prefixes = {entry["route_prefix"] for entry in payload["public_contract"]["http"]["experimental"]}
     assert "/apps/agent/" in experimental_prefixes
     assert "/platform/nodes" in experimental_prefixes
+    assert payload["public_contract"]["extensions"]["external_python_override"]["env_var"] == "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS"
     assert response.headers["X-API-Version"] == payload["api_version"]

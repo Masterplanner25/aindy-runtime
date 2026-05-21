@@ -74,6 +74,11 @@ Current hardening:
   by default
 - the only override is `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true`, which
   marks the deployment as explicitly trusting that external Python code
+- production use of that override also requires
+  `AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true`
+- when the override is active, `/health`, `/ready`, and `/api/version` expose
+  that state explicitly so operators can see that unsandboxed external Python
+  execution is enabled
 - plugin node handlers are loaded only from `AINDY/plugins/nodes/`
 - plugin node loading no longer mutates `sys.path`
 - plugin node handlers must expose a callable compatible with the node contract
@@ -135,6 +140,10 @@ Current hardening:
   deployment, not user content.
 - Treat external third-party Python extensions as blocked by default unless the
   deployment owner explicitly sets `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true`.
+- Treat that override as an operator exception, not a normal production mode.
+  It enables trusted in-process code execution and does not create isolation.
+- In production, pair the override with
+  `AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true` or startup will fail closed.
 - Prefer webhook nodes or dynamic flows when a use case can stay data-driven.
 - If you need real isolation for untrusted extension code, it must be moved out
   of process into a separately sandboxed execution environment.

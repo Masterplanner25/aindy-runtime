@@ -50,7 +50,12 @@ def _background_schema_ready() -> bool:
         if report.reconciled:
             logger.info("Worker reconciled runtime-owned schema to packaged metadata.")
         if not report.ok:
-            logger.warning("Worker schema readiness check failed: %s", report.summary())
+            logger.warning(
+                "Worker schema readiness check failed: %s drift_classes=%s remediation_categories=%s",
+                report.summary(),
+                list(report.drift_classes),
+                list(report.remediation_categories),
+            )
         return report.ok
     except Exception as exc:
         logger.warning("Worker schema readiness check failed: %s", exc)

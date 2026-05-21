@@ -14,6 +14,7 @@ _DEFAULT_TRUSTED_BOOTSTRAP_PREFIXES = ("AINDY.", "apps.")
 _DEFAULT_EXTERNAL_BOOTSTRAP_PREFIXES: tuple[str, ...] = ()
 _PRIVATE_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
 _EXTERNAL_PYTHON_OVERRIDE_ENV_VAR = "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS"
+_EXTERNAL_PYTHON_PROD_ACK_ENV_VAR = "AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON"
 OWNER_RUNTIME_BUILTIN = "runtime-built-in"
 OWNER_FIRST_PARTY_APP = "first-party-app"
 OWNER_EXTERNAL_THIRD_PARTY = "external-third-party"
@@ -22,6 +23,14 @@ ALLOWED_EXTENSION_OWNER_CLASSES = {
     OWNER_FIRST_PARTY_APP,
     OWNER_EXTERNAL_THIRD_PARTY,
 }
+
+
+def _env_truthy(env_name: str, default: str = "false") -> bool:
+    return os.getenv(env_name, default).lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def trusted_bootstrap_prefixes() -> tuple[str, ...]:
@@ -67,10 +76,30 @@ def validate_extension_owner_class(owner_class: str) -> str:
 
 
 def external_python_extensions_trusted() -> bool:
-    return os.getenv(_EXTERNAL_PYTHON_OVERRIDE_ENV_VAR, "false").lower() in {
-        "1",
-        "true",
-        "yes",
+    return _env_truthy(_EXTERNAL_PYTHON_OVERRIDE_ENV_VAR)
+
+
+def external_python_override_production_acknowledged() -> bool:
+    return _env_truthy(_EXTERNAL_PYTHON_PROD_ACK_ENV_VAR)
+
+
+def external_python_override_state() -> dict[str, object]:
+    enabled = external_python_extensions_trusted()
+    return {
+        "enabled": enabled,
+        "env_var": _EXTERNAL_PYTHON_OVERRIDE_ENV_VAR,
+        "production_ack_env_var": _EXTERNAL_PYTHON_PROD_ACK_ENV_VAR,
+        "production_acknowledged": (
+            external_python_override_production_acknowledged() if enabled else False
+        ),
+        "execution_model": (
+            "trusted-in-process-python" if enabled else "external-python-blocked"
+        ),
+        "sandboxing": "none",
+        "operator_warning": (
+            "External third-party Python, when enabled, runs in-process with full "
+            "interpreter privileges. This is trusted-code execution, not isolation."
+        ),
     }
 
 
@@ -83,6 +112,26 @@ def python_extension_trust_class(owner_class: str) -> str:
     if external_python_extensions_trusted():
         return "trusted-external-python-override"
     return "blocked-external-python"
+
+
+def python_extension_execution_metadata(owner_class: str) -> dict[str, object]:
+    resolved = validate_extension_owner_class(owner_class)
+    trust_class = python_extension_trust_class(resolved)
+    metadata: dict[str, object] = {
+        "owner_class": resolved,
+        "trust_class": trust_class,
+        "sandboxing": "none",
+        "execution_model": "trusted-in-process-python",
+        "trusted_override_active": False,
+        "trusted_override_env_var": None,
+    }
+    if resolved == OWNER_EXTERNAL_THIRD_PARTY:
+        if trust_class == "trusted-external-python-override":
+            metadata["trusted_override_active"] = True
+            metadata["trusted_override_env_var"] = _EXTERNAL_PYTHON_OVERRIDE_ENV_VAR
+        else:
+            metadata["execution_model"] = "blocked-external-python"
+    return metadata
 
 
 def assert_python_extension_allowed(

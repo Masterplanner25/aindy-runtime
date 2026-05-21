@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from AINDY.config import settings
+from AINDY.platform_layer.extension_policy import external_python_override_state
 
 BOOT_MODE_ENV_VAR = "AINDY_BOOT_MODE"
 DEPLOYMENT_PROFILE_ENV_VAR = "AINDY_DEPLOYMENT_PROFILE"
@@ -123,6 +124,8 @@ _api_runtime_state: dict[str, Any] = {
     "deployment_profile_source": "unknown",
     "app_plugins_loaded": False,
     "app_plugin_count": 0,
+    "external_python_override_active": False,
+    "external_python_override_execution_model": "external-python-blocked",
     "runtime_conditions": {},
 }
 
@@ -155,6 +158,15 @@ def runtime_ui_surface_state() -> dict[str, Any]:
         ),
         "app_plugins_loaded": bool(api_state.get("app_plugins_loaded", False)),
         "app_plugin_count": int(api_state.get("app_plugin_count", 0) or 0),
+        "external_python_override_active": bool(
+            api_state.get("external_python_override_active", False)
+        ),
+        "external_python_override_execution_model": str(
+            api_state.get(
+                "external_python_override_execution_model",
+                "external-python-blocked",
+            )
+        ),
         "ui_mode": RUNTIME_ONLY_BOOT_MODE if runtime_only else APP_PROFILE_BOOT_MODE,
         "default_route": "/memory" if runtime_only else "/dashboard",
         "platform_home": "/platform/agent",
@@ -457,6 +469,8 @@ def reset_runtime_state() -> None:
             "deployment_profile_source": "unknown",
             "app_plugins_loaded": False,
             "app_plugin_count": 0,
+            "external_python_override_active": False,
+            "external_python_override_execution_model": "external-python-blocked",
             "runtime_conditions": {},
         }
     )
@@ -512,6 +526,7 @@ def runtime_only_deployment_contract() -> dict[str, Any]:
 def deployment_contract_summary() -> dict[str, Any]:
     active_profile_name, active_profile_source = resolve_api_deployment_profile()
     active_profile = get_deployment_profile_contract(active_profile_name)
+    override_state = external_python_override_state()
     return {
         "release_posture": {
             "support_tier": "trusted-internal",
@@ -533,6 +548,9 @@ def deployment_contract_summary() -> dict[str, Any]:
             process_role=PROCESS_ROLE_API
         ),
         "runtime_only_support": runtime_only_deployment_contract(),
+        "extension_execution": {
+            "external_python_override": override_state,
+        },
         "requires": {
             "redis": redis_required(),
             "worker": worker_required(),

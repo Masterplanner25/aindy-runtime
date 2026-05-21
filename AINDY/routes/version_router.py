@@ -20,6 +20,8 @@ class RuntimeSurfaceResponse(BaseModel):
     background_leadership_mode: str
     app_plugins_loaded: bool
     app_plugin_count: int
+    external_python_override_active: bool
+    external_python_override_execution_model: str
     ui_mode: str
     default_route: str
     platform_home: str

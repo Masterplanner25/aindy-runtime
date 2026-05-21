@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from slowapi.middleware import SlowAPIMiddleware
 
 from AINDY.config import settings
-from AINDY.core.execution_guard import validate_execution_contract
+from AINDY.core.execution_guard import classify_execution_failure, validate_execution_contract
 from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.platform_layer.trace_context import (
     _trace_id_ctx,
@@ -87,7 +87,13 @@ async def _guard_metrics_endpoint(request: Request, call_next):
 async def enforce_execution_contract(request: Request, call_next):
     request_token = set_current_request(request)
     try:
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            classify_execution_failure(request, exc)
+            if exc.__class__.__name__ != "RouteExecutionViolation":
+                validate_execution_contract(request)
+            raise
         validate_execution_contract(request, response)
         return response
     finally:
