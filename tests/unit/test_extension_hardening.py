@@ -166,6 +166,10 @@ def handler(state, context):
     assert meta["execution_model"] == "trusted-in-process-python"
     assert meta["sandboxing"] == "none"
     assert meta["trusted_override_active"] is False
+    assert meta["execution_surface"] == "dynamic-plugin-node"
+    assert meta["module_name"] == "safe_node"
+    assert meta["function_name"] == "handler"
+    assert meta["source_path"].endswith("safe_node.py")
     assert get_dynamic_node("first-party-plugin")["trust_class"] == "trusted-first-party-python"
 
 
@@ -199,6 +203,10 @@ def handler(state, context):
     assert meta["execution_model"] == "trusted-in-process-python"
     assert meta["sandboxing"] == "none"
     assert meta["trusted_override_active"] is True
+    assert meta["execution_surface"] == "dynamic-plugin-node"
+    assert meta["module_name"] == "safe_node"
+    assert meta["function_name"] == "handler"
+    assert meta["source_path"].endswith("safe_node.py")
     assert get_dynamic_node("trusted-external-plugin")["trusted_override_active"] is True
 
 

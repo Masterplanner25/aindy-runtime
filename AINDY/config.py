@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_TIMEOUT_SECONDS: float = 15.0
     OPENAI_MAX_RETRIES: int = 3
     OPENAI_RETRY_BACKOFF_BASE_SECONDS: float = 1.0
-    AINDY_AGENT_PLANNER_BACKEND: str = "openai_chat_compat"
+    AINDY_AGENT_PLANNER_BACKEND: str = "runtime_local"
     AINDY_AGENT_PLANNER_MODEL: str = "gpt-4o"
     AINDY_AGENT_PLANNER_TEMPERATURE: float = 0.3
     AINDY_EVENT_HANDLER_TIMEOUT_SECONDS: float = 5.0

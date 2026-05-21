@@ -103,6 +103,7 @@ def test_safe_runtime_degradation_keeps_readiness_green(monkeypatch):
     assert health.tier == "degraded"
     assert status_code == 200
     assert payload["required_failures"] == []
+    assert payload["checks"]["trusted_python_execution"]["sandboxing"] == "none"
 
 
 def test_external_python_override_is_operator_visible_but_not_readiness_fatal(monkeypatch):
@@ -230,3 +231,15 @@ def test_event_bus_dependency_reports_local_only_degradation(monkeypatch):
 
     assert status.status == "degraded"
     assert status.detail == "WAIT/RESUME propagation is local-only"
+
+
+def test_testing_mode_readiness_reports_trusted_python_inventory(monkeypatch):
+    monkeypatch.setattr(health_service.settings, "TESTING", True)
+    monkeypatch.setattr(health_service.settings, "TEST_MODE", True)
+
+    status_code, payload = health_service.get_readiness_report()
+
+    assert status_code == 200
+    assert payload["checks"]["testing_mode"] is True
+    assert payload["checks"]["trusted_python_execution"]["execution_model"] == "trusted-in-process-python"
+    assert payload["checks"]["trusted_python_execution"]["sandboxing"] == "none"

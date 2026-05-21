@@ -160,6 +160,9 @@ Important extracted-runtime nuance:
 - the runtime now also emits machine-readable drift classes and remediation
   categories so operators can distinguish additive reconcile, offline
   migration, and manual repair cases
+- the runtime also exports an inspection-only schema contract through
+  `python -m AINDY.db.schema_ops inspect --format json`, plus matching
+  `schema_inspection` and `schema_contract` metadata on `/health` and `/ready`
 - see `docs/runtime/SCHEMA_LIFECYCLE.md` for the current operator workflow
 
 ## Migration Authoring Rules

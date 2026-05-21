@@ -88,6 +88,9 @@ def _testing_health_payload() -> dict:
         get_memory_ingest_queue_status,
     )
     from AINDY.platform_layer.deployment_contract import get_api_runtime_conditions
+    from AINDY.platform_layer.extension_runtime_inventory import (
+        trusted_python_execution_inventory,
+    )
     from AINDY.runtime import get_engine_status
 
     domains = get_domain_health()
@@ -107,6 +110,7 @@ def _testing_health_payload() -> dict:
         "degraded_domains": degraded_domains,
         "degraded_apps": degraded_domains,
         "platform": platform,
+        "trusted_python_execution": trusted_python_execution_inventory(),
         "domains": domains,
         "dependencies": {},
         "runtime_conditions": get_api_runtime_conditions(),

@@ -237,6 +237,16 @@ def _load_plugin_node(handler: str) -> Callable:
             f"{module_part}:{func_name} is not callable"
         )
     _validate_plugin_callable(fn, handler)
+    setattr(
+        fn,
+        "__aindy_extension_provenance__",
+        {
+            "module_name": module_part,
+            "function_name": func_name,
+            "qualified_name": qualified_name,
+            "source_path": str(source_path),
+        },
+    )
     return fn
 
 
@@ -331,6 +341,7 @@ def register_external_node(
             identifier=handler,
         )
         node_fn = _load_plugin_node(handler)  # raises ValueError on failure
+    provenance = getattr(node_fn, "__aindy_extension_provenance__", {})
     execution_metadata = (
         python_extension_execution_metadata(owner_class)
         if node_type == "plugin"
@@ -360,7 +371,13 @@ def register_external_node(
             "execution_model": execution_metadata["execution_model"],
             "sandboxing": execution_metadata["sandboxing"],
             "trusted_override_active": execution_metadata["trusted_override_active"],
+            "execution_surface": (
+                "dynamic-plugin-node" if node_type == "plugin" else "webhook-node"
+            ),
             "handler": handler,
+            "module_name": provenance.get("module_name") if node_type == "plugin" else None,
+            "function_name": provenance.get("function_name") if node_type == "plugin" else None,
+            "source_path": provenance.get("source_path") if node_type == "plugin" else None,
             "timeout_seconds": timeout_seconds if node_type == "webhook" else None,
             "signed": secret is not None if node_type == "webhook" else None,
             "created_at": datetime.now(timezone.utc).isoformat(),

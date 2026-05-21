@@ -13,6 +13,7 @@ import logging
 import os
 from collections import defaultdict
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -741,7 +742,11 @@ def publish_bootstrap_registration(
         "execution_model": execution_metadata["execution_model"],
         "sandboxing": execution_metadata["sandboxing"],
         "trusted_override_active": execution_metadata["trusted_override_active"],
+        "execution_surface": "manifest-bootstrap",
         "module_name": resolved_module_name,
+        "module_origin": current_extension.get("module_origin"),
+        "manifest_owner": current_extension.get("manifest_owner"),
+        "profile_name": current_extension.get("profile_name"),
         "dependencies": list(_bootstrap_dependencies[normalized]),
     }
     return normalized
@@ -1205,7 +1210,18 @@ def load_plugins(
                 module_name=module_name,
                 reason=f"could not be imported ({exc.__class__.__name__}: {exc})",
             ) from exc
+        module_origin = str(getattr(module, "__file__", "")).strip() or None
         bootstrap = getattr(module, "bootstrap", None)
+        _bootstrap_extension_ctx.set(
+            {
+                "module_name": module_name,
+                "module_origin": module_origin,
+                "owner_class": owner_class,
+                "trust_class": trust_class,
+                "manifest_owner": manifest_owner,
+                "profile_name": active_profile,
+            }
+        )
         if callable(bootstrap):
             try:
                 bootstrap()
@@ -1227,8 +1243,13 @@ def load_plugins(
             "execution_model": execution_metadata["execution_model"],
             "sandboxing": execution_metadata["sandboxing"],
             "trusted_override_active": execution_metadata["trusted_override_active"],
+            "execution_surface": "manifest-bootstrap",
+            "module_origin": module_origin,
             "manifest_owner": manifest_owner,
             "profile_name": active_profile,
+            "bootstrap_callable_present": callable(bootstrap),
+            "bootstrap_executed": callable(bootstrap),
+            "loaded_at": datetime.now(timezone.utc).isoformat(),
         }
         loaded.append(module_name)
     if loaded:

@@ -75,6 +75,9 @@ from AINDY.platform_layer.extension_policy import (
     external_python_override_production_acknowledged,
     external_python_override_state,
 )
+from AINDY.platform_layer.extension_runtime_inventory import (
+    trusted_python_execution_summary,
+)
 from AINDY.platform_layer.health_service import check_redis_available
 from AINDY.platform_layer.otel import init_otel
 from AINDY.platform_layer.trace_context import (
@@ -88,6 +91,7 @@ from AINDY.db.schema_contract import (
     SCHEMA_STATE_INCOMPATIBLE_MANUAL,
     SCHEMA_STATE_UPGRADE_REQUIRED,
     ensure_runtime_schema,
+    inspection_contract,
 )
 
 try:
@@ -162,6 +166,7 @@ def _publish_boot_runtime_state() -> None:
     deployment_profile, deployment_profile_source = resolve_api_deployment_profile()
     app_plugin_count = len(get_registered_apps())
     override_state = external_python_override_state()
+    trusted_python = trusted_python_execution_summary()
     publish_api_runtime_state(
         process_role=PROCESS_ROLE_API,
         boot_mode=boot_mode,
@@ -178,6 +183,7 @@ def _publish_boot_runtime_state() -> None:
         external_python_override_execution_model=str(
             override_state["execution_model"]
         ),
+        trusted_python_execution=trusted_python,
     )
 
 
@@ -237,6 +243,18 @@ def _initialize_runtime_bootstrap() -> None:
         load_plugins()
         validate_bootstrap_manifest(registry)
         _publish_boot_runtime_state()
+        trusted_python = trusted_python_execution_summary()
+        if trusted_python["present"]:
+            logger.info(
+                "Trusted in-process Python inventory: manifest_modules=%d "
+                "bootstrap_registrations=%d plugin_nodes=%d owner_classes=%s",
+                trusted_python["manifest_module_count"],
+                trusted_python["bootstrap_registration_count"],
+                trusted_python["plugin_node_count"],
+                ",".join(trusted_python["owner_classes_present"]) or "none",
+            )
+        else:
+            logger.info("Trusted in-process Python inventory: no trusted extension code loaded.")
         if boot_mode == RUNTIME_ONLY_BOOT_MODE:
             logger.info(
                 "Startup mode selected: %s -> profile %s (runtime boot without app plugins).",
@@ -960,7 +978,9 @@ def _enforce_schema_guard(db_factory) -> None:
                     raise RuntimeError(
                         "Runtime-owned schema requires an explicit additive reconcile. "
                         "Set AINDY_SCHEMA_RECONCILE=true for startup-time reconcile, or "
-                        "upgrade the database out of band before startup."
+                        "inspect the current drift with "
+                        f"{inspection_contract()['entrypoints']['module']}, "
+                        "then upgrade the database out of band before startup."
                     )
                 if report.state == SCHEMA_STATE_INCOMPATIBLE_MANUAL:
                     logger.error(
@@ -972,8 +992,9 @@ def _enforce_schema_guard(db_factory) -> None:
                     )
                     raise RuntimeError(
                         "Runtime-owned schema is incompatible with packaged metadata. "
-                        "Inspect schema_drift_classes and perform the required offline "
-                        "migration or manual repair before startup."
+                        f"Inspect the drift with {inspection_contract()['entrypoints']['module']} "
+                        "or GET /health, then perform the required offline migration or "
+                        "manual repair before startup."
                     )
                 logger.error("Runtime-owned schema is not ready: %s", report.summary())
                 raise RuntimeError(report.summary())

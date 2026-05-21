@@ -40,13 +40,16 @@ Release posture:
 
 - `GET /api/version`
   Returns package compatibility metadata, API version metadata, runtime-only
-  surface state, and the machine-readable public contract inventory.
+  surface state, the live trusted-Python execution summary, and the
+  machine-readable public contract inventory.
 - `GET /health`
-  Returns operator-visible liveness and degraded-runtime conditions.
+  Returns operator-visible liveness, degraded-runtime conditions, and the live
+  trusted-Python execution inventory.
 - `GET /ready`
   Returns operator-visible readiness with strict dependency and unsafe-degraded
-  checks for the active deployment profile. It does not certify extension
-  isolation or third-party code trust.
+  checks for the active deployment profile. It also reports the current
+  trusted-Python execution inventory. It does not certify extension isolation
+  or third-party code trust.
 - `GET /platform/syscalls`
   Returns the versioned syscall catalog with per-entry `stable` and
   `deprecated` markers.
@@ -130,6 +133,13 @@ Ownership model:
 
 The runtime-owned manifest may load only `runtime-built-in` entries. App and
 third-party ownership classes must stay out of the runtime-only profile.
+
+Operator visibility:
+
+- `GET /api/version` publishes the current trusted-Python execution summary
+- `GET /health` publishes the full trusted-Python inventory
+- `GET /ready` publishes the current trusted-Python inventory alongside
+  dependency readiness checks
 
 If the external Python override is enabled, the runtime surfaces that state as
 operator-visible degraded mode. Health and readiness still describe dependency

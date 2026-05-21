@@ -167,8 +167,11 @@ and app-owned tools are not part of the runtime-only contract.
 Planner dependency note:
 
 - the planner contract is runtime-owned and provider-agnostic
+- the default runtime-only backend is `runtime_local`, which does not require
+  any external provider configuration
 - the built-in compatibility backend may still call an external model provider
-- that external provider choice is configuration, not part of the core planner contract
+- that external provider choice is optional configuration, not part of the core
+  planner contract
 
 Agent enrichment boundary in runtime-only mode:
 

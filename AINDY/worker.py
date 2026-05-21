@@ -4,7 +4,7 @@ import signal
 import time
 
 from AINDY.db.database import SessionLocal
-from AINDY.db.schema_contract import ensure_runtime_schema
+from AINDY.db.schema_contract import ensure_runtime_schema, inspection_contract
 from AINDY.platform_layer import scheduler_service
 from AINDY.platform_layer.registry import emit_event, load_plugins
 logger = logging.getLogger(__name__)
@@ -51,10 +51,11 @@ def _background_schema_ready() -> bool:
             logger.info("Worker reconciled runtime-owned schema to packaged metadata.")
         if not report.ok:
             logger.warning(
-                "Worker schema readiness check failed: %s drift_classes=%s remediation_categories=%s",
+                "Worker schema readiness check failed: %s drift_classes=%s remediation_categories=%s inspection=%s",
                 report.summary(),
                 list(report.drift_classes),
                 list(report.remediation_categories),
+                inspection_contract()["entrypoints"]["module"],
             )
         return report.ok
     except Exception as exc:

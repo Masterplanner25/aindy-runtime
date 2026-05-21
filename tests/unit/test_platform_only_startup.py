@@ -204,8 +204,8 @@ def test_platform_only_registers_runtime_agent_defaults(platform_only_runtime):
 
     assert planner_context["system_prompt"]
     assert isinstance(planner_context["context_block"], str)
-    assert planner_context["planner_backend"] == "openai_chat_compat"
-    assert {"disabled", "openai_chat_compat"} <= set(planner_backends)
+    assert planner_context["planner_backend"] == "runtime_local"
+    assert {"disabled", "runtime_local", "openai_chat_compat"} <= set(planner_backends)
     assert {tool["name"] for tool in tools} == set(contract["baseline_agent_capabilities"]["tools"])
     assert evaluator is not None
     assert evaluator({"trigger_type": "user", "trigger": {"importance": 0.9}, "context": {}})["decision"] == "execute"

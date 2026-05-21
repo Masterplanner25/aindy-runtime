@@ -63,6 +63,14 @@ This document describes the current runtime behavior of the FastAPI backend as i
   - `deployment_profile`
   - `deployment_profile_source`
   - `background_leadership_mode`
+- `/api/version`, `/health`, and `/ready` now publish trusted-Python execution
+  state explicitly:
+  - manifest bootstrap modules loaded into the interpreter
+  - bootstrap registrations those modules published
+  - trusted dynamic plugin nodes
+  - per-owner-class counts distinguishing runtime-owned from first-party app-owned code
+- This reporting is for operator auditability only. It does not create an
+  isolation boundary or downgrade trusted Python to untrusted execution.
 - `/ready` now fails when required infrastructure is down or when any active runtime condition is classified as `unsafe_degraded` or `startup_fatal`.
 - The external Python override is intentionally not treated as a dependency
   failure by itself, but it remains visible in `/ready` and `/api/version`.
@@ -93,6 +101,11 @@ This document describes the current runtime behavior of the FastAPI backend as i
   operator action the runtime expects.
 - `/health` and `/ready` now also expose `schema_drift_classes`,
   `schema_remediation_categories`, and whether offline migration is required.
+- `/health` and `/ready` also expose:
+  - `schema_inspection`
+  - `schema_contract`
+  These provide the exact inspection entrypoint and the current runtime-owned
+  schema contract export for operator tooling.
 - See `docs/runtime/SCHEMA_LIFECYCLE.md` for the operator workflow.
 
 ## 4. Execution Registration

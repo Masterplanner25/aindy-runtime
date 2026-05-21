@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection, Engine
@@ -18,6 +19,8 @@ import AINDY.memory.memory_persistence  # noqa: F401
 
 _RUNTIME_MODEL_PREFIXES = ("AINDY.db.models.",)
 _RUNTIME_MODEL_MODULES = {"AINDY.memory.memory_persistence"}
+SCHEMA_CONTRACT_VERSION = "2026-05-20"
+SCHEMA_INSPECT_MODULE = "python -m AINDY.db.schema_ops inspect --format json"
 
 SCHEMA_STATE_BLANK_DATABASE = "blank_database"
 SCHEMA_STATE_BLANK_BOOTSTRAP = "blank_bootstrap"
@@ -47,6 +50,17 @@ class SchemaIssue:
     reconcile_supported: bool = False
     drift_class: str = ""
     remediation_category: str = REMEDIATION_MANUAL_REPAIR
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "detail": self.detail,
+            "table": self.table,
+            "column": self.column,
+            "reconcile_supported": self.reconcile_supported,
+            "drift_class": self.drift_class,
+            "remediation_category": self.remediation_category,
+        }
 
 
 @dataclass(frozen=True)
@@ -81,6 +95,7 @@ class SchemaReport:
 
     def operator_workflow(self) -> dict[str, object]:
         return {
+            "schema_contract_version": SCHEMA_CONTRACT_VERSION,
             "state": self.state,
             "operator_action": self.operator_action,
             "reconcile_supported": self.reconcile_supported,
@@ -88,11 +103,98 @@ class SchemaReport:
             "offline_migration_required": self.offline_migration_required,
             "drift_classes": list(self.drift_classes),
             "remediation_categories": list(self.remediation_categories),
+            "inspection": inspection_contract(
+                remediation_categories=self.remediation_categories,
+                drift_classes=self.drift_classes,
+            ),
             "offline_migration": offline_migration_contract(
                 remediation_categories=self.remediation_categories,
                 drift_classes=self.drift_classes,
             ),
+            "schema_contract": runtime_schema_contract_metadata(),
         }
+
+    def to_dict(self) -> dict[str, object]:
+        workflow = self.operator_workflow()
+        return {
+            "schema_contract_version": SCHEMA_CONTRACT_VERSION,
+            "ok": self.ok,
+            "bootstrapped": self.bootstrapped,
+            "reconciled": self.reconciled,
+            "state": self.state,
+            "summary": self.summary(),
+            "reconcile_supported": self.reconcile_supported,
+            "operator_action": self.operator_action,
+            "drift_classes": list(self.drift_classes),
+            "remediation_categories": list(self.remediation_categories),
+            "offline_migration_required": self.offline_migration_required,
+            "startup_reconcile_permitted": self.startup_reconcile_permitted,
+            "issues": [issue.to_dict() for issue in self.issues],
+            "inspection": workflow["inspection"],
+            "offline_migration": workflow["offline_migration"],
+            "schema_contract": workflow["schema_contract"],
+        }
+
+
+def runtime_schema_contract_metadata() -> dict[str, object]:
+    return {
+        "owned_by": "aindy-runtime",
+        "schema_contract_version": SCHEMA_CONTRACT_VERSION,
+        "table_names": list(runtime_owned_table_names()),
+        "lifecycle_states": [
+            SCHEMA_STATE_BLANK_BOOTSTRAP,
+            SCHEMA_STATE_COMPATIBLE,
+            SCHEMA_STATE_UPGRADE_REQUIRED,
+            SCHEMA_STATE_INCOMPATIBLE_MANUAL,
+        ],
+        "automatic_actions": {
+            "blank_bootstrap": [DRIFT_CLASS_ADDITIVE_MISSING_TABLE],
+            "explicit_startup_reconcile_only": [
+                DRIFT_CLASS_ADDITIVE_MISSING_TABLE,
+                DRIFT_CLASS_ADDITIVE_MISSING_COLUMN,
+            ],
+            "never_automatic": [
+                DRIFT_CLASS_UNSUPPORTED_REQUIRED_COLUMN,
+                DRIFT_CLASS_TYPE_MISMATCH,
+                DRIFT_CLASS_NULLABILITY_MISMATCH,
+                DRIFT_CLASS_PRIMARY_KEY_MISMATCH,
+            ],
+        },
+        "remediation_categories": {
+            REMEDIATION_BOOTSTRAP: "Blank-database bootstrap from packaged metadata.",
+            REMEDIATION_STARTUP_RECONCILE: (
+                "Explicit additive startup reconcile with AINDY_SCHEMA_RECONCILE=true."
+            ),
+            REMEDIATION_OFFLINE_MIGRATION: (
+                "Operator-managed offline SQL migration while the runtime is stopped."
+            ),
+            REMEDIATION_MANUAL_REPAIR: (
+                "Operator-managed manual schema repair before restart."
+            ),
+        },
+        "inspection": inspection_contract(),
+    }
+
+
+def inspection_contract(
+    *,
+    remediation_categories: tuple[str, ...] = (),
+    drift_classes: tuple[str, ...] = (),
+) -> dict[str, object]:
+    return {
+        "mode": "inspection-only",
+        "entrypoints": {
+            "module": SCHEMA_INSPECT_MODULE,
+            "health_surface": "GET /health",
+            "readiness_surface": "GET /ready",
+        },
+        "active_remediation_categories": list(remediation_categories),
+        "active_drift_classes": list(drift_classes),
+        "notes": (
+            "Inspection tooling exports the runtime-owned schema contract and the "
+            "current drift report. It does not mutate the database."
+        ),
+    }
 
 
 def offline_migration_contract(
@@ -102,6 +204,7 @@ def offline_migration_contract(
 ) -> dict[str, object]:
     return {
         "owned_by": "aindy-runtime",
+        "schema_contract_version": SCHEMA_CONTRACT_VERSION,
         "mode": "offline-manual",
         "required_for_categories": [
             REMEDIATION_OFFLINE_MIGRATION,
@@ -117,8 +220,15 @@ def offline_migration_contract(
             DRIFT_CLASS_PRIMARY_KEY_MISMATCH,
             DRIFT_CLASS_UNSUPPORTED_REQUIRED_COLUMN,
         ],
+        "inspection_command": SCHEMA_INSPECT_MODULE,
+        "unsupported_drift_matrix": {
+            DRIFT_CLASS_UNSUPPORTED_REQUIRED_COLUMN: REMEDIATION_OFFLINE_MIGRATION,
+            DRIFT_CLASS_TYPE_MISMATCH: REMEDIATION_OFFLINE_MIGRATION,
+            DRIFT_CLASS_NULLABILITY_MISMATCH: REMEDIATION_OFFLINE_MIGRATION,
+            DRIFT_CLASS_PRIMARY_KEY_MISMATCH: REMEDIATION_MANUAL_REPAIR,
+        },
         "operator_steps": [
-            "Inspect reported drift_classes and issues from /health or startup logs.",
+            "Inspect the drift report with GET /health or python -m AINDY.db.schema_ops inspect --format json.",
             "Prepare an out-of-band SQL migration or schema repair that matches packaged runtime metadata.",
             "Apply the change while the runtime is not serving traffic.",
             "Restart the runtime with AINDY_ENFORCE_SCHEMA=true and verify schema_state=compatible.",
@@ -460,3 +570,7 @@ def ensure_runtime_schema(
         return reconcile_runtime_schema(bind)
 
     return report
+
+
+def inspect_runtime_schema_payload(bind: Engine | Connection | Session) -> dict[str, object]:
+    return inspect_runtime_schema(bind).to_dict()

@@ -78,7 +78,7 @@ Current classification:
 POST /agent/run  (create)
 │
 ├─ agent_runtime.create_agent_run()
-│   └─ GPT-4o structured plan generation
+│   └─ runtime-selected planner backend generates a structured plan
 │
 ├─ POST /agent/run/{id}/approve  (trust gate)
 │   └─ agent_runtime.approve_agent_run()
@@ -121,6 +121,11 @@ Selection order:
 
 Built-in backends:
 
+- `runtime_local`
+  - deterministic runtime-local backend
+  - selects from the injected tool catalog without requiring any external
+    provider configuration
+  - this is the runtime default, including runtime-only deployments
 - `openai_chat_compat`
   - compatibility adapter that preserves the previous external model behavior
     through the runtime-owned planner contract
@@ -138,6 +143,8 @@ Important boundary:
 - the planner core no longer hard-codes vendor or model names
 - external model dependency, when used, now lives in a backend adapter rather
   than in the core planning contract
+- `AINDY_AGENT_PLANNER_MODEL` and `AINDY_AGENT_PLANNER_TEMPERATURE` apply only
+  to provider-backed adapters such as `openai_chat_compat`
 
 ---
 
@@ -325,7 +332,7 @@ own agent tools, plugin registration, and app-specific extensions.
 No-plugin behavior is fail-safe at the runtime boundary:
 - runtime defaults provide a generic planner context
 - runtime defaults register the built-in planner backends
-- runtime defaults select `openai_chat_compat` unless configuration overrides it
+- runtime defaults select `runtime_local` unless configuration overrides it
 - runtime defaults provide the memory tool catalog
 - no app suggestion provider -> empty suggestion list
 - no app completion hook -> runtime no-op completion

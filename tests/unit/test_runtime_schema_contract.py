@@ -190,7 +190,86 @@ def test_runtime_schema_report_exposes_offline_migration_contract():
         assert workflow["offline_migration_required"] is False
         assert "offline_migration" in workflow
         assert workflow["offline_migration"]["owned_by"] == "aindy-runtime"
-        assert "Inspect reported drift_classes and issues" in workflow["offline_migration"]["operator_steps"][0]
+        assert workflow["offline_migration"]["inspection_command"] == "python -m AINDY.db.schema_ops inspect --format json"
+        assert "python -m AINDY.db.schema_ops inspect --format json" in workflow["offline_migration"]["operator_steps"][0]
+        assert workflow["inspection"]["entrypoints"]["module"] == "python -m AINDY.db.schema_ops inspect --format json"
+    finally:
+        engine.dispose()
+
+
+def test_runtime_schema_report_exports_machine_readable_operator_payload():
+    import_runtime_model_registry()
+
+    from AINDY.db.database import Base
+    from AINDY.db.schema_contract import ensure_runtime_schema
+
+    engine = _make_engine()
+    try:
+        Base.metadata.tables["background_task_leases"].create(bind=engine)
+        report = ensure_runtime_schema(engine, allow_bootstrap=True)
+        payload = report.to_dict()
+
+        assert payload["schema_contract_version"] == "2026-05-20"
+        assert payload["state"] == "upgrade_required"
+        assert payload["operator_action"] == "startup_reconcile"
+        assert payload["inspection"]["entrypoints"]["module"] == "python -m AINDY.db.schema_ops inspect --format json"
+        assert payload["schema_contract"]["owned_by"] == "aindy-runtime"
+        assert "background_task_leases" in payload["schema_contract"]["table_names"]
+    finally:
+        engine.dispose()
+
+
+def test_runtime_schema_ops_inspect_command_emits_machine_readable_payload(capsys, tmp_path):
+    import_runtime_model_registry()
+
+    from AINDY.db.database import Base
+    from AINDY.db.schema_ops import main as schema_ops_main
+
+    db_path = tmp_path / "schema_ops_inspect.db"
+    file_url = f"sqlite:///{db_path.as_posix()}"
+    engine = create_engine(file_url)
+    try:
+        Base.metadata.tables["background_task_leases"].create(bind=engine)
+        exit_code = schema_ops_main(
+            [
+                "inspect",
+                "--database-url",
+                file_url,
+                "--format",
+                "json",
+            ]
+        )
+        output = capsys.readouterr().out
+
+        assert exit_code == 0
+        assert '"state": "upgrade_required"' in output
+        assert '"schema_contract_version": "2026-05-20"' in output
+        assert '"owned_by": "aindy-runtime"' in output
+    finally:
+        engine.dispose()
+
+
+def test_runtime_schema_ops_require_compatible_exits_nonzero_for_drift(tmp_path):
+    import_runtime_model_registry()
+
+    from AINDY.db.database import Base
+    from AINDY.db.schema_ops import main as schema_ops_main
+
+    db_path = tmp_path / "schema_ops_require_compatible.db"
+    file_url = f"sqlite:///{db_path.as_posix()}"
+    engine = create_engine(file_url)
+    try:
+        Base.metadata.tables["background_task_leases"].create(bind=engine)
+        exit_code = schema_ops_main(
+            [
+                "inspect",
+                "--database-url",
+                file_url,
+                "--require-compatible",
+            ]
+        )
+
+        assert exit_code == 2
     finally:
         engine.dispose()
 
@@ -234,7 +313,7 @@ def test_startup_schema_guard_requires_explicit_reconcile_for_partial_schema(mon
         monkeypatch.setattr(startup.settings, "TESTING", False)
         monkeypatch.setattr(startup.settings, "TEST_MODE", False)
 
-        with pytest.raises(RuntimeError, match="explicit additive reconcile"):
+        with pytest.raises(RuntimeError, match="python -m AINDY.db.schema_ops inspect --format json"):
             startup._enforce_schema_guard(session_factory)
     finally:
         engine.dispose()
@@ -294,6 +373,8 @@ def test_health_schema_check_reports_runtime_schema_drift(monkeypatch):
         assert status.metadata["schema_state"] == "incompatible_manual"
         assert "column_type_mismatch" in status.metadata["drift_classes"]
         assert status.metadata["offline_migration_required"] is True
+        assert status.metadata["inspection"]["entrypoints"]["module"] == "python -m AINDY.db.schema_ops inspect --format json"
+        assert status.metadata["schema_contract"]["owned_by"] == "aindy-runtime"
         assert "expected" in (status.detail or "")
     finally:
         engine.dispose()

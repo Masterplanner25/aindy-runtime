@@ -70,3 +70,13 @@ def test_runtime_public_contract_describes_external_python_override_precisely():
     assert override["default"] == "blocked"
     assert override["sandboxing"] == "none"
     assert "trusted in-process Python execution" in override["effect_when_enabled"]
+
+
+def test_runtime_public_contract_describes_trusted_in_process_python_precisely():
+    metadata = runtime_public_contract_metadata()
+
+    trusted = metadata["extensions"]["trusted_in_process_python"]
+    assert trusted["owner_classes"] == ["runtime-built-in", "first-party-app"]
+    assert trusted["sandboxing"] == "none"
+    assert "GET /health" in trusted["operator_visibility"]
+    assert "full interpreter privileges" in trusted["notes"]

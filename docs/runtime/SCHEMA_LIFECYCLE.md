@@ -57,6 +57,35 @@ In addition to `schema_state`, the runtime now emits machine-readable:
 - `schema_offline_migration_required`
   - whether the runtime expects an out-of-band migration or repair before
     restart
+- `schema_inspection`
+  - the runtime-owned inspection contract, including the safe module entrypoint
+    `python -m AINDY.db.schema_ops inspect --format json`
+- `schema_contract`
+  - the current runtime-owned schema contract export, including table names,
+    lifecycle states, and automatic-vs-manual drift boundaries
+
+## Inspection Tooling
+
+The runtime ships an inspection-only helper for operators:
+
+```powershell
+python -m AINDY.db.schema_ops inspect --format json
+```
+
+Properties:
+
+- reads the current runtime-owned schema state
+- emits the same contract version and drift metadata that `/health` exposes
+- does not mutate the database
+- exits with code `2` when `--require-compatible` is supplied and drift remains
+
+Useful variants:
+
+```powershell
+python -m AINDY.db.schema_ops inspect --format text
+python -m AINDY.db.schema_ops inspect --format json --require-compatible
+python -m AINDY.db.schema_ops inspect --database-url postgresql://...
+```
 
 ## Operator Workflow
 
@@ -77,6 +106,9 @@ In addition to `schema_state`, the runtime now emits machine-readable:
 - Default behavior:
   - startup fails closed
   - `/health` reports schema unavailable with `schema_state=upgrade_required`
+- inspect the exact drift with:
+  - `python -m AINDY.db.schema_ops inspect --format json`
+  - or `GET /health` / `GET /ready`
 - Explicit runtime-owned reconcile:
   - set `AINDY_SCHEMA_RECONCILE=true`
   - restart the API or worker
@@ -89,6 +121,9 @@ already-initialized production schema.
 
 - Startup fails closed.
 - `/health` reports `schema_state=incompatible_manual`.
+- inspect the exact drift with:
+  - `python -m AINDY.db.schema_ops inspect --format json`
+  - or `GET /health`
 - The runtime will not attempt to coerce the schema automatically.
 - Inspect `schema_drift_classes` and `schema_remediation_categories`:
   - `offline_migration` means prepare and apply an out-of-band SQL migration
@@ -145,3 +180,5 @@ Production guidance:
 - keep `AINDY_ENFORCE_SCHEMA=true`
 - enable `AINDY_SCHEMA_RECONCILE=true` only for a deliberate release operation
   that expects additive runtime-owned schema changes
+- use `python -m AINDY.db.schema_ops inspect --format json --require-compatible`
+  in release checks when you want a non-mutating compatibility gate

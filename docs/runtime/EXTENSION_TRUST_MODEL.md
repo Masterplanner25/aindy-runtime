@@ -79,6 +79,13 @@ Current hardening:
 - when the override is active, `/health`, `/ready`, and `/api/version` expose
   that state explicitly so operators can see that unsandboxed external Python
   execution is enabled
+- `/health`, `/ready`, and `/api/version` also publish a live trusted-Python
+  inventory covering:
+  - loaded manifest bootstrap modules
+  - bootstrap registrations published by those modules
+  - trusted dynamic plugin nodes
+  - ownership-class counts distinguishing `runtime-built-in` from
+    `first-party-app`
 - plugin node handlers are loaded only from `AINDY/plugins/nodes/`
 - plugin node loading no longer mutates `sys.path`
 - plugin node handlers must expose a callable compatible with the node contract
@@ -138,6 +145,10 @@ Current hardening:
 
 - Treat manifest bootstrap modules and dynamic plugin nodes as trusted code
   deployment, not user content.
+- Treat `runtime-built-in` and `first-party-app` as distinct operator-visible
+  classes:
+  runtime-built-in code is runtime-owned infrastructure code;
+  first-party-app code is trusted app-owned code loaded into the same process.
 - Treat external third-party Python extensions as blocked by default unless the
   deployment owner explicitly sets `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true`.
 - Treat that override as an operator exception, not a normal production mode.

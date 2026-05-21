@@ -26,21 +26,41 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["runtime"] == {
-        "process_role": "api",
-        "boot_mode": "runtime-only",
-        "boot_profile": "platform-only",
-        "boot_profile_source": "AINDY_BOOT_MODE",
-        "deployment_profile": "single-instance",
-        "deployment_profile_source": "AINDY_DEPLOYMENT_PROFILE",
-        "background_leadership_mode": "in-process",
-        "app_plugins_loaded": False,
-        "app_plugin_count": 0,
-        "external_python_override_active": False,
-        "external_python_override_execution_model": "external-python-blocked",
-        "ui_mode": "runtime-only",
-        "default_route": "/memory",
-        "platform_home": "/platform/agent",
+    assert payload["runtime"]["process_role"] == "api"
+    assert payload["runtime"]["boot_mode"] == "runtime-only"
+    assert payload["runtime"]["boot_profile"] == "platform-only"
+    assert payload["runtime"]["boot_profile_source"] == "AINDY_BOOT_MODE"
+    assert payload["runtime"]["deployment_profile"] == "single-instance"
+    assert payload["runtime"]["deployment_profile_source"] == "AINDY_DEPLOYMENT_PROFILE"
+    assert payload["runtime"]["background_leadership_mode"] == "in-process"
+    assert payload["runtime"]["app_plugins_loaded"] is False
+    assert payload["runtime"]["app_plugin_count"] == 0
+    assert payload["runtime"]["external_python_override_active"] is False
+    assert (
+        payload["runtime"]["external_python_override_execution_model"]
+        == "external-python-blocked"
+    )
+    assert payload["runtime"]["ui_mode"] == "runtime-only"
+    assert payload["runtime"]["default_route"] == "/memory"
+    assert payload["runtime"]["platform_home"] == "/platform/agent"
+    assert payload["runtime"]["trusted_python_execution"] == {
+        "present": False,
+        "execution_model": "trusted-in-process-python",
+        "sandboxing": "none",
+        "total_count": 0,
+        "manifest_module_count": 0,
+        "bootstrap_registration_count": 0,
+        "plugin_node_count": 0,
+        "owner_classes_present": [],
+        "owner_class_counts": {
+            "runtime-built-in": 0,
+            "first-party-app": 0,
+            "external-third-party": 0,
+        },
+        "operator_note": (
+            "Trusted Python extensions execute in-process with full interpreter "
+            "privileges. This inventory is an audit surface, not a sandbox boundary."
+        ),
     }
     assert payload["compatibility"] == {
         "runtime_package": {
@@ -71,4 +91,16 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     assert "/apps/agent/" in experimental_prefixes
     assert "/platform/nodes" in experimental_prefixes
     assert payload["public_contract"]["extensions"]["external_python_override"]["env_var"] == "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS"
+    assert payload["public_contract"]["extensions"]["trusted_in_process_python"]["sandboxing"] == "none"
+    assert "GET /api/version" in payload["public_contract"]["extensions"]["trusted_in_process_python"]["operator_visibility"]
     assert response.headers["X-API-Version"] == payload["api_version"]
+
+
+def test_health_route_reports_trusted_python_inventory(runtime_only_client):
+    response = runtime_only_client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["trusted_python_execution"]["execution_model"] == "trusted-in-process-python"
+    assert payload["trusted_python_execution"]["sandboxing"] == "none"
+    assert payload["trusted_python_execution"]["present"] is False

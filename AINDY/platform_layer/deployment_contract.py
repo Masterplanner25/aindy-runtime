@@ -145,6 +145,10 @@ def runtime_ui_surface_state() -> dict[str, Any]:
     api_state = get_api_runtime_state()
     boot_mode = api_state.get("boot_mode", "unknown")
     runtime_only = boot_mode == RUNTIME_ONLY_BOOT_MODE
+    from AINDY.platform_layer.extension_runtime_inventory import (
+        trusted_python_execution_summary,
+    )
+
     return {
         "process_role": api_state.get("process_role", PROCESS_ROLE_API),
         "boot_mode": boot_mode,
@@ -167,6 +171,7 @@ def runtime_ui_surface_state() -> dict[str, Any]:
                 "external-python-blocked",
             )
         ),
+        "trusted_python_execution": trusted_python_execution_summary(),
         "ui_mode": RUNTIME_ONLY_BOOT_MODE if runtime_only else APP_PROFILE_BOOT_MODE,
         "default_route": "/memory" if runtime_only else "/dashboard",
         "platform_home": "/platform/agent",
@@ -527,6 +532,10 @@ def deployment_contract_summary() -> dict[str, Any]:
     active_profile_name, active_profile_source = resolve_api_deployment_profile()
     active_profile = get_deployment_profile_contract(active_profile_name)
     override_state = external_python_override_state()
+    from AINDY.platform_layer.extension_runtime_inventory import (
+        trusted_python_execution_summary,
+    )
+
     return {
         "release_posture": {
             "support_tier": "trusted-internal",
@@ -550,6 +559,7 @@ def deployment_contract_summary() -> dict[str, Any]:
         "runtime_only_support": runtime_only_deployment_contract(),
         "extension_execution": {
             "external_python_override": override_state,
+            "trusted_python_execution": trusted_python_execution_summary(),
         },
         "requires": {
             "redis": redis_required(),

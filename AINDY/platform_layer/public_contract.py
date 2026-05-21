@@ -149,6 +149,25 @@ def _extension_surface_contract() -> dict[str, object]:
             "first-party-app",
             "external-third-party",
         ],
+        "trusted_in_process_python": {
+            "owner_classes": [
+                "runtime-built-in",
+                "first-party-app",
+            ],
+            "execution_model": "trusted in-process Python execution",
+            "sandboxing": "none",
+            "operator_visibility": [
+                "GET /api/version",
+                "GET /health",
+                "GET /ready",
+            ],
+            "notes": (
+                "Runtime-built-in and first-party app Python extensions are treated "
+                "as trusted internal code. They execute in-process with full "
+                "interpreter privileges, and the runtime reports their live inventory "
+                "for audit visibility rather than claiming isolation."
+            ),
+        },
         "external_python_override": {
             "env_var": override_state["env_var"],
             "production_ack_env_var": override_state["production_ack_env_var"],

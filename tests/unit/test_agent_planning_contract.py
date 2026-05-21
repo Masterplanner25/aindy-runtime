@@ -90,7 +90,7 @@ def clean_agent_planner_registry(monkeypatch):
     try:
         for name, value in _REGISTRY_STATE_EMPTY.items():
             setattr(registry, name, _copy_registry_value(value))
-        monkeypatch.setattr(settings, "AINDY_AGENT_PLANNER_BACKEND", "openai_chat_compat")
+        monkeypatch.setattr(settings, "AINDY_AGENT_PLANNER_BACKEND", "runtime_local")
         monkeypatch.setattr(settings, "AINDY_AGENT_PLANNER_MODEL", "gpt-4o")
         monkeypatch.setattr(settings, "AINDY_AGENT_PLANNER_TEMPERATURE", 0.3)
         yield
@@ -193,6 +193,87 @@ def test_generate_plan_disabled_backend_is_deterministic(
 
     assert plan is None
     assert "disabled" in getattr(compat._plan_failure, "reason", "").lower()
+
+
+def test_runtime_local_backend_generates_valid_plan_without_external_provider(
+    clean_agent_planner_registry,
+):
+    plan = generate_plan(
+        objective="Recall prior context for the release task",
+        user_id="user-1",
+        db=object(),
+    )
+
+    assert plan is not None
+    assert isinstance(plan["executive_summary"], str)
+    assert plan["steps"]
+    assert plan["steps"][0]["tool"] == "memory.recall"
+    assert plan["steps"][0]["args"]["query"] == "Recall prior context for the release task"
+    assert plan["overall_risk"] == "low"
+
+
+def test_runtime_local_backend_can_select_memory_write_when_objective_implies_persistence(
+    clean_agent_planner_registry,
+):
+    plan = generate_plan(
+        objective="Write a memory note about the customer follow-up",
+        user_id="user-1",
+        db=object(),
+    )
+
+    assert plan is not None
+    assert plan["steps"][0]["tool"] == "memory.write"
+    assert plan["steps"][0]["args"]["content"] == "Write a memory note about the customer follow-up"
+
+
+def test_openai_compat_backend_remains_available_as_explicit_adapter(
+    clean_agent_planner_registry,
+    monkeypatch,
+):
+    captured = {}
+
+    def fake_external_call(*, service_name, db, user_id, endpoint, model, method, extra, operation):
+        captured.update(
+            {
+                "service_name": service_name,
+                "endpoint": endpoint,
+                "model": model,
+                "method": method,
+                "extra": extra,
+            }
+        )
+
+        class _Message:
+            content = '{"executive_summary":"Use OpenAI adapter.","steps":[{"tool":"memory.recall","args":{"query":"alpha"},"risk_level":"low","description":"Recall memory."}],"overall_risk":"low"}'
+
+        class _Choice:
+            message = _Message()
+
+        class _Response:
+            choices = [_Choice()]
+
+        return _Response()
+
+    monkeypatch.setattr(settings, "AINDY_AGENT_PLANNER_BACKEND", "openai_chat_compat")
+    monkeypatch.setattr(
+        "AINDY.agents.agent_runtime.planner_backends.perform_external_call",
+        fake_external_call,
+    )
+    monkeypatch.setattr(
+        "AINDY.agents.agent_runtime.planner_backends.get_openai_client",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "AINDY.agents.agent_runtime.planner_backends.chat_completion",
+        lambda *args, **kwargs: object(),
+    )
+
+    plan = generate_plan(objective="Recall alpha", user_id="user-1", db=object())
+
+    assert plan is not None
+    assert plan["steps"][0]["tool"] == "memory.recall"
+    assert captured["service_name"] == "openai"
+    assert captured["extra"]["planner_backend"] == "openai_chat_compat"
 
 
 def test_create_agent_run_runtime_still_uses_new_planning_boundary(

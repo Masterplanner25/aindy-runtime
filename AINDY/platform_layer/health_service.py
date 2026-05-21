@@ -25,7 +25,11 @@ from AINDY.platform_layer.deployment_contract import (
     worker_required,
 )
 from AINDY.platform_layer.registry import get_degraded_domains
+from AINDY.platform_layer.extension_runtime_inventory import (
+    trusted_python_execution_inventory,
+)
 from AINDY.db.schema_contract import ensure_runtime_schema
+from AINDY.db.schema_contract import runtime_schema_contract_metadata
 from AINDY.platform_layer.registry import get_all_health_checks
 
 logger = logging.getLogger(__name__)
@@ -62,6 +66,7 @@ class SystemHealth:
             "degraded_domains": degraded_domains,
             "degraded_apps": degraded_domains,
             "platform": platform,
+            "trusted_python_execution": trusted_python_execution_inventory(),
             "domains": domains,
             "memory_ingest_queue": get_memory_ingest_queue_status(),
             "deployment_contract": deployment_contract_summary(),
@@ -528,7 +533,9 @@ def check_schema() -> DependencyStatus:
             "remediation_categories": list(report.remediation_categories),
             "offline_migration_required": report.offline_migration_required,
             "startup_reconcile_permitted": report.startup_reconcile_permitted,
+            "inspection": report.operator_workflow()["inspection"],
             "offline_migration": report.operator_workflow()["offline_migration"],
+            "schema_contract": runtime_schema_contract_metadata(),
         }
         if report.ok:
             return DependencyStatus(
@@ -647,10 +654,14 @@ def get_system_health(*, force: bool = False) -> SystemHealth:
 
 def get_readiness_report() -> tuple[int, dict[str, Any]]:
     if settings.is_testing:
+        inventory = trusted_python_execution_inventory()
         return 200, {
             "status": "ready",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "checks": {"testing_mode": True},
+            "checks": {
+                "testing_mode": True,
+                "trusted_python_execution": inventory,
+            },
             "required_failures": [],
             "deployment_contract": deployment_contract_summary(),
             "readiness_scope": (
@@ -689,6 +700,7 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         ),
         "degraded_domains": get_degraded_domains(),
         "runtime_conditions": get_api_runtime_conditions(),
+        "trusted_python_execution": trusted_python_execution_inventory(),
     }
 
     failures: list[str] = []
@@ -716,6 +728,10 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
             checks["schema_offline_migration_required"] = bool(
                 schema.metadata["offline_migration_required"]
             )
+        if schema.metadata.get("inspection"):
+            checks["schema_inspection"] = schema.metadata["inspection"]
+        if schema.metadata.get("schema_contract"):
+            checks["schema_contract"] = schema.metadata["schema_contract"]
         if schema.critical and schema.status != "ok":
             failures.append("schema")
 
