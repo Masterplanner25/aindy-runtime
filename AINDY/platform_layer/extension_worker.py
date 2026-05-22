@@ -6,9 +6,11 @@ import io
 import ipaddress
 import json
 import os
+import secrets
 import socket
 import sys
 import threading
+import time
 from importlib import util as importlib_util
 from pathlib import Path
 from typing import Any, Callable
@@ -31,6 +33,10 @@ _ALLOWED_RUNTIME_IMPORTS = {
     "AINDY.platform_layer.extension_runtime_api",
 }
 _RUNTIME_API_CONTEXT = threading.local()
+_WORKER_INSTANCE_ID = secrets.token_hex(12)
+_AUTH_REPLAY_LOCK = threading.RLock()
+_SEEN_RUNTIME_CHANNEL_NONCES: set[str] = set()
+_AUTH_CLOCK_SKEW_SECONDS = 5.0
 
 
 def _error(message: str) -> dict[str, Any]:
@@ -56,7 +62,102 @@ def _require_authenticated_runtime_context() -> dict[str, Any]:
         raise PermissionError(
             "UNAUTHENTICATED_EXTENSION_CHANNEL: sandboxed plugin runtime calls require a worker-authenticated channel"
         )
+    if str(context.get("_worker_instance_id") or "") != _WORKER_INSTANCE_ID:
+        raise PermissionError(
+            "UNAUTHENTICATED_EXTENSION_CHANNEL: runtime channel is not valid for this worker instance"
+        )
+    _validate_runtime_auth_timing(context)
     return context
+
+
+def _validate_runtime_auth_timing(context: dict[str, Any]) -> None:
+    issued_at = float(context.get("issued_at") or 0.0)
+    expires_at = float(context.get("expires_at") or 0.0)
+    now = time.time()
+    if issued_at <= 0.0 or expires_at <= 0.0 or expires_at <= issued_at:
+        raise PermissionError("INVALID_EXTENSION_CHANNEL: runtime channel timing is invalid")
+    if now < (issued_at - _AUTH_CLOCK_SKEW_SECONDS):
+        raise PermissionError("INVALID_EXTENSION_CHANNEL: runtime channel is not yet valid")
+    if now > (expires_at + _AUTH_CLOCK_SKEW_SECONDS):
+        raise PermissionError("EXPIRED_EXTENSION_CHANNEL: runtime channel has expired")
+
+
+def _validate_runtime_auth_binding(
+    *,
+    plugin_context: dict[str, Any],
+    runtime_api_auth: dict[str, Any],
+    host_state: dict[str, Any] | None = None,
+    consume_nonce: bool = True,
+) -> dict[str, Any]:
+    channel_id = str(runtime_api_auth.get("runtime_channel_id") or "").strip()
+    channel_token = str(runtime_api_auth.get("runtime_channel_token") or "").strip()
+    channel_nonce = str(runtime_api_auth.get("runtime_channel_nonce") or "").strip()
+    sandbox_instance_id = str(runtime_api_auth.get("sandbox_instance_id") or "").strip()
+    extension_name = str(runtime_api_auth.get("extension_name") or "").strip()
+    owner_class = str(runtime_api_auth.get("owner_class") or "").strip()
+    tenant_user_id = str(runtime_api_auth.get("user_id") or "").strip()
+
+    if not channel_id or not channel_token or not channel_nonce:
+        raise PermissionError("UNAUTHENTICATED_EXTENSION_CHANNEL: runtime channel binding is incomplete")
+    if not sandbox_instance_id:
+        raise PermissionError("INVALID_EXTENSION_CHANNEL: sandbox instance binding is missing")
+    if str(runtime_api_auth.get("auth_version") or "") != "2026-05-22":
+        raise PermissionError("INVALID_EXTENSION_CHANNEL: runtime channel auth_version is unsupported")
+    _validate_runtime_auth_timing(runtime_api_auth)
+
+    expected_pairs = {
+        "user_id": str(plugin_context.get("user_id") or "").strip(),
+        "run_id": str(plugin_context.get("run_id") or "").strip(),
+        "trace_id": str(plugin_context.get("trace_id") or "").strip(),
+        "extension_name": str(plugin_context.get("extension_name") or "").strip(),
+        "owner_class": str(plugin_context.get("owner_class") or "").strip(),
+        "sandbox_instance_id": str((plugin_context.get("runtime_api") or {}).get("sandbox_instance_id") or "").strip(),
+    }
+    actual_pairs = {
+        "user_id": tenant_user_id,
+        "run_id": str(runtime_api_auth.get("run_id") or "").strip(),
+        "trace_id": str(runtime_api_auth.get("trace_id") or "").strip(),
+        "extension_name": extension_name,
+        "owner_class": owner_class,
+        "sandbox_instance_id": sandbox_instance_id,
+    }
+    for key, expected in expected_pairs.items():
+        if expected != actual_pairs[key]:
+            raise PermissionError(
+                f"BINDING_MISMATCH: runtime channel {key}={actual_pairs[key]!r} does not match plugin context {expected!r}"
+            )
+    if str((plugin_context.get("runtime_api") or {}).get("runtime_channel_id") or "").strip() != channel_id:
+        raise PermissionError("BINDING_MISMATCH: runtime channel_id does not match plugin-visible runtime_api descriptor")
+
+    if host_state is not None:
+        expected_sandbox = str(host_state.get("sandbox_instance_id") or "").strip()
+        if expected_sandbox and expected_sandbox != sandbox_instance_id:
+            raise PermissionError(
+                f"SANDBOX_INSTANCE_MISMATCH: runtime channel sandbox instance {sandbox_instance_id!r} does not match active host instance {expected_sandbox!r}"
+            )
+        expected_extension = str(host_state.get("extension_name") or "").strip()
+        if expected_extension and expected_extension != extension_name:
+            raise PermissionError(
+                f"EXTENSION_BINDING_MISMATCH: runtime channel extension {extension_name!r} does not match active host extension {expected_extension!r}"
+            )
+        expected_owner = str(host_state.get("owner_class") or "").strip()
+        if expected_owner and expected_owner != owner_class:
+            raise PermissionError(
+                f"OWNER_BINDING_MISMATCH: runtime channel owner {owner_class!r} does not match active host owner {expected_owner!r}"
+            )
+
+    if consume_nonce:
+        replay_key = f"{_WORKER_INSTANCE_ID}:{channel_nonce}"
+        with _AUTH_REPLAY_LOCK:
+            if replay_key in _SEEN_RUNTIME_CHANNEL_NONCES:
+                raise PermissionError(
+                    "REPLAYED_EXTENSION_CHANNEL: runtime channel nonce has already been used by this worker instance"
+                )
+            _SEEN_RUNTIME_CHANNEL_NONCES.add(replay_key)
+
+    validated = dict(runtime_api_auth)
+    validated["_worker_instance_id"] = _WORKER_INSTANCE_ID
+    return validated
 
 
 def _require_runtime_tenant() -> str:
@@ -85,6 +186,8 @@ def _extension_call_metadata(operation: str) -> dict[str, Any]:
         "extension_name": str(context.get("extension_name") or "").strip(),
         "owner_class": str(context.get("owner_class") or "").strip(),
         "runtime_channel_id": str(context.get("runtime_channel_id") or ""),
+        "sandbox_instance_id": str(context.get("sandbox_instance_id") or ""),
+        "runner_type": str(context.get("runner_type") or ""),
         "runtime_channel_authenticated": True,
     }
 
@@ -120,6 +223,7 @@ def _runtime_execution_metadata() -> dict[str, Any]:
         "extension_name": str(context.get("extension_name") or ""),
         "owner_class": str(context.get("owner_class") or ""),
         "runtime_channel_id": str(context.get("runtime_channel_id") or ""),
+        "sandbox_instance_id": str(context.get("sandbox_instance_id") or ""),
         "granted_capabilities": [str(item) for item in list(context.get("granted_capabilities") or [])],
         "channel_type": "worker-authenticated-rpc",
     }
@@ -256,11 +360,21 @@ def _runtime_api_bridge(operation: str, payload: dict[str, Any] | None = None) -
     raise PermissionError(f"unsupported extension runtime operation {operation!r}")
 
 
-def _extract_plugin_context(runtime_context: dict[str, Any] | None) -> dict[str, Any]:
+def _extract_plugin_context(
+    runtime_context: dict[str, Any] | None,
+    *,
+    host_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = dict(runtime_context or {})
     plugin_context = dict(payload.get("plugin_context") or {})
     runtime_api_auth = dict(payload.get("runtime_api_auth") or {})
-    _set_hidden_runtime_context(runtime_api_auth)
+    validated_auth = _validate_runtime_auth_binding(
+        plugin_context=plugin_context,
+        runtime_api_auth=runtime_api_auth,
+        host_state=host_state,
+        consume_nonce=True,
+    )
+    _set_hidden_runtime_context(validated_auth)
     extension_runtime_api._install_runtime_api_channel(bridge=_runtime_api_bridge)
     return plugin_context
 
@@ -621,6 +735,9 @@ def _handle_host_session() -> int:
         "handler": None,
         "plugin_root": None,
         "callable": None,
+        "extension_name": None,
+        "owner_class": None,
+        "sandbox_instance_id": None,
         "provenance": {},
         "started_at": None,
         "request_count": 0,
@@ -662,7 +779,10 @@ def _handle_host_session() -> int:
                 if not handler or not plugin_root:
                     response = _host_error("plugin host start requires handler and plugin_root")
                 else:
-                    _extract_plugin_context(payload.get("context") or {})
+                    plugin_context = _extract_plugin_context(
+                        payload.get("context") or {},
+                        host_state=host_state,
+                    )
                     if not host_state["guards_installed"]:
                         host_state["original_import"] = _install_import_guard()
                         (
@@ -685,6 +805,11 @@ def _handle_host_session() -> int:
                     host_state["handler"] = handler
                     host_state["plugin_root"] = plugin_root
                     host_state["callable"] = fn
+                    host_state["extension_name"] = str(plugin_context.get("extension_name") or "").strip()
+                    host_state["owner_class"] = str(plugin_context.get("owner_class") or "").strip()
+                    host_state["sandbox_instance_id"] = str(
+                        (plugin_context.get("runtime_api") or {}).get("sandbox_instance_id") or ""
+                    ).strip()
                     host_state["provenance"] = provenance
                     host_state["started_at"] = payload.get("started_at") or ""
                     response = {"ok": True, "provenance": provenance}
@@ -700,7 +825,10 @@ def _handle_host_session() -> int:
                 if fn is None:
                     response = _host_error("plugin host has not been started")
                 else:
-                    plugin_context = _extract_plugin_context(payload.get("context") or {})
+                    plugin_context = _extract_plugin_context(
+                        payload.get("context") or {},
+                        host_state=host_state,
+                    )
                     result = _validate_response_contract(
                         fn(payload.get("state") or {}, plugin_context)
                     )

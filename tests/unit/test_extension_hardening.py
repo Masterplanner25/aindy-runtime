@@ -254,6 +254,7 @@ def handler(state, context):
             "channel_type": context.get("runtime_api", {}).get("channel_type"),
             "metadata_channel_type": metadata.get("channel_type"),
             "metadata_channel_id_matches": metadata.get("runtime_channel_id") == context.get("runtime_api", {}).get("runtime_channel_id"),
+            "metadata_sandbox_instance_matches": metadata.get("sandbox_instance_id") == context.get("runtime_api", {}).get("sandbox_instance_id"),
         },
     }
 """,
@@ -282,6 +283,7 @@ def handler(state, context):
     assert result["output_patch"]["channel_type"] == "worker-authenticated-rpc"
     assert result["output_patch"]["metadata_channel_type"] == "worker-authenticated-rpc"
     assert result["output_patch"]["metadata_channel_id_matches"] is True
+    assert result["output_patch"]["metadata_sandbox_instance_matches"] is True
 
 
 def test_dynamic_plugin_node_denies_ungranted_memory_read_capability(

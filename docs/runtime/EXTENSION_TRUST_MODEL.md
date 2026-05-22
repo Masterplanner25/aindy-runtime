@@ -152,6 +152,41 @@ Important implications:
 - `containerized_oci` on non-Linux hosts is reported explicitly as degraded
   rather than being treated as equivalent to the Linux hardened path
 
+## Assurance Reporting
+
+Operator surfaces now distinguish three separate concepts for third-party plugin
+execution:
+
+- assurance class
+  The current runner category reported by the runtime:
+  `insecure-dev`, `container-grade-sandbox`, or `strong-sandbox-tier`.
+- attestation
+  What the runtime actually observed, primarily from launch-time backend
+  identity and command evidence.
+- certification tier
+  What the runtime can justify from verified evidence and the shared worker
+  policy suite:
+  `contained-process-certified`, `container-sandbox-certified`, or
+  `strong-sandbox-certified`.
+
+These are related but not interchangeable:
+
+- a stronger assurance class does not by itself imply certification
+- verified attestation is narrower than a blanket sandbox guarantee
+- readiness does not imply a higher assurance class than the runtime reports
+
+Profile expectations:
+
+- `single-instance`
+  - required assurance class: none
+  - certification tier: none required
+- `distributed-api` / `distributed-worker`
+  - required assurance class: `container-grade-sandbox`
+  - certification tier: none required at startup
+- `hostile-third-party`
+  - required assurance class: `strong-sandbox-tier`
+  - required certification tier: `strong-sandbox-certified`
+
 ## Untrusted Or Less-Trusted Extension Classes
 
 These extension classes are treated as contract-driven integrations or data,

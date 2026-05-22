@@ -248,4 +248,32 @@ def test_testing_mode_readiness_reports_trusted_python_inventory(monkeypatch):
     assert payload["checks"]["trusted_python_execution"]["execution_model"] == "trusted-in-process-python"
     assert payload["checks"]["trusted_python_execution"]["sandboxing"] == "none"
     assert payload["checks"]["plugin_sandbox_attestation"]["present"] is False
+    assert payload["checks"]["plugin_sandbox_posture"] == {
+        "deployment_profile": "single-instance",
+        "current": {
+            "runner_type": "insecure_dev_subprocess",
+            "assurance_class": "insecure-dev",
+            "certification_tier": "contained-process-certified",
+            "certification_status": "certified",
+        },
+        "required": {
+            "assurance_class": None,
+            "runner_type": None,
+            "certification_tier": None,
+        },
+        "requirement_status": {
+            "assurance_class_satisfied": True,
+            "certification_tier_satisfied": True,
+        },
+        "unsupported_claims": [
+            "general third-party sandboxing",
+            "hard resource-limit enforcement",
+            "kernel-level isolation guarantees",
+        ],
+        "distinction_note": (
+            "Assurance class describes the runner category, attestation describes what the runtime "
+            "observed, and certification describes what the runtime can justify from verified evidence."
+        ),
+        "notes": "This profile does not require a third-party sandbox assurance class.",
+    }
     assert payload["checks"]["plugin_sandbox_platform"]["schema_version"] == "2026-05-21"

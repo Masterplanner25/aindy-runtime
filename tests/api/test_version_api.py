@@ -72,19 +72,49 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
         "present": False,
         "host_count": 0,
         "runner_types_present": [],
+        "assurance_classes_present": [],
         "isolation_classes_present": [],
+        "certification_tiers_present": [],
         "active_hardening_controls_present": [],
         "hosts": [],
         "operator_note": (
-            "Sandbox attestation summarizes the effective isolation mode, hardening controls, "
-            "resource limits, and provenance state for third-party plugin hosts."
+            "Sandbox attestation summarizes requested policy, active runner metadata, launch-verified "
+            "state, pinned runtime identity, resource limits, and provenance for third-party plugin hosts."
         ),
+    }
+    assert payload["runtime"]["plugin_sandbox_posture"] == {
+        "deployment_profile": "single-instance",
+        "current": {
+            "runner_type": "insecure_dev_subprocess",
+            "assurance_class": "insecure-dev",
+            "certification_tier": "contained-process-certified",
+            "certification_status": "certified",
+        },
+        "required": {
+            "assurance_class": None,
+            "runner_type": None,
+            "certification_tier": None,
+        },
+        "requirement_status": {
+            "assurance_class_satisfied": True,
+            "certification_tier_satisfied": True,
+        },
+        "unsupported_claims": [
+            "general third-party sandboxing",
+            "hard resource-limit enforcement",
+            "kernel-level isolation guarantees",
+        ],
+        "distinction_note": (
+            "Assurance class describes the runner category, attestation describes what the runtime "
+            "observed, and certification describes what the runtime can justify from verified evidence."
+        ),
+        "notes": "This profile does not require a third-party sandbox assurance class.",
     }
     assert payload["runtime"]["plugin_sandbox_platform"]["schema_version"] == "2026-05-21"
     assert payload["runtime"]["plugin_sandbox_platform"]["current_platform"] in {"linux", "windows", "darwin", "other"}
     assert "supported_platforms" in payload["runtime"]["plugin_sandbox_platform"]
     runtime_runner_types = {entry["runner_type"] for entry in payload["runtime"]["plugin_hosts"]["available_runners"]}
-    assert runtime_runner_types == {"insecure_dev_subprocess", "containerized_oci"}
+    assert runtime_runner_types == {"insecure_dev_subprocess", "containerized_oci", "strong_sandbox_vm"}
     assert payload["compatibility"] == {
         "runtime_package": {
             "name": "aindy-runtime",
@@ -125,9 +155,46 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     assert payload["public_contract"]["extensions"]["sandbox_runners"]["default_external_runner"] == "insecure_dev_subprocess"
     assert payload["public_contract"]["extensions"]["sandbox_runners"]["configured_selection"] == "auto"
     assert payload["public_contract"]["extensions"]["sandbox_runners"]["certification_contract"]["schema_version"] == "2026-05-21"
+    assert {
+        entry["tier"]
+        for entry in payload["public_contract"]["extensions"]["sandbox_runners"]["certification_contract"]["certification_tiers"]
+    } == {
+        "contained-process-certified",
+        "container-sandbox-certified",
+        "strong-sandbox-certified",
+    }
+    assert {
+        entry["id"]
+        for entry in payload["public_contract"]["extensions"]["sandbox_runners"]["certification_contract"]["assurance_validation_checks"]["strong-sandbox-certified"]
+    } == {
+        "runner_class_verification",
+        "verified_runtime_identity",
+        "verified_hardening_profile_state",
+        "verified_stronger_isolation_reporting",
+        "verified_resource_limit_mode",
+        "fail_closed_unavailability",
+    }
     assert payload["public_contract"]["extensions"]["sandbox_runners"]["active_certification_profile"]["runner_type"] == "insecure_dev_subprocess"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["active_certification_profile"]["certification_tier"] == "contained-process-certified"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["active_certification_profile"]["tier_status"] == "certified"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["active_certification_profile"]["validation_layers"]["runner_assurance"]["layer"] == "contained-process-certified"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["selection_policy"]["strong_runner_requires_explicit_selection"] == "strong_sandbox_vm"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["selection_policy"]["pinned_runtime_identity_required_for_production_safe_profiles"] is True
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["selection_policy"]["hostile_third_party_profile"]["profile"] == "hostile-third-party"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["selection_policy"]["hostile_third_party_profile"]["required_runner_type"] == "strong_sandbox_vm"
+    assert "launch_attestation.runtime_identity" in payload["public_contract"]["extensions"]["sandbox_runners"]["selection_policy"]["hostile_third_party_profile"]["required_verified_fields"]
     assert payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["version_surface"] == "runtime.plugin_sandbox_attestation"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["assurance_posture_surface"] == "runtime.plugin_sandbox_posture"
     assert payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["platform_matrix_surface"] == "runtime.plugin_sandbox_platform"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["attestation_model"]["verified"] == "launch-observed backend identity and command evidence only"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["attestation_model"]["assurance_class"] == "the current runner category reported by the runtime"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["attestation_model"]["required_assurance_class"] == "the minimum class required by the active deployment profile"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["attestation_model"]["certification_tier"] == "derived only from runner-specific verified evidence and shared worker-policy eligibility"
+    assert "certification" in payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["attestation_fields"]
+    assert "runtime_identity" in payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["attestation_fields"]
+    assert "launch_attestation" in payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["attestation_fields"]
+    assert "mount_isolation" in payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["attestation_fields"]
+    assert "network_isolation" in payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["attestation_fields"]
     assert payload["public_contract"]["extensions"]["sandbox_runners"]["platform_matrix"]["schema_version"] == "2026-05-21"
     public_runner_claims = {
         entry["runner_type"]: entry["isolation_claim"]
@@ -135,6 +202,9 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     }
     assert public_runner_claims["insecure_dev_subprocess"] == "none"
     assert public_runner_claims["containerized_oci"] == "container-boundary"
+    assert public_runner_claims["strong_sandbox_vm"] == "vm-boundary"
+    assert "hostile-third-party" in payload["public_contract"]["extensions"]["sandbox_runners"]["notes"]
+    assert "not interchangeable" in payload["public_contract"]["extensions"]["sandbox_runners"]["notes"]
     assert payload["public_contract"]["extensions"]["capability_model"]["surfaces"]["dynamic-plugin-node"]["authority_model"] == "isolated-explicit-capabilities"
     assert payload["public_contract"]["extensions"]["capability_model"]["surfaces"]["dynamic-plugin-node"]["filesystem_policy"]["default"] == "read-only-approved-roots"
     assert payload["public_contract"]["extensions"]["capability_model"]["surfaces"]["dynamic-plugin-node"]["filesystem_policy"]["writes"] == "deny"
@@ -153,4 +223,32 @@ def test_health_route_reports_trusted_python_inventory(runtime_only_client):
     assert payload["extension_provenance"]["present"] is False
     assert payload["plugin_hosts"]["present"] is False
     assert payload["plugin_sandbox_attestation"]["present"] is False
+    assert payload["plugin_sandbox_posture"] == {
+        "deployment_profile": "single-instance",
+        "current": {
+            "runner_type": "insecure_dev_subprocess",
+            "assurance_class": "insecure-dev",
+            "certification_tier": "contained-process-certified",
+            "certification_status": "certified",
+        },
+        "required": {
+            "assurance_class": None,
+            "runner_type": None,
+            "certification_tier": None,
+        },
+        "requirement_status": {
+            "assurance_class_satisfied": True,
+            "certification_tier_satisfied": True,
+        },
+        "unsupported_claims": [
+            "general third-party sandboxing",
+            "hard resource-limit enforcement",
+            "kernel-level isolation guarantees",
+        ],
+        "distinction_note": (
+            "Assurance class describes the runner category, attestation describes what the runtime "
+            "observed, and certification describes what the runtime can justify from verified evidence."
+        ),
+        "notes": "This profile does not require a third-party sandbox assurance class.",
+    }
     assert payload["plugin_sandbox_platform"]["schema_version"] == "2026-05-21"

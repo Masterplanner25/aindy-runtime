@@ -5,6 +5,7 @@ import pytest
 from AINDY.platform_layer.deployment_contract import (
     DEPLOYMENT_PROFILE_DISTRIBUTED_API,
     DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER,
+    DEPLOYMENT_PROFILE_HOSTILE_THIRD_PARTY,
     DEPLOYMENT_PROFILE_SINGLE_INSTANCE,
     deployment_contract_summary,
     publish_api_runtime_state,
@@ -90,6 +91,10 @@ def test_distributed_api_profile_accepts_explicit_container_plugin_runner(monkey
     monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
     monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "containerized_oci")
     monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr(
+        "AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST",
+        "sha256:" + ("a" * 64),
+    )
     monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "docker")
     monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Linux")
 
@@ -97,7 +102,92 @@ def test_distributed_api_profile_accepts_explicit_container_plugin_runner(monkey
 
     assert profile["plugin_sandbox_policy"]["configured_runner"] == "containerized_oci"
     assert profile["plugin_sandbox_policy"]["resolved_runner"] == "containerized_oci"
+    assert profile["plugin_sandbox_policy"]["runtime_identity"]["pinned"] is True
+    assert profile["plugin_sandbox_policy"]["runtime_identity"]["launch_reference"].endswith(
+        "@sha256:" + ("a" * 64)
+    )
     assert profile["plugin_sandbox_policy"]["platform_matrix"]["current_platform"] == "linux"
+
+
+def test_distributed_api_profile_accepts_explicit_strong_plugin_runner(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_API)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "strong_sandbox_vm")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE", "ghcr.io/example/aindy-strong-sandbox:test")
+    monkeypatch.setattr(
+        "AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE_DIGEST",
+        "sha256:" + ("b" * 64),
+    )
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "sandbox")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Linux")
+
+    profile = validate_api_deployment_profile()
+
+    assert profile["plugin_sandbox_policy"]["configured_runner"] == "strong_sandbox_vm"
+    assert profile["plugin_sandbox_policy"]["resolved_runner"] == "strong_sandbox_vm"
+    assert profile["plugin_sandbox_policy"]["runtime_identity"]["pinned"] is True
+    assert profile["plugin_sandbox_policy"]["runtime_identity"]["launch_reference"].endswith(
+        "@sha256:" + ("b" * 64)
+    )
+    assert profile["plugin_sandbox_policy"]["platform_matrix"]["current_platform"] == "linux"
+
+
+def test_hostile_third_party_profile_accepts_explicit_strong_plugin_runner(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_HOSTILE_THIRD_PARTY)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "strong_sandbox_vm")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE", "ghcr.io/example/aindy-strong-sandbox:test")
+    monkeypatch.setattr(
+        "AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE_DIGEST",
+        "sha256:" + ("c" * 64),
+    )
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "sandbox")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Linux")
+
+    profile = validate_api_deployment_profile()
+
+    assert profile["name"] == DEPLOYMENT_PROFILE_HOSTILE_THIRD_PARTY
+    assert profile["plugin_sandbox_policy"]["resolved_runner"] == "strong_sandbox_vm"
+    assert profile["plugin_sandbox_policy"]["assurance_class"] == "strong-sandbox-tier"
+    assert profile["plugin_sandbox_policy"]["runtime_identity"]["pinned"] is True
+    assert (
+        profile["plugin_sandbox_policy"]["hostile_third_party_attestation_requirements"]["required_runner_type"]
+        == "strong_sandbox_vm"
+    )
+
+
+def test_distributed_api_profile_rejects_unpinned_container_runtime_identity(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_API)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "containerized_oci")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST", "")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "docker")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Linux")
+
+    with pytest.raises(RuntimeError, match="requires a pinned sandbox runtime identity"):
+        validate_api_deployment_profile()
+
+
+def test_distributed_api_profile_rejects_unpinned_strong_runtime_identity(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_API)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "strong_sandbox_vm")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE", "ghcr.io/example/aindy-strong-sandbox:test")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE_DIGEST", "")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "sandbox")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Linux")
+
+    with pytest.raises(RuntimeError, match="requires a pinned sandbox runtime identity"):
+        validate_api_deployment_profile()
 
 
 def test_worker_profile_requires_distributed_mode(monkeypatch):
@@ -126,10 +216,75 @@ def test_distributed_api_profile_rejects_non_linux_container_sandbox_host(monkey
     monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
     monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "containerized_oci")
     monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr(
+        "AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST",
+        "sha256:" + ("e" * 64),
+    )
     monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "docker")
     monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Windows")
 
     with pytest.raises(RuntimeError, match="requires a Linux host with compatible container sandbox support"):
+        validate_api_deployment_profile()
+
+
+def test_distributed_api_profile_rejects_unavailable_strong_runner(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_API)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "strong_sandbox_vm")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE", "")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: None)
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Windows")
+
+    with pytest.raises(RuntimeError, match="AINDY_PLUGIN_STRONG_SANDBOX_IMAGE|requires a Linux host with compatible strong sandbox VM support"):
+        validate_api_deployment_profile()
+
+
+def test_hostile_third_party_profile_rejects_non_linux_high_assurance_host(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_HOSTILE_THIRD_PARTY)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "strong_sandbox_vm")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE", "ghcr.io/example/aindy-strong-sandbox:test")
+    monkeypatch.setattr(
+        "AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE_DIGEST",
+        "sha256:" + ("f" * 64),
+    )
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "sandbox")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Windows")
+
+    with pytest.raises(RuntimeError, match="requires a Linux host with compatible strong sandbox VM support|does not provide that support"):
+        validate_api_deployment_profile()
+
+
+def test_hostile_third_party_profile_rejects_container_runner(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_HOSTILE_THIRD_PARTY)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "containerized_oci")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr(
+        "AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST",
+        "sha256:" + ("d" * 64),
+    )
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "docker")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Linux")
+
+    with pytest.raises(RuntimeError, match="requires AINDY_PLUGIN_SANDBOX_RUNNER=strong_sandbox_vm"):
+        validate_api_deployment_profile()
+
+
+def test_hostile_third_party_profile_rejects_insecure_runner(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_HOSTILE_THIRD_PARTY)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "insecure_dev_subprocess")
+
+    with pytest.raises(RuntimeError, match="requires AINDY_PLUGIN_SANDBOX_RUNNER=strong_sandbox_vm|does not permit AINDY_PLUGIN_SANDBOX_RUNNER=insecure_dev_subprocess"):
         validate_api_deployment_profile()
 
 
@@ -178,7 +333,36 @@ def test_readiness_reports_active_deployment_profile(monkeypatch):
     assert status_code == 200
     assert payload["checks"]["deployment_profile"] == DEPLOYMENT_PROFILE_SINGLE_INSTANCE
     assert payload["checks"]["background_leadership_mode"] == "in-process"
-    assert "does not imply extension sandboxing" in payload["readiness_scope"]
+    assert payload["checks"]["plugin_sandbox_posture"] == {
+        "deployment_profile": DEPLOYMENT_PROFILE_SINGLE_INSTANCE,
+        "current": {
+            "runner_type": "insecure_dev_subprocess",
+            "assurance_class": "insecure-dev",
+            "certification_tier": "contained-process-certified",
+            "certification_status": "certified",
+        },
+        "required": {
+            "assurance_class": None,
+            "runner_type": None,
+            "certification_tier": None,
+        },
+        "requirement_status": {
+            "assurance_class_satisfied": True,
+            "certification_tier_satisfied": True,
+        },
+        "unsupported_claims": [
+            "general third-party sandboxing",
+            "hard resource-limit enforcement",
+            "kernel-level isolation guarantees",
+        ],
+        "distinction_note": (
+            "Assurance class describes the runner category, attestation describes what the runtime "
+            "observed, and certification describes what the runtime can justify from verified evidence."
+        ),
+        "notes": "This profile does not require a third-party sandbox assurance class.",
+    }
+    assert "must not be conflated" in payload["readiness_scope"]
+    assert "does not imply stronger sandbox guarantees" in payload["readiness_scope"]
 
 
 def test_deployment_contract_summary_reports_active_profile(monkeypatch):

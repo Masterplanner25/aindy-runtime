@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from AINDY.config import settings
 from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY
-from AINDY.platform_layer.deployment_contract import runtime_only_deployment_contract
+from AINDY.platform_layer.deployment_contract import (
+    DEPLOYMENT_PROFILE_HOSTILE_THIRD_PARTY,
+    hostile_third_party_attestation_requirements,
+    runtime_only_deployment_contract,
+)
 from AINDY.platform_layer.extension_abi import extension_abi_policy
 from AINDY.platform_layer.extension_capabilities import extension_capability_policy
 from AINDY.platform_layer.extension_policy import external_python_override_state
@@ -190,27 +194,61 @@ def _extension_surface_contract() -> dict[str, object]:
                 "version_surface": "runtime.plugin_sandbox_attestation",
                 "health_surface": "plugin_sandbox_attestation",
                 "readiness_surface": "checks.plugin_sandbox_attestation",
+                "assurance_posture_surface": "runtime.plugin_sandbox_posture",
                 "platform_matrix_surface": "runtime.plugin_sandbox_platform",
                 "attestation_fields": [
                     "runner_type",
+                    "assurance_class",
                     "isolation_class",
+                    "certification",
+                    "requested_hardening_controls",
                     "active_hardening_controls",
+                    "verified_hardening_controls",
                     "effective_resource_limits",
+                    "launch_attestation",
+                    "mount_isolation",
+                    "runtime_identity",
+                    "network_isolation",
                     "network_policy",
                     "filesystem_policy",
                     "provenance_status",
                 ],
+                "attestation_model": {
+                    "assurance_class": "the current runner category reported by the runtime",
+                    "required_assurance_class": "the minimum class required by the active deployment profile",
+                    "requested": "operator-configured or runner-requested policy",
+                    "active": "runner metadata for controls the runtime expects to be active",
+                    "verified": "launch-observed backend identity and command evidence only",
+                    "certification_tier": "derived only from runner-specific verified evidence and shared worker-policy eligibility",
+                    "mount_and_network": "mount/network isolation claims are verified only when the runtime observes launch arguments or resolved backend identity proving them",
+                },
             },
             "selection_policy": {
                 "explicit_setting_env_var": "AINDY_PLUGIN_SANDBOX_RUNNER",
                 "auto_single_instance": RUNNER_INSECURE_DEV_SUBPROCESS,
                 "auto_distributed": "containerized_oci",
+                "strong_runner_requires_explicit_selection": "strong_sandbox_vm",
+                "pinned_runtime_identity_required_for_production_safe_profiles": True,
+                "hostile_third_party_profile": hostile_third_party_attestation_requirements(),
             },
+            "assurance_classes": [
+                "insecure-dev",
+                "container-grade-sandbox",
+                "strong-sandbox-tier",
+            ],
             "notes": (
                 "Third-party plugin-host execution targets a runtime-owned sandbox runner "
                 "interface. The current subprocess-backed runner is a containment boundary, "
-                "not a sandbox guarantee. When the container runner is selected, the runtime "
-                "fails closed if the container runtime or image is unavailable."
+                "not a sandbox guarantee. When the container runner or strong sandbox VM runner "
+                "is selected, the runtime fails closed if the required runtime, launcher, image, "
+                "or pinned runtime identity is unavailable. Verified attestation reflects only "
+                "what the runtime directly observes at launch time, not a blanket proof of ongoing "
+                "kernel enforcement. "
+                f"{DEPLOYMENT_PROFILE_HOSTILE_THIRD_PARTY!r} is the explicit fail-closed "
+                "profile for hostile or semi-trusted third-party workloads and requires "
+                "strong_sandbox_vm plus live verified host attestation. Operators must "
+                "distinguish assurance class, attestation, and certification tier; they are "
+                "related but not interchangeable."
             ),
         },
         "ownership_classes": [

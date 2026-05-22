@@ -210,6 +210,186 @@ def test_extension_runtime_api_denies_unauthenticated_runtime_calls():
         extension_runtime_api.memory_read(query="alpha")
 
 
+def test_extension_runtime_channel_allows_valid_bound_context():
+    from AINDY.platform_layer import extension_runtime_api, extension_worker
+
+    payload = {
+        "plugin_context": {
+            "user_id": "user-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "extension_name": "ext.alpha",
+            "owner_class": "external-third-party",
+            "granted_capabilities": ["memory.read"],
+            "runtime_api": {
+                "channel_type": "worker-authenticated-rpc",
+                "channel_version": "2026-05-22",
+                "runtime_channel_id": "chan-1",
+                "sandbox_instance_id": "sandbox-1",
+                "expires_at": 32503680000.0,
+            },
+        },
+        "runtime_api_auth": {
+            "auth_version": "2026-05-22",
+            "user_id": "user-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "extension_name": "ext.alpha",
+            "owner_class": "external-third-party",
+            "granted_capabilities": ["memory.read"],
+            "runtime_channel_id": "chan-1",
+            "runtime_channel_token": "tok-1",
+            "runtime_channel_nonce": "nonce-1",
+            "issued_at": 1.0,
+            "expires_at": 32503680000.0,
+            "sandbox_instance_id": "sandbox-1",
+            "runner_type": "containerized_oci",
+        },
+    }
+
+    try:
+        plugin_context = extension_worker._extract_plugin_context(payload)
+        metadata = extension_runtime_api.get_execution_metadata()
+    finally:
+        extension_worker._clear_runtime_channel()
+
+    assert plugin_context["runtime_api"]["runtime_channel_id"] == "chan-1"
+    assert "runtime_channel_token" not in plugin_context
+    assert metadata["user_id"] == "user-1"
+    assert metadata["extension_name"] == "ext.alpha"
+    assert metadata["sandbox_instance_id"] == "sandbox-1"
+    assert metadata["channel_type"] == "worker-authenticated-rpc"
+
+
+def test_extension_runtime_channel_rejects_replayed_nonce():
+    from AINDY.platform_layer import extension_worker
+
+    payload = {
+        "plugin_context": {
+            "user_id": "user-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "extension_name": "ext.alpha",
+            "owner_class": "external-third-party",
+            "runtime_api": {
+                "channel_type": "worker-authenticated-rpc",
+                "channel_version": "2026-05-22",
+                "runtime_channel_id": "chan-1",
+                "sandbox_instance_id": "sandbox-1",
+                "expires_at": 32503680000.0,
+            },
+        },
+        "runtime_api_auth": {
+            "auth_version": "2026-05-22",
+            "user_id": "user-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "extension_name": "ext.alpha",
+            "owner_class": "external-third-party",
+            "runtime_channel_id": "chan-1",
+            "runtime_channel_token": "tok-1",
+            "runtime_channel_nonce": "nonce-replay",
+            "issued_at": 1.0,
+            "expires_at": 32503680000.0,
+            "sandbox_instance_id": "sandbox-1",
+            "runner_type": "containerized_oci",
+        },
+    }
+
+    try:
+        extension_worker._extract_plugin_context(payload)
+        extension_worker._clear_runtime_channel()
+        with pytest.raises(PermissionError, match="REPLAYED_EXTENSION_CHANNEL"):
+            extension_worker._extract_plugin_context(payload)
+    finally:
+        extension_worker._clear_runtime_channel()
+
+
+def test_extension_runtime_channel_rejects_mismatched_tenant_binding():
+    from AINDY.platform_layer import extension_worker
+
+    payload = {
+        "plugin_context": {
+            "user_id": "user-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "extension_name": "ext.alpha",
+            "owner_class": "external-third-party",
+            "runtime_api": {
+                "channel_type": "worker-authenticated-rpc",
+                "channel_version": "2026-05-22",
+                "runtime_channel_id": "chan-1",
+                "sandbox_instance_id": "sandbox-1",
+                "expires_at": 32503680000.0,
+            },
+        },
+        "runtime_api_auth": {
+            "auth_version": "2026-05-22",
+            "user_id": "user-2",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "extension_name": "ext.alpha",
+            "owner_class": "external-third-party",
+            "runtime_channel_id": "chan-1",
+            "runtime_channel_token": "tok-1",
+            "runtime_channel_nonce": "nonce-tenant",
+            "issued_at": 1.0,
+            "expires_at": 32503680000.0,
+            "sandbox_instance_id": "sandbox-1",
+            "runner_type": "containerized_oci",
+        },
+    }
+
+    with pytest.raises(PermissionError, match="BINDING_MISMATCH"):
+        extension_worker._extract_plugin_context(payload)
+
+
+def test_extension_runtime_channel_rejects_cross_instance_binding():
+    from AINDY.platform_layer import extension_worker
+
+    payload = {
+        "plugin_context": {
+            "user_id": "user-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "extension_name": "ext.alpha",
+            "owner_class": "external-third-party",
+            "runtime_api": {
+                "channel_type": "worker-authenticated-rpc",
+                "channel_version": "2026-05-22",
+                "runtime_channel_id": "chan-1",
+                "sandbox_instance_id": "sandbox-2",
+                "expires_at": 32503680000.0,
+            },
+        },
+        "runtime_api_auth": {
+            "auth_version": "2026-05-22",
+            "user_id": "user-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "extension_name": "ext.alpha",
+            "owner_class": "external-third-party",
+            "runtime_channel_id": "chan-1",
+            "runtime_channel_token": "tok-1",
+            "runtime_channel_nonce": "nonce-sandbox",
+            "issued_at": 1.0,
+            "expires_at": 32503680000.0,
+            "sandbox_instance_id": "sandbox-2",
+            "runner_type": "containerized_oci",
+        },
+    }
+
+    with pytest.raises(PermissionError, match="SANDBOX_INSTANCE_MISMATCH"):
+        extension_worker._extract_plugin_context(
+            payload,
+            host_state={
+                "sandbox_instance_id": "sandbox-1",
+                "extension_name": "ext.alpha",
+                "owner_class": "external-third-party",
+            },
+        )
+
+
 def test_extension_runtime_api_exposes_no_ambient_runtime_handles():
     from AINDY.platform_layer import extension_runtime_api
 

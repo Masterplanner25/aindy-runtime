@@ -60,9 +60,17 @@ def handler(state, context):
     assert snapshot["resource_limits"]["enforcement"] == "none"
     assert snapshot["resource_limits"]["memory_limit"] is None
     assert snapshot["sandbox_attestation"]["runner_type"] == "insecure_dev_subprocess"
+    assert snapshot["sandbox_attestation"]["assurance_class"] == "insecure-dev"
     assert snapshot["sandbox_attestation"]["isolation_class"] == "insecure-dev-subprocess"
+    assert snapshot["sandbox_attestation"]["certification"]["certification_tier"] == "contained-process-certified"
+    assert snapshot["sandbox_attestation"]["requested_hardening_controls"] == []
     assert snapshot["sandbox_attestation"]["active_hardening_controls"] == []
+    assert snapshot["sandbox_attestation"]["verified_hardening_controls"] == []
     assert snapshot["sandbox_attestation"]["effective_resource_limits"]["enforcement"] == "none"
+    assert snapshot["sandbox_attestation"]["launch_attestation"]["status"] == "not-applicable"
+    assert snapshot["sandbox_attestation"]["mount_isolation"]["artifact_mount"]["active"] == "host-process"
+    assert snapshot["sandbox_attestation"]["network_isolation"]["boundary"]["active"] == "host-process"
+    assert snapshot["sandbox_attestation"]["runtime_identity"]["verification"] == "missing-reference"
     assert snapshot["provenance"]["module_name"] == "safe_node"
 
     assert shutdown_plugin_host("hosted-plugin") is True
@@ -322,6 +330,8 @@ def handler(state, context):
     assert hosts["present"] is True
     assert hosts["overall_status"] == "ok"
     assert hosts["runner_types_present"] == ["insecure_dev_subprocess"]
+    assert hosts["sandbox_attestation"]["assurance_classes_present"] == ["insecure-dev"]
+    assert hosts["sandbox_attestation"]["certification_tiers_present"] == ["contained-process-certified"]
     assert hosts["hosts"][0]["name"] == "inventory-plugin"
     assert hosts["hosts"][0]["runner_type"] == "insecure_dev_subprocess"
     assert hosts["hosts"][0]["granted_capabilities"] == ["memory.read"]
@@ -333,6 +343,14 @@ def handler(state, context):
     assert hosts["hosts"][0]["sandbox_attestation"]["filesystem_policy"]["writes"] == "deny"
     assert hosts["sandbox_attestation"]["isolation_classes_present"] == ["insecure-dev-subprocess"]
     assert hosts["sandbox_attestation"]["hosts"][0]["runner_type"] == "insecure_dev_subprocess"
+    assert hosts["sandbox_attestation"]["hosts"][0]["assurance_class"] == "insecure-dev"
+    assert hosts["sandbox_attestation"]["hosts"][0]["certification"]["certification_tier"] == "contained-process-certified"
+    assert hosts["sandbox_attestation"]["hosts"][0]["requested_hardening_controls"] == []
+    assert hosts["sandbox_attestation"]["hosts"][0]["verified_hardening_controls"] == []
+    assert hosts["sandbox_attestation"]["hosts"][0]["launch_attestation"]["status"] == "not-applicable"
+    assert hosts["sandbox_attestation"]["hosts"][0]["mount_isolation"]["artifact_mount"]["active"] == "host-process"
+    assert hosts["sandbox_attestation"]["hosts"][0]["network_isolation"]["deny_by_default"] is True
+    assert hosts["sandbox_attestation"]["hosts"][0]["runtime_identity"]["verification"] == "missing-reference"
     assert hosts["sandbox_attestation"]["hosts"][0]["network_policy"]["default"] == "deny"
     assert hosts["sandbox_attestation"]["hosts"][0]["filesystem_policy"]["default"] == "read-only-approved-roots"
     assert "plugin host boundary" in hosts["operator_note"]
@@ -408,6 +426,50 @@ def handler(state, context):
         with pytest.raises(RuntimeError, match="not allowed under deployment profile 'distributed-api' with runner insecure_dev_subprocess"):
             start_plugin_host(
                 name="unsafe-third-party-plugin",
+                handler="safe_node:handler",
+                plugin_root=plugin_dir,
+                owner_class="external-third-party",
+                granted_capabilities=[],
+            )
+    finally:
+        publish_api_runtime_state(**original_state)
+
+
+def test_external_third_party_plugin_host_rejects_container_runner_in_hostile_profile(
+    tmp_path, clean_plugin_hosts, monkeypatch
+):
+    from AINDY.config import settings
+    from AINDY.platform_layer.deployment_contract import (
+        get_api_runtime_state,
+        publish_api_runtime_state,
+    )
+    from AINDY.platform_layer.plugin_host import start_plugin_host
+
+    plugin_dir = _write_plugin(
+        tmp_path,
+        "safe_node",
+        """
+def handler(state, context):
+    return {"status": "SUCCESS"}
+""",
+    )
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", "hostile-third-party")
+    monkeypatch.setattr(settings, "EXECUTION_MODE", "distributed")
+    monkeypatch.setattr(settings, "REDIS_URL", "redis://example")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_SANDBOX_RUNNER", "containerized_oci")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST", "sha256:" + ("d" * 64))
+    original_state = get_api_runtime_state()
+    try:
+        publish_api_runtime_state(
+            process_role="api",
+            deployment_profile="hostile-third-party",
+            deployment_profile_source="AINDY_DEPLOYMENT_PROFILE",
+        )
+
+        with pytest.raises(RuntimeError, match="Hostile third-party mode rejects container-only and development runners|requires AINDY_PLUGIN_SANDBOX_RUNNER=strong_sandbox_vm"):
+            start_plugin_host(
+                name="hostile-container-plugin",
                 handler="safe_node:handler",
                 plugin_root=plugin_dir,
                 owner_class="external-third-party",

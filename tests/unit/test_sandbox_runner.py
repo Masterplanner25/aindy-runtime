@@ -118,6 +118,50 @@ def test_auto_runner_selection_prefers_dev_subprocess_for_single_instance(monkey
     assert resolve_sandbox_runner_type() == "insecure_dev_subprocess"
 
 
+def test_explicit_strong_runner_selection_is_supported(monkeypatch):
+    from AINDY.config import settings
+    from AINDY.platform_layer.sandbox_runner import resolve_sandbox_runner_type
+
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_SANDBOX_RUNNER", "strong_sandbox_vm")
+
+    assert resolve_sandbox_runner_type() == "strong_sandbox_vm"
+
+
+def test_container_runner_runtime_identity_reports_pinned_digest(monkeypatch):
+    from AINDY.config import settings
+    from AINDY.platform_layer.sandbox_runner import ContainerizedOciSandboxRunner
+
+    digest = "sha256:" + ("c" * 64)
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST", digest)
+
+    metadata = ContainerizedOciSandboxRunner().metadata()
+
+    assert metadata["runtime_identity"]["pinned"] is True
+    assert metadata["runtime_identity"]["verification"] == "configured-digest"
+    assert metadata["runtime_identity"]["digest"] == digest
+    assert metadata["runtime_identity"]["launch_reference"] == (
+        f"ghcr.io/example/aindy-runtime:test@{digest}"
+    )
+    assert metadata["launch_attestation"]["status"] == "not-started"
+    assert metadata["launch_attestation"]["runtime_identity"]["verified"] is False
+
+
+def test_container_runner_runtime_identity_reports_mutable_reference(monkeypatch):
+    from AINDY.config import settings
+    from AINDY.platform_layer.sandbox_runner import ContainerizedOciSandboxRunner
+
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST", "")
+
+    metadata = ContainerizedOciSandboxRunner().metadata()
+
+    assert metadata["runtime_identity"]["pinned"] is False
+    assert metadata["runtime_identity"]["verification"] == "mutable-reference"
+    assert metadata["runtime_identity"]["mutable_reference"] is True
+    assert metadata["launch_attestation"]["status"] == "not-started"
+
+
 def test_container_runner_executes_through_plugin_host(monkeypatch, tmp_path, clean_plugin_hosts):
     from AINDY.config import settings
     from AINDY.platform_layer.plugin_host import (
@@ -128,6 +172,7 @@ def test_container_runner_executes_through_plugin_host(monkeypatch, tmp_path, cl
     from AINDY.platform_layer import sandbox_runner
 
     monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST", "sha256:" + ("d" * 64))
     monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_RUNTIME", "docker")
     monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_WRITABLE_TMP", True)
     monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_NO_NEW_PRIVILEGES", True)
@@ -162,6 +207,28 @@ def test_container_runner_executes_through_plugin_host(monkeypatch, tmp_path, cl
     assert snapshot["runner_type"] == "containerized_oci"
     assert snapshot["runner"]["container_runtime"] == "docker"
     assert snapshot["runner"]["image"] == "ghcr.io/example/aindy-runtime:test"
+    assert snapshot["runner"]["runtime_identity"]["pinned"] is True
+    assert snapshot["runner"]["runtime_identity"]["launch_reference"].endswith(
+        "@sha256:" + ("d" * 64)
+    )
+    assert snapshot["runner"]["launch_attestation"]["status"] == "launch-observed"
+    assert snapshot["runner"]["launch_attestation"]["backend_identity"]["active"] == "docker"
+    assert snapshot["runner"]["launch_attestation"]["runtime_identity"]["verified"] is True
+    assert snapshot["runner"]["launch_attestation"]["mount_mode"]["verified"] is True
+    assert snapshot["runner"]["launch_attestation"]["writable_temp"]["active"] == "tmpfs:/tmp"
+    assert snapshot["runner"]["launch_attestation"]["writable_temp"]["verified"] is True
+    assert snapshot["runner"]["launch_attestation"]["host_path_access"]["active"] == "plugin-root-bind-only"
+    assert snapshot["runner"]["launch_attestation"]["host_path_access"]["verified"] is True
+    assert snapshot["runner"]["launch_attestation"]["network_mode"]["active"] == "none"
+    assert snapshot["runner"]["launch_attestation"]["network_mode"]["verified"] is True
+    assert snapshot["runner"]["launch_attestation"]["resource_limit_mode"]["verified"] is True
+    assert set(snapshot["runner"]["launch_attestation"]["resource_limit_mode"]["verified_limits"]) == {
+        "memory_limit",
+        "cpu_limit",
+        "cpu_shares",
+        "process_limit",
+    }
+    assert "no_new_privileges" in snapshot["runner"]["launch_attestation"]["hardening_profiles"]["verified_controls"]
     assert snapshot["runner"]["plugin_mount_mode"] == "read-only"
     assert snapshot["runner"]["writable_tmp"] is True
     assert "no_new_privileges" in snapshot["runner"]["kernel_controls"]["active_controls"]
@@ -175,6 +242,14 @@ def test_container_runner_executes_through_plugin_host(monkeypatch, tmp_path, cl
     assert snapshot["resource_limits"]["effective_limits"]["cpu_shares"] == 512
     assert snapshot["resource_limits"]["effective_limits"]["process_limit"] == 64
     assert snapshot["resource_limits"]["effective_limits"]["wall_clock_timeout_seconds"] == 30.0
+    assert snapshot["sandbox_attestation"]["runtime_identity"]["pinned"] is True
+    assert snapshot["sandbox_attestation"]["mount_isolation"]["artifact_mount"]["verified"] is True
+    assert snapshot["sandbox_attestation"]["mount_isolation"]["writable_temp"]["verified"] is True
+    assert snapshot["sandbox_attestation"]["mount_isolation"]["host_path_access"]["verified"] is True
+    assert snapshot["sandbox_attestation"]["network_isolation"]["deny_by_default"] is True
+    assert snapshot["sandbox_attestation"]["network_isolation"]["boundary"]["active"] == "none"
+    assert "no_new_privileges" in snapshot["sandbox_attestation"]["verified_hardening_controls"]
+    assert snapshot["sandbox_attestation"]["launch_attestation"]["status"] == "launch-observed"
     assert result["status"] == "SUCCESS"
     assert result["output_patch"]["mode"] == "container"
     assert shutdown_plugin_host("container-plugin") is True
@@ -199,6 +274,37 @@ def test_container_runner_unavailable_fails_closed_without_fallback(monkeypatch,
             plugin_root=plugin_dir,
             owner_class="external-third-party",
             granted_capabilities=[],
+        )
+
+
+def test_strong_runner_reports_assurance_class_and_fails_closed_when_unavailable(monkeypatch, tmp_path, clean_plugin_hosts):
+    from AINDY.config import settings
+    from AINDY.platform_layer.plugin_host import start_plugin_host
+    from AINDY.platform_layer.sandbox_runner import StrongSandboxVmRunner
+    import AINDY.platform_layer.sandbox_runner as sandbox_runner
+
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_STRONG_SANDBOX_LAUNCHER", "aindy-sandbox-vm")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_STRONG_SANDBOX_IMAGE", "")
+    monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: None)
+    monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
+
+    metadata = StrongSandboxVmRunner().metadata()
+    plugin_dir = tmp_path / "plugins" / "nodes"
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+
+    assert metadata["runner_type"] == "strong_sandbox_vm"
+    assert metadata["assurance_class"] == "strong-sandbox-tier"
+    assert metadata["resource_limits"]["enforcement"] == "unavailable"
+    assert metadata["hardening_controls"]["active_controls"] == []
+
+    with pytest.raises(RuntimeError, match="AINDY_PLUGIN_STRONG_SANDBOX_IMAGE|launcher 'aindy-sandbox-vm' was not found on PATH"):
+        start_plugin_host(
+            name="missing-strong-runner",
+            handler="sample_plugin:handler",
+            plugin_root=plugin_dir,
+            owner_class="external-third-party",
+            granted_capabilities=[],
+            runner_type="strong_sandbox_vm",
         )
 
 
@@ -291,7 +397,7 @@ def test_sandbox_platform_matrix_reports_linux_hardened_support(monkeypatch):
     from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
     import AINDY.platform_layer.sandbox_runner as sandbox_runner
 
-    monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "docker")
+    monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
     monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
 
     matrix = sandbox_platform_capability_matrix()
@@ -299,23 +405,60 @@ def test_sandbox_platform_matrix_reports_linux_hardened_support(monkeypatch):
     assert matrix["schema_version"] == "2026-05-21"
     assert matrix["current_platform"] == "linux"
     assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is True
+    assert matrix["current_environment"]["support_levels"]["contained_process"]["support"] == "supported"
+    assert matrix["current_environment"]["support_levels"]["container_sandbox"]["support"] == "supported"
+    assert matrix["current_environment"]["support_levels"]["strong_sandbox"]["support"] == "supported"
+    assert matrix["current_environment"]["highest_supported_assurance_class"] == "strong-sandbox-tier"
+    assert matrix["current_environment"]["high_assurance_hostile_workload_support"] is True
     assert "containerized_oci" in matrix["current_environment"]["available_runner_types"]
+    assert "strong_sandbox_vm" in matrix["current_environment"]["available_runner_types"]
     assert "seccomp_profile" in matrix["current_environment"]["available_hardening_controls"]["containerized_oci"]
+    assert "sandbox-runtime-hard-limits" in matrix["current_environment"]["available_hardening_controls"]["strong_sandbox_vm"]
 
 
 def test_sandbox_platform_matrix_reports_windows_degraded_support(monkeypatch):
     from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
     import AINDY.platform_layer.sandbox_runner as sandbox_runner
 
-    monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "docker")
+    monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
     monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
 
     matrix = sandbox_platform_capability_matrix()
 
     assert matrix["current_platform"] == "windows"
     assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is False
+    assert matrix["current_environment"]["support_levels"]["contained_process"]["support"] == "supported"
+    assert matrix["current_environment"]["support_levels"]["container_sandbox"]["support"] == "supported"
+    assert matrix["current_environment"]["support_levels"]["strong_sandbox"]["support"] == "unsupported"
+    assert matrix["current_environment"]["highest_supported_assurance_class"] == "container-grade-sandbox"
+    assert matrix["current_environment"]["high_assurance_hostile_workload_support"] is False
     assert "containerized_oci" in matrix["current_environment"]["available_runner_types"]
+    assert "strong_sandbox_vm" not in matrix["current_environment"]["available_runner_types"]
     assert any(
         "linux-only kernel controls" in entry.lower()
+        for entry in matrix["current_environment"]["degraded_modes"]
+    )
+    assert any(
+        "strong_sandbox_vm" in entry.lower()
+        for entry in matrix["current_environment"]["degraded_modes"]
+    )
+
+
+def test_sandbox_platform_matrix_reports_macos_without_strong_sandbox_support(monkeypatch):
+    from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+    import AINDY.platform_layer.sandbox_runner as sandbox_runner
+
+    monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
+    monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Darwin")
+
+    matrix = sandbox_platform_capability_matrix()
+
+    assert matrix["current_platform"] == "darwin"
+    assert matrix["current_environment"]["support_levels"]["container_sandbox"]["support"] == "supported"
+    assert matrix["current_environment"]["support_levels"]["strong_sandbox"]["support"] == "unsupported"
+    assert matrix["current_environment"]["highest_supported_assurance_class"] == "container-grade-sandbox"
+    assert matrix["current_environment"]["high_assurance_hostile_workload_support"] is False
+    assert any(
+        "native macos kernel policy enforcement" in entry.lower()
         for entry in matrix["current_environment"]["degraded_modes"]
     )

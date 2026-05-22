@@ -26,6 +26,7 @@ class RuntimeSurfaceResponse(BaseModel):
     extension_provenance: dict
     plugin_hosts: dict
     plugin_sandbox_attestation: dict
+    plugin_sandbox_posture: dict
     plugin_sandbox_platform: dict
     ui_mode: str
     default_route: str

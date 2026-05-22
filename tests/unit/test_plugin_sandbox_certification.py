@@ -349,6 +349,11 @@ def handler(state, context):
     )
     assert inventory["default_runner_type"] == "insecure_dev_subprocess"
     assert profile["resource_limit_enforcement"] == "none"
+    assert profile["certification_tier"] == "contained-process-certified"
+    assert profile["tier_status"] == "certified"
+    assert profile["validation_layers"]["shared_worker_policy"]["status"] == "certifiable-shared-worker-policy"
+    assert profile["validation_layers"]["runner_assurance"]["layer"] == "contained-process-certified"
+    assert profile["validation_layers"]["runner_assurance"]["status"] == "not_applicable_for_stronger_assurance"
     report["results"].append(
         _certification_result(
             "hard_resource_limits",
@@ -391,6 +396,7 @@ def test_container_runner_certification_suite_reports_attested_hardening(
     from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
 
     monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST", "sha256:" + ("d" * 64))
     monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_RUNTIME", "docker")
     monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_WRITABLE_TMP", True)
     monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_NO_NEW_PRIVILEGES", True)
@@ -445,8 +451,22 @@ def test_container_runner_certification_suite_reports_attested_hardening(
     assert result["status"] == "SUCCESS"
     assert result["output_patch"]["runner"] == "container"
     assert snapshot["sandbox_attestation"]["isolation_class"] == "containerized-hardened-sandbox"
+    assert snapshot["sandbox_attestation"]["certification"]["certification_tier"] == "container-sandbox-certified"
     assert snapshot["resource_limits"]["enforcement"] == "container-runtime-hard-limits"
     assert "no_new_privileges" in snapshot["sandbox_attestation"]["active_hardening_controls"]
+    assert profile["certification_tier"] == "container-sandbox-certified"
+    assert profile["tier_status"] == "certified"
+    assert profile["validation_layers"]["runner_assurance"]["layer"] == "container-sandbox-certified"
+    assert profile["validation_layers"]["runner_assurance"]["status"] == "passed"
+    assert {
+        check["check_id"]: check["status"]
+        for check in profile["validation_layers"]["runner_assurance"]["checks"]
+    } == {
+        "runner_class_verification": "passed",
+        "verified_runtime_identity": "passed",
+        "verified_resource_limit_mode": "passed",
+        "verified_isolation_reporting": "passed",
+    }
     assert any(
         check["id"] == "hard_resource_limits"
         and check["runner_status"] == "certifiable"
@@ -494,3 +514,266 @@ def test_container_runner_certification_unavailability_is_explicit(
         and check["runner_status"] == "not_certifiable_for_runner"
         for check in profile["checks"]
     )
+    assert profile["certification_tier"] is None
+    assert "launch_attestation.status" in profile["missing_tier_requirements"]
+    assert profile["validation_layers"]["runner_assurance"]["layer"] == "container-sandbox-certified"
+    assert profile["validation_layers"]["runner_assurance"]["status"] == "not_certified"
+
+
+def test_strong_runner_certification_tier_requires_verified_launch_attestation():
+    from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+    uncertified = sandbox_certification_profile(
+        runner_type="strong_sandbox_vm",
+        runner_metadata={
+            "runner_type": "strong_sandbox_vm",
+            "assurance_class": "strong-sandbox-tier",
+            "execution_boundary": "vm-stdio-json-rpc",
+            "isolation_claim": "vm-boundary",
+            "resource_limits": {
+                "enforcement": "sandbox-runtime-hard-limits",
+            },
+            "hardening_controls": {
+                "active_controls": [],
+            },
+            "launch_attestation": {
+                "status": "not-started",
+                "backend_identity": {"verified": False},
+                "runtime_identity": {"verified": False},
+                "mount_mode": {"verified": False},
+                "resource_limit_mode": {"verified": False},
+                "hardening_profiles": {"verified_controls": []},
+            },
+        },
+        platform_matrix={
+            "current_environment": {
+                "support_levels": {
+                    "strong_sandbox": {"support": "supported"},
+                }
+            }
+        },
+    )
+
+    assert uncertified["certification_tier"] is None
+    assert uncertified["tier_status"] == "not_certified_for_runner"
+    assert "launch_attestation.status" in uncertified["missing_tier_requirements"]
+    assert "verified.backend_identity" in uncertified["missing_tier_requirements"]
+    assert "hardening_controls.active_controls" in uncertified["missing_tier_requirements"]
+    assert "verified.read_only_plugin_mount" in uncertified["missing_tier_requirements"]
+    assert uncertified["validation_layers"]["runner_assurance"]["layer"] == "strong-sandbox-certified"
+    assert uncertified["validation_layers"]["runner_assurance"]["status"] == "not_certified"
+
+
+def test_strong_runner_certification_tier_granted_only_with_verified_strong_evidence():
+    from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+    profile = sandbox_certification_profile(
+        runner_type="strong_sandbox_vm",
+        runner_metadata={
+            "runner_type": "strong_sandbox_vm",
+            "assurance_class": "strong-sandbox-tier",
+            "execution_boundary": "vm-stdio-json-rpc",
+            "isolation_claim": "vm-boundary",
+            "resource_limits": {
+                "enforcement": "sandbox-runtime-hard-limits",
+            },
+            "runtime_identity": {
+                "pinned": True,
+            },
+            "hardening_controls": {
+                "active_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ]
+            },
+            "launch_attestation": {
+                "status": "launch-observed",
+                "backend_identity": {"verified": True},
+                "runtime_identity": {"verified": True},
+                "mount_mode": {"verified": True},
+                "resource_limit_mode": {"verified": True},
+                "hardening_profiles": {
+                    "verified_controls": ["read_only_plugin_mount"],
+                },
+            },
+        },
+        platform_matrix={
+            "current_environment": {
+                "support_levels": {
+                    "strong_sandbox": {"support": "supported"},
+                }
+            }
+        },
+    )
+
+    assert profile["certification_tier"] == "strong-sandbox-certified"
+    assert profile["tier_status"] == "certified"
+    assert profile["missing_tier_requirements"] == []
+    assert profile["validation_layers"]["runner_assurance"]["layer"] == "strong-sandbox-certified"
+    assert profile["validation_layers"]["runner_assurance"]["status"] == "passed"
+    assert {
+        check["check_id"]: check["status"]
+        for check in profile["validation_layers"]["runner_assurance"]["checks"]
+    } == {
+        "runner_class_verification": "passed",
+        "verified_runtime_identity": "passed",
+        "verified_hardening_profile_state": "passed",
+        "verified_stronger_isolation_reporting": "passed",
+        "verified_resource_limit_mode": "passed",
+        "fail_closed_unavailability": "not_applicable",
+    }
+
+
+def test_strong_runner_certification_tier_rejected_on_unsupported_platform():
+    from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+    profile = sandbox_certification_profile(
+        runner_type="strong_sandbox_vm",
+        runner_metadata={
+            "runner_type": "strong_sandbox_vm",
+            "assurance_class": "strong-sandbox-tier",
+            "execution_boundary": "vm-stdio-json-rpc",
+            "isolation_claim": "vm-boundary",
+            "resource_limits": {
+                "enforcement": "sandbox-runtime-hard-limits",
+            },
+            "runtime_identity": {
+                "pinned": True,
+            },
+            "hardening_controls": {
+                "active_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ]
+            },
+            "launch_attestation": {
+                "status": "launch-observed",
+                "backend_identity": {"verified": True},
+                "runtime_identity": {"verified": True},
+                "mount_mode": {"verified": True},
+                "resource_limit_mode": {"verified": True},
+                "hardening_profiles": {
+                    "verified_controls": ["read_only_plugin_mount"],
+                },
+            },
+        },
+        platform_matrix={
+            "current_environment": {
+                "support_levels": {
+                    "strong_sandbox": {"support": "unsupported"},
+                }
+            }
+        },
+    )
+
+    assert profile["certification_tier"] is None
+    assert profile["tier_status"] == "not_certified_for_runner"
+    assert "platform_support.strong_sandbox" in profile["missing_tier_requirements"]
+    assert profile["validation_layers"]["runner_assurance"]["layer"] == "strong-sandbox-certified"
+    assert profile["validation_layers"]["runner_assurance"]["status"] == "not_certified"
+
+
+def test_strong_runner_validation_layer_reports_passed_assurance_checks():
+    from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+    profile = sandbox_certification_profile(
+        runner_type="strong_sandbox_vm",
+        runner_metadata={
+            "runner_type": "strong_sandbox_vm",
+            "assurance_class": "strong-sandbox-tier",
+            "execution_boundary": "vm-stdio-json-rpc",
+            "isolation_claim": "vm-boundary",
+            "resource_limits": {
+                "enforcement": "sandbox-runtime-hard-limits",
+            },
+            "runtime_identity": {
+                "pinned": True,
+            },
+            "hardening_controls": {
+                "active_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ]
+            },
+            "launch_attestation": {
+                "status": "launch-observed",
+                "backend_identity": {"verified": True},
+                "runtime_identity": {"verified": True},
+                "mount_mode": {"verified": True},
+                "resource_limit_mode": {"verified": True},
+                "hardening_profiles": {
+                    "verified_controls": ["read_only_plugin_mount"],
+                },
+            },
+        },
+        platform_matrix={
+            "current_environment": {
+                "support_levels": {
+                    "strong_sandbox": {"support": "supported"},
+                }
+            }
+        },
+    )
+
+    assert profile["certification_tier"] == "strong-sandbox-certified"
+    checks = {
+        check["check_id"]: check["status"]
+        for check in profile["validation_layers"]["runner_assurance"]["checks"]
+    }
+    assert checks == {
+        "runner_class_verification": "passed",
+        "verified_runtime_identity": "passed",
+        "verified_hardening_profile_state": "passed",
+        "verified_stronger_isolation_reporting": "passed",
+        "verified_resource_limit_mode": "passed",
+        "fail_closed_unavailability": "not_applicable",
+    }
+
+
+def test_strong_runner_validation_layer_reports_unavailability_as_observable():
+    from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+    profile = sandbox_certification_profile(
+        runner_type="strong_sandbox_vm",
+        runner_metadata={
+            "runner_type": "strong_sandbox_vm",
+            "assurance_class": "strong-sandbox-tier",
+            "execution_boundary": "vm-stdio-json-rpc",
+            "isolation_claim": "vm-boundary",
+            "resource_limits": {
+                "enforcement": "unavailable",
+            },
+            "runtime_identity": {
+                "pinned": False,
+            },
+            "hardening_controls": {
+                "unsupported_controls": [{"control": "strong_sandbox_vm", "reason": "launcher missing"}],
+            },
+            "launch_attestation": {
+                "status": "not-started",
+                "backend_identity": {"verified": False},
+                "runtime_identity": {"verified": False},
+                "mount_mode": {"verified": False},
+                "resource_limit_mode": {"verified": False},
+            },
+        },
+        platform_matrix={
+            "current_environment": {
+                "support_levels": {
+                    "strong_sandbox": {"support": "supported"},
+                }
+            }
+        },
+    )
+
+    checks = {
+        check["check_id"]: check["status"]
+        for check in profile["validation_layers"]["runner_assurance"]["checks"]
+    }
+    assert checks["fail_closed_unavailability"] == "observable"

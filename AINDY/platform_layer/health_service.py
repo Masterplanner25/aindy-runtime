@@ -20,6 +20,10 @@ from AINDY.platform_layer.deployment_contract import (
     event_bus_required,
     get_api_runtime_conditions,
     get_api_runtime_state,
+    hostile_third_party_attestation_requirements,
+    hostile_third_party_attestation_violations,
+    hostile_third_party_profile_required,
+    plugin_sandbox_assurance_posture,
     queue_backend_required,
     redis_required,
     worker_required,
@@ -77,6 +81,9 @@ class SystemHealth:
             "extension_provenance": extension_provenance_inventory(),
             "plugin_hosts": host_inventory,
             "plugin_sandbox_attestation": dict(host_inventory.get("sandbox_attestation") or {}),
+            "plugin_sandbox_posture": plugin_sandbox_assurance_posture(
+                get_api_runtime_state().get("deployment_profile")
+            ),
             "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
             "domains": domains,
             "memory_ingest_queue": get_memory_ingest_queue_status(),
@@ -685,6 +692,7 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
                 "extension_provenance": extension_provenance_inventory(),
                 "plugin_hosts": hosts,
                 "plugin_sandbox_attestation": dict(hosts.get("sandbox_attestation") or {}),
+                "plugin_sandbox_posture": plugin_sandbox_assurance_posture(),
                 "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
             },
             "required_failures": [],
@@ -730,8 +738,35 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         "extension_provenance": extension_provenance_inventory(),
         "plugin_hosts": plugin_hosts,
         "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),
+        "plugin_sandbox_posture": plugin_sandbox_assurance_posture(
+            api_state.get("deployment_profile")
+        ),
         "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
     }
+    if hostile_third_party_profile_required(str(checks["deployment_profile"] or "")):
+        requirements = hostile_third_party_attestation_requirements()
+        host_violations = {
+            str(host.get("name") or "<unknown>"): hostile_third_party_attestation_violations(
+                dict(host.get("sandbox_attestation") or {})
+            )
+            for host in list(plugin_hosts.get("hosts") or [])
+        }
+        checks["plugin_sandbox_attestation_policy"] = {
+            "profile": requirements["profile"],
+            "required_runner_type": requirements["required_runner_type"],
+            "required_assurance_class": requirements["required_assurance_class"],
+            "required_active_policies": dict(
+                requirements["required_active_policies"]
+            ),
+            "required_verified_fields": list(
+                requirements["required_verified_fields"]
+            ),
+            "host_violations": {
+                name: violations
+                for name, violations in host_violations.items()
+                if violations
+            },
+        }
 
     failures: list[str] = []
     if not checks["startup_complete"]:
@@ -813,6 +848,11 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
     checks["plugin_hosts_overall_status"] = plugin_hosts.get("overall_status", "ok")
     if plugin_hosts.get("present") and plugin_hosts.get("overall_status") != "ok":
         failures.append("plugin_hosts")
+    if (
+        hostile_third_party_profile_required(str(checks["deployment_profile"] or ""))
+        and (checks.get("plugin_sandbox_attestation_policy") or {}).get("host_violations")
+    ):
+        failures.append("plugin_sandbox_attestation")
 
     for condition in checks["runtime_conditions"]:
         if condition.get("classification") in {"unsafe_degraded", "startup_fatal"}:
@@ -826,14 +866,17 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         "checks": checks,
         "plugin_hosts": plugin_hosts,
         "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),
+        "plugin_sandbox_posture": plugin_sandbox_assurance_posture(
+            checks.get("deployment_profile")
+        ),
         "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
         "required_failures": failures,
         "deployment_contract": deployment_contract_summary(),
         "readiness_scope": (
             "Ready means the runtime currently satisfies dependency and unsafe-condition "
-            "checks for the active deployment profile. It does not imply extension "
-            "sandboxing, third-party code trust, or a stable contract outside the "
-            "declared public surfaces."
+            "checks for the active deployment profile. Assurance class, attestation, and "
+            "certification are reported separately and must not be conflated. Ready does "
+            "not imply stronger sandbox guarantees than the runtime explicitly reports."
         ),
     }
 

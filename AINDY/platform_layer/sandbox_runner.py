@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -20,11 +21,18 @@ SANDBOX_RUNNER_INTERFACE_VERSION = "2026-05-21"
 SANDBOX_PLATFORM_MATRIX_VERSION = "2026-05-21"
 RUNNER_INSECURE_DEV_SUBPROCESS = "insecure_dev_subprocess"
 RUNNER_CONTAINERIZED_OCI = "containerized_oci"
+RUNNER_STRONG_SANDBOX_VM = "strong_sandbox_vm"
 RUNNER_SELECTION_AUTO = "auto"
 SUPPORTED_SANDBOX_RUNNERS = (
     RUNNER_INSECURE_DEV_SUBPROCESS,
     RUNNER_CONTAINERIZED_OCI,
+    RUNNER_STRONG_SANDBOX_VM,
 )
+
+ASSURANCE_CLASS_INSECURE_DEV = "insecure-dev"
+ASSURANCE_CLASS_CONTAINER = "container-grade-sandbox"
+ASSURANCE_CLASS_STRONG = "strong-sandbox-tier"
+OCI_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 PLATFORM_LINUX = "linux"
 PLATFORM_WINDOWS = "windows"
@@ -36,6 +44,7 @@ def list_supported_sandbox_runners() -> list[dict[str, Any]]:
     return [
         {
             "runner_type": RUNNER_INSECURE_DEV_SUBPROCESS,
+            "assurance_class": ASSURANCE_CLASS_INSECURE_DEV,
             "stability": "current",
             "isolation_claim": "none",
             "execution_boundary": "subprocess-json-rpc",
@@ -48,16 +57,32 @@ def list_supported_sandbox_runners() -> list[dict[str, Any]]:
         },
         {
             "runner_type": RUNNER_CONTAINERIZED_OCI,
+            "assurance_class": ASSURANCE_CLASS_CONTAINER,
             "stability": "current",
             "isolation_claim": "container-boundary",
             "execution_boundary": "container-stdio-json-rpc",
             "kernel_control_reporting": "explicit",
             "resource_limit_enforcement": "container-runtime-hard-limits",
+            "runtime_identity_requirement": "pinned-oci-image-for-production-safe-profiles",
             "operator_note": (
                 "This runner launches the extension worker in an operator-supplied "
                 "container image with a read-only plugin mount and minimal environment. "
                 "It is materially stronger than the dev subprocess runner, but it is "
                 "still not a blanket security guarantee."
+            ),
+        },
+        {
+            "runner_type": RUNNER_STRONG_SANDBOX_VM,
+            "assurance_class": ASSURANCE_CLASS_STRONG,
+            "stability": "current",
+            "isolation_claim": "vm-boundary",
+            "execution_boundary": "vm-stdio-json-rpc",
+            "resource_limit_enforcement": "sandbox-runtime-hard-limits",
+            "runtime_identity_requirement": "pinned-sandbox-image-for-production-safe-profiles",
+            "operator_note": (
+                "This runner targets a dedicated VM-grade sandbox launcher that is "
+                "separate from the generic container runner. The runtime fails closed "
+                "if the launcher or sandbox image is unavailable."
             ),
         },
     ]
@@ -71,6 +96,67 @@ def _platform_label(platform_name: str) -> str:
     if platform_name == PLATFORM_MACOS:
         return "macOS"
     return "Other"
+
+
+def _normalize_digest(digest: str | None) -> str | None:
+    value = str(digest or "").strip()
+    return value or None
+
+
+def classify_oci_runtime_identity(
+    *,
+    reference: str | None,
+    configured_digest: str | None = None,
+) -> dict[str, Any]:
+    configured_reference = str(reference or "").strip()
+    digest_override = _normalize_digest(configured_digest)
+    issues: list[str] = []
+    reference_digest: str | None = None
+    base_reference = configured_reference
+
+    if configured_reference and "@" in configured_reference:
+        base_reference, possible_digest = configured_reference.rsplit("@", 1)
+        if OCI_DIGEST_PATTERN.match(possible_digest):
+            reference_digest = possible_digest
+        else:
+            issues.append("reference digest is not a valid sha256 OCI digest")
+
+    if digest_override and not OCI_DIGEST_PATTERN.match(digest_override):
+        issues.append("configured digest is not a valid sha256 OCI digest")
+
+    if digest_override and reference_digest and digest_override != reference_digest:
+        issues.append("configured digest does not match digest embedded in reference")
+
+    effective_digest = digest_override or reference_digest
+    if effective_digest and configured_reference:
+        launch_reference = f"{base_reference}@{effective_digest}"
+        verification = "configured-digest" if digest_override else "digest-in-reference"
+        pinned = not issues
+    elif configured_reference:
+        launch_reference = configured_reference
+        verification = "mutable-reference"
+        pinned = False
+    else:
+        launch_reference = ""
+        verification = "missing-reference"
+        pinned = False
+
+    return {
+        "identity_kind": "oci-image",
+        "configured_reference": configured_reference or None,
+        "configured_digest": digest_override,
+        "embedded_digest": reference_digest,
+        "launch_reference": launch_reference or None,
+        "digest": effective_digest,
+        "pinned": bool(pinned),
+        "verification": verification,
+        "mutable_reference": bool(configured_reference and not effective_digest),
+        "issues": issues,
+        "operator_note": (
+            "Production-safe third-party plugin execution requires a pinned runtime identity. "
+            "Mutable tags or unqualified image references are not treated as equivalent to a digest-pinned identity."
+        ),
+    }
 
 
 def _normalize_platform_name(name: str | None = None) -> str:
@@ -89,6 +175,8 @@ def _platform_matrix_entry(
     platform_name: str,
     container_runtime: str,
     runtime_available: bool,
+    strong_launcher: str,
+    strong_runtime_available: bool,
 ) -> dict[str, Any]:
     linux = platform_name == PLATFORM_LINUX
     windows = platform_name == PLATFORM_WINDOWS
@@ -96,12 +184,20 @@ def _platform_matrix_entry(
     available_runner_types = [RUNNER_INSECURE_DEV_SUBPROCESS]
     if runtime_available:
         available_runner_types.append(RUNNER_CONTAINERIZED_OCI)
+    if linux and strong_runtime_available:
+        available_runner_types.append(RUNNER_STRONG_SANDBOX_VM)
 
     available_hardening_controls = {
         "insecure_dev_subprocess": [],
         "containerized_oci": [
             "disable_network",
             "read_only_rootfs",
+        ],
+        "strong_sandbox_vm": [
+            "dedicated-vm-boundary",
+            "sandbox-runtime-hard-limits",
+            "read_only_plugin_mount",
+            "minimal_environment",
         ],
     }
     if linux and runtime_available:
@@ -115,6 +211,18 @@ def _platform_matrix_entry(
                 "selinux_label",
             ]
         )
+    if not linux:
+        available_hardening_controls["strong_sandbox_vm"] = []
+
+    process_grade_supported = True
+    container_grade_supported = bool(runtime_available)
+    strong_sandbox_supported = bool(linux and strong_runtime_available)
+    if strong_sandbox_supported:
+        highest_assurance_class = ASSURANCE_CLASS_STRONG
+    elif container_grade_supported:
+        highest_assurance_class = ASSURANCE_CLASS_CONTAINER
+    else:
+        highest_assurance_class = ASSURANCE_CLASS_INSECURE_DEV
 
     unsupported_guarantees = [
         "in-process Python sandboxing",
@@ -126,6 +234,11 @@ def _platform_matrix_entry(
             f"containerized_oci unavailable because container runtime {container_runtime!r} is not on PATH"
         )
         unsupported_guarantees.append("containerized third-party plugin sandbox execution")
+    if not strong_runtime_available:
+        degraded_modes.append(
+            f"strong_sandbox_vm unavailable because sandbox launcher {strong_launcher!r} is not on PATH"
+        )
+        unsupported_guarantees.append("strong sandbox VM third-party plugin execution")
     if windows or macos or platform_name == PLATFORM_OTHER:
         degraded_modes.append(
             "containerized_oci cannot report Linux-only kernel controls such as no_new_privileges, "
@@ -133,6 +246,12 @@ def _platform_matrix_entry(
         )
         unsupported_guarantees.append(
             "Linux-grade hardened third-party plugin sandbox guarantees on non-Linux hosts"
+        )
+        degraded_modes.append(
+            "strong_sandbox_vm is currently characterized only for Linux hosts with a compatible VM sandbox launcher"
+        )
+        unsupported_guarantees.append(
+            "strong sandbox VM guarantees on non-Linux hosts"
         )
     if macos:
         degraded_modes.append(
@@ -146,6 +265,22 @@ def _platform_matrix_entry(
     return {
         "platform": platform_name,
         "label": _platform_label(platform_name),
+        "support_levels": {
+            "contained_process": {
+                "support": "supported" if process_grade_supported else "unsupported",
+                "assurance_class": ASSURANCE_CLASS_INSECURE_DEV,
+            },
+            "container_sandbox": {
+                "support": "supported" if container_grade_supported else "unsupported",
+                "assurance_class": ASSURANCE_CLASS_CONTAINER,
+            },
+            "strong_sandbox": {
+                "support": "supported" if strong_sandbox_supported else "unsupported",
+                "assurance_class": ASSURANCE_CLASS_STRONG,
+            },
+        },
+        "highest_supported_assurance_class": highest_assurance_class,
+        "high_assurance_hostile_workload_support": bool(strong_sandbox_supported),
         "available_runner_types": available_runner_types,
         "available_hardening_controls": available_hardening_controls,
         "production_safe_third_party_plugin_execution": bool(linux and runtime_available),
@@ -153,7 +288,8 @@ def _platform_matrix_entry(
         "degraded_modes": degraded_modes,
         "operator_note": (
             "Production-safe third-party plugin sandbox guarantees are currently characterized only "
-            "for Linux hosts with a compatible container runtime available."
+            "for Linux hosts with a compatible container runtime available. Strong sandbox VM "
+            "guarantees are characterized only for Linux hosts with a compatible strong sandbox launcher."
         ),
     }
 
@@ -165,7 +301,39 @@ def sandbox_platform_capability_matrix(
 ) -> dict[str, Any]:
     runtime_name = str(container_runtime or settings.AINDY_PLUGIN_CONTAINER_RUNTIME or "docker").strip() or "docker"
     runtime_available = shutil.which(runtime_name) is not None
+    strong_launcher = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_LAUNCHER or "aindy-sandbox-vm").strip() or "aindy-sandbox-vm"
+    strong_runtime_available = shutil.which(strong_launcher) is not None
     current_name = _normalize_platform_name(current_platform)
+    supported_platforms = {
+        PLATFORM_LINUX: _platform_matrix_entry(
+            platform_name=PLATFORM_LINUX,
+            container_runtime=runtime_name,
+            runtime_available=True,
+            strong_launcher=strong_launcher,
+            strong_runtime_available=True,
+        ),
+        PLATFORM_WINDOWS: _platform_matrix_entry(
+            platform_name=PLATFORM_WINDOWS,
+            container_runtime=runtime_name,
+            runtime_available=True,
+            strong_launcher=strong_launcher,
+            strong_runtime_available=False,
+        ),
+        PLATFORM_MACOS: _platform_matrix_entry(
+            platform_name=PLATFORM_MACOS,
+            container_runtime=runtime_name,
+            runtime_available=True,
+            strong_launcher=strong_launcher,
+            strong_runtime_available=False,
+        ),
+        PLATFORM_OTHER: _platform_matrix_entry(
+            platform_name=PLATFORM_OTHER,
+            container_runtime=runtime_name,
+            runtime_available=False,
+            strong_launcher=strong_launcher,
+            strong_runtime_available=False,
+        ),
+    }
     return {
         "schema_version": SANDBOX_PLATFORM_MATRIX_VERSION,
         "current_platform": current_name,
@@ -173,29 +341,10 @@ def sandbox_platform_capability_matrix(
             platform_name=current_name,
             container_runtime=runtime_name,
             runtime_available=runtime_available,
+            strong_launcher=strong_launcher,
+            strong_runtime_available=strong_runtime_available,
         ),
-        "supported_platforms": {
-            PLATFORM_LINUX: _platform_matrix_entry(
-                platform_name=PLATFORM_LINUX,
-                container_runtime=runtime_name,
-                runtime_available=runtime_available,
-            ),
-            PLATFORM_WINDOWS: _platform_matrix_entry(
-                platform_name=PLATFORM_WINDOWS,
-                container_runtime=runtime_name,
-                runtime_available=runtime_available,
-            ),
-            PLATFORM_MACOS: _platform_matrix_entry(
-                platform_name=PLATFORM_MACOS,
-                container_runtime=runtime_name,
-                runtime_available=runtime_available,
-            ),
-            PLATFORM_OTHER: _platform_matrix_entry(
-                platform_name=PLATFORM_OTHER,
-                container_runtime=runtime_name,
-                runtime_available=runtime_available,
-            ),
-        },
+        "supported_platforms": supported_platforms,
     }
 
 
@@ -273,6 +422,8 @@ def create_sandbox_runner(runner_type: str | None = None) -> SandboxRunner:
         return InsecureDevSubprocessRunner()
     if resolved == RUNNER_CONTAINERIZED_OCI:
         return ContainerizedOciSandboxRunner()
+    if resolved == RUNNER_STRONG_SANDBOX_VM:
+        return StrongSandboxVmRunner()
     raise ValueError(
         f"Unsupported sandbox runner {resolved!r}. "
         f"Supported values: {', '.join(item['runner_type'] for item in list_supported_sandbox_runners())}."
@@ -286,6 +437,7 @@ class _JsonRpcProcessRunner(SandboxRunner):
         self._stderr_lines: deque[str] = deque(maxlen=20)
         self._stdout_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
+        self._launch_attestation: dict[str, Any] = self._default_launch_attestation()
 
     def start(
         self,
@@ -379,9 +531,72 @@ class _JsonRpcProcessRunner(SandboxRunner):
     def _worker_plugin_root(self, plugin_root: str | Path) -> str:
         return str(plugin_root)
 
+    def _default_launch_attestation(self) -> dict[str, Any]:
+        return {
+            "verification_scope": "none",
+            "status": "not-started",
+            "backend_identity": {
+                "requested": None,
+                "active": None,
+                "verified": False,
+            },
+            "runtime_identity": {
+                "requested": None,
+                "active": None,
+                "verified": False,
+            },
+            "mount_mode": {
+                "requested": None,
+                "active": None,
+                "verified": False,
+            },
+            "writable_temp": {
+                "requested": None,
+                "active": None,
+                "verified": False,
+            },
+            "host_path_access": {
+                "requested": None,
+                "active": None,
+                "verified": False,
+            },
+            "network_mode": {
+                "requested": None,
+                "active": None,
+                "verified": False,
+            },
+            "resource_limit_mode": {
+                "requested": None,
+                "active": None,
+                "verified": False,
+                "verified_limits": [],
+            },
+            "hardening_profiles": {
+                "requested_controls": [],
+                "active_controls": [],
+                "verified_controls": [],
+            },
+            "operator_note": "No launch attestation is available until the runner starts.",
+        }
+
+    def _build_launch_attestation(
+        self,
+        *,
+        args: list[str],
+        plugin_root: str | Path,
+    ) -> dict[str, Any]:
+        _ = args
+        _ = plugin_root
+        return self._default_launch_attestation()
+
     def _spawn_process(self, plugin_root: str | Path) -> None:
+        args = self._process_args(plugin_root)
+        self._launch_attestation = self._build_launch_attestation(
+            args=list(args),
+            plugin_root=plugin_root,
+        )
         process = subprocess.Popen(
-            self._process_args(plugin_root),
+            args,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -485,11 +700,14 @@ class InsecureDevSubprocessRunner(_JsonRpcProcessRunner):
         return RUNNER_INSECURE_DEV_SUBPROCESS
 
     def metadata(self) -> dict[str, Any]:
+        runtime_identity = classify_oci_runtime_identity(reference=None)
         return {
             "runner_type": self.runner_type,
+            "assurance_class": ASSURANCE_CLASS_INSECURE_DEV,
             "interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
             "execution_boundary": "subprocess-json-rpc",
             "isolation_claim": "none",
+            "runtime_identity": runtime_identity,
             "resource_limits": {
                 "enforcement": "none",
                 "wall_clock_timeout_seconds": None,
@@ -501,6 +719,55 @@ class InsecureDevSubprocessRunner(_JsonRpcProcessRunner):
                     "The insecure development subprocess runner does not enforce hard "
                     "memory, CPU, or process quotas. Only higher-level timeout and "
                     "quarantine behavior applies."
+                ),
+            },
+            "launch_attestation": {
+                "verification_scope": "none",
+                "status": "not-applicable",
+                "backend_identity": {
+                    "requested": sys.executable,
+                    "active": sys.executable,
+                    "verified": True,
+                },
+                "runtime_identity": {
+                    "requested": None,
+                    "active": None,
+                    "verified": False,
+                },
+                "mount_mode": {
+                    "requested": "host-process",
+                    "active": "host-process",
+                    "verified": True,
+                },
+                "writable_temp": {
+                    "requested": "host-process",
+                    "active": "host-process",
+                    "verified": True,
+                },
+                "host_path_access": {
+                    "requested": "host-process",
+                    "active": "host-process",
+                    "verified": True,
+                },
+                "network_mode": {
+                    "requested": "host-process",
+                    "active": "host-process",
+                    "verified": True,
+                },
+                "resource_limit_mode": {
+                    "requested": "none",
+                    "active": "none",
+                    "verified": True,
+                    "verified_limits": [],
+                },
+                "hardening_profiles": {
+                    "requested_controls": [],
+                    "active_controls": [],
+                    "verified_controls": [],
+                },
+                "operator_note": (
+                    "The insecure development subprocess runner has no sandbox launch "
+                    "attestation beyond the local Python executable path."
                 ),
             },
             "development_class": "insecure-development-runner",
@@ -546,6 +813,7 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         super().__init__()
         self.container_runtime = str(settings.AINDY_PLUGIN_CONTAINER_RUNTIME or "docker").strip() or "docker"
         self.image = str(settings.AINDY_PLUGIN_CONTAINER_IMAGE or "").strip()
+        self.image_digest = str(settings.AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST or "").strip()
         self.plugin_mount_path = str(settings.AINDY_PLUGIN_CONTAINER_PLUGIN_MOUNT_PATH or "/plugin-root").strip() or "/plugin-root"
         self.workdir = str(settings.AINDY_PLUGIN_CONTAINER_WORKDIR or "/tmp").strip() or "/tmp"
         self.no_new_privileges = bool(settings.AINDY_PLUGIN_CONTAINER_NO_NEW_PRIVILEGES)
@@ -567,6 +835,10 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         return RUNNER_CONTAINERIZED_OCI
 
     def metadata(self) -> dict[str, Any]:
+        runtime_identity = classify_oci_runtime_identity(
+            reference=self.image,
+            configured_digest=self.image_digest,
+        )
         kernel_controls = inspect_container_kernel_controls(
             container_runtime=self.container_runtime,
             requested_controls={
@@ -592,11 +864,13 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         )
         return {
             "runner_type": self.runner_type,
+            "assurance_class": ASSURANCE_CLASS_CONTAINER,
             "interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
             "execution_boundary": "container-stdio-json-rpc",
             "isolation_claim": "container-boundary",
             "container_runtime": self.container_runtime,
             "image": self.image or None,
+            "runtime_identity": runtime_identity,
             "plugin_mount_path": self.plugin_mount_path,
             "plugin_mount_mode": "read-only",
             "writable_tmp": self.writable_tmp,
@@ -604,11 +878,149 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
             "workdir": self.workdir,
             "kernel_controls": kernel_controls,
             "resource_limits": resource_limits,
+            "launch_attestation": dict(self._launch_attestation),
             "selection_mode": "explicit-or-auto",
             "operator_note": (
                 "The containerized OCI runner requires an operator-provided image with "
                 "aindy-runtime installed. The runtime does not silently fall back to the "
                 "development subprocess runner when this mode is selected."
+            ),
+        }
+
+    def _build_launch_attestation(
+        self,
+        *,
+        args: list[str],
+        plugin_root: str | Path,
+    ) -> dict[str, Any]:
+        runtime_identity = classify_oci_runtime_identity(
+            reference=self.image,
+            configured_digest=self.image_digest,
+        )
+        kernel_controls = inspect_container_kernel_controls(
+            container_runtime=self.container_runtime,
+            requested_controls={
+                "no_new_privileges": self.no_new_privileges,
+                "drop_all_capabilities": self.drop_all_capabilities,
+                "disable_network": self.disable_network,
+                "read_only_rootfs": self.read_only_rootfs,
+                "pids_limit": self.pids_limit > 0,
+                "seccomp_profile": bool(self.seccomp_profile),
+                "apparmor_profile": bool(self.apparmor_profile),
+                "selinux_label": bool(self.selinux_label),
+            },
+        )
+        requested_controls = list(kernel_controls.get("requested_controls") or [])
+        active_controls = list(kernel_controls.get("active_controls") or [])
+        verified_controls: list[str] = []
+        args_list = list(args)
+        security_opts = [
+            str(args_list[index + 1])
+            for index, value in enumerate(args_list[:-1])
+            if value == "--security-opt"
+        ]
+        mount_args = [
+            str(args_list[index + 1])
+            for index, value in enumerate(args_list[:-1])
+            if value == "--mount"
+        ]
+        bind_mounts = [value for value in mount_args if "type=bind" in value]
+        tmpfs_mounts = [value for value in mount_args if "type=tmpfs" in value]
+        if "--network" in args_list:
+            idx = args_list.index("--network")
+            if idx + 1 < len(args_list) and args_list[idx + 1] == "none":
+                verified_controls.append("disable_network")
+        if "--read-only" in args_list:
+            verified_controls.append("read_only_rootfs")
+        if "--cap-drop" in args_list:
+            idx = args_list.index("--cap-drop")
+            if idx + 1 < len(args_list) and args_list[idx + 1] == "ALL":
+                verified_controls.append("drop_all_capabilities")
+        if "no-new-privileges" in security_opts:
+            verified_controls.append("no_new_privileges")
+        if "--pids-limit" in args_list:
+            verified_controls.append("pids_limit")
+        if any(str(opt).startswith("seccomp=") for opt in security_opts):
+            verified_controls.append("seccomp_profile")
+        if any(str(opt).startswith("apparmor=") for opt in security_opts):
+            verified_controls.append("apparmor_profile")
+        if any(str(opt).startswith("label=") for opt in security_opts):
+            verified_controls.append("selinux_label")
+        verified_limits = [
+            limit_name
+            for flag, limit_name in (
+                ("--memory", "memory_limit"),
+                ("--cpus", "cpu_limit"),
+                ("--cpu-shares", "cpu_shares"),
+                ("--pids-limit", "process_limit"),
+            )
+            if flag in args_list
+        ]
+        mount_mode_active = None
+        mount_mode_verified = False
+        if any("readonly" in value for value in bind_mounts):
+            mount_mode_active = "read-only"
+            mount_mode_verified = True
+        writable_temp_active = "tmpfs:/tmp" if tmpfs_mounts else "none"
+        writable_temp_verified = any("dst=/tmp" in value for value in tmpfs_mounts)
+        host_path_access_active = "plugin-root-bind-only" if len(bind_mounts) == 1 else "additional-bind-mounts-present"
+        host_path_access_verified = len(bind_mounts) == 1
+        network_mode_active = "none" if "--network" in args_list and "none" in args_list else "default"
+        resource_limit_mode_active = (
+            "container-runtime-hard-limits" if verified_limits else "wall-clock-timeout-only"
+        )
+        resolved_backend = shutil.which(self.container_runtime) or self.container_runtime
+        return {
+            "verification_scope": "launch-argv-and-resolved-executable",
+            "status": "launch-observed",
+            "backend_identity": {
+                "requested": self.container_runtime,
+                "active": resolved_backend,
+                "verified": bool(resolved_backend),
+            },
+            "runtime_identity": {
+                "requested": runtime_identity.get("launch_reference"),
+                "active": runtime_identity.get("launch_reference"),
+                "verified": bool(runtime_identity.get("launch_reference")),
+            },
+            "mount_mode": {
+                "requested": "read-only",
+                "active": mount_mode_active,
+                "verified": mount_mode_verified,
+                "evidence": mount_args,
+                "plugin_root": str(Path(plugin_root).resolve()),
+            },
+            "writable_temp": {
+                "requested": "isolated-tmpfs:/tmp" if self.writable_tmp else "none",
+                "active": writable_temp_active,
+                "verified": writable_temp_verified if self.writable_tmp else True,
+                "evidence": tmpfs_mounts,
+            },
+            "host_path_access": {
+                "requested": "no-ambient-host-paths",
+                "active": host_path_access_active,
+                "verified": host_path_access_verified,
+                "evidence": bind_mounts,
+            },
+            "network_mode": {
+                "requested": "none" if self.disable_network else "default",
+                "active": network_mode_active,
+                "verified": True,
+            },
+            "resource_limit_mode": {
+                "requested": "container-runtime-hard-limits",
+                "active": resource_limit_mode_active,
+                "verified": True,
+                "verified_limits": verified_limits,
+            },
+            "hardening_profiles": {
+                "requested_controls": requested_controls,
+                "active_controls": active_controls,
+                "verified_controls": sorted(set(verified_controls)),
+            },
+            "operator_note": (
+                "Verified controls reflect launch arguments and resolved backend identity "
+                "observed by the runtime. They do not prove kernel enforcement after launch."
             ),
         }
 
@@ -626,9 +1038,18 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         return child_env
 
     def _ensure_container_runtime_ready(self) -> None:
-        if not self.image:
+        runtime_identity = classify_oci_runtime_identity(
+            reference=self.image,
+            configured_digest=self.image_digest,
+        )
+        if not runtime_identity.get("configured_reference"):
             raise RuntimeError(
                 "container sandbox runner requires AINDY_PLUGIN_CONTAINER_IMAGE"
+            )
+        if runtime_identity.get("issues"):
+            raise RuntimeError(
+                "container sandbox runner runtime identity is invalid: "
+                + "; ".join(str(item) for item in runtime_identity["issues"])
             )
         if shutil.which(self.container_runtime) is None:
             raise RuntimeError(
@@ -681,7 +1102,275 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
             args.extend(["--env", f"{key}={value}"])
         args.extend(
             [
-                self.image,
+                classify_oci_runtime_identity(
+                    reference=self.image,
+                    configured_digest=self.image_digest,
+                )["launch_reference"],
+                "python",
+                "-m",
+                "AINDY.platform_layer.extension_worker",
+                "--host",
+            ]
+        )
+        return args
+
+
+class StrongSandboxVmRunner(_JsonRpcProcessRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.launcher = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_LAUNCHER or "aindy-sandbox-vm").strip() or "aindy-sandbox-vm"
+        self.image = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE or "").strip()
+        self.image_digest = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE_DIGEST or "").strip()
+        self.plugin_mount_path = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_PLUGIN_MOUNT_PATH or "/plugin-root").strip() or "/plugin-root"
+        self.workdir = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_WORKDIR or "/work").strip() or "/work"
+        self.memory_limit = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_MEMORY_LIMIT or "").strip()
+        self.cpu_limit = float(settings.AINDY_PLUGIN_STRONG_SANDBOX_CPU_LIMIT or 0.0)
+        self.pids_limit = int(settings.AINDY_PLUGIN_STRONG_SANDBOX_PIDS_LIMIT or 0)
+
+    @property
+    def runner_type(self) -> str:
+        return RUNNER_STRONG_SANDBOX_VM
+
+    def metadata(self) -> dict[str, Any]:
+        runtime_identity = classify_oci_runtime_identity(
+            reference=self.image,
+            configured_digest=self.image_digest,
+        )
+        launcher_available = shutil.which(self.launcher) is not None
+        platform_name = _normalized_platform_system() or "unknown"
+        supported = platform_name == PLATFORM_LINUX and launcher_available
+        unsupported_reasons: list[str] = []
+        if platform_name != PLATFORM_LINUX:
+            unsupported_reasons.append(
+                f"strong_sandbox_vm is currently characterized only for Linux hosts, not {platform_name!r}"
+            )
+        if not launcher_available:
+            unsupported_reasons.append(
+                f"sandbox launcher {self.launcher!r} is not available on PATH"
+            )
+        if not runtime_identity.get("configured_reference"):
+            unsupported_reasons.append(
+                "AINDY_PLUGIN_STRONG_SANDBOX_IMAGE is not configured"
+            )
+        if runtime_identity.get("issues"):
+            unsupported_reasons.extend(str(item) for item in runtime_identity["issues"])
+        return {
+            "runner_type": self.runner_type,
+            "assurance_class": ASSURANCE_CLASS_STRONG,
+            "interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
+            "execution_boundary": "vm-stdio-json-rpc",
+            "isolation_claim": "vm-boundary",
+            "sandbox_launcher": self.launcher,
+            "sandbox_image": self.image or None,
+            "runtime_identity": runtime_identity,
+            "plugin_mount_path": self.plugin_mount_path,
+            "plugin_mount_mode": "read-only",
+            "workdir": self.workdir,
+            "resource_limits": {
+                "enforcement": "sandbox-runtime-hard-limits" if supported and runtime_identity.get("launch_reference") and not runtime_identity.get("issues") else "unavailable",
+                "runtime_available": launcher_available,
+                "effective_limits": {
+                    "wall_clock_timeout_seconds": 30.0,
+                    "memory_limit": self.memory_limit or None,
+                    "cpu_limit": self.cpu_limit or None,
+                    "cpu_shares": None,
+                    "process_limit": self.pids_limit or None,
+                },
+                "unsupported_limits": [] if supported and self.image else [
+                    {
+                        "limit": "sandbox-runtime-hard-limits",
+                        "reason": "; ".join(unsupported_reasons) or "strong sandbox runtime unavailable",
+                    }
+                ],
+                "operator_note": (
+                    "Strong sandbox VM limits are hard limits only when the dedicated sandbox launcher "
+                    "and image are available on a supported host platform."
+                ),
+            },
+            "hardening_controls": {
+                "reporting_version": SANDBOX_RUNNER_INTERFACE_VERSION,
+                "platform": platform_name,
+                "runtime_available": launcher_available,
+                "requested_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ],
+                "supported_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ] if supported else [],
+                "active_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ] if supported and runtime_identity.get("launch_reference") and not runtime_identity.get("issues") else [],
+                "unsupported_controls": [
+                    {
+                        "control": "strong_sandbox_vm",
+                        "reason": "; ".join(unsupported_reasons) or "strong sandbox runtime unavailable",
+                    }
+                ] if unsupported_reasons else [],
+            },
+            "launch_attestation": dict(self._launch_attestation),
+            "selection_mode": "explicit-only",
+            "operator_note": (
+                "The strong sandbox VM runner targets a dedicated higher-assurance sandbox launcher. "
+                "The runtime fails closed when it is selected but unavailable and does not map it "
+                "onto the generic container runner."
+            ),
+        }
+
+    def _build_launch_attestation(
+        self,
+        *,
+        args: list[str],
+        plugin_root: str | Path,
+    ) -> dict[str, Any]:
+        runtime_identity = classify_oci_runtime_identity(
+            reference=self.image,
+            configured_digest=self.image_digest,
+        )
+        verified_limits = [
+            limit_name
+            for flag, limit_name in (
+                ("--memory", "memory_limit"),
+                ("--cpus", "cpu_limit"),
+                ("--pids-limit", "process_limit"),
+            )
+            if flag in args
+        ]
+        verified_controls: list[str] = []
+        if "--mount-readonly" in args:
+            verified_controls.append("read_only_plugin_mount")
+        resolved_backend = shutil.which(self.launcher) or self.launcher
+        return {
+            "verification_scope": "launch-argv-and-resolved-executable",
+            "status": "launch-observed",
+            "backend_identity": {
+                "requested": self.launcher,
+                "active": resolved_backend,
+                "verified": bool(resolved_backend),
+            },
+            "runtime_identity": {
+                "requested": runtime_identity.get("launch_reference"),
+                "active": runtime_identity.get("launch_reference"),
+                "verified": bool(runtime_identity.get("launch_reference")),
+            },
+            "mount_mode": {
+                "requested": "read-only",
+                "active": "read-only" if "--mount-readonly" in args else None,
+                "verified": "--mount-readonly" in args,
+                "evidence": [
+                    str(args[index + 1])
+                    for index, value in enumerate(args[:-1])
+                    if value == "--mount-readonly"
+                ],
+                "plugin_root": str(Path(plugin_root).resolve()),
+            },
+            "writable_temp": {
+                "requested": "launcher-defined",
+                "active": "launcher-defined",
+                "verified": False,
+            },
+            "host_path_access": {
+                "requested": "no-ambient-host-paths",
+                "active": "plugin-root-mount-only" if "--mount-readonly" in args else "unknown",
+                "verified": "--mount-readonly" in args,
+            },
+            "network_mode": {
+                "requested": "launcher-defined",
+                "active": "launcher-defined",
+                "verified": False,
+            },
+            "resource_limit_mode": {
+                "requested": "sandbox-runtime-hard-limits",
+                "active": "sandbox-runtime-hard-limits" if verified_limits else "launcher-default",
+                "verified": bool(verified_limits),
+                "verified_limits": verified_limits,
+            },
+            "hardening_profiles": {
+                "requested_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ],
+                "active_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ] if runtime_identity.get("launch_reference") else [],
+                "verified_controls": sorted(set(verified_controls)),
+            },
+            "operator_note": (
+                "Verified controls reflect launch arguments and resolved launcher identity "
+                "observed by the runtime. VM isolation properties remain launcher-defined."
+            ),
+        }
+
+    def _worker_plugin_root(self, plugin_root: str | Path) -> str:
+        _ = plugin_root
+        return self.plugin_mount_path
+
+    def _build_child_env(self) -> dict[str, str]:
+        return {
+            "PYTHONIOENCODING": "utf-8",
+        }
+
+    def _ensure_strong_sandbox_ready(self) -> None:
+        runtime_identity = classify_oci_runtime_identity(
+            reference=self.image,
+            configured_digest=self.image_digest,
+        )
+        if not runtime_identity.get("configured_reference"):
+            raise RuntimeError(
+                "strong sandbox runner requires AINDY_PLUGIN_STRONG_SANDBOX_IMAGE"
+            )
+        if runtime_identity.get("issues"):
+            raise RuntimeError(
+                "strong sandbox runner runtime identity is invalid: "
+                + "; ".join(str(item) for item in runtime_identity["issues"])
+            )
+        if _normalized_platform_system() != PLATFORM_LINUX:
+            raise RuntimeError(
+                "strong sandbox runner requires a Linux host"
+            )
+        if shutil.which(self.launcher) is None:
+            raise RuntimeError(
+                f"strong sandbox runner unavailable: launcher {self.launcher!r} was not found on PATH"
+            )
+
+    def _process_args(self, plugin_root: str | Path) -> list[str]:
+        self._ensure_strong_sandbox_ready()
+        resolved_plugin_root = str(Path(plugin_root).resolve())
+        args = [
+            self.launcher,
+            "run",
+            "--image",
+            classify_oci_runtime_identity(
+                reference=self.image,
+                configured_digest=self.image_digest,
+            )["launch_reference"],
+            "--mount-readonly",
+            f"{resolved_plugin_root}:{self.plugin_mount_path}",
+            "--workdir",
+            self.workdir,
+        ]
+        if self.memory_limit:
+            args.extend(["--memory", self.memory_limit])
+        if self.cpu_limit > 0:
+            args.extend(["--cpus", f"{self.cpu_limit:g}"])
+        if self.pids_limit > 0:
+            args.extend(["--pids-limit", str(self.pids_limit)])
+        args.extend(
+            [
+                "--",
                 "python",
                 "-m",
                 "AINDY.platform_layer.extension_worker",

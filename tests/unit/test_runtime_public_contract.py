@@ -111,28 +111,87 @@ def test_runtime_public_contract_publishes_sandbox_runner_inventory():
     assert runners["default_external_runner"] == "insecure_dev_subprocess"
     assert runners["selection_policy"]["auto_single_instance"] == "insecure_dev_subprocess"
     assert runners["selection_policy"]["auto_distributed"] == "containerized_oci"
+    assert runners["selection_policy"]["strong_runner_requires_explicit_selection"] == "strong_sandbox_vm"
     runner_types = {entry["runner_type"] for entry in runners["available_runners"]}
-    assert runner_types == {"insecure_dev_subprocess", "containerized_oci"}
+    assert runner_types == {"insecure_dev_subprocess", "containerized_oci", "strong_sandbox_vm"}
     claims = {entry["runner_type"]: entry["isolation_claim"] for entry in runners["available_runners"]}
     assert claims["insecure_dev_subprocess"] == "none"
     assert claims["containerized_oci"] == "container-boundary"
+    assert claims["strong_sandbox_vm"] == "vm-boundary"
     container_runner = next(
         entry for entry in runners["available_runners"]
         if entry["runner_type"] == "containerized_oci"
     )
+    strong_runner = next(
+        entry for entry in runners["available_runners"]
+        if entry["runner_type"] == "strong_sandbox_vm"
+    )
     assert container_runner["kernel_control_reporting"] == "explicit"
+    assert strong_runner["assurance_class"] == "strong-sandbox-tier"
     assert runners["operator_reporting"]["version_surface"] == "runtime.plugin_sandbox_attestation"
     assert runners["operator_reporting"]["health_surface"] == "plugin_sandbox_attestation"
+    assert runners["operator_reporting"]["assurance_posture_surface"] == "runtime.plugin_sandbox_posture"
     assert runners["operator_reporting"]["platform_matrix_surface"] == "runtime.plugin_sandbox_platform"
+    assert "assurance_class" in runners["operator_reporting"]["attestation_fields"]
     assert "isolation_class" in runners["operator_reporting"]["attestation_fields"]
+    assert "certification" in runners["operator_reporting"]["attestation_fields"]
+    assert "runtime_identity" in runners["operator_reporting"]["attestation_fields"]
+    assert "launch_attestation" in runners["operator_reporting"]["attestation_fields"]
+    assert "verified_hardening_controls" in runners["operator_reporting"]["attestation_fields"]
+    assert "mount_isolation" in runners["operator_reporting"]["attestation_fields"]
+    assert "network_isolation" in runners["operator_reporting"]["attestation_fields"]
+    assert runners["operator_reporting"]["attestation_model"]["requested"] == "operator-configured or runner-requested policy"
+    assert runners["operator_reporting"]["attestation_model"]["active"] == "runner metadata for controls the runtime expects to be active"
+    assert runners["operator_reporting"]["attestation_model"]["assurance_class"] == "the current runner category reported by the runtime"
+    assert runners["operator_reporting"]["attestation_model"]["required_assurance_class"] == "the minimum class required by the active deployment profile"
+    assert "mount/network isolation claims" in runners["operator_reporting"]["attestation_model"]["mount_and_network"]
+    assert runners["selection_policy"]["pinned_runtime_identity_required_for_production_safe_profiles"] is True
+    assert runners["selection_policy"]["hostile_third_party_profile"]["profile"] == "hostile-third-party"
+    assert runners["selection_policy"]["hostile_third_party_profile"]["required_runner_type"] == "strong_sandbox_vm"
+    assert (
+        runners["selection_policy"]["hostile_third_party_profile"]["required_assurance_class"]
+        == "strong-sandbox-tier"
+    )
+    assert "launch_attestation.runtime_identity" in runners["selection_policy"]["hostile_third_party_profile"]["required_verified_fields"]
+    assert "strong-sandbox-tier" in runners["assurance_classes"]
     assert runners["certification_contract"]["schema_version"] == "2026-05-21"
+    certification_tiers = {
+        entry["tier"] for entry in runners["certification_contract"]["certification_tiers"]
+    }
+    assert certification_tiers == {
+        "contained-process-certified",
+        "container-sandbox-certified",
+        "strong-sandbox-certified",
+    }
     assert runners["active_certification_profile"]["runner_type"] == "insecure_dev_subprocess"
     assert runners["active_certification_profile"]["shared_worker_policy_status"] == "certifiable-shared-worker-policy"
+    assert runners["active_certification_profile"]["certification_tier"] == "contained-process-certified"
+    assert runners["active_certification_profile"]["tier_status"] == "certified"
+    assert "assurance_validation_checks" in runners["certification_contract"]
+    assert "strong-sandbox-certified" in runners["certification_contract"]["assurance_validation_checks"]
+    strong_validation_ids = {
+        entry["id"]
+        for entry in runners["certification_contract"]["assurance_validation_checks"]["strong-sandbox-certified"]
+    }
+    assert strong_validation_ids == {
+        "runner_class_verification",
+        "verified_runtime_identity",
+        "verified_hardening_profile_state",
+        "verified_stronger_isolation_reporting",
+        "verified_resource_limit_mode",
+        "fail_closed_unavailability",
+    }
+    assert runners["active_certification_profile"]["validation_layers"]["runner_assurance"]["layer"] == "contained-process-certified"
     assert runners["platform_matrix"]["schema_version"] == "2026-05-21"
     assert runners["platform_matrix"]["current_platform"] in {"linux", "windows", "darwin", "other"}
     assert "linux" in runners["platform_matrix"]["supported_platforms"]
     assert "windows" in runners["platform_matrix"]["supported_platforms"]
+    assert runners["platform_matrix"]["supported_platforms"]["linux"]["support_levels"]["strong_sandbox"]["support"] == "supported"
+    assert runners["platform_matrix"]["supported_platforms"]["windows"]["support_levels"]["strong_sandbox"]["support"] == "unsupported"
     assert "fails closed" in runners["notes"]
+    assert "directly observes at launch time" in runners["notes"]
+    assert "hostile-third-party" in runners["notes"]
+    assert "not interchangeable" in runners["notes"]
 
 
 def test_runtime_public_contract_describes_external_python_override_precisely():

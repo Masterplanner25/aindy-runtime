@@ -4,6 +4,7 @@ import atexit
 import logging
 import secrets
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -12,13 +13,19 @@ from typing import Any
 
 from AINDY.platform_layer.sandbox_runner import (
     RUNNER_INSECURE_DEV_SUBPROCESS,
+    RUNNER_STRONG_SANDBOX_VM,
     SANDBOX_RUNNER_INTERFACE_VERSION,
     SandboxRunner,
     create_sandbox_runner,
     list_supported_sandbox_runners,
     resolve_sandbox_runner_type,
 )
+from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
 from AINDY.platform_layer.deployment_contract import (
+    get_api_runtime_state,
+    hostile_third_party_attestation_violations,
+    hostile_third_party_profile_required,
+    resolve_api_deployment_profile,
     validate_external_third_party_plugin_runtime_policy,
 )
 
@@ -34,6 +41,7 @@ DEFAULT_PLUGIN_HOST_TIMEOUT_QUARANTINE_THRESHOLD = 2
 DEFAULT_PLUGIN_HOST_CONTRACT_VIOLATION_QUARANTINE_THRESHOLD = 2
 DEFAULT_PLUGIN_HOST_QUARANTINE_SECONDS = 300.0
 PLUGIN_HOST_PROTOCOL_VERSION = "2026-05-20"
+RUNTIME_API_CHANNEL_TTL_SECONDS = 30.0
 
 _HOSTS_LOCK = threading.RLock()
 _HOSTS: dict[str, "PluginHostRecord"] = {}
@@ -52,6 +60,7 @@ class PluginHostRecord:
     granted_capabilities: list[str]
     resource_access: dict[str, Any] = field(default_factory=dict)
     runner_type: str = RUNNER_INSECURE_DEV_SUBPROCESS
+    sandbox_instance_id: str = field(default_factory=lambda: secrets.token_hex(12))
     heartbeat_timeout_seconds: float = DEFAULT_PLUGIN_HOST_HEARTBEAT_TIMEOUT_SECONDS
     runner: SandboxRunner | None = None
     state: str = "stopped"
@@ -274,10 +283,15 @@ def _prepare_context(
     extension_name: str,
     owner_class: str,
     granted_capabilities: list[str],
+    sandbox_instance_id: str,
+    runner_type: str,
     runtime_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     base = dict(runtime_context or {})
     channel_id = secrets.token_hex(8)
+    channel_nonce = secrets.token_hex(12)
+    issued_at = time.time()
+    expires_at = issued_at + RUNTIME_API_CHANNEL_TTL_SECONDS
     plugin_context = {
         "user_id": str(base.get("user_id") or ""),
         "run_id": str(base.get("run_id") or base.get("trace_id") or ""),
@@ -290,13 +304,21 @@ def _prepare_context(
         "node_name": extension_name,
         "runtime_api": {
             "channel_type": "worker-authenticated-rpc",
-            "channel_version": "2026-05-21",
+            "channel_version": "2026-05-22",
             "runtime_channel_id": channel_id,
+            "sandbox_instance_id": sandbox_instance_id,
+            "expires_at": expires_at,
         },
     }
     runtime_api_auth = dict(plugin_context)
+    runtime_api_auth["auth_version"] = "2026-05-22"
     runtime_api_auth["runtime_channel_id"] = channel_id
     runtime_api_auth["runtime_channel_token"] = secrets.token_hex(16)
+    runtime_api_auth["runtime_channel_nonce"] = channel_nonce
+    runtime_api_auth["issued_at"] = issued_at
+    runtime_api_auth["expires_at"] = expires_at
+    runtime_api_auth["sandbox_instance_id"] = sandbox_instance_id
+    runtime_api_auth["runner_type"] = runner_type
     return {
         "plugin_context": plugin_context,
         "runtime_api_auth": runtime_api_auth,
@@ -311,6 +333,12 @@ def _runner_metadata(runner_type: str) -> dict[str, Any]:
 def _sandbox_isolation_class(*, runner_type: str, runner_metadata: dict[str, Any]) -> str:
     if runner_type == RUNNER_INSECURE_DEV_SUBPROCESS:
         return "insecure-dev-subprocess"
+    if runner_type == RUNNER_STRONG_SANDBOX_VM:
+        hardening_controls = dict(runner_metadata.get("hardening_controls") or {})
+        resource_limits = dict(runner_metadata.get("resource_limits") or {})
+        if hardening_controls.get("active_controls") and resource_limits.get("enforcement") == "sandbox-runtime-hard-limits":
+            return "strong-sandbox-vm"
+        return "strong-sandbox-vm-unavailable"
     kernel_controls = dict(runner_metadata.get("kernel_controls") or {})
     resource_limits = dict(runner_metadata.get("resource_limits") or {})
     if kernel_controls.get("active_controls") or resource_limits.get("enforcement") == "container-runtime-hard-limits":
@@ -326,7 +354,9 @@ def _host_sandbox_attestation(
     provenance: dict[str, Any],
 ) -> dict[str, Any]:
     kernel_controls = dict(runner_metadata.get("kernel_controls") or {})
+    hardening_controls = dict(runner_metadata.get("hardening_controls") or {})
     resource_limits = dict(runner_metadata.get("resource_limits") or {})
+    launch_attestation = dict(runner_metadata.get("launch_attestation") or {})
     network_policy = dict(resource_access.get("network") or {})
     filesystem_policy = dict(resource_access.get("filesystem") or {})
     provenance_status = {
@@ -336,29 +366,79 @@ def _host_sandbox_attestation(
         "verification": provenance.get("verification"),
         "integrity": dict(provenance.get("integrity") or {}),
     }
+    runtime_identity = dict(runner_metadata.get("runtime_identity") or {})
+    certification = sandbox_certification_profile(
+        runner_type=runner_type,
+        runner_metadata=runner_metadata,
+    )
+    mount_mode = dict(launch_attestation.get("mount_mode") or {})
+    writable_temp = dict(launch_attestation.get("writable_temp") or {})
+    host_path_access = dict(launch_attestation.get("host_path_access") or {})
+    network_mode = dict(launch_attestation.get("network_mode") or {})
     return {
         "runner_type": runner_type,
+        "assurance_class": runner_metadata.get("assurance_class"),
         "isolation_class": _sandbox_isolation_class(
             runner_type=runner_type,
             runner_metadata=runner_metadata,
         ),
         "execution_boundary": runner_metadata.get("execution_boundary"),
         "isolation_claim": runner_metadata.get("isolation_claim"),
-        "active_hardening_controls": list(kernel_controls.get("active_controls") or []),
-        "supported_hardening_controls": list(kernel_controls.get("supported_controls") or []),
-        "unsupported_hardening_controls": list(kernel_controls.get("unsupported_controls") or []),
+        "requested_hardening_controls": list(
+            kernel_controls.get("requested_controls") or hardening_controls.get("requested_controls") or []
+        ),
+        "active_hardening_controls": list(
+            kernel_controls.get("active_controls") or hardening_controls.get("active_controls") or []
+        ),
+        "verified_hardening_controls": list(
+            ((launch_attestation.get("hardening_profiles") or {}).get("verified_controls") or [])
+        ),
+        "supported_hardening_controls": list(
+            kernel_controls.get("supported_controls") or hardening_controls.get("supported_controls") or []
+        ),
+        "unsupported_hardening_controls": list(
+            kernel_controls.get("unsupported_controls") or hardening_controls.get("unsupported_controls") or []
+        ),
         "effective_resource_limits": resource_limits,
+        "launch_attestation": launch_attestation,
+        "mount_isolation": {
+            "artifact_mount": mount_mode,
+            "writable_temp": writable_temp,
+            "host_path_access": host_path_access,
+            "filesystem_default": filesystem_policy.get("default"),
+            "filesystem_writes": filesystem_policy.get("writes"),
+        },
+        "runtime_identity": runtime_identity,
+        "certification": certification,
+        "network_isolation": {
+            "boundary": network_mode,
+            "outbound_default": network_policy.get("default"),
+            "deny_by_default": (
+                network_policy.get("default") == "deny"
+                or network_mode.get("active") == "none"
+            ),
+            "capability_required": network_policy.get("capability_required"),
+            "private_target_policy": network_policy.get("private_target_policy"),
+        },
         "network_policy": network_policy,
         "filesystem_policy": filesystem_policy,
         "provenance_status": provenance_status,
         "operator_note": (
-            "This attestation reflects the runtime-enforced runner, controls, limits, "
-            "and extension provenance currently active for this plugin host."
+            "This attestation distinguishes requested policy, active runner metadata, and launch-verified "
+            "backend state for this plugin host. Verified fields are limited to what the runtime directly "
+            "observes at launch time."
         ),
     }
 
 
 def _inventory_sandbox_attestation(hosts: list[dict[str, Any]]) -> dict[str, Any]:
+    assurance_classes_present = sorted(
+        {
+            str((host.get("sandbox_attestation") or {}).get("assurance_class") or "")
+            for host in hosts
+            if (host.get("sandbox_attestation") or {}).get("assurance_class")
+        }
+    )
     isolation_classes_present = sorted(
         {
             str((host.get("sandbox_attestation") or {}).get("isolation_class") or "")
@@ -380,22 +460,60 @@ def _inventory_sandbox_attestation(hosts: list[dict[str, Any]]) -> dict[str, Any
             for control in list((host.get("sandbox_attestation") or {}).get("active_hardening_controls") or [])
         }
     )
+    certification_tiers_present = sorted(
+        {
+            str(
+                ((host.get("sandbox_attestation") or {}).get("certification") or {}).get(
+                    "certification_tier"
+                )
+                or ""
+            )
+            for host in hosts
+            if ((host.get("sandbox_attestation") or {}).get("certification") or {}).get(
+                "certification_tier"
+            )
+        }
+    )
     return {
         "present": bool(hosts),
         "host_count": len(hosts),
         "runner_types_present": runner_types_present,
+        "assurance_classes_present": assurance_classes_present,
         "isolation_classes_present": isolation_classes_present,
+        "certification_tiers_present": certification_tiers_present,
         "active_hardening_controls_present": active_controls,
         "hosts": [
             {
                 "name": host.get("name"),
                 "runner_type": (host.get("sandbox_attestation") or {}).get("runner_type"),
+                "assurance_class": (host.get("sandbox_attestation") or {}).get("assurance_class"),
                 "isolation_class": (host.get("sandbox_attestation") or {}).get("isolation_class"),
+                "requested_hardening_controls": list(
+                    (host.get("sandbox_attestation") or {}).get("requested_hardening_controls") or []
+                ),
                 "active_hardening_controls": list(
                     (host.get("sandbox_attestation") or {}).get("active_hardening_controls") or []
                 ),
+                "verified_hardening_controls": list(
+                    (host.get("sandbox_attestation") or {}).get("verified_hardening_controls") or []
+                ),
                 "effective_resource_limits": dict(
                     (host.get("sandbox_attestation") or {}).get("effective_resource_limits") or {}
+                ),
+                "launch_attestation": dict(
+                    (host.get("sandbox_attestation") or {}).get("launch_attestation") or {}
+                ),
+                "mount_isolation": dict(
+                    (host.get("sandbox_attestation") or {}).get("mount_isolation") or {}
+                ),
+                "runtime_identity": dict(
+                    (host.get("sandbox_attestation") or {}).get("runtime_identity") or {}
+                ),
+                "certification": dict(
+                    (host.get("sandbox_attestation") or {}).get("certification") or {}
+                ),
+                "network_isolation": dict(
+                    (host.get("sandbox_attestation") or {}).get("network_isolation") or {}
                 ),
                 "network_policy": dict(
                     (host.get("sandbox_attestation") or {}).get("network_policy") or {}
@@ -410,8 +528,8 @@ def _inventory_sandbox_attestation(hosts: list[dict[str, Any]]) -> dict[str, Any
             for host in hosts
         ],
         "operator_note": (
-            "Sandbox attestation summarizes the effective isolation mode, hardening controls, "
-            "resource limits, and provenance state for third-party plugin hosts."
+            "Sandbox attestation summarizes requested policy, active runner metadata, launch-verified "
+            "state, pinned runtime identity, resource limits, and provenance for third-party plugin hosts."
         ),
     }
 
@@ -419,6 +537,7 @@ def _inventory_sandbox_attestation(hosts: list[dict[str, Any]]) -> dict[str, Any
 def _start_record(record: PluginHostRecord, *, runtime_context: dict[str, Any] | None) -> dict[str, Any]:
     _assert_host_not_quarantined(record)
     record.runner = create_sandbox_runner(record.runner_type)
+    record.sandbox_instance_id = secrets.token_hex(12)
     record.launch_count += 1
     record.state = "starting"
     record.last_start_at = _utcnow_iso()
@@ -432,6 +551,8 @@ def _start_record(record: PluginHostRecord, *, runtime_context: dict[str, Any] |
             extension_name=record.name,
             owner_class=record.owner_class,
             granted_capabilities=record.granted_capabilities,
+            sandbox_instance_id=record.sandbox_instance_id,
+            runner_type=record.runner_type,
             runtime_context=runtime_context,
         ),
     )
@@ -440,7 +561,39 @@ def _start_record(record: PluginHostRecord, *, runtime_context: dict[str, Any] |
     record.provenance = merged_provenance
     record.state = "running"
     record.last_heartbeat_at = _utcnow_iso()
-    return record.snapshot()
+    snapshot = record.snapshot()
+    active_profile_name = str(
+        get_api_runtime_state().get("deployment_profile") or ""
+    ).strip()
+    if not active_profile_name or active_profile_name == "unknown":
+        try:
+            active_profile_name, _ = resolve_api_deployment_profile()
+        except Exception:
+            active_profile_name = ""
+    if (
+        record.owner_class == "external-third-party"
+        and hostile_third_party_profile_required(active_profile_name)
+    ):
+        violations = hostile_third_party_attestation_violations(
+            dict(snapshot.get("sandbox_attestation") or {})
+        )
+        if violations:
+            _mark_failure(
+                record,
+                state="failed",
+                error=(
+                    "plugin host launch did not satisfy hostile-third-party sandbox "
+                    f"attestation requirements: {', '.join(violations)}"
+                ),
+                kind="contract_violation",
+            )
+            _terminate_record_process(record, force_kill=True)
+            raise RuntimeError(
+                "hostile-third-party sandbox admission failed because live sandbox "
+                f"attestation requirements were not verified: {', '.join(violations)}"
+            )
+        snapshot = record.snapshot()
+    return snapshot
 
 
 def _terminate_record_process(record: PluginHostRecord, *, force_kill: bool = False) -> None:
@@ -603,6 +756,8 @@ def execute_plugin_host(
                         extension_name=record.name,
                         owner_class=record.owner_class,
                         granted_capabilities=record.granted_capabilities,
+                        sandbox_instance_id=record.sandbox_instance_id,
+                        runner_type=record.runner_type,
                         runtime_context=runtime_context,
                     ),
                     timeout_seconds=DEFAULT_PLUGIN_HOST_EXECUTE_TIMEOUT_SECONDS,
@@ -687,7 +842,11 @@ def plugin_host_inventory(*, probe: bool = False) -> dict[str, Any]:
     default_runner_note = (
         "The current default runner is insecure_dev_subprocess, which is not a sandbox."
         if default_runner_type == RUNNER_INSECURE_DEV_SUBPROCESS
-        else "The current default runner is containerized_oci, which requires an operator-supplied container runtime and image."
+        else (
+            "The current default runner is strong_sandbox_vm, which requires a Linux host plus a dedicated sandbox launcher and image."
+            if default_runner_type == RUNNER_STRONG_SANDBOX_VM
+            else "The current default runner is containerized_oci, which requires an operator-supplied container runtime and image."
+        )
     )
     return {
         "present": bool(hosts),
