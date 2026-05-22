@@ -48,6 +48,7 @@ class NodeRegistration(BaseModel):
     name: str = Field(...)
     type: str = Field(...)
     handler: str = Field(...)
+    artifact_path: Optional[str] = Field(None)
     timeout_seconds: int = Field(10, ge=1, le=30)
     secret: Optional[str] = Field(None)
     capabilities: List[str] = Field(default_factory=list)

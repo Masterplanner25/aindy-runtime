@@ -7,6 +7,18 @@ from AINDY.platform_layer.extension_abi import extension_abi_policy
 from AINDY.platform_layer.extension_capabilities import extension_capability_policy
 from AINDY.platform_layer.extension_policy import external_python_override_state
 from AINDY.platform_layer.extension_provenance import extension_provenance_policy
+from AINDY.platform_layer.sandbox_certification import (
+    sandbox_certification_contract,
+    sandbox_certification_profile,
+)
+from AINDY.platform_layer.sandbox_runner import (
+    RUNNER_SELECTION_AUTO,
+    RUNNER_INSECURE_DEV_SUBPROCESS,
+    resolve_sandbox_runner_type,
+    SANDBOX_RUNNER_INTERFACE_VERSION,
+    list_supported_sandbox_runners,
+    sandbox_platform_capability_matrix,
+)
 
 
 PUBLIC_CONTRACT_SCHEMA_VERSION = "2026-05-20"
@@ -164,6 +176,43 @@ def _extension_surface_contract() -> dict[str, object]:
         "abi": abi_policy,
         "capability_model": capability_policy,
         "provenance_policy": extension_provenance_policy(),
+        "sandbox_runners": {
+            "interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
+            "configured_selection": RUNNER_SELECTION_AUTO,
+            "default_external_runner": resolve_sandbox_runner_type(),
+            "available_runners": list_supported_sandbox_runners(),
+            "certification_contract": sandbox_certification_contract(),
+            "active_certification_profile": sandbox_certification_profile(
+                runner_type=resolve_sandbox_runner_type()
+            ),
+            "platform_matrix": sandbox_platform_capability_matrix(),
+            "operator_reporting": {
+                "version_surface": "runtime.plugin_sandbox_attestation",
+                "health_surface": "plugin_sandbox_attestation",
+                "readiness_surface": "checks.plugin_sandbox_attestation",
+                "platform_matrix_surface": "runtime.plugin_sandbox_platform",
+                "attestation_fields": [
+                    "runner_type",
+                    "isolation_class",
+                    "active_hardening_controls",
+                    "effective_resource_limits",
+                    "network_policy",
+                    "filesystem_policy",
+                    "provenance_status",
+                ],
+            },
+            "selection_policy": {
+                "explicit_setting_env_var": "AINDY_PLUGIN_SANDBOX_RUNNER",
+                "auto_single_instance": RUNNER_INSECURE_DEV_SUBPROCESS,
+                "auto_distributed": "containerized_oci",
+            },
+            "notes": (
+                "Third-party plugin-host execution targets a runtime-owned sandbox runner "
+                "interface. The current subprocess-backed runner is a containment boundary, "
+                "not a sandbox guarantee. When the container runner is selected, the runtime "
+                "fails closed if the container runtime or image is unavailable."
+            ),
+        },
         "ownership_classes": [
             "runtime-built-in",
             "first-party-app",
@@ -239,7 +288,7 @@ def _extension_surface_contract() -> dict[str, object]:
                 "surface": "dynamic plugin nodes",
                 "entrypoint": "AINDY.platform_layer.node_registry.register_external_node(type='plugin')",
                 "abi_versions": abi_policy["surfaces"]["dynamic-node-registration"]["supported_versions"],
-                "notes": "Runtime-built-in and first-party plugin nodes are trusted in-process code; third-party plugin nodes use an isolated plugin-host boundary.",
+                "notes": "Runtime-built-in and first-party plugin nodes are trusted in-process code; third-party plugin nodes must be admitted as verified plugin artifacts and run through the isolated plugin-host boundary.",
             },
             {
                 "surface": "webhook nodes",

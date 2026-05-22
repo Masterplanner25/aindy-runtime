@@ -112,6 +112,7 @@ class ManifestDeclarativeNodeEntry(BaseModel):
     name: str = Field(..., min_length=1)
     type: str = Field(..., min_length=1)
     handler: str = Field(..., min_length=1)
+    artifact_path: str | None = None
     timeout_seconds: int = Field(10, ge=1, le=30)
     secret: str | None = None
     capabilities: list[str] = Field(default_factory=list)

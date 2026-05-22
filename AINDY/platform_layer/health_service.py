@@ -32,6 +32,7 @@ from AINDY.platform_layer.extension_provenance_inventory import (
     extension_provenance_inventory,
 )
 from AINDY.platform_layer.plugin_host import plugin_host_inventory
+from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
 from AINDY.db.schema_contract import ensure_runtime_schema
 from AINDY.db.schema_contract import runtime_schema_contract_metadata
 from AINDY.platform_layer.registry import get_all_health_checks
@@ -75,6 +76,8 @@ class SystemHealth:
             "trusted_python_execution": trusted_python_execution_inventory(),
             "extension_provenance": extension_provenance_inventory(),
             "plugin_hosts": host_inventory,
+            "plugin_sandbox_attestation": dict(host_inventory.get("sandbox_attestation") or {}),
+            "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
             "domains": domains,
             "memory_ingest_queue": get_memory_ingest_queue_status(),
             "deployment_contract": deployment_contract_summary(),
@@ -681,6 +684,8 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
                 "trusted_python_execution": inventory,
                 "extension_provenance": extension_provenance_inventory(),
                 "plugin_hosts": hosts,
+                "plugin_sandbox_attestation": dict(hosts.get("sandbox_attestation") or {}),
+                "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
             },
             "required_failures": [],
             "deployment_contract": deployment_contract_summary(),
@@ -724,6 +729,8 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         "trusted_python_execution": trusted_python_execution_inventory(),
         "extension_provenance": extension_provenance_inventory(),
         "plugin_hosts": plugin_hosts,
+        "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),
+        "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
     }
 
     failures: list[str] = []
@@ -818,6 +825,8 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "checks": checks,
         "plugin_hosts": plugin_hosts,
+        "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),
+        "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
         "required_failures": failures,
         "deployment_contract": deployment_contract_summary(),
         "readiness_scope": (

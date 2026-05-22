@@ -6,26 +6,25 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tests.helpers_plugin_artifacts import build_plugin_artifact
 
 
 pytestmark = pytest.mark.runtime_only
 
 
-def _sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _plugin_provenance(plugin_file: Path, *, extension_id: str | None = None) -> dict[str, object]:
-    return {
-        "extension_id": extension_id or plugin_file.stem,
-        "version": "1.0.0",
-        "source_type": "external-source-tree",
-        "source_ref": str(plugin_file),
-        "integrity": {
-            "algorithm": "sha256",
-            "value": _sha256_file(plugin_file),
-        },
-    }
+def _third_party_plugin_artifact(
+    tmp_path: Path,
+    *,
+    module_name: str,
+    source: str,
+    extension_id: str,
+) -> dict[str, object]:
+    return build_plugin_artifact(
+        tmp_path,
+        module_name=module_name,
+        source=source,
+        extension_id=extension_id,
+    )
 
 
 def _json_sha256(payload: dict[str, object]) -> str:
@@ -180,24 +179,22 @@ def test_dynamic_plugin_node_uses_isolated_worker_by_default(monkeypatch, tmp_pa
     from AINDY.platform_layer.node_registry import get_dynamic_node, register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "safe_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="safe_node",
+        extension_id="vendor.third-party-plugin",
+        source="""
 def handler(state, context):
     return {"status": "SUCCESS", "output_patch": {"seen": state.get("value")}}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     meta = register_external_node(
         "third-party-plugin",
         "plugin",
-        "safe_node:handler",
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.third-party-plugin"),
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
     )
 
     assert meta["owner_class"] == "external-third-party"
@@ -234,34 +231,41 @@ def test_dynamic_plugin_node_granted_capability_path_succeeds(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "memory_cap_node.py"
-    plugin_file.write_text(
-        """
-from AINDY.platform_layer.extension_runtime_api import get_granted_capabilities, require_capability
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="memory_cap_node",
+        extension_id="vendor.memory-cap-plugin",
+        source="""
+from AINDY.platform_layer.extension_runtime_api import (
+    get_execution_metadata,
+    get_granted_capabilities,
+    require_capability,
+)
 
 def handler(state, context):
     require_capability("memory.read")
+    metadata = get_execution_metadata()
     return {
         "status": "SUCCESS",
         "output_patch": {
             "granted_capabilities": get_granted_capabilities(),
             "has_db": "db" in context,
+            "has_runtime_channel_token": "runtime_channel_token" in context,
+            "channel_type": context.get("runtime_api", {}).get("channel_type"),
+            "metadata_channel_type": metadata.get("channel_type"),
+            "metadata_channel_id_matches": metadata.get("runtime_channel_id") == context.get("runtime_api", {}).get("runtime_channel_id"),
         },
     }
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     meta = register_external_node(
         "memory-cap-plugin",
         "plugin",
-        "memory_cap_node:handler",
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
         capabilities=["memory.read"],
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.memory-cap-plugin"),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -274,6 +278,10 @@ def handler(state, context):
     assert result["status"] == "SUCCESS"
     assert result["output_patch"]["granted_capabilities"] == ["memory.read"]
     assert result["output_patch"]["has_db"] is False
+    assert result["output_patch"]["has_runtime_channel_token"] is False
+    assert result["output_patch"]["channel_type"] == "worker-authenticated-rpc"
+    assert result["output_patch"]["metadata_channel_type"] == "worker-authenticated-rpc"
+    assert result["output_patch"]["metadata_channel_id_matches"] is True
 
 
 def test_dynamic_plugin_node_denies_ungranted_memory_read_capability(
@@ -282,27 +290,25 @@ def test_dynamic_plugin_node_denies_ungranted_memory_read_capability(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "denied_memory_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="denied_memory_node",
+        extension_id="vendor.denied-memory-plugin",
+        source="""
 from AINDY.platform_layer.extension_runtime_api import memory_read
 
 def handler(state, context):
     memory_read(query="forbidden")
     return {"status": "SUCCESS"}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     register_external_node(
         "denied-memory-plugin",
         "plugin",
-        "denied_memory_node:handler",
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.denied-memory-plugin"),
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -318,27 +324,25 @@ def test_dynamic_plugin_node_denies_outbound_http_without_capability(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "denied_network_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="denied_network_node",
+        extension_id="vendor.denied-network-plugin",
+        source="""
 import socket
 
 def handler(state, context):
     socket.create_connection(("127.0.0.1", 9), timeout=0.1)
     return {"status": "SUCCESS"}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     register_external_node(
         "denied-network-plugin",
         "plugin",
-        "denied_network_node:handler",
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.denied-network-plugin"),
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -354,29 +358,27 @@ def test_dynamic_plugin_node_denies_private_targets_even_with_outbound_http(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "private_network_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="private_network_node",
+        extension_id="vendor.private-network-plugin",
+        source="""
 import socket
 
 def handler(state, context):
     socket.create_connection(("127.0.0.1", 9), timeout=0.01)
     return {"status": "SUCCESS"}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
     monkeypatch.delenv("AINDY_ALLOW_PRIVATE_EXTENSION_TARGETS", raising=False)
 
     register_external_node(
         "private-network-plugin",
         "plugin",
-        "private_network_node:handler",
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
         capabilities=["outbound.http"],
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.private-network-plugin"),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -392,12 +394,11 @@ def test_dynamic_plugin_node_private_target_override_allows_attempt(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "override_network_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="override_network_node",
+        extension_id="vendor.override-network-plugin",
+        source="""
 import socket
 
 def handler(state, context):
@@ -405,19 +406,18 @@ def handler(state, context):
         socket.create_connection(("127.0.0.1", 9), timeout=0.01)
     except Exception as exc:
         return {"status": "SUCCESS", "output_patch": {"error_type": type(exc).__name__}}
-    return {"status": "SUCCESS", "output_patch": {"error_type": "none"}}
-""".strip(),
-        encoding="utf-8",
+        return {"status": "SUCCESS", "output_patch": {"error_type": "none"}}
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
     monkeypatch.setenv("AINDY_ALLOW_PRIVATE_EXTENSION_TARGETS", "true")
 
     register_external_node(
         "override-network-plugin",
         "plugin",
-        "override_network_node:handler",
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
         capabilities=["outbound.http"],
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.override-network-plugin"),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -433,27 +433,25 @@ def test_dynamic_plugin_node_allows_read_only_access_within_plugin_root(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "self_read_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="self_read_node",
+        extension_id="vendor.self-read-plugin",
+        source="""
 from pathlib import Path
 
 def handler(state, context):
     text = Path(__file__).read_text(encoding="utf-8")
     return {"status": "SUCCESS", "output_patch": {"contains_handler": "def handler" in text}}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     register_external_node(
         "self-read-plugin",
         "plugin",
-        "self_read_node:handler",
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.self-read-plugin"),
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -471,27 +469,25 @@ def test_dynamic_plugin_node_blocks_filesystem_access_outside_plugin_root(
 
     outside_file = tmp_path / "outside.txt"
     outside_file.write_text("secret", encoding="utf-8")
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "blocked_fs_node.py"
-    plugin_file.write_text(
-        f"""
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="blocked_fs_node",
+        extension_id="vendor.blocked-fs-plugin",
+        source=f"""
 from pathlib import Path
 
 def handler(state, context):
     Path(r\"{outside_file}\").read_text(encoding=\"utf-8\")
     return {{\"status\": \"SUCCESS\"}}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     register_external_node(
         "blocked-fs-plugin",
         "plugin",
-        "blocked_fs_node:handler",
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.blocked-fs-plugin"),
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -507,27 +503,25 @@ def test_dynamic_plugin_node_blocks_filesystem_writes(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "blocked_write_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="blocked_write_node",
+        extension_id="vendor.blocked-write-plugin",
+        source="""
 from pathlib import Path
 
 def handler(state, context):
     Path(__file__).write_text("overwrite", encoding="utf-8")
     return {"status": "SUCCESS"}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     register_external_node(
         "blocked-write-plugin",
         "plugin",
-        "blocked_write_node:handler",
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.blocked-write-plugin"),
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -543,12 +537,11 @@ def test_dynamic_plugin_node_does_not_receive_runtime_secret_environment(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "env_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="env_node",
+        extension_id="vendor.env-plugin",
+        source="""
 import os
 
 def handler(state, context):
@@ -560,18 +553,17 @@ def handler(state, context):
             "has_path": "PATH" in os.environ,
         },
     }
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
     monkeypatch.setenv("DATABASE_URL", "postgresql://secret")
 
     meta = register_external_node(
         "env-plugin",
         "plugin",
-        "env_node:handler",
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.env-plugin"),
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -589,29 +581,109 @@ def test_dynamic_plugin_node_blocks_internal_runtime_import_bypass(
 ):
     from AINDY.platform_layer.node_registry import register_external_node
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "blocked_import_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="blocked_import_node",
+        extension_id="vendor.blocked-import-plugin",
+        source="""
 from AINDY.config import settings
 
 def handler(state, context):
     return {"status": "SUCCESS", "output_patch": {"env": settings.ENV}}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     with pytest.raises(ValueError, match="plugin runtime import blocked"):
         register_external_node(
             "blocked-import-plugin",
             "plugin",
-            "blocked_import_node:handler",
-            provenance=_plugin_provenance(plugin_file, extension_id="vendor.blocked-import-plugin"),
+            artifact["handler"],
+            artifact_path=str(artifact["artifact_root"]),
+            provenance=artifact["provenance"],
             overwrite=True,
         )
+
+
+def test_dynamic_plugin_node_cannot_rebind_runtime_api_channel(
+    monkeypatch, tmp_path, clean_dynamic_runtime_state
+):
+    from AINDY.platform_layer.node_registry import register_external_node
+    from AINDY.runtime.flow_engine import NODE_REGISTRY
+
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="rebind_runtime_api_node",
+        extension_id="vendor.rebind-runtime-api-plugin",
+        source="""
+from AINDY.platform_layer import extension_runtime_api
+
+def handler(state, context):
+    try:
+        extension_runtime_api._install_runtime_api_channel(bridge=lambda *_args, **_kwargs: {})
+    except Exception as exc:
+        return {
+            "status": "SUCCESS",
+            "output_patch": {
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            },
+        }
+    return {"status": "FAILURE", "error": "runtime channel rebind unexpectedly succeeded"}
+""",
+    )
+
+    register_external_node(
+        "rebind-runtime-api-plugin",
+        "plugin",
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
+        overwrite=True,
+    )
+
+    result = NODE_REGISTRY["rebind-runtime-api-plugin"]({}, {"user_id": "user-1", "run_id": "run-1"})
+
+    assert result["status"] == "SUCCESS"
+    assert result["output_patch"]["error_type"] == "PermissionError"
+    assert "restricted to the extension worker" in result["output_patch"]["message"]
+
+
+def test_dynamic_plugin_node_cannot_see_extension_worker_module(
+    monkeypatch, tmp_path, clean_dynamic_runtime_state
+):
+    from AINDY.platform_layer.node_registry import register_external_node
+    from AINDY.runtime.flow_engine import NODE_REGISTRY
+
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="sysmodules_probe_node",
+        extension_id="vendor.sysmodules-probe-plugin",
+        source="""
+import sys
+
+def handler(state, context):
+    return {
+        "status": "SUCCESS",
+        "output_patch": {
+            "has_extension_worker_module": "AINDY.platform_layer.extension_worker" in sys.modules,
+        },
+    }
+""",
+    )
+
+    register_external_node(
+        "sysmodules-probe-plugin",
+        "plugin",
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
+        overwrite=True,
+    )
+
+    result = NODE_REGISTRY["sysmodules-probe-plugin"]({}, {"user_id": "user-1", "run_id": "run-1"})
+
+    assert result["status"] == "SUCCESS"
+    assert result["output_patch"]["has_extension_worker_module"] is False
 
 
 def test_dynamic_plugin_node_allows_first_party_trusted_integration(monkeypatch, tmp_path, clean_dynamic_runtime_state):
@@ -659,26 +731,24 @@ def test_dynamic_plugin_node_crash_does_not_crash_runtime_process(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "crash_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="crash_node",
+        extension_id="vendor.crashing-third-party-plugin",
+        source="""
 import os
 
 def handler(state, context):
     os._exit(7)
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     meta = register_external_node(
         "crashing-third-party-plugin",
         "plugin",
-        "crash_node:handler",
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.crashing-third-party-plugin"),
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -703,24 +773,22 @@ def test_dynamic_plugin_node_worker_failure_is_surfaced_cleanly(
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_engine import NODE_REGISTRY
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "boom_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="boom_node",
+        extension_id="vendor.failing-third-party-plugin",
+        source="""
 def handler(state, context):
     raise RuntimeError("boom")
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     register_external_node(
         "failing-third-party-plugin",
         "plugin",
-        "boom_node:handler",
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.failing-third-party-plugin"),
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
+        provenance=artifact["provenance"],
         overwrite=True,
     )
 
@@ -811,25 +879,22 @@ def test_registry_restore_loads_external_plugin_nodes_through_isolated_boundary(
         def query(self, _model):
             return FakeQuery(self._rows)
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "safe_node.py"
-    plugin_file.write_text(
-        """
+    artifact = _third_party_plugin_artifact(
+        tmp_path,
+        module_name="safe_node",
+        extension_id="vendor.restored-third-party-plugin",
+        source="""
 def handler(state, context):
     return {"status": "SUCCESS"}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
     stats = {"nodes_loaded": 0, "nodes_skipped": 0}
     row = SimpleNamespace(
         name="restored-third-party-plugin",
         node_type="plugin",
         owner_class="external-third-party",
-        handler_config={"handler": "safe_node:handler"},
-        provenance=_plugin_provenance(plugin_file, extension_id="vendor.restored-third-party-plugin"),
+        handler_config={"handler": artifact["handler"], "artifact_path": str(artifact["artifact_root"])},
+        provenance=artifact["provenance"],
         secret=None,
         created_by="user-1",
     )

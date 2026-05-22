@@ -60,8 +60,10 @@ from AINDY.platform_layer.extension_policy import (
     validate_extension_owner_class,
     validate_outbound_extension_url,
 )
+from AINDY.platform_layer.plugin_artifacts import admit_plugin_artifact
 from AINDY.platform_layer.extension_provenance import (
     SOURCE_WEBHOOK_INTEGRATION,
+    derive_plugin_artifact_provenance,
     derive_python_extension_provenance,
     derive_structured_extension_provenance,
 )
@@ -328,6 +330,7 @@ def _make_isolated_plugin_node(
     name: str,
     handler: str,
     *,
+    plugin_root: str,
     owner_class: str,
     granted_capabilities: list[str],
     provenance: dict[str, Any] | None = None,
@@ -341,7 +344,7 @@ def _make_isolated_plugin_node(
         host = start_plugin_host(
             name=name,
             handler=handler,
-            plugin_root=str(_PLUGINS_DIR),
+            plugin_root=plugin_root,
             owner_class=owner_class,
             granted_capabilities=granted_capabilities,
             resource_access=resource_access,
@@ -356,6 +359,7 @@ def _make_isolated_plugin_node(
     except Exception as exc:
         raise ValueError(str(exc)) from exc
     provenance = dict(host.get("provenance") or {})
+    runner_type = host.get("runner_type")
 
     def isolated_plugin_node(state: dict, context: dict) -> dict:
         try:
@@ -383,7 +387,10 @@ def _make_isolated_plugin_node(
 
     isolated_plugin_node.__name__ = name
     isolated_plugin_node.__qualname__ = f"isolated_plugin_node[{name}]"
-    return isolated_plugin_node, provenance
+    return isolated_plugin_node, {
+        "provenance": provenance,
+        "runner_type": runner_type,
+    }
 
 
 def _validate_plugin_callable(fn: Callable, handler: str) -> None:
@@ -426,6 +433,7 @@ def register_external_node(
     *,
     timeout_seconds: int = 10,
     secret: str | None = None,
+    artifact_path: str | None = None,
     user_id: str | None = None,
     owner_class: str = OWNER_EXTERNAL_THIRD_PARTY,
     capabilities: list[str] | None = None,
@@ -471,6 +479,7 @@ def register_external_node(
     )
 
     worker_provenance: dict[str, Any] = {}
+    plugin_runner_type: str | None = None
     if node_type == "webhook":
         validate_outbound_extension_url(handler, field_name="webhook handler")
         timeout_seconds = max(1, min(int(timeout_seconds), _WEBHOOK_MAX_TIMEOUT))
@@ -508,27 +517,42 @@ def register_external_node(
             identifier=handler,
         )
         if owner_class == OWNER_EXTERNAL_THIRD_PARTY:
-            module_name, function_name, source_path = _resolve_plugin_source(handler)
-            source_provenance = derive_python_extension_provenance(
+            if not artifact_path:
+                raise ValueError(
+                    "external-third-party plugin nodes require artifact_path and do not admit loose source-tree handlers"
+                )
+            admitted_artifact = admit_plugin_artifact(
+                artifact_path=artifact_path,
+                expected_owner_class=owner_class,
+                expected_handler=handler,
+            )
+            module_name, function_name = handler.rsplit(":", 1)
+            source_provenance = derive_plugin_artifact_provenance(
                 owner_class=owner_class,
                 surface="dynamic-plugin-node",
                 extension_name=name,
-                module_name=module_name,
-                source_path=source_path,
+                extension_id=str(admitted_artifact["extension_id"]),
+                version=str(admitted_artifact["version"]),
+                artifact_path=str(admitted_artifact["artifact_root"]),
+                observed_hash=str(admitted_artifact["integrity_hash"]),
+                publisher=admitted_artifact.get("publisher"),
                 declared=provenance,
                 allow_legacy_missing=allow_legacy_missing_provenance,
             )
-            node_fn, worker_provenance = _make_isolated_plugin_node(
+            node_fn, isolated_meta = _make_isolated_plugin_node(
                 name,
-                handler,
+                str(admitted_artifact["entrypoint"]),
+                plugin_root=str(admitted_artifact["code_path"]),
                 owner_class=owner_class,
                 granted_capabilities=granted_capabilities,
                 provenance=source_provenance,
             )
+            worker_provenance = dict(isolated_meta.get("provenance") or {})
+            plugin_runner_type = str(isolated_meta.get("runner_type") or "")
             worker_provenance = dict(worker_provenance or {})
             worker_provenance.setdefault("module_name", module_name)
             worker_provenance.setdefault("function_name", function_name)
-            worker_provenance.setdefault("source_path", str(source_path))
+            worker_provenance.setdefault("source_path", str(admitted_artifact["code_path"]))
         else:
             node_fn = _load_plugin_node(handler)  # raises ValueError on failure
             worker_provenance = getattr(node_fn, "__aindy_extension_provenance__", {})
@@ -582,6 +606,9 @@ def register_external_node(
                 "dynamic-plugin-node" if node_type == "plugin" else "webhook-node"
             ),
             "handler": handler,
+            "artifact_path": (
+                artifact_path if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY else None
+            ),
             "module_name": worker_provenance.get("module_name") if node_type == "plugin" else None,
             "function_name": worker_provenance.get("function_name") if node_type == "plugin" else None,
             "source_path": worker_provenance.get("source_path") if node_type == "plugin" else None,
@@ -589,6 +616,16 @@ def register_external_node(
             "provenance": source_provenance,
             "transport": (
                 "plugin-host-rpc"
+                if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY
+                else None
+            ),
+            "resource_limits": (
+                dict((get_plugin_host(name) or {}).get("resource_limits") or {})
+                if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY
+                else None
+            ),
+            "runner_type": (
+                plugin_runner_type or None
                 if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY
                 else None
             ),
@@ -610,6 +647,7 @@ def register_external_node(
             handler,
             secret=secret,
             timeout_seconds=timeout_seconds,
+            artifact_path=artifact_path,
             user_id=user_id,
             owner_class=owner_class,
             capabilities=granted_capabilities,
@@ -631,6 +669,7 @@ def _persist_node(
     *,
     secret: str | None,
     timeout_seconds: int,
+    artifact_path: str | None,
     user_id: str | None,
     owner_class: str,
     capabilities: list[str],
@@ -648,7 +687,11 @@ def _persist_node(
             "capabilities": list(capabilities),
         }
     else:
-        handler_config = {"handler": handler, "capabilities": list(capabilities)}
+        handler_config = {
+            "handler": handler,
+            "artifact_path": artifact_path,
+            "capabilities": list(capabilities),
+        }
 
     now = datetime.now(timezone.utc)
 

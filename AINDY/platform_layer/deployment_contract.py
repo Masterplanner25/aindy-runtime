@@ -6,6 +6,13 @@ from typing import Any
 
 from AINDY.config import settings
 from AINDY.platform_layer.extension_policy import external_python_override_state
+from AINDY.platform_layer.sandbox_runner import (
+    RUNNER_CONTAINERIZED_OCI,
+    RUNNER_INSECURE_DEV_SUBPROCESS,
+    RUNNER_SELECTION_AUTO,
+    resolve_sandbox_runner_type,
+    sandbox_platform_capability_matrix,
+)
 
 BOOT_MODE_ENV_VAR = "AINDY_BOOT_MODE"
 DEPLOYMENT_PROFILE_ENV_VAR = "AINDY_DEPLOYMENT_PROFILE"
@@ -151,7 +158,10 @@ def runtime_ui_surface_state() -> dict[str, Any]:
     from AINDY.platform_layer.extension_provenance_inventory import (
         extension_provenance_inventory,
     )
+    from AINDY.platform_layer.plugin_host import plugin_host_inventory
+    from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
 
+    plugin_hosts = plugin_host_inventory(probe=False)
     return {
         "process_role": api_state.get("process_role", PROCESS_ROLE_API),
         "boot_mode": boot_mode,
@@ -176,6 +186,9 @@ def runtime_ui_surface_state() -> dict[str, Any]:
         ),
         "trusted_python_execution": trusted_python_execution_summary(),
         "extension_provenance": extension_provenance_inventory(),
+        "plugin_hosts": plugin_hosts,
+        "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),
+        "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
         "ui_mode": RUNTIME_ONLY_BOOT_MODE if runtime_only else APP_PROFILE_BOOT_MODE,
         "default_route": "/memory" if runtime_only else "/dashboard",
         "platform_home": "/platform/agent",
@@ -328,6 +341,110 @@ def background_leadership_mode_for_profile(profile_name: str) -> str:
     return str(get_deployment_profile_contract(profile_name)["background_leadership_mode"])
 
 
+def production_safe_plugin_sandbox_required(profile_name: str) -> bool:
+    return profile_name in {
+        DEPLOYMENT_PROFILE_DISTRIBUTED_API,
+        DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER,
+    }
+
+
+def selected_plugin_sandbox_policy() -> dict[str, Any]:
+    configured = str(settings.AINDY_PLUGIN_SANDBOX_RUNNER or RUNNER_SELECTION_AUTO).strip() or RUNNER_SELECTION_AUTO
+    resolved = resolve_sandbox_runner_type(configured)
+    platform_matrix = sandbox_platform_capability_matrix()
+    return {
+        "configured_runner": configured,
+        "resolved_runner": resolved,
+        "container_image_configured": bool(str(settings.AINDY_PLUGIN_CONTAINER_IMAGE or "").strip()),
+        "platform_matrix": platform_matrix,
+    }
+
+
+def validate_plugin_sandbox_profile_policy(*, profile_name: str, process_role: str) -> dict[str, Any]:
+    policy = selected_plugin_sandbox_policy()
+    if not production_safe_plugin_sandbox_required(profile_name):
+        return policy
+
+    configured = str(policy["configured_runner"])
+    resolved = str(policy["resolved_runner"])
+    if configured == RUNNER_SELECTION_AUTO:
+        raise RuntimeError(
+            f"{process_role} deployment profile {profile_name!r} requires an explicit "
+            "third-party plugin sandbox runner. Set AINDY_PLUGIN_SANDBOX_RUNNER=containerized_oci; "
+            "AINDY_PLUGIN_SANDBOX_RUNNER=auto is not allowed for production-safe profiles."
+        )
+    if resolved == RUNNER_INSECURE_DEV_SUBPROCESS:
+        raise RuntimeError(
+            f"{process_role} deployment profile {profile_name!r} does not permit "
+            "AINDY_PLUGIN_SANDBOX_RUNNER=insecure_dev_subprocess. "
+            "Use AINDY_PLUGIN_SANDBOX_RUNNER=containerized_oci for production-safe third-party plugin execution."
+        )
+    if resolved == RUNNER_CONTAINERIZED_OCI and not policy["container_image_configured"]:
+        raise RuntimeError(
+            f"{process_role} deployment profile {profile_name!r} requires "
+            "AINDY_PLUGIN_CONTAINER_IMAGE when third-party plugin sandboxing is enabled."
+        )
+    if resolved == RUNNER_CONTAINERIZED_OCI and not bool(
+        ((policy.get("platform_matrix") or {}).get("current_environment") or {}).get(
+            "production_safe_third_party_plugin_execution",
+            False,
+        )
+    ):
+        current_platform = str(
+            ((policy.get("platform_matrix") or {}).get("current_platform") or "unknown")
+        )
+        raise RuntimeError(
+            f"{process_role} deployment profile {profile_name!r} requires a Linux host with "
+            f"compatible container sandbox support for third-party plugins. Current platform={current_platform!r}."
+        )
+    return policy
+
+
+def validate_external_third_party_plugin_runtime_policy(*, identifier: str) -> dict[str, Any]:
+    profile_name = str(get_api_runtime_state().get("deployment_profile") or "").strip()
+    if not profile_name or profile_name == "unknown":
+        try:
+            profile_name, _ = resolve_api_deployment_profile()
+        except Exception:
+            profile_name = DEPLOYMENT_PROFILE_SINGLE_INSTANCE
+
+    policy = selected_plugin_sandbox_policy()
+    configured = str(policy["configured_runner"])
+    resolved = str(policy["resolved_runner"])
+    if production_safe_plugin_sandbox_required(profile_name) and configured == RUNNER_SELECTION_AUTO:
+        raise RuntimeError(
+            f"external-third-party plugin {identifier!r} is not allowed under deployment profile "
+            f"{profile_name!r} while AINDY_PLUGIN_SANDBOX_RUNNER=auto. "
+            "Set AINDY_PLUGIN_SANDBOX_RUNNER=containerized_oci explicitly."
+        )
+    if production_safe_plugin_sandbox_required(profile_name) and resolved == RUNNER_INSECURE_DEV_SUBPROCESS:
+        raise RuntimeError(
+            f"external-third-party plugin {identifier!r} is not allowed under deployment profile "
+            f"{profile_name!r} with runner insecure_dev_subprocess. "
+            "Use AINDY_PLUGIN_SANDBOX_RUNNER=containerized_oci."
+        )
+    if resolved == RUNNER_CONTAINERIZED_OCI and not policy["container_image_configured"]:
+        raise RuntimeError(
+            f"external-third-party plugin {identifier!r} requires AINDY_PLUGIN_CONTAINER_IMAGE "
+            "for containerized sandbox execution."
+        )
+    if resolved == RUNNER_CONTAINERIZED_OCI and not bool(
+        ((policy.get("platform_matrix") or {}).get("current_environment") or {}).get(
+            "production_safe_third_party_plugin_execution",
+            False,
+        )
+    ) and production_safe_plugin_sandbox_required(profile_name):
+        current_platform = str(
+            ((policy.get("platform_matrix") or {}).get("current_platform") or "unknown")
+        )
+        raise RuntimeError(
+            f"external-third-party plugin {identifier!r} is not allowed under deployment profile "
+            f"{profile_name!r} because platform {current_platform!r} does not provide the "
+            "documented production-safe third-party sandbox guarantees."
+        )
+    return policy
+
+
 def validate_api_deployment_profile() -> dict[str, Any]:
     profile_name, source = resolve_api_deployment_profile()
     errors: list[str] = []
@@ -358,8 +475,13 @@ def validate_api_deployment_profile() -> dict[str, Any]:
         raise RuntimeError(
             f"Invalid deployment profile {profile_name!r}: " + "; ".join(errors)
         )
+    sandbox_policy = validate_plugin_sandbox_profile_policy(
+        profile_name=profile_name,
+        process_role=PROCESS_ROLE_API,
+    )
     contract = get_deployment_profile_contract(profile_name)
     contract["source"] = source
+    contract["plugin_sandbox_policy"] = sandbox_policy
     return contract
 
 
@@ -378,8 +500,13 @@ def validate_worker_deployment_profile() -> dict[str, Any]:
         raise RuntimeError(
             f"Invalid deployment profile {profile_name!r}: " + "; ".join(errors)
         )
+    sandbox_policy = validate_plugin_sandbox_profile_policy(
+        profile_name=profile_name,
+        process_role=PROCESS_ROLE_WORKER,
+    )
     contract = get_deployment_profile_contract(profile_name)
     contract["source"] = source
+    contract["plugin_sandbox_policy"] = sandbox_policy
     return contract
 
 
@@ -575,6 +702,7 @@ def deployment_contract_summary() -> dict[str, Any]:
             "queue_backend": queue_backend_required(),
             "schema_enforcement": schema_enforcement_required(),
         },
+        "plugin_sandbox_policy": selected_plugin_sandbox_policy(),
         "optional_in_dev": {
             "redis": settings.is_dev or settings.is_testing,
             "worker": settings.is_dev or settings.is_testing,

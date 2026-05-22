@@ -50,6 +50,7 @@ def register_node(request: Request, body: NodeRegistration, db: Session = Depend
                 name=body.name,
                 node_type=body.type,
                 handler=body.handler,
+                artifact_path=body.artifact_path,
                 timeout_seconds=body.timeout_seconds,
                 secret=body.secret,
                 capabilities=body.capabilities,

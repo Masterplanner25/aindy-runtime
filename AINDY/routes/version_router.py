@@ -24,6 +24,9 @@ class RuntimeSurfaceResponse(BaseModel):
     external_python_override_execution_model: str
     trusted_python_execution: dict
     extension_provenance: dict
+    plugin_hosts: dict
+    plugin_sandbox_attestation: dict
+    plugin_sandbox_platform: dict
     ui_mode: str
     default_route: str
     platform_home: str

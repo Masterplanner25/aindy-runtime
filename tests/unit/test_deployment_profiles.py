@@ -61,6 +61,45 @@ def test_distributed_api_profile_requires_redis(monkeypatch):
         validate_api_deployment_profile()
 
 
+def test_distributed_api_profile_rejects_ambiguous_plugin_runner(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_API)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "auto")
+
+    with pytest.raises(RuntimeError, match="AINDY_PLUGIN_SANDBOX_RUNNER=auto is not allowed"):
+        validate_api_deployment_profile()
+
+
+def test_distributed_api_profile_rejects_insecure_dev_plugin_runner(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_API)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "insecure_dev_subprocess")
+
+    with pytest.raises(RuntimeError, match="does not permit AINDY_PLUGIN_SANDBOX_RUNNER=insecure_dev_subprocess"):
+        validate_api_deployment_profile()
+
+
+def test_distributed_api_profile_accepts_explicit_container_plugin_runner(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_API)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "containerized_oci")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "docker")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Linux")
+
+    profile = validate_api_deployment_profile()
+
+    assert profile["plugin_sandbox_policy"]["configured_runner"] == "containerized_oci"
+    assert profile["plugin_sandbox_policy"]["resolved_runner"] == "containerized_oci"
+    assert profile["plugin_sandbox_policy"]["platform_matrix"]["current_platform"] == "linux"
+
+
 def test_worker_profile_requires_distributed_mode(monkeypatch):
     monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER)
     monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "thread")
@@ -68,6 +107,30 @@ def test_worker_profile_requires_distributed_mode(monkeypatch):
 
     with pytest.raises(RuntimeError, match="requires EXECUTION_MODE=distributed"):
         validate_worker_deployment_profile()
+
+
+def test_distributed_worker_profile_rejects_ambiguous_plugin_runner(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_WORKER)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "auto")
+
+    with pytest.raises(RuntimeError, match="requires an explicit third-party plugin sandbox runner"):
+        validate_worker_deployment_profile()
+
+
+def test_distributed_api_profile_rejects_non_linux_container_sandbox_host(monkeypatch):
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", DEPLOYMENT_PROFILE_DISTRIBUTED_API)
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.EXECUTION_MODE", "distributed")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.REDIS_URL", "redis://example")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_CACHE_BACKEND", "redis")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_SANDBOX_RUNNER", "containerized_oci")
+    monkeypatch.setattr("AINDY.platform_layer.deployment_contract.settings.AINDY_PLUGIN_CONTAINER_IMAGE", "ghcr.io/example/aindy-runtime:test")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "docker")
+    monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Windows")
+
+    with pytest.raises(RuntimeError, match="requires a Linux host with compatible container sandbox support"):
+        validate_api_deployment_profile()
 
 
 def test_distributed_api_missing_worker_is_startup_fatal_in_production(monkeypatch):

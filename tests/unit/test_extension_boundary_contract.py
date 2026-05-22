@@ -196,39 +196,23 @@ def test_tool_suggestion_providers_do_not_receive_db_handles():
     assert captured["suggestion_context"]["model"] == {"_redacted_type": "object"}
 
 
-def test_extension_runtime_api_requires_tenant_identity_for_runtime_calls():
+def test_extension_runtime_api_rejects_direct_channel_bootstrap():
     from AINDY.platform_layer import extension_runtime_api
 
-    extension_runtime_api._configure_runtime_context(
-        {
-            "user_id": "",
-            "granted_capabilities": ["memory.read"],
-            "trace_id": "trace-1",
-            "extension_name": "tenantless-plugin",
-            "owner_class": "external-third-party",
-        }
-    )
+    with pytest.raises(PermissionError, match="restricted to the extension worker"):
+        extension_runtime_api._install_runtime_api_channel(bridge=lambda *_args, **_kwargs: {})
 
-    with pytest.raises(PermissionError, match="TENANT_VIOLATION"):
+
+def test_extension_runtime_api_denies_unauthenticated_runtime_calls():
+    from AINDY.platform_layer import extension_runtime_api
+
+    with pytest.raises(PermissionError, match="UNAUTHENTICATED_EXTENSION_CHANNEL"):
         extension_runtime_api.memory_read(query="alpha")
 
 
-def test_extension_runtime_api_rejects_cross_tenant_tool_args(monkeypatch):
+def test_extension_runtime_api_exposes_no_ambient_runtime_handles():
     from AINDY.platform_layer import extension_runtime_api
 
-    extension_runtime_api._configure_runtime_context(
-        {
-            "user_id": "tenant-a",
-            "granted_capabilities": ["tool.invoke"],
-            "trace_id": "trace-1",
-            "extension_name": "scoped-plugin",
-            "owner_class": "external-third-party",
-        }
-    )
-    monkeypatch.setattr(extension_runtime_api, "SessionLocal", lambda: object())
-
-    with pytest.raises(PermissionError, match="TENANT_VIOLATION"):
-        extension_runtime_api.tool_invoke(
-            tool_name="demo.tool",
-            args={"user_id": "tenant-b"},
-        )
+    assert hasattr(extension_runtime_api, "dispatch_syscall") is False
+    assert hasattr(extension_runtime_api, "SessionLocal") is False
+    assert hasattr(extension_runtime_api, "execute_tool") is False

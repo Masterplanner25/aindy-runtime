@@ -86,6 +86,14 @@ Current hardening:
 - external third-party dynamic plugin nodes no longer import into the runtime
   process; they validate and execute through `AINDY.platform_layer.extension_worker`
   over a subprocess request/response boundary
+- third-party plugin-host lifecycle is now mediated through the runtime-owned
+  sandbox runner interface; the current implementation is
+  `insecure_dev_subprocess`, which is a containment boundary rather than a
+  sandbox claim
+- when `containerized_oci` is selected, the runtime reports kernel-level
+  hardening controls explicitly per environment, including active controls and
+  unsupported controls; it does not claim Linux security features are active on
+  platforms where they cannot be enforced
 - external third-party dynamic plugin nodes receive no ambient runtime
   capabilities by default; allowed runtime interactions must be granted
   explicitly and go through the runtime extension API
@@ -101,6 +109,48 @@ Current hardening:
 - plugin node handlers are loaded only from `AINDY/plugins/nodes/`
 - plugin node loading no longer mutates `sys.path`
 - plugin node handlers must expose a callable compatible with the node contract
+
+## Supported Platform Sandbox Matrix
+
+The runtime now publishes a platform capability matrix through `/api/version`,
+`/health`, and `/ready`. The matrix is runtime-owned and reflects the current
+host platform rather than implying uniform guarantees across operating systems.
+
+Current support summary:
+
+- Linux
+  - available runners: `insecure_dev_subprocess`, `containerized_oci`
+  - production-safe third-party plugin sandbox support: yes, when a compatible
+    container runtime is available
+  - stronger controls may be reported active for `containerized_oci`, including
+    `no_new_privileges`, dropped capabilities, PID limits, seccomp, AppArmor,
+    and SELinux label controls
+- Windows
+  - available runners: `insecure_dev_subprocess`, `containerized_oci` when a
+    container runtime is installed
+  - production-safe third-party plugin sandbox support: no
+  - degraded mode: Linux-only kernel hardening controls are not reported as
+    enforceable on the Windows host
+- macOS
+  - available runners: `insecure_dev_subprocess`, `containerized_oci` when a
+    container runtime is installed
+  - production-safe third-party plugin sandbox support: no
+  - degraded mode: container execution depends on host virtualization and does
+    not imply native macOS kernel policy enforcement
+- Other hosts
+  - available runners: `insecure_dev_subprocess`, plus `containerized_oci`
+    only if a compatible container runtime is available
+  - production-safe third-party plugin sandbox support: no
+  - degraded mode: the host is outside the explicitly characterized sandbox
+    support set
+
+Important implications:
+
+- production-oriented deployment profiles reject third-party sandbox execution
+  unless the runtime can provide the documented Linux containerized guarantees
+- `insecure_dev_subprocess` remains a development containment boundary only
+- `containerized_oci` on non-Linux hosts is reported explicitly as degraded
+  rather than being treated as equivalent to the Linux hardened path
 
 ## Untrusted Or Less-Trusted Extension Classes
 

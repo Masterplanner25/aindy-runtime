@@ -54,6 +54,15 @@ def handler(state, context):
     assert snapshot["lifecycle_state"] == "running"
     assert snapshot["healthy"] is True
     assert snapshot["pid"] is not None
+    assert snapshot["runner_type"] == "insecure_dev_subprocess"
+    assert snapshot["runner"]["execution_boundary"] == "subprocess-json-rpc"
+    assert snapshot["runner"]["isolation_claim"] == "none"
+    assert snapshot["resource_limits"]["enforcement"] == "none"
+    assert snapshot["resource_limits"]["memory_limit"] is None
+    assert snapshot["sandbox_attestation"]["runner_type"] == "insecure_dev_subprocess"
+    assert snapshot["sandbox_attestation"]["isolation_class"] == "insecure-dev-subprocess"
+    assert snapshot["sandbox_attestation"]["active_hardening_controls"] == []
+    assert snapshot["sandbox_attestation"]["effective_resource_limits"]["enforcement"] == "none"
     assert snapshot["provenance"]["module_name"] == "safe_node"
 
     assert shutdown_plugin_host("hosted-plugin") is True
@@ -62,6 +71,7 @@ def handler(state, context):
     assert stopped["lifecycle_state"] == "stopped"
     assert stopped["healthy"] is False
     assert stopped["pid"] is None
+    assert stopped["runner_type"] == "insecure_dev_subprocess"
 
 
 def test_plugin_host_heartbeat_loss_is_reported(tmp_path, clean_plugin_hosts):
@@ -291,7 +301,18 @@ def handler(state, context):
         plugin_root=plugin_dir,
         owner_class="external-third-party",
         granted_capabilities=["memory.read"],
-        resource_access={"environment": {"secret_injection": "none"}},
+        resource_access={
+            "environment": {"secret_injection": "none"},
+            "network": {"default": "deny", "capability_required": "outbound.http"},
+            "filesystem": {"default": "read-only-approved-roots", "writes": "deny"},
+        },
+        provenance={
+            "extension_id": "vendor.inventory-plugin",
+            "version": "1.0.0",
+            "source_type": "external-plugin-artifact",
+            "verification": "declared-and-verified",
+            "integrity": {"algorithm": "sha256", "value": "a" * 64},
+        },
     )
 
     status_code, payload = get_readiness_report()
@@ -300,10 +321,22 @@ def handler(state, context):
     assert status_code == 200
     assert hosts["present"] is True
     assert hosts["overall_status"] == "ok"
+    assert hosts["runner_types_present"] == ["insecure_dev_subprocess"]
     assert hosts["hosts"][0]["name"] == "inventory-plugin"
+    assert hosts["hosts"][0]["runner_type"] == "insecure_dev_subprocess"
     assert hosts["hosts"][0]["granted_capabilities"] == ["memory.read"]
     assert hosts["hosts"][0]["resource_access"]["environment"]["secret_injection"] == "none"
+    assert hosts["hosts"][0]["resource_limits"]["enforcement"] == "none"
+    assert hosts["hosts"][0]["sandbox_attestation"]["isolation_class"] == "insecure-dev-subprocess"
+    assert hosts["hosts"][0]["sandbox_attestation"]["provenance_status"]["verification"] == "declared-and-verified"
+    assert hosts["hosts"][0]["sandbox_attestation"]["network_policy"]["capability_required"] == "outbound.http"
+    assert hosts["hosts"][0]["sandbox_attestation"]["filesystem_policy"]["writes"] == "deny"
+    assert hosts["sandbox_attestation"]["isolation_classes_present"] == ["insecure-dev-subprocess"]
+    assert hosts["sandbox_attestation"]["hosts"][0]["runner_type"] == "insecure_dev_subprocess"
+    assert hosts["sandbox_attestation"]["hosts"][0]["network_policy"]["default"] == "deny"
+    assert hosts["sandbox_attestation"]["hosts"][0]["filesystem_policy"]["default"] == "read-only-approved-roots"
     assert "plugin host boundary" in hosts["operator_note"]
+    assert "not a sandbox" in hosts["operator_note"]
 
 
 def test_readiness_fails_when_plugin_host_is_quarantined(tmp_path, clean_plugin_hosts, monkeypatch):
@@ -340,3 +373,45 @@ def handler(state, context):
     assert status_code == 503
     assert payload["checks"]["plugin_hosts_overall_status"] == "unavailable"
     assert "plugin_hosts" in payload["required_failures"]
+
+
+def test_external_third_party_plugin_host_rejects_insecure_runner_in_distributed_profile(
+    tmp_path, clean_plugin_hosts, monkeypatch
+):
+    from AINDY.config import settings
+    from AINDY.platform_layer.deployment_contract import (
+        get_api_runtime_state,
+        publish_api_runtime_state,
+    )
+    from AINDY.platform_layer.plugin_host import start_plugin_host
+
+    plugin_dir = _write_plugin(
+        tmp_path,
+        "safe_node",
+        """
+def handler(state, context):
+    return {"status": "SUCCESS"}
+""",
+    )
+    monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", "distributed-api")
+    monkeypatch.setattr(settings, "EXECUTION_MODE", "distributed")
+    monkeypatch.setattr(settings, "REDIS_URL", "redis://example")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_SANDBOX_RUNNER", "insecure_dev_subprocess")
+    original_state = get_api_runtime_state()
+    try:
+        publish_api_runtime_state(
+            process_role="api",
+            deployment_profile="distributed-api",
+            deployment_profile_source="AINDY_DEPLOYMENT_PROFILE",
+        )
+
+        with pytest.raises(RuntimeError, match="not allowed under deployment profile 'distributed-api' with runner insecure_dev_subprocess"):
+            start_plugin_host(
+                name="unsafe-third-party-plugin",
+                handler="safe_node:handler",
+                plugin_root=plugin_dir,
+                owner_class="external-third-party",
+                granted_capabilities=[],
+            )
+    finally:
+        publish_api_runtime_state(**original_state)

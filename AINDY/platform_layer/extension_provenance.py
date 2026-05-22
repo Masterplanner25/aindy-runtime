@@ -21,6 +21,7 @@ INTEGRITY_ALGORITHM_SHA256 = "sha256"
 SOURCE_RUNTIME_PACKAGE = "runtime-package"
 SOURCE_FIRST_PARTY_SOURCE = "first-party-source-tree"
 SOURCE_EXTERNAL_SOURCE = "external-source-tree"
+SOURCE_EXTERNAL_PLUGIN_ARTIFACT = "external-plugin-artifact"
 SOURCE_WEBHOOK_INTEGRATION = "webhook-integration"
 SOURCE_DATA_REGISTRATION = "data-registration"
 SOURCE_OPERATOR_MANUAL = "operator-manual"
@@ -156,6 +157,73 @@ def derive_python_extension_provenance(
             verification = "declared-and-verified"
         else:
             verification = "declared-no-local-bytes"
+    elif provenance_required(owner_class=resolved, surface=surface):
+        if allow_legacy_missing:
+            verification = "legacy-restore-unverified"
+            return _finalize_provenance(
+                owner_class=resolved,
+                surface=surface,
+                payload=payload,
+                observed_hash=observed_hash,
+                verification=verification,
+            )
+        raise ValueError(
+            f"{surface} {extension_name!r} requires declared provenance for external-third-party ownership"
+        )
+    return _finalize_provenance(
+        owner_class=resolved,
+        surface=surface,
+        payload=payload,
+        observed_hash=observed_hash,
+        verification=verification,
+    )
+
+
+def derive_plugin_artifact_provenance(
+    *,
+    owner_class: str,
+    surface: str,
+    extension_name: str,
+    extension_id: str,
+    version: str,
+    artifact_path: str | Path,
+    observed_hash: str,
+    publisher: str | None = None,
+    declared: dict[str, Any] | None = None,
+    allow_legacy_missing: bool = False,
+) -> dict[str, Any]:
+    resolved = validate_extension_owner_class(owner_class)
+    artifact_text = str(artifact_path or "").strip()
+    payload = {
+        "extension_id": extension_id or extension_name,
+        "version": version,
+        "source_type": SOURCE_EXTERNAL_PLUGIN_ARTIFACT,
+        "source_ref": artifact_text or extension_name,
+        "publisher": publisher,
+    }
+    verification = "runtime-derived"
+    declared_model = _validated_declared_provenance(
+        declared,
+        owner_class=resolved,
+        surface=surface,
+    )
+    if declared_model is not None:
+        payload.update(
+            {
+                "extension_id": declared_model.extension_id,
+                "version": declared_model.version,
+                "source_type": declared_model.source_type,
+                "source_ref": declared_model.source_ref,
+                "publisher": declared_model.publisher,
+            }
+        )
+        _verify_integrity_match(
+            declared_model.integrity,
+            observed_hash=observed_hash,
+            surface=surface,
+            extension_id=payload["extension_id"],
+        )
+        verification = "declared-and-verified"
     elif provenance_required(owner_class=resolved, surface=surface):
         if allow_legacy_missing:
             verification = "legacy-restore-unverified"

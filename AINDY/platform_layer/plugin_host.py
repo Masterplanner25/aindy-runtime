@@ -1,19 +1,26 @@
 from __future__ import annotations
 
 import atexit
-import json
 import logging
-import os
-import queue
-import subprocess
-import sys
+import secrets
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from AINDY.platform_layer.sandbox_runner import (
+    RUNNER_INSECURE_DEV_SUBPROCESS,
+    SANDBOX_RUNNER_INTERFACE_VERSION,
+    SandboxRunner,
+    create_sandbox_runner,
+    list_supported_sandbox_runners,
+    resolve_sandbox_runner_type,
+)
+from AINDY.platform_layer.deployment_contract import (
+    validate_external_third_party_plugin_runtime_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,36 +43,6 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _build_child_env() -> dict[str, str]:
-    child_env = {
-        key: value
-        for key, value in os.environ.items()
-        if key
-        in {
-            "SYSTEMROOT",
-            "WINDIR",
-            "PATH",
-            "PATHEXT",
-            "TEMP",
-            "TMP",
-            "DATABASE_URL",
-            "AINDY_ALLOW_SQLITE",
-            "ENV",
-            "TESTING",
-            "TEST_MODE",
-            "AINDY_SKIP_MONGO_PING",
-            "SKIP_MONGO_PING",
-            "AINDY_ALLOW_PRIVATE_EXTENSION_TARGETS",
-        }
-    }
-    child_env.setdefault("PYTHONIOENCODING", "utf-8")
-    return child_env
-
-
-def _host_process_args() -> list[str]:
-    return [sys.executable, "-m", "AINDY.platform_layer.extension_worker", "--host"]
-
-
 @dataclass
 class PluginHostRecord:
     name: str
@@ -74,8 +51,9 @@ class PluginHostRecord:
     owner_class: str
     granted_capabilities: list[str]
     resource_access: dict[str, Any] = field(default_factory=dict)
+    runner_type: str = RUNNER_INSECURE_DEV_SUBPROCESS
     heartbeat_timeout_seconds: float = DEFAULT_PLUGIN_HOST_HEARTBEAT_TIMEOUT_SECONDS
-    process: subprocess.Popen[str] | None = None
+    runner: SandboxRunner | None = None
     state: str = "stopped"
     launch_count: int = 0
     restart_count: int = 0
@@ -101,17 +79,16 @@ class PluginHostRecord:
         default_factory=lambda: deque(maxlen=10),
     )
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
-    _response_queue: queue.Queue[str] = field(default_factory=queue.Queue, repr=False)
-    _stderr_lines: deque[str] = field(default_factory=lambda: deque(maxlen=20), repr=False)
-    _stdout_thread: threading.Thread | None = field(default=None, repr=False)
-    _stderr_thread: threading.Thread | None = field(default=None, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
-            process = self.process
-            pid = process.pid if process is not None and process.poll() is None else None
+            runner = self.runner
+            pid = runner.pid() if runner is not None else None
             running = pid is not None
             heartbeat_healthy = self._heartbeat_fresh_unlocked()
+            runner_metadata = (
+                dict(runner.metadata()) if runner is not None else _runner_metadata(self.runner_type)
+            )
             if self._quarantine_active_unlocked():
                 lifecycle_state = "quarantined"
             elif self._circuit_open_unlocked():
@@ -131,7 +108,18 @@ class PluginHostRecord:
                 "owner_class": self.owner_class,
                 "granted_capabilities": list(self.granted_capabilities),
                 "resource_access": dict(self.resource_access),
+                "resource_limits": (
+                    dict(runner_metadata.get("resource_limits") or {})
+                ),
                 "protocol_version": PLUGIN_HOST_PROTOCOL_VERSION,
+                "runner_type": self.runner_type,
+                "runner": runner_metadata,
+                "sandbox_attestation": _host_sandbox_attestation(
+                    runner_type=self.runner_type,
+                    runner_metadata=runner_metadata,
+                    resource_access=dict(self.resource_access),
+                    provenance=dict(self.provenance),
+                ),
                 "lifecycle_state": lifecycle_state,
                 "healthy": running and heartbeat_healthy and lifecycle_state == "running",
                 "pid": pid,
@@ -188,28 +176,12 @@ class PluginHostRecord:
 
 
 def _append_stderr_line(record: PluginHostRecord, line: str) -> None:
-    cleaned = str(line or "").rstrip()
-    if cleaned:
-        record._stderr_lines.append(cleaned)
+    _ = record
+    _ = line
 
 
 def _future_iso(seconds: float) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=max(0.0, seconds))).isoformat()
-
-
-def _pipe_reader(record: PluginHostRecord, pipe, *, target: str) -> None:
-    try:
-        while True:
-            line = pipe.readline()
-            if not line:
-                break
-            if target == "stdout":
-                record._response_queue.put(str(line).rstrip("\r\n"))
-            else:
-                _append_stderr_line(record, str(line))
-    except Exception as exc:
-        if target == "stderr":
-            _append_stderr_line(record, f"reader error: {exc}")
 
 
 def _mark_failure(
@@ -297,100 +269,6 @@ def _assert_host_not_in_backoff(record: PluginHostRecord) -> None:
         )
 
 
-def _spawn_host_process(record: PluginHostRecord) -> None:
-    process = subprocess.Popen(
-        _host_process_args(),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        bufsize=1,
-        env=_build_child_env(),
-    )
-    if process.stdin is None or process.stdout is None or process.stderr is None:
-        process.kill()
-        raise RuntimeError("plugin host subprocess did not expose stdio pipes")
-
-    record.process = process
-    record._response_queue = queue.Queue()
-    record._stderr_lines = deque(maxlen=20)
-    record._stdout_thread = threading.Thread(
-        target=_pipe_reader,
-        args=(record, process.stdout),
-        kwargs={"target": "stdout"},
-        daemon=True,
-        name=f"plugin-host-stdout-{record.name}",
-    )
-    record._stderr_thread = threading.Thread(
-        target=_pipe_reader,
-        args=(record, process.stderr),
-        kwargs={"target": "stderr"},
-        daemon=True,
-        name=f"plugin-host-stderr-{record.name}",
-    )
-    record._stdout_thread.start()
-    record._stderr_thread.start()
-    record.launch_count += 1
-    record.state = "starting"
-    record.last_start_at = _utcnow_iso()
-    record.last_stop_at = None
-    record.last_error = None
-    record.last_exit_code = None
-
-
-def _process_stderr_excerpt(record: PluginHostRecord) -> str:
-    if not record._stderr_lines:
-        return ""
-    return " | stderr=" + " | ".join(record._stderr_lines)
-
-
-def _wait_for_response(
-    record: PluginHostRecord,
-    *,
-    timeout_seconds: float,
-) -> dict[str, Any]:
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        remaining = max(0.0, deadline - time.monotonic())
-        if remaining == 0.0:
-            raise TimeoutError("plugin host command timed out")
-        try:
-            raw = record._response_queue.get(timeout=min(0.25, remaining))
-        except queue.Empty as exc:
-            process = record.process
-            if process is not None and process.poll() is not None:
-                raise RuntimeError(
-                    f"plugin host exited with code {process.returncode}{_process_stderr_excerpt(record)}"
-                ) from exc
-            continue
-        try:
-            return json.loads(raw or "{}")
-        except Exception as exc:
-            raise RuntimeError(f"plugin host returned invalid JSON: {exc}") from exc
-
-
-def _send_command(
-    record: PluginHostRecord,
-    payload: dict[str, Any],
-    *,
-    timeout_seconds: float,
-) -> dict[str, Any]:
-    process = record.process
-    if process is None or process.stdin is None:
-        raise RuntimeError("plugin host process is not running")
-    if process.poll() is not None:
-        raise RuntimeError(
-            f"plugin host exited with code {process.returncode}{_process_stderr_excerpt(record)}"
-        )
-    try:
-        process.stdin.write(json.dumps(payload, default=str) + "\n")
-        process.stdin.flush()
-    except Exception as exc:
-        raise RuntimeError(f"failed to send plugin host command: {exc}") from exc
-    return _wait_for_response(record, timeout_seconds=timeout_seconds)
-
-
 def _prepare_context(
     *,
     extension_name: str,
@@ -399,33 +277,164 @@ def _prepare_context(
     runtime_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     base = dict(runtime_context or {})
-    base["extension_name"] = extension_name
-    base["owner_class"] = owner_class
-    base["granted_capabilities"] = list(granted_capabilities)
-    base["node_name"] = extension_name
-    return base
+    channel_id = secrets.token_hex(8)
+    plugin_context = {
+        "user_id": str(base.get("user_id") or ""),
+        "run_id": str(base.get("run_id") or base.get("trace_id") or ""),
+        "trace_id": str(base.get("trace_id") or base.get("run_id") or ""),
+        "workflow_type": str(base.get("workflow_type") or ""),
+        "flow_name": str(base.get("flow_name") or ""),
+        "extension_name": extension_name,
+        "owner_class": owner_class,
+        "granted_capabilities": list(granted_capabilities),
+        "node_name": extension_name,
+        "runtime_api": {
+            "channel_type": "worker-authenticated-rpc",
+            "channel_version": "2026-05-21",
+            "runtime_channel_id": channel_id,
+        },
+    }
+    runtime_api_auth = dict(plugin_context)
+    runtime_api_auth["runtime_channel_id"] = channel_id
+    runtime_api_auth["runtime_channel_token"] = secrets.token_hex(16)
+    return {
+        "plugin_context": plugin_context,
+        "runtime_api_auth": runtime_api_auth,
+    }
+
+
+def _runner_metadata(runner_type: str) -> dict[str, Any]:
+    runner = create_sandbox_runner(runner_type)
+    return dict(runner.metadata())
+
+
+def _sandbox_isolation_class(*, runner_type: str, runner_metadata: dict[str, Any]) -> str:
+    if runner_type == RUNNER_INSECURE_DEV_SUBPROCESS:
+        return "insecure-dev-subprocess"
+    kernel_controls = dict(runner_metadata.get("kernel_controls") or {})
+    resource_limits = dict(runner_metadata.get("resource_limits") or {})
+    if kernel_controls.get("active_controls") or resource_limits.get("enforcement") == "container-runtime-hard-limits":
+        return "containerized-hardened-sandbox"
+    return "containerized-sandbox"
+
+
+def _host_sandbox_attestation(
+    *,
+    runner_type: str,
+    runner_metadata: dict[str, Any],
+    resource_access: dict[str, Any],
+    provenance: dict[str, Any],
+) -> dict[str, Any]:
+    kernel_controls = dict(runner_metadata.get("kernel_controls") or {})
+    resource_limits = dict(runner_metadata.get("resource_limits") or {})
+    network_policy = dict(resource_access.get("network") or {})
+    filesystem_policy = dict(resource_access.get("filesystem") or {})
+    provenance_status = {
+        "extension_id": provenance.get("extension_id"),
+        "version": provenance.get("version"),
+        "source_type": provenance.get("source_type"),
+        "verification": provenance.get("verification"),
+        "integrity": dict(provenance.get("integrity") or {}),
+    }
+    return {
+        "runner_type": runner_type,
+        "isolation_class": _sandbox_isolation_class(
+            runner_type=runner_type,
+            runner_metadata=runner_metadata,
+        ),
+        "execution_boundary": runner_metadata.get("execution_boundary"),
+        "isolation_claim": runner_metadata.get("isolation_claim"),
+        "active_hardening_controls": list(kernel_controls.get("active_controls") or []),
+        "supported_hardening_controls": list(kernel_controls.get("supported_controls") or []),
+        "unsupported_hardening_controls": list(kernel_controls.get("unsupported_controls") or []),
+        "effective_resource_limits": resource_limits,
+        "network_policy": network_policy,
+        "filesystem_policy": filesystem_policy,
+        "provenance_status": provenance_status,
+        "operator_note": (
+            "This attestation reflects the runtime-enforced runner, controls, limits, "
+            "and extension provenance currently active for this plugin host."
+        ),
+    }
+
+
+def _inventory_sandbox_attestation(hosts: list[dict[str, Any]]) -> dict[str, Any]:
+    isolation_classes_present = sorted(
+        {
+            str((host.get("sandbox_attestation") or {}).get("isolation_class") or "")
+            for host in hosts
+            if (host.get("sandbox_attestation") or {}).get("isolation_class")
+        }
+    )
+    runner_types_present = sorted(
+        {
+            str((host.get("sandbox_attestation") or {}).get("runner_type") or "")
+            for host in hosts
+            if (host.get("sandbox_attestation") or {}).get("runner_type")
+        }
+    )
+    active_controls = sorted(
+        {
+            str(control)
+            for host in hosts
+            for control in list((host.get("sandbox_attestation") or {}).get("active_hardening_controls") or [])
+        }
+    )
+    return {
+        "present": bool(hosts),
+        "host_count": len(hosts),
+        "runner_types_present": runner_types_present,
+        "isolation_classes_present": isolation_classes_present,
+        "active_hardening_controls_present": active_controls,
+        "hosts": [
+            {
+                "name": host.get("name"),
+                "runner_type": (host.get("sandbox_attestation") or {}).get("runner_type"),
+                "isolation_class": (host.get("sandbox_attestation") or {}).get("isolation_class"),
+                "active_hardening_controls": list(
+                    (host.get("sandbox_attestation") or {}).get("active_hardening_controls") or []
+                ),
+                "effective_resource_limits": dict(
+                    (host.get("sandbox_attestation") or {}).get("effective_resource_limits") or {}
+                ),
+                "network_policy": dict(
+                    (host.get("sandbox_attestation") or {}).get("network_policy") or {}
+                ),
+                "filesystem_policy": dict(
+                    (host.get("sandbox_attestation") or {}).get("filesystem_policy") or {}
+                ),
+                "provenance_status": dict(
+                    (host.get("sandbox_attestation") or {}).get("provenance_status") or {}
+                ),
+            }
+            for host in hosts
+        ],
+        "operator_note": (
+            "Sandbox attestation summarizes the effective isolation mode, hardening controls, "
+            "resource limits, and provenance state for third-party plugin hosts."
+        ),
+    }
 
 
 def _start_record(record: PluginHostRecord, *, runtime_context: dict[str, Any] | None) -> dict[str, Any]:
     _assert_host_not_quarantined(record)
-    _spawn_host_process(record)
-    response = _send_command(
-        record,
-        {
-            "command": "start",
-            "handler": record.handler,
-            "plugin_root": record.plugin_root,
-            "context": _prepare_context(
-                extension_name=record.name,
-                owner_class=record.owner_class,
-                granted_capabilities=record.granted_capabilities,
-                runtime_context=runtime_context,
-            ),
-        },
-        timeout_seconds=DEFAULT_PLUGIN_HOST_START_TIMEOUT_SECONDS,
+    record.runner = create_sandbox_runner(record.runner_type)
+    record.launch_count += 1
+    record.state = "starting"
+    record.last_start_at = _utcnow_iso()
+    record.last_stop_at = None
+    record.last_error = None
+    record.last_exit_code = None
+    response = record.runner.start(
+        handler=record.handler,
+        plugin_root=record.plugin_root,
+        runtime_context=_prepare_context(
+            extension_name=record.name,
+            owner_class=record.owner_class,
+            granted_capabilities=record.granted_capabilities,
+            runtime_context=runtime_context,
+        ),
     )
-    if not response.get("ok"):
-        raise RuntimeError(str(response.get("error") or "plugin host start failed"))
     merged_provenance = dict(response.get("provenance") or {})
     merged_provenance.update(record.provenance)
     record.provenance = merged_provenance
@@ -435,31 +444,17 @@ def _start_record(record: PluginHostRecord, *, runtime_context: dict[str, Any] |
 
 
 def _terminate_record_process(record: PluginHostRecord, *, force_kill: bool = False) -> None:
-    process = record.process
-    if process is None:
+    runner = record.runner
+    if runner is None:
         return
     try:
-        if not force_kill and process.poll() is None:
-            _send_command(
-                record,
-                {"command": "shutdown"},
-                timeout_seconds=5.0,
-            )
+        record.last_exit_code = runner.returncode()
+        runner.shutdown(force=force_kill)
     except Exception:
         pass
-    try:
-        if process.poll() is None:
-            process.terminate()
-            process.wait(timeout=3)
-    except Exception:
-        try:
-            process.kill()
-            process.wait(timeout=3)
-        except Exception:
-            pass
     finally:
-        record.last_exit_code = process.returncode
-        record.process = None
+        record.last_exit_code = runner.returncode()
+        record.runner = None
         record.last_stop_at = _utcnow_iso()
         if record.state not in {"failed", "crashed", "quarantined", "heartbeat_lost"}:
             record.state = "stopped"
@@ -475,9 +470,13 @@ def start_plugin_host(
     resource_access: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
     runtime_context: dict[str, Any] | None = None,
+    runner_type: str | None = None,
     force_restart: bool = False,
 ) -> dict[str, Any]:
     plugin_root_str = str(plugin_root)
+    if owner_class == "external-third-party":
+        validate_external_third_party_plugin_runtime_policy(identifier=name)
+    resolved_runner_type = resolve_sandbox_runner_type(runner_type)
     with _HOSTS_LOCK:
         record = _HOSTS.get(name)
         if record is None:
@@ -488,6 +487,7 @@ def start_plugin_host(
                 owner_class=owner_class,
                 granted_capabilities=list(granted_capabilities),
                 resource_access=dict(resource_access or {}),
+                runner_type=resolved_runner_type,
                 provenance=dict(provenance or {}),
             )
             _HOSTS[name] = record
@@ -501,6 +501,7 @@ def start_plugin_host(
             or record.owner_class != owner_class
             or list(record.granted_capabilities) != list(granted_capabilities)
             or dict(record.resource_access) != dict(resource_access or {})
+            or record.runner_type != resolved_runner_type
             or dict(record.provenance) != dict(provenance or {})
         )
         if config_changed:
@@ -509,19 +510,20 @@ def start_plugin_host(
             record.owner_class = owner_class
             record.granted_capabilities = list(granted_capabilities)
             record.resource_access = dict(resource_access or {})
+            record.runner_type = resolved_runner_type
             record.provenance = dict(provenance or {})
             force_restart = True
-        if force_restart and record.process is not None:
+        if force_restart and record.runner is not None:
             record.restart_count += 1
             _terminate_record_process(record)
-        if record.process is None or record.process.poll() is not None:
-            if record.process is not None and record.process.poll() is not None:
+        if record.runner is None or not record.runner.is_running():
+            if record.runner is not None and not record.runner.is_running() and record.runner.returncode() is not None:
                 _mark_failure(
                     record,
                     state="crashed",
-                    error=f"plugin host exited with code {record.process.returncode}",
+                    error=f"plugin host exited with code {record.runner.returncode()}",
                     kind="crash",
-                    exit_code=record.process.returncode,
+                    exit_code=record.runner.returncode(),
                 )
                 record.restart_count += 1
             try:
@@ -540,26 +542,22 @@ def heartbeat_plugin_host(name: str) -> dict[str, Any]:
     with record._lock:
         if record._quarantine_active_unlocked() or record._circuit_open_unlocked():
             return record.snapshot()
-        process = record.process
-        if process is None:
+        runner = record.runner
+        if runner is None:
             record.state = "stopped"
             return record.snapshot()
-        if process.poll() is not None:
+        if not runner.is_running():
             _mark_failure(
                 record,
                 state="crashed",
-                error=f"plugin host exited with code {process.returncode}",
+                error=f"plugin host exited with code {runner.returncode()}",
                 kind="crash",
-                exit_code=process.returncode,
+                exit_code=runner.returncode(),
             )
-            record.process = None
+            record.runner = None
             return record.snapshot()
         try:
-            response = _send_command(
-                record,
-                {"command": "heartbeat"},
-                timeout_seconds=5.0,
-            )
+            response = runner.heartbeat(timeout_seconds=5.0)
             if not response.get("ok"):
                 raise RuntimeError(str(response.get("error") or "heartbeat failed"))
             record.last_heartbeat_at = _utcnow_iso()
@@ -583,33 +581,30 @@ def execute_plugin_host(
         _assert_host_not_in_backoff(record)
         retries_remaining = 1
         while True:
-            process = record.process
-            if process is None or process.poll() is not None:
-                if process is not None and process.poll() is not None:
+            runner = record.runner
+            if runner is None or not runner.is_running():
+                if runner is not None and runner.returncode() is not None:
                     _mark_failure(
                         record,
                         state="crashed",
-                        error=f"plugin host exited with code {process.returncode}",
+                        error=f"plugin host exited with code {runner.returncode()}",
                         kind="crash",
-                        exit_code=process.returncode,
+                        exit_code=runner.returncode(),
                     )
                 if retries_remaining < 0:
                     raise RuntimeError("plugin host is unavailable")
                 record.restart_count += 1
                 _start_record(record, runtime_context=runtime_context)
+                runner = record.runner
             try:
-                response = _send_command(
-                    record,
-                    {
-                        "command": "execute",
-                        "state": state,
-                        "context": _prepare_context(
-                            extension_name=record.name,
-                            owner_class=record.owner_class,
-                            granted_capabilities=record.granted_capabilities,
-                            runtime_context=runtime_context,
-                        ),
-                    },
+                response = runner.execute(
+                    state=state,
+                    runtime_context=_prepare_context(
+                        extension_name=record.name,
+                        owner_class=record.owner_class,
+                        granted_capabilities=record.granted_capabilities,
+                        runtime_context=runtime_context,
+                    ),
                     timeout_seconds=DEFAULT_PLUGIN_HOST_EXECUTE_TIMEOUT_SECONDS,
                 )
                 if not response.get("ok"):
@@ -620,15 +615,15 @@ def execute_plugin_host(
                 _mark_success(record)
                 return result
             except Exception as exc:
-                process = record.process
-                crashed = process is not None and process.poll() is not None
+                runner = record.runner
+                crashed = runner is not None and (not runner.is_running()) and runner.returncode() is not None
                 failure_kind = _classify_failure(error=str(exc), crashed=crashed)
                 _mark_failure(
                     record,
                     state="crashed" if crashed else "failed",
                     error=str(exc),
                     kind=failure_kind,
-                    exit_code=process.returncode if crashed and process is not None else None,
+                    exit_code=runner.returncode() if crashed and runner is not None else None,
                 )
                 if retries_remaining <= 0 or record._quarantine_active_unlocked():
                     raise
@@ -688,16 +683,28 @@ def plugin_host_inventory(*, probe: bool = False) -> dict[str, Any]:
         overall_status = "degraded"
     else:
         overall_status = "ok"
+    default_runner_type = resolve_sandbox_runner_type()
+    default_runner_note = (
+        "The current default runner is insecure_dev_subprocess, which is not a sandbox."
+        if default_runner_type == RUNNER_INSECURE_DEV_SUBPROCESS
+        else "The current default runner is containerized_oci, which requires an operator-supplied container runtime and image."
+    )
     return {
         "present": bool(hosts),
         "protocol_version": PLUGIN_HOST_PROTOCOL_VERSION,
+        "sandbox_runner_interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
+        "default_runner_type": default_runner_type,
+        "runner_types_present": sorted({str(host.get("runner_type") or "") for host in hosts if host.get("runner_type")}),
+        "available_runners": list_supported_sandbox_runners(),
         "overall_status": overall_status,
         "host_count": len(hosts),
         "hosts": hosts,
+        "sandbox_attestation": _inventory_sandbox_attestation(hosts),
         "operator_note": (
             "Third-party plugin nodes run behind a runtime-owned plugin host boundary. "
             "The runtime tracks host lifecycle and health separately from plugin payload results, "
-            "and may apply restart backoff or quarantine after repeated failures."
+            "and may apply restart backoff or quarantine after repeated failures. "
+            f"{default_runner_note}"
         ),
     }
 

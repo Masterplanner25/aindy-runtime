@@ -95,11 +95,13 @@ def _testing_health_payload() -> dict:
         extension_provenance_inventory,
     )
     from AINDY.platform_layer.plugin_host import plugin_host_inventory
+    from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
     from AINDY.runtime import get_engine_status
 
     domains = get_domain_health()
     degraded_domains = _get_degraded_domains()
     db_pool = get_pool_status()
+    plugin_hosts = plugin_host_inventory(probe=True)
     platform = {
         "execution_engine": "ok",
         "scheduler": "ok",
@@ -116,7 +118,9 @@ def _testing_health_payload() -> dict:
         "platform": platform,
         "trusted_python_execution": trusted_python_execution_inventory(),
         "extension_provenance": extension_provenance_inventory(),
-        "plugin_hosts": plugin_host_inventory(probe=True),
+        "plugin_hosts": plugin_hosts,
+        "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),
+        "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
         "domains": domains,
         "dependencies": {},
         "runtime_conditions": get_api_runtime_conditions(),

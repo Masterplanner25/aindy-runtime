@@ -102,6 +102,39 @@ def test_runtime_public_contract_publishes_extension_provenance_policy():
     assert "dynamic-plugin-node" in provenance["required_when"]["external-third-party"]
 
 
+def test_runtime_public_contract_publishes_sandbox_runner_inventory():
+    metadata = runtime_public_contract_metadata()
+
+    runners = metadata["extensions"]["sandbox_runners"]
+    assert runners["interface_version"] == "2026-05-21"
+    assert runners["configured_selection"] == "auto"
+    assert runners["default_external_runner"] == "insecure_dev_subprocess"
+    assert runners["selection_policy"]["auto_single_instance"] == "insecure_dev_subprocess"
+    assert runners["selection_policy"]["auto_distributed"] == "containerized_oci"
+    runner_types = {entry["runner_type"] for entry in runners["available_runners"]}
+    assert runner_types == {"insecure_dev_subprocess", "containerized_oci"}
+    claims = {entry["runner_type"]: entry["isolation_claim"] for entry in runners["available_runners"]}
+    assert claims["insecure_dev_subprocess"] == "none"
+    assert claims["containerized_oci"] == "container-boundary"
+    container_runner = next(
+        entry for entry in runners["available_runners"]
+        if entry["runner_type"] == "containerized_oci"
+    )
+    assert container_runner["kernel_control_reporting"] == "explicit"
+    assert runners["operator_reporting"]["version_surface"] == "runtime.plugin_sandbox_attestation"
+    assert runners["operator_reporting"]["health_surface"] == "plugin_sandbox_attestation"
+    assert runners["operator_reporting"]["platform_matrix_surface"] == "runtime.plugin_sandbox_platform"
+    assert "isolation_class" in runners["operator_reporting"]["attestation_fields"]
+    assert runners["certification_contract"]["schema_version"] == "2026-05-21"
+    assert runners["active_certification_profile"]["runner_type"] == "insecure_dev_subprocess"
+    assert runners["active_certification_profile"]["shared_worker_policy_status"] == "certifiable-shared-worker-policy"
+    assert runners["platform_matrix"]["schema_version"] == "2026-05-21"
+    assert runners["platform_matrix"]["current_platform"] in {"linux", "windows", "darwin", "other"}
+    assert "linux" in runners["platform_matrix"]["supported_platforms"]
+    assert "windows" in runners["platform_matrix"]["supported_platforms"]
+    assert "fails closed" in runners["notes"]
+
+
 def test_runtime_public_contract_describes_external_python_override_precisely():
     metadata = runtime_public_contract_metadata()
 

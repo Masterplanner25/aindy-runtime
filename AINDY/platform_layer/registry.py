@@ -1275,6 +1275,7 @@ def _load_manifest_declarative_extensions(
                 name=str(extension_entry["name"]),
                 node_type=str(extension_entry["type"]),
                 handler=str(extension_entry["handler"]),
+                artifact_path=str(extension_entry["artifact_path"]) if extension_entry.get("artifact_path") else None,
                 timeout_seconds=int(extension_entry.get("timeout_seconds", 10)),
                 secret=extension_entry.get("secret"),
                 owner_class=owner_class,

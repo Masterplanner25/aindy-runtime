@@ -153,6 +153,7 @@ def _load_nodes(db: Session, stats: dict[str, int]) -> None:
                 row.node_type,
                 handler,
                 timeout_seconds=timeout,
+                artifact_path=cfg.get("artifact_path") if isinstance(cfg, dict) else None,
                 secret=row.secret,
                 user_id=row.created_by,
                 owner_class=getattr(row, "owner_class", None) or cfg.get("owner_class") or "external-third-party",

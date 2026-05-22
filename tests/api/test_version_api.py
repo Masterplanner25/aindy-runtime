@@ -64,6 +64,27 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     }
     assert payload["runtime"]["extension_provenance"]["present"] is False
     assert payload["runtime"]["extension_provenance"]["total_count"] == 0
+    assert payload["runtime"]["plugin_hosts"]["present"] is False
+    assert payload["runtime"]["plugin_hosts"]["sandbox_runner_interface_version"] == "2026-05-21"
+    assert payload["runtime"]["plugin_hosts"]["default_runner_type"] == "insecure_dev_subprocess"
+    assert payload["runtime"]["plugin_hosts"]["runner_types_present"] == []
+    assert payload["runtime"]["plugin_sandbox_attestation"] == {
+        "present": False,
+        "host_count": 0,
+        "runner_types_present": [],
+        "isolation_classes_present": [],
+        "active_hardening_controls_present": [],
+        "hosts": [],
+        "operator_note": (
+            "Sandbox attestation summarizes the effective isolation mode, hardening controls, "
+            "resource limits, and provenance state for third-party plugin hosts."
+        ),
+    }
+    assert payload["runtime"]["plugin_sandbox_platform"]["schema_version"] == "2026-05-21"
+    assert payload["runtime"]["plugin_sandbox_platform"]["current_platform"] in {"linux", "windows", "darwin", "other"}
+    assert "supported_platforms" in payload["runtime"]["plugin_sandbox_platform"]
+    runtime_runner_types = {entry["runner_type"] for entry in payload["runtime"]["plugin_hosts"]["available_runners"]}
+    assert runtime_runner_types == {"insecure_dev_subprocess", "containerized_oci"}
     assert payload["compatibility"] == {
         "runtime_package": {
             "name": "aindy-runtime",
@@ -101,6 +122,19 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     ]
     assert payload["public_contract"]["extensions"]["provenance_policy"]["policy_version"] == "2026-05-20"
     assert payload["public_contract"]["extensions"]["provenance_policy"]["signing"]["status"] == "unsupported"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["default_external_runner"] == "insecure_dev_subprocess"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["configured_selection"] == "auto"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["certification_contract"]["schema_version"] == "2026-05-21"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["active_certification_profile"]["runner_type"] == "insecure_dev_subprocess"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["version_surface"] == "runtime.plugin_sandbox_attestation"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["operator_reporting"]["platform_matrix_surface"] == "runtime.plugin_sandbox_platform"
+    assert payload["public_contract"]["extensions"]["sandbox_runners"]["platform_matrix"]["schema_version"] == "2026-05-21"
+    public_runner_claims = {
+        entry["runner_type"]: entry["isolation_claim"]
+        for entry in payload["public_contract"]["extensions"]["sandbox_runners"]["available_runners"]
+    }
+    assert public_runner_claims["insecure_dev_subprocess"] == "none"
+    assert public_runner_claims["containerized_oci"] == "container-boundary"
     assert payload["public_contract"]["extensions"]["capability_model"]["surfaces"]["dynamic-plugin-node"]["authority_model"] == "isolated-explicit-capabilities"
     assert payload["public_contract"]["extensions"]["capability_model"]["surfaces"]["dynamic-plugin-node"]["filesystem_policy"]["default"] == "read-only-approved-roots"
     assert payload["public_contract"]["extensions"]["capability_model"]["surfaces"]["dynamic-plugin-node"]["filesystem_policy"]["writes"] == "deny"
@@ -118,3 +152,5 @@ def test_health_route_reports_trusted_python_inventory(runtime_only_client):
     assert payload["trusted_python_execution"]["present"] is False
     assert payload["extension_provenance"]["present"] is False
     assert payload["plugin_hosts"]["present"] is False
+    assert payload["plugin_sandbox_attestation"]["present"] is False
+    assert payload["plugin_sandbox_platform"]["schema_version"] == "2026-05-21"

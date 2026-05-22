@@ -247,3 +247,5 @@ def test_testing_mode_readiness_reports_trusted_python_inventory(monkeypatch):
     assert payload["checks"]["testing_mode"] is True
     assert payload["checks"]["trusted_python_execution"]["execution_model"] == "trusted-in-process-python"
     assert payload["checks"]["trusted_python_execution"]["sandboxing"] == "none"
+    assert payload["checks"]["plugin_sandbox_attestation"]["present"] is False
+    assert payload["checks"]["plugin_sandbox_platform"]["schema_version"] == "2026-05-21"

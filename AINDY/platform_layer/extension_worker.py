@@ -8,11 +8,19 @@ import json
 import os
 import socket
 import sys
+import threading
 from importlib import util as importlib_util
 from pathlib import Path
 from typing import Any, Callable
 
 from AINDY.platform_layer import extension_runtime_api
+from AINDY.platform_layer.extension_capabilities import (
+    CAP_EVENT_EMIT,
+    CAP_FLOW_RUN,
+    CAP_MEMORY_READ,
+    CAP_MEMORY_WRITE,
+    CAP_TOOL_INVOKE,
+)
 
 _VALID_STATUSES = frozenset(["SUCCESS", "RETRY", "FAILURE", "WAIT"])
 _PLUGIN_MODULE_NAMESPACE = "AINDY.plugins.nodes"
@@ -22,10 +30,247 @@ _ALLOWED_RUNTIME_IMPORTS = {
     "AINDY.platform_layer",
     "AINDY.platform_layer.extension_runtime_api",
 }
+_RUNTIME_API_CONTEXT = threading.local()
 
 
 def _error(message: str) -> dict[str, Any]:
     return {"ok": False, "error": message}
+
+
+def _hidden_runtime_context() -> dict[str, Any]:
+    value = getattr(_RUNTIME_API_CONTEXT, "value", None)
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _set_hidden_runtime_context(context: dict[str, Any]) -> None:
+    _RUNTIME_API_CONTEXT.value = dict(context)
+
+
+def _clear_hidden_runtime_context() -> None:
+    _RUNTIME_API_CONTEXT.value = {}
+
+
+def _require_authenticated_runtime_context() -> dict[str, Any]:
+    context = _hidden_runtime_context()
+    if not context.get("runtime_channel_id") or not context.get("runtime_channel_token"):
+        raise PermissionError(
+            "UNAUTHENTICATED_EXTENSION_CHANNEL: sandboxed plugin runtime calls require a worker-authenticated channel"
+        )
+    return context
+
+
+def _require_runtime_tenant() -> str:
+    context = _require_authenticated_runtime_context()
+    tenant_user_id = str(context.get("user_id") or "").strip()
+    if not tenant_user_id:
+        raise PermissionError("TENANT_VIOLATION: extension runtime call requires a tenant-scoped user_id")
+    return tenant_user_id
+
+
+def _require_runtime_capability(capability: str) -> None:
+    context = _require_authenticated_runtime_context()
+    granted = {str(item) for item in list(context.get("granted_capabilities") or [])}
+    if capability not in granted:
+        raise PermissionError(
+            f"Extension capability {capability!r} not granted; granted={sorted(granted)!r}"
+        )
+
+
+def _extension_call_metadata(operation: str) -> dict[str, Any]:
+    context = _require_authenticated_runtime_context()
+    return {
+        "surface": "extension-runtime-api",
+        "operation": operation,
+        "tenant_user_id": _require_runtime_tenant(),
+        "extension_name": str(context.get("extension_name") or "").strip(),
+        "owner_class": str(context.get("owner_class") or "").strip(),
+        "runtime_channel_id": str(context.get("runtime_channel_id") or ""),
+        "runtime_channel_authenticated": True,
+    }
+
+
+def _extension_source_label() -> str:
+    context = _require_authenticated_runtime_context()
+    extension_name = str(context.get("extension_name") or "").strip()
+    return f"extension:{extension_name}" if extension_name else "extension-runtime-api"
+
+
+def _sanitize_tool_args(args: dict[str, Any] | None) -> dict[str, Any]:
+    sanitized = dict(args or {})
+    tenant_user_id = _require_runtime_tenant()
+    for key in ("user_id", "tenant_id"):
+        if key not in sanitized:
+            continue
+        value = str(sanitized.get(key) or "").strip()
+        if value and value != tenant_user_id:
+            raise PermissionError(
+                f"TENANT_VIOLATION: extension tool call may not set {key}={value!r} "
+                f"outside tenant context {tenant_user_id!r}"
+            )
+        sanitized[key] = tenant_user_id
+    return sanitized
+
+
+def _runtime_execution_metadata() -> dict[str, Any]:
+    context = _require_authenticated_runtime_context()
+    return {
+        "user_id": str(context.get("user_id") or ""),
+        "run_id": str(context.get("run_id") or ""),
+        "trace_id": str(context.get("trace_id") or ""),
+        "extension_name": str(context.get("extension_name") or ""),
+        "owner_class": str(context.get("owner_class") or ""),
+        "runtime_channel_id": str(context.get("runtime_channel_id") or ""),
+        "granted_capabilities": [str(item) for item in list(context.get("granted_capabilities") or [])],
+        "channel_type": "worker-authenticated-rpc",
+    }
+
+
+def _runtime_api_bridge(operation: str, payload: dict[str, Any] | None = None) -> Any:
+    request = dict(payload or {})
+    context = _require_authenticated_runtime_context()
+
+    if operation == "capabilities.list":
+        return [str(item) for item in list(context.get("granted_capabilities") or [])]
+    if operation == "execution.metadata":
+        return _runtime_execution_metadata()
+
+    if operation == "memory.read":
+        _require_runtime_capability(CAP_MEMORY_READ)
+        tenant_user_id = _require_runtime_tenant()
+
+        def _invoke() -> dict[str, Any]:
+            from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+
+            return dispatch_syscall(
+                "sys.v1.memory.read",
+                {
+                    "query": str(request.get("query") or ""),
+                    "limit": int(request.get("limit") or 5),
+                    "tags": list(request.get("tags") or []),
+                },
+                user_id=tenant_user_id,
+                capability=CAP_MEMORY_READ,
+                trace_id=str(context.get("trace_id") or context.get("run_id") or ""),
+                execution_unit_id=str(context.get("run_id") or context.get("trace_id") or ""),
+                metadata={"_extension_call": _extension_call_metadata("memory.read")},
+            )
+
+        return extension_runtime_api._run_trusted_runtime_operation(_invoke)
+
+    if operation == "memory.write":
+        _require_runtime_capability(CAP_MEMORY_WRITE)
+        tenant_user_id = _require_runtime_tenant()
+
+        def _invoke() -> dict[str, Any]:
+            from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+
+            return dispatch_syscall(
+                "sys.v1.memory.write",
+                {
+                    "content": str(request.get("content") or ""),
+                    "tags": list(request.get("tags") or []),
+                    "node_type": str(request.get("node_type") or "execution"),
+                    "source": _extension_source_label(),
+                },
+                user_id=tenant_user_id,
+                capability=CAP_MEMORY_WRITE,
+                trace_id=str(context.get("trace_id") or context.get("run_id") or ""),
+                execution_unit_id=str(context.get("run_id") or context.get("trace_id") or ""),
+                metadata={"_extension_call": _extension_call_metadata("memory.write")},
+            )
+
+        return extension_runtime_api._run_trusted_runtime_operation(_invoke)
+
+    if operation == "flow.run":
+        _require_runtime_capability(CAP_FLOW_RUN)
+        tenant_user_id = _require_runtime_tenant()
+
+        def _invoke() -> dict[str, Any]:
+            from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+
+            return dispatch_syscall(
+                "sys.v1.flow.run",
+                {
+                    "flow_name": str(request.get("flow_name") or ""),
+                    "initial_state": dict(request.get("initial_state") or {}),
+                },
+                user_id=tenant_user_id,
+                capability=CAP_FLOW_RUN,
+                trace_id=str(context.get("trace_id") or context.get("run_id") or ""),
+                execution_unit_id=str(context.get("run_id") or context.get("trace_id") or ""),
+                metadata={"_extension_call": _extension_call_metadata("flow.run")},
+            )
+
+        return extension_runtime_api._run_trusted_runtime_operation(_invoke)
+
+    if operation == "event.emit":
+        _require_runtime_capability(CAP_EVENT_EMIT)
+        tenant_user_id = _require_runtime_tenant()
+
+        def _invoke() -> dict[str, Any]:
+            from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+
+            return dispatch_syscall(
+                "sys.v1.event.emit",
+                {
+                    "event_type": str(request.get("event_type") or ""),
+                    "payload": dict(request.get("payload") or {}),
+                },
+                user_id=tenant_user_id,
+                capability=CAP_EVENT_EMIT,
+                trace_id=str(context.get("trace_id") or context.get("run_id") or ""),
+                execution_unit_id=str(context.get("run_id") or context.get("trace_id") or ""),
+                metadata={"_extension_call": _extension_call_metadata("event.emit")},
+            )
+
+        return extension_runtime_api._run_trusted_runtime_operation(_invoke)
+
+    if operation == "tool.invoke":
+        _require_runtime_capability(CAP_TOOL_INVOKE)
+        tenant_user_id = _require_runtime_tenant()
+        sanitized_args = _sanitize_tool_args(request.get("args"))
+
+        def _invoke() -> dict[str, Any]:
+            from AINDY.agents.tool_registry import execute_tool
+            from AINDY.db.database import SessionLocal
+
+            db = SessionLocal()
+            try:
+                result = execute_tool(
+                    str(request.get("tool_name") or ""),
+                    sanitized_args,
+                    user_id=tenant_user_id,
+                    db=db,
+                    run_id=None,
+                    execution_token=None,
+                )
+                if not result.get("success"):
+                    raise RuntimeError(result.get("error") or f"tool {request.get('tool_name')!r} failed")
+                value = result.get("result")
+                return value if isinstance(value, dict) else {"result": value}
+            finally:
+                db.close()
+
+        return extension_runtime_api._run_trusted_runtime_operation(_invoke)
+
+    raise PermissionError(f"unsupported extension runtime operation {operation!r}")
+
+
+def _extract_plugin_context(runtime_context: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(runtime_context or {})
+    plugin_context = dict(payload.get("plugin_context") or {})
+    runtime_api_auth = dict(payload.get("runtime_api_auth") or {})
+    _set_hidden_runtime_context(runtime_api_auth)
+    extension_runtime_api._install_runtime_api_channel(bridge=_runtime_api_bridge)
+    return plugin_context
+
+
+def _clear_runtime_channel() -> None:
+    _clear_hidden_runtime_context()
+    try:
+        extension_runtime_api._clear_runtime_api_channel()
+    except Exception:
+        pass
 
 
 def _resolve_plugin_source(handler: str, plugin_root: str) -> tuple[str, str, Path]:
@@ -291,7 +536,6 @@ def _prune_runtime_modules() -> None:
         "AINDY",
         "AINDY.platform_layer",
         "AINDY.platform_layer.extension_runtime_api",
-        "AINDY.platform_layer.extension_worker",
     }
     for name in list(sys.modules):
         if (name.startswith("AINDY") or name.startswith("runtime")) and name not in allowed:
@@ -320,7 +564,7 @@ def _handle_request(payload: dict[str, Any]) -> dict[str, Any]:
         "yes",
     }
     try:
-        extension_runtime_api._configure_runtime_context(payload.get("context") or {})
+        plugin_context = _extract_plugin_context(payload.get("context") or {})
         _strip_plugin_environment()
         _prune_runtime_modules()
         original_import = _install_import_guard()
@@ -340,7 +584,7 @@ def _handle_request(payload: dict[str, Any]) -> dict[str, Any]:
             return {"ok": True, "provenance": provenance}
         if action == "execute":
             result = _validate_response_contract(
-                fn(payload.get("state") or {}, payload.get("context") or {})
+                fn(payload.get("state") or {}, plugin_context)
             )
             return {"ok": True, "result": result, "provenance": provenance}
         return _error(f"unsupported action {action!r}")
@@ -365,6 +609,7 @@ def _handle_request(payload: dict[str, Any]) -> dict[str, Any]:
             socket.socket.connect_ex = original_connect_ex
         except Exception:
             pass
+        _clear_runtime_channel()
 
 
 def _host_error(message: str) -> dict[str, Any]:
@@ -417,7 +662,7 @@ def _handle_host_session() -> int:
                 if not handler or not plugin_root:
                     response = _host_error("plugin host start requires handler and plugin_root")
                 else:
-                    extension_runtime_api._configure_runtime_context(payload.get("context") or {})
+                    _extract_plugin_context(payload.get("context") or {})
                     if not host_state["guards_installed"]:
                         host_state["original_import"] = _install_import_guard()
                         (
@@ -455,9 +700,9 @@ def _handle_host_session() -> int:
                 if fn is None:
                     response = _host_error("plugin host has not been started")
                 else:
-                    extension_runtime_api._configure_runtime_context(payload.get("context") or {})
+                    plugin_context = _extract_plugin_context(payload.get("context") or {})
                     result = _validate_response_contract(
-                        fn(payload.get("state") or {}, payload.get("context") or {})
+                        fn(payload.get("state") or {}, plugin_context)
                     )
                     host_state["request_count"] = int(host_state["request_count"]) + 1
                     response = {
@@ -474,6 +719,8 @@ def _handle_host_session() -> int:
                 response = _host_error(f"unsupported host command {command!r}")
         except Exception as exc:
             response = _host_error(f"{exc.__class__.__name__}: {exc}")
+        finally:
+            _clear_runtime_channel()
 
         sys.stdout.write(json.dumps(response) + "\n")
         sys.stdout.flush()

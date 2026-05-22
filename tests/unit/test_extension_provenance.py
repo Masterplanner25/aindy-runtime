@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+from tests.helpers_plugin_artifacts import build_plugin_artifact
 
 
 pytestmark = pytest.mark.runtime_only
@@ -117,23 +118,22 @@ def test_external_plugin_registration_rejects_missing_provenance(
 ):
     from AINDY.platform_layer.node_registry import register_external_node
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    (plugin_dir / "safe_node.py").write_text(
-        """
+    artifact = build_plugin_artifact(
+        tmp_path,
+        module_name="safe_node",
+        extension_id="vendor.safe-node",
+        source="""
 def handler(state, context):
     return {"status": "SUCCESS"}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     with pytest.raises(ValueError, match="requires declared provenance"):
         register_external_node(
             "missing-provenance-plugin",
             "plugin",
-            "safe_node:handler",
+            artifact["handler"],
+            artifact_path=str(artifact["artifact_root"]),
         )
 
 
@@ -142,28 +142,27 @@ def test_external_plugin_registration_rejects_integrity_mismatch(
 ):
     from AINDY.platform_layer.node_registry import register_external_node
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    (plugin_dir / "safe_node.py").write_text(
-        """
+    artifact = build_plugin_artifact(
+        tmp_path,
+        module_name="safe_node",
+        extension_id="vendor.safe-node",
+        source="""
 def handler(state, context):
     return {"status": "SUCCESS"}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     with pytest.raises(ValueError, match="failed integrity verification"):
         register_external_node(
             "bad-integrity-plugin",
             "plugin",
-            "safe_node:handler",
+            artifact["handler"],
+            artifact_path=str(artifact["artifact_root"]),
             provenance={
                 "extension_id": "vendor.safe-node",
                 "version": "1.2.3",
-                "source_type": "external-source-tree",
-                "source_ref": "file://vendor/safe_node.py",
+                "source_type": "external-plugin-artifact",
+                "source_ref": str(artifact["artifact_root"]),
                 "integrity": {"algorithm": "sha256", "value": "0" * 64},
             },
         )
@@ -204,29 +203,28 @@ def test_readiness_reports_loaded_extension_provenance(
     from AINDY.platform_layer.health_service import get_readiness_report
     from AINDY.platform_layer.node_registry import register_external_node
 
-    plugin_dir = tmp_path / "plugins" / "nodes"
-    plugin_dir.mkdir(parents=True)
-    (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
-    plugin_file = plugin_dir / "safe_node.py"
-    plugin_file.write_text(
-        """
+    artifact = build_plugin_artifact(
+        tmp_path,
+        module_name="safe_node",
+        extension_id="vendor.reported-plugin",
+        version="2.0.0",
+        source="""
 def handler(state, context):
     return {"status": "SUCCESS"}
-""".strip(),
-        encoding="utf-8",
+""",
     )
-    monkeypatch.setattr("AINDY.platform_layer.node_registry._PLUGINS_DIR", plugin_dir)
 
     register_external_node(
         "reported-plugin",
         "plugin",
-        "safe_node:handler",
+        artifact["handler"],
+        artifact_path=str(artifact["artifact_root"]),
         provenance={
             "extension_id": "vendor.reported-plugin",
             "version": "2.0.0",
-            "source_type": "external-source-tree",
-            "source_ref": str(plugin_file),
-            "integrity": {"algorithm": "sha256", "value": hashlib.sha256(plugin_file.read_bytes()).hexdigest()},
+            "source_type": "external-plugin-artifact",
+            "source_ref": str(artifact["artifact_root"]),
+            "integrity": {"algorithm": "sha256", "value": artifact["integrity"]},
         },
     )
 
@@ -238,3 +236,21 @@ def handler(state, context):
         entry["extension_id"] == "vendor.reported-plugin"
         for entry in payload["checks"]["extension_provenance"]["entries"]
     )
+
+
+def test_plugin_artifact_admission_rejects_malformed_manifest(tmp_path):
+    from AINDY.platform_layer.plugin_artifacts import admit_plugin_artifact
+
+    artifact_root = tmp_path / "broken_artifact"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "plugin-artifact.json").write_text(
+        '{"kind":"aindy-plugin-artifact","schema_version":"2026-05-21"}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="plugin artifact manifest is invalid"):
+        admit_plugin_artifact(
+            artifact_path=artifact_root,
+            expected_owner_class="external-third-party",
+            expected_handler="broken:handler",
+        )
