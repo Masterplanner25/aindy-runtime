@@ -104,6 +104,7 @@ def test_safe_runtime_degradation_keeps_readiness_green(monkeypatch):
     assert status_code == 200
     assert payload["required_failures"] == []
     assert payload["checks"]["trusted_python_execution"]["sandboxing"] == "none"
+    assert payload["checks"]["extension_execution_posture"]["schema_version"] == "2026-05-22"
 
 
 def test_external_python_override_is_operator_visible_but_not_readiness_fatal(monkeypatch):
@@ -248,14 +249,21 @@ def test_testing_mode_readiness_reports_trusted_python_inventory(monkeypatch):
     assert payload["checks"]["trusted_python_execution"]["execution_model"] == "trusted-in-process-python"
     assert payload["checks"]["trusted_python_execution"]["sandboxing"] == "none"
     assert payload["checks"]["plugin_sandbox_attestation"]["present"] is False
+    assert payload["checks"]["extension_execution_posture"]["schema_version"] == "2026-05-22"
     assert payload["checks"]["plugin_sandbox_posture"] == {
         "deployment_profile": "single-instance",
         "current": {
             "runner_type": "insecure_dev_subprocess",
             "assurance_class": "insecure-dev",
+            "runtime_trust_status": "missing-reference",
             "certification_tier": "contained-process-certified",
             "certification_status": "certified",
         },
+        "covered_execution_model_class": "isolated-externalized",
+        "covered_surface_ids": [
+            "dynamic-plugin-node:first-party-app",
+            "dynamic-plugin-node:external-third-party",
+        ],
         "required": {
             "assurance_class": None,
             "runner_type": None,
@@ -264,6 +272,12 @@ def test_testing_mode_readiness_reports_trusted_python_inventory(monkeypatch):
         "requirement_status": {
             "assurance_class_satisfied": True,
             "certification_tier_satisfied": True,
+        },
+        "platform_support": {
+            "current_platform": payload["checks"]["plugin_sandbox_platform"]["current_platform"],
+            "current_equivalence_status": payload["checks"]["plugin_sandbox_platform"]["current_environment"]["equivalence_status"],
+            "strong_sandbox_supported_host_platforms": ["linux"],
+            "hostile_third_party_supported_host_platforms": ["linux"],
         },
         "unsupported_claims": [
             "general third-party sandboxing",

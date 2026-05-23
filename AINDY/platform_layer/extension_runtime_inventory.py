@@ -30,6 +30,7 @@ def trusted_python_execution_inventory() -> dict[str, Any]:
         "present": bool(manifest_modules or plugin_nodes),
         "execution_model": "trusted-in-process-python",
         "sandboxing": "none",
+        "capability_boundary_mode": "explicit-runtime-owned-mediation",
         "total_count": len(manifest_modules) + len(plugin_nodes),
         "manifest_module_count": len(manifest_modules),
         "bootstrap_registration_count": len(bootstrap_registrations),
@@ -45,7 +46,9 @@ def trusted_python_execution_inventory() -> dict[str, Any]:
         "plugin_nodes": plugin_nodes,
         "operator_note": (
             "Trusted Python extensions execute in-process with full interpreter "
-            "privileges. This inventory is an audit surface, not a sandbox boundary."
+            "privileges. This inventory is an audit surface, not a sandbox boundary. "
+            "Residual in-process execution is confined only by explicit runtime-owned "
+            "capability mediation on official registration surfaces."
         ),
     }
 
@@ -56,6 +59,7 @@ def trusted_python_execution_summary() -> dict[str, Any]:
         "present": inventory["present"],
         "execution_model": inventory["execution_model"],
         "sandboxing": inventory["sandboxing"],
+        "capability_boundary_mode": inventory["capability_boundary_mode"],
         "total_count": inventory["total_count"],
         "manifest_module_count": inventory["manifest_module_count"],
         "bootstrap_registration_count": inventory["bootstrap_registration_count"],
@@ -87,6 +91,16 @@ def _trusted_manifest_modules() -> list[dict[str, Any]]:
                 "trusted_override_active": bool(
                     entry.get("trusted_override_active", False)
                 ),
+                "capability_boundary_mode": entry.get("capability_boundary_mode"),
+                "allowed_in_process_capabilities": list(
+                    entry.get("allowed_in_process_capabilities") or []
+                ),
+                "used_in_process_capabilities": list(
+                    entry.get("used_in_process_capabilities") or []
+                ),
+                "denied_in_process_capabilities": list(
+                    entry.get("denied_in_process_capabilities") or []
+                ),
                 "loaded_at": entry.get("loaded_at"),
             }
         )
@@ -110,6 +124,16 @@ def _trusted_bootstrap_registrations() -> list[dict[str, Any]]:
                 "profile_name": entry.get("profile_name"),
                 "trusted_override_active": bool(
                     entry.get("trusted_override_active", False)
+                ),
+                "capability_boundary_mode": entry.get("capability_boundary_mode"),
+                "allowed_in_process_capabilities": list(
+                    entry.get("allowed_in_process_capabilities") or []
+                ),
+                "used_in_process_capabilities": list(
+                    entry.get("used_in_process_capabilities") or []
+                ),
+                "denied_in_process_capabilities": list(
+                    entry.get("denied_in_process_capabilities") or []
                 ),
                 "dependencies": list(entry.get("dependencies") or []),
             }

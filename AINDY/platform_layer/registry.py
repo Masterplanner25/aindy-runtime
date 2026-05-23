@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 import hashlib
+from functools import wraps
 
 from AINDY.platform_layer.agent_plugin_contracts import CapabilityProviderBundle
 from AINDY.platform_layer.deployment_contract import (
@@ -74,6 +75,11 @@ from AINDY.platform_layer.extension_policy import (
     OWNER_FIRST_PARTY_APP,
     OWNER_RUNTIME_BUILTIN,
     infer_bootstrap_owner_class,
+)
+from AINDY.platform_layer.runtime_callback_host import (
+    RUNTIME_CALLBACK_EXECUTION_MODE,
+    build_runtime_callback_spec,
+    invoke_runtime_callback,
 )
 from AINDY.platform_layer.extension_provenance import (
     derive_python_extension_provenance,
@@ -140,17 +146,311 @@ _APP_PLUGIN_MANIFEST_ENV_VAR = "AINDY_APP_PLUGIN_MANIFEST"
 _active_plugin_profile: str | None = None
 _active_plugin_profile_source: str | None = None
 _runtime_agent_defaults_loaded = False
+_runtime_callback_invocations: dict[str, dict[str, Any]] = {}
+_in_process_extension_capability_audit: dict[str, dict[str, Any]] = {}
 _bootstrap_extension_ctx: ContextVar[dict[str, Any] | None] = ContextVar(
     "_bootstrap_extension_ctx",
     default=None,
 )
+
+INPROC_CAP_PUBLISH_BOOTSTRAP_REGISTRATION = "bootstrap.publish_registration"
+INPROC_CAP_REGISTER_ROUTER = "registry.register_router"
+INPROC_CAP_REGISTER_ROOT_ROUTER = "registry.register_root_router"
+INPROC_CAP_REGISTER_LEGACY_ROOT_ROUTER = "registry.register_legacy_root_router"
+INPROC_CAP_REGISTER_JOB = "registry.register_job"
+INPROC_CAP_REGISTER_FLOW = "registry.register_flow"
+INPROC_CAP_REGISTER_FLOW_RESULT = "registry.register_flow_result"
+INPROC_CAP_REGISTER_FLOW_PLAN = "registry.register_flow_plan"
+INPROC_CAP_REGISTER_EVENT_HANDLER = "registry.register_event_handler"
+INPROC_CAP_REGISTER_EVENT_TYPE = "registry.register_event_type"
+INPROC_CAP_REGISTER_SCHEDULED_JOB = "registry.register_scheduled_job"
+INPROC_CAP_REGISTER_RESPONSE_ADAPTER = "registry.register_response_adapter"
+INPROC_CAP_REGISTER_ROUTE_GUARD = "registry.register_route_guard"
+INPROC_CAP_REGISTER_STARTUP_HOOK = "registry.register_startup_hook"
+INPROC_CAP_REGISTER_AGENT_TOOL = "registry.register_agent_tool"
+INPROC_CAP_REGISTER_PLANNER_CONTEXT = "registry.register_planner_context"
+INPROC_CAP_REGISTER_PLANNER_BACKEND = "registry.register_planner_backend"
+INPROC_CAP_REGISTER_RUN_TOOL_PROVIDER = "registry.register_run_tool_provider"
+INPROC_CAP_REGISTER_AGENT_COMPLETION_HOOK = "registry.register_agent_completion_hook"
+INPROC_CAP_REGISTER_AGENT_EVENT = "registry.register_agent_event"
+INPROC_CAP_REGISTER_TRIGGER_EVALUATOR = "registry.register_trigger_evaluator"
+INPROC_CAP_REGISTER_CAPABILITY_DEFINITION = "registry.register_capability_definition"
+INPROC_CAP_REGISTER_CAPABILITY_PROVIDER = "registry.register_capability_definition_provider"
+INPROC_CAP_REGISTER_TOOL_CAPABILITIES = "registry.register_tool_capabilities"
+INPROC_CAP_REGISTER_AGENT_CAPABILITIES = "registry.register_agent_capabilities"
+INPROC_CAP_REGISTER_RESTRICTED_TOOL = "registry.register_restricted_tool"
+INPROC_CAP_REGISTER_HEALTH_CHECK = "registry.register_health_check"
+INPROC_CAP_PUBLISH_CORE_DOMAINS = "registry.publish_core_domains"
+INPROC_CAP_REGISTER_SYSCALL = "registry.register_syscall"
+INPROC_CAP_REGISTER_EXECUTION_ADAPTER = "registry.register_execution_adapter"
+INPROC_CAP_REGISTER_MEMORY_POLICY = "registry.register_memory_policy"
+INPROC_CAP_REGISTER_AGENT_RANKING_STRATEGY = "registry.register_agent_ranking_strategy"
+INPROC_CAP_REGISTER_FLOW_STRATEGY = "registry.register_flow_strategy"
+INPROC_CAP_REGISTER_SYMBOL = "registry.register_symbol"
+INPROC_CAP_REGISTER_SYMBOLS = "registry.register_symbols"
+INPROC_CAP_REGISTER_ROUTE_PREFIX = "registry.register_route_prefix"
+INPROC_CAP_REGISTER_REQUIRED_FLOW_NODE = "registry.register_required_flow_node"
+INPROC_CAP_REGISTER_REQUIRED_SYSCALL = "registry.register_required_syscall"
+
+_ALL_INPROC_EXTENSION_CAPABILITIES = {
+    INPROC_CAP_PUBLISH_BOOTSTRAP_REGISTRATION,
+    INPROC_CAP_REGISTER_ROUTER,
+    INPROC_CAP_REGISTER_ROOT_ROUTER,
+    INPROC_CAP_REGISTER_LEGACY_ROOT_ROUTER,
+    INPROC_CAP_REGISTER_JOB,
+    INPROC_CAP_REGISTER_FLOW,
+    INPROC_CAP_REGISTER_FLOW_RESULT,
+    INPROC_CAP_REGISTER_FLOW_PLAN,
+    INPROC_CAP_REGISTER_EVENT_HANDLER,
+    INPROC_CAP_REGISTER_EVENT_TYPE,
+    INPROC_CAP_REGISTER_SCHEDULED_JOB,
+    INPROC_CAP_REGISTER_RESPONSE_ADAPTER,
+    INPROC_CAP_REGISTER_ROUTE_GUARD,
+    INPROC_CAP_REGISTER_STARTUP_HOOK,
+    INPROC_CAP_REGISTER_AGENT_TOOL,
+    INPROC_CAP_REGISTER_PLANNER_CONTEXT,
+    INPROC_CAP_REGISTER_PLANNER_BACKEND,
+    INPROC_CAP_REGISTER_RUN_TOOL_PROVIDER,
+    INPROC_CAP_REGISTER_AGENT_COMPLETION_HOOK,
+    INPROC_CAP_REGISTER_AGENT_EVENT,
+    INPROC_CAP_REGISTER_TRIGGER_EVALUATOR,
+    INPROC_CAP_REGISTER_CAPABILITY_DEFINITION,
+    INPROC_CAP_REGISTER_CAPABILITY_PROVIDER,
+    INPROC_CAP_REGISTER_TOOL_CAPABILITIES,
+    INPROC_CAP_REGISTER_AGENT_CAPABILITIES,
+    INPROC_CAP_REGISTER_RESTRICTED_TOOL,
+    INPROC_CAP_REGISTER_HEALTH_CHECK,
+    INPROC_CAP_PUBLISH_CORE_DOMAINS,
+    INPROC_CAP_REGISTER_SYSCALL,
+    INPROC_CAP_REGISTER_EXECUTION_ADAPTER,
+    INPROC_CAP_REGISTER_MEMORY_POLICY,
+    INPROC_CAP_REGISTER_AGENT_RANKING_STRATEGY,
+    INPROC_CAP_REGISTER_FLOW_STRATEGY,
+    INPROC_CAP_REGISTER_SYMBOL,
+    INPROC_CAP_REGISTER_SYMBOLS,
+    INPROC_CAP_REGISTER_ROUTE_PREFIX,
+    INPROC_CAP_REGISTER_REQUIRED_FLOW_NODE,
+    INPROC_CAP_REGISTER_REQUIRED_SYSCALL,
+}
+_FIRST_PARTY_ALLOWED_INPROC_EXTENSION_CAPABILITIES = {
+    INPROC_CAP_PUBLISH_BOOTSTRAP_REGISTRATION,
+    INPROC_CAP_REGISTER_ROUTER,
+    INPROC_CAP_REGISTER_ROOT_ROUTER,
+    INPROC_CAP_REGISTER_LEGACY_ROOT_ROUTER,
+    INPROC_CAP_REGISTER_JOB,
+    INPROC_CAP_REGISTER_FLOW,
+    INPROC_CAP_REGISTER_FLOW_RESULT,
+    INPROC_CAP_REGISTER_FLOW_PLAN,
+    INPROC_CAP_REGISTER_EVENT_HANDLER,
+    INPROC_CAP_REGISTER_EVENT_TYPE,
+    INPROC_CAP_REGISTER_SCHEDULED_JOB,
+    INPROC_CAP_REGISTER_RESPONSE_ADAPTER,
+    INPROC_CAP_REGISTER_ROUTE_GUARD,
+    INPROC_CAP_REGISTER_STARTUP_HOOK,
+    INPROC_CAP_REGISTER_AGENT_TOOL,
+    INPROC_CAP_REGISTER_PLANNER_CONTEXT,
+    INPROC_CAP_REGISTER_PLANNER_BACKEND,
+    INPROC_CAP_REGISTER_RUN_TOOL_PROVIDER,
+    INPROC_CAP_REGISTER_AGENT_COMPLETION_HOOK,
+    INPROC_CAP_REGISTER_AGENT_EVENT,
+    INPROC_CAP_REGISTER_TRIGGER_EVALUATOR,
+    INPROC_CAP_REGISTER_CAPABILITY_DEFINITION,
+    INPROC_CAP_REGISTER_CAPABILITY_PROVIDER,
+    INPROC_CAP_REGISTER_TOOL_CAPABILITIES,
+    INPROC_CAP_REGISTER_AGENT_CAPABILITIES,
+    INPROC_CAP_REGISTER_RESTRICTED_TOOL,
+    INPROC_CAP_REGISTER_HEALTH_CHECK,
+    INPROC_CAP_PUBLISH_CORE_DOMAINS,
+}
 
 
 def _sanitized_extension_input(context: dict[str, Any] | None) -> dict[str, Any]:
     return sanitize_extension_context(context or {})
 
 
+def _current_in_process_extension_capabilities(owner_class: str) -> list[str]:
+    resolved_owner = str(owner_class or "").strip()
+    if resolved_owner == OWNER_RUNTIME_BUILTIN:
+        return sorted(_ALL_INPROC_EXTENSION_CAPABILITIES)
+    if resolved_owner == OWNER_FIRST_PARTY_APP:
+        return sorted(_FIRST_PARTY_ALLOWED_INPROC_EXTENSION_CAPABILITIES)
+    return []
+
+
+def _ensure_in_process_extension_audit_record() -> dict[str, Any] | None:
+    current_extension = _bootstrap_extension_ctx.get() or {}
+    module_name = str(current_extension.get("module_name") or "").strip()
+    owner_class = str(current_extension.get("owner_class") or "").strip()
+    if not module_name or owner_class not in {OWNER_RUNTIME_BUILTIN, OWNER_FIRST_PARTY_APP}:
+        return None
+    audit = _in_process_extension_capability_audit.get(module_name)
+    if audit is None:
+        audit = {
+            "module_name": module_name,
+            "owner_class": owner_class,
+            "capability_boundary_mode": "in-process-bootstrap-capabilities",
+            "allowed_capabilities": _current_in_process_extension_capabilities(owner_class),
+            "used_capabilities": [],
+            "denied_capabilities": [],
+        }
+        _in_process_extension_capability_audit[module_name] = audit
+    return audit
+
+
+def _require_in_process_extension_capability(capability: str) -> None:
+    audit = _ensure_in_process_extension_audit_record()
+    if audit is None:
+        return
+    used = set(audit.get("used_capabilities") or [])
+    used.add(capability)
+    audit["used_capabilities"] = sorted(used)
+    allowed = set(audit.get("allowed_capabilities") or [])
+    if capability in allowed:
+        return
+    denied = set(audit.get("denied_capabilities") or [])
+    denied.add(capability)
+    audit["denied_capabilities"] = sorted(denied)
+    raise PermissionError(
+        f"in-process bootstrap capability {capability!r} is not allowed for "
+        f"{audit['owner_class']!r} module {audit['module_name']!r}"
+    )
+
+
+def get_in_process_extension_capability_audit() -> dict[str, dict[str, Any]]:
+    return {key: dict(value) for key, value in _in_process_extension_capability_audit.items()}
+
+
+def _runtime_callback_key(surface: str, identifier: str) -> str:
+    return f"{surface}:{identifier}"
+
+
+def _record_runtime_callback_invocation(spec: dict[str, Any], response: dict[str, Any]) -> None:
+    _runtime_callback_invocations[_runtime_callback_key(spec["surface"], spec["identifier"])] = {
+        "surface": spec["surface"],
+        "identifier": spec["identifier"],
+        "owner_class": spec["owner_class"],
+        "module_name": spec["module_name"],
+        "function_name": spec["function_name"],
+        "execution_mode": response.get("execution_mode") or RUNTIME_CALLBACK_EXECUTION_MODE,
+        "worker_pid": response.get("worker_pid"),
+        "protocol_version": response.get("protocol_version"),
+    }
+
+
+def get_runtime_callback_invocations() -> dict[str, dict[str, Any]]:
+    return {key: dict(value) for key, value in _runtime_callback_invocations.items()}
+
+
+def _callback_owner_class(handler: Handler) -> str:
+    current_extension = _bootstrap_extension_ctx.get() or {}
+    owner_class = str(current_extension.get("owner_class") or "").strip()
+    if owner_class:
+        return owner_class
+    module_name = str(getattr(handler, "__module__", "") or "").strip()
+    if module_name:
+        return infer_bootstrap_owner_class(module_name)
+    return OWNER_EXTERNAL_THIRD_PARTY
+
+
+def _callback_is_module_resolvable(handler: Handler) -> bool:
+    module_name = str(getattr(handler, "__module__", "") or "").strip()
+    function_name = str(getattr(handler, "__name__", "") or "").strip()
+    if not module_name or not function_name or function_name == "<lambda>":
+        return False
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:
+        return False
+    return getattr(module, function_name, None) is handler
+
+
+def _callback_source_path(handler: Handler) -> str | None:
+    module_name = str(getattr(handler, "__module__", "") or "").strip()
+    function_name = str(getattr(handler, "__name__", "") or "").strip()
+    if not module_name or not function_name or function_name == "<lambda>":
+        return None
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:
+        return None
+    if getattr(module, function_name, None) is not handler:
+        return None
+    module_origin = str(getattr(module, "__file__", "") or "").strip()
+    return module_origin or None
+
+
+def _runtime_callback_spec(
+    *,
+    surface: str,
+    identifier: str,
+    handler: Handler,
+    expects_argument: bool,
+) -> dict[str, Any] | None:
+    module_name = str(getattr(handler, "__module__", "") or "").strip()
+    function_name = str(getattr(handler, "__name__", "") or "").strip()
+    owner_class = _callback_owner_class(handler)
+    if owner_class not in {OWNER_RUNTIME_BUILTIN, OWNER_FIRST_PARTY_APP}:
+        return None
+    if owner_class == OWNER_RUNTIME_BUILTIN and not module_name.startswith("AINDY."):
+        return None
+    if owner_class == OWNER_FIRST_PARTY_APP and not module_name.startswith("apps."):
+        return None
+    if not _callback_is_module_resolvable(handler):
+        return None
+    return build_runtime_callback_spec(
+        surface=surface,
+        identifier=identifier,
+        owner_class=owner_class,
+        module_name=module_name,
+        function_name=function_name,
+        source_path=_callback_source_path(handler),
+        expects_argument=expects_argument,
+        bootstrap_register=module_name == "AINDY.platform_layer.runtime_agent_defaults",
+    )
+
+
+def _maybe_wrap_runtime_callback(
+    *,
+    surface: str,
+    identifier: str,
+    handler: Handler,
+    expects_argument: bool,
+) -> Handler:
+    spec = _runtime_callback_spec(
+        surface=surface,
+        identifier=identifier,
+        handler=handler,
+        expects_argument=expects_argument,
+    )
+    if spec is None:
+        return handler
+
+    if expects_argument:
+        @wraps(handler)
+        def _wrapped(payload: dict[str, Any] | None = None):
+            response = invoke_runtime_callback(spec, argument=_sanitized_extension_input(payload or {}))
+            _record_runtime_callback_invocation(spec, response)
+            return response.get("result")
+
+        setattr(_wrapped, "__aindy_runtime_callback_spec__", dict(spec))
+        return _wrapped
+
+    @wraps(handler)
+    def _wrapped_zero_arg():
+        response = invoke_runtime_callback(spec, argument=None)
+        _record_runtime_callback_invocation(spec, response)
+        return response.get("result")
+
+    setattr(_wrapped_zero_arg, "__aindy_runtime_callback_spec__", dict(spec))
+    return _wrapped_zero_arg
+
+
 def register_router(router: Any, *, root: bool = False, legacy_root: bool = False) -> Any:
+    _require_in_process_extension_capability(
+        INPROC_CAP_REGISTER_LEGACY_ROOT_ROUTER
+        if legacy_root
+        else (INPROC_CAP_REGISTER_ROOT_ROUTER if root else INPROC_CAP_REGISTER_ROUTER)
+    )
     validate_router(router)
     target = _routers
     if legacy_root:
@@ -175,6 +475,7 @@ def get_legacy_root_routers() -> list[Any]:
 
 
 def register_syscall(name: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_SYSCALL)
     validate_syscall_handler(name, handler)
     _syscalls[name] = handler
     return handler
@@ -189,6 +490,7 @@ def iter_syscalls() -> Iterable[tuple[str, Handler]]:
 
 
 def register_job(name: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_JOB)
     validate_job_handler(name, handler)
     _jobs[name] = handler
     return handler
@@ -203,6 +505,7 @@ def iter_jobs() -> Iterable[tuple[str, Handler]]:
 
 
 def register_flow(register_fn: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_FLOW)
     validate_flow_registration(getattr(register_fn, "__name__", "<anonymous>"), register_fn)
     if register_fn in _flows:
         return register_fn
@@ -222,6 +525,7 @@ def register_flow_result(
     extractor: Handler | None = None,
     completion_event: str | None = None,
 ) -> None:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_FLOW_RESULT)
     validate_flow_result_registration(
         flow_name,
         result_key=result_key,
@@ -249,6 +553,7 @@ def get_flow_completion_event(flow_name: str) -> str | None:
 
 
 def register_flow_plan(flow_name: str, plan: dict[str, Any]) -> None:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_FLOW_PLAN)
     validate_flow_plan(flow_name, plan)
     _flow_plans[flow_name] = plan
 
@@ -258,6 +563,7 @@ def get_flow_plan(flow_name: str) -> dict[str, Any] | None:
 
 
 def register_event_handler(event_type: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_EVENT_HANDLER)
     validate_event_handler(event_type, handler)
     register_event_type(event_type)
     _event_handlers[event_type].append(handler)
@@ -269,6 +575,7 @@ def get_event_handlers(event_type: str) -> list[Handler]:
 
 
 def register_event_type(event_type: str) -> str:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_EVENT_TYPE)
     if not event_type or not event_type.strip():
         raise ValueError("event_type must be a non-empty string")
     _event_types.add(event_type)
@@ -299,6 +606,7 @@ def register_scheduled_job(
     trigger_kwargs: dict[str, Any] | None = None,
     replace_existing: bool = True,
 ) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_SCHEDULED_JOB)
     validate_scheduled_job_entry(
         job_id,
         handler=handler,
@@ -322,6 +630,7 @@ def get_scheduled_jobs() -> tuple[dict[str, Any], ...]:
 
 
 def register_response_adapter(route_prefix: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_RESPONSE_ADAPTER)
     validate_response_adapter(route_prefix, handler)
     _response_adapters[route_prefix.rstrip(".")] = handler
     return handler
@@ -333,6 +642,7 @@ def get_response_adapter(route_prefix: str) -> Handler | None:
 
 
 def register_route_guard(route_prefix: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_ROUTE_GUARD)
     validate_route_guard(route_prefix, handler)
     _route_guards[route_prefix.rstrip(".")] = handler
     return handler
@@ -344,6 +654,7 @@ def get_route_guard(route_prefix: str) -> Handler | None:
 
 
 def register_execution_adapter(entity_type: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_EXECUTION_ADAPTER)
     validate_execution_adapter(entity_type, handler)
     _execution_adapters[entity_type.strip()] = handler
     return handler
@@ -355,8 +666,16 @@ def get_execution_adapter(entity_type: str) -> Handler | None:
 
 
 def register_startup_hook(handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_STARTUP_HOOK)
     validate_startup_hook(handler)
-    _startup_hooks.append(handler)
+    _startup_hooks.append(
+        _maybe_wrap_runtime_callback(
+            surface="startup_hook",
+            identifier=str(getattr(handler, "__name__", "startup_hook")),
+            handler=handler,
+            expects_argument=True,
+        )
+    )
     return handler
 
 
@@ -383,6 +702,7 @@ def get_capture_rules() -> dict[str, Any]:
 
 
 def register_memory_policy(event_type: str, policy: Any) -> Any:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_MEMORY_POLICY)
     validate_memory_policy(event_type, policy)
     _memory_policies[event_type] = policy
     _capture_rules[event_type] = policy
@@ -413,6 +733,7 @@ def get_memory_significance_rule(event_type: str) -> float | None:
 
 
 def register_agent_tool(name: str, tool: Any) -> Any:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_AGENT_TOOL)
     validate_agent_tool(name, tool)
     _agent_tools[name] = tool
     return tool
@@ -429,12 +750,19 @@ def iter_agent_tools() -> Iterable[tuple[str, Any]]:
 
 
 def register_planner_context_provider(run_type: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_PLANNER_CONTEXT)
     validate_agent_planner_context(run_type, handler)
-    _agent_planner_contexts[run_type] = handler
+    _agent_planner_contexts[run_type] = _maybe_wrap_runtime_callback(
+        surface="planner_context",
+        identifier=run_type,
+        handler=handler,
+        expects_argument=True,
+    )
     return handler
 
 
 def register_agent_planner_backend(name: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_PLANNER_BACKEND)
     validate_agent_planner_backend(name, handler)
     _agent_planner_backends[name] = handler
     return handler
@@ -464,8 +792,14 @@ def register_agent_planner_context(run_type: str, handler: Handler) -> Handler:
 
 
 def register_run_tool_provider(run_type: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_RUN_TOOL_PROVIDER)
     validate_agent_run_tools(run_type, handler)
-    _agent_run_tools[run_type] = handler
+    _agent_run_tools[run_type] = _maybe_wrap_runtime_callback(
+        surface="run_tool_provider",
+        identifier=run_type,
+        handler=handler,
+        expects_argument=True,
+    )
     return handler
 
 
@@ -483,8 +817,16 @@ def register_agent_run_tools(run_type: str, handler: Handler) -> Handler:
 
 
 def register_agent_completion_hook(run_type: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_AGENT_COMPLETION_HOOK)
     validate_agent_event(f"agent.completion.{run_type}", handler)
-    _agent_completion_hooks[run_type].append(handler)
+    _agent_completion_hooks[run_type].append(
+        _maybe_wrap_runtime_callback(
+            surface="agent_completion_hook",
+            identifier=run_type,
+            handler=handler,
+            expects_argument=True,
+        )
+    )
     return handler
 
 
@@ -501,6 +843,7 @@ def run_agent_completion_hooks(run_type: str, context: dict[str, Any]) -> list[A
 
 
 def register_agent_event(event_name: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_AGENT_EVENT)
     validate_agent_event(event_name, handler)
     _agent_event_emitters[event_name].append(handler)
     return handler
@@ -515,6 +858,7 @@ def emit_agent_event(event_name: str, context: dict[str, Any]) -> list[Any]:
 
 
 def register_agent_ranking_strategy(handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_AGENT_RANKING_STRATEGY)
     validate_agent_ranking_strategy(handler)
     global _agent_ranking_strategy
     _agent_ranking_strategy = handler
@@ -527,8 +871,14 @@ def get_agent_ranking_strategy() -> Handler | None:
 
 
 def register_trigger_evaluator(trigger_type: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_TRIGGER_EVALUATOR)
     validate_trigger_evaluator(trigger_type, handler)
-    _trigger_evaluators[trigger_type] = handler
+    _trigger_evaluators[trigger_type] = _maybe_wrap_runtime_callback(
+        surface="trigger_evaluator",
+        identifier=trigger_type,
+        handler=handler,
+        expects_argument=True,
+    )
     return handler
 
 
@@ -539,6 +889,7 @@ def get_trigger_evaluator(trigger_type: str) -> Handler | None:
 
 
 def register_flow_strategy(flow_type: str, handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_FLOW_STRATEGY)
     validate_flow_strategy(flow_type, handler)
     _flow_strategies[flow_type] = handler
     return handler
@@ -550,16 +901,26 @@ def get_flow_strategy(flow_type: str) -> Handler | None:
 
 
 def register_capability_definition(name: str, metadata: dict[str, Any]) -> dict[str, Any]:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_CAPABILITY_DEFINITION)
     validate_capability_definition(name, metadata)
     _capability_definitions[name] = dict(metadata)
     return _capability_definitions[name]
 
 
 def register_capability_definition_provider(handler: Handler) -> Handler:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_CAPABILITY_PROVIDER)
     if not callable(handler):
         raise ValueError("capability definition provider must be callable")
-    if handler not in _capability_definition_providers:
-        _capability_definition_providers.append(handler)
+    wrapped = _maybe_wrap_runtime_callback(
+        surface="capability_definition_provider",
+        identifier=str(getattr(handler, "__name__", "capability_definition_provider")),
+        handler=handler,
+        expects_argument=False,
+    )
+    for existing in tuple(_capability_definition_providers):
+        if existing is wrapped or getattr(existing, "__wrapped__", None) is handler or existing is handler:
+            return handler
+    _capability_definition_providers.append(wrapped)
     return handler
 
 
@@ -608,6 +969,7 @@ def get_capability_definitions() -> dict[str, dict[str, Any]]:
 
 
 def register_tool_capabilities(tool_name: str, capability_names: list[str]) -> list[str]:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_TOOL_CAPABILITIES)
     validate_capability_names("Tool capabilities", tool_name, capability_names)
     capabilities = sorted({name for name in capability_names if isinstance(name, str)})
     _tool_capabilities[tool_name] = capabilities
@@ -620,6 +982,7 @@ def get_capabilities_for_tool(tool_name: str) -> list[str]:
 
 
 def register_agent_capabilities(agent_id: str, capability_names: list[str]) -> list[str]:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_AGENT_CAPABILITIES)
     validate_capability_names("Agent capabilities", agent_id, capability_names)
     capabilities = sorted({name for name in capability_names if isinstance(name, str)})
     _agent_capabilities[agent_id] = capabilities
@@ -632,6 +995,7 @@ def get_capabilities_for_agent(agent_id: str) -> list[str]:
 
 
 def register_restricted_tool(tool_name: str) -> str:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_RESTRICTED_TOOL)
     validate_restricted_tool(tool_name)
     _restricted_tools.add(tool_name)
     return tool_name
@@ -643,6 +1007,7 @@ def get_restricted_tools() -> set[str]:
 
 
 def register_route_prefix(prefix: str, execution_unit_type: str) -> None:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_ROUTE_PREFIX)
     validate_route_prefix(prefix, execution_unit_type)
     _route_prefixes[prefix] = execution_unit_type
 
@@ -652,6 +1017,7 @@ def get_route_prefix(prefix: str) -> str | None:
 
 
 def register_required_flow_node(node_name: str) -> str:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_REQUIRED_FLOW_NODE)
     """Register a flow node name that must exist after bootstrap."""
     if not node_name or not isinstance(node_name, str):
         raise ValueError(f"node_name must be a non-empty string, got {node_name!r}")
@@ -664,6 +1030,7 @@ def get_required_flow_nodes() -> list[str]:
 
 
 def register_required_syscall(name: str) -> None:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_REQUIRED_SYSCALL)
     """Declare that a syscall must be present after bootstrap."""
     if not name or not isinstance(name, str):
         raise ValueError(f"name must be a non-empty string, got {name!r}")
@@ -676,6 +1043,7 @@ def get_required_syscalls() -> list[str]:
 
 
 def register_symbol(name: str, value: Any) -> Any:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_SYMBOL)
     validate_symbol(name)
     _symbols[name] = value
     return value
@@ -686,6 +1054,7 @@ def get_symbol(name: str) -> Any | None:
 
 
 def register_symbols(symbols: dict[str, Any]) -> None:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_SYMBOLS)
     validate_symbols(symbols)
     for name, value in symbols.items():
         if not name.startswith("__"):
@@ -714,6 +1083,7 @@ def get_degraded_domains() -> list[str]:
 
 
 def register_health_check(app_name: str, check_fn: Callable[[], dict[str, Any]]) -> Callable[[], dict[str, Any]]:
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_HEALTH_CHECK)
     if not isinstance(app_name, str) or not app_name.strip():
         raise ValueError("app_name must be a non-empty string")
     if not callable(check_fn):
@@ -733,6 +1103,7 @@ def publish_bootstrap_registration(
     owner_class: str | None = None,
     module_name: str | None = None,
 ) -> str:
+    _require_in_process_extension_capability(INPROC_CAP_PUBLISH_BOOTSTRAP_REGISTRATION)
     normalized = str(app_name or "").strip()
     if not normalized:
         raise ValueError("app_name must be a non-empty string")
@@ -773,11 +1144,26 @@ def publish_bootstrap_registration(
         "profile_name": current_extension.get("profile_name"),
         "dependencies": list(_bootstrap_dependencies[normalized]),
         "provenance": dict(current_extension.get("provenance") or {}),
+        "capability_boundary_mode": (
+            "in-process-bootstrap-capabilities"
+            if resolved_owner_class in {OWNER_RUNTIME_BUILTIN, OWNER_FIRST_PARTY_APP}
+            else "not-applicable"
+        ),
+        "allowed_in_process_capabilities": list(
+            (_ensure_in_process_extension_audit_record() or {}).get("allowed_capabilities") or []
+        ),
+        "used_in_process_capabilities": list(
+            (_ensure_in_process_extension_audit_record() or {}).get("used_capabilities") or []
+        ),
+        "denied_in_process_capabilities": list(
+            (_ensure_in_process_extension_audit_record() or {}).get("denied_capabilities") or []
+        ),
     }
     return normalized
 
 
 def publish_core_domains(domains: Iterable[str]) -> list[str]:
+    _require_in_process_extension_capability(INPROC_CAP_PUBLISH_CORE_DOMAINS)
     published = sorted(
         {
             str(domain).strip()
@@ -1415,6 +1801,7 @@ def load_plugins(
                 "abi_stability": manifest_abi_stability,
             }
         )
+        _ensure_in_process_extension_audit_record()
         try:
             module = importlib.import_module(module_name)
         except Exception as exc:
@@ -1481,6 +1868,20 @@ def load_plugins(
             "provenance": resolved_provenance,
             "bootstrap_callable_present": callable(bootstrap),
             "bootstrap_executed": callable(bootstrap),
+            "capability_boundary_mode": (
+                "in-process-bootstrap-capabilities"
+                if owner_class in {OWNER_RUNTIME_BUILTIN, OWNER_FIRST_PARTY_APP}
+                else "not-applicable"
+            ),
+            "allowed_in_process_capabilities": list(
+                (_in_process_extension_capability_audit.get(module_name) or {}).get("allowed_capabilities") or []
+            ),
+            "used_in_process_capabilities": list(
+                (_in_process_extension_capability_audit.get(module_name) or {}).get("used_capabilities") or []
+            ),
+            "denied_in_process_capabilities": list(
+                (_in_process_extension_capability_audit.get(module_name) or {}).get("denied_capabilities") or []
+            ),
             "loaded_at": datetime.now(timezone.utc).isoformat(),
         }
         loaded.append(module_name)

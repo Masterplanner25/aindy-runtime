@@ -1,6 +1,6 @@
 ---
 title: "Extension Trust Model"
-last_verified: "2026-05-20"
+last_verified: "2026-05-22"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -54,6 +54,17 @@ Ownership is separate from trust:
 - webhook nodes, webhook subscriptions, and dynamic flows are contract-driven
   integrations or data-only registrations, not Python sandbox boundaries
 
+Important first-party distinction:
+
+- first-party manifest bootstrap remains a privileged in-process exception
+- first-party dynamic plugin nodes now default to the isolated plugin-host path
+- first-party module-style callback providers registered into runtime registries
+  now execute through a runtime-owned callback worker when the handler is
+  resolvable as a module-level function
+- residual in-process bootstrap interaction with the kernel now goes through an
+  explicit runtime-owned registration capability boundary, with a smaller
+  default allowlist for `first-party-app` than for `runtime-built-in`
+
 ## Trusted Extension Classes
 
 These extension classes are trusted code execution:
@@ -64,9 +75,9 @@ These extension classes are trusted code execution:
 - manifest declarative extension entries loaded by
   [AINDY/platform_layer/registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/registry.py)
   for external onboarding without Python bootstrap execution
-- dynamic plugin nodes loaded by
+- runtime-built-in dynamic plugin nodes loaded by
   [AINDY/platform_layer/node_registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/node_registry.py)
-  when `owner_class` is `runtime-built-in` or `first-party-app`
+  when `owner_class` is `runtime-built-in`
 
 Properties:
 
@@ -86,6 +97,14 @@ Current hardening:
 - external third-party dynamic plugin nodes no longer import into the runtime
   process; they validate and execute through `AINDY.platform_layer.extension_worker`
   over a subprocess request/response boundary
+- first-party app dynamic plugin nodes also execute through the plugin-host
+  boundary by default, using the same explicit runtime API capability model as
+  third-party plugin nodes
+- first-party and runtime-built-in module callbacks registered for startup
+  hooks, planner context, run-tool providers, trigger evaluators, completion
+  hooks, and capability-definition providers execute through the
+  `runtime_callback_worker` boundary when they are module-level functions the
+  runtime can resolve explicitly
 - third-party plugin-host lifecycle is now mediated through the runtime-owned
   sandbox runner interface; the current implementation is
   `insecure_dev_subprocess`, which is a containment boundary rather than a
@@ -106,6 +125,7 @@ Current hardening:
   - trusted dynamic plugin nodes
   - ownership-class counts distinguishing `runtime-built-in` from
     `first-party-app`
+  - allowed, used, and denied in-process bootstrap registration capabilities
 - plugin node handlers are loaded only from `AINDY/plugins/nodes/`
 - plugin node loading no longer mutates `sys.path`
 - plugin node handlers must expose a callable compatible with the node contract
@@ -119,9 +139,12 @@ host platform rather than implying uniform guarantees across operating systems.
 Current support summary:
 
 - Linux
-  - available runners: `insecure_dev_subprocess`, `containerized_oci`
+  - available runners: `insecure_dev_subprocess`, `containerized_oci`,
+    `strong_sandbox_vm`
   - production-safe third-party plugin sandbox support: yes, when a compatible
     container runtime is available
+  - declared fully supported host platform for strong sandbox and
+    `hostile-third-party`: yes
   - stronger controls may be reported active for `containerized_oci`, including
     `no_new_privileges`, dropped capabilities, PID limits, seccomp, AppArmor,
     and SELinux label controls
@@ -129,18 +152,24 @@ Current support summary:
   - available runners: `insecure_dev_subprocess`, `containerized_oci` when a
     container runtime is installed
   - production-safe third-party plugin sandbox support: no
+  - declared fully supported host platform for strong sandbox and
+    `hostile-third-party`: no
   - degraded mode: Linux-only kernel hardening controls are not reported as
     enforceable on the Windows host
 - macOS
   - available runners: `insecure_dev_subprocess`, `containerized_oci` when a
     container runtime is installed
   - production-safe third-party plugin sandbox support: no
+  - declared fully supported host platform for strong sandbox and
+    `hostile-third-party`: no
   - degraded mode: container execution depends on host virtualization and does
     not imply native macOS kernel policy enforcement
 - Other hosts
   - available runners: `insecure_dev_subprocess`, plus `containerized_oci`
     only if a compatible container runtime is available
   - production-safe third-party plugin sandbox support: no
+  - declared fully supported host platform for strong sandbox and
+    `hostile-third-party`: no
   - degraded mode: the host is outside the explicitly characterized sandbox
     support set
 
@@ -148,6 +177,9 @@ Important implications:
 
 - production-oriented deployment profiles reject third-party sandbox execution
   unless the runtime can provide the documented Linux containerized guarantees
+- the repo’s declared strong-sandbox support set is Linux-only; non-Linux hosts
+  remain explicitly visible in the matrix, but they are not part of the
+  equivalent high-assurance support claim
 - `insecure_dev_subprocess` remains a development containment boundary only
 - `containerized_oci` on non-Linux hosts is reported explicitly as degraded
   rather than being treated as equivalent to the Linux hardened path
@@ -245,7 +277,14 @@ Current hardening:
 - Treat `runtime-built-in` and `first-party-app` as distinct operator-visible
   classes:
   runtime-built-in code is runtime-owned infrastructure code;
-  first-party-app code is trusted app-owned code loaded into the same process.
+  first-party-app code is trusted app-owned code, with manifest bootstrap still
+  loaded in-process and plugin-style execution isolated where the runtime can
+  externalize it.
+- Treat first-party manifest bootstrap as the remaining explicit privileged
+  exception set. It stays in-process because it performs registry mutation and
+  boot-time kernel wiring.
+- Treat first-party plugin nodes and first-party registry callback providers as
+  isolated by default unless they fall into that explicit bootstrap exception.
 - Treat external third-party manifest bootstrap as unsupported.
 - Treat external third-party plugin nodes as isolated subprocess work, not
   trusted in-process imports.

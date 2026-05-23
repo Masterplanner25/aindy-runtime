@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 from collections import defaultdict
 
 import pytest
@@ -77,6 +78,8 @@ _REGISTRY_STATE_EMPTY = {
     "_active_plugin_profile": None,
     "_active_plugin_profile_source": None,
     "_runtime_agent_defaults_loaded": False,
+    "_runtime_callback_invocations": {},
+    "_in_process_extension_capability_audit": {},
 }
 
 
@@ -210,6 +213,26 @@ def test_platform_only_registers_runtime_agent_defaults(platform_only_runtime):
     assert evaluator is not None
     assert evaluator({"trigger_type": "user", "trigger": {"importance": 0.9}, "context": {}})["decision"] == "execute"
     assert set(contract["baseline_agent_capabilities"]["capabilities"]) <= set(capabilities)
+    callback_invocations = registry.get_runtime_callback_invocations()
+    assert callback_invocations["planner_context:default"]["execution_mode"] == "isolated-runtime-callback"
+    assert callback_invocations["run_tool_provider:default"]["execution_mode"] == "isolated-runtime-callback"
+    assert callback_invocations["trigger_evaluator:default"]["execution_mode"] == "isolated-runtime-callback"
+    assert callback_invocations["capability_definition_provider:runtime_capability_bundle"]["execution_mode"] == "isolated-runtime-callback"
+    assert callback_invocations["planner_context:default"]["worker_pid"] != os.getpid()
+
+
+def test_platform_only_runtime_startup_hooks_can_execute_through_runtime_callback_boundary(platform_only_runtime):
+    _startup, _main = _reload_platform_only_modules()
+
+    from AINDY.platform_layer import runtime_agent_defaults
+
+    registry.register_startup_hook(runtime_agent_defaults.handle_agent_run_completed)
+    results = registry.run_startup_hooks({"db": object(), "user_id": "user-1"})
+    invocation = registry.get_runtime_callback_invocations()["startup_hook:handle_agent_run_completed"]
+
+    assert results == [None]
+    assert invocation["execution_mode"] == "isolated-runtime-callback"
+    assert invocation["worker_pid"] != os.getpid()
 
 
 def test_platform_only_runtime_memory_tools_dispatch_kernel_syscalls(platform_only_runtime, monkeypatch):
@@ -252,8 +275,11 @@ def test_platform_only_runtime_completion_hook_is_generic_noop(platform_only_run
     _startup, _main = _reload_platform_only_modules()
 
     results = registry.run_agent_completion_hooks("default", {"run": object(), "db": object(), "user_id": "user-1"})
+    invocation = registry.get_runtime_callback_invocations()["agent_completion_hook:default"]
 
     assert results == [None]
+    assert invocation["execution_mode"] == "isolated-runtime-callback"
+    assert invocation["worker_pid"] != os.getpid()
 
 
 def test_platform_only_app_owned_capabilities_fail_predictably(platform_only_runtime):

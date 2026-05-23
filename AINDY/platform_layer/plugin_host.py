@@ -20,6 +20,9 @@ from AINDY.platform_layer.sandbox_runner import (
     list_supported_sandbox_runners,
     resolve_sandbox_runner_type,
 )
+from AINDY.platform_layer.extension_execution_model import (
+    EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
+)
 from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
 from AINDY.platform_layer.deployment_contract import (
     get_api_runtime_state,
@@ -84,6 +87,9 @@ class PluginHostRecord:
     circuit_open_until: str | None = None
     quarantined_until: str | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
+    post_launch_verification: dict[str, Any] = field(default_factory=dict)
+    verified_worker_instance_id: str | None = None
+    last_post_launch_verification_at: str | None = None
     recent_failures: deque[dict[str, Any]] = field(
         default_factory=lambda: deque(maxlen=10),
     )
@@ -128,6 +134,7 @@ class PluginHostRecord:
                     runner_metadata=runner_metadata,
                     resource_access=dict(self.resource_access),
                     provenance=dict(self.provenance),
+                    post_launch_verification=dict(self.post_launch_verification),
                 ),
                 "lifecycle_state": lifecycle_state,
                 "healthy": running and heartbeat_healthy and lifecycle_state == "running",
@@ -154,6 +161,9 @@ class PluginHostRecord:
                 "heartbeat_timeout_seconds": self.heartbeat_timeout_seconds,
                 "recent_failures": list(self.recent_failures),
                 "provenance": dict(self.provenance),
+                "post_launch_verification": dict(self.post_launch_verification),
+                "verified_worker_instance_id": self.verified_worker_instance_id,
+                "last_post_launch_verification_at": self.last_post_launch_verification_at,
             }
 
     def _heartbeat_fresh_unlocked(self) -> bool:
@@ -330,6 +340,132 @@ def _runner_metadata(runner_type: str) -> dict[str, Any]:
     return dict(runner.metadata())
 
 
+def _verify_post_launch_state(record: PluginHostRecord) -> dict[str, Any]:
+    runner = record.runner
+    if runner is None:
+        verification = {
+            "status": "failed",
+            "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+            "checked_at": _utcnow_iso(),
+            "verified_fields": [],
+            "failures": ["runner-unavailable"],
+            "operator_note": (
+                "Post-launch verification requires a live worker probe. No runner is currently active."
+            ),
+        }
+        record.post_launch_verification = verification
+        record.last_post_launch_verification_at = verification["checked_at"]
+        return verification
+    response = runner.probe(timeout_seconds=5.0)
+    if not response.get("ok"):
+        raise RuntimeError(str(response.get("error") or "plugin host probe failed"))
+    probe = dict(response.get("probe") or {})
+    session = dict(probe.get("session_continuity") or {})
+    isolation = dict(probe.get("isolation_state") or {})
+    boundary = dict(probe.get("boundary_metadata") or {})
+    mount_network_state = dict(probe.get("mount_network_state") or {})
+    verified_fields: list[str] = []
+    failures: list[str] = []
+
+    worker_instance_id = str(probe.get("worker_instance_id") or "").strip()
+    if worker_instance_id:
+        verified_fields.append("session_continuity.worker_instance_id")
+    else:
+        failures.append("session_continuity.worker_instance_id")
+    if record.verified_worker_instance_id and worker_instance_id != record.verified_worker_instance_id:
+        failures.append("session_continuity.worker_instance_changed")
+
+    expected_pairs = {
+        "session_continuity.extension_name": (str(session.get("extension_name") or "").strip(), record.name),
+        "session_continuity.owner_class": (str(session.get("owner_class") or "").strip(), record.owner_class),
+        "session_continuity.sandbox_instance_id": (
+            str(session.get("sandbox_instance_id") or "").strip(),
+            record.sandbox_instance_id,
+        ),
+    }
+    for field_name, (actual, expected) in expected_pairs.items():
+        if actual == expected and actual:
+            verified_fields.append(field_name)
+        else:
+            failures.append(field_name)
+
+    if bool(session.get("started")):
+        verified_fields.append("session_continuity.started")
+    else:
+        failures.append("session_continuity.started")
+
+    for field_name, value in {
+        "isolation_state.import_guard_active": bool(isolation.get("import_guard_active")),
+        "isolation_state.filesystem_guard_active": bool(isolation.get("filesystem_guard_active")),
+        "isolation_state.network_guard_active": bool(isolation.get("network_guard_active")),
+        "boundary_metadata.runtime_api_channel_hidden": bool(boundary.get("runtime_api_channel_hidden")),
+    }.items():
+        if value:
+            verified_fields.append(field_name)
+        else:
+            failures.append(field_name)
+
+    network_live = dict(mount_network_state.get("network_policy") or {})
+    live_probe_checks = {
+        "mount_network_state.artifact_read_access": bool(
+            (mount_network_state.get("artifact_read_access") or {}).get("verified")
+        ),
+        "mount_network_state.artifact_write_blocked": bool(
+            (mount_network_state.get("artifact_write_blocked") or {}).get("verified")
+        ),
+        "mount_network_state.writable_temp_scope": bool(
+            (mount_network_state.get("writable_temp_scope") or {}).get("verified")
+        ),
+        "mount_network_state.host_path_access_blocked": bool(
+            (mount_network_state.get("host_path_access_blocked") or {}).get("verified")
+        ),
+        "mount_network_state.network_policy.socket_guard_active": bool(
+            (network_live.get("socket_guard_active") or {}).get("verified")
+        ),
+        "mount_network_state.network_policy.deny_by_default_outbound": (
+            bool((network_live.get("deny_by_default_outbound") or {}).get("verified"))
+            or str((network_live.get("deny_by_default_outbound") or {}).get("status") or "")
+            == "not_applicable"
+        ),
+        "mount_network_state.network_policy.private_target_blocking": (
+            bool((network_live.get("private_target_blocking") or {}).get("verified"))
+            or str((network_live.get("private_target_blocking") or {}).get("status") or "")
+            == "not_applicable"
+        ),
+        "mount_network_state.network_policy.expected_boundary_mode": bool(
+            (network_live.get("expected_boundary_mode") or {}).get("verified")
+        ),
+    }
+    for field_name, satisfied in live_probe_checks.items():
+        if satisfied:
+            verified_fields.append(field_name)
+        else:
+            failures.append(field_name)
+
+    checked_at = _utcnow_iso()
+    verification = {
+        "status": "passed" if not failures else "failed",
+        "verification_scope": str(probe.get("verification_scope") or "live-worker-self-report-over-authenticated-rpc"),
+        "checked_at": checked_at,
+        "verified_fields": verified_fields,
+        "failures": failures,
+        "worker_instance_id": worker_instance_id or None,
+        "session_continuity": session,
+        "isolation_state": isolation,
+        "boundary_metadata": boundary,
+        "mount_network_state": mount_network_state,
+        "operator_note": str(
+            probe.get("operator_note")
+            or "Post-launch verification is limited to live worker continuity and guard-state checks."
+        ),
+    }
+    record.post_launch_verification = verification
+    record.last_post_launch_verification_at = checked_at
+    if verification["status"] == "passed" and worker_instance_id:
+        record.verified_worker_instance_id = worker_instance_id
+    return verification
+
+
 def _sandbox_isolation_class(*, runner_type: str, runner_metadata: dict[str, Any]) -> str:
     if runner_type == RUNNER_INSECURE_DEV_SUBPROCESS:
         return "insecure-dev-subprocess"
@@ -352,11 +488,29 @@ def _host_sandbox_attestation(
     runner_metadata: dict[str, Any],
     resource_access: dict[str, Any],
     provenance: dict[str, Any],
+    post_launch_verification: dict[str, Any],
 ) -> dict[str, Any]:
     kernel_controls = dict(runner_metadata.get("kernel_controls") or {})
     hardening_controls = dict(runner_metadata.get("hardening_controls") or {})
     resource_limits = dict(runner_metadata.get("resource_limits") or {})
     launch_attestation = dict(runner_metadata.get("launch_attestation") or {})
+    effective_post_launch_verification = dict(post_launch_verification or {})
+    if not effective_post_launch_verification:
+        effective_post_launch_verification = {
+            "status": "not_applicable"
+            if runner_type != RUNNER_STRONG_SANDBOX_VM
+            else "not_verified_yet",
+            "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+            "checked_at": None,
+            "verified_fields": [],
+            "failures": [],
+            "operator_note": (
+                "Post-launch verification is required only for the strong_sandbox_vm path. "
+                "Other runner classes do not claim stronger live continuity verification."
+                if runner_type != RUNNER_STRONG_SANDBOX_VM
+                else "Strong sandbox post-launch verification has not completed yet."
+            ),
+        }
     network_policy = dict(resource_access.get("network") or {})
     filesystem_policy = dict(resource_access.get("filesystem") or {})
     provenance_status = {
@@ -367,16 +521,22 @@ def _host_sandbox_attestation(
         "integrity": dict(provenance.get("integrity") or {}),
     }
     runtime_identity = dict(runner_metadata.get("runtime_identity") or {})
+    assurance_properties = dict(runner_metadata.get("assurance_properties") or {})
     certification = sandbox_certification_profile(
         runner_type=runner_type,
         runner_metadata=runner_metadata,
+        post_launch_verification=effective_post_launch_verification,
     )
     mount_mode = dict(launch_attestation.get("mount_mode") or {})
     writable_temp = dict(launch_attestation.get("writable_temp") or {})
     host_path_access = dict(launch_attestation.get("host_path_access") or {})
     network_mode = dict(launch_attestation.get("network_mode") or {})
+    live_mount_network_state = dict(
+        (effective_post_launch_verification.get("mount_network_state") or {})
+    )
     return {
         "runner_type": runner_type,
+        "execution_model_class": EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
         "assurance_class": runner_metadata.get("assurance_class"),
         "isolation_class": _sandbox_isolation_class(
             runner_type=runner_type,
@@ -407,8 +567,24 @@ def _host_sandbox_attestation(
             "host_path_access": host_path_access,
             "filesystem_default": filesystem_policy.get("default"),
             "filesystem_writes": filesystem_policy.get("writes"),
+            "live_verification": {
+                "artifact_read_access": dict(
+                    live_mount_network_state.get("artifact_read_access") or {}
+                ),
+                "artifact_write_blocked": dict(
+                    live_mount_network_state.get("artifact_write_blocked") or {}
+                ),
+                "writable_temp_scope": dict(
+                    live_mount_network_state.get("writable_temp_scope") or {}
+                ),
+                "host_path_access_blocked": dict(
+                    live_mount_network_state.get("host_path_access_blocked") or {}
+                ),
+            },
         },
         "runtime_identity": runtime_identity,
+        "assurance_properties": assurance_properties,
+        "post_launch_verification": effective_post_launch_verification,
         "certification": certification,
         "network_isolation": {
             "boundary": network_mode,
@@ -419,14 +595,36 @@ def _host_sandbox_attestation(
             ),
             "capability_required": network_policy.get("capability_required"),
             "private_target_policy": network_policy.get("private_target_policy"),
+            "live_verification": {
+                "socket_guard_active": dict(
+                    ((live_mount_network_state.get("network_policy") or {}).get(
+                        "socket_guard_active"
+                    ) or {})
+                ),
+                "deny_by_default_outbound": dict(
+                    ((live_mount_network_state.get("network_policy") or {}).get(
+                        "deny_by_default_outbound"
+                    ) or {})
+                ),
+                "private_target_blocking": dict(
+                    ((live_mount_network_state.get("network_policy") or {}).get(
+                        "private_target_blocking"
+                    ) or {})
+                ),
+                "expected_boundary_mode": dict(
+                    ((live_mount_network_state.get("network_policy") or {}).get(
+                        "expected_boundary_mode"
+                    ) or {})
+                ),
+            },
         },
         "network_policy": network_policy,
         "filesystem_policy": filesystem_policy,
         "provenance_status": provenance_status,
         "operator_note": (
             "This attestation distinguishes requested policy, active runner metadata, and launch-verified "
-            "backend state for this plugin host. Verified fields are limited to what the runtime directly "
-            "observes at launch time."
+            "backend state for this plugin host. Post-launch verification reflects live worker continuity, "
+            "guard-state probes, and partial live mount/network behavior checks, not blanket proof of ongoing kernel enforcement."
         ),
     }
 
@@ -474,18 +672,41 @@ def _inventory_sandbox_attestation(hosts: list[dict[str, Any]]) -> dict[str, Any
             )
         }
     )
+    post_launch_statuses_present = sorted(
+        {
+            str(
+                ((host.get("sandbox_attestation") or {}).get("post_launch_verification") or {}).get(
+                    "status"
+                )
+                or ""
+            )
+            for host in hosts
+            if ((host.get("sandbox_attestation") or {}).get("post_launch_verification") or {}).get(
+                "status"
+            )
+        }
+    )
     return {
         "present": bool(hosts),
         "host_count": len(hosts),
+        "covered_execution_model_class": EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
+        "covered_surface_ids": [
+            "dynamic-plugin-node:first-party-app",
+            "dynamic-plugin-node:external-third-party",
+        ],
         "runner_types_present": runner_types_present,
         "assurance_classes_present": assurance_classes_present,
         "isolation_classes_present": isolation_classes_present,
         "certification_tiers_present": certification_tiers_present,
+        "post_launch_verification_statuses_present": post_launch_statuses_present,
         "active_hardening_controls_present": active_controls,
         "hosts": [
             {
                 "name": host.get("name"),
                 "runner_type": (host.get("sandbox_attestation") or {}).get("runner_type"),
+                "execution_model_class": (
+                    (host.get("sandbox_attestation") or {}).get("execution_model_class")
+                ),
                 "assurance_class": (host.get("sandbox_attestation") or {}).get("assurance_class"),
                 "isolation_class": (host.get("sandbox_attestation") or {}).get("isolation_class"),
                 "requested_hardening_controls": list(
@@ -509,6 +730,12 @@ def _inventory_sandbox_attestation(hosts: list[dict[str, Any]]) -> dict[str, Any
                 "runtime_identity": dict(
                     (host.get("sandbox_attestation") or {}).get("runtime_identity") or {}
                 ),
+                "assurance_properties": dict(
+                    (host.get("sandbox_attestation") or {}).get("assurance_properties") or {}
+                ),
+                "post_launch_verification": dict(
+                    (host.get("sandbox_attestation") or {}).get("post_launch_verification") or {}
+                ),
                 "certification": dict(
                     (host.get("sandbox_attestation") or {}).get("certification") or {}
                 ),
@@ -529,7 +756,7 @@ def _inventory_sandbox_attestation(hosts: list[dict[str, Any]]) -> dict[str, Any
         ],
         "operator_note": (
             "Sandbox attestation summarizes requested policy, active runner metadata, launch-verified "
-            "state, pinned runtime identity, resource limits, and provenance for third-party plugin hosts."
+            "state, pinned runtime identity, resource limits, and provenance for isolated plugin hosts."
         ),
     }
 
@@ -561,6 +788,14 @@ def _start_record(record: PluginHostRecord, *, runtime_context: dict[str, Any] |
     record.provenance = merged_provenance
     record.state = "running"
     record.last_heartbeat_at = _utcnow_iso()
+    if record.runner_type == RUNNER_STRONG_SANDBOX_VM:
+        verification = _verify_post_launch_state(record)
+        if verification.get("status") != "passed":
+            failure_fields = ", ".join(str(item) for item in list(verification.get("failures") or []))
+            raise RuntimeError(
+                "strong sandbox post-launch verification failed: "
+                + (failure_fields or "unverified strong sandbox session state")
+            )
     snapshot = record.snapshot()
     active_profile_name = str(
         get_api_runtime_state().get("deployment_profile") or ""
@@ -715,6 +950,13 @@ def heartbeat_plugin_host(name: str) -> dict[str, Any]:
                 raise RuntimeError(str(response.get("error") or "heartbeat failed"))
             record.last_heartbeat_at = _utcnow_iso()
             record.state = "running"
+            if record.runner_type == RUNNER_STRONG_SANDBOX_VM:
+                verification = _verify_post_launch_state(record)
+                if verification.get("status") != "passed":
+                    raise RuntimeError(
+                        "strong sandbox post-launch verification failed: "
+                        + ", ".join(str(item) for item in list(verification.get("failures") or []))
+                    )
         except Exception as exc:
             _mark_failure(record, state="heartbeat_lost", error=str(exc), kind=_classify_failure(error=str(exc), crashed=False))
         return record.snapshot()
@@ -767,6 +1009,13 @@ def execute_plugin_host(
                 result = response.get("result")
                 if not isinstance(result, dict):
                     raise RuntimeError("plugin host returned a non-dict plugin result")
+                if record.runner_type == RUNNER_STRONG_SANDBOX_VM:
+                    verification = _verify_post_launch_state(record)
+                    if verification.get("status") != "passed":
+                        raise RuntimeError(
+                            "strong sandbox post-launch verification failed: "
+                            + ", ".join(str(item) for item in list(verification.get("failures") or []))
+                        )
                 _mark_success(record)
                 return result
             except Exception as exc:
@@ -860,7 +1109,7 @@ def plugin_host_inventory(*, probe: bool = False) -> dict[str, Any]:
         "hosts": hosts,
         "sandbox_attestation": _inventory_sandbox_attestation(hosts),
         "operator_note": (
-            "Third-party plugin nodes run behind a runtime-owned plugin host boundary. "
+            "Isolated plugin nodes run behind a runtime-owned plugin host boundary. "
             "The runtime tracks host lifecycle and health separately from plugin payload results, "
             "and may apply restart backoff or quarantine after repeated failures. "
             f"{default_runner_note}"

@@ -91,6 +91,9 @@ def _testing_health_payload() -> dict:
         get_api_runtime_conditions,
         plugin_sandbox_assurance_posture,
     )
+    from AINDY.platform_layer.extension_execution_model import (
+        extension_execution_model_contract,
+    )
     from AINDY.platform_layer.extension_runtime_inventory import (
         trusted_python_execution_inventory,
     )
@@ -120,6 +123,7 @@ def _testing_health_payload() -> dict:
         "degraded_apps": degraded_domains,
         "platform": platform,
         "trusted_python_execution": trusted_python_execution_inventory(),
+        "extension_execution_posture": extension_execution_model_contract(),
         "extension_provenance": extension_provenance_inventory(),
         "plugin_hosts": plugin_hosts,
         "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),

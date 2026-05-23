@@ -38,6 +38,29 @@ PLATFORM_LINUX = "linux"
 PLATFORM_WINDOWS = "windows"
 PLATFORM_MACOS = "darwin"
 PLATFORM_OTHER = "other"
+STRONG_SANDBOX_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)
+HOSTILE_THIRD_PARTY_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)
+PRODUCTION_SAFE_CONTAINER_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)
+CONTAINER_GRADE_HOST_PLATFORMS = (
+    PLATFORM_LINUX,
+    PLATFORM_WINDOWS,
+    PLATFORM_MACOS,
+)
+CONTAINED_PROCESS_HOST_PLATFORMS = (
+    PLATFORM_LINUX,
+    PLATFORM_WINDOWS,
+    PLATFORM_MACOS,
+    PLATFORM_OTHER,
+)
+
+STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES = {
+    "boundary_type": "dedicated-vm-sandbox",
+    "process_separation_model": "vm-kernel-boundary",
+    "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+    "network_mediation_model": "sandbox-launcher-deny-default",
+    "runtime_identity_model": "pinned-sandbox-runtime",
+    "session_verification_model": "launch-plus-post-launch-runtime-probe",
+}
 
 
 def list_supported_sandbox_runners() -> list[dict[str, Any]]:
@@ -63,6 +86,14 @@ def list_supported_sandbox_runners() -> list[dict[str, Any]]:
             "execution_boundary": "container-stdio-json-rpc",
             "kernel_control_reporting": "explicit",
             "resource_limit_enforcement": "container-runtime-hard-limits",
+            "assurance_properties": {
+                "boundary_type": "shared-kernel-container-sandbox",
+                "process_separation_model": "container-namespace-boundary",
+                "mount_mediation_model": "container-runtime-bind-mount-read-only",
+                "network_mediation_model": "container-runtime-network-policy",
+                "runtime_identity_model": "pinned-oci-image",
+                "session_verification_model": "launch-attestation-only",
+            },
             "runtime_identity_requirement": "pinned-oci-image-for-production-safe-profiles",
             "operator_note": (
                 "This runner launches the extension worker in an operator-supplied "
@@ -78,6 +109,7 @@ def list_supported_sandbox_runners() -> list[dict[str, Any]]:
             "isolation_claim": "vm-boundary",
             "execution_boundary": "vm-stdio-json-rpc",
             "resource_limit_enforcement": "sandbox-runtime-hard-limits",
+            "assurance_properties": dict(STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES),
             "runtime_identity_requirement": "pinned-sandbox-image-for-production-safe-profiles",
             "operator_note": (
                 "This runner targets a dedicated VM-grade sandbox launcher that is "
@@ -101,6 +133,113 @@ def _platform_label(platform_name: str) -> str:
 def _normalize_digest(digest: str | None) -> str | None:
     value = str(digest or "").strip()
     return value or None
+
+
+def _normalize_csv_values(raw: str | None) -> list[str]:
+    return [item.strip() for item in str(raw or "").split(",") if item.strip()]
+
+
+def _normalize_signing_status(raw: str | None) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {
+        "signature-verified",
+        "signature-present",
+        "unsigned",
+        "unverified",
+        "verification-failed",
+        "unsupported",
+    }:
+        return value
+    return "unverified"
+
+
+def evaluate_runtime_identity_trust(
+    *,
+    runtime_identity: dict[str, Any],
+    runtime_source: str | None,
+    runtime_trust_issuer: str | None,
+    runtime_signing_status: str | None,
+    runtime_base_compatibility: str | None,
+    required_base_compatibility: str | None,
+    trusted_sources: list[str] | None = None,
+    trusted_issuers: list[str] | None = None,
+    require_signature_verification: bool = False,
+    require_trusted_source_for_hostile: bool = False,
+) -> dict[str, Any]:
+    source = str(runtime_source or "").strip() or None
+    issuer = str(runtime_trust_issuer or "").strip() or None
+    signing_status = _normalize_signing_status(runtime_signing_status)
+    base_compatibility = str(runtime_base_compatibility or "").strip() or None
+    required_compatibility = str(required_base_compatibility or "").strip() or None
+    trusted_source_values = list(trusted_sources or [])
+    trusted_issuer_values = list(trusted_issuers or [])
+    pinned = bool(runtime_identity.get("pinned"))
+    source_trusted = bool(source and source in trusted_source_values) if trusted_source_values else True
+    issuer_trusted = bool(issuer and issuer in trusted_issuer_values) if trusted_issuer_values else True
+    compatibility_satisfied = (
+        True if not required_compatibility else base_compatibility == required_compatibility
+    )
+    signature_verified = signing_status == "signature-verified"
+    signature_requirement_satisfied = (
+        signature_verified if require_signature_verification else True
+    )
+    issues: list[str] = []
+    if not pinned:
+        issues.append("runtime identity is not digest-pinned")
+    if required_compatibility and not compatibility_satisfied:
+        issues.append(
+            f"runtime base compatibility {base_compatibility!r} does not satisfy required contract {required_compatibility!r}"
+        )
+    if trusted_source_values and not source_trusted:
+        issues.append(f"runtime source {source!r} is not in the trusted source policy")
+    if trusted_issuer_values and not issuer_trusted:
+        issues.append(f"runtime trust issuer {issuer!r} is not in the trusted issuer policy")
+    if require_signature_verification and not signature_verified:
+        issues.append(
+            f"runtime signing status {signing_status!r} does not satisfy signature verification policy"
+        )
+    accepted_for_production_safe_profiles = (
+        pinned and compatibility_satisfied and source_trusted and issuer_trusted and signature_requirement_satisfied
+    )
+    accepted_for_hostile_profiles = (
+        pinned
+        and compatibility_satisfied
+        and signature_verified
+        and issuer_trusted
+        and (source_trusted if require_trusted_source_for_hostile or trusted_source_values else True)
+    )
+    if accepted_for_hostile_profiles:
+        verification_status = "trusted-signed-pinned-compatible"
+    elif accepted_for_production_safe_profiles:
+        verification_status = "trusted-pinned-compatible"
+    elif pinned and compatibility_satisfied:
+        verification_status = "pinned-compatible-untrusted"
+    elif pinned:
+        verification_status = "pinned-incompatible-or-untrusted"
+    else:
+        verification_status = str(runtime_identity.get("verification") or "unverified")
+    return {
+        "source": source,
+        "trusted_source_policy": trusted_source_values,
+        "source_trusted": source_trusted,
+        "trust_issuer": issuer,
+        "trusted_issuer_policy": trusted_issuer_values,
+        "issuer_trusted": issuer_trusted,
+        "signing_status": signing_status,
+        "signature_verified": signature_verified,
+        "require_signature_verification": bool(require_signature_verification),
+        "runtime_base_compatibility": base_compatibility,
+        "required_base_compatibility": required_compatibility,
+        "compatibility_satisfied": compatibility_satisfied,
+        "accepted_for_production_safe_profiles": accepted_for_production_safe_profiles,
+        "accepted_for_hostile_profiles": accepted_for_hostile_profiles,
+        "verification_status": verification_status,
+        "issues": issues,
+        "operator_note": (
+            "Runtime trust combines digest pinning with optional source policy, issuer policy, "
+            "signature-verification status, and sandbox base compatibility metadata."
+        ),
+    }
 
 
 def classify_oci_runtime_identity(
@@ -262,9 +401,18 @@ def _platform_matrix_entry(
             "host platform is not part of the explicitly characterized sandbox support set"
         )
 
+    equivalence_status = "outside-characterized-support-set"
+    if strong_sandbox_supported:
+        equivalence_status = "full-strong-sandbox-support"
+    elif container_grade_supported:
+        equivalence_status = "non-equivalent-container-grade-only"
+    elif process_grade_supported:
+        equivalence_status = "contained-process-only"
+
     return {
         "platform": platform_name,
         "label": _platform_label(platform_name),
+        "equivalence_status": equivalence_status,
         "support_levels": {
             "contained_process": {
                 "support": "supported" if process_grade_supported else "unsupported",
@@ -334,6 +482,43 @@ def sandbox_platform_capability_matrix(
             strong_runtime_available=False,
         ),
     }
+    support_contract = {
+        "claim_scope": "platform-specific-assurance-contract",
+        "contained_process_supported_host_platforms": list(
+            CONTAINED_PROCESS_HOST_PLATFORMS
+        ),
+        "container_grade_supported_host_platforms": list(
+            CONTAINER_GRADE_HOST_PLATFORMS
+        ),
+        "production_safe_container_supported_host_platforms": list(
+            PRODUCTION_SAFE_CONTAINER_SUPPORTED_HOST_PLATFORMS
+        ),
+        "strong_sandbox_supported_host_platforms": list(
+            STRONG_SANDBOX_SUPPORTED_HOST_PLATFORMS
+        ),
+        "hostile_third_party_supported_host_platforms": list(
+            HOSTILE_THIRD_PARTY_SUPPORTED_HOST_PLATFORMS
+        ),
+        "non_equivalent_host_platforms": {
+            PLATFORM_WINDOWS: (
+                "Container-grade isolation may be available, but it is not treated as "
+                "equivalent to Linux strong-sandbox support."
+            ),
+            PLATFORM_MACOS: (
+                "Container-grade isolation may be available through virtualization, but it "
+                "is not treated as equivalent to Linux strong-sandbox support."
+            ),
+            PLATFORM_OTHER: (
+                "The host is outside the explicitly characterized support set for third-party "
+                "sandbox assurances."
+            ),
+        },
+        "operator_note": (
+            "The runtime does not claim strong-sandbox or hostile-workload parity across all "
+            "host platforms. Linux is the only declared fully supported host platform for "
+            "strong_sandbox_vm and hostile third-party plugin execution."
+        ),
+    }
     return {
         "schema_version": SANDBOX_PLATFORM_MATRIX_VERSION,
         "current_platform": current_name,
@@ -344,6 +529,7 @@ def sandbox_platform_capability_matrix(
             strong_launcher=strong_launcher,
             strong_runtime_available=strong_runtime_available,
         ),
+        "support_contract": support_contract,
         "supported_platforms": supported_platforms,
     }
 
@@ -393,6 +579,10 @@ class SandboxRunner(ABC):
         runtime_context: dict[str, Any],
         timeout_seconds: float,
     ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def probe(self, *, timeout_seconds: float) -> dict[str, Any]:
         raise NotImplementedError
 
     @abstractmethod
@@ -453,6 +643,7 @@ class _JsonRpcProcessRunner(SandboxRunner):
                 "handler": handler,
                 "plugin_root": self._worker_plugin_root(plugin_root),
                 "context": dict(runtime_context or {}),
+                "started_at": time.time(),
             },
             timeout_seconds=10.0,
         )
@@ -479,6 +670,12 @@ class _JsonRpcProcessRunner(SandboxRunner):
     def heartbeat(self, *, timeout_seconds: float) -> dict[str, Any]:
         return self._send_command(
             {"command": "heartbeat"},
+            timeout_seconds=timeout_seconds,
+        )
+
+    def probe(self, *, timeout_seconds: float) -> dict[str, Any]:
+        return self._send_command(
+            {"command": "probe"},
             timeout_seconds=timeout_seconds,
         )
 
@@ -701,6 +898,14 @@ class InsecureDevSubprocessRunner(_JsonRpcProcessRunner):
 
     def metadata(self) -> dict[str, Any]:
         runtime_identity = classify_oci_runtime_identity(reference=None)
+        runtime_identity["trust_chain"] = evaluate_runtime_identity_trust(
+            runtime_identity=runtime_identity,
+            runtime_source=None,
+            runtime_trust_issuer=None,
+            runtime_signing_status=None,
+            runtime_base_compatibility=None,
+            required_base_compatibility=None,
+        )
         return {
             "runner_type": self.runner_type,
             "assurance_class": ASSURANCE_CLASS_INSECURE_DEV,
@@ -814,6 +1019,16 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         self.container_runtime = str(settings.AINDY_PLUGIN_CONTAINER_RUNTIME or "docker").strip() or "docker"
         self.image = str(settings.AINDY_PLUGIN_CONTAINER_IMAGE or "").strip()
         self.image_digest = str(settings.AINDY_PLUGIN_CONTAINER_IMAGE_DIGEST or "").strip()
+        self.runtime_source = str(settings.AINDY_PLUGIN_CONTAINER_RUNTIME_SOURCE or "").strip()
+        self.runtime_trust_issuer = str(settings.AINDY_PLUGIN_CONTAINER_RUNTIME_TRUST_ISSUER or "").strip()
+        self.runtime_signing_status = str(settings.AINDY_PLUGIN_CONTAINER_RUNTIME_SIGNING_STATUS or "unverified").strip()
+        self.runtime_base_compatibility = str(settings.AINDY_PLUGIN_CONTAINER_RUNTIME_BASE_COMPATIBILITY or "").strip()
+        self.required_base_compatibility = str(settings.AINDY_PLUGIN_CONTAINER_REQUIRED_BASE_COMPATIBILITY or "").strip()
+        self.trusted_sources = _normalize_csv_values(settings.AINDY_PLUGIN_CONTAINER_TRUSTED_SOURCES)
+        self.trusted_issuers = _normalize_csv_values(settings.AINDY_PLUGIN_CONTAINER_TRUSTED_ISSUERS)
+        self.require_signature_verification = bool(
+            settings.AINDY_PLUGIN_CONTAINER_REQUIRE_SIGNATURE_VERIFICATION
+        )
         self.plugin_mount_path = str(settings.AINDY_PLUGIN_CONTAINER_PLUGIN_MOUNT_PATH or "/plugin-root").strip() or "/plugin-root"
         self.workdir = str(settings.AINDY_PLUGIN_CONTAINER_WORKDIR or "/tmp").strip() or "/tmp"
         self.no_new_privileges = bool(settings.AINDY_PLUGIN_CONTAINER_NO_NEW_PRIVILEGES)
@@ -838,6 +1053,17 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         runtime_identity = classify_oci_runtime_identity(
             reference=self.image,
             configured_digest=self.image_digest,
+        )
+        runtime_identity["trust_chain"] = evaluate_runtime_identity_trust(
+            runtime_identity=runtime_identity,
+            runtime_source=self.runtime_source,
+            runtime_trust_issuer=self.runtime_trust_issuer,
+            runtime_signing_status=self.runtime_signing_status,
+            runtime_base_compatibility=self.runtime_base_compatibility,
+            required_base_compatibility=self.required_base_compatibility,
+            trusted_sources=self.trusted_sources,
+            trusted_issuers=self.trusted_issuers,
+            require_signature_verification=self.require_signature_verification,
         )
         kernel_controls = inspect_container_kernel_controls(
             container_runtime=self.container_runtime,
@@ -865,6 +1091,14 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         return {
             "runner_type": self.runner_type,
             "assurance_class": ASSURANCE_CLASS_CONTAINER,
+            "assurance_properties": {
+                "boundary_type": "shared-kernel-container-sandbox",
+                "process_separation_model": "container-namespace-boundary",
+                "mount_mediation_model": "container-runtime-bind-mount-read-only",
+                "network_mediation_model": "container-runtime-network-policy",
+                "runtime_identity_model": "pinned-oci-image",
+                "session_verification_model": "launch-attestation-only",
+            },
             "interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
             "execution_boundary": "container-stdio-json-rpc",
             "isolation_claim": "container-boundary",
@@ -896,6 +1130,17 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         runtime_identity = classify_oci_runtime_identity(
             reference=self.image,
             configured_digest=self.image_digest,
+        )
+        runtime_identity["trust_chain"] = evaluate_runtime_identity_trust(
+            runtime_identity=runtime_identity,
+            runtime_source=self.runtime_source,
+            runtime_trust_issuer=self.runtime_trust_issuer,
+            runtime_signing_status=self.runtime_signing_status,
+            runtime_base_compatibility=self.runtime_base_compatibility,
+            required_base_compatibility=self.required_base_compatibility,
+            trusted_sources=self.trusted_sources,
+            trusted_issuers=self.trusted_issuers,
+            require_signature_verification=self.require_signature_verification,
         )
         kernel_controls = inspect_container_kernel_controls(
             container_runtime=self.container_runtime,
@@ -982,6 +1227,7 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
                 "requested": runtime_identity.get("launch_reference"),
                 "active": runtime_identity.get("launch_reference"),
                 "verified": bool(runtime_identity.get("launch_reference")),
+                "trust_chain": dict(runtime_identity.get("trust_chain") or {}),
             },
             "mount_mode": {
                 "requested": "read-only",
@@ -1018,6 +1264,32 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
                 "active_controls": active_controls,
                 "verified_controls": sorted(set(verified_controls)),
             },
+            "assurance_properties": {
+                "requested": {
+                    "boundary_type": "shared-kernel-container-sandbox",
+                    "process_separation_model": "container-namespace-boundary",
+                    "mount_mediation_model": "container-runtime-bind-mount-read-only",
+                    "network_mediation_model": "container-runtime-network-policy",
+                    "runtime_identity_model": "pinned-oci-image",
+                    "session_verification_model": "launch-attestation-only",
+                },
+                "active": {
+                    "boundary_type": "shared-kernel-container-sandbox",
+                    "process_separation_model": "container-namespace-boundary",
+                    "mount_mediation_model": "container-runtime-bind-mount-read-only",
+                    "network_mediation_model": "container-runtime-network-policy",
+                    "runtime_identity_model": "pinned-oci-image",
+                    "session_verification_model": "launch-attestation-only",
+                },
+                "verified": {
+                    "boundary_type": True,
+                    "process_separation_model": True,
+                    "mount_mediation_model": mount_mode_verified,
+                    "network_mediation_model": True,
+                    "runtime_identity_model": bool(runtime_identity.get("launch_reference")),
+                    "session_verification_model": True,
+                },
+            },
             "operator_note": (
                 "Verified controls reflect launch arguments and resolved backend identity "
                 "observed by the runtime. They do not prove kernel enforcement after launch."
@@ -1042,6 +1314,17 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
             reference=self.image,
             configured_digest=self.image_digest,
         )
+        runtime_identity["trust_chain"] = evaluate_runtime_identity_trust(
+            runtime_identity=runtime_identity,
+            runtime_source=self.runtime_source,
+            runtime_trust_issuer=self.runtime_trust_issuer,
+            runtime_signing_status=self.runtime_signing_status,
+            runtime_base_compatibility=self.runtime_base_compatibility,
+            required_base_compatibility=self.required_base_compatibility,
+            trusted_sources=self.trusted_sources,
+            trusted_issuers=self.trusted_issuers,
+            require_signature_verification=self.require_signature_verification,
+        )
         if not runtime_identity.get("configured_reference"):
             raise RuntimeError(
                 "container sandbox runner requires AINDY_PLUGIN_CONTAINER_IMAGE"
@@ -1050,6 +1333,14 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
             raise RuntimeError(
                 "container sandbox runner runtime identity is invalid: "
                 + "; ".join(str(item) for item in runtime_identity["issues"])
+            )
+        if (runtime_identity.get("trust_chain") or {}).get("issues"):
+            raise RuntimeError(
+                "container sandbox runner runtime trust is invalid: "
+                + "; ".join(
+                    str(item)
+                    for item in (runtime_identity.get("trust_chain") or {}).get("issues") or []
+                )
             )
         if shutil.which(self.container_runtime) is None:
             raise RuntimeError(
@@ -1121,6 +1412,16 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
         self.launcher = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_LAUNCHER or "aindy-sandbox-vm").strip() or "aindy-sandbox-vm"
         self.image = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE or "").strip()
         self.image_digest = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE_DIGEST or "").strip()
+        self.runtime_source = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_RUNTIME_SOURCE or "").strip()
+        self.runtime_trust_issuer = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_RUNTIME_TRUST_ISSUER or "").strip()
+        self.runtime_signing_status = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_RUNTIME_SIGNING_STATUS or "unverified").strip()
+        self.runtime_base_compatibility = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_RUNTIME_BASE_COMPATIBILITY or "").strip()
+        self.required_base_compatibility = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_REQUIRED_BASE_COMPATIBILITY or "").strip()
+        self.trusted_sources = _normalize_csv_values(settings.AINDY_PLUGIN_STRONG_SANDBOX_TRUSTED_SOURCES)
+        self.trusted_issuers = _normalize_csv_values(settings.AINDY_PLUGIN_STRONG_SANDBOX_TRUSTED_ISSUERS)
+        self.require_signature_verification = bool(
+            settings.AINDY_PLUGIN_STRONG_SANDBOX_REQUIRE_SIGNATURE_VERIFICATION
+        )
         self.plugin_mount_path = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_PLUGIN_MOUNT_PATH or "/plugin-root").strip() or "/plugin-root"
         self.workdir = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_WORKDIR or "/work").strip() or "/work"
         self.memory_limit = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_MEMORY_LIMIT or "").strip()
@@ -1135,6 +1436,18 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
         runtime_identity = classify_oci_runtime_identity(
             reference=self.image,
             configured_digest=self.image_digest,
+        )
+        runtime_identity["trust_chain"] = evaluate_runtime_identity_trust(
+            runtime_identity=runtime_identity,
+            runtime_source=self.runtime_source,
+            runtime_trust_issuer=self.runtime_trust_issuer,
+            runtime_signing_status=self.runtime_signing_status,
+            runtime_base_compatibility=self.runtime_base_compatibility,
+            required_base_compatibility=self.required_base_compatibility,
+            trusted_sources=self.trusted_sources,
+            trusted_issuers=self.trusted_issuers,
+            require_signature_verification=self.require_signature_verification,
+            require_trusted_source_for_hostile=True,
         )
         launcher_available = shutil.which(self.launcher) is not None
         platform_name = _normalized_platform_system() or "unknown"
@@ -1154,9 +1467,14 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
             )
         if runtime_identity.get("issues"):
             unsupported_reasons.extend(str(item) for item in runtime_identity["issues"])
+        if (runtime_identity.get("trust_chain") or {}).get("issues"):
+            unsupported_reasons.extend(
+                str(item) for item in (runtime_identity.get("trust_chain") or {}).get("issues") or []
+            )
         return {
             "runner_type": self.runner_type,
             "assurance_class": ASSURANCE_CLASS_STRONG,
+            "assurance_properties": dict(STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES),
             "interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
             "execution_boundary": "vm-stdio-json-rpc",
             "isolation_claim": "vm-boundary",
@@ -1194,18 +1512,24 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
                 "requested_controls": [
                     "dedicated_vm_boundary",
                     "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
                     "minimal_environment",
                     "sandbox_runtime_limits",
                 ],
                 "supported_controls": [
                     "dedicated_vm_boundary",
                     "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
                     "minimal_environment",
                     "sandbox_runtime_limits",
                 ] if supported else [],
                 "active_controls": [
                     "dedicated_vm_boundary",
                     "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
                     "minimal_environment",
                     "sandbox_runtime_limits",
                 ] if supported and runtime_identity.get("launch_reference") and not runtime_identity.get("issues") else [],
@@ -1235,6 +1559,18 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
             reference=self.image,
             configured_digest=self.image_digest,
         )
+        runtime_identity["trust_chain"] = evaluate_runtime_identity_trust(
+            runtime_identity=runtime_identity,
+            runtime_source=self.runtime_source,
+            runtime_trust_issuer=self.runtime_trust_issuer,
+            runtime_signing_status=self.runtime_signing_status,
+            runtime_base_compatibility=self.runtime_base_compatibility,
+            required_base_compatibility=self.required_base_compatibility,
+            trusted_sources=self.trusted_sources,
+            trusted_issuers=self.trusted_issuers,
+            require_signature_verification=self.require_signature_verification,
+            require_trusted_source_for_hostile=True,
+        )
         verified_limits = [
             limit_name
             for flag, limit_name in (
@@ -1247,6 +1583,10 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
         verified_controls: list[str] = []
         if "--mount-readonly" in args:
             verified_controls.append("read_only_plugin_mount")
+        if "--network-deny-default" in args:
+            verified_controls.append("launcher_network_deny_default")
+        if "--deny-host-paths" in args:
+            verified_controls.append("launcher_host_path_denial")
         resolved_backend = shutil.which(self.launcher) or self.launcher
         return {
             "verification_scope": "launch-argv-and-resolved-executable",
@@ -1260,6 +1600,7 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
                 "requested": runtime_identity.get("launch_reference"),
                 "active": runtime_identity.get("launch_reference"),
                 "verified": bool(runtime_identity.get("launch_reference")),
+                "trust_chain": dict(runtime_identity.get("trust_chain") or {}),
             },
             "mount_mode": {
                 "requested": "read-only",
@@ -1273,19 +1614,19 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
                 "plugin_root": str(Path(plugin_root).resolve()),
             },
             "writable_temp": {
-                "requested": "launcher-defined",
-                "active": "launcher-defined",
-                "verified": False,
+                "requested": "isolated-writable-temp",
+                "active": "isolated-writable-temp" if "--tmpfs" in args else "launcher-defined",
+                "verified": "--tmpfs" in args,
             },
             "host_path_access": {
-                "requested": "no-ambient-host-paths",
-                "active": "plugin-root-mount-only" if "--mount-readonly" in args else "unknown",
-                "verified": "--mount-readonly" in args,
+                "requested": "launcher-denied-host-path-access",
+                "active": "launcher-denied-host-path-access" if "--deny-host-paths" in args else "unknown",
+                "verified": "--deny-host-paths" in args,
             },
             "network_mode": {
-                "requested": "launcher-defined",
-                "active": "launcher-defined",
-                "verified": False,
+                "requested": "deny-default-via-sandbox-launcher",
+                "active": "deny-default-via-sandbox-launcher" if "--network-deny-default" in args else "launcher-defined",
+                "verified": "--network-deny-default" in args,
             },
             "resource_limit_mode": {
                 "requested": "sandbox-runtime-hard-limits",
@@ -1297,16 +1638,32 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
                 "requested_controls": [
                     "dedicated_vm_boundary",
                     "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
                     "minimal_environment",
                     "sandbox_runtime_limits",
                 ],
                 "active_controls": [
                     "dedicated_vm_boundary",
                     "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
                     "minimal_environment",
                     "sandbox_runtime_limits",
                 ] if runtime_identity.get("launch_reference") else [],
                 "verified_controls": sorted(set(verified_controls)),
+            },
+            "assurance_properties": {
+                "requested": dict(STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES),
+                "active": dict(STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES),
+                "verified": {
+                    "boundary_type": bool(resolved_backend),
+                    "process_separation_model": bool(resolved_backend),
+                    "mount_mediation_model": "--mount-readonly" in args,
+                    "network_mediation_model": "--network-deny-default" in args,
+                    "runtime_identity_model": bool(runtime_identity.get("launch_reference")),
+                    "session_verification_model": True,
+                },
             },
             "operator_note": (
                 "Verified controls reflect launch arguments and resolved launcher identity "
@@ -1328,6 +1685,18 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
             reference=self.image,
             configured_digest=self.image_digest,
         )
+        runtime_identity["trust_chain"] = evaluate_runtime_identity_trust(
+            runtime_identity=runtime_identity,
+            runtime_source=self.runtime_source,
+            runtime_trust_issuer=self.runtime_trust_issuer,
+            runtime_signing_status=self.runtime_signing_status,
+            runtime_base_compatibility=self.runtime_base_compatibility,
+            required_base_compatibility=self.required_base_compatibility,
+            trusted_sources=self.trusted_sources,
+            trusted_issuers=self.trusted_issuers,
+            require_signature_verification=self.require_signature_verification,
+            require_trusted_source_for_hostile=True,
+        )
         if not runtime_identity.get("configured_reference"):
             raise RuntimeError(
                 "strong sandbox runner requires AINDY_PLUGIN_STRONG_SANDBOX_IMAGE"
@@ -1336,6 +1705,14 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
             raise RuntimeError(
                 "strong sandbox runner runtime identity is invalid: "
                 + "; ".join(str(item) for item in runtime_identity["issues"])
+            )
+        if (runtime_identity.get("trust_chain") or {}).get("issues"):
+            raise RuntimeError(
+                "strong sandbox runner runtime trust is invalid: "
+                + "; ".join(
+                    str(item)
+                    for item in (runtime_identity.get("trust_chain") or {}).get("issues") or []
+                )
             )
         if _normalized_platform_system() != PLATFORM_LINUX:
             raise RuntimeError(
@@ -1359,6 +1736,10 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
             )["launch_reference"],
             "--mount-readonly",
             f"{resolved_plugin_root}:{self.plugin_mount_path}",
+            "--deny-host-paths",
+            "--network-deny-default",
+            "--tmpfs",
+            "/tmp",
             "--workdir",
             self.workdir,
         ]

@@ -57,6 +57,8 @@ _REGISTRY_STATE_EMPTY = {
     "_degraded_domains": [],
     "_health_checks": {},
     "_runtime_agent_defaults_loaded": False,
+    "_runtime_callback_invocations": {},
+    "_in_process_extension_capability_audit": {},
 }
 
 

@@ -23,6 +23,7 @@ class RuntimeSurfaceResponse(BaseModel):
     external_python_override_active: bool
     external_python_override_execution_model: str
     trusted_python_execution: dict
+    extension_execution_posture: dict
     extension_provenance: dict
     plugin_hosts: dict
     plugin_sandbox_attestation: dict

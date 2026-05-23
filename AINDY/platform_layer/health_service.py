@@ -32,6 +32,9 @@ from AINDY.platform_layer.registry import get_degraded_domains
 from AINDY.platform_layer.extension_runtime_inventory import (
     trusted_python_execution_inventory,
 )
+from AINDY.platform_layer.extension_execution_model import (
+    extension_execution_model_contract,
+)
 from AINDY.platform_layer.extension_provenance_inventory import (
     extension_provenance_inventory,
 )
@@ -78,6 +81,7 @@ class SystemHealth:
             "degraded_apps": degraded_domains,
             "platform": platform,
             "trusted_python_execution": trusted_python_execution_inventory(),
+            "extension_execution_posture": extension_execution_model_contract(),
             "extension_provenance": extension_provenance_inventory(),
             "plugin_hosts": host_inventory,
             "plugin_sandbox_attestation": dict(host_inventory.get("sandbox_attestation") or {}),
@@ -689,6 +693,7 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
             "checks": {
                 "testing_mode": True,
                 "trusted_python_execution": inventory,
+                "extension_execution_posture": extension_execution_model_contract(),
                 "extension_provenance": extension_provenance_inventory(),
                 "plugin_hosts": hosts,
                 "plugin_sandbox_attestation": dict(hosts.get("sandbox_attestation") or {}),
@@ -735,6 +740,7 @@ def get_readiness_report() -> tuple[int, dict[str, Any]]:
         "degraded_domains": get_degraded_domains(),
         "runtime_conditions": get_api_runtime_conditions(),
         "trusted_python_execution": trusted_python_execution_inventory(),
+        "extension_execution_posture": extension_execution_model_contract(),
         "extension_provenance": extension_provenance_inventory(),
         "plugin_hosts": plugin_hosts,
         "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),

@@ -38,6 +38,11 @@ ISOLATED_CAPABILITY_AUTHORITY = "isolated-explicit-capabilities"
 CONTRACT_DRIVEN_AUTHORITY = "contract-driven-surface"
 
 
+def _first_party_isolated_surface(*, owner_class: str, surface: str) -> bool:
+    resolved_owner = validate_extension_owner_class(owner_class)
+    return resolved_owner == OWNER_FIRST_PARTY_APP and surface == "dynamic-plugin-node"
+
+
 def extension_capability_policy() -> dict[str, Any]:
     return {
         "policy_version": "2026-05-20",
@@ -139,7 +144,12 @@ def normalize_extension_capabilities(
 ) -> list[str]:
     resolved_owner = validate_extension_owner_class(owner_class)
     policy = extension_capability_policy()["surfaces"][surface]
-    if resolved_owner in {OWNER_RUNTIME_BUILTIN, OWNER_FIRST_PARTY_APP}:
+    if resolved_owner == OWNER_RUNTIME_BUILTIN:
+        return []
+    if resolved_owner == OWNER_FIRST_PARTY_APP and not _first_party_isolated_surface(
+        owner_class=resolved_owner,
+        surface=surface,
+    ):
         return []
     requested_caps = sorted(
         {
@@ -156,6 +166,11 @@ def normalize_extension_capabilities(
             f"supported capabilities: {sorted(supported)!r}"
         )
     default_caps = sorted(set(policy.get("default_runtime_capabilities") or []))
+    if resolved_owner == OWNER_FIRST_PARTY_APP and _first_party_isolated_surface(
+        owner_class=resolved_owner,
+        surface=surface,
+    ):
+        return sorted(set(default_caps) | set(requested_caps))
     if resolved_owner != OWNER_EXTERNAL_THIRD_PARTY:
         return default_caps
     return sorted(set(default_caps) | set(requested_caps))
@@ -163,7 +178,12 @@ def normalize_extension_capabilities(
 
 def extension_authority_model(*, owner_class: str, surface: str) -> str:
     resolved_owner = validate_extension_owner_class(owner_class)
-    if resolved_owner in {OWNER_RUNTIME_BUILTIN, OWNER_FIRST_PARTY_APP}:
+    if resolved_owner == OWNER_RUNTIME_BUILTIN:
+        return TRUSTED_INTERNAL_AUTHORITY
+    if resolved_owner == OWNER_FIRST_PARTY_APP and not _first_party_isolated_surface(
+        owner_class=resolved_owner,
+        surface=surface,
+    ):
         return TRUSTED_INTERNAL_AUTHORITY
     return str(extension_capability_policy()["surfaces"][surface]["authority_model"])
 
@@ -175,7 +195,18 @@ def extension_resource_access_summary(
     granted_capabilities: list[str] | None = None,
 ) -> dict[str, Any]:
     resolved_owner = validate_extension_owner_class(owner_class)
-    if resolved_owner in {OWNER_RUNTIME_BUILTIN, OWNER_FIRST_PARTY_APP}:
+    if resolved_owner == OWNER_RUNTIME_BUILTIN:
+        return {
+            "authority_model": TRUSTED_INTERNAL_AUTHORITY,
+            "network": {"policy": "trusted-internal"},
+            "filesystem": {"policy": "trusted-internal"},
+            "environment": {"policy": "trusted-internal"},
+            "secret_access": {"policy": "trusted-internal"},
+        }
+    if resolved_owner == OWNER_FIRST_PARTY_APP and not _first_party_isolated_surface(
+        owner_class=resolved_owner,
+        surface=surface,
+    ):
         return {
             "authority_model": TRUSTED_INTERNAL_AUTHORITY,
             "network": {"policy": "trusted-internal"},

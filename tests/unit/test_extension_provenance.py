@@ -58,6 +58,8 @@ def clean_registry_state():
         "_active_plugin_profile": registry._active_plugin_profile,
         "_active_plugin_profile_source": registry._active_plugin_profile_source,
         "_runtime_agent_defaults_loaded": registry._runtime_agent_defaults_loaded,
+        "_runtime_callback_invocations": dict(registry._runtime_callback_invocations),
+        "_in_process_extension_capability_audit": dict(registry._in_process_extension_capability_audit),
     }
     try:
         registry._loaded_plugins.clear()
@@ -68,6 +70,8 @@ def clean_registry_state():
         registry._active_plugin_profile = None
         registry._active_plugin_profile_source = None
         registry._runtime_agent_defaults_loaded = False
+        registry._runtime_callback_invocations.clear()
+        registry._in_process_extension_capability_audit.clear()
         yield
     finally:
         registry._loaded_plugins = snapshot["_loaded_plugins"]
@@ -78,6 +82,8 @@ def clean_registry_state():
         registry._active_plugin_profile = snapshot["_active_plugin_profile"]
         registry._active_plugin_profile_source = snapshot["_active_plugin_profile_source"]
         registry._runtime_agent_defaults_loaded = snapshot["_runtime_agent_defaults_loaded"]
+        registry._runtime_callback_invocations = snapshot["_runtime_callback_invocations"]
+        registry._in_process_extension_capability_audit = snapshot["_in_process_extension_capability_audit"]
 
 
 def test_manifest_runtime_builtin_records_runtime_derived_provenance(monkeypatch, tmp_path, clean_registry_state):

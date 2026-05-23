@@ -135,6 +135,10 @@ def python_extension_execution_metadata(
         "trusted_override_active": False,
         "trusted_override_env_var": None,
     }
+    if resolved == OWNER_FIRST_PARTY_APP and surface == "dynamic plugin node":
+        metadata["trust_class"] = "isolated-first-party-python"
+        metadata["execution_model"] = "isolated-plugin-host"
+        metadata["sandboxing"] = "subprocess-boundary"
     if resolved == OWNER_EXTERNAL_THIRD_PARTY:
         if surface == "dynamic plugin node":
             metadata["execution_model"] = "isolated-plugin-host"
@@ -152,6 +156,8 @@ def assert_python_extension_allowed(
     identifier: str,
 ) -> str:
     resolved = validate_extension_owner_class(owner_class)
+    if resolved == OWNER_FIRST_PARTY_APP and surface == "dynamic plugin node":
+        return "isolated-first-party-python"
     if resolved != OWNER_EXTERNAL_THIRD_PARTY:
         return python_extension_trust_class(resolved)
     if surface == "dynamic plugin node":

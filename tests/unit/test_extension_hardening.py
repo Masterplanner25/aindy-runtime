@@ -691,14 +691,31 @@ def handler(state, context):
 def test_dynamic_plugin_node_allows_first_party_trusted_integration(monkeypatch, tmp_path, clean_dynamic_runtime_state):
     from AINDY.platform_layer.extension_policy import OWNER_FIRST_PARTY_APP
     from AINDY.platform_layer.node_registry import get_dynamic_node, register_external_node
+    from AINDY.runtime.flow_engine import NODE_REGISTRY
 
     plugin_dir = tmp_path / "plugins" / "nodes"
     plugin_dir.mkdir(parents=True)
     (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
     (plugin_dir / "safe_node.py").write_text(
         """
+from AINDY.platform_layer.extension_runtime_api import (
+    get_execution_metadata,
+    get_granted_capabilities,
+    require_capability,
+)
+
 def handler(state, context):
-    return {"status": "SUCCESS"}
+    require_capability("memory.read")
+    metadata = get_execution_metadata()
+    return {
+        "status": "SUCCESS",
+        "output_patch": {
+            "granted_capabilities": get_granted_capabilities(),
+            "has_db": "db" in context,
+            "channel_type": context.get("runtime_api", {}).get("channel_type"),
+            "metadata_channel_type": metadata.get("channel_type"),
+        },
+    }
 """.strip(),
         encoding="utf-8",
     )
@@ -709,22 +726,39 @@ def handler(state, context):
         "plugin",
         "safe_node:handler",
         owner_class=OWNER_FIRST_PARTY_APP,
+        capabilities=["memory.read"],
         overwrite=True,
+    )
+    result = NODE_REGISTRY["first-party-plugin"](
+        {},
+        {"user_id": "user-1", "run_id": "run-1", "trace_id": "trace-1", "db": object()},
     )
 
     assert meta["owner_class"] == OWNER_FIRST_PARTY_APP
     assert meta["abi_surface"] == "dynamic-node-registration"
-    assert meta["authority_model"] == "trusted-internal-ambient-authority"
-    assert meta["granted_capabilities"] == []
-    assert meta["trust_class"] == "trusted-first-party-python"
-    assert meta["execution_model"] == "trusted-in-process-python"
-    assert meta["sandboxing"] == "none"
+    assert meta["authority_model"] == "isolated-explicit-capabilities"
+    assert meta["granted_capabilities"] == ["memory.read"]
+    assert meta["trust_class"] == "isolated-first-party-python"
+    assert meta["execution_model"] == "isolated-plugin-host"
+    assert meta["sandboxing"] == "subprocess-boundary"
     assert meta["trusted_override_active"] is False
     assert meta["execution_surface"] == "dynamic-plugin-node"
     assert meta["module_name"] == "safe_node"
     assert meta["function_name"] == "handler"
     assert meta["source_path"].endswith("safe_node.py")
-    assert get_dynamic_node("first-party-plugin")["trust_class"] == "trusted-first-party-python"
+    assert meta["transport"] == "plugin-host-rpc"
+    assert meta["plugin_host_name"] == "first-party-plugin"
+    assert meta["runner_type"] == "insecure_dev_subprocess"
+    assert "AINDY.plugins.nodes.safe_node" not in sys.modules
+    assert result["status"] == "SUCCESS"
+    assert result["output_patch"]["granted_capabilities"] == ["memory.read"]
+    assert result["output_patch"]["has_db"] is False
+    assert result["output_patch"]["channel_type"] == "worker-authenticated-rpc"
+    assert result["output_patch"]["metadata_channel_type"] == "worker-authenticated-rpc"
+    assert "AINDY.plugins.nodes.safe_node" not in sys.modules
+    dynamic = get_dynamic_node("first-party-plugin")
+    assert dynamic["trust_class"] == "isolated-first-party-python"
+    assert dynamic["plugin_host"]["lifecycle_state"] == "running"
 
 
 def test_dynamic_plugin_node_crash_does_not_crash_runtime_process(

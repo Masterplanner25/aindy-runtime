@@ -7,14 +7,85 @@ from AINDY.platform_layer.sandbox_runner import (
     RUNNER_INSECURE_DEV_SUBPROCESS,
     RUNNER_STRONG_SANDBOX_VM,
     SANDBOX_RUNNER_INTERFACE_VERSION,
+    STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES,
     create_sandbox_runner,
     sandbox_platform_capability_matrix,
+)
+from AINDY.platform_layer.extension_execution_model import (
+    EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
 )
 
 SANDBOX_CERTIFICATION_SCHEMA_VERSION = "2026-05-21"
 CERTIFICATION_TIER_CONTAINED_PROCESS = "contained-process-certified"
 CERTIFICATION_TIER_CONTAINER_SANDBOX = "container-sandbox-certified"
 CERTIFICATION_TIER_STRONG_SANDBOX = "strong-sandbox-certified"
+
+
+def _strong_sandbox_live_evidence_fields() -> list[str]:
+    return [
+        "session_continuity.worker_instance_id",
+        "session_continuity.sandbox_instance_id",
+        "isolation_state.import_guard_active",
+        "isolation_state.filesystem_guard_active",
+        "isolation_state.network_guard_active",
+        "boundary_metadata.runtime_api_channel_hidden",
+        "mount_network_state.artifact_read_access",
+        "mount_network_state.artifact_write_blocked",
+        "mount_network_state.writable_temp_scope",
+        "mount_network_state.host_path_access_blocked",
+        "mount_network_state.network_policy.socket_guard_active",
+        "mount_network_state.network_policy.deny_by_default_outbound",
+        "mount_network_state.network_policy.private_target_blocking",
+        "mount_network_state.network_policy.expected_boundary_mode",
+    ]
+
+
+def _uncertified_reason_category(requirement: str) -> str:
+    if requirement.startswith("platform_support."):
+        return "platform_support"
+    if requirement in {"assurance_class", "isolation_claim", "execution_boundary"}:
+        return "runner_identity"
+    if requirement.startswith("runtime_identity.trust_chain"):
+        return "runtime_trust"
+    if requirement.startswith("assurance_properties.") or requirement.startswith("launch_attestation.assurance_properties."):
+        return "assurance_properties"
+    if requirement.startswith("hardening_controls.") or requirement.startswith("verified.read_only_plugin_mount"):
+        return "hardening_state"
+    if requirement.startswith("resource_limits."):
+        return "resource_limits"
+    if requirement.startswith("launch_attestation.") or requirement.startswith("verified."):
+        return "launch_evidence"
+    if requirement.startswith("post_launch_verification.") or requirement.startswith("post_launch_verified."):
+        return "live_evidence"
+    if requirement.startswith("shared_worker_policy_status"):
+        return "shared_worker_policy"
+    return "other"
+
+
+def _uncertified_reasons(missing_requirements: list[str]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[str]] = {}
+    for requirement in missing_requirements:
+        grouped.setdefault(_uncertified_reason_category(requirement), []).append(requirement)
+    ordered_categories = [
+        "platform_support",
+        "runner_identity",
+        "runtime_trust",
+        "launch_evidence",
+        "live_evidence",
+        "hardening_state",
+        "resource_limits",
+        "assurance_properties",
+        "shared_worker_policy",
+        "other",
+    ]
+    return [
+        {
+            "category": category,
+            "missing_requirements": sorted(grouped[category]),
+        }
+        for category in ordered_categories
+        if grouped.get(category)
+    ]
 
 
 def _check_result(*, check_id: str, status: str, detail: str) -> dict[str, str]:
@@ -51,11 +122,12 @@ def sandbox_certification_tiers() -> list[dict[str, Any]]:
                     "mount_mode",
                     "resource_limit_mode",
                 ],
+                "required_runtime_trust_status": "trusted-pinned-compatible",
                 "resource_limit_enforcement": "container-runtime-hard-limits",
             },
             "notes": (
                 "Requires the container runner plus launch-observed backend identity, "
-                "verified pinned runtime identity, verified read-only artifact mount, "
+                "verified pinned runtime identity, an accepted runtime trust chain, verified read-only artifact mount, "
                 "and verified container runtime hard resource-limit flags."
             ),
         },
@@ -72,12 +144,22 @@ def sandbox_certification_tiers() -> list[dict[str, Any]]:
                     "mount_mode",
                     "resource_limit_mode",
                 ],
+                "post_launch_verification_status": "passed",
+                "post_launch_verification_scope": "live-worker-self-report-over-authenticated-rpc",
+                "post_launch_required_fields": [
+                    "checked_at",
+                    "worker_instance_id",
+                ],
+                "post_launch_verified_fields": _strong_sandbox_live_evidence_fields(),
+                "required_assurance_properties": dict(STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES),
+                "required_runtime_trust_status": "trusted-signed-pinned-compatible",
                 "resource_limit_enforcement": "sandbox-runtime-hard-limits",
             },
             "notes": (
                 "Requires the higher-assurance strong_sandbox_vm runner and live verified "
-                "attestation for launched backend identity, pinned runtime identity, "
-                "read-only artifact mount, and hard resource-limit launch mode."
+                "attestation for launched backend identity, signed and trusted pinned runtime identity, "
+                "read-only artifact mount, hard resource-limit launch mode, and a "
+                "successful post-launch continuity and guard-state probe."
             ),
         },
     ]
@@ -102,10 +184,13 @@ def _runner_certification_tier(
     metadata: dict[str, Any],
     shared_worker_status: str,
     platform_matrix: dict[str, Any],
+    post_launch_verification: dict[str, Any],
 ) -> tuple[str | None, list[str]]:
     resource_limits = dict(metadata.get("resource_limits") or {})
     launch_attestation = dict(metadata.get("launch_attestation") or {})
     assurance_class = str(metadata.get("assurance_class") or "")
+    runtime_identity = dict(metadata.get("runtime_identity") or {})
+    runtime_trust_chain = dict(runtime_identity.get("trust_chain") or {})
     verified_fields = _verified_attestation_fields(launch_attestation)
     current_environment = dict(platform_matrix.get("current_environment") or {})
     support_levels = dict(current_environment.get("support_levels") or {})
@@ -126,6 +211,8 @@ def _runner_certification_tier(
             missing.append("launch_attestation.status")
         if str(resource_limits.get("enforcement") or "") != "container-runtime-hard-limits":
             missing.append("resource_limits.enforcement")
+        if not bool(runtime_trust_chain.get("accepted_for_production_safe_profiles")):
+            missing.append("runtime_identity.trust_chain")
         for field_name in ("backend_identity", "runtime_identity", "mount_mode", "resource_limit_mode"):
             if field_name not in verified_fields:
                 missing.append(f"verified.{field_name}")
@@ -135,10 +222,14 @@ def _runner_certification_tier(
 
     if runner_type == RUNNER_STRONG_SANDBOX_VM:
         missing = []
+        live_verified_fields = set(post_launch_verification.get("verified_fields") or [])
         active_controls = set((metadata.get("hardening_controls") or {}).get("active_controls") or [])
         verified_controls = set(
             ((launch_attestation.get("hardening_profiles") or {}).get("verified_controls") or [])
         )
+        assurance_properties = dict(metadata.get("assurance_properties") or {})
+        active_assurance_properties = dict((launch_attestation.get("assurance_properties") or {}).get("active") or {})
+        verified_assurance_properties = dict((launch_attestation.get("assurance_properties") or {}).get("verified") or {})
         if str((support_levels.get("strong_sandbox") or {}).get("support") or "") != "supported":
             missing.append("platform_support.strong_sandbox")
         if assurance_class != "strong-sandbox-tier":
@@ -151,6 +242,26 @@ def _runner_certification_tier(
             missing.append("launch_attestation.status")
         if str(resource_limits.get("enforcement") or "") != "sandbox-runtime-hard-limits":
             missing.append("resource_limits.enforcement")
+        if not bool(runtime_trust_chain.get("accepted_for_hostile_profiles")):
+            missing.append("runtime_identity.trust_chain")
+        for key, expected in STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES.items():
+            if str(assurance_properties.get(key) or "") != expected:
+                missing.append(f"assurance_properties.{key}")
+            if str(active_assurance_properties.get(key) or "") != expected:
+                missing.append(f"launch_attestation.assurance_properties.active.{key}")
+            if not bool(verified_assurance_properties.get(key)):
+                missing.append(f"launch_attestation.assurance_properties.verified.{key}")
+        if str(post_launch_verification.get("status") or "") != "passed":
+            missing.append("post_launch_verification.status")
+        if str(post_launch_verification.get("verification_scope") or "") != "live-worker-self-report-over-authenticated-rpc":
+            missing.append("post_launch_verification.verification_scope")
+        if not str(post_launch_verification.get("checked_at") or "").strip():
+            missing.append("post_launch_verification.checked_at")
+        if not str(post_launch_verification.get("worker_instance_id") or "").strip():
+            missing.append("post_launch_verification.worker_instance_id")
+        for field_name in _strong_sandbox_live_evidence_fields():
+            if field_name not in live_verified_fields:
+                missing.append(f"post_launch_verified.{field_name}")
         if not {
             "dedicated_vm_boundary",
             "read_only_plugin_mount",
@@ -174,6 +285,11 @@ def sandbox_certification_contract() -> dict[str, Any]:
     return {
         "schema_version": SANDBOX_CERTIFICATION_SCHEMA_VERSION,
         "interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
+        "covered_execution_model_class": EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
+        "covered_surface_ids": [
+            "dynamic-plugin-node:first-party-app",
+            "dynamic-plugin-node:external-third-party",
+        ],
         "certification_tiers": sandbox_certification_tiers(),
         "shared_worker_policy_checks": [
             {
@@ -266,6 +382,11 @@ def sandbox_certification_contract() -> dict[str, Any]:
                     "expected_outcome": "pinned runtime identity is active and launch-verified",
                 },
                 {
+                    "id": "verified_runtime_trust_chain",
+                    "verification_mode": "runtime_identity_policy_and_attestation",
+                    "expected_outcome": "runtime trust chain satisfies the production-safe trust policy",
+                },
+                {
                     "id": "verified_resource_limit_mode",
                     "verification_mode": "launch_verified_attestation",
                     "expected_outcome": "container runtime hard limits are active and launch-verified",
@@ -288,6 +409,11 @@ def sandbox_certification_contract() -> dict[str, Any]:
                     "expected_outcome": "pinned strong sandbox runtime identity is active and launch-verified",
                 },
                 {
+                    "id": "verified_runtime_trust_chain",
+                    "verification_mode": "runtime_identity_policy_and_attestation",
+                    "expected_outcome": "strong sandbox runtime trust chain satisfies the hostile-workload trust policy",
+                },
+                {
                     "id": "verified_hardening_profile_state",
                     "verification_mode": "active_controls_and_launch_verified_attestation",
                     "expected_outcome": "strong sandbox hardening controls are active and at least the read-only plugin mount is launch-verified",
@@ -301,6 +427,26 @@ def sandbox_certification_contract() -> dict[str, Any]:
                     "id": "verified_resource_limit_mode",
                     "verification_mode": "launch_verified_attestation",
                     "expected_outcome": "strong sandbox hard limits are active and launch-verified",
+                },
+                {
+                    "id": "verified_strong_boundary_properties",
+                    "verification_mode": "runner_contract_and_launch_verified_attestation",
+                    "expected_outcome": "the runner proves dedicated-vm, launcher-mediated mount/network, pinned sandbox runtime, and post-launch session verification properties that container-grade evidence cannot satisfy",
+                },
+                {
+                    "id": "live_session_continuity",
+                    "verification_mode": "post_launch_runtime_probe",
+                    "expected_outcome": "the runtime can confirm the active worker instance and sandbox instance continuity after launch",
+                },
+                {
+                    "id": "live_isolation_state_probe",
+                    "verification_mode": "post_launch_runtime_probe",
+                    "expected_outcome": "the runtime can confirm expected live guard state and hidden runtime channel posture after launch",
+                },
+                {
+                    "id": "live_mount_network_policy_probe",
+                    "verification_mode": "post_launch_runtime_probe",
+                    "expected_outcome": "the runtime can partially verify live read-only artifact behavior, writable temp scope, host-path denial, and deny-by-default socket policy where applicable",
                 },
                 {
                     "id": "fail_closed_unavailability",
@@ -324,15 +470,21 @@ def _assurance_validation_profile(
     metadata: dict[str, Any],
     platform_matrix: dict[str, Any],
     certification_tier: str | None,
+    post_launch_verification: dict[str, Any],
 ) -> dict[str, Any]:
     launch_attestation = dict(metadata.get("launch_attestation") or {})
     runtime_identity = dict(metadata.get("runtime_identity") or {})
+    runtime_trust_chain = dict(runtime_identity.get("trust_chain") or {})
     resource_limits = dict(metadata.get("resource_limits") or {})
     hardening_controls = dict(metadata.get("hardening_controls") or {})
     active_controls = set(hardening_controls.get("active_controls") or [])
     verified_controls = set(
         ((launch_attestation.get("hardening_profiles") or {}).get("verified_controls") or [])
     )
+    live_verified_fields = set(post_launch_verification.get("verified_fields") or [])
+    assurance_properties = dict(metadata.get("assurance_properties") or {})
+    active_assurance_properties = dict((launch_attestation.get("assurance_properties") or {}).get("active") or {})
+    verified_assurance_properties = dict((launch_attestation.get("assurance_properties") or {}).get("verified") or {})
     support_levels = dict(
         ((platform_matrix.get("current_environment") or {}).get("support_levels") or {})
     )
@@ -372,6 +524,19 @@ def _assurance_validation_profile(
                     if runtime_identity.get("pinned")
                     and bool((launch_attestation.get("runtime_identity") or {}).get("verified"))
                     else "runtime identity is not both pinned and launch-verified"
+                ),
+            ),
+            _check_result(
+                check_id="verified_runtime_trust_chain",
+                status=(
+                    "passed"
+                    if bool(runtime_trust_chain.get("accepted_for_production_safe_profiles"))
+                    else "failed"
+                ),
+                detail=(
+                    "runtime trust chain satisfies the production-safe policy"
+                    if bool(runtime_trust_chain.get("accepted_for_production_safe_profiles"))
+                    else f"runtime trust chain did not satisfy the production-safe policy: {runtime_trust_chain.get('verification_status')!r}"
                 ),
             ),
             _check_result(
@@ -455,6 +620,19 @@ def _assurance_validation_profile(
                 ),
             ),
             _check_result(
+                check_id="verified_runtime_trust_chain",
+                status=(
+                    "passed"
+                    if bool(runtime_trust_chain.get("accepted_for_hostile_profiles"))
+                    else "failed"
+                ),
+                detail=(
+                    "strong sandbox runtime trust chain satisfies the hostile-workload policy"
+                    if bool(runtime_trust_chain.get("accepted_for_hostile_profiles"))
+                    else f"strong sandbox runtime trust chain did not satisfy the hostile-workload policy: {runtime_trust_chain.get('verification_status')!r}"
+                ),
+            ),
+            _check_result(
                 check_id="verified_hardening_profile_state",
                 status=(
                     "passed"
@@ -498,6 +676,108 @@ def _assurance_validation_profile(
                 ),
             ),
             _check_result(
+                check_id="verified_strong_boundary_properties",
+                status=(
+                    "passed"
+                    if all(
+                        str(assurance_properties.get(key) or "") == expected
+                        and str(active_assurance_properties.get(key) or "") == expected
+                        and bool(verified_assurance_properties.get(key))
+                        for key, expected in STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES.items()
+                    )
+                    else "failed"
+                ),
+                detail=(
+                    "strong sandbox runner reports and verifies its required VM-only assurance properties"
+                    if all(
+                        str(assurance_properties.get(key) or "") == expected
+                        and str(active_assurance_properties.get(key) or "") == expected
+                        and bool(verified_assurance_properties.get(key))
+                        for key, expected in STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES.items()
+                    )
+                    else "strong sandbox runner did not verify the VM-only assurance properties required to distinguish it from container-grade isolation"
+                ),
+            ),
+            _check_result(
+                check_id="live_session_continuity",
+                status=(
+                    "passed"
+                    if str(post_launch_verification.get("status") or "") == "passed"
+                    and {
+                        "session_continuity.worker_instance_id",
+                        "session_continuity.sandbox_instance_id",
+                    }.issubset(live_verified_fields)
+                    else "failed"
+                ),
+                detail=(
+                    "post-launch probe verified worker instance continuity and sandbox instance binding"
+                    if str(post_launch_verification.get("status") or "") == "passed"
+                    and {
+                        "session_continuity.worker_instance_id",
+                        "session_continuity.sandbox_instance_id",
+                    }.issubset(live_verified_fields)
+                    else "post-launch probe did not verify worker instance continuity and sandbox binding"
+                ),
+            ),
+            _check_result(
+                check_id="live_isolation_state_probe",
+                status=(
+                    "passed"
+                    if str(post_launch_verification.get("status") or "") == "passed"
+                    and {
+                        "isolation_state.import_guard_active",
+                        "isolation_state.filesystem_guard_active",
+                        "isolation_state.network_guard_active",
+                        "boundary_metadata.runtime_api_channel_hidden",
+                    }.issubset(live_verified_fields)
+                    else "failed"
+                ),
+                detail=(
+                    "post-launch probe verified expected live guard state and hidden runtime channel posture"
+                    if str(post_launch_verification.get("status") or "") == "passed"
+                    and {
+                        "isolation_state.import_guard_active",
+                        "isolation_state.filesystem_guard_active",
+                        "isolation_state.network_guard_active",
+                        "boundary_metadata.runtime_api_channel_hidden",
+                    }.issubset(live_verified_fields)
+                    else "post-launch probe did not verify expected live guard state and hidden runtime channel posture"
+                ),
+            ),
+            _check_result(
+                check_id="live_mount_network_policy_probe",
+                status=(
+                    "passed"
+                    if str(post_launch_verification.get("status") or "") == "passed"
+                    and {
+                        "mount_network_state.artifact_read_access",
+                        "mount_network_state.artifact_write_blocked",
+                        "mount_network_state.writable_temp_scope",
+                        "mount_network_state.host_path_access_blocked",
+                        "mount_network_state.network_policy.socket_guard_active",
+                        "mount_network_state.network_policy.deny_by_default_outbound",
+                        "mount_network_state.network_policy.private_target_blocking",
+                        "mount_network_state.network_policy.expected_boundary_mode",
+                    }.issubset(live_verified_fields)
+                    else "failed"
+                ),
+                detail=(
+                    "post-launch probe partially verified live mount and network policy behavior"
+                    if str(post_launch_verification.get("status") or "") == "passed"
+                    and {
+                        "mount_network_state.artifact_read_access",
+                        "mount_network_state.artifact_write_blocked",
+                        "mount_network_state.writable_temp_scope",
+                        "mount_network_state.host_path_access_blocked",
+                        "mount_network_state.network_policy.socket_guard_active",
+                        "mount_network_state.network_policy.deny_by_default_outbound",
+                        "mount_network_state.network_policy.private_target_blocking",
+                        "mount_network_state.network_policy.expected_boundary_mode",
+                    }.issubset(live_verified_fields)
+                    else "post-launch probe did not verify the required live mount and network policy behavior"
+                ),
+            ),
+            _check_result(
                 check_id="fail_closed_unavailability",
                 status=(
                     "observable"
@@ -531,9 +811,11 @@ def sandbox_certification_profile(
     runner_type: str,
     runner_metadata: dict[str, Any] | None = None,
     platform_matrix: dict[str, Any] | None = None,
+    post_launch_verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata = dict(runner_metadata or create_sandbox_runner(runner_type).metadata())
     effective_platform_matrix = dict(platform_matrix or sandbox_platform_capability_matrix())
+    effective_post_launch_verification = dict(post_launch_verification or {})
     resource_limits = dict(metadata.get("resource_limits") or {})
     launch_attestation = dict(metadata.get("launch_attestation") or {})
     hard_limits_active = (
@@ -571,11 +853,17 @@ def sandbox_certification_profile(
         metadata=metadata,
         shared_worker_status=shared_worker_status,
         platform_matrix=effective_platform_matrix,
+        post_launch_verification=effective_post_launch_verification,
     )
 
     return {
         "schema_version": SANDBOX_CERTIFICATION_SCHEMA_VERSION,
         "runner_type": runner_type,
+        "covered_execution_model_class": EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
+        "covered_surface_ids": [
+            "dynamic-plugin-node:first-party-app",
+            "dynamic-plugin-node:external-third-party",
+        ],
         "assurance_class": metadata.get("assurance_class"),
         "platform_support": dict(
             ((effective_platform_matrix.get("current_environment") or {}).get("support_levels") or {})
@@ -586,6 +874,7 @@ def sandbox_certification_profile(
         "certification_tier": certification_tier,
         "tier_status": "certified" if certification_tier else "not_certified_for_runner",
         "missing_tier_requirements": missing_requirements,
+        "uncertified_reasons": _uncertified_reasons(missing_requirements),
         "validation_layers": {
             "shared_worker_policy": {
                 "status": shared_worker_status,
@@ -603,6 +892,7 @@ def sandbox_certification_profile(
                 metadata=metadata,
                 platform_matrix=effective_platform_matrix,
                 certification_tier=certification_tier,
+                post_launch_verification=effective_post_launch_verification,
             ),
         },
         "checks": [

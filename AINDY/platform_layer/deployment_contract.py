@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from AINDY.config import settings
+from AINDY.platform_layer.extension_execution_model import (
+    EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
+    extension_execution_model_contract,
+)
 from AINDY.platform_layer.extension_policy import external_python_override_state
 from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
 from AINDY.platform_layer.sandbox_runner import (
@@ -190,6 +194,7 @@ def runtime_ui_surface_state() -> dict[str, Any]:
             )
         ),
         "trusted_python_execution": trusted_python_execution_summary(),
+        "extension_execution_posture": extension_execution_model_contract(),
         "extension_provenance": extension_provenance_inventory(),
         "plugin_hosts": plugin_hosts,
         "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),
@@ -395,6 +400,7 @@ def hostile_third_party_attestation_requirements() -> dict[str, Any]:
         "required_assurance_class": "strong-sandbox-tier",
         "required_active_policies": {
             "pinned_runtime_identity": True,
+            "runtime_trust_chain": "trusted-signed-pinned-compatible",
             "resource_limit_enforcement": "sandbox-runtime-hard-limits",
         },
         "required_verified_fields": [
@@ -402,12 +408,18 @@ def hostile_third_party_attestation_requirements() -> dict[str, Any]:
             "launch_attestation.runtime_identity",
             "mount_isolation.artifact_mount",
             "launch_attestation.resource_limit_mode",
+            "post_launch_verification.session_continuity",
+            "post_launch_verification.isolation_state",
+            "post_launch_verification.mount_network_state.artifact_write_blocked",
+            "post_launch_verification.mount_network_state.host_path_access_blocked",
+            "post_launch_verification.mount_network_state.network_policy.deny_by_default_outbound",
         ],
         "operator_note": (
             "Hostile third-party mode requires strong_sandbox_vm plus live host "
             "attestation that the runtime actually observed a launched sandbox "
-            "backend, a pinned runtime identity, a verified read-only artifact "
-            "mount, and verified hard resource-limit launch flags."
+            "backend, a signed and trusted pinned runtime identity, a verified read-only artifact "
+            "mount, verified hard resource-limit launch flags, and a successful "
+            "post-launch continuity, guard-state, and live mount/network policy probe."
         ),
     }
 
@@ -495,14 +507,23 @@ def plugin_sandbox_assurance_posture(profile_name: str | None = None) -> dict[st
     required_certification_tier = requirements.get("required_certification_tier")
     current_assurance_class = str(policy.get("assurance_class") or "unknown")
     current_certification_tier = certification.get("certification_tier")
+    platform_matrix = dict(policy.get("platform_matrix") or {})
+    current_environment = dict(platform_matrix.get("current_environment") or {})
+    support_contract = dict(platform_matrix.get("support_contract") or {})
     return {
         "deployment_profile": active_profile,
         "current": {
             "runner_type": str(policy["resolved_runner"]),
             "assurance_class": current_assurance_class,
+            "runtime_trust_status": str(policy.get("runtime_trust_status") or "unknown"),
             "certification_tier": current_certification_tier,
             "certification_status": certification.get("tier_status"),
         },
+        "covered_execution_model_class": EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
+        "covered_surface_ids": [
+            "dynamic-plugin-node:first-party-app",
+            "dynamic-plugin-node:external-third-party",
+        ],
         "required": {
             "assurance_class": required_assurance_class,
             "runner_type": requirements.get("required_runner_type"),
@@ -516,6 +537,17 @@ def plugin_sandbox_assurance_posture(profile_name: str | None = None) -> dict[st
             "certification_tier_satisfied": (
                 required_certification_tier is None
                 or current_certification_tier == required_certification_tier
+            ),
+        },
+        "platform_support": {
+            "current_platform": platform_matrix.get("current_platform"),
+            "current_equivalence_status": current_environment.get("equivalence_status"),
+            "strong_sandbox_supported_host_platforms": list(
+                support_contract.get("strong_sandbox_supported_host_platforms") or []
+            ),
+            "hostile_third_party_supported_host_platforms": list(
+                support_contract.get("hostile_third_party_supported_host_platforms")
+                or []
             ),
         },
         "unsupported_claims": _assurance_unsupported_claims(current_assurance_class),
@@ -538,6 +570,8 @@ def hostile_third_party_attestation_violations(
     artifact_mount = dict(mount_isolation.get("artifact_mount") or {})
     effective_resource_limits = dict(attestation.get("effective_resource_limits") or {})
     resource_limit_mode = dict(launch_attestation.get("resource_limit_mode") or {})
+    post_launch_verification = dict(attestation.get("post_launch_verification") or {})
+    post_launch_isolation_state = dict(post_launch_verification.get("isolation_state") or {})
 
     violations: list[str] = []
     if str(attestation.get("runner_type") or "") != RUNNER_STRONG_SANDBOX_VM:
@@ -546,6 +580,8 @@ def hostile_third_party_attestation_violations(
         violations.append("assurance_class")
     if not bool(runtime_identity.get("pinned")):
         violations.append("runtime_identity.pinned")
+    if not bool((runtime_identity.get("trust_chain") or {}).get("accepted_for_hostile_profiles")):
+        violations.append("runtime_identity.trust_chain")
     if str(launch_attestation.get("status") or "") != "launch-observed":
         violations.append("launch_attestation.status")
     if not bool((launch_attestation.get("backend_identity") or {}).get("verified")):
@@ -561,6 +597,25 @@ def hostile_third_party_attestation_violations(
         violations.append("effective_resource_limits.enforcement")
     if not bool(resource_limit_mode.get("verified")):
         violations.append("launch_attestation.resource_limit_mode")
+    if str(post_launch_verification.get("status") or "") != "passed":
+        violations.append("post_launch_verification.status")
+    required_live_fields = {
+        "session_continuity.worker_instance_id": bool(
+            str(post_launch_verification.get("worker_instance_id") or "").strip()
+        ),
+        "session_continuity.sandbox_instance_id": bool(
+            str((post_launch_verification.get("session_continuity") or {}).get("sandbox_instance_id") or "").strip()
+        ),
+        "isolation_state.import_guard_active": bool(post_launch_isolation_state.get("import_guard_active")),
+        "isolation_state.filesystem_guard_active": bool(post_launch_isolation_state.get("filesystem_guard_active")),
+        "isolation_state.network_guard_active": bool(post_launch_isolation_state.get("network_guard_active")),
+        "boundary_metadata.runtime_api_channel_hidden": bool(
+            (post_launch_verification.get("boundary_metadata") or {}).get("runtime_api_channel_hidden")
+        ),
+    }
+    for field_name, satisfied in required_live_fields.items():
+        if not satisfied:
+            violations.append(f"post_launch_verification.{field_name}")
     return violations
 
 
@@ -576,6 +631,12 @@ def selected_plugin_sandbox_policy() -> dict[str, Any]:
         "strong_sandbox_image_configured": bool(str(settings.AINDY_PLUGIN_STRONG_SANDBOX_IMAGE or "").strip()),
         "assurance_class": str(runner_metadata.get("assurance_class") or "unknown"),
         "runtime_identity": dict(runner_metadata.get("runtime_identity") or {}),
+        "runtime_trust_status": str(
+            (
+                (runner_metadata.get("runtime_identity") or {}).get("trust_chain") or {}
+            ).get("verification_status")
+            or "unknown"
+        ),
         "launch_attestation": dict(runner_metadata.get("launch_attestation") or {}),
         "resource_limits": dict(runner_metadata.get("resource_limits") or {}),
         "platform_matrix": platform_matrix,
@@ -625,14 +686,20 @@ def validate_plugin_sandbox_profile_policy(*, profile_name: str, process_role: s
             f"{process_role} deployment profile {profile_name!r} requires "
             "AINDY_PLUGIN_STRONG_SANDBOX_IMAGE when strong_sandbox_vm is selected."
         )
+    runtime_identity = dict(policy.get("runtime_identity") or {})
+    runtime_trust_chain = dict(runtime_identity.get("trust_chain") or {})
     if _pinned_runtime_identity_required_for_runner(resolved) and not bool(
-        (policy.get("runtime_identity") or {}).get("pinned")
+        runtime_identity.get("pinned")
     ):
-        runtime_identity = dict(policy.get("runtime_identity") or {})
         launch_reference = runtime_identity.get("launch_reference") or runtime_identity.get("configured_reference") or "<unset>"
         raise RuntimeError(
             f"{process_role} deployment profile {profile_name!r} requires a pinned sandbox runtime identity for runner "
             f"{resolved}. Mutable or unverified runtime reference {launch_reference!r} is not allowed."
+        )
+    if not bool(runtime_trust_chain.get("accepted_for_production_safe_profiles")):
+        raise RuntimeError(
+            f"{process_role} deployment profile {profile_name!r} requires a trusted sandbox runtime identity chain for "
+            f"runner {resolved}; current trust status is {runtime_trust_chain.get('verification_status')!r}."
         )
     if resolved == RUNNER_CONTAINERIZED_OCI and not bool(
         ((policy.get("platform_matrix") or {}).get("current_environment") or {}).get(
@@ -682,6 +749,11 @@ def validate_plugin_sandbox_profile_policy(*, profile_name: str, process_role: s
                 f"{process_role} deployment profile {profile_name!r} requires assurance_class="
                 "'strong-sandbox-tier' for third-party sandbox execution."
             )
+        if not bool(runtime_trust_chain.get("accepted_for_hostile_profiles")):
+            raise RuntimeError(
+                f"{process_role} deployment profile {profile_name!r} requires a signed, trusted, compatible sandbox runtime identity "
+                f"for runner {resolved}; current trust status is {runtime_trust_chain.get('verification_status')!r}."
+            )
         if str((policy.get("resource_limits") or {}).get("enforcement") or "") != "sandbox-runtime-hard-limits":
             raise RuntimeError(
                 f"{process_role} deployment profile {profile_name!r} requires "
@@ -729,15 +801,24 @@ def validate_external_third_party_plugin_runtime_policy(*, identifier: str) -> d
             f"external-third-party plugin {identifier!r} requires AINDY_PLUGIN_STRONG_SANDBOX_IMAGE "
             "for strong sandbox VM execution."
         )
+    runtime_identity = dict(policy.get("runtime_identity") or {})
+    runtime_trust_chain = dict(runtime_identity.get("trust_chain") or {})
     if _pinned_runtime_identity_required_for_runner(resolved) and production_safe_plugin_sandbox_required(profile_name) and not bool(
-        (policy.get("runtime_identity") or {}).get("pinned")
+        runtime_identity.get("pinned")
     ):
-        runtime_identity = dict(policy.get("runtime_identity") or {})
         launch_reference = runtime_identity.get("launch_reference") or runtime_identity.get("configured_reference") or "<unset>"
         raise RuntimeError(
             f"external-third-party plugin {identifier!r} is not allowed under deployment profile "
             f"{profile_name!r} because runner {resolved} does not have a pinned sandbox runtime identity; "
             f"configured runtime reference {launch_reference!r} is mutable or unverifiable."
+        )
+    if production_safe_plugin_sandbox_required(profile_name) and not bool(
+        runtime_trust_chain.get("accepted_for_production_safe_profiles")
+    ):
+        raise RuntimeError(
+            f"external-third-party plugin {identifier!r} is not allowed under deployment profile "
+            f"{profile_name!r} because runner {resolved} does not satisfy the trusted sandbox runtime identity chain; "
+            f"current trust status is {runtime_trust_chain.get('verification_status')!r}."
         )
     if resolved == RUNNER_CONTAINERIZED_OCI and not bool(
         ((policy.get("platform_matrix") or {}).get("current_environment") or {}).get(
@@ -789,6 +870,12 @@ def validate_external_third_party_plugin_runtime_policy(*, identifier: str) -> d
                 f"external-third-party plugin {identifier!r} is not allowed under deployment profile "
                 f"{profile_name!r} because the selected runner does not report assurance_class "
                 "'strong-sandbox-tier'."
+            )
+        if not bool(runtime_trust_chain.get("accepted_for_hostile_profiles")):
+            raise RuntimeError(
+                f"external-third-party plugin {identifier!r} is not allowed under deployment profile "
+                f"{profile_name!r} because the selected runner does not have a signed, trusted, compatible sandbox runtime identity chain; "
+                f"current trust status is {runtime_trust_chain.get('verification_status')!r}."
             )
         if str((policy.get("resource_limits") or {}).get("enforcement") or "") != "sandbox-runtime-hard-limits":
             raise RuntimeError(
@@ -1053,6 +1140,7 @@ def deployment_contract_summary() -> dict[str, Any]:
         "extension_execution": {
             "external_python_override": override_state,
             "trusted_python_execution": trusted_python_execution_summary(),
+            "extension_execution_posture": extension_execution_model_contract(),
         },
         "requires": {
             "redis": redis_required(),

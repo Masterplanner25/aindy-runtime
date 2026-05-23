@@ -9,6 +9,9 @@ from AINDY.platform_layer.deployment_contract import (
 )
 from AINDY.platform_layer.extension_abi import extension_abi_policy
 from AINDY.platform_layer.extension_capabilities import extension_capability_policy
+from AINDY.platform_layer.extension_execution_model import (
+    extension_execution_model_contract,
+)
 from AINDY.platform_layer.extension_policy import external_python_override_state
 from AINDY.platform_layer.extension_provenance import extension_provenance_policy
 from AINDY.platform_layer.sandbox_certification import (
@@ -178,6 +181,7 @@ def _extension_surface_contract() -> dict[str, object]:
             }
         ],
         "abi": abi_policy,
+        "execution_models": extension_execution_model_contract(),
         "capability_model": capability_policy,
         "provenance_policy": extension_provenance_policy(),
         "sandbox_runners": {
@@ -198,6 +202,7 @@ def _extension_surface_contract() -> dict[str, object]:
                 "platform_matrix_surface": "runtime.plugin_sandbox_platform",
                 "attestation_fields": [
                     "runner_type",
+                    "execution_model_class",
                     "assurance_class",
                     "isolation_class",
                     "certification",
@@ -208,7 +213,12 @@ def _extension_surface_contract() -> dict[str, object]:
                     "launch_attestation",
                     "mount_isolation",
                     "runtime_identity",
+                    "runtime_identity.trust_chain",
+                    "assurance_properties",
+                    "post_launch_verification",
                     "network_isolation",
+                    "mount_isolation.live_verification",
+                    "network_isolation.live_verification",
                     "network_policy",
                     "filesystem_policy",
                     "provenance_status",
@@ -216,9 +226,14 @@ def _extension_surface_contract() -> dict[str, object]:
                 "attestation_model": {
                     "assurance_class": "the current runner category reported by the runtime",
                     "required_assurance_class": "the minimum class required by the active deployment profile",
+                    "coverage": "plugin sandbox attestation and certification cover isolated plugin-host execution only",
                     "requested": "operator-configured or runner-requested policy",
                     "active": "runner metadata for controls the runtime expects to be active",
                     "verified": "launch-observed backend identity and command evidence only",
+                    "post_launch_verified": "live worker continuity and guard-state checks over a runtime-owned authenticated probe",
+                    "live_mount_and_network": "partial live verification that the worker still experiences read-only artifact behavior, writable temp scope, host-path denial, and deny-by-default socket policy where those probes are applicable",
+                    "runtime_trust_chain": "runtime-owned trust policy result combining digest pinning with source, issuer, signing-status, and base-compatibility metadata",
+                    "assurance_properties": "machine-readable properties that distinguish process containment, container-grade sandboxing, and strong sandbox behavior",
                     "certification_tier": "derived only from runner-specific verified evidence and shared worker-policy eligibility",
                     "mount_and_network": "mount/network isolation claims are verified only when the runtime observes launch arguments or resolved backend identity proving them",
                 },
@@ -229,7 +244,20 @@ def _extension_surface_contract() -> dict[str, object]:
                 "auto_distributed": "containerized_oci",
                 "strong_runner_requires_explicit_selection": "strong_sandbox_vm",
                 "pinned_runtime_identity_required_for_production_safe_profiles": True,
+                "trusted_runtime_identity_chain_required_for_production_safe_profiles": True,
                 "hostile_third_party_profile": hostile_third_party_attestation_requirements(),
+            },
+            "support_contract": {
+                "strong_sandbox_supported_host_platforms": sandbox_platform_capability_matrix()[
+                    "support_contract"
+                ]["strong_sandbox_supported_host_platforms"],
+                "hostile_third_party_supported_host_platforms": sandbox_platform_capability_matrix()[
+                    "support_contract"
+                ]["hostile_third_party_supported_host_platforms"],
+                "notes": (
+                    "Windows and macOS may report contained-process or container-grade runner availability, "
+                    "but they are not part of the declared strong-sandbox or hostile-workload support set."
+                ),
             },
             "assurance_classes": [
                 "insecure-dev",
@@ -241,14 +269,16 @@ def _extension_surface_contract() -> dict[str, object]:
                 "interface. The current subprocess-backed runner is a containment boundary, "
                 "not a sandbox guarantee. When the container runner or strong sandbox VM runner "
                 "is selected, the runtime fails closed if the required runtime, launcher, image, "
-                "or pinned runtime identity is unavailable. Verified attestation reflects only "
-                "what the runtime directly observes at launch time, not a blanket proof of ongoing "
+                "or trusted pinned runtime identity chain is unavailable. Verified attestation reflects only "
+                "what the runtime directly observes at launch time, and post-launch verification reflects "
+                "only live worker continuity and guard-state probes, not a blanket proof of ongoing "
                 "kernel enforcement. "
                 f"{DEPLOYMENT_PROFILE_HOSTILE_THIRD_PARTY!r} is the explicit fail-closed "
                 "profile for hostile or semi-trusted third-party workloads and requires "
                 "strong_sandbox_vm plus live verified host attestation. Operators must "
                 "distinguish assurance class, attestation, and certification tier; they are "
-                "related but not interchangeable."
+                "related but not interchangeable. Linux is the only declared fully supported "
+                "host platform for strong_sandbox_vm and hostile third-party plugin execution."
             ),
         },
         "ownership_classes": [
@@ -263,17 +293,33 @@ def _extension_surface_contract() -> dict[str, object]:
             ],
             "execution_model": "trusted in-process Python execution",
             "sandboxing": "none",
+            "explicit_exceptions": [
+                "manifest bootstrap modules",
+            ],
+            "capability_boundary": {
+                "mode": "explicit-runtime-owned-mediation",
+                "first_party_bootstrap_default": "restricted-allowlist",
+                "runtime_built_in_bootstrap_default": "full-runtime-owned-allowlist",
+                "not_claimed": [
+                    "sandboxing",
+                    "import-level isolation",
+                    "kernel-enforced privilege separation",
+                ],
+            },
             "operator_visibility": [
                 "GET /api/version",
                 "GET /health",
                 "GET /ready",
             ],
             "notes": (
-                "Runtime-built-in and first-party app Python extensions are treated "
-                "as trusted internal code. They execute in-process with full "
-                "interpreter privileges, and the runtime reports their live inventory "
-                "for audit visibility rather than claiming isolation or explicit "
-                "capability confinement."
+                "Manifest bootstrap remains the explicit privileged exception for "
+                "runtime-built-in and first-party app Python. The runtime reports "
+                "that in-process inventory for audit visibility rather than claiming "
+                "isolation or explicit capability confinement. First-party plugin "
+                "nodes and module-style callback providers are isolated where the "
+                "runtime can externalize them through runtime-owned worker boundaries. "
+                "Residual in-process bootstrap code is confined only through explicit "
+                "runtime-owned registration capabilities on official kernel APIs."
             ),
         },
         "external_python_override": {
@@ -326,7 +372,7 @@ def _extension_surface_contract() -> dict[str, object]:
                 "surface": "dynamic plugin nodes",
                 "entrypoint": "AINDY.platform_layer.node_registry.register_external_node(type='plugin')",
                 "abi_versions": abi_policy["surfaces"]["dynamic-node-registration"]["supported_versions"],
-                "notes": "Runtime-built-in and first-party plugin nodes are trusted in-process code; third-party plugin nodes must be admitted as verified plugin artifacts and run through the isolated plugin-host boundary.",
+                "notes": "Runtime-built-in plugin nodes remain trusted in-process code. First-party app plugin nodes and third-party plugin nodes use the isolated plugin-host boundary; third-party nodes must also be admitted as verified plugin artifacts.",
             },
             {
                 "surface": "webhook nodes",

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 from collections import defaultdict
+import os
+import sys
 
 import pytest
 
@@ -66,6 +68,8 @@ _REGISTRY_STATE_EMPTY = {
     "_degraded_domains": [],
     "_health_checks": {},
     "_runtime_agent_defaults_loaded": False,
+    "_runtime_callback_invocations": {},
+    "_in_process_extension_capability_audit": {},
 }
 
 
@@ -280,6 +284,130 @@ def bootstrap():
     assert registration["profile_name"] == "default-apps"
     assert registration["dependencies"] == []
     assert registration["provenance"]["extension_id"] == "apps.test_bootstrap"
+    assert registration["capability_boundary_mode"] == "in-process-bootstrap-capabilities"
+    assert "bootstrap.publish_registration" in registration["allowed_in_process_capabilities"]
+    assert registration["used_in_process_capabilities"] == ["bootstrap.publish_registration"]
+    assert registration["denied_in_process_capabilities"] == []
+
+
+def test_first_party_registry_callbacks_execute_through_isolated_runtime_callback_boundary(
+    monkeypatch, tmp_path, clean_registry_state
+):
+    apps_dir = tmp_path / "apps"
+    apps_dir.mkdir()
+    (apps_dir / "__init__.py").write_text("", encoding="utf-8")
+    (apps_dir / "test_callbacks.py").write_text(
+        """
+from AINDY.platform_layer import registry
+
+def planner_context(context):
+    return {
+        "planner_backend": "runtime_local",
+        "origin": "first-party",
+        "db_present": "db" in (context or {}),
+    }
+
+def startup_hook(context):
+    return {
+        "origin": "startup",
+        "db_present": "db" in (context or {}),
+    }
+
+def bootstrap():
+    registry.publish_bootstrap_registration("first-party-callbacks")
+    registry.register_planner_context_provider("first-party", planner_context)
+    registry.register_startup_hook(startup_hook)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = tmp_path / "aindy_plugins.json"
+    manifest.write_text(
+        """
+{
+  "default_profile": "default-apps",
+  "profiles": {
+    "default-apps": {
+      "plugins": [
+        {"module": "apps.test_callbacks", "owner_class": "first-party-app"}
+      ]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("apps.test_callbacks", None)
+    sys.modules.pop("apps", None)
+
+    registry.load_plugins(manifest_path=manifest, profile="default-apps")
+    planner = registry.get_planner_context("first-party", {"user_id": "user-1", "db": object()})
+    startup = registry.run_startup_hooks({"user_id": "user-1", "db": object()})
+    invocations = registry.get_runtime_callback_invocations()
+
+    assert planner == {
+        "planner_backend": "runtime_local",
+        "origin": "first-party",
+        "db_present": False,
+    }
+    assert startup == [{"origin": "startup", "db_present": False}]
+    assert invocations["planner_context:first-party"]["owner_class"] == OWNER_FIRST_PARTY_APP
+    assert invocations["startup_hook:startup_hook"]["owner_class"] == OWNER_FIRST_PARTY_APP
+    assert invocations["planner_context:first-party"]["execution_mode"] == "isolated-runtime-callback"
+    assert invocations["startup_hook:startup_hook"]["execution_mode"] == "isolated-runtime-callback"
+    assert invocations["planner_context:first-party"]["worker_pid"] != os.getpid()
+    assert invocations["startup_hook:startup_hook"]["worker_pid"] != os.getpid()
+
+
+def test_first_party_bootstrap_denies_disallowed_registry_capability(
+    monkeypatch, tmp_path, clean_registry_state
+):
+    apps_dir = tmp_path / "apps"
+    apps_dir.mkdir()
+    (apps_dir / "__init__.py").write_text("", encoding="utf-8")
+    (apps_dir / "forbidden_bootstrap.py").write_text(
+        """
+from AINDY.platform_layer.registry import register_syscall
+
+def forbidden_syscall(_payload):
+    return {"status": "ok"}
+
+def bootstrap():
+    register_syscall("apps.forbidden", forbidden_syscall)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = tmp_path / "aindy_plugins.json"
+    manifest.write_text(
+        """
+{
+  "default_profile": "default-apps",
+  "profiles": {
+    "default-apps": {
+      "plugins": [
+        {"module": "apps.forbidden_bootstrap", "owner_class": "first-party-app"}
+      ]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.syspath_prepend(str(tmp_path))
+    sys.modules.pop("apps.forbidden_bootstrap", None)
+    sys.modules.pop("apps", None)
+
+    with pytest.raises(RuntimeError, match="in-process bootstrap capability 'registry.register_syscall' is not allowed"):
+        registry.load_plugins(manifest_path=manifest, profile="default-apps")
+
+    audit = registry.get_in_process_extension_capability_audit()["apps.forbidden_bootstrap"]
+    assert audit["capability_boundary_mode"] == "in-process-bootstrap-capabilities"
+    assert "registry.register_syscall" in audit["used_capabilities"]
+    assert audit["denied_capabilities"] == ["registry.register_syscall"]
 
 
 def test_load_plugins_blocks_external_python_bootstrap_by_default(monkeypatch, tmp_path, clean_registry_state):
@@ -412,6 +540,7 @@ def bootstrap():
     assert inventory["present"] is True
     assert inventory["execution_model"] == "trusted-in-process-python"
     assert inventory["sandboxing"] == "none"
+    assert inventory["capability_boundary_mode"] == "explicit-runtime-owned-mediation"
     assert inventory["manifest_module_count"] == 2
     assert inventory["bootstrap_registration_count"] == 1
     assert inventory["plugin_node_count"] == 0
@@ -438,6 +567,10 @@ def bootstrap():
             "manifest_owner": "explicit",
             "profile_name": "default-apps",
             "trusted_override_active": False,
+            "capability_boundary_mode": "in-process-bootstrap-capabilities",
+            "allowed_in_process_capabilities": inventory["bootstrap_registrations"][0]["allowed_in_process_capabilities"],
+            "used_in_process_capabilities": ["bootstrap.publish_registration"],
+            "denied_in_process_capabilities": [],
             "dependencies": [],
         }
     ]

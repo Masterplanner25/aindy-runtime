@@ -195,7 +195,7 @@ def handler(state, context):
 from pathlib import Path
 
 def handler(state, context):
-    Path(__file__).write_text("overwrite", encoding="utf-8")
+    Path(__file__).with_name("forbidden-write.txt").write_text("overwrite", encoding="utf-8")
     return {"status": "SUCCESS"}
 """,
     )
@@ -464,6 +464,7 @@ def test_container_runner_certification_suite_reports_attested_hardening(
     } == {
         "runner_class_verification": "passed",
         "verified_runtime_identity": "passed",
+        "verified_runtime_trust_chain": "passed",
         "verified_resource_limit_mode": "passed",
         "verified_isolation_reporting": "passed",
     }
@@ -530,6 +531,14 @@ def test_strong_runner_certification_tier_requires_verified_launch_attestation()
             "assurance_class": "strong-sandbox-tier",
             "execution_boundary": "vm-stdio-json-rpc",
             "isolation_claim": "vm-boundary",
+            "assurance_properties": {
+                "boundary_type": "dedicated-vm-sandbox",
+                "process_separation_model": "vm-kernel-boundary",
+                "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+                "network_mediation_model": "sandbox-launcher-deny-default",
+                "runtime_identity_model": "pinned-sandbox-runtime",
+                "session_verification_model": "launch-plus-post-launch-runtime-probe",
+            },
             "resource_limits": {
                 "enforcement": "sandbox-runtime-hard-limits",
             },
@@ -552,14 +561,24 @@ def test_strong_runner_certification_tier_requires_verified_launch_attestation()
                 }
             }
         },
+        post_launch_verification={},
     )
 
     assert uncertified["certification_tier"] is None
     assert uncertified["tier_status"] == "not_certified_for_runner"
     assert "launch_attestation.status" in uncertified["missing_tier_requirements"]
+    assert "post_launch_verification.verification_scope" in uncertified["missing_tier_requirements"]
+    assert "post_launch_verification.checked_at" in uncertified["missing_tier_requirements"]
+    assert "post_launch_verification.worker_instance_id" in uncertified["missing_tier_requirements"]
     assert "verified.backend_identity" in uncertified["missing_tier_requirements"]
     assert "hardening_controls.active_controls" in uncertified["missing_tier_requirements"]
     assert "verified.read_only_plugin_mount" in uncertified["missing_tier_requirements"]
+    assert "post_launch_verification.status" in uncertified["missing_tier_requirements"]
+    assert "post_launch_verified.mount_network_state.artifact_write_blocked" in uncertified["missing_tier_requirements"]
+    assert {
+        reason["category"]
+        for reason in uncertified["uncertified_reasons"]
+    } >= {"launch_evidence", "live_evidence", "hardening_state", "runtime_trust"}
     assert uncertified["validation_layers"]["runner_assurance"]["layer"] == "strong-sandbox-certified"
     assert uncertified["validation_layers"]["runner_assurance"]["status"] == "not_certified"
 
@@ -574,16 +593,30 @@ def test_strong_runner_certification_tier_granted_only_with_verified_strong_evid
             "assurance_class": "strong-sandbox-tier",
             "execution_boundary": "vm-stdio-json-rpc",
             "isolation_claim": "vm-boundary",
+            "assurance_properties": {
+                "boundary_type": "dedicated-vm-sandbox",
+                "process_separation_model": "vm-kernel-boundary",
+                "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+                "network_mediation_model": "sandbox-launcher-deny-default",
+                "runtime_identity_model": "pinned-sandbox-runtime",
+                "session_verification_model": "launch-plus-post-launch-runtime-probe",
+            },
             "resource_limits": {
                 "enforcement": "sandbox-runtime-hard-limits",
             },
             "runtime_identity": {
                 "pinned": True,
+                "trust_chain": {
+                    "accepted_for_hostile_profiles": True,
+                    "verification_status": "trusted-signed-pinned-compatible",
+                },
             },
             "hardening_controls": {
                 "active_controls": [
                     "dedicated_vm_boundary",
                     "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
                     "minimal_environment",
                     "sandbox_runtime_limits",
                 ]
@@ -595,7 +628,29 @@ def test_strong_runner_certification_tier_granted_only_with_verified_strong_evid
                 "mount_mode": {"verified": True},
                 "resource_limit_mode": {"verified": True},
                 "hardening_profiles": {
-                    "verified_controls": ["read_only_plugin_mount"],
+                    "verified_controls": [
+                        "read_only_plugin_mount",
+                        "launcher_network_deny_default",
+                        "launcher_host_path_denial",
+                    ],
+                },
+                "assurance_properties": {
+                    "active": {
+                        "boundary_type": "dedicated-vm-sandbox",
+                        "process_separation_model": "vm-kernel-boundary",
+                        "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+                        "network_mediation_model": "sandbox-launcher-deny-default",
+                        "runtime_identity_model": "pinned-sandbox-runtime",
+                        "session_verification_model": "launch-plus-post-launch-runtime-probe",
+                    },
+                    "verified": {
+                        "boundary_type": True,
+                        "process_separation_model": True,
+                        "mount_mediation_model": True,
+                        "network_mediation_model": True,
+                        "runtime_identity_model": True,
+                        "session_verification_model": True,
+                    },
                 },
             },
         },
@@ -606,11 +661,34 @@ def test_strong_runner_certification_tier_granted_only_with_verified_strong_evid
                 }
             }
         },
+        post_launch_verification={
+            "status": "passed",
+            "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+            "checked_at": "2026-05-22T00:00:00+00:00",
+            "worker_instance_id": "worker-strong-1",
+            "verified_fields": [
+                "session_continuity.worker_instance_id",
+                "session_continuity.sandbox_instance_id",
+                "isolation_state.import_guard_active",
+                "isolation_state.filesystem_guard_active",
+                "isolation_state.network_guard_active",
+                "boundary_metadata.runtime_api_channel_hidden",
+                "mount_network_state.artifact_read_access",
+                "mount_network_state.artifact_write_blocked",
+                "mount_network_state.writable_temp_scope",
+                "mount_network_state.host_path_access_blocked",
+                "mount_network_state.network_policy.socket_guard_active",
+                "mount_network_state.network_policy.deny_by_default_outbound",
+                "mount_network_state.network_policy.private_target_blocking",
+                "mount_network_state.network_policy.expected_boundary_mode",
+            ],
+        },
     )
 
     assert profile["certification_tier"] == "strong-sandbox-certified"
     assert profile["tier_status"] == "certified"
     assert profile["missing_tier_requirements"] == []
+    assert profile["uncertified_reasons"] == []
     assert profile["validation_layers"]["runner_assurance"]["layer"] == "strong-sandbox-certified"
     assert profile["validation_layers"]["runner_assurance"]["status"] == "passed"
     assert {
@@ -619,9 +697,14 @@ def test_strong_runner_certification_tier_granted_only_with_verified_strong_evid
     } == {
         "runner_class_verification": "passed",
         "verified_runtime_identity": "passed",
+        "verified_runtime_trust_chain": "passed",
         "verified_hardening_profile_state": "passed",
         "verified_stronger_isolation_reporting": "passed",
         "verified_resource_limit_mode": "passed",
+        "verified_strong_boundary_properties": "passed",
+        "live_session_continuity": "passed",
+        "live_isolation_state_probe": "passed",
+        "live_mount_network_policy_probe": "passed",
         "fail_closed_unavailability": "not_applicable",
     }
 
@@ -636,16 +719,30 @@ def test_strong_runner_certification_tier_rejected_on_unsupported_platform():
             "assurance_class": "strong-sandbox-tier",
             "execution_boundary": "vm-stdio-json-rpc",
             "isolation_claim": "vm-boundary",
+            "assurance_properties": {
+                "boundary_type": "dedicated-vm-sandbox",
+                "process_separation_model": "vm-kernel-boundary",
+                "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+                "network_mediation_model": "sandbox-launcher-deny-default",
+                "runtime_identity_model": "pinned-sandbox-runtime",
+                "session_verification_model": "launch-plus-post-launch-runtime-probe",
+            },
             "resource_limits": {
                 "enforcement": "sandbox-runtime-hard-limits",
             },
             "runtime_identity": {
                 "pinned": True,
+                "trust_chain": {
+                    "accepted_for_hostile_profiles": True,
+                    "verification_status": "trusted-signed-pinned-compatible",
+                },
             },
             "hardening_controls": {
                 "active_controls": [
                     "dedicated_vm_boundary",
                     "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
                     "minimal_environment",
                     "sandbox_runtime_limits",
                 ]
@@ -657,7 +754,29 @@ def test_strong_runner_certification_tier_rejected_on_unsupported_platform():
                 "mount_mode": {"verified": True},
                 "resource_limit_mode": {"verified": True},
                 "hardening_profiles": {
-                    "verified_controls": ["read_only_plugin_mount"],
+                    "verified_controls": [
+                        "read_only_plugin_mount",
+                        "launcher_network_deny_default",
+                        "launcher_host_path_denial",
+                    ],
+                },
+                "assurance_properties": {
+                    "active": {
+                        "boundary_type": "dedicated-vm-sandbox",
+                        "process_separation_model": "vm-kernel-boundary",
+                        "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+                        "network_mediation_model": "sandbox-launcher-deny-default",
+                        "runtime_identity_model": "pinned-sandbox-runtime",
+                        "session_verification_model": "launch-plus-post-launch-runtime-probe",
+                    },
+                    "verified": {
+                        "boundary_type": True,
+                        "process_separation_model": True,
+                        "mount_mediation_model": True,
+                        "network_mediation_model": True,
+                        "runtime_identity_model": True,
+                        "session_verification_model": True,
+                    },
                 },
             },
         },
@@ -667,6 +786,28 @@ def test_strong_runner_certification_tier_rejected_on_unsupported_platform():
                     "strong_sandbox": {"support": "unsupported"},
                 }
             }
+        },
+        post_launch_verification={
+            "status": "passed",
+            "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+            "checked_at": "2026-05-22T00:00:00+00:00",
+            "worker_instance_id": "worker-strong-1",
+            "verified_fields": [
+                "session_continuity.worker_instance_id",
+                "session_continuity.sandbox_instance_id",
+                "isolation_state.import_guard_active",
+                "isolation_state.filesystem_guard_active",
+                "isolation_state.network_guard_active",
+                "boundary_metadata.runtime_api_channel_hidden",
+                "mount_network_state.artifact_read_access",
+                "mount_network_state.artifact_write_blocked",
+                "mount_network_state.writable_temp_scope",
+                "mount_network_state.host_path_access_blocked",
+                "mount_network_state.network_policy.socket_guard_active",
+                "mount_network_state.network_policy.deny_by_default_outbound",
+                "mount_network_state.network_policy.private_target_blocking",
+                "mount_network_state.network_policy.expected_boundary_mode",
+            ],
         },
     )
 
@@ -687,16 +828,30 @@ def test_strong_runner_validation_layer_reports_passed_assurance_checks():
             "assurance_class": "strong-sandbox-tier",
             "execution_boundary": "vm-stdio-json-rpc",
             "isolation_claim": "vm-boundary",
+            "assurance_properties": {
+                "boundary_type": "dedicated-vm-sandbox",
+                "process_separation_model": "vm-kernel-boundary",
+                "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+                "network_mediation_model": "sandbox-launcher-deny-default",
+                "runtime_identity_model": "pinned-sandbox-runtime",
+                "session_verification_model": "launch-plus-post-launch-runtime-probe",
+            },
             "resource_limits": {
                 "enforcement": "sandbox-runtime-hard-limits",
             },
             "runtime_identity": {
                 "pinned": True,
+                "trust_chain": {
+                    "accepted_for_hostile_profiles": True,
+                    "verification_status": "trusted-signed-pinned-compatible",
+                },
             },
             "hardening_controls": {
                 "active_controls": [
                     "dedicated_vm_boundary",
                     "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
                     "minimal_environment",
                     "sandbox_runtime_limits",
                 ]
@@ -708,7 +863,29 @@ def test_strong_runner_validation_layer_reports_passed_assurance_checks():
                 "mount_mode": {"verified": True},
                 "resource_limit_mode": {"verified": True},
                 "hardening_profiles": {
-                    "verified_controls": ["read_only_plugin_mount"],
+                    "verified_controls": [
+                        "read_only_plugin_mount",
+                        "launcher_network_deny_default",
+                        "launcher_host_path_denial",
+                    ],
+                },
+                "assurance_properties": {
+                    "active": {
+                        "boundary_type": "dedicated-vm-sandbox",
+                        "process_separation_model": "vm-kernel-boundary",
+                        "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+                        "network_mediation_model": "sandbox-launcher-deny-default",
+                        "runtime_identity_model": "pinned-sandbox-runtime",
+                        "session_verification_model": "launch-plus-post-launch-runtime-probe",
+                    },
+                    "verified": {
+                        "boundary_type": True,
+                        "process_separation_model": True,
+                        "mount_mediation_model": True,
+                        "network_mediation_model": True,
+                        "runtime_identity_model": True,
+                        "session_verification_model": True,
+                    },
                 },
             },
         },
@@ -718,6 +895,28 @@ def test_strong_runner_validation_layer_reports_passed_assurance_checks():
                     "strong_sandbox": {"support": "supported"},
                 }
             }
+        },
+        post_launch_verification={
+            "status": "passed",
+            "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+            "checked_at": "2026-05-22T00:00:00+00:00",
+            "worker_instance_id": "worker-strong-1",
+            "verified_fields": [
+                "session_continuity.worker_instance_id",
+                "session_continuity.sandbox_instance_id",
+                "isolation_state.import_guard_active",
+                "isolation_state.filesystem_guard_active",
+                "isolation_state.network_guard_active",
+                "boundary_metadata.runtime_api_channel_hidden",
+                "mount_network_state.artifact_read_access",
+                "mount_network_state.artifact_write_blocked",
+                "mount_network_state.writable_temp_scope",
+                "mount_network_state.host_path_access_blocked",
+                "mount_network_state.network_policy.socket_guard_active",
+                "mount_network_state.network_policy.deny_by_default_outbound",
+                "mount_network_state.network_policy.private_target_blocking",
+                "mount_network_state.network_policy.expected_boundary_mode",
+            ],
         },
     )
 
@@ -729,9 +928,14 @@ def test_strong_runner_validation_layer_reports_passed_assurance_checks():
     assert checks == {
         "runner_class_verification": "passed",
         "verified_runtime_identity": "passed",
+        "verified_runtime_trust_chain": "passed",
         "verified_hardening_profile_state": "passed",
         "verified_stronger_isolation_reporting": "passed",
         "verified_resource_limit_mode": "passed",
+        "verified_strong_boundary_properties": "passed",
+        "live_session_continuity": "passed",
+        "live_isolation_state_probe": "passed",
+        "live_mount_network_policy_probe": "passed",
         "fail_closed_unavailability": "not_applicable",
     }
 
@@ -770,6 +974,7 @@ def test_strong_runner_validation_layer_reports_unavailability_as_observable():
                 }
             }
         },
+        post_launch_verification={},
     )
 
     checks = {
@@ -777,3 +982,207 @@ def test_strong_runner_validation_layer_reports_unavailability_as_observable():
         for check in profile["validation_layers"]["runner_assurance"]["checks"]
     }
     assert checks["fail_closed_unavailability"] == "observable"
+
+
+def test_strong_runner_certification_rejects_container_grade_assurance_properties():
+    from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+    profile = sandbox_certification_profile(
+        runner_type="strong_sandbox_vm",
+        runner_metadata={
+            "runner_type": "strong_sandbox_vm",
+            "assurance_class": "strong-sandbox-tier",
+            "execution_boundary": "vm-stdio-json-rpc",
+            "isolation_claim": "vm-boundary",
+            "assurance_properties": {
+                "boundary_type": "shared-kernel-container-sandbox",
+                "process_separation_model": "container-namespace-boundary",
+                "mount_mediation_model": "container-runtime-bind-mount-read-only",
+                "network_mediation_model": "container-runtime-network-policy",
+                "runtime_identity_model": "pinned-oci-image",
+                "session_verification_model": "launch-attestation-only",
+            },
+            "resource_limits": {
+                "enforcement": "sandbox-runtime-hard-limits",
+            },
+            "runtime_identity": {
+                "pinned": True,
+                "trust_chain": {
+                    "accepted_for_hostile_profiles": True,
+                    "verification_status": "trusted-signed-pinned-compatible",
+                },
+            },
+            "hardening_controls": {
+                "active_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ]
+            },
+            "launch_attestation": {
+                "status": "launch-observed",
+                "backend_identity": {"verified": True},
+                "runtime_identity": {"verified": True},
+                "mount_mode": {"verified": True},
+                "resource_limit_mode": {"verified": True},
+                "hardening_profiles": {
+                    "verified_controls": [
+                        "read_only_plugin_mount",
+                        "launcher_network_deny_default",
+                        "launcher_host_path_denial",
+                    ],
+                },
+                "assurance_properties": {
+                    "active": {
+                        "boundary_type": "shared-kernel-container-sandbox",
+                        "process_separation_model": "container-namespace-boundary",
+                        "mount_mediation_model": "container-runtime-bind-mount-read-only",
+                        "network_mediation_model": "container-runtime-network-policy",
+                        "runtime_identity_model": "pinned-oci-image",
+                        "session_verification_model": "launch-attestation-only",
+                    },
+                    "verified": {
+                        "boundary_type": True,
+                        "process_separation_model": True,
+                        "mount_mediation_model": True,
+                        "network_mediation_model": True,
+                        "runtime_identity_model": True,
+                        "session_verification_model": True,
+                    },
+                },
+            },
+        },
+        platform_matrix={
+            "current_environment": {
+                "support_levels": {
+                    "strong_sandbox": {"support": "supported"},
+                }
+            }
+        },
+        post_launch_verification={
+            "status": "passed",
+            "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+            "checked_at": "2026-05-22T00:00:00+00:00",
+            "worker_instance_id": "worker-strong-1",
+            "verified_fields": [
+                "session_continuity.worker_instance_id",
+                "session_continuity.sandbox_instance_id",
+                "isolation_state.import_guard_active",
+                "isolation_state.filesystem_guard_active",
+                "isolation_state.network_guard_active",
+                "boundary_metadata.runtime_api_channel_hidden",
+            ],
+        },
+    )
+
+    assert profile["certification_tier"] is None
+    assert "assurance_properties.boundary_type" in profile["missing_tier_requirements"]
+    assert "launch_attestation.assurance_properties.active.network_mediation_model" in profile["missing_tier_requirements"]
+    checks = {
+        check["check_id"]: check["status"]
+        for check in profile["validation_layers"]["runner_assurance"]["checks"]
+    }
+    assert checks["verified_strong_boundary_properties"] == "failed"
+
+
+def test_strong_runner_certification_reports_live_evidence_denial_reasons():
+    from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+    profile = sandbox_certification_profile(
+        runner_type="strong_sandbox_vm",
+        runner_metadata={
+            "runner_type": "strong_sandbox_vm",
+            "assurance_class": "strong-sandbox-tier",
+            "execution_boundary": "vm-stdio-json-rpc",
+            "isolation_claim": "vm-boundary",
+            "assurance_properties": {
+                "boundary_type": "dedicated-vm-sandbox",
+                "process_separation_model": "vm-kernel-boundary",
+                "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+                "network_mediation_model": "sandbox-launcher-deny-default",
+                "runtime_identity_model": "pinned-sandbox-runtime",
+                "session_verification_model": "launch-plus-post-launch-runtime-probe",
+            },
+            "resource_limits": {
+                "enforcement": "sandbox-runtime-hard-limits",
+            },
+            "runtime_identity": {
+                "pinned": True,
+                "trust_chain": {
+                    "accepted_for_hostile_profiles": True,
+                    "verification_status": "trusted-signed-pinned-compatible",
+                },
+            },
+            "hardening_controls": {
+                "active_controls": [
+                    "dedicated_vm_boundary",
+                    "read_only_plugin_mount",
+                    "launcher_network_deny_default",
+                    "launcher_host_path_denial",
+                    "minimal_environment",
+                    "sandbox_runtime_limits",
+                ]
+            },
+            "launch_attestation": {
+                "status": "launch-observed",
+                "backend_identity": {"verified": True},
+                "runtime_identity": {"verified": True},
+                "mount_mode": {"verified": True},
+                "resource_limit_mode": {"verified": True},
+                "hardening_profiles": {
+                    "verified_controls": [
+                        "read_only_plugin_mount",
+                        "launcher_network_deny_default",
+                        "launcher_host_path_denial",
+                    ],
+                },
+                "assurance_properties": {
+                    "active": {
+                        "boundary_type": "dedicated-vm-sandbox",
+                        "process_separation_model": "vm-kernel-boundary",
+                        "mount_mediation_model": "sandbox-launcher-mediated-read-only",
+                        "network_mediation_model": "sandbox-launcher-deny-default",
+                        "runtime_identity_model": "pinned-sandbox-runtime",
+                        "session_verification_model": "launch-plus-post-launch-runtime-probe",
+                    },
+                    "verified": {
+                        "boundary_type": True,
+                        "process_separation_model": True,
+                        "mount_mediation_model": True,
+                        "network_mediation_model": True,
+                        "runtime_identity_model": True,
+                        "session_verification_model": True,
+                    },
+                },
+            },
+        },
+        platform_matrix={
+            "current_environment": {
+                "support_levels": {
+                    "strong_sandbox": {"support": "supported"},
+                }
+            }
+        },
+        post_launch_verification={
+            "status": "passed",
+            "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+            "checked_at": "2026-05-22T00:00:00+00:00",
+            "worker_instance_id": "worker-strong-1",
+            "verified_fields": [
+                "session_continuity.worker_instance_id",
+                "session_continuity.sandbox_instance_id",
+            ],
+        },
+    )
+
+    assert profile["certification_tier"] is None
+    reasons = {
+        reason["category"]: set(reason["missing_requirements"])
+        for reason in profile["uncertified_reasons"]
+    }
+    assert "live_evidence" in reasons
+    assert "post_launch_verified.isolation_state.import_guard_active" in reasons["live_evidence"]
+    assert "post_launch_verified.mount_network_state.artifact_write_blocked" in reasons["live_evidence"]

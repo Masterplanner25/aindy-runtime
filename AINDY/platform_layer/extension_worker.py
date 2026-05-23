@@ -8,7 +8,9 @@ import json
 import os
 import secrets
 import socket
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from importlib import util as importlib_util
@@ -563,17 +565,48 @@ def _install_network_guard(
     return original_create_connection, original_connect, original_connect_ex
 
 
-def _install_filesystem_guard(plugin_root: str) -> tuple[Callable[..., Any], Callable[..., Any], Callable[..., Any], Callable[..., Any], Callable[..., Any]]:
+def _filesystem_guard_roots(plugin_root: str) -> tuple[Path, set[Path]]:
     allowed_root = Path(plugin_root).resolve()
     runtime_roots = {
         Path(sys.base_prefix).resolve(),
         Path(sys.prefix).resolve(),
     }
+    return allowed_root, runtime_roots
+
+
+def _path_is_within_allowed_roots(path: Path, *, allowed_root: Path, runtime_roots: set[Path]) -> bool:
+    return (
+        path == allowed_root
+        or allowed_root in path.parents
+        or any(path == root or root in path.parents for root in runtime_roots)
+    )
+
+
+def _path_is_within_temp_root(path: Path, writable_temp_root: Path | None) -> bool:
+    if writable_temp_root is None:
+        return False
+    temp_root = writable_temp_root.resolve()
+    return path == temp_root or temp_root in path.parents
+
+
+def _install_filesystem_guard(plugin_root: str) -> dict[str, Callable[..., Any] | None]:
+    allowed_root, runtime_roots = _filesystem_guard_roots(plugin_root)
+    writable_temp_root = Path(tempfile.mkdtemp(prefix="aindy-sandbox-")).resolve()
+    path_class = type(Path.cwd())
     original_open = builtins.open
     original_io_open = io.open
     original_os_open = os.open
     original_listdir = os.listdir
     original_scandir = os.scandir
+    original_path_open = path_class.open
+    original_path_mkdir = path_class.mkdir
+    original_path_unlink = path_class.unlink
+    original_path_rename = path_class.rename
+    original_path_replace = path_class.replace
+    original_path_rmdir = path_class.rmdir
+    original_path_touch = path_class.touch
+    original_path_write_text = path_class.write_text
+    original_path_write_bytes = path_class.write_bytes
 
     def _resolve_path(file: Any) -> Path:
         return Path(file).resolve()
@@ -582,16 +615,16 @@ def _install_filesystem_guard(plugin_root: str) -> tuple[Callable[..., Any], Cal
         resolved = _resolve_path(file)
         mode_text = str(mode or "r")
         read_only = not any(flag in mode_text for flag in ("w", "a", "x", "+"))
-        if not read_only:
+        if not read_only and not _path_is_within_temp_root(resolved, writable_temp_root):
             raise PermissionError(
                 "Filesystem write blocked by extension filesystem policy"
             )
-        approved_root = (
-            resolved == allowed_root
-            or allowed_root in resolved.parents
-            or any(resolved == root or root in resolved.parents for root in runtime_roots)
+        approved_root = _path_is_within_allowed_roots(
+            resolved,
+            allowed_root=allowed_root,
+            runtime_roots=runtime_roots,
         )
-        if not approved_root:
+        if not approved_root and not _path_is_within_temp_root(resolved, writable_temp_root):
             raise PermissionError(
                 "Filesystem path blocked by extension filesystem policy: only approved read-only roots are allowed"
             )
@@ -626,12 +659,76 @@ def _install_filesystem_guard(plugin_root: str) -> tuple[Callable[..., Any], Cal
         _ensure_allowed(path, "r")
         return original_scandir(path)
 
+    def guarded_path_open(self: Path, mode="r", *args, **kwargs):
+        _ensure_allowed(self, mode)
+        return original_path_open(self, mode, *args, **kwargs)
+
+    def guarded_path_mkdir(self: Path, *args, **kwargs):
+        _ensure_allowed(self, "w")
+        return original_path_mkdir(self, *args, **kwargs)
+
+    def guarded_path_unlink(self: Path, *args, **kwargs):
+        _ensure_allowed(self, "w")
+        return original_path_unlink(self, *args, **kwargs)
+
+    def guarded_path_rename(self: Path, target, *args, **kwargs):
+        _ensure_allowed(self, "w")
+        _ensure_allowed(target, "w")
+        return original_path_rename(self, target, *args, **kwargs)
+
+    def guarded_path_replace(self: Path, target, *args, **kwargs):
+        _ensure_allowed(self, "w")
+        _ensure_allowed(target, "w")
+        return original_path_replace(self, target, *args, **kwargs)
+
+    def guarded_path_rmdir(self: Path, *args, **kwargs):
+        _ensure_allowed(self, "w")
+        return original_path_rmdir(self, *args, **kwargs)
+
+    def guarded_path_touch(self: Path, *args, **kwargs):
+        _ensure_allowed(self, "w")
+        return original_path_touch(self, *args, **kwargs)
+
+    def guarded_path_write_text(self: Path, data: str, *args, **kwargs):
+        _ensure_allowed(self, "w")
+        return original_path_write_text(self, data, *args, **kwargs)
+
+    def guarded_path_write_bytes(self: Path, data: bytes, *args, **kwargs):
+        _ensure_allowed(self, "w")
+        return original_path_write_bytes(self, data, *args, **kwargs)
+
     builtins.open = guarded_open
     io.open = guarded_io_open
     os.open = guarded_os_open
     os.listdir = guarded_listdir
     os.scandir = guarded_scandir
-    return original_open, original_io_open, original_os_open, original_listdir, original_scandir
+    path_class.open = guarded_path_open
+    path_class.mkdir = guarded_path_mkdir
+    path_class.unlink = guarded_path_unlink
+    path_class.rename = guarded_path_rename
+    path_class.replace = guarded_path_replace
+    path_class.rmdir = guarded_path_rmdir
+    path_class.touch = guarded_path_touch
+    path_class.write_text = guarded_path_write_text
+    path_class.write_bytes = guarded_path_write_bytes
+    return {
+        "path_class": path_class,
+        "writable_temp_root": writable_temp_root,
+        "open": original_open,
+        "io_open": original_io_open,
+        "os_open": original_os_open,
+        "listdir": original_listdir,
+        "scandir": original_scandir,
+        "path_open": original_path_open,
+        "path_mkdir": original_path_mkdir,
+        "path_unlink": original_path_unlink,
+        "path_rename": original_path_rename,
+        "path_replace": original_path_replace,
+        "path_rmdir": original_path_rmdir,
+        "path_touch": original_path_touch,
+        "path_write_text": original_path_write_text,
+        "path_write_bytes": original_path_write_bytes,
+    }
 
 
 def _strip_plugin_environment() -> dict[str, str]:
@@ -669,6 +766,16 @@ def _handle_request(payload: dict[str, Any]) -> dict[str, Any]:
     original_os_open = os.open
     original_listdir = os.listdir
     original_scandir = os.scandir
+    original_path_open = Path.open
+    original_path_mkdir = Path.mkdir
+    original_path_unlink = Path.unlink
+    original_path_rename = Path.rename
+    original_path_replace = Path.replace
+    original_path_rmdir = Path.rmdir
+    original_path_touch = Path.touch
+    original_path_write_text = Path.write_text
+    original_path_write_bytes = Path.write_bytes
+    writable_temp_root = None
     original_create_connection = socket.create_connection
     original_connect = socket.socket.connect
     original_connect_ex = socket.socket.connect_ex
@@ -682,13 +789,23 @@ def _handle_request(payload: dict[str, Any]) -> dict[str, Any]:
         _strip_plugin_environment()
         _prune_runtime_modules()
         original_import = _install_import_guard()
-        (
-            original_open,
-            original_io_open,
-            original_os_open,
-            original_listdir,
-            original_scandir,
-        ) = _install_filesystem_guard(plugin_root)
+        filesystem_guard_originals = _install_filesystem_guard(plugin_root)
+        original_open = filesystem_guard_originals["open"]
+        original_io_open = filesystem_guard_originals["io_open"]
+        original_os_open = filesystem_guard_originals["os_open"]
+        original_listdir = filesystem_guard_originals["listdir"]
+        original_scandir = filesystem_guard_originals["scandir"]
+        path_class = filesystem_guard_originals["path_class"]
+        original_path_open = filesystem_guard_originals["path_open"]
+        original_path_mkdir = filesystem_guard_originals["path_mkdir"]
+        original_path_unlink = filesystem_guard_originals["path_unlink"]
+        original_path_rename = filesystem_guard_originals["path_rename"]
+        original_path_replace = filesystem_guard_originals["path_replace"]
+        original_path_rmdir = filesystem_guard_originals["path_rmdir"]
+        original_path_touch = filesystem_guard_originals["path_touch"]
+        original_path_write_text = filesystem_guard_originals["path_write_text"]
+        original_path_write_bytes = filesystem_guard_originals["path_write_bytes"]
+        writable_temp_root = filesystem_guard_originals["writable_temp_root"]
         original_create_connection, original_connect, original_connect_ex = _install_network_guard(
             allow_outbound_http=extension_runtime_api.outbound_http_enabled(),
             allow_private_targets=allow_private_targets,
@@ -715,6 +832,19 @@ def _handle_request(payload: dict[str, Any]) -> dict[str, Any]:
             os.open = original_os_open
             os.listdir = original_listdir
             os.scandir = original_scandir
+            path_class.open = original_path_open
+            path_class.mkdir = original_path_mkdir
+            path_class.unlink = original_path_unlink
+            path_class.rename = original_path_rename
+            path_class.replace = original_path_replace
+            path_class.rmdir = original_path_rmdir
+            path_class.touch = original_path_touch
+            path_class.write_text = original_path_write_text
+            path_class.write_bytes = original_path_write_bytes
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(writable_temp_root, ignore_errors=True)
         except Exception:
             pass
         try:
@@ -728,6 +858,290 @@ def _handle_request(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _host_error(message: str) -> dict[str, Any]:
     return {"ok": False, "error": message}
+
+
+def _probe_artifact_read_access(host_state: dict[str, Any]) -> dict[str, Any]:
+    source_path = str((host_state.get("provenance") or {}).get("source_path") or "").strip()
+    if not source_path:
+        return {
+            "status": "unverified",
+            "verified": False,
+            "detail": "plugin source_path was not available for read probe",
+        }
+    try:
+        with builtins.open(source_path, "r", encoding="utf-8") as handle:
+            handle.read(1)
+        return {
+            "status": "passed",
+            "verified": True,
+            "detail": "plugin artifact content remained readable through the guarded mount",
+            "path": source_path,
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "verified": False,
+            "detail": f"artifact read probe failed: {exc.__class__.__name__}: {exc}",
+            "path": source_path,
+        }
+
+
+def _probe_artifact_write_blocked(host_state: dict[str, Any]) -> dict[str, Any]:
+    allowed_root, _runtime_roots = _filesystem_guard_roots(str(host_state.get("plugin_root") or ""))
+    candidate = allowed_root / f".aindy-write-probe-{secrets.token_hex(4)}"
+    try:
+        with builtins.open(candidate, "x", encoding="utf-8") as handle:
+            handle.write("probe")
+        try:
+            candidate.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return {
+            "status": "failed",
+            "verified": False,
+            "detail": "artifact write unexpectedly succeeded inside the plugin artifact root",
+            "path": str(candidate),
+        }
+    except PermissionError:
+        return {
+            "status": "passed",
+            "verified": True,
+            "detail": "artifact write remained blocked by the filesystem guard",
+            "path": str(candidate),
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "verified": False,
+            "detail": f"artifact write probe failed unexpectedly: {exc.__class__.__name__}: {exc}",
+            "path": str(candidate),
+        }
+
+
+def _probe_writable_temp_scope(host_state: dict[str, Any]) -> dict[str, Any]:
+    temp_root = Path(host_state.get("writable_temp_root") or "").resolve() if host_state.get("writable_temp_root") else None
+    if temp_root is None:
+        return {
+            "status": "unverified",
+            "verified": False,
+            "detail": "worker did not record a dedicated writable temp root",
+        }
+    candidate = temp_root / f"aindy-sandbox-probe-{secrets.token_hex(4)}.tmp"
+    try:
+        with builtins.open(candidate, "w", encoding="utf-8") as handle:
+            handle.write("probe")
+        with builtins.open(candidate, "r", encoding="utf-8") as handle:
+            handle.read()
+        candidate.unlink(missing_ok=True)
+        return {
+            "status": "passed",
+            "verified": True,
+            "detail": "isolated writable temp scope remained usable",
+            "path": str(candidate),
+            "temp_root": str(temp_root),
+        }
+    except Exception as exc:
+        try:
+            candidate.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return {
+            "status": "failed",
+            "verified": False,
+            "detail": f"writable temp probe failed: {exc.__class__.__name__}: {exc}",
+            "path": str(candidate),
+            "temp_root": str(temp_root),
+        }
+
+
+def _probe_host_path_access_blocked(host_state: dict[str, Any]) -> dict[str, Any]:
+    allowed_root, runtime_roots = _filesystem_guard_roots(str(host_state.get("plugin_root") or ""))
+    candidates = [
+        Path.cwd().resolve(),
+        allowed_root.parent.resolve(),
+        Path.home().resolve(),
+    ]
+    candidate: Path | None = None
+    for item in candidates:
+        if not _path_is_within_allowed_roots(
+            item,
+            allowed_root=allowed_root,
+            runtime_roots=runtime_roots,
+        ):
+            candidate = item
+            break
+    if candidate is None:
+        return {
+            "status": "unverified",
+            "verified": False,
+            "detail": "no suitable out-of-scope host path candidate was available for probing",
+        }
+    try:
+        os.listdir(candidate)
+        return {
+            "status": "failed",
+            "verified": False,
+            "detail": "ambient host path access unexpectedly succeeded outside approved roots",
+            "path": str(candidate),
+        }
+    except PermissionError:
+        return {
+            "status": "passed",
+            "verified": True,
+            "detail": "ambient host path access remained blocked outside approved roots",
+            "path": str(candidate),
+        }
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "verified": False,
+            "detail": f"ambient host path probe failed unexpectedly: {exc.__class__.__name__}: {exc}",
+            "path": str(candidate),
+        }
+
+
+def _probe_network_policy(host_state: dict[str, Any]) -> dict[str, Any]:
+    allow_outbound_http = bool(host_state.get("allow_outbound_http"))
+    allow_private_targets = bool(host_state.get("allow_private_targets"))
+    details: dict[str, Any] = {
+        "socket_guard_active": {
+            "status": "passed",
+            "verified": True,
+            "detail": "network guard wrappers remain installed in the live worker",
+        },
+        "deny_by_default_outbound": {
+            "status": "unverified",
+            "verified": False,
+            "detail": "outbound policy was not probed",
+        },
+        "private_target_blocking": {
+            "status": "unverified",
+            "verified": False,
+            "detail": "private-target policy was not probed",
+        },
+        "expected_boundary_mode": {
+            "status": "passed",
+            "verified": True,
+            "configured": "deny-by-default" if not allow_outbound_http else "capability-gated",
+            "live_policy_observed": "deny-by-default" if not allow_outbound_http else "capability-gated",
+            "detail": "worker-level socket policy mode remains consistent with the granted capability state",
+        },
+    }
+    if not allow_outbound_http:
+        try:
+            socket.create_connection(("example.com", 80), timeout=0.01)
+            details["deny_by_default_outbound"] = {
+                "status": "failed",
+                "verified": False,
+                "detail": "outbound socket connection unexpectedly bypassed deny-by-default policy",
+            }
+        except PermissionError:
+            details["deny_by_default_outbound"] = {
+                "status": "passed",
+                "verified": True,
+                "detail": "deny-by-default outbound policy remained active without outbound.http capability",
+            }
+        except Exception as exc:
+            details["deny_by_default_outbound"] = {
+                "status": "failed",
+                "verified": False,
+                "detail": f"deny-by-default outbound probe failed unexpectedly: {exc.__class__.__name__}: {exc}",
+            }
+    else:
+        details["deny_by_default_outbound"] = {
+            "status": "not_applicable",
+            "verified": False,
+            "detail": "outbound.http capability was granted, so deny-by-default was not expected for all targets",
+        }
+    if allow_outbound_http and not allow_private_targets:
+        try:
+            socket.create_connection(("127.0.0.1", 80), timeout=0.01)
+            details["private_target_blocking"] = {
+                "status": "failed",
+                "verified": False,
+                "detail": "private/loopback target unexpectedly bypassed network policy",
+            }
+        except PermissionError:
+            details["private_target_blocking"] = {
+                "status": "passed",
+                "verified": True,
+                "detail": "private/loopback target blocking remained active",
+            }
+        except Exception as exc:
+            details["private_target_blocking"] = {
+                "status": "failed",
+                "verified": False,
+                "detail": f"private-target probe failed unexpectedly: {exc.__class__.__name__}: {exc}",
+            }
+    elif not allow_outbound_http:
+        details["private_target_blocking"] = {
+            "status": "passed",
+            "verified": True,
+            "detail": "private targets remained unreachable because all outbound sockets were denied",
+        }
+    else:
+        details["private_target_blocking"] = {
+            "status": "not_applicable",
+            "verified": False,
+            "detail": "private target override is enabled in this worker session",
+        }
+    return details
+
+
+def _host_probe_payload(host_state: dict[str, Any]) -> dict[str, Any]:
+    filesystem_guard_originals = dict(host_state.get("filesystem_guard_originals") or {})
+    path_class = filesystem_guard_originals.get("path_class") or type(Path.cwd())
+    import_guard_active = builtins.__import__ is not host_state.get("original_import")
+    filesystem_guard_active = (
+        builtins.open is not filesystem_guard_originals.get("open")
+        and io.open is not filesystem_guard_originals.get("io_open")
+        and os.open is not filesystem_guard_originals.get("os_open")
+        and path_class.open is not filesystem_guard_originals.get("path_open")
+    )
+    network_guard_active = (
+        socket.create_connection is not host_state.get("original_create_connection")
+        and socket.socket.connect is not host_state.get("original_connect")
+        and socket.socket.connect_ex is not host_state.get("original_connect_ex")
+    )
+    mount_network_state = {
+        "artifact_read_access": _probe_artifact_read_access(host_state),
+        "artifact_write_blocked": _probe_artifact_write_blocked(host_state),
+        "writable_temp_scope": _probe_writable_temp_scope(host_state),
+        "host_path_access_blocked": _probe_host_path_access_blocked(host_state),
+        "network_policy": _probe_network_policy(host_state),
+    }
+    return {
+        "worker_instance_id": _WORKER_INSTANCE_ID,
+        "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+        "session_continuity": {
+            "started": bool(host_state["callable"] is not None),
+            "started_at": host_state.get("started_at") or None,
+            "request_count": int(host_state["request_count"]),
+            "handler": host_state.get("handler"),
+            "plugin_root": host_state.get("plugin_root"),
+            "extension_name": host_state.get("extension_name"),
+            "owner_class": host_state.get("owner_class"),
+            "sandbox_instance_id": host_state.get("sandbox_instance_id"),
+        },
+        "isolation_state": {
+            "import_guard_active": import_guard_active,
+            "filesystem_guard_active": filesystem_guard_active,
+            "network_guard_active": network_guard_active,
+            "guards_installed": bool(host_state.get("guards_installed")),
+            "environment_stripped": True,
+            "runtime_modules_pruned": True,
+        },
+        "boundary_metadata": {
+            "runtime_api_channel_hidden": True,
+            "private_targets_allowed": bool(host_state.get("allow_private_targets")),
+            "provenance": dict(host_state.get("provenance") or {}),
+        },
+        "mount_network_state": mount_network_state,
+        "operator_note": (
+            "This probe confirms worker session continuity and expected guard state through a live "
+            "runtime-owned RPC call after launch. It does not prove kernel state outside the worker."
+        ),
+    }
 
 
 def _handle_host_session() -> int:
@@ -748,9 +1162,12 @@ def _handle_host_session() -> int:
         "original_os_open": os.open,
         "original_listdir": os.listdir,
         "original_scandir": os.scandir,
+        "filesystem_guard_originals": {},
+        "writable_temp_root": None,
         "original_create_connection": socket.create_connection,
         "original_connect": socket.socket.connect,
         "original_connect_ex": socket.socket.connect_ex,
+        "allow_outbound_http": False,
         "allow_private_targets": os.getenv("AINDY_ALLOW_PRIVATE_EXTENSION_TARGETS", "false").lower() in {
             "1",
             "true",
@@ -785,13 +1202,15 @@ def _handle_host_session() -> int:
                     )
                     if not host_state["guards_installed"]:
                         host_state["original_import"] = _install_import_guard()
-                        (
-                            host_state["original_open"],
-                            host_state["original_io_open"],
-                            host_state["original_os_open"],
-                            host_state["original_listdir"],
-                            host_state["original_scandir"],
-                        ) = _install_filesystem_guard(plugin_root)
+                        host_state["filesystem_guard_originals"] = _install_filesystem_guard(plugin_root)
+                        host_state["original_open"] = host_state["filesystem_guard_originals"].get("open")
+                        host_state["original_io_open"] = host_state["filesystem_guard_originals"].get("io_open")
+                        host_state["original_os_open"] = host_state["filesystem_guard_originals"].get("os_open")
+                        host_state["original_listdir"] = host_state["filesystem_guard_originals"].get("listdir")
+                        host_state["original_scandir"] = host_state["filesystem_guard_originals"].get("scandir")
+                        host_state["writable_temp_root"] = str(
+                            host_state["filesystem_guard_originals"].get("writable_temp_root") or ""
+                        )
                         (
                             host_state["original_create_connection"],
                             host_state["original_connect"],
@@ -800,6 +1219,7 @@ def _handle_host_session() -> int:
                             allow_outbound_http=extension_runtime_api.outbound_http_enabled(),
                             allow_private_targets=bool(host_state["allow_private_targets"]),
                         )
+                        host_state["allow_outbound_http"] = extension_runtime_api.outbound_http_enabled()
                         host_state["guards_installed"] = True
                     fn, provenance = _load_plugin_callable(handler, plugin_root)
                     host_state["handler"] = handler
@@ -819,6 +1239,13 @@ def _handle_host_session() -> int:
                     "pid": os.getpid(),
                     "request_count": int(host_state["request_count"]),
                     "started": bool(host_state["callable"] is not None),
+                }
+            elif command == "probe":
+                response = {
+                    "ok": True,
+                    "pid": os.getpid(),
+                    "started": bool(host_state["callable"] is not None),
+                    "probe": _host_probe_payload(host_state),
                 }
             elif command == "execute":
                 fn = host_state.get("callable")

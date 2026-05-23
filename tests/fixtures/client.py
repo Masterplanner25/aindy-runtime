@@ -108,6 +108,7 @@ _EMPTY_REGISTRY_STATE = {
     "_active_plugin_profile": None,
     "_active_plugin_profile_source": None,
     "_runtime_agent_defaults_loaded": False,
+    "_in_process_extension_capability_audit": {},
 }
 
 

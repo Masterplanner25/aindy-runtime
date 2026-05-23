@@ -54,6 +54,7 @@ from AINDY.platform_layer.extension_capabilities import (
     normalize_extension_capabilities,
 )
 from AINDY.platform_layer.extension_policy import (
+    OWNER_FIRST_PARTY_APP,
     OWNER_EXTERNAL_THIRD_PARTY,
     assert_python_extension_allowed,
     python_extension_execution_metadata,
@@ -553,6 +554,31 @@ def register_external_node(
             worker_provenance.setdefault("module_name", module_name)
             worker_provenance.setdefault("function_name", function_name)
             worker_provenance.setdefault("source_path", str(admitted_artifact["code_path"]))
+        elif owner_class == OWNER_FIRST_PARTY_APP:
+            module_name, function_name, source_path = _resolve_plugin_source(handler)
+            source_provenance = derive_python_extension_provenance(
+                owner_class=owner_class,
+                surface="dynamic-plugin-node",
+                extension_name=name,
+                module_name=module_name,
+                source_path=str(source_path),
+                declared=provenance,
+                allow_legacy_missing=allow_legacy_missing_provenance,
+            )
+            node_fn, isolated_meta = _make_isolated_plugin_node(
+                name,
+                handler,
+                plugin_root=str(_PLUGINS_DIR),
+                owner_class=owner_class,
+                granted_capabilities=granted_capabilities,
+                provenance=source_provenance,
+            )
+            worker_provenance = dict(isolated_meta.get("provenance") or {})
+            plugin_runner_type = str(isolated_meta.get("runner_type") or "")
+            worker_provenance = dict(worker_provenance or {})
+            worker_provenance.setdefault("module_name", module_name)
+            worker_provenance.setdefault("function_name", function_name)
+            worker_provenance.setdefault("source_path", str(source_path))
         else:
             node_fn = _load_plugin_node(handler)  # raises ValueError on failure
             worker_provenance = getattr(node_fn, "__aindy_extension_provenance__", {})
@@ -569,6 +595,9 @@ def register_external_node(
             owner_class,
             surface="dynamic plugin node",
         )
+    plugin_isolated = (
+        node_type == "plugin" and execution_metadata["execution_model"] == "isolated-plugin-host"
+    )
 
     # â”€â”€ Register (thread-safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     with _node_lock:
@@ -616,21 +645,21 @@ def register_external_node(
             "provenance": source_provenance,
             "transport": (
                 "plugin-host-rpc"
-                if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY
+                if plugin_isolated
                 else None
             ),
             "resource_limits": (
                 dict((get_plugin_host(name) or {}).get("resource_limits") or {})
-                if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY
+                if plugin_isolated
                 else None
             ),
             "runner_type": (
                 plugin_runner_type or None
-                if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY
+                if plugin_isolated
                 else None
             ),
             "plugin_host_name": (
-                name if node_type == "plugin" and owner_class == OWNER_EXTERNAL_THIRD_PARTY else None
+                name if plugin_isolated else None
             ),
             "timeout_seconds": timeout_seconds if node_type == "webhook" else None,
             "signed": secret is not None if node_type == "webhook" else None,

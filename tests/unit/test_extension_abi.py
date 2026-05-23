@@ -37,6 +37,8 @@ _REGISTRY_STATE_EMPTY = {
     "_active_plugin_profile": None,
     "_active_plugin_profile_source": None,
     "_runtime_agent_defaults_loaded": False,
+    "_runtime_callback_invocations": {},
+    "_in_process_extension_capability_audit": {},
     "_agent_planner_backends": {},
     "_agent_planner_contexts": {},
     "_agent_run_tools": {},

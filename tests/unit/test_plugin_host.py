@@ -60,6 +60,7 @@ def handler(state, context):
     assert snapshot["resource_limits"]["enforcement"] == "none"
     assert snapshot["resource_limits"]["memory_limit"] is None
     assert snapshot["sandbox_attestation"]["runner_type"] == "insecure_dev_subprocess"
+    assert snapshot["sandbox_attestation"]["execution_model_class"] == "isolated-externalized"
     assert snapshot["sandbox_attestation"]["assurance_class"] == "insecure-dev"
     assert snapshot["sandbox_attestation"]["isolation_class"] == "insecure-dev-subprocess"
     assert snapshot["sandbox_attestation"]["certification"]["certification_tier"] == "contained-process-certified"
@@ -68,9 +69,11 @@ def handler(state, context):
     assert snapshot["sandbox_attestation"]["verified_hardening_controls"] == []
     assert snapshot["sandbox_attestation"]["effective_resource_limits"]["enforcement"] == "none"
     assert snapshot["sandbox_attestation"]["launch_attestation"]["status"] == "not-applicable"
+    assert snapshot["sandbox_attestation"]["post_launch_verification"]["status"] == "not_applicable"
     assert snapshot["sandbox_attestation"]["mount_isolation"]["artifact_mount"]["active"] == "host-process"
     assert snapshot["sandbox_attestation"]["network_isolation"]["boundary"]["active"] == "host-process"
     assert snapshot["sandbox_attestation"]["runtime_identity"]["verification"] == "missing-reference"
+    assert snapshot["sandbox_attestation"]["runtime_identity"]["trust_chain"]["verification_status"] == "missing-reference"
     assert snapshot["provenance"]["module_name"] == "safe_node"
 
     assert shutdown_plugin_host("hosted-plugin") is True
@@ -330,8 +333,14 @@ def handler(state, context):
     assert hosts["present"] is True
     assert hosts["overall_status"] == "ok"
     assert hosts["runner_types_present"] == ["insecure_dev_subprocess"]
+    assert hosts["sandbox_attestation"]["covered_execution_model_class"] == "isolated-externalized"
+    assert hosts["sandbox_attestation"]["covered_surface_ids"] == [
+        "dynamic-plugin-node:first-party-app",
+        "dynamic-plugin-node:external-third-party",
+    ]
     assert hosts["sandbox_attestation"]["assurance_classes_present"] == ["insecure-dev"]
     assert hosts["sandbox_attestation"]["certification_tiers_present"] == ["contained-process-certified"]
+    assert hosts["sandbox_attestation"]["post_launch_verification_statuses_present"] == ["not_applicable"]
     assert hosts["hosts"][0]["name"] == "inventory-plugin"
     assert hosts["hosts"][0]["runner_type"] == "insecure_dev_subprocess"
     assert hosts["hosts"][0]["granted_capabilities"] == ["memory.read"]
@@ -343,14 +352,17 @@ def handler(state, context):
     assert hosts["hosts"][0]["sandbox_attestation"]["filesystem_policy"]["writes"] == "deny"
     assert hosts["sandbox_attestation"]["isolation_classes_present"] == ["insecure-dev-subprocess"]
     assert hosts["sandbox_attestation"]["hosts"][0]["runner_type"] == "insecure_dev_subprocess"
+    assert hosts["sandbox_attestation"]["hosts"][0]["execution_model_class"] == "isolated-externalized"
     assert hosts["sandbox_attestation"]["hosts"][0]["assurance_class"] == "insecure-dev"
     assert hosts["sandbox_attestation"]["hosts"][0]["certification"]["certification_tier"] == "contained-process-certified"
     assert hosts["sandbox_attestation"]["hosts"][0]["requested_hardening_controls"] == []
     assert hosts["sandbox_attestation"]["hosts"][0]["verified_hardening_controls"] == []
     assert hosts["sandbox_attestation"]["hosts"][0]["launch_attestation"]["status"] == "not-applicable"
+    assert hosts["sandbox_attestation"]["hosts"][0]["post_launch_verification"]["status"] == "not_applicable"
     assert hosts["sandbox_attestation"]["hosts"][0]["mount_isolation"]["artifact_mount"]["active"] == "host-process"
     assert hosts["sandbox_attestation"]["hosts"][0]["network_isolation"]["deny_by_default"] is True
     assert hosts["sandbox_attestation"]["hosts"][0]["runtime_identity"]["verification"] == "missing-reference"
+    assert hosts["sandbox_attestation"]["hosts"][0]["runtime_identity"]["trust_chain"]["verification_status"] == "missing-reference"
     assert hosts["sandbox_attestation"]["hosts"][0]["network_policy"]["default"] == "deny"
     assert hosts["sandbox_attestation"]["hosts"][0]["filesystem_policy"]["default"] == "read-only-approved-roots"
     assert "plugin host boundary" in hosts["operator_note"]
