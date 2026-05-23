@@ -40,7 +40,9 @@ def _compute_orm_hash() -> str:
         relative_path = path.relative_to(REPO_ROOT).as_posix()
         digest.update(relative_path.encode("utf-8"))
         digest.update(b"\n")
-        digest.update(path.read_bytes())
+        # Normalize line endings so the contract hash is stable across
+        # Windows and Linux checkouts.
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
         digest.update(b"\n")
     return digest.hexdigest()
 
