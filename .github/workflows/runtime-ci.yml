@@ -125,6 +125,9 @@ jobs:
           python -m pip install -r AINDY/requirements.txt
           python -m pip install -e .[test] --no-deps --no-build-isolation
 
+      - name: Check schema contract version is current
+        run: python scripts/check_schema_version.py
+
       - name: Assert runtime code does not import apps
         run: |
           if grep -R -n -E '^\s*(from apps\.|import apps\.|from apps\b|import apps\b)' AINDY --include='*.py'; then

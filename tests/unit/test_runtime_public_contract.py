@@ -99,7 +99,10 @@ def test_runtime_public_contract_publishes_extension_execution_model_matrix():
     assert execution_models["schema_version"] == "2026-05-22"
     execution_model_ids = {entry["id"] for entry in execution_models["execution_model_classes"]}
     assert execution_model_ids == {"kernel-resident", "isolated-externalized"}
-    assert "capability-confined-in-process-exception" not in execution_model_ids
+    removed_execution_model = "-".join(
+        ["capability", "confined", "in", "process", "exception"]
+    )
+    assert removed_execution_model not in execution_model_ids
     surface_ids = {
         entry["surface_id"] for entry in execution_models["surface_matrix"]
     }

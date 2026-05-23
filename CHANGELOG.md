@@ -130,3 +130,47 @@ model.
   `registration_boundary = "registration-capability-gate"`.
 
 **Verification:** 220 passed, 1 skipped across the full test suite.
+
+---
+
+### Production Hardening - Dependency Pins, Async Context Coverage, and Schema CI (2026-05-23)
+
+Pinned the remaining loose observability dependencies, added import-contract
+coverage for the async execution context helper, and enforced schema contract
+version bumps in CI when runtime-owned ORM models change.
+
+**What changed:**
+
+- `pyproject.toml` and `AINDY/requirements.txt` - Replaced the six loose
+  lower-bound observability constraints with exact pins matching the currently
+  installed working versions: `opentelemetry-api==1.42.1`,
+  `opentelemetry-sdk==1.42.1`,
+  `opentelemetry-instrumentation-fastapi==0.63b1`,
+  `opentelemetry-exporter-otlp-proto-grpc==1.42.1`,
+  `prometheus-fastapi-instrumentator==7.1.0`, and
+  `python-json-logger==4.1.0`.
+
+- `tests/unit/test_async_execution_context.py` - Added runtime-only tests for
+  `activate_async_execution_context`, `deactivate_async_execution_context`, and
+  `is_async_execution_active`. The module now has explicit coverage for import,
+  default inactive state, activation, and token-based restoration.
+
+- `scripts/check_schema_version.py` and
+  `scripts/schema_version_baseline.json` - Added a standalone schema contract
+  checker that hashes the runtime-owned ORM model sources
+  (`AINDY/db/models/*.py` plus `AINDY/memory/memory_persistence.py`), imports
+  `SCHEMA_CONTRACT_VERSION`, and fails when ORM definitions change without a
+  matching version bump. The initial committed baseline records the current hash
+  and version.
+
+- `.github/workflows/runtime-ci.yml` - Added
+  `python scripts/check_schema_version.py` to the `runtime-contracts` job after
+  dependency installation and before pytest.
+
+**Verification:** `pip install -e .[test]` succeeded. `pytest --tb=short -q`
+passed at 249 passed, 1 skipped after the new async context tests. The
+runtime-only `/api/version` smoke check still reported `boot_profile =
+platform-only` and `app_plugins_loaded = false`. The schema checker created its
+baseline, failed with the expected contract message when a model-file hash was
+temporarily changed without a version bump, and returned to a clean pass after
+reverting the temporary change.
