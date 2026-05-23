@@ -1,6 +1,6 @@
 ---
 title: "Extension Trust Model"
-last_verified: "2026-05-22"
+last_verified: "2026-05-23"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -27,24 +27,38 @@ Important limitation:
 
 ## Ownership Classes
 
-The runtime now distinguishes three ownership classes:
+aindy-runtime operates on a two-tier isolation model:
+
+- **Tier 1 — trusted-operator kernel-resident code**
+  `runtime-built-in` and `first-party-app` code runs in the main interpreter
+  because it is deployed by the same operator running the runtime. This is the
+  intentional design for this tier, not an exception to a more-isolated baseline.
+  Capability mediation gates what each caller may register; after registration,
+  Tier 1 callables execute as kernel-resident trusted code.
+- **Tier 2 — third-party externalized extension surfaces**
+  `external-third-party` code never runs in the main interpreter. All third-party
+  execution goes through the isolated plugin-host subprocess boundary. No
+  exceptions.
+
+Within this model, the runtime distinguishes three ownership classes:
 
 - `runtime-built-in`
-  Runtime-owned extensions shipped under `AINDY.*`. These are trusted internal
-  extensions and are the only class allowed in the runtime-owned manifest.
+  Runtime-owned kernel callables and bootstrap modules shipped under `AINDY.*`.
+  These are Tier 1 trusted-operator code and are the only class allowed in the
+  runtime-owned manifest.
 - `first-party-app`
-  Trusted app-owned integrations loaded from `apps.*`. These remain first-party
-  code, but they are not runtime-owned and are excluded from the runtime-only
-  profile.
+  Trusted app-owned integrations loaded from `apps.*`. These are Tier 1
+  trusted-operator code, but they are not runtime-owned and are excluded from
+  the runtime-only profile.
 - `external-third-party`
-  Third-party or non-monolith extensions. These are never treated as
-  runtime-owned. Third-party manifest bootstrap modules remain unsupported,
-  and third-party plugin nodes execute only through the isolated
-  plugin-host boundary. External onboarding should use declarative manifest
-  entries or the runtime registration APIs for webhook nodes, webhook
-  subscriptions, dynamic flows, or isolated plugin nodes. The plugin-host
-  boundary enforces runtime-owned socket and standard file-API restrictions,
-  but it is still not a full OS sandbox.
+  Third-party or non-monolith extensions. These are Tier 2: never trusted as
+  in-process code. Third-party manifest bootstrap modules remain unsupported,
+  and third-party plugin nodes execute only through the isolated plugin-host
+  boundary. External onboarding should use declarative manifest entries or the
+  runtime registration APIs for webhook nodes, webhook subscriptions, dynamic
+  flows, or isolated plugin nodes. The plugin-host boundary enforces
+  runtime-owned socket and standard file-API restrictions, but it is still not
+  a full OS sandbox.
 
 Ownership is separate from trust:
 
@@ -54,20 +68,25 @@ Ownership is separate from trust:
 - webhook nodes, webhook subscriptions, and dynamic flows are contract-driven
   integrations or data-only registrations, not Python sandbox boundaries
 
-Important first-party distinction:
+Tier 1 — first-party execution model:
 
-- first-party manifest bootstrap remains a privileged in-process exception
-- first-party dynamic plugin nodes now default to the isolated plugin-host path
+- first-party manifest bootstrap is the intentional in-process registration path
+  for trusted-operator boot wiring; it is Tier 1 kernel code, not a privileged
+  exception to a more-isolated baseline
+- first-party dynamic plugin nodes execute through the isolated plugin-host path,
+  not in-process
 - first-party module-style callback providers registered into runtime registries
-  now execute through a runtime-owned callback worker when the handler is
-  resolvable as a module-level function
-- residual in-process bootstrap interaction with the kernel now goes through an
-  explicit runtime-owned registration capability boundary, with a smaller
-  default allowlist for `first-party-app` than for `runtime-built-in`
+  execute through a runtime-owned callback worker when the handler is resolvable
+  as a module-level function
+- in-process bootstrap interaction with the kernel goes through an explicit
+  runtime-owned registration capability boundary, with a smaller default
+  allowlist for `first-party-app` than for `runtime-built-in`
 
-## Trusted Extension Classes
+## Tier 1 Trusted Kernel Code
 
-These extension classes are trusted code execution:
+The following surfaces execute as trusted Tier 1 kernel code in the main
+interpreter. They are kernel code deployed by the operator, not extension code
+requiring a sandbox boundary:
 
 - manifest bootstrap modules loaded by
   [AINDY/platform_layer/registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/registry.py)
@@ -79,11 +98,13 @@ These extension classes are trusted code execution:
   [AINDY/platform_layer/node_registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/node_registry.py)
   when `owner_class` is `runtime-built-in`
 
-Properties:
+Properties of Tier 1 kernel code:
 
-- they can execute arbitrary Python during import or call time
-- they can mutate process state
-- they can violate runtime invariants if the code itself is malicious or broken
+- can execute arbitrary Python during import or call time
+- can mutate process state
+- can violate runtime invariants if the code itself is malicious or broken
+- is trusted because the operator controls and deploys it — not because it is
+  sandboxed or capability-confined at execution time
 
 Current hardening:
 
@@ -219,6 +240,13 @@ Profile expectations:
   - required assurance class: `strong-sandbox-tier`
   - required certification tier: `strong-sandbox-certified`
 
+Tier 1 trusted-operator surfaces — manifest bootstrap for `runtime-built-in`
+and `first-party-app`, kernel-resident callables, and runtime-built-in plugin
+nodes — are excluded from plugin sandbox attestation. These surfaces are trusted
+kernel code deployed by the same operator running the runtime. They do not
+require a process isolation boundary, and sandbox attestation is therefore not
+applicable to them.
+
 ## Untrusted Or Less-Trusted Extension Classes
 
 These extension classes are treated as contract-driven integrations or data,
@@ -280,11 +308,13 @@ Current hardening:
   first-party-app code is trusted app-owned code, with manifest bootstrap still
   loaded in-process and plugin-style execution isolated where the runtime can
   externalize it.
-- Treat first-party manifest bootstrap as the remaining explicit privileged
-  exception set. It stays in-process because it performs registry mutation and
-  boot-time kernel wiring.
+- Treat first-party manifest bootstrap as Tier 1 kernel code: the intentional
+  in-process registration path for trusted-operator boot wiring. It runs
+  in-process because it performs registry mutation and boot-time kernel wiring,
+  not because it is a transitional exception awaiting future externalization.
 - Treat first-party plugin nodes and first-party registry callback providers as
-  isolated by default unless they fall into that explicit bootstrap exception.
+  Tier 2 isolated by default. Only first-party manifest bootstrap executes
+  in-process, as intentional Tier 1 kernel code.
 - Treat external third-party manifest bootstrap as unsupported.
 - Treat external third-party plugin nodes as isolated subprocess work, not
   trusted in-process imports.

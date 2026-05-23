@@ -11,9 +11,6 @@ from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matr
 
 EXECUTION_MODEL_KERNEL_RESIDENT = "kernel-resident"
 EXECUTION_MODEL_ISOLATED_EXTERNALIZED = "isolated-externalized"
-EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION = (
-    "capability-confined-in-process-exception"
-)
 EXTENSION_EXECUTION_MODEL_SCHEMA_VERSION = "2026-05-22"
 
 ALL_CHARACTERIZED_HOST_PLATFORMS = ["linux", "windows", "darwin", "other"]
@@ -40,13 +37,6 @@ def extension_execution_model_contract() -> dict[str, Any]:
                     "or network contract boundary."
                 ),
             },
-            {
-                "id": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
-                "meaning": (
-                    "Residual in-process extension behavior confined only by explicit runtime-owned "
-                    "capability mediation on official kernel APIs. This is not sandboxing."
-                ),
-            },
         ],
         "surface_matrix": [
             {
@@ -54,15 +44,17 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 "surface": "manifest bootstrap modules",
                 "owner_class": OWNER_RUNTIME_BUILTIN,
                 "supported": True,
-                "execution_model_class": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
+                "execution_model_class": EXECUTION_MODEL_KERNEL_RESIDENT,
                 "execution_path": "in-process bootstrap import plus runtime-owned registration capability checks",
-                "registration_boundary": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
+                "registration_boundary": "registration-capability-gate",
                 "platform_support": {
                     "supported_host_platforms": list(ALL_CHARACTERIZED_HOST_PLATFORMS),
                 },
                 "operator_surface": "trusted_python_execution.manifest_modules",
                 "notes": (
-                    "This is the residual in-process privileged exception for runtime-owned bootstrap code."
+                    "Tier 1 kernel-resident bootstrap: the intentional in-process registration path "
+                    "for trusted-operator boot wiring. Registration-time capability checks are "
+                    "registration gates, not execution-time confinement."
                 ),
             },
             {
@@ -70,15 +62,17 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 "surface": "manifest bootstrap modules",
                 "owner_class": OWNER_FIRST_PARTY_APP,
                 "supported": True,
-                "execution_model_class": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
+                "execution_model_class": EXECUTION_MODEL_KERNEL_RESIDENT,
                 "execution_path": "in-process bootstrap import plus restricted runtime-owned registration allowlist",
-                "registration_boundary": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
+                "registration_boundary": "registration-capability-gate",
                 "platform_support": {
                     "supported_host_platforms": list(ALL_CHARACTERIZED_HOST_PLATFORMS),
                 },
                 "operator_surface": "trusted_python_execution.manifest_modules",
                 "notes": (
-                    "First-party bootstrap remains an explicit in-process exception and is not sandboxed."
+                    "Tier 1 kernel-resident bootstrap: trusted-operator app-owned boot wiring. "
+                    "Registration-time capability checks use a narrower allowlist than runtime-built-in; "
+                    "after registration, execution is kernel-resident with no capability mediation."
                 ),
             },
             {
@@ -130,7 +124,7 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 "supported": True,
                 "execution_model_class": EXECUTION_MODEL_KERNEL_RESIDENT,
                 "execution_path": "in-process callable execution from kernel-owned registries",
-                "registration_boundary": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
+                "registration_boundary": "registration-capability-gate",
                 "examples": [
                     "syscalls",
                     "jobs",
@@ -146,7 +140,8 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 },
                 "operator_surface": "extensions.execution_models.surface_matrix",
                 "notes": (
-                    "These runtime-owned callables remain kernel-resident after registration."
+                    "Tier 1 kernel-resident callables. Registration-time capability checks are "
+                    "registration gates only; after registration, execution is kernel-resident."
                 ),
             },
             {
@@ -156,7 +151,7 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 "supported": True,
                 "execution_model_class": EXECUTION_MODEL_KERNEL_RESIDENT,
                 "execution_path": "in-process callable execution from kernel-owned registries",
-                "registration_boundary": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
+                "registration_boundary": "registration-capability-gate",
                 "examples": [
                     "syscalls",
                     "jobs",
@@ -172,8 +167,9 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 },
                 "operator_surface": "extensions.execution_models.surface_matrix",
                 "notes": (
-                    "First-party callable registrations are still privileged in-process once registered. "
-                    "Only registration itself is capability-mediated."
+                    "Tier 1 kernel-resident callables for trusted app-owned integrations. "
+                    "Registration-time capability checks are registration gates only; "
+                    "after registration, execution is kernel-resident."
                 ),
             },
             {
@@ -183,7 +179,7 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 "supported": True,
                 "execution_model_class": EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
                 "execution_path": "runtime-owned isolated callback worker subprocess",
-                "registration_boundary": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
+                "registration_boundary": "registration-capability-gate",
                 "callback_types": [
                     "startup hooks",
                     "planner context providers",
@@ -207,7 +203,7 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 "supported": True,
                 "execution_model_class": EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
                 "execution_path": "runtime-owned isolated callback worker subprocess",
-                "registration_boundary": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
+                "registration_boundary": "registration-capability-gate",
                 "callback_types": [
                     "startup hooks",
                     "planner context providers",
@@ -232,13 +228,13 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 "supported": True,
                 "execution_model_class": EXECUTION_MODEL_KERNEL_RESIDENT,
                 "execution_path": "in-process node callable execution",
-                "registration_boundary": EXECUTION_MODEL_CAPABILITY_CONFINED_IN_PROCESS_EXCEPTION,
+                "registration_boundary": "registration-capability-gate",
                 "platform_support": {
                     "supported_host_platforms": list(ALL_CHARACTERIZED_HOST_PLATFORMS),
                 },
                 "operator_surface": "trusted_python_execution.plugin_nodes",
                 "notes": (
-                    "Runtime-built-in plugin nodes remain kernel-resident and are not sandboxed."
+                    "Tier 1 kernel-resident plugin nodes. Runtime-built-in nodes run in-process by design."
                 ),
             },
             {
@@ -352,8 +348,10 @@ def extension_execution_model_contract() -> dict[str, Any]:
                     "dynamic-flow:any-owner",
                 ],
                 "notes": (
-                    "Plugin sandbox attestation and certification describe isolated plugin-host execution only. "
-                    "They do not cover kernel-resident or capability-confined in-process bootstrap surfaces."
+                    "Plugin sandbox attestation and certification describe Tier 2 isolated plugin-host "
+                    "execution only. Tier 1 trusted-operator surfaces — manifest bootstrap, "
+                    "kernel-resident callables, and runtime-built-in plugin nodes — are excluded; "
+                    "they are kernel code and do not require a process isolation boundary."
                 ),
             },
             "deployment_profile_enforcement": {
@@ -366,8 +364,10 @@ def extension_execution_model_contract() -> dict[str, Any]:
             },
         },
         "operator_note": (
-            "This matrix is the authoritative execution-model taxonomy for extension classes. "
-            "It distinguishes kernel-resident behavior, isolated externalized behavior, and the residual "
-            "capability-confined in-process bootstrap exception without implying sandboxing where none exists."
+            "This matrix is the authoritative execution-model taxonomy for extension classes under the "
+            "two-tier isolation model. Tier 1 (trusted-operator kernel-resident) covers manifest bootstrap, "
+            "kernel-resident callables, and runtime-built-in plugin nodes — all intentional kernel code. "
+            "Tier 2 (externalized) covers all third-party and first-party plugin node execution behind the "
+            "isolated plugin-host boundary. No in-process sandboxing is implied for either tier."
         ),
     }

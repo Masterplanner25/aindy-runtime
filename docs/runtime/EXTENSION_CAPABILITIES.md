@@ -1,6 +1,6 @@
 ---
 title: "Extension Capabilities"
-last_verified: "2026-05-20"
+last_verified: "2026-05-23"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -23,6 +23,23 @@ It does not apply to trusted internal Python code:
 
 Those classes remain trusted internal code execution, not capability-confined
 third-party extensions.
+
+### Tier Model Scope
+
+- **Tier 1 — `runtime-built-in` and `first-party-app` callables** are trusted
+  internal code. They are not capability-confined. The registration-time
+  capability checks for Tier 1 callables are registration gates: they control
+  what may be registered, not how the callable executes after registration.
+  After registration, Tier 1 callables execute as kernel-resident trusted code
+  with no runtime capability mediation.
+- **Tier 2 — `external-third-party` surfaces** behind the isolated plugin-host
+  boundary are capability-confined. This is where the capability enforcement
+  model applies.
+
+The registration-time capability checks for Tier 1 callables are registration
+gates. They control what may be registered; they are not execution-time
+confinement. After registration, Tier 1 callables execute as kernel-resident
+trusted code with no runtime capability mediation.
 
 ## Capability Set
 
@@ -58,9 +75,12 @@ Not exposed as extension capabilities:
 - webhook subscriptions:
   - authority model: `contract-driven-surface`
   - intrinsic capability: `outbound.http`
-- manifest bootstrap:
+- manifest bootstrap (Tier 1):
   - authority model: `trusted-internal-ambient-authority`
-  - not capability-confined
+  - execution model: Tier 1 kernel-resident — not capability-confined
+  - note: registration-time capability checks are registration gates, not
+    execution-time confinement; after registration, Tier 1 callables run
+    as kernel-resident trusted code
 
 ## Operator Visibility
 

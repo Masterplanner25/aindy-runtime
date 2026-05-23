@@ -1,6 +1,6 @@
 ---
 title: "Public Runtime Surfaces"
-last_verified: "2026-05-20"
+last_verified: "2026-05-23"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -117,7 +117,17 @@ Representative experimental entries today:
 ## Extension Registration Surfaces
 
 These are externally consumable integration points, but they are still
-experimental:
+experimental. Each surface belongs to one of two isolation tiers:
+
+- **Tier 1 — kernel-resident, trusted-operator**: manifest bootstrap modules
+  and declarative entries for `runtime-built-in` and `first-party-app` code.
+  These run in the main interpreter by design, as intentional kernel code.
+- **Tier 2 — externalized, plugin-host isolated**: dynamic plugin nodes for
+  `external-third-party` code (and `first-party-app` plugin nodes), webhook
+  nodes, and dynamic flows. These always execute behind a subprocess or network
+  boundary.
+
+Surfaces in scope:
 
 - manifest bootstrap modules loaded through `AINDY.platform_layer.registry`
 - manifest declarative extension entries loaded through
@@ -132,16 +142,18 @@ experimental:
 
 Reason for the experimental classification:
 
-- these surfaces still reflect extraction-era architecture
 - they are validated and runtime-owned, but the exact registration shapes and
   extension boundaries are still moving
-- the runtime does not claim in-process isolation for trusted Python extensions
+- the runtime does not claim in-process isolation for Tier 2 extension surfaces;
+  Tier 1 surfaces are kernel-resident by design, not by omission
 
 Ownership model:
 
-- `runtime-built-in`: runtime-owned internal extensions under `AINDY.*`
-- `first-party-app`: trusted app-owned integrations under `apps.*`
-- `external-third-party`: explicitly separate third-party integrations
+- `runtime-built-in`: Tier 1 — runtime-owned kernel callables and bootstrap
+  modules under `AINDY.*`
+- `first-party-app`: Tier 1 — trusted app-owned integrations under `apps.*`
+- `external-third-party`: Tier 2 — explicitly separate third-party integrations,
+  always externalized behind the plugin-host boundary
 
 The runtime-owned manifest may load only `runtime-built-in` entries. App and
 third-party ownership classes must stay out of the runtime-only profile.

@@ -97,13 +97,9 @@ def test_runtime_public_contract_publishes_extension_execution_model_matrix():
 
     execution_models = metadata["extensions"]["execution_models"]
     assert execution_models["schema_version"] == "2026-05-22"
-    assert {
-        entry["id"] for entry in execution_models["execution_model_classes"]
-    } == {
-        "kernel-resident",
-        "isolated-externalized",
-        "capability-confined-in-process-exception",
-    }
+    execution_model_ids = {entry["id"] for entry in execution_models["execution_model_classes"]}
+    assert execution_model_ids == {"kernel-resident", "isolated-externalized"}
+    assert "capability-confined-in-process-exception" not in execution_model_ids
     surface_ids = {
         entry["surface_id"] for entry in execution_models["surface_matrix"]
     }
@@ -128,9 +124,19 @@ def test_runtime_public_contract_publishes_extension_execution_model_matrix():
         if entry["surface_id"] == "registry-kernel-callable:first-party-app"
     )
     assert first_party_kernel_callable["execution_model_class"] == "kernel-resident"
-    assert first_party_kernel_callable["registration_boundary"] == (
-        "capability-confined-in-process-exception"
+    assert first_party_kernel_callable["registration_boundary"] == "registration-capability-gate"
+    runtime_builtin_bootstrap = next(
+        entry
+        for entry in execution_models["surface_matrix"]
+        if entry["surface_id"] == "manifest-bootstrap:runtime-built-in"
     )
+    assert runtime_builtin_bootstrap["execution_model_class"] == "kernel-resident"
+    first_party_bootstrap = next(
+        entry
+        for entry in execution_models["surface_matrix"]
+        if entry["surface_id"] == "manifest-bootstrap:first-party-app"
+    )
+    assert first_party_bootstrap["execution_model_class"] == "kernel-resident"
     external_plugin = next(
         entry
         for entry in execution_models["surface_matrix"]
@@ -155,8 +161,10 @@ def test_runtime_public_contract_publishes_extension_execution_model_matrix():
             "dynamic-flow:any-owner",
         ],
         "notes": (
-            "Plugin sandbox attestation and certification describe isolated plugin-host execution only. "
-            "They do not cover kernel-resident or capability-confined in-process bootstrap surfaces."
+            "Plugin sandbox attestation and certification describe Tier 2 isolated plugin-host "
+            "execution only. Tier 1 trusted-operator surfaces — manifest bootstrap, "
+            "kernel-resident callables, and runtime-built-in plugin nodes — are excluded; "
+            "they are kernel code and do not require a process isolation boundary."
         ),
     }
     assert execution_models["attestation_scope"]["deployment_profile_enforcement"] == {
