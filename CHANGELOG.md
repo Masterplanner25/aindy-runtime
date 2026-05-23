@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+### Hygiene Pass — Dev Environment, CI Hardening, Subsystem Contract Tests (2026-05-23)
+
+Four-item hygiene pass covering dev environment reliability, supply chain
+security, and contract-level test coverage for three runtime subsystems.
+
+**Item 1 — prometheus_client missing from dev install (no file change)**
+
+`prometheus-fastapi-instrumentator>=6.1.0` was already in `pyproject.toml`
+main `dependencies`. The dev environment had been set up with
+`pip install -e .[test] --no-deps` (matching CI). Fix: run
+`pip install -e .[test]` without `--no-deps` to pick up transitive deps.
+
+**Item 2 — `.env.example` and `.gitignore`**
+
+- `.env.example` created at repo root with five documented groups: required
+  boot, boot mode, schema control, optional infrastructure, local smoke test.
+- `.gitignore` updated to include `.env` (was missing).
+
+**Item 3 — GitHub Actions SHA-pinning**
+
+All floating action tags replaced with pinned commit SHAs across both
+workflow files:
+
+- `.github/workflows/runtime-ci.yml`: `actions/checkout@…# v4` (×4),
+  `actions/setup-python@…# v5` (×4), `actions/cache@…# v4` (×1).
+- `.github/workflows/release-staging.yml`: `actions/checkout@…# v4`,
+  `actions/setup-python@…# v5`, `actions/upload-artifact@…# v4`.
+
+**Item 4 — Subsystem contract tests**
+
+Three new test files under `tests/unit/`, each marked `@pytest.mark.runtime_only`:
+
+- `test_worker_contract.py` — 7 tests for `WorkerHealthServer`: construction,
+  check registration, start/stop lifecycle (ephemeral port 0), HTTP 200/503/404
+  response correctness, idempotent `start()`.
+- `test_watcher_contract.py` — 13 tests for classifier (`classify()` covering
+  idle/work/distraction/communication/unknown paths and browser title patterns),
+  `VALID_SIGNAL_TYPES`, `VALID_ACTIVITY_TYPES`, `parse_timestamp()`, and
+  `SessionTracker` state machine transitions through IDLE → CONFIRMING_WORK →
+  WORKING with `session_started` event emission.
+- `test_nodus_runtime_contract.py` — 5 tests for `AINDYMemoryBridge`
+  (constructor, `_safe_node()` from dict, from object, null-tags default) and
+  `AINDYNodusRuntime` subclass assertion (skipped if nodus-lang absent).
+
+**SDK deferred:** `AINDY/sdk/` is a self-contained `aindy-sdk 1.0.0` package
+(stdlib-only, own `pyproject.toml`, own `tests/`, own `examples/`). It does
+not belong in this repo long-term. Documented in `TECH_DEBT.md`. SDK test
+coverage intentionally omitted from this pass.
+
+**Verification:** 245 passed, 1 skipped (up from 220/1). Non-zero coverage on
+all three targeted subsystems.
+
+---
+
 ### Contract Clarification — Tiered Isolation Model (2026-05-23)
 
 Adopted the Tiered Isolation Contract vocabulary throughout runtime governance
