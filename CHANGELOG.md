@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- SDK extraction complete. `AINDY/sdk/` removed from `aindy-runtime`.
+  `aindy-sdk` is now a standalone package at
+  https://github.com/Masterplanner25/aindy-sdk-
+  with its own CI, 47 passing tests, and independent release cycle.
+  `aindy-runtime` no longer ships client code.
+
 ### Gap C1 Scope B1 - Kernel-Observable Post-Launch Verification On Linux (2026-05-23)
 
 Gap C1 Scope B1 - Kernel-observable post-launch verification on Linux. Added

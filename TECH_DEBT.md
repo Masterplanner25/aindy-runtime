@@ -1,15 +1,19 @@
 # Technical Debt
 
-## SDK Extraction (Pending)
+## SDK Extraction
 
-`AINDY/sdk/` contains a self-contained package (`aindy-sdk 1.0.0`,
-stdlib-only, zero external deps, own `pyproject.toml`, own `tests/`
-and `examples/` directories). It was included in `aindy-runtime` during
-the monolith split. It does not belong in this repo long-term.
+Status: COMPLETE (2026-05-23)
 
-Next action: extract to a standalone `aindy-sdk` repo. SDK test coverage
-belongs there, not here. Do not add tests for `AINDY/sdk/` in `aindy-runtime`.
+`aindy-sdk` extracted to standalone repo:
+https://github.com/Masterplanner25/aindy-sdk-
 
-Condition to close: `aindy-sdk` exists as a standalone repo with its own
-CI. `AINDY/sdk/` is removed from `aindy-runtime` and from the package
-manifest in `pyproject.toml`.
+First green CI run:
+https://github.com/Masterplanner25/aindy-sdk-/actions/runs/26343161733
+
+`AINDY/sdk/` removed from `aindy-runtime` in this commit.
+
+47 SDK tests pass in the standalone repo.
+
+`aindy-runtime` packaging config confirmed - no explicit sdk include
+required removal. `pyproject.toml` already used `include = ["AINDY*"]`,
+so removing the directory was sufficient.
