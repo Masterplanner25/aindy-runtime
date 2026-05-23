@@ -107,7 +107,10 @@ def mongo_db(mongo_client):
 
 @pytest.fixture
 def test_user(db_session):
-    """A persisted User row visible for the duration of a single test."""
+    """A persisted admin User row visible for the duration of a single test.
+
+    Admin is required for /platform/* routes which use require_platform_admin_access.
+    """
     from AINDY.db.models.user import User
     from AINDY.services.auth_service import hash_password
 
@@ -116,7 +119,7 @@ def test_user(db_session):
         username=f"testuser-{uuid.uuid4().hex[:8]}",
         hashed_password=hash_password("test-password"),
         is_active=True,
-        is_admin=False,
+        is_admin=True,
     )
     db_session.add(user)
     db_session.commit()
@@ -126,10 +129,18 @@ def test_user(db_session):
 
 @pytest.fixture
 def auth_headers(test_user):
-    """Authorization header with a valid Bearer token for test_user."""
+    """Authorization header with a valid Bearer token for test_user.
+
+    Includes is_admin=True in the JWT payload to match normal login flow
+    and satisfy require_platform_admin_access on /platform/* routes.
+    """
     from AINDY.services.auth_service import create_access_token
 
-    token = create_access_token({"sub": str(test_user.id)})
+    token = create_access_token({
+        "sub": str(test_user.id),
+        "email": test_user.email,
+        "is_admin": True,
+    })
     return {"Authorization": f"Bearer {token}"}
 
 
