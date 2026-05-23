@@ -86,6 +86,7 @@ def _testing_health_payload() -> dict:
         derive_public_status,
         get_domain_health,
         get_memory_ingest_queue_status,
+        sandbox_verification_posture,
     )
     from AINDY.platform_layer.deployment_contract import (
         get_api_runtime_conditions,
@@ -129,6 +130,7 @@ def _testing_health_payload() -> dict:
         "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),
         "plugin_sandbox_posture": plugin_sandbox_assurance_posture(),
         "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
+        "sandbox_verification_posture": sandbox_verification_posture(),
         "domains": domains,
         "dependencies": {},
         "runtime_conditions": get_api_runtime_conditions(),

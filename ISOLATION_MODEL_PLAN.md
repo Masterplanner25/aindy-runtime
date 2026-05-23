@@ -127,7 +127,7 @@ names the Tier 1/Tier 2 distinction explicitly.
 
 **Tier relevance:** Tier 2 only
 
-**Resolution path:** DEFERRED
+**Resolution path:** SCOPE A COMPLETE, SCOPE B DEFERRED
 
 **Rationale:** The `_verify_post_launch_state` function in
 `AINDY/platform_layer/plugin_host.py` (lines 343-466) performs post-launch
@@ -144,6 +144,11 @@ Closing this gap fully would require kernel-observable verification of worker
 constraints (reading cgroups membership, confirming seccomp activation, verifying
 namespace separation) from a component that is not the worker itself — dedicated
 sandbox launcher infrastructure not in scope for this milestone.
+
+**Status note:** Scope A complete: verification_method and assurance_ceiling are
+now machine-readable on /api/version and /health. Operators can detect the
+transition to kernel-observable verification without reading changelogs. Scope B
+(kernel-observable proof) remains deferred â€” see condition to reopen.
 
 **Why deferred:** The limitation is already accurately disclosed and does not
 affect the tiered model's binary claim (Tier 2 surfaces are externalized; they are
@@ -490,6 +495,11 @@ limitation is accurately disclosed in both code and docs. The tiered model's bin
 boundary claim (Tier 2 is externalized) is not affected by this limitation. Closing
 the gap fully requires a dedicated privileged sandbox launcher with OS-level
 observability into worker constraints — infrastructure work outside this milestone.
+
+**Status note:** Scope A complete: verification_method and assurance_ceiling are
+now machine-readable on /api/version and /health. Operators can detect the
+transition to kernel-observable verification without reading changelogs. Scope B
+(kernel-observable proof) remains deferred â€” see condition to reopen.
 
 **Where to track:** Open an issue: "Strengthen strong_sandbox_vm post-launch
 verification with kernel-observable constraint evidence."

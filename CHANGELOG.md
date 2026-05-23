@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Gap C1 Scope A - Machine-Readable Sandbox Verification Posture (2026-05-23)
+
+Gap C1 Scope A - Sandbox verification posture now machine-readable. Added
+`verification_method` (`worker-self-report`) and `assurance_ceiling`
+(`worker-self-report-verified`) to `/api/version` sandbox capability metadata
+and `/health` `sandbox_verification_posture`. Kernel-observable verification
+(Scope B) remains deferred.
+
 ### Hygiene Pass — Dev Environment, CI Hardening, Subsystem Contract Tests (2026-05-23)
 
 Four-item hygiene pass covering dev environment reliability, supply chain

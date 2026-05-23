@@ -16,6 +16,8 @@ from AINDY.platform_layer.sandbox_runner import (
     RUNNER_STRONG_SANDBOX_VM,
     SANDBOX_RUNNER_INTERFACE_VERSION,
     SandboxRunner,
+    VERIFICATION_METHOD_NONE,
+    VERIFICATION_METHOD_WORKER_SELF_REPORT,
     create_sandbox_runner,
     list_supported_sandbox_runners,
     resolve_sandbox_runner_type,
@@ -346,6 +348,7 @@ def _verify_post_launch_state(record: PluginHostRecord) -> dict[str, Any]:
         verification = {
             "status": "failed",
             "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+            "verification_method": VERIFICATION_METHOD_NONE,
             "checked_at": _utcnow_iso(),
             "verified_fields": [],
             "failures": ["runner-unavailable"],
@@ -446,6 +449,7 @@ def _verify_post_launch_state(record: PluginHostRecord) -> dict[str, Any]:
     verification = {
         "status": "passed" if not failures else "failed",
         "verification_scope": str(probe.get("verification_scope") or "live-worker-self-report-over-authenticated-rpc"),
+        "verification_method": VERIFICATION_METHOD_WORKER_SELF_REPORT,
         "checked_at": checked_at,
         "verified_fields": verified_fields,
         "failures": failures,
@@ -501,6 +505,7 @@ def _host_sandbox_attestation(
             if runner_type != RUNNER_STRONG_SANDBOX_VM
             else "not_verified_yet",
             "verification_scope": "live-worker-self-report-over-authenticated-rpc",
+            "verification_method": VERIFICATION_METHOD_NONE,
             "checked_at": None,
             "verified_fields": [],
             "failures": [],

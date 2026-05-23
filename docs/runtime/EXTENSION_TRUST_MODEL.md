@@ -247,6 +247,25 @@ kernel code deployed by the same operator running the runtime. They do not
 require a process isolation boundary, and sandbox attestation is therefore not
 applicable to them.
 
+### Verification Method
+
+Post-launch sandbox verification currently uses worker self-report: the runtime
+sends an authenticated RPC probe to the worker subprocess and the worker
+reports its own guard state (import restrictions, filesystem restrictions,
+network restrictions, mount policy, network policy). This is
+`verification_method: worker-self-report`.
+
+Kernel-observable verification â€” reading cgroups membership, confirming
+seccomp filter activation, verifying Linux namespace separation from outside
+the worker process â€” is not yet implemented (Gap C1, deferred). The current
+assurance ceiling for `strong_sandbox_vm` is
+`worker-self-report-verified`.
+
+When Gap C1 is implemented, the `verification_method` field on `/api/version`
+and `/health` will change to `kernel-observable` and the `assurance_ceiling`
+will be updated accordingly. Operators can use these fields to detect the
+transition without reading changelogs.
+
 ## Untrusted Or Less-Trusted Extension Classes
 
 These extension classes are treated as contract-driven integrations or data,

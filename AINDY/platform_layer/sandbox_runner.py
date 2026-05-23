@@ -32,6 +32,11 @@ SUPPORTED_SANDBOX_RUNNERS = (
 ASSURANCE_CLASS_INSECURE_DEV = "insecure-dev"
 ASSURANCE_CLASS_CONTAINER = "container-grade-sandbox"
 ASSURANCE_CLASS_STRONG = "strong-sandbox-tier"
+ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED = "worker-self-report-verified"
+ASSURANCE_CEILING_NO_ISOLATION_GUARANTEE = "no-isolation-guarantee"
+VERIFICATION_METHOD_WORKER_SELF_REPORT = "worker-self-report"
+VERIFICATION_METHOD_KERNEL_OBSERVABLE = "kernel-observable"
+VERIFICATION_METHOD_NONE = "none"
 OCI_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 PLATFORM_LINUX = "linux"
@@ -63,11 +68,37 @@ STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES = {
 }
 
 
+def sandbox_runner_assurance_posture(runner_type: str) -> dict[str, str]:
+    if runner_type == RUNNER_STRONG_SANDBOX_VM:
+        return {
+            "assurance_ceiling": ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED,
+            "ceiling_note": (
+                "Post-launch verification relies on worker self-report via authenticated RPC. "
+                "Kernel-observable verification (cgroups, seccomp, namespace inspection from "
+                "outside the worker) is not yet implemented. See Gap C1 in "
+                "ISOLATION_MODEL_PLAN.md."
+            ),
+            "verification_method": VERIFICATION_METHOD_WORKER_SELF_REPORT,
+        }
+    if runner_type == RUNNER_CONTAINERIZED_OCI:
+        return {
+            "assurance_ceiling": ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED,
+            "ceiling_note": "Same limitation as strong_sandbox_vm.",
+            "verification_method": VERIFICATION_METHOD_NONE,
+        }
+    return {
+        "assurance_ceiling": ASSURANCE_CEILING_NO_ISOLATION_GUARANTEE,
+        "ceiling_note": "Development runner. No sandbox boundary.",
+        "verification_method": VERIFICATION_METHOD_NONE,
+    }
+
+
 def list_supported_sandbox_runners() -> list[dict[str, Any]]:
     return [
         {
             "runner_type": RUNNER_INSECURE_DEV_SUBPROCESS,
             "assurance_class": ASSURANCE_CLASS_INSECURE_DEV,
+            **sandbox_runner_assurance_posture(RUNNER_INSECURE_DEV_SUBPROCESS),
             "stability": "current",
             "isolation_claim": "none",
             "execution_boundary": "subprocess-json-rpc",
@@ -81,6 +112,7 @@ def list_supported_sandbox_runners() -> list[dict[str, Any]]:
         {
             "runner_type": RUNNER_CONTAINERIZED_OCI,
             "assurance_class": ASSURANCE_CLASS_CONTAINER,
+            **sandbox_runner_assurance_posture(RUNNER_CONTAINERIZED_OCI),
             "stability": "current",
             "isolation_claim": "container-boundary",
             "execution_boundary": "container-stdio-json-rpc",
@@ -105,6 +137,7 @@ def list_supported_sandbox_runners() -> list[dict[str, Any]]:
         {
             "runner_type": RUNNER_STRONG_SANDBOX_VM,
             "assurance_class": ASSURANCE_CLASS_STRONG,
+            **sandbox_runner_assurance_posture(RUNNER_STRONG_SANDBOX_VM),
             "stability": "current",
             "isolation_claim": "vm-boundary",
             "execution_boundary": "vm-stdio-json-rpc",
@@ -909,6 +942,7 @@ class InsecureDevSubprocessRunner(_JsonRpcProcessRunner):
         return {
             "runner_type": self.runner_type,
             "assurance_class": ASSURANCE_CLASS_INSECURE_DEV,
+            **sandbox_runner_assurance_posture(self.runner_type),
             "interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
             "execution_boundary": "subprocess-json-rpc",
             "isolation_claim": "none",
@@ -1091,6 +1125,7 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         return {
             "runner_type": self.runner_type,
             "assurance_class": ASSURANCE_CLASS_CONTAINER,
+            **sandbox_runner_assurance_posture(self.runner_type),
             "assurance_properties": {
                 "boundary_type": "shared-kernel-container-sandbox",
                 "process_separation_model": "container-namespace-boundary",
@@ -1474,6 +1509,7 @@ class StrongSandboxVmRunner(_JsonRpcProcessRunner):
         return {
             "runner_type": self.runner_type,
             "assurance_class": ASSURANCE_CLASS_STRONG,
+            **sandbox_runner_assurance_posture(self.runner_type),
             "assurance_properties": dict(STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES),
             "interface_version": SANDBOX_RUNNER_INTERFACE_VERSION,
             "execution_boundary": "vm-stdio-json-rpc",

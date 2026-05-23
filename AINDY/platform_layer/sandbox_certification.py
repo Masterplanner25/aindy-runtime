@@ -8,6 +8,7 @@ from AINDY.platform_layer.sandbox_runner import (
     RUNNER_STRONG_SANDBOX_VM,
     SANDBOX_RUNNER_INTERFACE_VERSION,
     STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES,
+    VERIFICATION_METHOD_WORKER_SELF_REPORT,
     create_sandbox_runner,
     sandbox_platform_capability_matrix,
 )
@@ -146,6 +147,7 @@ def sandbox_certification_tiers() -> list[dict[str, Any]]:
                 ],
                 "post_launch_verification_status": "passed",
                 "post_launch_verification_scope": "live-worker-self-report-over-authenticated-rpc",
+                "post_launch_verification_method": VERIFICATION_METHOD_WORKER_SELF_REPORT,
                 "post_launch_required_fields": [
                     "checked_at",
                     "worker_instance_id",

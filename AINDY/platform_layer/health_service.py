@@ -39,7 +39,11 @@ from AINDY.platform_layer.extension_provenance_inventory import (
     extension_provenance_inventory,
 )
 from AINDY.platform_layer.plugin_host import plugin_host_inventory
-from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+from AINDY.platform_layer.sandbox_runner import (
+    RUNNER_STRONG_SANDBOX_VM,
+    sandbox_platform_capability_matrix,
+    sandbox_runner_assurance_posture,
+)
 from AINDY.db.schema_contract import ensure_runtime_schema
 from AINDY.db.schema_contract import runtime_schema_contract_metadata
 from AINDY.platform_layer.registry import get_all_health_checks
@@ -89,6 +93,7 @@ class SystemHealth:
                 get_api_runtime_state().get("deployment_profile")
             ),
             "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
+            "sandbox_verification_posture": sandbox_verification_posture(),
             "domains": domains,
             "memory_ingest_queue": get_memory_ingest_queue_status(),
             "deployment_contract": deployment_contract_summary(),
@@ -115,6 +120,17 @@ _redis_health_cached_result = False
 _health_cache_lock = threading.Lock()
 _health_cache: SystemHealth | None = None
 _health_cache_checked_at = 0.0
+
+
+def sandbox_verification_posture() -> dict[str, Any]:
+    posture = sandbox_runner_assurance_posture(RUNNER_STRONG_SANDBOX_VM)
+    return {
+        "verification_method": posture["verification_method"],
+        "kernel_observable": False,
+        "gap_reference": "C1",
+        "assurance_ceiling": posture["assurance_ceiling"],
+        "ceiling_note": posture["ceiling_note"],
+    }
 
 
 def _normalize_domain_health_result(result: Any) -> dict[str, Any]:
