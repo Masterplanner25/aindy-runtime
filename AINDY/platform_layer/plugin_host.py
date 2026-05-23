@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 import secrets
 import threading
 import time
@@ -16,15 +17,19 @@ from AINDY.platform_layer.sandbox_runner import (
     RUNNER_STRONG_SANDBOX_VM,
     SANDBOX_RUNNER_INTERFACE_VERSION,
     SandboxRunner,
+    VERIFICATION_METHOD_KERNEL_OBSERVABLE,
     VERIFICATION_METHOD_NONE,
     VERIFICATION_METHOD_WORKER_SELF_REPORT,
     create_sandbox_runner,
     list_supported_sandbox_runners,
+    publish_sandbox_verification_observation,
     resolve_sandbox_runner_type,
+    reset_sandbox_verification_runtime_state,
 )
 from AINDY.platform_layer.extension_execution_model import (
     EXECUTION_MODEL_ISOLATED_EXTERNALIZED,
 )
+from AINDY.platform_layer.kernel_proc_reader import read_all_kernel_evidence
 from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
 from AINDY.platform_layer.deployment_contract import (
     get_api_runtime_state,
@@ -369,6 +374,8 @@ def _verify_post_launch_state(record: PluginHostRecord) -> dict[str, Any]:
     mount_network_state = dict(probe.get("mount_network_state") or {})
     verified_fields: list[str] = []
     failures: list[str] = []
+    verification_method = VERIFICATION_METHOD_WORKER_SELF_REPORT
+    kernel_evidence: dict[str, Any] | None = None
 
     worker_instance_id = str(probe.get("worker_instance_id") or "").strip()
     if worker_instance_id:
@@ -397,6 +404,39 @@ def _verify_post_launch_state(record: PluginHostRecord) -> dict[str, Any]:
     else:
         failures.append("session_continuity.started")
 
+    worker_pid = runner.pid()
+    if worker_pid is not None:
+        kernel_candidate = read_all_kernel_evidence(worker_pid, os.getpid())
+        if kernel_candidate.get("kernel_observable"):
+            kernel_evidence = kernel_candidate
+            verification_method = VERIFICATION_METHOD_KERNEL_OBSERVABLE
+            isolation["import_guard_active"] = bool(
+                ((kernel_evidence.get("seccomp") or {}).get("seccomp_active"))
+            )
+            isolation["filesystem_guard_active"] = bool(
+                ((kernel_evidence.get("namespace_comparison") or {}).get("mnt_isolated"))
+            )
+            isolation["network_guard_active"] = bool(
+                ((kernel_evidence.get("namespace_comparison") or {}).get("net_isolated"))
+            )
+            logger.info(
+                "Kernel-observable evidence collected for worker PID %s: seccomp_active=%s, "
+                "net_isolated=%s, mnt_isolated=%s",
+                worker_pid,
+                bool(((kernel_evidence.get("seccomp") or {}).get("seccomp_active"))),
+                bool(((kernel_evidence.get("namespace_comparison") or {}).get("net_isolated"))),
+                bool(((kernel_evidence.get("namespace_comparison") or {}).get("mnt_isolated"))),
+            )
+        else:
+            kernel_errors = [
+                str((kernel_candidate.get(section) or {}).get("error") or "").strip()
+                for section in ("seccomp", "cgroup", "namespaces", "runtime_namespaces")
+                if str((kernel_candidate.get(section) or {}).get("error") or "").strip()
+            ]
+            logger.debug(
+                "Kernel-observable evidence unavailable: %s",
+                "; ".join(kernel_errors) or "unknown reason",
+            )
     for field_name, value in {
         "isolation_state.import_guard_active": bool(isolation.get("import_guard_active")),
         "isolation_state.filesystem_guard_active": bool(isolation.get("filesystem_guard_active")),
@@ -449,7 +489,7 @@ def _verify_post_launch_state(record: PluginHostRecord) -> dict[str, Any]:
     verification = {
         "status": "passed" if not failures else "failed",
         "verification_scope": str(probe.get("verification_scope") or "live-worker-self-report-over-authenticated-rpc"),
-        "verification_method": VERIFICATION_METHOD_WORKER_SELF_REPORT,
+        "verification_method": verification_method,
         "checked_at": checked_at,
         "verified_fields": verified_fields,
         "failures": failures,
@@ -458,6 +498,7 @@ def _verify_post_launch_state(record: PluginHostRecord) -> dict[str, Any]:
         "isolation_state": isolation,
         "boundary_metadata": boundary,
         "mount_network_state": mount_network_state,
+        "kernel_evidence": kernel_evidence,
         "operator_note": str(
             probe.get("operator_note")
             or "Post-launch verification is limited to live worker continuity and guard-state checks."
@@ -465,6 +506,10 @@ def _verify_post_launch_state(record: PluginHostRecord) -> dict[str, Any]:
     }
     record.post_launch_verification = verification
     record.last_post_launch_verification_at = checked_at
+    publish_sandbox_verification_observation(
+        runner_type=record.runner_type,
+        kernel_observable=verification_method == VERIFICATION_METHOD_KERNEL_OBSERVABLE,
+    )
     if verification["status"] == "passed" and worker_instance_id:
         record.verified_worker_instance_id = worker_instance_id
     return verification
@@ -1134,6 +1179,7 @@ def shutdown_all_plugin_hosts() -> None:
 
 def reset_plugin_hosts() -> None:
     shutdown_all_plugin_hosts()
+    reset_sandbox_verification_runtime_state()
 
 
 atexit.register(shutdown_all_plugin_hosts)

@@ -43,6 +43,7 @@ from AINDY.platform_layer.sandbox_runner import (
     RUNNER_STRONG_SANDBOX_VM,
     sandbox_platform_capability_matrix,
     sandbox_runner_assurance_posture,
+    strong_sandbox_kernel_observable_evidence_seen,
 )
 from AINDY.db.schema_contract import ensure_runtime_schema
 from AINDY.db.schema_contract import runtime_schema_contract_metadata
@@ -124,10 +125,15 @@ _health_cache_checked_at = 0.0
 
 def sandbox_verification_posture() -> dict[str, Any]:
     posture = sandbox_runner_assurance_posture(RUNNER_STRONG_SANDBOX_VM)
+    kernel_observable = strong_sandbox_kernel_observable_evidence_seen()
     return {
         "verification_method": posture["verification_method"],
-        "kernel_observable": False,
-        "gap_reference": "C1",
+        "kernel_observable": kernel_observable,
+        "gap_reference": (
+            "C1-scope-b1-complete"
+            if kernel_observable
+            else "C1"
+        ),
         "assurance_ceiling": posture["assurance_ceiling"],
         "ceiling_note": posture["ceiling_note"],
     }

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Gap C1 Scope B1 - Kernel-Observable Post-Launch Verification On Linux (2026-05-23)
+
+Gap C1 Scope B1 - Kernel-observable post-launch verification on Linux. Added
+`AINDY/platform_layer/kernel_proc_reader.py` implementing unprivileged `/proc`
+reads for seccomp status, cgroup membership, and namespace IDs.
+`_verify_post_launch_state` now layers kernel evidence on top of the existing
+RPC probe on Linux hosts. `verification_method` transitions to
+`kernel-observable` and `assurance_ceiling` transitions to
+`kernel-observable-verified` when evidence is available. Non-Linux hosts remain
+at `worker-self-report-verified`. No new processes. No privilege escalation.
+
 ### Gap C1 Scope A - Machine-Readable Sandbox Verification Posture (2026-05-23)
 
 Gap C1 Scope A - Sandbox verification posture now machine-readable. Added

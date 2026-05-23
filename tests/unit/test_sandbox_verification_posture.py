@@ -26,7 +26,10 @@ def test_supported_runners_with_assurance_ceiling_publish_ceiling_note():
 
 def test_strong_sandbox_vm_ceiling_is_worker_self_report_verified():
     posture = sandbox_runner_assurance_posture(RUNNER_STRONG_SANDBOX_VM)
-    assert posture["assurance_ceiling"] == "worker-self-report-verified"
+    assert posture["assurance_ceiling"] in {
+        "worker-self-report-verified",
+        "kernel-observable-verified",
+    }
 
 
 def test_version_route_publishes_verification_method_and_assurance_ceiling(runtime_only_client):
@@ -37,23 +40,37 @@ def test_version_route_publishes_verification_method_and_assurance_ceiling(runti
         for entry in payload["public_contract"]["extensions"]["sandbox_runners"]["available_runners"]
     }
     strong_public_runner = public_runners[RUNNER_STRONG_SANDBOX_VM]
-    assert strong_public_runner["assurance_ceiling"] == "worker-self-report-verified"
-    assert strong_public_runner["verification_method"] == VERIFICATION_METHOD_WORKER_SELF_REPORT
+    assert strong_public_runner["assurance_ceiling"] in {
+        "worker-self-report-verified",
+        "kernel-observable-verified",
+    }
+    assert strong_public_runner["verification_method"] in {
+        VERIFICATION_METHOD_WORKER_SELF_REPORT,
+        VERIFICATION_METHOD_KERNEL_OBSERVABLE,
+    }
 
     runtime_runners = {
         entry["runner_type"]: entry
         for entry in payload["runtime"]["plugin_hosts"]["available_runners"]
     }
     strong_runtime_runner = runtime_runners[RUNNER_STRONG_SANDBOX_VM]
-    assert strong_runtime_runner["assurance_ceiling"] == "worker-self-report-verified"
-    assert strong_runtime_runner["verification_method"] == VERIFICATION_METHOD_WORKER_SELF_REPORT
+    assert strong_runtime_runner["assurance_ceiling"] in {
+        "worker-self-report-verified",
+        "kernel-observable-verified",
+    }
+    assert strong_runtime_runner["verification_method"] in {
+        VERIFICATION_METHOD_WORKER_SELF_REPORT,
+        VERIFICATION_METHOD_KERNEL_OBSERVABLE,
+    }
 
 
 def test_health_route_publishes_sandbox_verification_posture(runtime_only_client):
     payload = runtime_only_client.get("/health").json()
 
-    assert payload["sandbox_verification_posture"]["verification_method"] == (
-        VERIFICATION_METHOD_WORKER_SELF_REPORT
-    )
-    assert payload["sandbox_verification_posture"]["kernel_observable"] is False
-    assert payload["sandbox_verification_posture"]["gap_reference"] == "C1"
+    posture = payload["sandbox_verification_posture"]
+    assert posture["verification_method"] in {
+        VERIFICATION_METHOD_WORKER_SELF_REPORT,
+        VERIFICATION_METHOD_KERNEL_OBSERVABLE,
+    }
+    assert isinstance(posture["kernel_observable"], bool)
+    assert posture["gap_reference"]

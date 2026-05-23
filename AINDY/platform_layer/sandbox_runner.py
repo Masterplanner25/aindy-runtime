@@ -32,6 +32,7 @@ SUPPORTED_SANDBOX_RUNNERS = (
 ASSURANCE_CLASS_INSECURE_DEV = "insecure-dev"
 ASSURANCE_CLASS_CONTAINER = "container-grade-sandbox"
 ASSURANCE_CLASS_STRONG = "strong-sandbox-tier"
+ASSURANCE_CEILING_KERNEL_OBSERVABLE_VERIFIED = "kernel-observable-verified"
 ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED = "worker-self-report-verified"
 ASSURANCE_CEILING_NO_ISOLATION_GUARANTEE = "no-isolation-guarantee"
 VERIFICATION_METHOD_WORKER_SELF_REPORT = "worker-self-report"
@@ -67,18 +68,54 @@ STRONG_SANDBOX_REQUIRED_ASSURANCE_PROPERTIES = {
     "session_verification_model": "launch-plus-post-launch-runtime-probe",
 }
 
+_sandbox_verification_runtime_state: dict[str, bool] = {
+    "strong_kernel_observable_evidence_seen": False,
+}
+
+
+def publish_sandbox_verification_observation(*, runner_type: str, kernel_observable: bool) -> None:
+    if runner_type == RUNNER_STRONG_SANDBOX_VM and kernel_observable:
+        _sandbox_verification_runtime_state["strong_kernel_observable_evidence_seen"] = True
+
+
+def reset_sandbox_verification_runtime_state() -> None:
+    _sandbox_verification_runtime_state["strong_kernel_observable_evidence_seen"] = False
+
+
+def strong_sandbox_kernel_observable_evidence_seen() -> bool:
+    return bool(_sandbox_verification_runtime_state["strong_kernel_observable_evidence_seen"])
+
 
 def sandbox_runner_assurance_posture(runner_type: str) -> dict[str, str]:
     if runner_type == RUNNER_STRONG_SANDBOX_VM:
+        kernel_observable = (
+            _normalized_platform_system() == PLATFORM_LINUX
+            and strong_sandbox_kernel_observable_evidence_seen()
+        )
         return {
-            "assurance_ceiling": ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED,
-            "ceiling_note": (
-                "Post-launch verification relies on worker self-report via authenticated RPC. "
-                "Kernel-observable verification (cgroups, seccomp, namespace inspection from "
-                "outside the worker) is not yet implemented. See Gap C1 in "
-                "ISOLATION_MODEL_PLAN.md."
+            "assurance_ceiling": (
+                ASSURANCE_CEILING_KERNEL_OBSERVABLE_VERIFIED
+                if kernel_observable
+                else ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED
             ),
-            "verification_method": VERIFICATION_METHOD_WORKER_SELF_REPORT,
+            "ceiling_note": (
+                "Post-launch verification includes unprivileged /proc-based kernel evidence "
+                "on Linux after the worker launch path has produced a live worker PID. "
+                "Before that evidence is collected, reporting remains worker-self-report-verified. "
+                "Non-Linux hosts remain worker-self-report-verified."
+                if kernel_observable
+                else (
+                    "Post-launch verification relies on worker self-report via authenticated RPC. "
+                    "Kernel-observable verification (cgroups, seccomp, namespace inspection from "
+                    "outside the worker) is reported only after live Linux /proc evidence has "
+                    "been collected for a worker. See Gap C1 in ISOLATION_MODEL_PLAN.md."
+                )
+            ),
+            "verification_method": (
+                VERIFICATION_METHOD_KERNEL_OBSERVABLE
+                if kernel_observable
+                else VERIFICATION_METHOD_WORKER_SELF_REPORT
+            ),
         }
     if runner_type == RUNNER_CONTAINERIZED_OCI:
         return {

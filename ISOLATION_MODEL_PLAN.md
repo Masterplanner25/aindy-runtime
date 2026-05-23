@@ -145,10 +145,14 @@ constraints (reading cgroups membership, confirming seccomp activation, verifyin
 namespace separation) from a component that is not the worker itself — dedicated
 sandbox launcher infrastructure not in scope for this milestone.
 
-**Status note:** Scope A complete: verification_method and assurance_ceiling are
-now machine-readable on /api/version and /health. Operators can detect the
-transition to kernel-observable verification without reading changelogs. Scope B
-(kernel-observable proof) remains deferred â€” see condition to reopen.
+**Status note:** Scope B1 complete: unprivileged kernel-observable evidence is
+now collected via `/proc/<pid>/status` (seccomp), `/proc/<pid>/cgroup`, and
+`/proc/<pid>/ns/` after worker launch on Linux. `verification_method`
+transitions to `kernel-observable` when evidence is available.
+`assurance_ceiling` transitions to `kernel-observable-verified` on Linux hosts
+where evidence is collected. Scope B2 (privileged launcher with BPF filter
+introspection) remains a future option if the threat model requires it - no
+current condition to reopen.
 
 **Why deferred:** The limitation is already accurately disclosed and does not
 affect the tiered model's binary claim (Tier 2 surfaces are externalized; they are
@@ -496,10 +500,14 @@ boundary claim (Tier 2 is externalized) is not affected by this limitation. Clos
 the gap fully requires a dedicated privileged sandbox launcher with OS-level
 observability into worker constraints — infrastructure work outside this milestone.
 
-**Status note:** Scope A complete: verification_method and assurance_ceiling are
-now machine-readable on /api/version and /health. Operators can detect the
-transition to kernel-observable verification without reading changelogs. Scope B
-(kernel-observable proof) remains deferred â€” see condition to reopen.
+**Status note:** Scope B1 complete: unprivileged kernel-observable evidence is
+now collected via `/proc/<pid>/status` (seccomp), `/proc/<pid>/cgroup`, and
+`/proc/<pid>/ns/` after worker launch on Linux. `verification_method`
+transitions to `kernel-observable` when evidence is available.
+`assurance_ceiling` transitions to `kernel-observable-verified` on Linux hosts
+where evidence is collected. Scope B2 (privileged launcher with BPF filter
+introspection) remains a future option if the threat model requires it - no
+current condition to reopen.
 
 **Where to track:** Open an issue: "Strengthen strong_sandbox_vm post-launch
 verification with kernel-observable constraint evidence."
