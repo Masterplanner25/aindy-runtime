@@ -11,6 +11,7 @@
 
 - [ ] Runtime-owned CI/test impact was considered
 - [ ] `python -m pytest tests -m runtime_only -q` passes locally, or the gap is explained
+- [ ] Coverage floor (≥ 40%) is met — check the `coverage-sqlite` artifact from CI
 - [ ] Runtime-only `/api/version` and boot behavior remain correct if affected
 - [ ] `aindy-runtime` / `aindy-runtime-api` packaging or entrypoint behavior was checked if affected
 - [ ] `python -m build` / artifact viability was checked if packaging changed

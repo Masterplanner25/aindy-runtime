@@ -1,0 +1,38 @@
+services:
+  postgres-test:
+    image: pgvector/pgvector:pg15
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: aindy_test
+      POSTGRES_PASSWORD: aindy_test
+      POSTGRES_DB: aindy_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aindy_test -d aindy_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mongo-test:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    tmpfs:
+      - /data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

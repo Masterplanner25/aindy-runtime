@@ -1,6 +1,6 @@
 ---
 title: "Runtime CI Ownership"
-last_verified: "2026-05-17"
+last_verified: "2026-05-23"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -57,14 +57,37 @@ matrix:
 Those checks are historical in that repo and are no longer authoritative for
 runtime signoff.
 
+## Integration Test Tier
+
+A PostgreSQL/Redis integration tier is wired in `runtime-ci.yml` as the
+`integration-postgres` job:
+
+- runs against pgvector:pg15 + Redis 7 service containers
+- executes `tests/integration/` via `pytest.integration.ini`
+- verifies schema bootstrap via `AINDY.db.schema_contract.ensure_runtime_schema()`
+- uploads a `coverage-integration` XML artifact
+- `continue-on-error: true` — non-blocking on PR, but tracked for regressions
+
+Local service stack: `docker-compose -f docker-compose.test.yml up -d`
+
+Integration tier markers:
+
+| Marker | Requires |
+|--------|----------|
+| `integration` | Postgres DATABASE_URL |
+| `redis` | REDIS_URL |
+| `multi_instance` | fakeredis installed |
+| `mongo` | MONGO_URL |
+| `postgres` | PostgreSQL DATABASE_URL |
+
 ## Current Gaps
 
 Remaining gaps in runtime CI are intentional or still deferred:
 
-- no Redis/PostgreSQL/Mongo service-matrix job in default runtime CI
 - no runtime-owned Docker image build workflow yet
-- no separate long-running integration tier beyond the extracted
-  `runtime_only` pytest slice
+- coverage floor for the integration suite is not yet enforced
+  (set `--cov-fail-under` in the `integration-postgres` job once a stable
+  baseline is established under Postgres)
 
-Add those only if they validate runtime-owned behavior without depending on
-`apps/` or app-profile fixtures.
+Add new checks only if they validate runtime-owned behavior without depending
+on `apps/` or app-profile fixtures.
