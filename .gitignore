@@ -8,3 +8,5 @@ build/
 dist/
 *.egg-info/
 .env
+ISOLATION_MODEL_PLAN.md
+AINDY_ORIENTATION.md
