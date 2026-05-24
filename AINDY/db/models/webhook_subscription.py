@@ -16,7 +16,7 @@ Deletion is soft - is_active=False.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, String
+from sqlalchemy import Boolean, Column, DateTime, Index, String
 from sqlalchemy.dialects.postgresql import JSON, UUID
 
 from AINDY.db.database import Base
@@ -39,3 +39,13 @@ class WebhookSubscription(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     is_active = Column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        Index(
+            "uq_webhook_subscriptions_event_url_active",
+            "event_type",
+            "callback_url",
+            unique=True,
+            postgresql_where="is_active = true",
+        ),
+    )

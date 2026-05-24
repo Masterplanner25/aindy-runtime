@@ -292,6 +292,12 @@ jobs:
           print(f"schema_state={report.state} tables={len(report.issues)} summary={report.summary()}")
           PY
 
+      - name: Stamp and apply runtime Alembic migrations
+        run: |
+          python -m alembic stamp 0001
+          python -m alembic upgrade head
+          python -m alembic current
+
       - name: Run integration test suite
         run: >
           python -m pytest

@@ -160,10 +160,19 @@ class ExecutionUnit(Base):
     __table_args__ = (
         # Fast queries: all active executions for a user, by type
         Index("ix_eu_user_type_status", "user_id", "type", "status"),
-        # Find EU from any originating record
+        # Find EU from any originating record (non-unique performance index)
         Index("ix_eu_source", "source_type", "source_id"),
         # Trace all EUs sharing a correlation chain
         Index("ix_eu_correlation", "correlation_id"),
         # Per-tenant scheduling queries (OS layer)
         Index("ix_eu_tenant_priority", "tenant_id", "priority"),
+        # IDEM-4: prevent duplicate EU rows for the same source record.
+        # Partial index — only enforced when both columns are non-NULL.
+        Index(
+            "uq_execution_units_source",
+            "source_type",
+            "source_id",
+            unique=True,
+            postgresql_where="source_type IS NOT NULL AND source_id IS NOT NULL",
+        ),
     )

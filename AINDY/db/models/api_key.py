@@ -11,7 +11,7 @@ Example:     aindy_X7kB3mQpRvL9...
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import relationship
 
@@ -61,6 +61,16 @@ class PlatformAPIKey(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_platform_api_keys_user_name_active",
+            "user_id",
+            "name",
+            unique=True,
+            postgresql_where="is_active = true",
+        ),
     )
 
     user = relationship("User", back_populates="api_keys")

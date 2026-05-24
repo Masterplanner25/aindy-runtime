@@ -154,3 +154,52 @@ def test_inspect_blank_database_returns_blank_database_state():
         assert not report.ok
     finally:
         blank_engine.dispose()
+
+
+# ── Alembic tests ─────────────────────────────────────────────────────────────
+
+def test_alembic_version_runtime_table_exists(test_engine):
+    """alembic_version_runtime table must exist after migration 0002 is applied."""
+    from sqlalchemy import inspect as sa_inspect
+
+    inspector = sa_inspect(test_engine)
+    assert inspector.has_table("alembic_version_runtime"), (
+        "alembic_version_runtime table missing — run 'alembic upgrade head' first"
+    )
+
+
+def test_alembic_version_runtime_at_head(test_engine):
+    """alembic_version_runtime must be stamped at 0002 (current head)."""
+    from sqlalchemy import text
+
+    with test_engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT version_num FROM alembic_version_runtime")
+        ).fetchone()
+
+    assert row is not None, "alembic_version_runtime has no rows — DB not stamped"
+    assert row[0] == "0002", (
+        f"Expected version '0002', got {row[0]!r}"
+    )
+
+
+def test_idempotency_constraints_exist(test_engine):
+    """Migration 0002 must have applied all idempotency unique indexes."""
+    from sqlalchemy import inspect as sa_inspect
+
+    inspector = sa_inspect(test_engine)
+
+    expected_indexes = {
+        "webhook_subscriptions": "uq_webhook_subscriptions_event_url_active",
+        "platform_api_keys": "uq_platform_api_keys_user_name_active",
+        "execution_units": "uq_execution_units_source",
+        "dynamic_flows": "uq_dynamic_flows_name",
+        "dynamic_nodes": "uq_dynamic_nodes_name",
+    }
+
+    for table, index_name in expected_indexes.items():
+        indexes = {idx["name"] for idx in inspector.get_indexes(table)}
+        assert index_name in indexes, (
+            f"Expected index {index_name!r} on {table!r} — not found. "
+            f"Existing indexes: {sorted(indexes)}"
+        )

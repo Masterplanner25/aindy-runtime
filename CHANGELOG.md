@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added — Alembic migration layer + idempotency fixes (2026-05-23)
+
+- Added Alembic to `aindy-runtime` (`alembic==1.17.0` in deps). Runtime uses
+  `alembic_version_runtime` table to avoid conflicts with monolith `alembic_version`.
+- Migration `0001_runtime_baseline`: empty baseline — stamps existing schema-bootstrapped
+  deployments at the Alembic split point.
+- Migration `0002_idempotency_constraints`: closes IDEM-2, IDEM-3, IDEM-4, IDEM-5.
+  Adds partial unique indexes on webhook_subscriptions, platform_api_keys, execution_units,
+  dynamic_flows, dynamic_nodes. Includes deduplication step for existing data.
+- `include_object` filter in `alembic/env.py` restricts autogenerate to runtime-owned tables.
+- 3 new integration tests in `test_schema_contract.py` verify Alembic version table,
+  head revision, and all idempotency indexes.
+
+### Fixed — Idempotency audit findings (2026-05-23)
+
+- **IDEM-1** (`AINDY/kernel/syscall_registry.py`): `VersionedSyscallRegistry.__setitem__`
+  now raises `ValueError` on conflicting re-registration with a different handler.
+- **IDEM-8** (`AINDY/apscheduler/schedulers/background.py`): Stub `BackgroundScheduler`
+  now raises `ConflictingIdError` when `add_job()` is called with a duplicate id and
+  `replace_existing=False`, matching real APScheduler behavior.
+
 ### Changed
 
 - SDK extraction complete. `AINDY/sdk/` removed from `aindy-runtime`.

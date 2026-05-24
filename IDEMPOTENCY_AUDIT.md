@@ -1,7 +1,7 @@
 # A.I.N.D.Y. Runtime — Idempotency and Invariants Audit
 **Date:** 2026-05-23
 **Method:** Static analysis + targeted PostgreSQL tests (27 tests, 27 passed)
-**Status:** Findings only — no fixes applied in this pass
+**Status:** IDEM-1, IDEM-2, IDEM-3, IDEM-4, IDEM-5, IDEM-8 fixed in Alembic split (2026-05-23)
 
 ---
 
@@ -36,9 +36,10 @@ hazards under concurrent API traffic or multi-instance deployments.
 
 ## Findings
 
-### IDEM-1 — Syscall registry is last-write-wins with no error on conflicting re-registration
+### IDEM-1 — Syscall registry is last-write-wins with no error on conflicting re-registration ✓ FIXED
 **Surface:** Surface 2 — Syscall Registration
 **Severity:** Medium
+**Fixed:** 2026-05-23 — `VersionedSyscallRegistry.__setitem__` now raises `ValueError` on conflicting re-registration with a different handler. Same-handler re-registration remains idempotent. (`AINDY/kernel/syscall_registry.py`)
 **Type:** Silent overwrite with possible incorrect handler active
 **Description:**
 `VersionedSyscallRegistry.__setitem__` (called by `register_syscall`) logs a
@@ -61,9 +62,10 @@ Re-registration of the same syscall name with a *different* handler should raise
 
 ---
 
-### IDEM-2 — webhook_subscriptions has no UNIQUE constraint on callback_url
+### IDEM-2 — webhook_subscriptions has no UNIQUE constraint on callback_url ✓ FIXED
 **Surface:** Surface 6 — Platform Registry and Plugin Loading
 **Severity:** High
+**Fixed:** 2026-05-23 — Alembic migration `0002` adds partial unique index `uq_webhook_subscriptions_event_url_active` on `(event_type, callback_url) WHERE is_active = true`. ORM `__table_args__` updated to match.
 **Type:** Missing DB-level uniqueness — application-level-only enforcement
 **Description:**
 The `webhook_subscriptions` table has only a UUID primary key. There is no
@@ -86,9 +88,10 @@ prevent duplicate active subscriptions for the same URL+event pair.
 
 ---
 
-### IDEM-3 — platform_api_keys has no UNIQUE constraint on (user_id, name)
+### IDEM-3 — platform_api_keys has no UNIQUE constraint on (user_id, name) ✓ FIXED
 **Surface:** Surface 4 — API Endpoint Idempotency
 **Severity:** Medium
+**Fixed:** 2026-05-23 — Alembic migration `0002` adds partial unique index `uq_platform_api_keys_user_name_active` on `(user_id, name) WHERE is_active = true`. ORM `__table_args__` updated to match.
 **Type:** Missing DB-level uniqueness — application-level-only enforcement
 **Description:**
 `platform_api_keys` enforces UNIQUE only on `key_hash` (correct — prevents
@@ -112,9 +115,10 @@ service layer with a pre-check + `ON CONFLICT`.
 
 ---
 
-### IDEM-4 — execution_units has no UNIQUE constraint on (source_type, source_id)
+### IDEM-4 — execution_units has no UNIQUE constraint on (source_type, source_id) ✓ FIXED
 **Surface:** Surface 5 — Flow Engine
 **Severity:** Medium
+**Fixed:** 2026-05-23 — Alembic migration `0002` adds partial unique index `uq_execution_units_source` on `(source_type, source_id) WHERE source_type IS NOT NULL AND source_id IS NOT NULL`. ORM `__table_args__` updated to match.
 **Type:** Missing DB-level uniqueness — application-level-only enforcement
 **Description:**
 `execution_units` is intended to have one row per originating record
@@ -139,9 +143,10 @@ INSERT.
 
 ---
 
-### IDEM-5 — dynamic_flows and dynamic_nodes have no UNIQUE constraint on name
+### IDEM-5 — dynamic_flows and dynamic_nodes have no UNIQUE constraint on name ✓ FIXED
 **Surface:** Surface 6 — Platform Registry and Plugin Loading
 **Severity:** Medium
+**Fixed:** 2026-05-23 — Alembic migration `0002` creates named unique indexes `uq_dynamic_flows_name` and `uq_dynamic_nodes_name`. ORM models updated with explicit `Index(...)` in `__table_args__`.
 **Type:** Missing DB-level uniqueness — application-level-only enforcement
 **Description:**
 `dynamic_flows` and `dynamic_nodes` tables have only UUID primary keys. Neither
@@ -220,9 +225,10 @@ registered.
 
 ---
 
-### IDEM-8 — APScheduler stub (BackgroundScheduler) does not enforce replace_existing without ID match
+### IDEM-8 — APScheduler stub (BackgroundScheduler) does not enforce replace_existing without ID match ✓ FIXED
 **Surface:** Surface 3 — Scheduler and Job Registration
 **Severity:** Low
+**Fixed:** 2026-05-23 — Stub now raises `ConflictingIdError` when `add_job()` is called with a duplicate `id` and `replace_existing=False`, matching real APScheduler behavior. (`AINDY/apscheduler/schedulers/background.py`)
 **Type:** Stub vs production behavioral difference
 **Description:**
 The bundled `AINDY/apscheduler/schedulers/background.py` is a minimal stub used

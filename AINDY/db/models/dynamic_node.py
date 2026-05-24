@@ -20,7 +20,7 @@ Deletion is soft - is_active=False.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, String
+from sqlalchemy import Boolean, Column, DateTime, Index, String
 from sqlalchemy.dialects.postgresql import JSON, UUID
 
 from AINDY.db.database import Base
@@ -31,7 +31,7 @@ class DynamicNode(Base):
     __tablename__ = "dynamic_nodes"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(256), nullable=False, unique=True, index=True)
+    name = Column(String(256), nullable=False)
     node_type = Column(String(32), nullable=False)
     owner_class = Column(String(64), nullable=False, default=OWNER_EXTERNAL_THIRD_PARTY)
     handler_config = Column(JSON, nullable=False)
@@ -50,3 +50,7 @@ class DynamicNode(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
     is_active = Column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        Index("uq_dynamic_nodes_name", "name", unique=True),
+    )

@@ -1,6 +1,10 @@
 """Minimal BackgroundScheduler used by tests and fallback runtime paths."""
 
 
+class ConflictingIdError(Exception):
+    """Raised when add_job() is called with a duplicate job id and replace_existing=False."""
+
+
 class _Job:
     def __init__(self, *, func, trigger=None, id=None, name=None, replace_existing=False):
         self.func = func
@@ -17,8 +21,16 @@ class BackgroundScheduler:
         self._jobs = []
 
     def add_job(self, func, trigger=None, id=None, name=None, replace_existing=False, **kwargs):
-        if replace_existing and id is not None:
-            self._jobs = [job for job in self._jobs if job.id != id]
+        if id is not None:
+            existing_ids = {job.id for job in self._jobs if job.id is not None}
+            if id in existing_ids:
+                if replace_existing:
+                    self._jobs = [job for job in self._jobs if job.id != id]
+                else:
+                    raise ConflictingIdError(
+                        f"Job with id {id!r} already exists. "
+                        "Use replace_existing=True to overwrite it."
+                    )
         self._jobs.append(
             _Job(
                 func=func,

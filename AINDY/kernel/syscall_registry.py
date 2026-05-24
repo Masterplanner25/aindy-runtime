@@ -254,11 +254,12 @@ class VersionedSyscallRegistry(MutableMapping):
         if key in self._flat:
             existing = self._flat[key]
             if existing.handler is not value.handler:
-                logger.warning(
-                    "[SyscallRegistry] Syscall '%s' is being re-registered with a different handler. Previous: %r  New: %r. Each syscall should have exactly one registration point.",
-                    key,
-                    getattr(existing.handler, "__qualname__", repr(existing.handler)),
-                    getattr(value.handler, "__qualname__", repr(value.handler)),
+                raise ValueError(
+                    f"[SyscallRegistry] Syscall '{key}' is already registered with a "
+                    f"different handler. Previous: "
+                    f"{getattr(existing.handler, '__qualname__', repr(existing.handler))!r}  "
+                    f"New: {getattr(value.handler, '__qualname__', repr(value.handler))!r}. "
+                    "Each syscall must have exactly one registration point."
                 )
         self._flat[key] = value
         version, action = self._split(key)

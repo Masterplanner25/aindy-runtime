@@ -21,7 +21,7 @@ Deletion is soft - is_active=False - so the audit trail is preserved.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, String
+from sqlalchemy import Boolean, Column, DateTime, Index, String
 from sqlalchemy.dialects.postgresql import JSON, UUID
 
 from AINDY.db.database import Base
@@ -32,7 +32,7 @@ class DynamicFlow(Base):
     __tablename__ = "dynamic_flows"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(256), nullable=False, unique=True, index=True)
+    name = Column(String(256), nullable=False)
     definition_json = Column(JSON, nullable=False)
     owner_class = Column(String(64), nullable=False, default=OWNER_EXTERNAL_THIRD_PARTY)
     provenance = Column(JSON, nullable=True)
@@ -49,3 +49,7 @@ class DynamicFlow(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
     is_active = Column(Boolean, nullable=False, default=True)
+
+    __table_args__ = (
+        Index("uq_dynamic_flows_name", "name", unique=True),
+    )
