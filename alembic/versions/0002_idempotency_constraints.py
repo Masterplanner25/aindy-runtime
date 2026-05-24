@@ -22,7 +22,11 @@ IDEM-4: execution_units — partial UNIQUE on (source_type, source_id) where
 IDEM-5: dynamic_flows and dynamic_nodes — UNIQUE on name. The ORM already
         declares unique=True; this migration creates the DB constraint for
         existing deployments that were bootstrapped before the ORM declaration.
-        Uses IF NOT EXISTS to be safe on fresh deployments.
+
+All index creation steps use IF NOT EXISTS so this migration is safe to run
+against a schema that was bootstrapped via create_all (which already creates
+indexes declared in __table_args__) as well as against a pristine migration
+target where no indexes exist yet.
 
 Pre-constraint deduplication: for each table, any existing duplicate active
 rows are resolved by retaining the most-recently-created row and soft-deleting
@@ -40,8 +44,10 @@ depends_on = None
 
 def upgrade() -> None:
     # ── Pre-constraint deduplication ──────────────────────────────────────────
-    # For each table, soft-delete older duplicate active rows so that the
-    # subsequent CREATE UNIQUE INDEX succeeds on existing deployments.
+    # Soft-delete older duplicate active rows so that the subsequent
+    # CREATE UNIQUE INDEX succeeds on existing deployments with duplicates.
+    # These UPDATE/DELETE statements are safe to run even when no duplicates
+    # exist — they will simply match zero rows.
 
     # IDEM-3 dedup: keep newest active key per (user_id, name), deactivate rest
     op.execute("""
@@ -80,63 +86,56 @@ def upgrade() -> None:
           )
     """)
 
-    # ── Uniqueness constraints ─────────────────────────────────────────────────
+    # ── Uniqueness constraints (all IF NOT EXISTS — idempotent against create_all) ──
 
     # IDEM-2: webhook_subscriptions — partial unique on (event_type, callback_url)
-    op.create_index(
-        "uq_webhook_subscriptions_event_url_active",
-        "webhook_subscriptions",
-        ["event_type", "callback_url"],
-        unique=True,
-        postgresql_where="is_active = true",
-    )
+    op.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_subscriptions_event_url_active
+        ON webhook_subscriptions (event_type, callback_url)
+        WHERE is_active = true
+    """)
 
     # IDEM-3: platform_api_keys — partial unique on (user_id, name)
-    op.create_index(
-        "uq_platform_api_keys_user_name_active",
-        "platform_api_keys",
-        ["user_id", "name"],
-        unique=True,
-        postgresql_where="is_active = true",
-    )
+    op.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_platform_api_keys_user_name_active
+        ON platform_api_keys (user_id, name)
+        WHERE is_active = true
+    """)
 
     # IDEM-4: execution_units — partial unique on (source_type, source_id)
-    op.create_index(
-        "uq_execution_units_source",
-        "execution_units",
-        ["source_type", "source_id"],
-        unique=True,
-        postgresql_where="source_type IS NOT NULL AND source_id IS NOT NULL",
-    )
+    op.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_execution_units_source
+        ON execution_units (source_type, source_id)
+        WHERE source_type IS NOT NULL AND source_id IS NOT NULL
+    """)
 
-    # IDEM-5a: dynamic_flows — rename old ix_ index (from unique=True column) to uq_ name.
-    # The ix_dynamic_flows_name index was created by create_all with the old ORM declaration.
-    # We rename it to the canonical uq_ name and create a new one if it doesn't exist.
-    op.execute(
-        "DO $$ BEGIN"
-        "  IF EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'ix_dynamic_flows_name') THEN"
-        "    ALTER INDEX ix_dynamic_flows_name RENAME TO uq_dynamic_flows_name;"
-        "  ELSE"
-        "    CREATE UNIQUE INDEX IF NOT EXISTS uq_dynamic_flows_name ON dynamic_flows (name);"
-        "  END IF;"
-        " END $$"
-    )
+    # IDEM-5a: dynamic_flows — rename old ix_ index (if present from create_all with
+    # the previous unique=True,index=True column declaration) or create fresh.
+    op.execute("""
+        DO $$ BEGIN
+          IF EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'ix_dynamic_flows_name') THEN
+            ALTER INDEX ix_dynamic_flows_name RENAME TO uq_dynamic_flows_name;
+          ELSE
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_dynamic_flows_name ON dynamic_flows (name);
+          END IF;
+        END $$
+    """)
 
     # IDEM-5b: dynamic_nodes — same rename/create pattern
-    op.execute(
-        "DO $$ BEGIN"
-        "  IF EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'ix_dynamic_nodes_name') THEN"
-        "    ALTER INDEX ix_dynamic_nodes_name RENAME TO uq_dynamic_nodes_name;"
-        "  ELSE"
-        "    CREATE UNIQUE INDEX IF NOT EXISTS uq_dynamic_nodes_name ON dynamic_nodes (name);"
-        "  END IF;"
-        " END $$"
-    )
+    op.execute("""
+        DO $$ BEGIN
+          IF EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'ix_dynamic_nodes_name') THEN
+            ALTER INDEX ix_dynamic_nodes_name RENAME TO uq_dynamic_nodes_name;
+          ELSE
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_dynamic_nodes_name ON dynamic_nodes (name);
+          END IF;
+        END $$
+    """)
 
 
 def downgrade() -> None:
-    op.drop_index("uq_dynamic_nodes_name", table_name="dynamic_nodes")
-    op.drop_index("uq_dynamic_flows_name", table_name="dynamic_flows")
-    op.drop_index("uq_execution_units_source", table_name="execution_units")
-    op.drop_index("uq_platform_api_keys_user_name_active", table_name="platform_api_keys")
-    op.drop_index("uq_webhook_subscriptions_event_url_active", table_name="webhook_subscriptions")
+    op.execute("DROP INDEX IF EXISTS uq_dynamic_nodes_name")
+    op.execute("DROP INDEX IF EXISTS uq_dynamic_flows_name")
+    op.execute("DROP INDEX IF EXISTS uq_execution_units_source")
+    op.execute("DROP INDEX IF EXISTS uq_platform_api_keys_user_name_active")
+    op.execute("DROP INDEX IF EXISTS uq_webhook_subscriptions_event_url_active")
