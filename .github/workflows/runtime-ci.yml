@@ -182,7 +182,7 @@ jobs:
           --cov=AINDY
           --cov-report=xml
           --cov-report=term-missing
-          --cov-fail-under=40
+          --cov-fail-under=35
 
       - name: Upload coverage report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

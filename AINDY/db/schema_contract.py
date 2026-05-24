@@ -238,17 +238,32 @@ def offline_migration_contract(
     }
 
 
+_PG_TYPE_ALIASES: dict[str, str] = {
+    # PostgreSQL FLOAT and DOUBLE PRECISION are numeric aliases.
+    # SQLAlchemy Float compiles to "float"; PostgreSQL reflects stored
+    # float columns as "double precision".
+    "double precision": "float",
+    "double_precision": "float",
+    # SQLAlchemy DateTime(timezone=False) compiles to "timestamp"; PostgreSQL
+    # inspector returns "timestamp without time zone" for the same column.
+    "timestamp without time zone": "timestamp",
+}
+
+
 def _normalize_type_name(type_, *, dialect=None) -> str:
     if dialect is not None:
         try:
             compiled = str(type_.compile(dialect=dialect))
-            return compiled.lower().split("(", 1)[0].strip()
+            raw = compiled.lower().split("(", 1)[0].strip()
+            return _PG_TYPE_ALIASES.get(raw, raw)
         except Exception:
             pass
     visit_name = getattr(type_, "__visit_name__", None)
     if visit_name:
-        return str(visit_name).lower()
-    return type(type_).__name__.lower()
+        raw = str(visit_name).lower()
+        return _PG_TYPE_ALIASES.get(raw, raw)
+    raw = type(type_).__name__.lower()
+    return _PG_TYPE_ALIASES.get(raw, raw)
 
 
 def _runtime_owned_tables():
@@ -303,6 +318,13 @@ def _inspect_schema_issues(
         actual_columns = {
             column["name"]: column for column in inspector.get_columns(table_name)
         }
+        # get_columns() does not reliably populate "primary_key" on PostgreSQL;
+        # get_pk_constraint() is the authoritative source.
+        try:
+            pk_info = inspector.get_pk_constraint(table_name)
+            pk_col_names: set[str] = set(pk_info.get("constrained_columns", []))
+        except Exception:
+            pk_col_names = set()
         for expected_column in table.columns:
             actual_column = actual_columns.get(expected_column.name)
             if actual_column is None:
@@ -334,7 +356,8 @@ def _inspect_schema_issues(
                 expected_column.type,
                 dialect=resolved.dialect,
             )
-            actual_type = _normalize_type_name(actual_column["type"])
+            # Pass the same dialect so both sides use the same compilation path.
+            actual_type = _normalize_type_name(actual_column["type"], dialect=resolved.dialect)
             if expected_type != actual_type:
                 issues.append(
                     SchemaIssue(
@@ -367,7 +390,7 @@ def _inspect_schema_issues(
                     )
                 )
 
-            actual_primary_key = bool(actual_column.get("primary_key", False))
+            actual_primary_key = expected_column.name in pk_col_names
             if actual_primary_key != bool(expected_column.primary_key):
                 issues.append(
                     SchemaIssue(
