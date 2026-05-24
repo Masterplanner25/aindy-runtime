@@ -1,6 +1,8 @@
 import os
+from pathlib import Path
 
 from fastapi import Depends
+from fastapi.staticfiles import StaticFiles
 from prometheus_client import make_asgi_app as _make_metrics_asgi
 
 from AINDY.core.execution_guard import require_execution_context
@@ -15,6 +17,8 @@ from AINDY.routes import (
     ROOT_ROUTERS,
     platform_router,
 )
+
+_PLATFORM_UI_DIST = Path(__file__).parent.parent / "platform" / "dist"
 
 
 def home():
@@ -51,3 +55,6 @@ def register_routes(app) -> None:
             app.include_router(route, dependencies=[Depends(require_execution_context)])
 
     enforce_registered_route_execution(app)
+
+    if _PLATFORM_UI_DIST.is_dir():
+        app.mount("/platform", StaticFiles(directory=str(_PLATFORM_UI_DIST), html=True), name="platform-ui")
