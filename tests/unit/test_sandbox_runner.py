@@ -154,6 +154,13 @@ class _FakeHostProcess:
         return self.returncode
 
 
+class _FakeCompletedProcess:
+    def __init__(self, returncode: int, stdout: str, stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
 class _FakeStrongProbeFailureProcess(_FakeHostProcess):
     def _handle_line(self, raw: str) -> None:
         payload = json.loads(raw)
@@ -714,3 +721,171 @@ def test_sandbox_platform_matrix_reports_macos_without_strong_sandbox_support(mo
         "native macos kernel policy enforcement" in entry.lower()
         for entry in matrix["current_environment"]["degraded_modes"]
     )
+
+
+class TestDetectLinuxContainerBackend:
+    def test_linux_host_runtime_available_uses_shutil_which_only(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_linux_container_backend
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "/usr/bin/docker")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
+
+        subprocess_calls: list[object] = []
+
+        def _must_not_run(*args: object, **kwargs: object) -> object:
+            subprocess_calls.append(args)
+            raise AssertionError("subprocess.run must not be called on a Linux host")
+
+        monkeypatch.setattr(sandbox_runner.subprocess, "run", _must_not_run)
+
+        result = _detect_linux_container_backend("docker")
+
+        assert result["runtime"] == "docker"
+        assert result["runtime_available"] is True
+        assert result["linux_container_backend"] is True
+        assert result["os_type"] == "linux"
+        assert result["detection_method"] == "shutil_which_only"
+        assert result["detection_error"] is None
+        assert subprocess_calls == []
+
+    def test_linux_host_runtime_not_available(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_linux_container_backend
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: None)
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
+
+        result = _detect_linux_container_backend("docker")
+
+        assert result["runtime"] == "docker"
+        assert result["runtime_available"] is False
+        assert result["linux_container_backend"] is False
+        assert result["detection_method"] == "unavailable"
+
+    def test_windows_host_docker_info_reports_linux(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_linux_container_backend
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "docker")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            sandbox_runner.subprocess,
+            "run",
+            lambda *args, **kwargs: _FakeCompletedProcess(0, '{"OSType":"linux","ServerVersion":"25.0.0"}'),
+        )
+
+        result = _detect_linux_container_backend("docker")
+
+        assert result["runtime"] == "docker"
+        assert result["runtime_available"] is True
+        assert result["linux_container_backend"] is True
+        assert result["detection_method"] == "docker_info_json"
+        assert result["os_type"] == "linux"
+        assert result["detection_error"] is None
+
+    def test_windows_host_docker_info_reports_windows(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_linux_container_backend
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "docker")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            sandbox_runner.subprocess,
+            "run",
+            lambda *args, **kwargs: _FakeCompletedProcess(0, '{"OSType":"windows","ServerVersion":"25.0.0"}'),
+        )
+
+        result = _detect_linux_container_backend("docker")
+
+        assert result["linux_container_backend"] is False
+        assert result["os_type"] == "windows"
+        assert result["detection_method"] == "docker_info_json"
+        assert result["detection_error"] is None
+
+    def test_macos_host_docker_info_reports_linux(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_linux_container_backend
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "docker")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(
+            sandbox_runner.subprocess,
+            "run",
+            lambda *args, **kwargs: _FakeCompletedProcess(0, '{"OSType":"linux"}'),
+        )
+
+        result = _detect_linux_container_backend("docker")
+
+        assert result["linux_container_backend"] is True
+        assert result["detection_method"] == "docker_info_json"
+        assert result["os_type"] == "linux"
+
+    def test_windows_host_docker_info_times_out(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_linux_container_backend
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "docker")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+
+        def _timeout(*args: object, **kwargs: object) -> object:
+            raise sandbox_runner.subprocess.TimeoutExpired(cmd="docker", timeout=3.0)
+
+        monkeypatch.setattr(sandbox_runner.subprocess, "run", _timeout)
+
+        result = _detect_linux_container_backend("docker")
+
+        assert result["linux_container_backend"] is False
+        assert result["detection_method"] == "docker_info_json"
+        error = result["detection_error"] or ""
+        assert "timed out" in error.lower() or "timeout" in error.lower()
+
+    def test_windows_host_docker_info_returns_invalid_json(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_linux_container_backend
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "docker")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            sandbox_runner.subprocess,
+            "run",
+            lambda *args, **kwargs: _FakeCompletedProcess(0, "not-valid-json{{{"),
+        )
+
+        result = _detect_linux_container_backend("docker")
+
+        assert result["linux_container_backend"] is False
+        assert result["detection_method"] == "docker_info_json"
+        assert "json" in (result["detection_error"] or "").lower()
+
+    def test_windows_host_docker_info_nonzero_exit(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_linux_container_backend
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "docker")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            sandbox_runner.subprocess,
+            "run",
+            lambda *args, **kwargs: _FakeCompletedProcess(1, "", "docker: error connecting to daemon"),
+        )
+
+        result = _detect_linux_container_backend("docker")
+
+        assert result["linux_container_backend"] is False
+        assert result["detection_method"] == "docker_info_json"
+        error = result["detection_error"] or ""
+        assert "1" in error or "error" in error.lower()
+
+    def test_non_linux_host_runtime_not_available(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_linux_container_backend
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: None)
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+
+        result = _detect_linux_container_backend("docker")
+
+        assert result["linux_container_backend"] is False
+        assert result["detection_method"] == "unavailable"
+        assert result["runtime_available"] is False

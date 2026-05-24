@@ -1854,6 +1854,144 @@ def _supports_selinux_label(container_runtime: str) -> bool:
     return _supports_linux_container_kernel_controls() and container_runtime in {"docker", "podman"}
 
 
+def _detect_linux_container_backend(container_runtime: str) -> dict[str, Any]:
+    """Detect whether the configured container runtime is a Linux-containers backend."""
+    if shutil.which(container_runtime) is None:
+        return {
+            "runtime": container_runtime,
+            "runtime_available": False,
+            "linux_container_backend": False,
+            "os_type": None,
+            "detection_method": "unavailable",
+            "detection_error": f"container runtime {container_runtime!r} is not on PATH",
+            "operator_note": (
+                f"container runtime {container_runtime!r} is not on PATH; "
+                "no Linux container backend available"
+            ),
+        }
+
+    if _normalized_platform_system() == PLATFORM_LINUX:
+        return {
+            "runtime": container_runtime,
+            "runtime_available": True,
+            "linux_container_backend": True,
+            "os_type": "linux",
+            "detection_method": "shutil_which_only",
+            "detection_error": None,
+            "operator_note": (
+                "runtime is on PATH and host is Linux; "
+                "Linux container backend assumed without subprocess detection"
+            ),
+        }
+
+    try:
+        proc = subprocess.run(
+            [container_runtime, "info", "--format", "{{json .}}"],
+            text=True,
+            check=False,
+            timeout=3.0,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.TimeoutExpired:
+        error = "container runtime info timed out after 3 seconds"
+        return {
+            "runtime": container_runtime,
+            "runtime_available": True,
+            "linux_container_backend": False,
+            "os_type": None,
+            "detection_method": "docker_info_json",
+            "detection_error": error,
+            "operator_note": (
+                f"docker info failed: {error}; "
+                "treating as no Linux container backend available"
+            ),
+        }
+    except FileNotFoundError:
+        error = f"container runtime {container_runtime!r} was not found when invoking info"
+        return {
+            "runtime": container_runtime,
+            "runtime_available": True,
+            "linux_container_backend": False,
+            "os_type": None,
+            "detection_method": "docker_info_json",
+            "detection_error": error,
+            "operator_note": (
+                f"docker info failed: {error}; "
+                "treating as no Linux container backend available"
+            ),
+        }
+
+    if proc.returncode != 0:
+        stderr_excerpt = str(proc.stderr or "").strip()
+        error = f"container runtime info exited with code {proc.returncode}"
+        if stderr_excerpt:
+            error += f"; stderr: {stderr_excerpt}"
+        return {
+            "runtime": container_runtime,
+            "runtime_available": True,
+            "linux_container_backend": False,
+            "os_type": None,
+            "detection_method": "docker_info_json",
+            "detection_error": error,
+            "operator_note": (
+                f"docker info failed: {error}; "
+                "treating as no Linux container backend available"
+            ),
+        }
+
+    try:
+        info = json.loads(proc.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return {
+            "runtime": container_runtime,
+            "runtime_available": True,
+            "linux_container_backend": False,
+            "os_type": None,
+            "detection_method": "docker_info_json",
+            "detection_error": "container runtime info output was not valid JSON",
+            "operator_note": (
+                "docker info failed: output was not valid JSON; "
+                "treating as no Linux container backend available"
+            ),
+        }
+
+    os_type_raw = str(info.get("OSType") or "").strip() or None
+    if (os_type_raw or "").lower() == "linux":
+        return {
+            "runtime": container_runtime,
+            "runtime_available": True,
+            "linux_container_backend": True,
+            "os_type": os_type_raw,
+            "detection_method": "docker_info_json",
+            "detection_error": None,
+            "operator_note": (
+                f"docker info reports OSType={os_type_raw}; "
+                "Linux container backend is active"
+            ),
+        }
+
+    if (os_type_raw or "").lower() == "windows":
+        note = (
+            f"docker info reports OSType={os_type_raw}; "
+            "Windows-containers mode is not currently supported by AINDY"
+        )
+    else:
+        note = (
+            f"docker info reports OSType={os_type_raw}; "
+            "OSType is not 'linux', treating as no Linux container backend available"
+        )
+    return {
+        "runtime": container_runtime,
+        "runtime_available": True,
+        "linux_container_backend": False,
+        "os_type": os_type_raw,
+        "detection_method": "docker_info_json",
+        "detection_error": None,
+        "operator_note": note,
+    }
+
+
 def inspect_container_kernel_controls(
     *,
     container_runtime: str,

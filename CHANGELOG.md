@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added — C2/NF-3: Linux container backend detection helper (2026-05-24)
+
+- **`_detect_linux_container_backend(container_runtime)`**
+  (`AINDY/platform_layer/sandbox_runner.py`): new module-level helper that
+  determines whether the configured container runtime is currently operating
+  as a Linux-containers backend. Returns a structured result dict with
+  `runtime`, `runtime_available`, `linux_container_backend`, `os_type`,
+  `detection_method`, `detection_error`, and `operator_note` keys.
+  Detection logic: on Linux hosts the binary presence alone is sufficient
+  (`detection_method: "shutil_which_only"`); on non-Linux hosts the helper
+  shells out to `{runtime} info --format '{{json .}}'` and inspects the
+  `OSType` field (`detection_method: "docker_info_json"`). Fails closed on
+  timeout, non-zero exit, `FileNotFoundError`, or JSON parse failure
+  (`linux_container_backend: False`). Not yet wired into
+  `_platform_matrix_entry` — that is NF-1 / NF-4.
+- **Unit tests** (`tests/unit/test_sandbox_runner.py`,
+  `TestDetectLinuxContainerBackend`): 9 cases covering Linux/Windows/macOS
+  host paths, timeout, invalid JSON, non-zero exit, and unavailable runtime.
+
 ### Added — IDEM-9: EffectRecord TTL cleanup (2026-05-24)
 
 - **Cleanup job** (`AINDY/platform_layer/scheduler_service.py`):
