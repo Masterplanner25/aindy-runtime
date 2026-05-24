@@ -47,6 +47,9 @@ class RetryPolicy:
     """If True, any failure on the first attempt is terminal regardless of
     max_attempts. Matches nodus_adapter high-risk no-retry rule."""
 
+    execution_guarantee: str = "AT_LEAST_ONCE"
+    """Idempotency contract: 'AT_LEAST_ONCE' or 'EXACTLY_ONCE'."""
+
 
 # ---------------------------------------------------------------------------
 # Well-known policies (named constants for documentation and future adoption)
@@ -64,6 +67,7 @@ AGENT_HIGH_RISK = RetryPolicy(
     backoff_ms=0,
     exponential_backoff=False,
     high_risk_immediate_fail=True,
+    execution_guarantee="EXACTLY_ONCE",
 )
 
 # Mirrors async_job_service default max_attempts=1

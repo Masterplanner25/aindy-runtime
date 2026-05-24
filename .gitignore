@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 coverage.xml
+coverage-*.xml
 .venv/
 build/
 dist/
@@ -10,3 +11,6 @@ dist/
 .env
 ISOLATION_MODEL_PLAN.md
 AINDY_ORIENTATION.md
+IDEMPOTENCY_AUDIT.md
+RUNTIME_SIGNOFF.md
+Idempotency convo.txt

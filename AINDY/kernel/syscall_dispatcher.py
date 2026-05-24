@@ -1,5 +1,5 @@
 """
-SyscallDispatcher â€” single entry point for all A.I.N.D.Y. system calls.
+SyscallDispatcher â€" single entry point for all A.I.N.D.Y. system calls.
 
 All sys.v{N}.{domain}.{action} calls route through dispatch(). The dispatcher:
 
@@ -9,7 +9,7 @@ All sys.v{N}.{domain}.{action} calls route through dispatch(). The dispatcher:
   4. Validates input payload against the entry's input_schema (if present).
   5. Checks tenant isolation and resource quota.
   6. Executes the registered handler.
-  7. Validates output against output_schema (non-fatal â€” logs warning only).
+  7. Validates output against output_schema (non-fatal â€" logs warning only).
   8. Emits deprecation warning if the syscall is marked deprecated.
   9. Wraps the result in the standard response envelope.
  10. Emits a SYSCALL_EXECUTED SystemEvent (non-fatal, swallowed on failure).
@@ -30,7 +30,10 @@ All calls return::
         "warning":           str | None # set when syscall is deprecated
     }
 
-The dispatcher NEVER raises. Every code path returns the envelope.
+The dispatcher never raises for transient or expected errors — every such path
+returns the envelope. The one exception is SyscallContractViolation, which is
+raised when an EXACTLY_ONCE handler returns a non-dict value. This is a
+programming error and callers must not catch it silently.
 
 Usage
 -----
@@ -52,6 +55,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+import hashlib as _gate_hashlib
+import json as _gate_json
 import uuid as _uuid
 from contextvars import ContextVar
 from typing import Any
@@ -90,6 +95,8 @@ except ImportError:
 
 __all__ = [
     "SyscallDispatcher",
+    "SyscallContractViolation",
+    "STALE_PENDING_THRESHOLD_SECONDS",
     "SyscallContext",
     "DEFAULT_NODUS_CAPABILITIES",
     "register_syscall",
@@ -100,10 +107,10 @@ __all__ = [
     "child_context",
 ]
 
-# â”€â”€ Trace propagation ContextVars â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Trace propagation ContextVars â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 # These carry the root trace_id and execution_unit_id across nested dispatch()
 # calls within the same thread or asyncio task.  The root dispatch() sets them
-# and always resets them in a finally block â€” nested calls inherit them without
+# and always resets them in a finally block â€" nested calls inherit them without
 # writing a new token.
 _TRACE_ID_CTX: ContextVar[str] = ContextVar("syscall_trace_id", default="")
 _EU_ID_CTX: ContextVar[str] = ContextVar("syscall_eu_id", default="")
@@ -115,6 +122,14 @@ def _get_rm():
     return get_resource_manager()
 
 logger = logging.getLogger(__name__)
+
+# Stale-pending threshold: a pending EffectRecord with no completed_at and
+# created_at older than this many seconds is considered abandoned (handler
+# interrupted mid-execution) and is eligible for in-band recovery.
+# 900 s = 15 min, chosen to exceed the maximum expected handler wall-clock
+# time plus a safety margin. Resolution of Open Question #3 in
+# docs/runtime/IDEMPOTENCY_CONTRACT.md.
+STALE_PENDING_THRESHOLD_SECONDS = 900
 
 
 def _quota_backend_failure_may_fail_open() -> bool:
@@ -142,11 +157,102 @@ def _validate_runtime_owned_call_metadata(context: SyscallContext) -> str | None
     return None
 
 
+class SyscallContractViolation(Exception):
+    """Raised when an EXACTLY_ONCE syscall handler returns a non-dict value.
+
+    This is a programming error in the handler, not a transient failure.
+    The EffectRecord is finalized as 'failed' before this exception is raised.
+
+    AT_LEAST_ONCE handlers never raise this — non-dict returns on that path
+    produce a normal error envelope so execution continues.
+
+    Layer 2 note: registration-time return-annotation checking is not implemented.
+    execution_guarantee is an EU-level attribute (ExecutionUnit.extra), not a
+    per-syscall attribute. A single syscall name may be dispatched from both
+    AT_LEAST_ONCE and EXACTLY_ONCE EUs, so the guarantee is not knowable at
+    registration time. Contract enforcement happens here, at dispatch time.
+    """
+
+
+def _resolve_effect_record(db, action_id: str, action_type: str, payload: dict):
+    from AINDY.db.models.effect_record import EffectRecord
+    from sqlalchemy.exc import IntegrityError
+    from datetime import datetime, timezone, timedelta
+
+    record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
+    if record is not None and record.status == "success":
+        return True, record.result_payload
+    if record is None:
+        payload_bytes = _gate_json.dumps(
+            dict(payload or {}), sort_keys=True, separators=(",", ":")
+        ).encode()
+        input_hash = _gate_hashlib.sha256(payload_bytes).hexdigest()
+        try:
+            db.add(EffectRecord(
+                action_id=action_id,
+                action_type=action_type,
+                input_hash=input_hash,
+                status="pending",
+            ))
+            db.commit()
+        except IntegrityError as exc:
+            # Only handle the unique-constraint violation on action_id; any
+            # other integrity violation (FK, check, etc.) must propagate.
+            _err_str = str(exc) + str(getattr(exc, "orig", ""))
+            if "uq_effect_records_action_id" not in _err_str:
+                raise
+            db.rollback()
+            # Re-query to discover what raced us into the constraint violation.
+            record = db.query(EffectRecord).filter(
+                EffectRecord.action_id == action_id
+            ).first()
+            if record is None:
+                raise  # Unexpected: constraint fired but no row found.
+            if record.status == "success":
+                # Concurrent call completed successfully first.
+                return True, record.result_payload
+            stale_cutoff = (
+                datetime.now(timezone.utc)
+                - timedelta(seconds=STALE_PENDING_THRESHOLD_SECONDS)
+            )
+            if record.status == "pending" and record.created_at >= stale_cutoff:
+                # A live concurrent call is already in flight for this action.
+                # Degrade to AT_LEAST_ONCE for this invocation; strict
+                # at-most-once under concurrent retry requires application-layer
+                # advisory locking (see IDEMPOTENCY_CONTRACT.md).
+                logger.warning(
+                    "[SyscallDispatcher] concurrent pending EffectRecord for"
+                    " action_id=%s; degrading to AT_LEAST_ONCE for this call",
+                    action_id,
+                )
+                return False, None
+            # Stale pending (abandoned mid-execution) or prior failure: reset
+            # the row in-place and claim the slot for this attempt.  Consistent
+            # with retry-after-failure semantics: failed records do not block
+            # future attempts (see IDEMPOTENCY_CONTRACT.md § Stale Pending Recovery).
+            record.status = "pending"
+            record.completed_at = None
+            record.created_at = datetime.now(timezone.utc)
+            db.commit()
+    return False, None
+
+
+def _complete_effect_record(db, action_id: str, status: str, result_payload):
+    from AINDY.db.models.effect_record import EffectRecord
+    from datetime import datetime, timezone
+    record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
+    if record is not None:
+        record.status = status
+        record.result_payload = result_payload if isinstance(result_payload, dict) else None
+        record.completed_at = datetime.now(timezone.utc)
+        db.commit()
+
+
 class SyscallDispatcher:
     """Routes sys.v1.* calls to registered handlers with capability enforcement.
 
     Instantiate once and reuse (the module-level singleton is the normal path).
-    The dispatcher itself is stateless â€” all state lives in the handlers and DB.
+    The dispatcher itself is stateless â€" all state lives in the handlers and DB.
     """
 
     def dispatch(
@@ -157,14 +263,14 @@ class SyscallDispatcher:
     ) -> dict[str, Any]:
         """Execute a syscall and return the standard response envelope.
 
-        This method never raises. All errors â€” unknown syscall, permission
-        denial, handler failure â€” are captured in the returned envelope.
+        This method never raises. All errors â€" unknown syscall, permission
+        denial, handler failure â€" are captured in the returned envelope.
 
         Trace propagation
         -----------------
         If a parent dispatch() is already active in this thread / asyncio task,
         the child inherits its trace_id and execution_unit_id automatically via
-        ContextVars â€” even if the caller passed a freshly-constructed context.
+        ContextVars â€" even if the caller passed a freshly-constructed context.
         This ensures a single trace_id across the full nested execution chain.
 
         If this is the root call (no parent active), the context's existing
@@ -180,10 +286,13 @@ class SyscallDispatcher:
             Standard response envelope (see module docstring).
         """
         t_start = time.monotonic()
+        _orig_eu_id = context.execution_unit_id or ""
         context, _tok_trace, _tok_eu = self._resolve_trace_context(context)
         try:
-            return self._dispatch(name, payload, context, t_start)
-        except Exception as exc:  # belt-and-suspenders â€” _dispatch shouldn't leak
+            return self._dispatch(name, payload, context, t_start, _orig_eu_id)
+        except SyscallContractViolation:
+            raise
+        except Exception as exc:  # belt-and-suspenders â€" _dispatch shouldn't leak
             logger.error(
                 "[SyscallDispatcher] unhandled exception for '%s': %s",
                 name, exc, exc_info=True,
@@ -195,7 +304,7 @@ class SyscallDispatcher:
             if _tok_eu is not None:
                 _EU_ID_CTX.reset(_tok_eu)
 
-    # â”€â”€ Private â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # â"€â"€ Private â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
     def _resolve_trace_context(
         self,
@@ -216,7 +325,7 @@ class SyscallDispatcher:
         inherited_eu = _EU_ID_CTX.get()
 
         if inherited_trace:
-            # â”€â”€ Nested call â€” inherit parent trace/EU â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            # â"€â"€ Nested call â€" inherit parent trace/EU â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
             if (
                 context.trace_id != inherited_trace
                 or context.execution_unit_id != inherited_eu
@@ -237,7 +346,7 @@ class SyscallDispatcher:
                 )
             return context, None, None
 
-        # â”€â”€ Root call â€” establish trace context â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # â"€â"€ Root call â€" establish trace context â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
         trace_id = context.trace_id or str(_uuid.uuid4())
         eu_id = context.execution_unit_id or str(_uuid.uuid4())
         if not context.trace_id or not context.execution_unit_id:
@@ -259,8 +368,9 @@ class SyscallDispatcher:
         payload: dict[str, Any],
         context: SyscallContext,
         t_start: float,
+        _orig_eu_id: str = "",
     ) -> dict[str, Any]:
-        # Step 1 â€” parse version and validate syscall exists
+        # Step 1 â€" parse version and validate syscall exists
         try:
             parsed_version, _ = parse_syscall_name(name)
         except ValueError:
@@ -298,7 +408,7 @@ class SyscallDispatcher:
                 version=parsed_version,
             )
 
-        # Step 2 â€” enforce capability
+        # Step 2 â€" enforce capability
         if entry.capability not in context.capabilities:
             return self._error_envelope(
                 name, context,
@@ -308,7 +418,7 @@ class SyscallDispatcher:
                 version=parsed_version,
             )
 
-        # Step 2b â€” tenant isolation: validate context has a user_id
+        # Step 2b â€" tenant isolation: validate context has a user_id
         if not context.user_id:
             return self._error_envelope(
                 name, context,
@@ -326,7 +436,7 @@ class SyscallDispatcher:
                 version=parsed_version,
             )
 
-        # Step 2c â€” resource quota check (syscall budget)
+        # Step 2c â€" resource quota check (syscall budget)
         # Quota hard denials always fail closed. Quota backend failures only
         # fail open in development/test environments; production blocks
         # execution until quota enforcement recovers.
@@ -350,7 +460,7 @@ class SyscallDispatcher:
                 return self._error_envelope(name, context, quota_reason, t_start,
                                             version=parsed_version)
 
-        # Step 2d â€” input validation against ABI schema
+        # Step 2d â€" input validation against ABI schema
         if entry.input_schema:
             errors = validate_input(entry.input_schema, payload)
             if errors:
@@ -361,7 +471,7 @@ class SyscallDispatcher:
                     version=parsed_version,
                 )
 
-        # Step 2e â€” deprecation check (warn but still execute)
+        # Step 2e â€" deprecation check (warn but still execute)
         deprecation_warning: str | None = None
         if entry.deprecated:
             parts = [f"Syscall '{name}' is deprecated"]
@@ -372,7 +482,65 @@ class SyscallDispatcher:
             deprecation_warning = " ".join(parts) + "."
             logger.warning("[SyscallDispatcher] %s", deprecation_warning)
 
-        # Step 3 â€” execute handler
+        # Step 2f — idempotency gate (EXACTLY_ONCE syscalls only)
+        _gate_db = None
+        _gate_action_id = None
+        if _orig_eu_id:
+            try:
+                from AINDY.db.database import SessionLocal
+                from AINDY.db.models.execution_unit import ExecutionUnit
+                _gate_db = SessionLocal()
+                _eu_row = _gate_db.query(ExecutionUnit).filter(
+                    ExecutionUnit.id == str(context.execution_unit_id)
+                ).first()
+                _guarantee = (
+                    (_eu_row.extra or {}).get("retry_policy", {}).get(
+                        "execution_guarantee", "AT_LEAST_ONCE"
+                    )
+                    if _eu_row is not None else "AT_LEAST_ONCE"
+                )
+            except Exception as _gate_exc:
+                if _gate_db is not None:
+                    try:
+                        _gate_db.close()
+                    except Exception:
+                        pass
+                    _gate_db = None
+                _guarantee = "AT_LEAST_ONCE"
+                logger.warning(
+                    "[SyscallDispatcher] idempotency gate EU lookup skipped for %r: %s",
+                    name, _gate_exc,
+                )
+
+            if _guarantee == "EXACTLY_ONCE" and _gate_db is not None:
+                from AINDY.core.execution_gate import compute_action_id
+                _gate_action_id = compute_action_id(
+                    action_type=name,
+                    input_payload=dict(payload or {}),
+                    scope=str(context.execution_unit_id),
+                )
+                _already_done, _cached = _resolve_effect_record(
+                    _gate_db, _gate_action_id, name, payload
+                )
+                if _already_done:
+                    _gate_db.close()
+                    _gate_db = None
+                    return {
+                        "status": "success",
+                        "data": _cached or {},
+                        "trace_id": context.trace_id,
+                        "execution_unit_id": context.execution_unit_id,
+                        "syscall": name,
+                        "version": parsed_version,
+                        "duration_ms": int((time.monotonic() - t_start) * 1000),
+                        "error": None,
+                        "warning": None,
+                    }
+            elif _gate_db is not None:
+                _gate_db.close()
+                _gate_db = None
+
+        # Step 3 â€" execute handler
         try:
             if _OTEL_AVAILABLE:
                 try:
@@ -423,20 +591,36 @@ class SyscallDispatcher:
                 "[SyscallDispatcher] handler error '%s': %s", name, exc, exc_info=True,
             )
             self._emit_syscall_event(name, context, "error")
+            if _gate_db is not None and _gate_action_id is not None:
+                _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
+                _gate_db.close()
+                _gate_db = None
             message = str(exc)
             if isinstance(exc, CircuitOpenError):
                 message = f"HTTP_503:{message}"
             return self._error_envelope(name, context, message, t_start,
                                         version=parsed_version)
 
-        # Step 3b â€” output validation (non-fatal: log warning, never fail execution)
+        # Step 3b — output type check.
+        # EXACTLY_ONCE: non-dict is a hard contract violation → raise SyscallContractViolation.
+        # AT_LEAST_ONCE / no gate: non-dict is a normal error envelope (existing behaviour).
         if not isinstance(data, dict):
             logger.error(
-                "[SyscallDispatcher] handler contract violation for '%s': expected dict, got %s",
+                "[SyscallDispatcher] handler contract violation for '%s': expected dict,"
+                " got %s (action_id=%s)",
                 name,
                 type(data).__name__,
+                _gate_action_id or "n/a",
             )
             self._emit_syscall_event(name, context, "error")
+            if _gate_db is not None and _gate_action_id is not None:
+                _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
+                _gate_db.close()
+                _gate_db = None
+                raise SyscallContractViolation(
+                    f"EXACTLY_ONCE handler '{name}' returned {type(data).__name__},"
+                    f" expected dict (action_id={_gate_action_id})"
+                )
             return self._error_envelope(
                 name,
                 context,
@@ -455,6 +639,10 @@ class SyscallDispatcher:
                         detail,
                     )
                     self._emit_syscall_event(name, context, "error")
+                    if _gate_db is not None and _gate_action_id is not None:
+                        _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
+                        _gate_db.close()
+                        _gate_db = None
                     return self._error_envelope(
                         name,
                         context,
@@ -468,7 +656,12 @@ class SyscallDispatcher:
                     detail,
                 )
 
-        # Step 4 â€” record syscall usage in ResourceManager (non-fatal)
+        if _gate_db is not None and _gate_action_id is not None:
+            _complete_effect_record(_gate_db, _gate_action_id, "success", data)
+            _gate_db.close()
+            _gate_db = None
+
+        # Step 4 â€" record syscall usage in ResourceManager (non-fatal)
         try:
             duration_so_far = int((time.monotonic() - t_start) * 1000)
             _get_rm().record_usage(
@@ -478,13 +671,13 @@ class SyscallDispatcher:
         except Exception as _rm_exc:
             logger.debug("[SyscallDispatcher] resource record skipped: %s", _rm_exc)
 
-        # Step 5 â€” emit observability event (non-fatal)
+        # Step 5 â€" emit observability event (non-fatal)
         try:
             self._emit_syscall_event(name, context, "success")
         except Exception as exc:
             logger.debug("[SyscallDispatcher] observability skipped for '%s': %s", name, exc)
 
-        # Step 6 â€” return structured result
+        # Step 6 â€" return structured result
         return {
             "status": "success",
             "data": data,
@@ -563,7 +756,7 @@ class SyscallDispatcher:
             )
 
 
-# â”€â”€ Module-level singleton â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Module-level singleton â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 _DISPATCHER = SyscallDispatcher()
 
@@ -619,7 +812,7 @@ def dispatch_syscall(
     return get_dispatcher().dispatch(name, payload, ctx)
 
 
-# â”€â”€ Context builder helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# â"€â"€ Context builder helpers â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def make_syscall_ctx_from_flow(
     context: dict,
@@ -685,8 +878,8 @@ def child_context(
     """Build a child SyscallContext that inherits trace_id and eu_id from parent.
 
     Use this when a handler explicitly dispatches a nested syscall and wants to
-    forward the full execution identity â€” trace_id, execution_unit_id, and
-    user_id â€” unchanged.  capabilities and metadata can be overridden.
+    forward the full execution identity â€" trace_id, execution_unit_id, and
+    user_id â€" unchanged.  capabilities and metadata can be overridden.
 
     The ContextVar mechanism in dispatch() already propagates the trace
     automatically for most cases; use child_context() when you need the

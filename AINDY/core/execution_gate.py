@@ -55,6 +55,8 @@ Usage
 """
 from __future__ import annotations
 
+import hashlib as _hashlib
+import json as _json
 import logging
 import time
 from datetime import datetime, timezone
@@ -63,6 +65,16 @@ from typing import Any, Callable, Optional
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+
+
+def compute_action_id(action_type: str, input_payload: dict, scope: str) -> str:
+    """Return a deterministic SHA-256 hex digest for an idempotency key."""
+    canonical = _json.dumps(
+        {"action_type": action_type, "input": input_payload, "scope": scope},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _hashlib.sha256(canonical.encode()).hexdigest()
 
 
 # ── Cross-type WAIT signal ────────────────────────────────────────────────────
@@ -186,6 +198,7 @@ def _resolve_policy_for_eu(eu_type: str, extra: dict[str, Any]) -> dict[str, Any
         "backoff_ms": policy.backoff_ms,
         "exponential_backoff": policy.exponential_backoff,
         "high_risk_immediate_fail": policy.high_risk_immediate_fail,
+        "execution_guarantee": policy.execution_guarantee,
     }
 
 

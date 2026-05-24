@@ -53,6 +53,7 @@ _RUNTIME_TABLES = {
     "capabilities",
     "dynamic_flows",
     "dynamic_nodes",
+    "effect_records",
     "event_edges",
     "event_outcomes",
     "execution_units",

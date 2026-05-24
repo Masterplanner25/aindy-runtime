@@ -63,7 +63,7 @@ from AINDY.core.observability_events import emit_observability_event
 
 MAX_STEP_RETRIES = 3  # kept for reference; retry gate now reads RetryPolicy
 
-from AINDY.core.retry_policy import resolve_retry_policy as _resolve_retry_policy  # noqa: E402
+from AINDY.core.retry_policy import is_retryable_error, resolve_retry_policy as _resolve_retry_policy  # noqa: E402
 
 
 def _db_run_id(run_id):
@@ -276,6 +276,8 @@ def agent_execute_step(state: dict, context: dict) -> dict:
         # REPLACED: if risk_level == "high": break → policy.high_risk_immediate_fail
         if _step_policy.high_risk_immediate_fail:
             break  # High-risk: no retry regardless
+        if not is_retryable_error(tool_result.get("error")):
+            break  # Non-transient error: skip retry
 
         if attempt < max_attempts:
             logger.warning(

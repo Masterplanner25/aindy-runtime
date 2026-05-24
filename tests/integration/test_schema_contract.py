@@ -169,7 +169,7 @@ def test_alembic_version_runtime_table_exists(test_engine):
 
 
 def test_alembic_version_runtime_at_head(test_engine):
-    """alembic_version_runtime must be stamped at 0002 (current head)."""
+    """alembic_version_runtime must be stamped at 0003 (current head)."""
     from sqlalchemy import text
 
     with test_engine.connect() as conn:
@@ -178,8 +178,29 @@ def test_alembic_version_runtime_at_head(test_engine):
         ).fetchone()
 
     assert row is not None, "alembic_version_runtime has no rows — DB not stamped"
-    assert row[0] == "0002", (
-        f"Expected version '0002', got {row[0]!r}"
+    assert row[0] == "0003", (
+        f"Expected version '0003', got {row[0]!r}"
+    )
+
+
+def test_effect_records_table_exists(test_engine):
+    """effect_records table must exist after migration 0003 is applied."""
+    from sqlalchemy import inspect as sa_inspect
+
+    inspector = sa_inspect(test_engine)
+    assert inspector.has_table("effect_records"), (
+        "effect_records table missing — run 'alembic upgrade head' first"
+    )
+
+
+def test_effect_records_action_id_unique_index_exists(test_engine):
+    """effect_records must have a unique index on action_id."""
+    from sqlalchemy import inspect as sa_inspect
+
+    inspector = sa_inspect(test_engine)
+    indexes = {idx["name"] for idx in inspector.get_indexes("effect_records")}
+    assert "uq_effect_records_action_id" in indexes, (
+        f"Expected unique index uq_effect_records_action_id — found: {sorted(indexes)}"
     )
 
 

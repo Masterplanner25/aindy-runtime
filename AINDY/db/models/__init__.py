@@ -29,6 +29,7 @@ from .dynamic_flow import DynamicFlow
 from .dynamic_node import DynamicNode
 from .waiting_flow_run import WaitingFlowRun
 from .webhook_subscription import WebhookSubscription
+from .effect_record import EffectRecord
 
 
 __all__ = [
@@ -57,6 +58,7 @@ __all__ = [
     "AgentRegistry",
     "ExecutionUnit",
     "EventEdge",
+    "EffectRecord",
     "JobLog",
     "NodusScheduledJob",
     "NodusTraceEvent",

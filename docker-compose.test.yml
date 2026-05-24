@@ -1,4 +1,4 @@
-services:
+﻿services:
   postgres-test:
     image: pgvector/pgvector:pg15
     ports:

@@ -100,6 +100,10 @@ logger = logging.getLogger(__name__)
 APScheduler_AVAILABLE = True
 _STALE_WAIT_CLEANUP_COUNTER = 0
 
+EFFECT_RECORD_TTL_DAYS = 90
+EFFECT_RECORD_CLEANUP_INTERVAL_HOURS = 24
+EFFECT_RECORD_DELETE_BATCH_SIZE = 10_000
+
 # Global scheduler instance â€” initialized once on startup
 _scheduler: Optional[BackgroundScheduler] = None
 
@@ -205,6 +209,16 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         id="cleanup_stale_logs",
         name="Cleanup stale automation logs",
         replace_existing=True,
+    )
+
+    scheduler.add_job(
+        _cleanup_expired_effect_records,
+        trigger=IntervalTrigger(hours=EFFECT_RECORD_CLEANUP_INTERVAL_HOURS),
+        id="effect_record_cleanup",
+        name="EffectRecord TTL cleanup",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
     )
 
     scheduler.add_job(
@@ -363,6 +377,89 @@ def _cleanup_stale_logs() -> None:
     except Exception as exc:
         logger.warning("Stale log cleanup failed: %s", exc)
 
+
+def _cleanup_expired_effect_records() -> None:
+    """Delete finalized EffectRecord rows older than EFFECT_RECORD_TTL_DAYS. Pending rows excluded."""
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.models.effect_record import EffectRecord
+        from sqlalchemy import func, text
+        from datetime import timedelta
+
+        t_start = datetime.now(timezone.utc)
+        cutoff = t_start - timedelta(days=EFFECT_RECORD_TTL_DAYS)
+        stale_pending_cutoff = t_start - timedelta(hours=1)
+
+        db = SessionLocal()
+
+        total_count = db.query(func.count(EffectRecord.id)).scalar()
+        pending_count = (
+            db.query(func.count(EffectRecord.id))
+            .filter(EffectRecord.status == "pending")
+            .scalar()
+        )
+        eligible_count = (
+            db.query(func.count(EffectRecord.id))
+            .filter(
+                EffectRecord.completed_at.isnot(None),
+                EffectRecord.completed_at < cutoff,
+                EffectRecord.status != "pending",
+            )
+            .scalar()
+        )
+        logger.info(
+            "[effect_record_cleanup] scan: total=%d pending=%d eligible=%d",
+            total_count,
+            pending_count,
+            eligible_count,
+        )
+
+        stale_pending = (
+            db.query(func.count(EffectRecord.id))
+            .filter(
+                EffectRecord.status == "pending",
+                EffectRecord.created_at < stale_pending_cutoff,
+            )
+            .scalar()
+        )
+        if stale_pending:
+            logger.warning(
+                "[effect_record_cleanup] %d pending EffectRecord row(s) older than 1 hour"
+                " — may indicate stuck handlers; investigate action_ids",
+                stale_pending,
+            )
+
+        total_deleted = 0
+        while True:
+            result = db.execute(
+                text("""
+                    DELETE FROM effect_records
+                    WHERE id IN (
+                        SELECT id FROM effect_records
+                        WHERE completed_at IS NOT NULL
+                          AND completed_at < :cutoff
+                          AND status != 'pending'
+                        ORDER BY completed_at
+                        LIMIT :batch_size
+                    )
+                """),
+                {"cutoff": cutoff, "batch_size": EFFECT_RECORD_DELETE_BATCH_SIZE},
+            )
+            batch_count = result.rowcount
+            db.commit()
+            total_deleted += batch_count
+            if batch_count < EFFECT_RECORD_DELETE_BATCH_SIZE:
+                break
+
+        elapsed_ms = int((datetime.now(timezone.utc) - t_start).total_seconds() * 1000)
+        logger.info(
+            "[effect_record_cleanup] done: deleted=%d elapsed_ms=%d",
+            total_deleted,
+            elapsed_ms,
+        )
+        db.close()
+    except Exception as exc:
+        logger.error("[effect_record_cleanup] failed: %s", exc)
 
 
 

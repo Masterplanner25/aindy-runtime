@@ -611,4 +611,16 @@ Implication:
 - the frontend should hydrate from identity boot first, then refresh domain panels opportunistically
 - blank post-login dashboards are non-canonical behavior
 
+---
+
+## Related Contracts
+
+- **Idempotency Contract** (`docs/runtime/IDEMPOTENCY_CONTRACT.md`) — defines how
+  `EXACTLY_ONCE` syscalls are deduplicated via the `EffectRecord` table. The gate sits
+  inside `SyscallDispatcher._dispatch()` and depends on the `ExecutionUnit` record that
+  this contract requires to exist before work begins.
+- **Retry Policy** (`docs/runtime/RETRY_POLICY.md`) — defines retry semantics and the
+  `is_retryable_error()` classifier. The idempotency gate and retry policy interact:
+  retries of `EXACTLY_ONCE` syscalls return the cached result rather than re-executing.
+
 

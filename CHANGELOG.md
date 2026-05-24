@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+### Added — IDEM-9: EffectRecord TTL cleanup (2026-05-24)
+
+- **Cleanup job** (`AINDY/platform_layer/scheduler_service.py`):
+  `_cleanup_expired_effect_records()` registered as a 24-hour interval APScheduler job.
+  Deletes finalized `effect_records` rows (status ≠ `pending`, `completed_at IS NOT NULL`)
+  older than 90 days in batches of 10,000 rows per commit. Pending rows are never deleted.
+  Stale pending rows (older than 1 hour) trigger a `WARNING` for operator visibility.
+  Constants: `EFFECT_RECORD_TTL_DAYS=90`, `EFFECT_RECORD_CLEANUP_INTERVAL_HOURS=24`,
+  `EFFECT_RECORD_DELETE_BATCH_SIZE=10_000`.
+- **Migration 0004** (`alembic/versions/0004_effect_records_completed_at_index.py`):
+  Adds `ix_effect_records_completed_at_status` — composite partial index on
+  `(completed_at, status) WHERE completed_at IS NOT NULL` — to support the cleanup query
+  at production volume. Idempotent (`IF NOT EXISTS`).
+- **ORM model** (`AINDY/db/models/effect_record.py`): `ix_effect_records_completed_at_status`
+  added to `EffectRecord.__table_args__`. `SCHEMA_CONTRACT_VERSION` bumped to "2026-05-24.1".
+  `scripts/schema_version_baseline.json` regenerated.
+- **Unit tests** (`tests/unit/test_effect_record_cleanup.py`): 6 tests — no-op path,
+  finalized-row deletion, multi-batch loop, single-full-batch boundary, stale-pending
+  warning, exception isolation.
+- **Integration test** (`tests/integration/test_effect_record_cleanup_e2e.py`): 1 test —
+  verifies expired row deleted, pending row preserved, recent row preserved against real
+  Postgres. IDEM-9 closed in `TECH_DEBT.md`.
+
+### Added — Idempotency layer: NF-1 through NF-5 (2026-05-24)
+
+- **NF-1** (`AINDY/db/models/effect_record.py`, `alembic/versions/0003_effect_records.py`):
+  New `EffectRecord` ORM model and Alembic migration 0003. Table stores per-syscall
+  idempotency records keyed by `action_id` (SHA-256). `SCHEMA_CONTRACT_VERSION` bumped
+  to "2026-05-24".
+- **NF-2** (`AINDY/core/retry_policy.py`): `RetryPolicy` dataclass gains
+  `execution_guarantee: str = "AT_LEAST_ONCE"` field. `AGENT_HIGH_RISK` constant sets
+  `execution_guarantee="EXACTLY_ONCE"`. `_resolve_policy_for_eu()` in `execution_gate.py`
+  serialises the field into `ExecutionUnit.extra["retry_policy"]`.
+- **NF-3** (`AINDY/core/execution_gate.py`): `compute_action_id(action_type, input_payload, scope)`
+  returns a deterministic SHA-256 hex digest used as the idempotency key.
+- **NF-4** (`AINDY/runtime/nodus_adapter.py`, `AINDY/runtime/flow_engine/runner_steps.py`):
+  `is_retryable_error()` wired into agent step and flow node retry loops. Non-transient
+  errors (permission denied, 404, unauthorized, etc.) skip retry immediately.
+- **NF-5** (`AINDY/kernel/syscall_dispatcher.py`): Idempotency gate inserted in
+  `SyscallDispatcher._dispatch()` between Step 2e (deprecation check) and Step 3
+  (handler execution). For `EXACTLY_ONCE` syscalls the gate checks `effect_records`
+  before calling the handler; a cache hit returns the stored result without re-executing.
+  AT_LEAST_ONCE syscalls are completely unaffected. Gate EU lookup is try/except wrapped
+  (graceful skip if EU unavailable); EffectRecord write is a hard invariant.
+  `_resolve_effect_record` and `_complete_effect_record` use `db.commit()` (not `flush()`)
+  so pending and final EffectRecord states are durable across session close.
+- **NF-1 fix** (`AINDY/db/models/effect_record.py`): `server_default` for the UUID primary
+  key uses `text("gen_random_uuid()")` instead of a bare string literal, preventing
+  SQLAlchemy from quoting it as a literal UUID value on Postgres.
+- **Schema baseline** (`scripts/schema_version_baseline.json`): updated to reflect the
+  corrected `effect_record.py` model hash at version "2026-05-24".
+
+### Added — IDEMPOTENCY_CONTRACT.md (2026-05-24)
+
+- `docs/runtime/IDEMPOTENCY_CONTRACT.md`: canonical contract for effect-level
+  idempotency. Covers three enforcement layers (DB constraints, Alembic migration
+  idempotency, NF-5 effect gate), 8 required invariants, EffectRecord state machine,
+  action_id derivation contract, execution guarantee labels, interaction with
+  EXECUTION_CONTRACT.md and RETRY_POLICY.md, exclusion scope, enforcement/verification
+  matrix, and 5 open operational questions.
+
 ### Added — Platform UI sub-project (2026-05-24)
 
 - `platform/` — standalone Vite + React 19 SPA (`@aindy/platform-ui`) that
