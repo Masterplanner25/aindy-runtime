@@ -312,6 +312,36 @@ jobs:
           name: coverage-integration
           path: coverage.xml
 
+  platform-ui-build:
+    name: Platform UI Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint]
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: platform/package-lock.json
+
+      - name: Install platform UI dependencies
+        working-directory: platform
+        run: npm ci
+
+      - name: Build platform UI
+        working-directory: platform
+        run: npm run build
+
+      - name: Verify dist artifacts
+        working-directory: platform
+        run: |
+          test -f dist/index.html
+          test -d dist/assets
+          echo "Platform UI build OK — $(du -sh dist | cut -f1) total"
+
   package-build:
     name: Runtime Package Build
     runs-on: ubuntu-latest

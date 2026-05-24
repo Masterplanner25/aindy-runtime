@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added — Platform UI sub-project (2026-05-24)
+
+- `platform/` — standalone Vite + React 19 SPA (`@aindy/platform-ui`) that
+  consumes `@aindy/ui-kit` for all shared surfaces. Replaces the previous
+  arrangement where the monolith served platform components.
+- 7 platform components copied and adapted: `AgentConsole`, `FlowEngineConsole`,
+  `ObservabilityDashboard`, `HealthDashboard`, `AgentApprovalInbox`,
+  `AgentRegistry`, `RippleTraceViewer`. `ExecutionConsole` replaced with a
+  runtime-only stub (domain analytics panels are monolith-only).
+- API modules (`agent.js`, `operator.js`, `platform.js`, `analytics.js`,
+  `rippletrace.js`) present locally; `_core.js` and `_routes.js` re-export
+  from `@aindy/ui-kit`.
+- `ErrorBoundary.jsx` simplified for runtime: no `reportClientError` call.
+- `AINDY/routing.py`: `StaticFiles(html=True)` mounted at `/platform` after
+  `enforce_registered_route_execution` so platform API routes keep full
+  priority. Mount is skipped gracefully if `platform/dist/` is absent.
+- Build: `cd platform && npm install && npm run build` (must run before serving).
+
 ### Added — Alembic migration layer + idempotency fixes (2026-05-23)
 
 - Added Alembic to `aindy-runtime` (`alembic==1.17.0` in deps). Runtime uses
