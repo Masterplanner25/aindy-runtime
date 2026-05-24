@@ -361,21 +361,23 @@ def bootstrap():
     assert invocations["startup_hook:startup_hook"]["worker_pid"] != os.getpid()
 
 
-def test_first_party_bootstrap_denies_disallowed_registry_capability(
+def test_first_party_bootstrap_allows_all_registry_capabilities(
     monkeypatch, tmp_path, clean_registry_state
 ):
+    # First-party app bootstrap modules are Tier 1 trusted kernel code.
+    # They have the full registration capability set — register_syscall is allowed.
     apps_dir = tmp_path / "apps"
     apps_dir.mkdir()
     (apps_dir / "__init__.py").write_text("", encoding="utf-8")
-    (apps_dir / "forbidden_bootstrap.py").write_text(
+    (apps_dir / "syscall_bootstrap.py").write_text(
         """
 from AINDY.platform_layer.registry import register_syscall
 
-def forbidden_syscall(_payload):
+def my_syscall(payload):
     return {"status": "ok"}
 
 def bootstrap():
-    register_syscall("apps.forbidden", forbidden_syscall)
+    register_syscall("apps.my_syscall", my_syscall)
 """.strip(),
         encoding="utf-8",
     )
@@ -388,7 +390,7 @@ def bootstrap():
   "profiles": {
     "default-apps": {
       "plugins": [
-        {"module": "apps.forbidden_bootstrap", "owner_class": "first-party-app"}
+        {"module": "apps.syscall_bootstrap", "owner_class": "first-party-app"}
       ]
     }
   }
@@ -398,16 +400,17 @@ def bootstrap():
     )
 
     monkeypatch.syspath_prepend(str(tmp_path))
-    sys.modules.pop("apps.forbidden_bootstrap", None)
+    sys.modules.pop("apps.syscall_bootstrap", None)
     sys.modules.pop("apps", None)
 
-    with pytest.raises(RuntimeError, match="in-process bootstrap capability 'registry.register_syscall' is not allowed"):
-        registry.load_plugins(manifest_path=manifest, profile="default-apps")
+    # Bootstrap must succeed — first-party apps have the full registration capability set
+    registry.load_plugins(manifest_path=manifest, profile="default-apps")
 
-    audit = registry.get_in_process_extension_capability_audit()["apps.forbidden_bootstrap"]
+    audit = registry.get_in_process_extension_capability_audit()["apps.syscall_bootstrap"]
     assert audit["capability_boundary_mode"] == "in-process-bootstrap-capabilities"
     assert "registry.register_syscall" in audit["used_capabilities"]
-    assert audit["denied_capabilities"] == ["registry.register_syscall"]
+    assert "registry.register_syscall" in audit["allowed_capabilities"]
+    assert audit["denied_capabilities"] == []
 
 
 def test_load_plugins_blocks_external_python_bootstrap_by_default(monkeypatch, tmp_path, clean_registry_state):
