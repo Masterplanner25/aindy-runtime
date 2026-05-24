@@ -386,6 +386,7 @@ def _platform_matrix_entry(
     runtime_available: bool,
     strong_launcher: str,
     strong_runtime_available: bool,
+    linux_container_backend_available: bool,
 ) -> dict[str, Any]:
     linux = platform_name == PLATFORM_LINUX
     windows = platform_name == PLATFORM_WINDOWS
@@ -470,6 +471,18 @@ def _platform_matrix_entry(
         degraded_modes.append(
             "host platform is not part of the explicitly characterized sandbox support set"
         )
+    if not linux and runtime_available:
+        if linux_container_backend_available:
+            degraded_modes.append(
+                "containerized_oci runs Linux containers via host virtualization; Linux kernel "
+                "hardening controls are active inside the container but are not host-introspectable "
+                "from this platform"
+            )
+        else:
+            degraded_modes.append(
+                "container runtime is present but does not report a Linux-container backend; "
+                "production-safe third-party plugin execution requires Linux containers"
+            )
 
     equivalence_status = "outside-characterized-support-set"
     if strong_sandbox_supported:
@@ -478,6 +491,11 @@ def _platform_matrix_entry(
         equivalence_status = "non-equivalent-container-grade-only"
     elif process_grade_supported:
         equivalence_status = "contained-process-only"
+
+    production_safe = bool(
+        (linux and runtime_available)
+        or (runtime_available and linux_container_backend_available)
+    )
 
     return {
         "platform": platform_name,
@@ -501,13 +519,14 @@ def _platform_matrix_entry(
         "high_assurance_hostile_workload_support": bool(strong_sandbox_supported),
         "available_runner_types": available_runner_types,
         "available_hardening_controls": available_hardening_controls,
-        "production_safe_third_party_plugin_execution": bool(linux and runtime_available),
+        "production_safe_third_party_plugin_execution": production_safe,
         "unsupported_guarantees": unsupported_guarantees,
         "degraded_modes": degraded_modes,
         "operator_note": (
-            "Production-safe third-party plugin sandbox guarantees are currently characterized only "
-            "for Linux hosts with a compatible container runtime available. Strong sandbox VM "
-            "guarantees are characterized only for Linux hosts with a compatible strong sandbox launcher."
+            "Production-safe third-party plugin sandbox guarantees require either a Linux host "
+            "or a non-Linux host whose configured container runtime is confirmed to be in "
+            "Linux-containers mode. Strong sandbox VM guarantees are characterized only for "
+            "Linux hosts with a compatible strong sandbox launcher."
         ),
     }
 
@@ -522,6 +541,10 @@ def sandbox_platform_capability_matrix(
     strong_launcher = str(settings.AINDY_PLUGIN_STRONG_SANDBOX_LAUNCHER or "aindy-sandbox-vm").strip() or "aindy-sandbox-vm"
     strong_runtime_available = shutil.which(strong_launcher) is not None
     current_name = _normalize_platform_name(current_platform)
+
+    backend_detection = _detect_linux_container_backend(runtime_name)
+    linux_container_backend_available = bool(backend_detection.get("linux_container_backend"))
+
     supported_platforms = {
         PLATFORM_LINUX: _platform_matrix_entry(
             platform_name=PLATFORM_LINUX,
@@ -529,6 +552,7 @@ def sandbox_platform_capability_matrix(
             runtime_available=True,
             strong_launcher=strong_launcher,
             strong_runtime_available=True,
+            linux_container_backend_available=True,
         ),
         PLATFORM_WINDOWS: _platform_matrix_entry(
             platform_name=PLATFORM_WINDOWS,
@@ -536,6 +560,7 @@ def sandbox_platform_capability_matrix(
             runtime_available=True,
             strong_launcher=strong_launcher,
             strong_runtime_available=False,
+            linux_container_backend_available=False,
         ),
         PLATFORM_MACOS: _platform_matrix_entry(
             platform_name=PLATFORM_MACOS,
@@ -543,6 +568,7 @@ def sandbox_platform_capability_matrix(
             runtime_available=True,
             strong_launcher=strong_launcher,
             strong_runtime_available=False,
+            linux_container_backend_available=False,
         ),
         PLATFORM_OTHER: _platform_matrix_entry(
             platform_name=PLATFORM_OTHER,
@@ -550,8 +576,15 @@ def sandbox_platform_capability_matrix(
             runtime_available=False,
             strong_launcher=strong_launcher,
             strong_runtime_available=False,
+            linux_container_backend_available=False,
         ),
     }
+
+    production_safe_third_party_platforms = list(PRODUCTION_SAFE_CONTAINER_SUPPORTED_HOST_PLATFORMS)
+    if current_name != PLATFORM_LINUX and linux_container_backend_available:
+        if current_name not in production_safe_third_party_platforms:
+            production_safe_third_party_platforms.append(current_name)
+
     support_contract = {
         "claim_scope": "platform-specific-assurance-contract",
         "contained_process_supported_host_platforms": list(
@@ -563,6 +596,7 @@ def sandbox_platform_capability_matrix(
         "production_safe_container_supported_host_platforms": list(
             PRODUCTION_SAFE_CONTAINER_SUPPORTED_HOST_PLATFORMS
         ),
+        "production_safe_third_party_supported_host_platforms": production_safe_third_party_platforms,
         "strong_sandbox_supported_host_platforms": list(
             STRONG_SANDBOX_SUPPORTED_HOST_PLATFORMS
         ),
@@ -598,7 +632,9 @@ def sandbox_platform_capability_matrix(
             runtime_available=runtime_available,
             strong_launcher=strong_launcher,
             strong_runtime_available=strong_runtime_available,
+            linux_container_backend_available=linux_container_backend_available,
         ),
+        "current_container_backend_detection": backend_detection,
         "support_contract": support_contract,
         "supported_platforms": supported_platforms,
     }

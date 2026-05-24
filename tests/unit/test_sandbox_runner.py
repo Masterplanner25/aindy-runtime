@@ -673,6 +673,10 @@ def test_sandbox_platform_matrix_reports_windows_degraded_support(monkeypatch):
 
     monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
     monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        sandbox_runner.subprocess, "run",
+        lambda *a, **k: _FakeCompletedProcess(1, "", ""),
+    )
 
     matrix = sandbox_platform_capability_matrix()
 
@@ -705,6 +709,10 @@ def test_sandbox_platform_matrix_reports_macos_without_strong_sandbox_support(mo
 
     monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
     monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        sandbox_runner.subprocess, "run",
+        lambda *a, **k: _FakeCompletedProcess(1, "", ""),
+    )
 
     matrix = sandbox_platform_capability_matrix()
 
@@ -889,3 +897,164 @@ class TestDetectLinuxContainerBackend:
         assert result["linux_container_backend"] is False
         assert result["detection_method"] == "unavailable"
         assert result["runtime_available"] is False
+
+
+def _make_detection(linux_container_backend: bool, detection_method: str = "docker_info_json") -> dict:
+    return {
+        "runtime": "docker",
+        "runtime_available": True,
+        "linux_container_backend": linux_container_backend,
+        "os_type": "linux" if linux_container_backend else None,
+        "detection_method": detection_method,
+        "detection_error": None,
+        "operator_note": "mocked",
+    }
+
+
+class TestPlatformMatrixWithLinuxContainerBackend:
+    def test_linux_host_runtime_available_production_safe(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
+
+        matrix = sandbox_platform_capability_matrix()
+
+        assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is True
+        assert matrix["current_container_backend_detection"]["linux_container_backend"] is True
+        assert matrix["current_container_backend_detection"]["detection_method"] == "shutil_which_only"
+        assert matrix["support_contract"]["production_safe_container_supported_host_platforms"] == ["linux"]
+        assert matrix["support_contract"]["production_safe_third_party_supported_host_platforms"] == ["linux"]
+
+    def test_linux_host_runtime_not_available_production_not_safe(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: None)
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
+
+        matrix = sandbox_platform_capability_matrix()
+
+        assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is False
+        assert matrix["current_container_backend_detection"]["linux_container_backend"] is False
+        assert matrix["current_container_backend_detection"]["detection_method"] == "unavailable"
+        assert matrix["support_contract"]["production_safe_third_party_supported_host_platforms"] == ["linux"]
+
+    def test_windows_host_linux_backend_production_safe(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            sandbox_runner, "_detect_linux_container_backend",
+            lambda _: _make_detection(True),
+        )
+
+        matrix = sandbox_platform_capability_matrix()
+
+        assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is True
+        assert matrix["current_container_backend_detection"]["linux_container_backend"] is True
+        assert "windows" in matrix["support_contract"]["production_safe_third_party_supported_host_platforms"]
+        assert "linux" in matrix["support_contract"]["production_safe_third_party_supported_host_platforms"]
+        assert matrix["support_contract"]["production_safe_container_supported_host_platforms"] == ["linux"]
+        assert any(
+            "host virtualization" in entry.lower()
+            for entry in matrix["current_environment"]["degraded_modes"]
+        )
+
+    def test_windows_host_no_linux_backend_production_not_safe(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            sandbox_runner, "_detect_linux_container_backend",
+            lambda _: _make_detection(False),
+        )
+
+        matrix = sandbox_platform_capability_matrix()
+
+        assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is False
+        assert matrix["support_contract"]["production_safe_third_party_supported_host_platforms"] == ["linux"]
+        assert any(
+            "not report a linux-container backend" in entry.lower()
+            for entry in matrix["current_environment"]["degraded_modes"]
+        )
+
+    def test_macos_host_linux_backend_production_safe(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(
+            sandbox_runner, "_detect_linux_container_backend",
+            lambda _: _make_detection(True),
+        )
+
+        matrix = sandbox_platform_capability_matrix()
+
+        assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is True
+        assert "darwin" in matrix["support_contract"]["production_safe_third_party_supported_host_platforms"]
+        assert "linux" in matrix["support_contract"]["production_safe_third_party_supported_host_platforms"]
+
+    def test_windows_host_runtime_not_available_production_not_safe(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: None)
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+
+        matrix = sandbox_platform_capability_matrix()
+
+        assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is False
+        assert matrix["current_container_backend_detection"]["linux_container_backend"] is False
+        assert matrix["current_container_backend_detection"]["detection_method"] == "unavailable"
+        assert matrix["support_contract"]["production_safe_third_party_supported_host_platforms"] == ["linux"]
+
+    def test_static_supported_platforms_unchanged_by_detection(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            sandbox_runner, "_detect_linux_container_backend",
+            lambda _: _make_detection(True),
+        )
+
+        matrix = sandbox_platform_capability_matrix()
+
+        assert matrix["supported_platforms"]["linux"]["production_safe_third_party_plugin_execution"] is True
+        assert matrix["supported_platforms"]["windows"]["production_safe_third_party_plugin_execution"] is False
+        assert matrix["supported_platforms"]["darwin"]["production_safe_third_party_plugin_execution"] is False
+        assert matrix["supported_platforms"]["other"]["production_safe_third_party_plugin_execution"] is False
+        assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is True
+
+
+def test_extension_execution_model_production_safe_platforms_populated_on_windows_with_linux_backend(
+    monkeypatch,
+):
+    import AINDY.platform_layer.sandbox_runner as sandbox_runner
+    from AINDY.platform_layer.extension_execution_model import extension_execution_model_contract
+
+    monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "runner")
+    monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        sandbox_runner, "_detect_linux_container_backend",
+        lambda _: _make_detection(True),
+    )
+
+    contract = extension_execution_model_contract()
+    third_party_surface = next(
+        entry
+        for entry in contract["surface_matrix"]
+        if entry["surface_id"] == "dynamic-plugin-node:external-third-party"
+    )
+
+    production_safe_platforms = third_party_surface["platform_support"]["production_safe_host_platforms"]
+    assert "windows" in production_safe_platforms
+    assert "linux" in production_safe_platforms

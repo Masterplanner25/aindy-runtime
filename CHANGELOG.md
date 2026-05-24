@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### Added — C2/NF-1, NF-4, NF-7: Non-Linux hosts with Docker Desktop in Linux mode become production-safe (2026-05-24)
+
+- **`_platform_matrix_entry`** (`AINDY/platform_layer/sandbox_runner.py`): new
+  `linux_container_backend_available: bool` parameter. The
+  `production_safe_third_party_plugin_execution` field is now computed as
+  `(linux AND runtime_available) OR (runtime_available AND linux_container_backend_available)`,
+  allowing Windows and macOS hosts running Docker Desktop or Podman in Linux-container
+  mode to receive `production_safe=True`. The Linux kernel-control reporting
+  (`available_hardening_controls`) remains Linux-host-only (honesty principle: those
+  controls are active inside the container VM but are not host-introspectable). New
+  `degraded_modes` entries distinguish "Linux containers via host virtualization" from
+  "container runtime present but not a Linux-container backend". `operator_note` updated.
+- **`sandbox_platform_capability_matrix`**: calls `_detect_linux_container_backend` once
+  and threads `linux_container_backend_available` into the `current_environment` entry;
+  static platform entries (`supported_platforms`) pass `True` only for the Linux entry
+  and `False` for all others (declared support model, not detection-dependent). New
+  top-level key `current_container_backend_detection` surfaces the full detection result
+  dict for operator visibility (e.g., `GET /api/version`). `support_contract` gains the
+  new `production_safe_third_party_supported_host_platforms` key — the dynamically resolved
+  list of platforms where the running runtime can deliver production-safe third-party plugin
+  execution; starts as `["linux"]` and grows to include the current non-Linux platform when
+  backend detection returns `linux_container_backend: True`. Existing
+  `production_safe_container_supported_host_platforms` key is unchanged.
+- **NF-6 auto-resolved**: `extension_execution_model_contract()` queries
+  `production_safe_third_party_supported_host_platforms` from `support_contract` to
+  populate `platform_support.production_safe_host_platforms` on the
+  `dynamic-plugin-node:external-third-party` surface. That field now correctly reflects the
+  active backend rather than silently resolving to `[]`.
+- **`PRODUCTION_SAFE_CONTAINER_SUPPORTED_HOST_PLATFORMS`** constant is **unchanged** —
+  it remains `(PLATFORM_LINUX,)` as the static declared support set.
+- **Note**: `deployment_contract.py` validation paths continue to read the same
+  `production_safe_third_party_plugin_execution` matrix field — they will benefit from this
+  change automatically. NF-5 (certification suite tests on non-Linux platforms) is the next
+  step to exercise that end-to-end path.
+- **Unit tests** (`tests/unit/test_sandbox_runner.py`, `TestPlatformMatrixWithLinuxContainerBackend`):
+  7 cases; plus 1 NF-6/NF-7 integration case confirming `extension_execution_model_contract()`
+  populates `production_safe_host_platforms` on Windows with a Linux backend. Two existing
+  platform-matrix tests updated to patch `subprocess.run` (determinism — `_detect_linux_container_backend`
+  now shells out on non-Linux hosts).
+
 ### Added — C2/NF-3: Linux container backend detection helper (2026-05-24)
 
 - **`_detect_linux_container_backend(container_runtime)`**
