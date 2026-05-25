@@ -351,7 +351,7 @@ def test_runtime_public_contract_describes_trusted_in_process_python_precisely()
     assert trusted["owner_classes"] == ["runtime-built-in", "first-party-app"]
     assert trusted["explicit_exceptions"] == ["manifest bootstrap modules"]
     assert trusted["capability_boundary"]["mode"] == "explicit-runtime-owned-mediation"
-    assert trusted["capability_boundary"]["first_party_bootstrap_default"] == "restricted-allowlist"
+    assert trusted["capability_boundary"]["first_party_bootstrap_default"] == "full-runtime-owned-allowlist"
     assert trusted["sandboxing"] == "none"
     assert "GET /health" in trusted["operator_visibility"]
     assert "explicit privileged exception" in trusted["notes"]

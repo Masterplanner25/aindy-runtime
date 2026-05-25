@@ -63,7 +63,7 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 "owner_class": OWNER_FIRST_PARTY_APP,
                 "supported": True,
                 "execution_model_class": EXECUTION_MODEL_KERNEL_RESIDENT,
-                "execution_path": "in-process bootstrap import plus restricted runtime-owned registration allowlist",
+                "execution_path": "in-process bootstrap import plus runtime-owned registration capability gate",
                 "registration_boundary": "registration-capability-gate",
                 "platform_support": {
                     "supported_host_platforms": list(ALL_CHARACTERIZED_HOST_PLATFORMS),
@@ -71,8 +71,9 @@ def extension_execution_model_contract() -> dict[str, Any]:
                 "operator_surface": "trusted_python_execution.manifest_modules",
                 "notes": (
                     "Tier 1 kernel-resident bootstrap: trusted-operator app-owned boot wiring. "
-                    "Registration-time capability checks use a narrower allowlist than runtime-built-in; "
-                    "after registration, execution is kernel-resident with no capability mediation."
+                    "Registration-time capability checks use the same allowlist as runtime-built-in — "
+                    "both are Tier 1 trusted kernel code under the isolation model. "
+                    "After registration, execution is kernel-resident with no capability mediation."
                 ),
             },
             {

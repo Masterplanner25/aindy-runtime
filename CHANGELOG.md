@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Fixed — DRIFT-1 + reordering guard: first-party bootstrap allowlist ratified, list_supported_sandbox_runners ordering frozen (2026-05-25)
+
+**DRIFT-1 (docs-only, no runtime behavior change):**
+
+- **`AINDY/platform_layer/extension_execution_model.py`** —
+  `manifest-bootstrap:first-party-app` surface entry: `execution_path`
+  updated from `"...restricted runtime-owned registration allowlist"` to
+  `"...runtime-owned registration capability gate"`; `notes` updated from
+  `"Registration-time capability checks use a narrower allowlist than
+  runtime-built-in"` to `"...use the same allowlist as runtime-built-in —
+  both are Tier 1 trusted kernel code under the isolation model."` This
+  ratifies what the code has always done: `registry.py` lines 235–238
+  explicitly assign `_FIRST_PARTY_ALLOWED_INPROC_EXTENSION_CAPABILITIES =
+  _ALL_INPROC_EXTENSION_CAPABILITIES` with a three-line comment documenting
+  the intent. `test_first_party_bootstrap_allows_all_registry_capabilities`
+  in `tests/unit/test_extension_ownership.py` (unchanged) is the live
+  evidence for this claim.
+- **`AINDY/platform_layer/public_contract.py`** —
+  `trusted_in_process_python.capability_boundary.first_party_bootstrap_default`
+  updated from `"restricted-allowlist"` to `"full-runtime-owned-allowlist"`,
+  matching `runtime_built_in_bootstrap_default`. Both fields now report the
+  same value.
+- **`docs/runtime/EXTENSION_TRUST_MODEL.md`** — Tier 1 first-party execution
+  model bullet updated from "smaller default allowlist for `first-party-app`
+  than for `runtime-built-in`" to the correct equivalence statement. Module-prefix
+  restrictions (which modules may bootstrap, e.g. `AINDY.` vs `apps.`) are
+  unchanged — those are distinct from capability allowlists. `last_verified`
+  bumped to 2026-05-25.
+- **`tests/unit/test_runtime_public_contract.py:354`** — updated assertion from
+  `"restricted-allowlist"` to `"full-runtime-owned-allowlist"`.
+
+**Reordering guard (preventative test, no code change):**
+
+- **`TestListSupportedSandboxRunnersOperatorNote`**
+  (`tests/unit/test_sandbox_runner.py`): 3 new tests asserting that each of
+  the three `list_supported_sandbox_runners()` entries carries its explicit
+  per-runner `operator_note`, not the posture-derived one from the
+  `**sandbox_runner_assurance_posture(runner_type)` spread. Guards against a
+  future dict-literal reordering that would silently place the spread after the
+  explicit key, causing the posture note to override the per-runner one.
+
 ### Added — Sandbox status surfaces: HealthDashboard, /health/sandbox, CLI subcommand, platform_layer boundary (2026-05-25)
 
 - **`platform/src/components/platform/HealthDashboard.jsx`**: Rewritten to

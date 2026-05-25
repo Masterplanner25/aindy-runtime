@@ -1116,6 +1116,39 @@ def test_assurance_posture_insecure_dev_subprocess_has_operator_note():
     assert posture["verification_method"] == VERIFICATION_METHOD_NONE
 
 
+class TestListSupportedSandboxRunnersOperatorNote:
+    """Guards against reordering the dict literal so **sandbox_runner_assurance_posture(...)
+    comes after the explicit operator_note key. If reordered, the spread would override the
+    explicit per-runner value and this test would fail."""
+
+    def test_insecure_dev_subprocess_has_explicit_operator_note(self):
+        from AINDY.platform_layer.sandbox_runner import (
+            RUNNER_INSECURE_DEV_SUBPROCESS,
+            list_supported_sandbox_runners,
+        )
+        runners = {r["runner_type"]: r for r in list_supported_sandbox_runners()}
+        note = runners[RUNNER_INSECURE_DEV_SUBPROCESS]["operator_note"]
+        assert note.startswith("This runner launches the extension worker in a local subprocess.")
+
+    def test_containerized_oci_has_explicit_operator_note(self):
+        from AINDY.platform_layer.sandbox_runner import (
+            RUNNER_CONTAINERIZED_OCI,
+            list_supported_sandbox_runners,
+        )
+        runners = {r["runner_type"]: r for r in list_supported_sandbox_runners()}
+        note = runners[RUNNER_CONTAINERIZED_OCI]["operator_note"]
+        assert note.startswith("This runner launches the extension worker in an operator-supplied")
+
+    def test_strong_sandbox_vm_has_explicit_operator_note(self):
+        from AINDY.platform_layer.sandbox_runner import (
+            RUNNER_STRONG_SANDBOX_VM,
+            list_supported_sandbox_runners,
+        )
+        runners = {r["runner_type"]: r for r in list_supported_sandbox_runners()}
+        note = runners[RUNNER_STRONG_SANDBOX_VM]["operator_note"]
+        assert note.startswith("This runner targets a dedicated VM-grade sandbox launcher that is")
+
+
 def test_extension_execution_model_production_safe_platforms_populated_on_windows_with_linux_backend(
     monkeypatch,
 ):

@@ -1,6 +1,6 @@
 ---
 title: "Extension Trust Model"
-last_verified: "2026-05-24"
+last_verified: "2026-05-25"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -79,8 +79,9 @@ Tier 1 — first-party execution model:
   execute through a runtime-owned callback worker when the handler is resolvable
   as a module-level function
 - in-process bootstrap interaction with the kernel goes through an explicit
-  runtime-owned registration capability boundary, with a smaller default
-  allowlist for `first-party-app` than for `runtime-built-in`
+  runtime-owned registration capability boundary; both `runtime-built-in`
+  and `first-party-app` bootstrap use the same registration capability
+  allowlist, consistent with their shared Tier 1 trusted-kernel-code status
 
 ## Tier 1 Trusted Kernel Code
 

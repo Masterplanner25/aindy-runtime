@@ -300,7 +300,7 @@ def _extension_surface_contract() -> dict[str, object]:
             ],
             "capability_boundary": {
                 "mode": "explicit-runtime-owned-mediation",
-                "first_party_bootstrap_default": "restricted-allowlist",
+                "first_party_bootstrap_default": "full-runtime-owned-allowlist",
                 "runtime_built_in_bootstrap_default": "full-runtime-owned-allowlist",
                 "not_claimed": [
                     "sandboxing",
