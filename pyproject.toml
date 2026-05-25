@@ -63,7 +63,7 @@ dependencies = [
   "pymongo==4.16.0",
   "pyphen==0.17.2",
   "python-dateutil==2.9.0.post0",
-  "python-dotenv==1.1.1",
+  "python-dotenv==1.2.2",
   "python-jose==3.5.0",
   "python-json-logger==4.1.0",
   "redis==5.0.4",
