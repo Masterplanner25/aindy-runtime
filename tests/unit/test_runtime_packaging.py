@@ -42,6 +42,7 @@ def test_runtime_package_metadata_declares_console_entrypoints():
     assert pyproject["tool"]["setuptools"]["package-data"]["AINDY"] == [
         "*.json",
         "**/*.json",
+        "platform/dist/**",
     ]
     assert pyproject["project"]["optional-dependencies"]["release"] == [
         "build==1.3.0",

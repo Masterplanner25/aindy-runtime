@@ -474,7 +474,13 @@ jobs:
           smoke_venv/bin/python - <<'PY'
           import importlib.util, pathlib
           spec = importlib.util.find_spec("AINDY")
-          pkg = pathlib.Path(spec.origin).parent
+          assert spec is not None, "AINDY package not found in smoke_venv"
+          # AINDY is a namespace package (no __init__.py), so spec.origin is None.
+          # Use submodule_search_locations to locate the package root instead.
+          if spec.origin is not None:
+              pkg = pathlib.Path(spec.origin).parent
+          else:
+              pkg = pathlib.Path(next(iter(spec.submodule_search_locations)))
           dist_html = pkg / "platform" / "dist" / "index.html"
           dist_assets = pkg / "platform" / "dist" / "assets"
           assert dist_html.exists(), f"platform/dist/index.html missing in installed wheel — {dist_html}"
