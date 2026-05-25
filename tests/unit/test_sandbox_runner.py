@@ -1035,6 +1035,87 @@ class TestPlatformMatrixWithLinuxContainerBackend:
         assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is True
 
 
+# ── Tests: sandbox_runner_assurance_posture operator_note ────────────────────
+
+def test_assurance_posture_containerized_oci_has_operator_note_mentioning_ceiling_and_method():
+    from AINDY.platform_layer.sandbox_runner import (
+        ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED,
+        RUNNER_CONTAINERIZED_OCI,
+        VERIFICATION_METHOD_NONE,
+        sandbox_runner_assurance_posture,
+    )
+
+    posture = sandbox_runner_assurance_posture(RUNNER_CONTAINERIZED_OCI)
+
+    assert "operator_note" in posture
+    note = posture["operator_note"]
+    assert "assurance_ceiling" in note
+    assert "verification_method" in note
+    assert posture["assurance_ceiling"] == ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED
+    assert posture["verification_method"] == VERIFICATION_METHOD_NONE
+
+
+def test_assurance_posture_strong_sandbox_worker_self_report_branch_has_operator_note(monkeypatch):
+    import AINDY.platform_layer.sandbox_runner as sandbox_runner
+    from AINDY.platform_layer.sandbox_runner import (
+        ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED,
+        RUNNER_STRONG_SANDBOX_VM,
+        VERIFICATION_METHOD_WORKER_SELF_REPORT,
+        sandbox_runner_assurance_posture,
+    )
+
+    monkeypatch.setattr(sandbox_runner, "strong_sandbox_kernel_observable_evidence_seen", lambda: False)
+
+    posture = sandbox_runner_assurance_posture(RUNNER_STRONG_SANDBOX_VM)
+
+    assert "operator_note" in posture
+    note = posture["operator_note"]
+    assert "assurance_ceiling" in note
+    assert "verification_method" in note
+    assert posture["assurance_ceiling"] == ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED
+    assert posture["verification_method"] == VERIFICATION_METHOD_WORKER_SELF_REPORT
+
+
+def test_assurance_posture_strong_sandbox_kernel_observable_branch_has_operator_note(monkeypatch):
+    import AINDY.platform_layer.sandbox_runner as sandbox_runner
+    from AINDY.platform_layer.sandbox_runner import (
+        ASSURANCE_CEILING_KERNEL_OBSERVABLE_VERIFIED,
+        RUNNER_STRONG_SANDBOX_VM,
+        VERIFICATION_METHOD_KERNEL_OBSERVABLE,
+        sandbox_runner_assurance_posture,
+    )
+
+    monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(sandbox_runner, "strong_sandbox_kernel_observable_evidence_seen", lambda: True)
+
+    posture = sandbox_runner_assurance_posture(RUNNER_STRONG_SANDBOX_VM)
+
+    assert "operator_note" in posture
+    note = posture["operator_note"]
+    assert "assurance_ceiling" in note
+    assert "verification_method" in note
+    assert posture["assurance_ceiling"] == ASSURANCE_CEILING_KERNEL_OBSERVABLE_VERIFIED
+    assert posture["verification_method"] == VERIFICATION_METHOD_KERNEL_OBSERVABLE
+
+
+def test_assurance_posture_insecure_dev_subprocess_has_operator_note():
+    from AINDY.platform_layer.sandbox_runner import (
+        ASSURANCE_CEILING_NO_ISOLATION_GUARANTEE,
+        RUNNER_INSECURE_DEV_SUBPROCESS,
+        VERIFICATION_METHOD_NONE,
+        sandbox_runner_assurance_posture,
+    )
+
+    posture = sandbox_runner_assurance_posture(RUNNER_INSECURE_DEV_SUBPROCESS)
+
+    assert "operator_note" in posture
+    note = posture["operator_note"]
+    assert "assurance_ceiling" in note
+    assert "verification_method" in note
+    assert posture["assurance_ceiling"] == ASSURANCE_CEILING_NO_ISOLATION_GUARANTEE
+    assert posture["verification_method"] == VERIFICATION_METHOD_NONE
+
+
 def test_extension_execution_model_production_safe_platforms_populated_on_windows_with_linux_backend(
     monkeypatch,
 ):

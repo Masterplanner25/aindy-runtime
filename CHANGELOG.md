@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Changed — Non-breaking: `operator_note` field added to all `sandbox_runner_assurance_posture` branches (2026-05-25)
+
+- **`AINDY/platform_layer/sandbox_runner.py` — `sandbox_runner_assurance_posture()`**: Added
+  `operator_note` field to all four return branches. The note clarifies the relationship
+  between `assurance_ceiling` (the highest tier the runner is structurally capable of
+  reaching) and `verification_method` (the evidence method actually used), which are
+  semantically distinct and easy to conflate when reading `/health/sandbox` or
+  `/api/version` output.
+  - `RUNNER_STRONG_SANDBOX_VM` kernel-observable branch: note states that both fields
+    reflect achieved kernel-observable evidence.
+  - `RUNNER_STRONG_SANDBOX_VM` worker-self-report branch: note states that both fields
+    reflect live authenticated-RPC probe evidence.
+  - `RUNNER_CONTAINERIZED_OCI`: note clarifies that `verification_method` is `"none"`
+    because only `strong_sandbox_vm` runs post-launch probes; the ceiling reflects
+    structural capability, not active probing.
+  - `RUNNER_INSECURE_DEV_SUBPROCESS` (fallback): note states both fields reflect the
+    absence of any sandbox boundary or isolation evidence.
+- **`RUNNER_CONTAINERIZED_OCI` `ceiling_note` rewritten**: Previous text read
+  `"Same limitation as strong_sandbox_vm."` — replaced with an accurate description:
+  `"Container runner reaches worker-self-report-verified when probed; kernel-observable
+  evidence is unavailable for shared-kernel container sandboxes."` No existing
+  `assurance_ceiling` or `verification_method` values changed.
+- **Non-breaking**: `operator_note` is an additive new field. No existing field values
+  were modified (except `ceiling_note` on `RUNNER_CONTAINERIZED_OCI` which was
+  corrected). Consumers reading only `assurance_ceiling` and `verification_method`
+  are unaffected.
+
 ### Added — C2/NF-2, NF-8: Contract decision recorded and trust model matrix rewritten (2026-05-24)
 
 - **`docs/runtime/EXTENSION_TRUST_MODEL.md` — Supported Platform Sandbox Matrix**

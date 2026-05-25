@@ -116,17 +116,45 @@ def sandbox_runner_assurance_posture(runner_type: str) -> dict[str, str]:
                 if kernel_observable
                 else VERIFICATION_METHOD_WORKER_SELF_REPORT
             ),
+            "operator_note": (
+                "assurance_ceiling describes the highest verification tier the runner "
+                "has actually achieved for an active worker; verification_method "
+                "describes the method used to reach that tier. Both are populated when "
+                "kernel-observable evidence is collected."
+                if kernel_observable
+                else (
+                    "assurance_ceiling describes the highest verification tier this runner "
+                    "can reach if probed via authenticated RPC; verification_method "
+                    "describes what is currently active. Both reflect live worker-probe "
+                    "evidence."
+                )
+            ),
         }
     if runner_type == RUNNER_CONTAINERIZED_OCI:
         return {
             "assurance_ceiling": ASSURANCE_CEILING_WORKER_SELF_REPORT_VERIFIED,
-            "ceiling_note": "Same limitation as strong_sandbox_vm.",
+            "ceiling_note": (
+                "Container runner reaches worker-self-report-verified when probed; "
+                "kernel-observable evidence is unavailable for shared-kernel container sandboxes."
+            ),
             "verification_method": VERIFICATION_METHOD_NONE,
+            "operator_note": (
+                "assurance_ceiling describes the highest verification tier this runner "
+                "could reach if probed; verification_method is 'none' because the "
+                "container runner does not run post-launch verification probes — "
+                "only strong_sandbox_vm does. The ceiling reflects what evidence "
+                "the runner is structurally capable of producing, not active probing."
+            ),
         }
     return {
         "assurance_ceiling": ASSURANCE_CEILING_NO_ISOLATION_GUARANTEE,
         "ceiling_note": "Development runner. No sandbox boundary.",
         "verification_method": VERIFICATION_METHOD_NONE,
+        "operator_note": (
+            "assurance_ceiling and verification_method both reflect that the "
+            "development subprocess runner is not a sandbox and produces no "
+            "verifiable isolation evidence."
+        ),
     }
 
 
