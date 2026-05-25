@@ -1,6 +1,6 @@
 ---
 title: "Public Runtime Surfaces"
-last_verified: "2026-05-23"
+last_verified: "2026-05-25"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -68,6 +68,13 @@ Release posture:
 
 ## Experimental HTTP Surfaces
 
+- `GET /health/sandbox`
+  Returns the full sandbox posture as a structured JSON object: runner type,
+  assurance class, requirement satisfaction, platform capability matrix,
+  verification posture, trusted-Python execution inventory, plugin host
+  attestation, and active runtime conditions. Intended for integrators and
+  operators who need sandbox status without parsing the full `/health` blob.
+  Also the backing source for the `aindy-runtime sandbox` CLI subcommand.
 - `/apps/agent/*`
   Runtime-owned and supported, but the external orchestration semantics are
   still evolving.

@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Added — Sandbox status surfaces: HealthDashboard, /health/sandbox, CLI subcommand, platform_layer boundary (2026-05-25)
+
+- **`platform/src/components/platform/HealthDashboard.jsx`**: Rewritten to
+  render sandbox data the backend was already sending but the frontend was
+  silently discarding. Added four new sections: Sandbox Posture (runner type,
+  assurance class, requirement satisfaction, trust status, cert tier,
+  platform/equivalence), Verification (method, kernel_observable, ceiling),
+  Trusted Python (present flag, count, owner classes), and Runtime Conditions
+  (conditional, shows code/classification/detail/component). Data paths:
+  `health.plugin_sandbox_posture`, `health.sandbox_verification_posture`,
+  `health.trusted_python_execution`, `health.runtime_conditions`.
+- **`GET /health/sandbox`** (`AINDY/routes/health_router.py`): New dedicated
+  endpoint (60/minute rate limit) returning 7 fields:
+  `plugin_sandbox_posture`, `plugin_sandbox_platform`,
+  `sandbox_verification_posture`, `trusted_python_execution`, `plugin_hosts`,
+  `plugin_sandbox_attestation`, `runtime_conditions`. Integrators no longer
+  need to parse the full `/health` blob. Test:
+  `tests/api/test_version_api.py::test_health_sandbox_route_returns_posture`.
+- **`aindy-runtime sandbox` CLI subcommand** (`AINDY/runtime_only.py`):
+  `main()` now dispatches `sys.argv[1] == "sandbox"` to `_run_sandbox_check()`,
+  which prints the full sandbox posture as JSON to stdout, exits 0 when
+  requirements satisfied, 1 when not, 2 on unexpected error. 8 new tests in
+  `tests/unit/test_runtime_cli.py` covering dispatch routing, exit codes, JSON
+  validity, payload content, and error handling.
+- **`AINDY/platform_layer/__init__.py` boundary enforcement**: `PUBLIC_MODULES`
+  frozenset added as the machine-readable public surface. Enforced by
+  `tests/unit/test_platform_layer_boundary.py` (3 tests: `PUBLIC_MODULES`
+  matches `PUBLIC_API_CONTRACT.md`, `__all__` derives from `PUBLIC_MODULES`,
+  every declared module has a `.py` file on disk). Prevents the three sources
+  of truth — contract doc, `__init__.py`, and filesystem — from drifting
+  independently.
+- **`GET /health/sandbox` added to `docs/runtime/PUBLIC_RUNTIME_SURFACES.md`**
+  under Experimental HTTP Surfaces.
+
 ### Changed — Non-breaking: `operator_note` field added to all `sandbox_runner_assurance_posture` branches (2026-05-25)
 
 - **`AINDY/platform_layer/sandbox_runner.py` — `sandbox_runner_assurance_posture()`**: Added
