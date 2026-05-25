@@ -1,6 +1,6 @@
 ---
 title: "Extension Trust Model"
-last_verified: "2026-05-23"
+last_verified: "2026-05-24"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -170,21 +170,41 @@ Current support summary:
     `no_new_privileges`, dropped capabilities, PID limits, seccomp, AppArmor,
     and SELinux label controls
 - Windows
-  - available runners: `insecure_dev_subprocess`, `containerized_oci` when a
-    container runtime is installed
-  - production-safe third-party plugin sandbox support: no
+  - available runners: `insecure_dev_subprocess`, `containerized_oci`
+    when Docker Desktop or Podman is configured for Linux containers
+  - production-safe third-party plugin sandbox support: yes, when the
+    configured container runtime is in Linux-containers mode. The runtime
+    detects this at startup via `docker info --format '{{json .}}'` and
+    requires `OSType=linux`.
   - declared fully supported host platform for strong sandbox and
     `hostile-third-party`: no
-  - degraded mode: Linux-only kernel hardening controls are not reported as
-    enforceable on the Windows host
+  - container hardening: Linux kernel hardening controls
+    (`no_new_privileges`, `drop_all_capabilities`, `pids_limit`,
+    `seccomp`, `apparmor`, `selinux_label`) run inside the container's
+    Linux kernel under Docker Desktop's WSL2 or Hyper-V VM. The runtime
+    does not introspect these controls from the host side and does not
+    list them in `available_hardening_controls` on Windows.
+  - degraded mode: if Docker Desktop is switched to Windows-containers
+    mode, the runtime reports `linux_container_backend: False`,
+    `production_safe_third_party_plugin_execution: False`, and refuses
+    third-party plugin admission under production-safe deployment
+    profiles. Windows-containers mode is not currently supported.
 - macOS
-  - available runners: `insecure_dev_subprocess`, `containerized_oci` when a
-    container runtime is installed
-  - production-safe third-party plugin sandbox support: no
+  - available runners: `insecure_dev_subprocess`, `containerized_oci`
+    when Docker Desktop or Podman is installed and configured for Linux
+    containers
+  - production-safe third-party plugin sandbox support: yes, when the
+    configured container runtime reports `OSType=linux`. macOS container
+    runtimes always run Linux containers in a virtualization-backed VM.
   - declared fully supported host platform for strong sandbox and
     `hostile-third-party`: no
-  - degraded mode: container execution depends on host virtualization and does
-    not imply native macOS kernel policy enforcement
+  - container hardening: Linux kernel hardening controls run inside the
+    container's Linux kernel under the host virtualization layer (Apple
+    Virtualization.framework, QEMU, or whichever backend the container
+    runtime selects). The runtime does not introspect these controls
+    from the host side and does not list them in
+    `available_hardening_controls` on macOS. Native macOS kernel policy
+    enforcement is not implied.
 - Other hosts
   - available runners: `insecure_dev_subprocess`, plus `containerized_oci`
     only if a compatible container runtime is available
@@ -197,13 +217,55 @@ Current support summary:
 Important implications:
 
 - production-oriented deployment profiles reject third-party sandbox execution
-  unless the runtime can provide the documented Linux containerized guarantees
-- the repo’s declared strong-sandbox support set is Linux-only; non-Linux hosts
-  remain explicitly visible in the matrix, but they are not part of the
-  equivalent high-assurance support claim
+  unless the runtime can provide the documented Linux container guarantees. The
+  runtime detects this by querying the container runtime’s `OSType`. On Linux
+  hosts, this is always satisfied when a container runtime is present. On
+  Windows and macOS hosts, this is satisfied when Docker Desktop or an
+  equivalent runtime is configured for Linux containers.
+- the repo’s declared strong-sandbox support set remains Linux-only; non-Linux
+  hosts can reach container-grade certification but not strong-sandbox or
+  `hostile-third-party` certification.
 - `insecure_dev_subprocess` remains a development containment boundary only
-- `containerized_oci` on non-Linux hosts is reported explicitly as degraded
-  rather than being treated as equivalent to the Linux hardened path
+- `containerized_oci` on Windows and macOS in Linux-containers mode is now
+  treated as production-safe for the `single-instance`, `distributed-api`,
+  and `distributed-worker` deployment profiles. Linux kernel hardening controls
+  are active inside the container’s Linux kernel but are not host-introspectable
+  from non-Linux hosts.
+
+### Production-Safe Third-Party Plugin Sandbox Semantics
+
+The runtime defines "production-safe third-party plugin sandbox" as a
+property of the container backend, not the host operating system. A host
+is production-safe for third-party plugin execution when:
+
+1. A supported container runtime is available on PATH (`docker`,
+   `podman`, etc.).
+2. The runtime is configured to run Linux containers (`OSType=linux`).
+
+Both conditions are detected at runtime startup via
+`_detect_linux_container_backend`. The detection result is published
+under `current_container_backend_detection` in the platform capability
+matrix and is visible through `/api/version`.
+
+Linux hosts trivially satisfy both conditions when a container runtime is
+present. Windows and macOS hosts satisfy both conditions when Docker
+Desktop or Podman is in Linux-containers mode. Windows-containers mode
+and missing container runtimes both fail closed.
+
+This definition holds the runtime to delivering Linux container semantics
+— pinned OCI images, runtime-managed read-only mounts, kernel-level
+hardening controls active inside the container — regardless of the host
+OS that supplies the kernel. Strong-sandbox guarantees, by contrast,
+remain bound to the Linux host platform because the strong sandbox VM
+launcher is currently Linux-only.
+
+This support set was live-verified on Windows + Docker Desktop:
+`sandbox_certification_profile` returned `tier_status: certified` at
+tier `container-sandbox-certified` with backend identity, runtime
+identity, mount mode, and resource limit mode all launch-verified;
+`docker run` argv included `--cap-drop ALL`, `--security-opt
+no-new-privileges`, `--read-only`, `--network none`, and `--pids-limit`,
+all accepted by the container kernel.
 
 ## Assurance Reporting
 

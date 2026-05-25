@@ -2,6 +2,65 @@
 
 ## Unreleased
 
+### Added — C2/NF-2, NF-8: Contract decision recorded and trust model matrix rewritten (2026-05-24)
+
+- **`docs/runtime/EXTENSION_TRUST_MODEL.md` — Supported Platform Sandbox Matrix**
+  (NF-8): Windows and macOS entries rewritten. Both now read
+  `production-safe third-party plugin sandbox support: yes, when the configured
+  container runtime is in Linux-containers mode`. Previous entries read `no`. New
+  `container hardening` bullet for each platform describes that Linux kernel
+  hardening controls (`no_new_privileges`, `drop_all_capabilities`, `pids_limit`,
+  `seccomp`, `apparmor`, `selinux_label`) run inside the container's Linux kernel
+  under the host virtualization layer and are not host-introspectable. New
+  `degraded mode` entry for Windows describes Windows-containers mode fail-closed
+  behavior. Linux and Other entries are unchanged.
+- **`docs/runtime/EXTENSION_TRUST_MODEL.md` — Important Implications** (NF-8):
+  Rewritten. "documented Linux containerized guarantees" → "documented Linux
+  container guarantees, detected by querying `OSType`." Removed Linux-only
+  framing for production-safe container support. Added explicit statement that
+  non-Linux hosts can reach container-grade certification but not strong-sandbox
+  or `hostile-third-party` certification. Added statement that `containerized_oci`
+  on Windows and macOS in Linux-containers mode is production-safe for
+  `single-instance`, `distributed-api`, and `distributed-worker` profiles.
+- **`docs/runtime/EXTENSION_TRUST_MODEL.md` — Production-Safe Third-Party Plugin
+  Sandbox Semantics** (NF-2): New subsection documenting the contract decision.
+  Defines "production-safe third-party plugin sandbox" as a property of the
+  container backend (`OSType=linux`), not the host OS. Documents the two
+  detection conditions and their evaluation via `_detect_linux_container_backend`.
+  Confirms strong-sandbox guarantees remain Linux-host-bound. Cross-references
+  live verification evidence: `sandbox_certification_profile` returned
+  `tier_status: certified` at `container-sandbox-certified` on Windows + Docker
+  Desktop with all five hardening controls accepted by the container kernel.
+- **`ISOLATION_MODEL_PLAN.md` Gap 4 and C2 reopen entries**: Annotated as
+  CLOSED. Gap 4 retitled "PARTIALLY CLOSED — container-grade closed (C2,
+  2026-05-24); strong-sandbox remains deferred (C3)." C2 reopen entry updated
+  with closure evidence and C3 forward pointer.
+- **`TECH_DEBT.md`**: Added closed C2 entry with live verification evidence.
+  Added open C3 entry for cross-platform strong-sandbox as the appropriate
+  follow-up gap, with its own reopen condition
+  (`tier_status: certified` at `strong-sandbox-certified` on a non-Linux host).
+- **This closes C2.** The C2 reopen condition — "a non-Linux host platform
+  produces a sandbox runner type passing the shared worker policy certification
+  suite with assurance class at or above `container-grade-sandbox`" — is met.
+  C3 (strong-sandbox cross-platform parity) is now the tracked follow-up.
+
+### Added — C2/NF-5: Certification suite proves container-sandbox-certified is platform-neutral (2026-05-24)
+
+- **`TestContainerSandboxCertificationCrossPlatform`**
+  (`tests/unit/test_plugin_sandbox_certification.py`): 11 new test cases proving
+  `sandbox_certification_profile` reaches `tier_status: "certified"` at
+  `container-sandbox-certified` on simulated Windows and macOS hosts (positive: Linux,
+  Windows + Linux backend, macOS + Linux backend), and stays uncertified when conditions
+  are not met (negative: Windows-containers mode, no runtime, no pinned digest,
+  wall-clock-only limits). One parametrized diagnostic case (4 sub-cases) confirms each
+  of the four `launch_attestation` verified fields — `backend_identity`, `runtime_identity`,
+  `mount_mode`, `resource_limit_mode` — is independently required.
+- **`sandbox_certification.py` required zero changes** — confirmed by audit: the function
+  contains no `platform.system()` calls and reads `platform_matrix["current_environment"]`
+  which is now a dynamic runtime-resolved dict produced by `_detect_linux_container_backend`.
+  Tests inject both `runner_metadata` and `platform_matrix` as synthetic dicts so no
+  subprocess calls or Docker invocations are made.
+
 ### Added — C2/NF-1, NF-4, NF-7: Non-Linux hosts with Docker Desktop in Linux mode become production-safe (2026-05-24)
 
 - **`_platform_matrix_entry`** (`AINDY/platform_layer/sandbox_runner.py`): new

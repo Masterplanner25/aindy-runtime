@@ -1186,3 +1186,201 @@ def test_strong_runner_certification_reports_live_evidence_denial_reasons():
     assert "live_evidence" in reasons
     assert "post_launch_verified.isolation_state.import_guard_active" in reasons["live_evidence"]
     assert "post_launch_verified.mount_network_state.artifact_write_blocked" in reasons["live_evidence"]
+
+
+class TestContainerSandboxCertificationCrossPlatform:
+    """NF-5: proves sandbox_certification_profile reaches container-sandbox-certified
+    on simulated Windows/macOS hosts and stays uncertified when conditions are not met.
+
+    runner_metadata and platform_matrix are injected as synthetic dicts so no subprocess
+    calls, no Docker, no platform.system() mocking needed — the certification function
+    is platform-neutral by construction (zero platform.system() calls in
+    sandbox_certification.py).
+    """
+
+    def _certified_metadata(self) -> dict:
+        return {
+            "assurance_class": "container-grade-sandbox",
+            "isolation_claim": "container-boundary",
+            "execution_boundary": "container-stdio-json-rpc",
+            "resource_limits": {
+                "enforcement": "container-runtime-hard-limits",
+            },
+            "runtime_identity": {
+                "pinned": True,
+                "trust_chain": {
+                    "accepted_for_production_safe_profiles": True,
+                },
+            },
+            "launch_attestation": {
+                "status": "launch-observed",
+                "backend_identity": {"verified": True},
+                "runtime_identity": {"verified": True},
+                "mount_mode": {"verified": True},
+                "resource_limit_mode": {"verified": True},
+            },
+        }
+
+    def _supported_platform_matrix(self) -> dict:
+        return {
+            "current_environment": {
+                "support_levels": {
+                    "container_sandbox": {"support": "supported"},
+                }
+            }
+        }
+
+    def _unsupported_platform_matrix(self) -> dict:
+        return {
+            "current_environment": {
+                "support_levels": {
+                    "container_sandbox": {"support": "unsupported"},
+                }
+            }
+        }
+
+    # --- Positive cases: certification is platform-neutral ---
+
+    def test_linux_host_certified(self):
+        from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+        profile = sandbox_certification_profile(
+            runner_type="containerized_oci",
+            runner_metadata=self._certified_metadata(),
+            platform_matrix=self._supported_platform_matrix(),
+        )
+        assert profile["tier_status"] == "certified"
+        assert profile["certification_tier"] == "container-sandbox-certified"
+        assert profile["missing_tier_requirements"] == []
+        assert profile["validation_layers"]["runner_assurance"]["status"] == "passed"
+
+    def test_windows_host_with_linux_backend_certified(self):
+        from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+        # platform_matrix reflects what _detect_linux_container_backend produces when
+        # Docker Desktop on Windows is running in Linux-containers mode (OSType=linux).
+        platform_matrix = {
+            "current_environment": {
+                "support_levels": {
+                    "container_sandbox": {"support": "supported"},
+                },
+                "platform": "windows",
+            }
+        }
+        profile = sandbox_certification_profile(
+            runner_type="containerized_oci",
+            runner_metadata=self._certified_metadata(),
+            platform_matrix=platform_matrix,
+        )
+        assert profile["tier_status"] == "certified"
+        assert profile["certification_tier"] == "container-sandbox-certified"
+        assert profile["missing_tier_requirements"] == []
+        assert profile["validation_layers"]["runner_assurance"]["status"] == "passed"
+
+    def test_macos_host_with_linux_backend_certified(self):
+        from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+        # platform_matrix reflects what _detect_linux_container_backend produces when
+        # Docker Desktop on macOS is running in Linux-containers mode (OSType=linux).
+        platform_matrix = {
+            "current_environment": {
+                "support_levels": {
+                    "container_sandbox": {"support": "supported"},
+                },
+                "platform": "darwin",
+            }
+        }
+        profile = sandbox_certification_profile(
+            runner_type="containerized_oci",
+            runner_metadata=self._certified_metadata(),
+            platform_matrix=platform_matrix,
+        )
+        assert profile["tier_status"] == "certified"
+        assert profile["certification_tier"] == "container-sandbox-certified"
+        assert profile["missing_tier_requirements"] == []
+        assert profile["validation_layers"]["runner_assurance"]["status"] == "passed"
+
+    # --- Negative cases: uncertified when conditions are not met ---
+
+    def test_windows_containers_mode_not_certified(self):
+        from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+        # Docker Desktop on Windows in Windows-containers mode returns OSType=windows →
+        # _detect_linux_container_backend sets linux_container_backend=False →
+        # platform_matrix surfaces container_sandbox.support=unsupported.
+        profile = sandbox_certification_profile(
+            runner_type="containerized_oci",
+            runner_metadata=self._certified_metadata(),
+            platform_matrix=self._unsupported_platform_matrix(),
+        )
+        assert profile["tier_status"] == "not_certified_for_runner"
+        assert profile["certification_tier"] is None
+        assert "platform_support.container_sandbox" in profile["missing_tier_requirements"]
+        assert profile["validation_layers"]["runner_assurance"]["status"] == "not_certified"
+
+    def test_no_runtime_available_not_certified(self):
+        from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+        metadata = self._certified_metadata()
+        metadata["launch_attestation"]["status"] = "not-started"
+        for field in ("backend_identity", "runtime_identity", "mount_mode", "resource_limit_mode"):
+            metadata["launch_attestation"][field] = {"verified": False}
+        metadata["resource_limits"]["enforcement"] = "unavailable"
+        metadata["runtime_identity"]["trust_chain"]["accepted_for_production_safe_profiles"] = False
+
+        profile = sandbox_certification_profile(
+            runner_type="containerized_oci",
+            runner_metadata=metadata,
+            platform_matrix=self._supported_platform_matrix(),
+        )
+        assert profile["tier_status"] == "not_certified_for_runner"
+        assert "launch_attestation.status" in profile["missing_tier_requirements"]
+        assert "resource_limits.enforcement" in profile["missing_tier_requirements"]
+
+    def test_no_pinned_digest_not_certified(self):
+        from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+        metadata = self._certified_metadata()
+        metadata["launch_attestation"]["backend_identity"] = {"verified": False}
+
+        profile = sandbox_certification_profile(
+            runner_type="containerized_oci",
+            runner_metadata=metadata,
+            platform_matrix=self._supported_platform_matrix(),
+        )
+        assert profile["tier_status"] == "not_certified_for_runner"
+        assert "verified.backend_identity" in profile["missing_tier_requirements"]
+
+    def test_wall_clock_only_limits_not_certified(self):
+        from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+        metadata = self._certified_metadata()
+        metadata["resource_limits"]["enforcement"] = "wall-clock-timeout-only"
+
+        profile = sandbox_certification_profile(
+            runner_type="containerized_oci",
+            runner_metadata=metadata,
+            platform_matrix=self._supported_platform_matrix(),
+        )
+        assert profile["tier_status"] == "not_certified_for_runner"
+        assert "resource_limits.enforcement" in profile["missing_tier_requirements"]
+
+    # --- Diagnostic: each verified attestation field is independently required ---
+
+    @pytest.mark.parametrize(
+        "field_name",
+        ["backend_identity", "runtime_identity", "mount_mode", "resource_limit_mode"],
+    )
+    def test_each_verified_attestation_field_independently_required(self, field_name: str):
+        from AINDY.platform_layer.sandbox_certification import sandbox_certification_profile
+
+        metadata = self._certified_metadata()
+        metadata["launch_attestation"][field_name] = {"verified": False}
+
+        profile = sandbox_certification_profile(
+            runner_type="containerized_oci",
+            runner_metadata=metadata,
+            platform_matrix=self._supported_platform_matrix(),
+        )
+        assert profile["tier_status"] == "not_certified_for_runner"
+        assert f"verified.{field_name}" in profile["missing_tier_requirements"]
