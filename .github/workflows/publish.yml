@@ -226,17 +226,22 @@ jobs:
       - name: Assert platform UI dist present in installed package
         run: |
           smoke_venv/bin/python - <<'PY'
-          import importlib.util, pathlib
-          spec = importlib.util.find_spec("AINDY")
-          assert spec is not None, "AINDY package not found in smoke_venv"
-          if spec.origin is not None:
-              pkg = pathlib.Path(spec.origin).parent
-          else:
-              pkg = pathlib.Path(next(iter(spec.submodule_search_locations)))
-          dist_html = pkg / "platform" / "dist" / "index.html"
-          dist_assets = pkg / "platform" / "dist" / "assets"
-          assert dist_html.exists(), f"platform/dist/index.html missing in installed wheel — {dist_html}"
-          assert dist_assets.is_dir(), f"platform/dist/assets/ missing in installed wheel — {dist_assets}"
+          import importlib.metadata, pathlib
+          pkg_files = importlib.metadata.files("aindy-runtime")
+          assert pkg_files is not None, "aindy-runtime not installed in smoke_venv"
+          dist_html_ref = next(
+              (f for f in pkg_files if "platform/dist/index.html" in str(f)),
+              None,
+          )
+          assert dist_html_ref is not None, (
+              "platform/dist/index.html not declared in wheel RECORD — "
+              "check that platform/dist/** is in pyproject.toml package-data "
+              "and that the UI build artifact was downloaded before python -m build"
+          )
+          dist_html = dist_html_ref.locate()
+          assert dist_html.exists(), f"platform/dist/index.html declared in RECORD but missing on disk: {dist_html}"
+          dist_assets = dist_html.parent / "assets"
+          assert dist_assets.is_dir(), f"platform/dist/assets/ missing: {dist_assets}"
           print(f"Platform UI dist OK: {dist_html.parent}")
           PY
 
