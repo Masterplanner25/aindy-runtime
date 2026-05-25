@@ -11,7 +11,7 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? "0.0.0"),
   },
   build: {
-    outDir: "dist",
+    outDir: "../AINDY/platform/dist",
     emptyOutDir: true,
   },
   base: "/platform/",

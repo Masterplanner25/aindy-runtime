@@ -108,6 +108,70 @@ certification suite (`tier_status: certified` at `strong-sandbox-certified`).
 
 ---
 
+## PACK-DEBT-1 — Nodus Pin Staleness
+
+Status: Deferred — Verify Before 1.0.0
+
+`pyproject.toml` pins `nodus-lang==1.1.0`. Nodus has shipped through phases 1–7 of
+Nodus 2.0, with at least one breaking CLI change. The runtime's Nodus surface must be
+audited before the 1.0.0 release to determine whether the pin is still safe.
+
+Action required:
+1. Audit all `from nodus*` / `import nodus*` in `AINDY/` to identify what surfaces are used.
+2. Review Nodus changelog between 1.1.0 and current for breaking changes to those surfaces.
+3. Either bump the pin (update callsites if needed, re-run full test suite) or document
+   a deliberate "stay at 1.1.0" decision with rationale in a comment in `pyproject.toml`.
+
+Trigger: must be resolved before tagging 1.0.0.
+
+---
+
+## PACK-DEBT-2 — Auth Dependency CVE Policy
+
+Status: Deferred — Low Priority
+
+`pyproject.toml` exact-pins the auth stack: `bcrypt==4.0.1`, `passlib==1.7.4`,
+`python-jose==3.5.0`. No automated mechanism watches for CVEs against these pins.
+
+Decision needed: manual quarterly review cadence, Dependabot, or other mechanism.
+Recommended: add `.github/dependabot.yml` (no code change, free GitHub feature).
+
+Trigger: revisit before 1.0.0 final release, or immediately on any CVE report against
+these packages.
+
+---
+
+## PACK-DEBT-3 — No mypy Baseline
+
+Status: Deferred — Decision Required
+
+No `mypy` configuration or CI step exists in `aindy-runtime`. Runtime codebase is
+untyped from a static-analysis perspective. This is a deliberate gap or an oversight —
+both are valid answers, but the choice should be documented.
+
+Decision needed: either wire mypy into CI with an explicit error-count baseline (matching
+the Nodus project's pattern), or add a note here confirming the decision to not pursue
+mypy for the runtime.
+
+Trigger: next time the project has bandwidth for tooling improvements.
+
+---
+
+## PACK-DEBT-4 — Integration Tier Uses `continue-on-error: true`
+
+Status: Deferred — Decision Required
+
+The `integration-postgres` job in `runtime-ci.yml` is marked `continue-on-error: true`,
+meaning integration failures do not block CI green. This is either intentional (known-flaky
+tier, signal-only) or transitional (working toward gating).
+
+Decision needed: if intentional, add a code comment to the `continue-on-error: true` line
+explaining why. If transitional, replace this entry with a tracked path to removing the flag.
+
+Trigger: next time the integration tier is touched or stabilized.
+
+---
+
 ## SDK Extraction
 
 Status: COMPLETE (2026-05-23)

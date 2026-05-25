@@ -18,7 +18,7 @@ from AINDY.routes import (
     platform_router,
 )
 
-_PLATFORM_UI_DIST = Path(__file__).parent.parent / "platform" / "dist"
+_PLATFORM_UI_DIST = Path(__file__).parent / "platform" / "dist"
 
 
 def home():

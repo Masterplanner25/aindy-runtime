@@ -116,8 +116,7 @@ version = { attr = "AINDY._version.__version__" }
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["AINDY*"]
-exclude = ["AINDY.tests*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"AINDY" = ["*.json", "**/*.json"]
+"AINDY" = ["*.json", "**/*.json", "platform/dist/**"]
