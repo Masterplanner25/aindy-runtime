@@ -1,0 +1,308 @@
+name: Publish Runtime to PyPI
+
+# Requires one-time setup on PyPI and TestPyPI before this workflow can publish.
+# Configure trusted publishing (OIDC — no stored token needed):
+#
+#   TestPyPI: https://test.pypi.org/manage/project/aindy-runtime/settings/publishing/
+#     GitHub owner: Masterplanner25  Repository: aindy-runtime
+#     Workflow: publish.yml          Environment: testpypi
+#
+#   PyPI: https://pypi.org/manage/project/aindy-runtime/settings/publishing/
+#     GitHub owner: Masterplanner25  Repository: aindy-runtime
+#     Workflow: publish.yml          Environment: production
+#
+# Also create two GitHub Environments (Settings → Environments):
+#   testpypi  — no required reviewers (automatic gate)
+#   production — add yourself as a required reviewer (manual approval gate)
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-version:
+    name: Validate Tag Matches Package Version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Assert tag matches _version.py and compatibility metadata
+        id: check
+        run: |
+          python - <<'PY'
+          import re, sys, os, tomllib
+          from pathlib import Path
+
+          tag = os.environ["GITHUB_REF_NAME"]        # v1.0.0
+          expected = tag.lstrip("v")
+
+          src = Path("AINDY/_version.py").read_text(encoding="utf-8")
+          m = re.search(r'__version__\s*=\s*"([^"]+)"', src)
+          if not m:
+              print("__version__ not found in AINDY/_version.py", file=sys.stderr)
+              sys.exit(1)
+          actual = m.group(1)
+          if actual != expected:
+              print(f"Tag {tag} does not match package version {actual}", file=sys.stderr)
+              sys.exit(1)
+
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          assert pyproject["project"]["name"] == "aindy-runtime", "package name mismatch"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print(f"version={actual}", file=out)
+          print(f"Version OK: {actual}")
+          PY
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Ruff
+        run: python -m pip install ruff==0.15.6
+
+      - name: Lint
+        run: python -m ruff check AINDY tests --config AINDY/ruff.toml
+
+  platform-ui-build:
+    name: Platform UI Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: platform/package-lock.json
+
+      - name: Install dependencies
+        working-directory: platform
+        run: npm ci
+
+      - name: Build
+        working-directory: platform
+        run: npm run build
+
+      - name: Verify dist artifacts
+        run: |
+          test -f AINDY/platform/dist/index.html
+          test -d AINDY/platform/dist/assets
+
+      - name: Upload platform UI dist
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-ui-dist
+          path: AINDY/platform/dist/
+
+  build:
+    name: Build sdist and Wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [validate-version, lint, platform-ui-build]
+
+    env:
+      DATABASE_URL: "sqlite:///:memory:"
+      AINDY_ALLOW_SQLITE: "true"
+      AINDY_SKIP_MONGO_PING: "true"
+      SKIP_MONGO_PING: "true"
+      MONGO_URL: ""
+      OPENAI_API_KEY: sk-test-placeholder
+      DEEPSEEK_API_KEY: ds-test-placeholder
+      SECRET_KEY: ci-publish-secret
+      PERMISSION_SECRET: ci-publish-permission-secret
+      AINDY_API_KEY: ci-publish-api-key
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Download platform UI dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: platform-ui-dist
+          path: AINDY/platform/dist/
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[release]
+          python -m build
+          python -m twine check dist/*
+          ls -la dist/
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aindy-runtime-dist
+          path: dist/
+
+  install-smoke-test:
+    name: Install Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build]
+
+    env:
+      ENV: test
+      TESTING: "true"
+      TEST_MODE: "true"
+      DATABASE_URL: "sqlite:///:memory:"
+      AINDY_ALLOW_SQLITE: "true"
+      AINDY_SKIP_MONGO_PING: "true"
+      SKIP_MONGO_PING: "true"
+      MONGO_URL: ""
+      OPENAI_API_KEY: sk-test-placeholder
+      DEEPSEEK_API_KEY: ds-test-placeholder
+      SECRET_KEY: ci-smoke-secret-key
+      PERMISSION_SECRET: ci-smoke-permission-secret
+      AINDY_API_KEY: ci-smoke-api-key
+      ALLOWED_ORIGINS: "http://localhost:3000"
+      AINDY_BOOT_MODE: runtime-only
+
+    steps:
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Install psycopg2 system dependency
+        run: sudo apt-get install -y libpq-dev
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: aindy-runtime-dist
+          path: dist/
+
+      - name: Install wheel into clean venv
+        run: |
+          python -m venv smoke_venv
+          smoke_venv/bin/pip install --upgrade pip
+          smoke_venv/bin/pip install dist/aindy_runtime-*.whl
+
+      - name: Assert entry points declared correctly
+        run: |
+          smoke_venv/bin/python - <<'PY'
+          import importlib.metadata as md
+          eps = {ep.name: ep.value for ep in md.entry_points(group="console_scripts") if ep.name in {"aindy-runtime", "aindy-runtime-api"}}
+          expected = {"aindy-runtime": "AINDY.runtime_only:main", "aindy-runtime-api": "AINDY.main:main"}
+          assert eps == expected, f"entry points mismatch: {eps}"
+          print("Entry points OK:", eps)
+          PY
+
+      - name: Import smoke — deployment contract and sandbox surfaces
+        run: |
+          smoke_venv/bin/python - <<'PY'
+          from AINDY.platform_layer.deployment_contract import deployment_contract_summary
+          from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+          print(deployment_contract_summary())
+          print(sandbox_platform_capability_matrix())
+          PY
+
+      - name: Assert platform UI dist present in installed package
+        run: |
+          smoke_venv/bin/python - <<'PY'
+          import importlib.util, pathlib
+          spec = importlib.util.find_spec("AINDY")
+          pkg = pathlib.Path(spec.origin).parent
+          dist_html = pkg / "platform" / "dist" / "index.html"
+          dist_assets = pkg / "platform" / "dist" / "assets"
+          assert dist_html.exists(), f"platform/dist/index.html missing in installed wheel — {dist_html}"
+          assert dist_assets.is_dir(), f"platform/dist/assets/ missing in installed wheel — {dist_assets}"
+          print(f"Platform UI dist OK: {dist_html.parent}")
+          PY
+
+      - name: aindy-runtime sandbox exit code check
+        run: |
+          smoke_venv/bin/aindy-runtime sandbox; code=$?
+          [ "$code" -le 2 ] || { echo "unexpected exit code $code (expected 0, 1, or 2)"; exit 1; }
+          echo "aindy-runtime sandbox exited $code (OK)"
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [install-smoke-test]
+    environment: testpypi
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: aindy-runtime-dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [publish-testpypi]
+    environment: production
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: aindy-runtime-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [publish-pypi]
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: aindy-runtime-dist
+          path: dist/
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" dist/* \
+            --title "aindy-runtime ${{ github.ref_name }}" \
+            --generate-notes
