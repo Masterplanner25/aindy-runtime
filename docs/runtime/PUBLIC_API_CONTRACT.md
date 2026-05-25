@@ -1,6 +1,6 @@
 ---
 title: "Runtime Public API Contract"
-last_verified: "2026-05-20"
+last_verified: "2026-05-25"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -23,6 +23,18 @@ Release posture note:
 For HTTP/syscall/boot stability tiers, use
 [Public Runtime Surfaces](./PUBLIC_RUNTIME_SURFACES.md). This document covers
 import boundaries, not the full external platform surface.
+
+## SDK Bridge Role
+
+`aindy-sdk` is the universal interface between operator app code and the runtime.
+It targets both distribution contexts: a locally-installed runtime (operator owns
+infrastructure) and a cloud-hosted runtime (provider owns infrastructure, operator
+interacts via the SDK only). The SDK's HTTP targets are the stable surfaces listed
+in `PUBLIC_RUNTIME_SURFACES.md`. The import modules listed in
+**Public Runtime API Modules** below are the boundary that first-party apps use
+when running inside the runtime process — the SDK operates over HTTP and does not
+import from `AINDY.*` directly. Cross-version compatibility between SDK and runtime
+versions is an open question; see `DEBT-COMPAT-1` in `TECH_DEBT.md`.
 
 ## Contract Rules
 

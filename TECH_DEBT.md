@@ -172,6 +172,113 @@ Trigger: next time the integration tier is touched or stabilized.
 
 ---
 
+## DEBT-COMPAT-1 — Cross-version compatibility story between runtime and SDK
+
+**Status:** Deferred — Low Priority
+**Trigger condition:** When two runtime versions exist in the wild
+simultaneously (e.g., a 1.0 cloud runtime serving users whose local
+SDKs are still on a 0.x version, or vice versa).
+
+**Context:** Today, the runtime and SDK ship at matching versions and
+the compatibility contract is implicit. Under the local + cloud
+distribution model (see ARCHITECTURE.md), this implicit contract
+becomes load-bearing: a cloud runtime at v1.1 may serve users whose
+local SDKs are v1.0, and the runtime's declared HTTP surface
+(`/health/sandbox`, `/flow/run`, etc.) must remain compatible across
+those versions.
+
+**Resolution path when reopened:** Define a compatibility window
+policy (e.g., "the SDK at version N is supported against runtimes
+at versions N through N+2"). Add automated cross-version testing
+that exercises older SDK versions against newer runtime versions.
+Document the policy in PUBLIC_API_CONTRACT.md.
+
+**Why deferred:** Only one version of each exists today. The
+infrastructure to test cross-version compatibility is non-trivial,
+and the policy needs to be informed by actual release cadence and
+deprecation philosophy, neither of which is settled.
+
+---
+
+## TENANT-2 — Per-tenant quota limits not configurable; `quota_group` has no enforcement
+
+Status: Deferred — Low Priority
+
+Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area A, finding TENANT-2.
+
+`MAX_CONCURRENT_PER_TENANT = 5` is a process-wide constant overridable only via
+`AINDY_QUOTA_MAX_CONCURRENT` env var, not per-billing-tenant. The `quota_group`
+column on `execution_unit` accepts policy tags ("premium", "batch") but nothing
+reads this field to adjust quota behavior. In a cloud multi-tenant context,
+different tenants need independently configured concurrency ceilings.
+
+Resolution path:
+- Build enforcement for `quota_group` as a policy lookup key, OR
+- Add a per-tenant concurrency limit table driven by control-plane configuration.
+
+Trigger: when cloud onboarding begins.
+
+---
+
+## COMPAT-2 — No deprecation or forward-compatibility policy for extension ABI
+
+Status: Deferred — Low Priority
+
+Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area B, finding COMPAT-2.
+
+`ABI_VERSIONS = frozenset({"v1"})` and the `EXTENSION_ABI.md` policy states
+"experimental ABI markers do not imply long-term compatibility" but defines no
+forward-compatibility window or deprecation procedure. When the runtime introduces
+ABI v2, plugin authors need a documented support window before v1 is dropped.
+
+Resolution path: define a compatibility window in `EXTENSION_ABI.md` — e.g.,
+"a stable ABI version is supported for at least two minor runtime releases after
+a newer stable version ships."
+
+Trigger: before any ABI version other than v1 is introduced.
+
+---
+
+## DATA-1 — No data residency mechanism
+
+Status: Deferred — Low Priority
+
+Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area D, finding DATA-1.
+
+No `AINDY_DATA_REGION` env var or equivalent exists. Cloud operators in regulated
+industries (GDPR, HIPAA, SOC 2 Type II) need to declare which region data is stored
+in and enforce that writes stay within that boundary.
+
+Resolution path:
+- Define an `AINDY_DATA_REGION` env var and expose it in the deployment contract.
+- Actual region-routing enforcement requires control-plane work outside this repo.
+
+Trigger: when cloud onboarding begins or when a regulated operator requires it.
+
+---
+
+## LOCAL-1 — No documented production upgrade path for local installs
+
+Status: Deferred — Low Priority
+
+Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area E, finding LOCAL-1.
+
+The README documents only the dev install path (`pip install -e .`). There is no
+documented production upgrade procedure: pip upgrade command, environment variable
+sequence (`AINDY_SCHEMA_RECONCILE=true`), or rollback guidance. Local-install
+operators face this gap at every upgrade.
+
+Resolution path: add an "Upgrading" section to `README.md` and/or
+`RUNTIME_ONLY_DEPLOYMENT.md` covering:
+1. `pip install --upgrade aindy-runtime`
+2. Verify new version: `aindy-runtime version` (or `/api/version` while running)
+3. Set `AINDY_SCHEMA_RECONCILE=true` before restart when a schema bump is expected
+4. Rollback: reinstall the previous version and restart without reconcile
+
+Trigger: before the 1.0.0 release.
+
+---
+
 ## SDK Extraction
 
 Status: COMPLETE (2026-05-23)

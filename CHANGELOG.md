@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Added — Local+cloud distribution audit (2026-05-25)
+
+- **`docs/runtime/LOCAL_AND_CLOUD_AUDIT.md`**: Full audit pass across seven areas
+  surfacing gaps the local+cloud framing makes newly visible. Areas: multi-tenancy
+  readiness (TENANT-1 through TENANT-4), cross-version compatibility beyond the SDK
+  (COMPAT-2, COMPAT-3), operator "where am I running" clarity (CLOUD-1, CLOUD-2),
+  data residency (DATA-1, DATA-2), self-update for local installs (LOCAL-1, LOCAL-2),
+  cloud control plane placeholders (CLOUD-3, CLOUD-4), and open findings (G-1, G-2).
+  Findings surface only — nothing fixed.
+- **`TECH_DEBT.md`**: Four new entries from the audit: `TENANT-2` (quota group
+  enforcement gap), `COMPAT-2` (no ABI deprecation policy), `DATA-1` (no data
+  residency mechanism), `LOCAL-1` (no production upgrade path documented).
+
+### Added — Local+cloud architecture framing documented (2026-05-25)
+
+- **`docs/runtime/ARCHITECTURE.md`**: New top-level architecture document
+  establishing the local+cloud distribution model as the explicit framing for
+  the runtime. Covers the three layers (runtime data plane, SDK universal
+  interface, cloud control plane not yet built), five concrete examples of how
+  the framing shapes architectural decisions, what the framing does not commit
+  to, and pointers to all related docs.
+- **`docs/runtime/PUBLIC_API_CONTRACT.md`**: Added SDK Bridge Role section
+  naming `aindy-sdk` as the universal interface targeting both local-install
+  and cloud-hosted deployment contexts. Bumped `last_verified` to 2026-05-25.
+- **`TECH_DEBT.md`**: Added `DEBT-COMPAT-1` — cross-version compatibility
+  story between runtime and SDK. Deferred; trigger condition is when two
+  runtime versions exist simultaneously in the wild.
+
 ### Fixed — DRIFT-1 + reordering guard: first-party bootstrap allowlist ratified, list_supported_sandbox_runners ordering frozen (2026-05-25)
 
 **DRIFT-1 (docs-only, no runtime behavior change):**
