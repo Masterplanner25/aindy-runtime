@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Python (pip) — security and version updates for runtime deps.
+  # Primary CVE signal comes from pip-audit in security-audit.yml.
+  # Dependabot catches transitive deps that pip-audit may miss against a
+  # stale lockfile, and auto-opens PRs for security advisories on PyPI.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+
+  # GitHub Actions — keeps pinned action SHAs up to date.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5

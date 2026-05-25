@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added — Auth dependency CVE monitoring and security policy (2026-05-25)
+
+- **`pyproject.toml`**: New `security` optional-dependencies group — `pip-audit>=2.7.0`
+  plus auth-adjacent floor pins (`bcrypt>=4.0.1`, `passlib>=1.7.4`,
+  `python-jose>=3.5.0`). Install with `pip install -e .[security]`.
+- **`.github/workflows/security-audit.yml`**: New workflow. pip-audit (OSV-backed)
+  runs on every PR and weekly (Mondays 08:00 UTC). Fails on any detected CVE; prints
+  advisory detail and SLA reminder. Exemptions documented in SECURITY_POLICY.md.
+- **`.github/dependabot.yml`**: New file. Enables Dependabot for `pip` and
+  `github-actions` ecosystems (weekly, Mondays). Secondary CVE signal for transitive
+  deps pip-audit may miss against a stale lockfile.
+- **`docs/runtime/SECURITY_POLICY.md`**: New file. Defines CVE response SLA
+  (Critical: 7 days, High: 14 days, Medium: next minor, Low: next major), exemption
+  procedure, and accepted-findings register. Closes PACK-DEBT-2.
+
+### Changed — Integration CI now gates on failures (2026-05-25)
+
+- **`.github/workflows/runtime-ci.yml`**: Removed `continue-on-error: true` from the
+  `integration-postgres` job. Integration failures now block CI green. Closes PACK-DEBT-4.
+
+### Decided — mypy not adopted (2026-05-25)
+
+- **`TECH_DEBT.md`**: Closed PACK-DEBT-3. Decision: do not pursue mypy on
+  `aindy-runtime` or `aindy-sdk`. Observed bug class is cross-module/cross-repo
+  contract drift, which audit-arc and contract tests address directly. Reopen triggers
+  documented (second engineer joins, or signature-drift bug missed by audit-arc).
+
 ### Added — Local+cloud distribution audit (2026-05-25)
 
 - **`docs/runtime/LOCAL_AND_CLOUD_AUDIT.md`**: Full audit pass across seven areas

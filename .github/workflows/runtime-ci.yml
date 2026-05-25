@@ -195,7 +195,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [lint, runtime-docs]
-    continue-on-error: true
 
     services:
       postgres:

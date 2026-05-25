@@ -102,6 +102,16 @@ release = [
   "build==1.3.0",
   "twine==6.2.0",
 ]
+security = [
+  # pip-audit scans installed deps against OSV. Run with: pip install -e .[security]
+  "pip-audit>=2.7.0",
+  # Auth-adjacent floors — minimum acceptable versions for CVE-monitored packages.
+  # The main dependencies list carries exact pins for reproducibility; these floors
+  # ensure a downgrade is flagged if the main pin is ever lowered below a known-safe version.
+  "bcrypt>=4.0.1",
+  "passlib>=1.7.4",
+  "python-jose>=3.5.0",
+]
 
 [project.scripts]
 aindy-runtime = "AINDY.runtime_only:main"

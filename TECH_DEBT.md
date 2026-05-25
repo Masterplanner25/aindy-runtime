@@ -128,47 +128,62 @@ Trigger: must be resolved before tagging 1.0.0.
 
 ## PACK-DEBT-2 — Auth Dependency CVE Policy
 
-Status: Deferred — Low Priority
+Status: CLOSED (2026-05-25)
 
-`pyproject.toml` exact-pins the auth stack: `bcrypt==4.0.1`, `passlib==1.7.4`,
-`python-jose==3.5.0`. No automated mechanism watches for CVEs against these pins.
-
-Decision needed: manual quarterly review cadence, Dependabot, or other mechanism.
-Recommended: add `.github/dependabot.yml` (no code change, free GitHub feature).
-
-Trigger: revisit before 1.0.0 final release, or immediately on any CVE report against
-these packages.
+Implemented:
+- `security` optional-dependencies group added to `pyproject.toml` — declares
+  `pip-audit>=2.7.0` plus floor pins for `bcrypt>=4.0.1`, `passlib>=1.7.4`,
+  `python-jose>=3.5.0`.
+- `.github/workflows/security-audit.yml` — pip-audit (OSV-backed) runs on every
+  PR and on a weekly cron schedule (Mondays 08:00 UTC). Fails CI on any detected CVE.
+  Produces an `audit-results.json` artifact. Exemptions via `--ignore-vuln <GHSA-ID>`
+  with mandatory comment documentation.
+- `.github/dependabot.yml` — enabled for `pip` and `github-actions` ecosystems,
+  weekly cadence. Secondary signal for transitive deps and stale SHA pins.
+- `docs/runtime/SECURITY_POLICY.md` — new file. Documents SLA (Critical: 7 days,
+  High: 14 days, Medium: next minor, Low: next major), exemption process, and
+  accepted-findings register.
 
 ---
 
 ## PACK-DEBT-3 — No mypy Baseline
 
-Status: Deferred — Decision Required
+Status: CLOSED (2026-05-25) — Decision: do not pursue mypy at this time.
 
-No `mypy` configuration or CI step exists in `aindy-runtime`. Runtime codebase is
-untyped from a static-analysis perspective. This is a deliberate gap or an oversight —
-both are valid answers, but the choice should be documented.
+The dominant bug class observed across this codebase is contract drift between
+modules, repos, and layers — registry implementation vs execution-model docs,
+frontend vs backend sandbox fields, SDK vs runtime surfaces. The audit arc and
+contract test suite address this class directly. mypy's primary value is signature
+drift within a module, which has not been the observed failure mode. Adopting mypy
+now would impose ongoing annotation maintenance cost (plugin-host dynamic dispatch
+friction, capability registry typing) for marginal coverage of the bugs actually
+being shipped.
 
-Decision needed: either wire mypy into CI with an explicit error-count baseline (matching
-the Nodus project's pattern), or add a note here confirming the decision to not pursue
-mypy for the runtime.
+Reopen triggers:
+- A second engineer joins the project, OR
+- A contributor PR introduces a signature-drift bug that audit-arc misses and a
+  type-checker would have caught.
 
-Trigger: next time the project has bandwidth for tooling improvements.
+On reopen: start with `aindy-sdk` (smaller surface, cleaner boundaries) before
+`aindy-runtime`. Use `--strict` on new code only; document a phased adoption plan.
 
 ---
 
 ## PACK-DEBT-4 — Integration Tier Uses `continue-on-error: true`
 
-Status: Deferred — Decision Required
+Status: CLOSED (2026-05-25)
 
-The `integration-postgres` job in `runtime-ci.yml` is marked `continue-on-error: true`,
-meaning integration failures do not block CI green. This is either intentional (known-flaky
-tier, signal-only) or transitional (working toward gating).
+`continue-on-error: true` removed from the `integration-postgres` job in
+`runtime-ci.yml`. Integration failures now block CI green.
 
-Decision needed: if intentional, add a code comment to the `continue-on-error: true` line
-explaining why. If transitional, replace this entry with a tracked path to removing the flag.
+Rationale: advisory-only integration tests provide weak signal. If integration
+coverage is worth running, it is worth gating on. If flakes materialize, they are
+investigated as real signals rather than silenced by restoring the bypass.
 
-Trigger: next time the integration tier is touched or stabilized.
+Followup posture: if a flake appears within the first two weeks, investigate root
+cause (test isolation, container startup race, fixture cleanup) rather than restoring
+`continue-on-error`. If genuinely environmental and unfixable, open a new TECH_DEBT
+entry rather than re-disabling the gate.
 
 ---
 
