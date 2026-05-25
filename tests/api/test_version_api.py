@@ -363,3 +363,41 @@ def test_health_route_reports_trusted_python_inventory(runtime_only_client):
         "notes": "This profile does not require a third-party sandbox assurance class.",
     }
     assert payload["plugin_sandbox_platform"]["schema_version"] == "2026-05-21"
+
+
+def test_health_sandbox_route_returns_posture(runtime_only_client):
+    response = runtime_only_client.get("/health/sandbox")
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    # Top-level keys present
+    assert "plugin_sandbox_posture" in payload
+    assert "plugin_sandbox_platform" in payload
+    assert "sandbox_verification_posture" in payload
+    assert "trusted_python_execution" in payload
+    assert "plugin_hosts" in payload
+    assert "plugin_sandbox_attestation" in payload
+    assert "runtime_conditions" in payload
+
+    # Posture shape matches what /health returns
+    posture = payload["plugin_sandbox_posture"]
+    assert posture["current"]["runner_type"] == "insecure_dev_subprocess"
+    assert posture["current"]["assurance_class"] == "insecure-dev"
+    assert posture["requirement_status"]["assurance_class_satisfied"] is True
+    assert posture["requirement_status"]["certification_tier_satisfied"] is True
+
+    # Verification posture present
+    verification = payload["sandbox_verification_posture"]
+    assert "verification_method" in verification
+    assert "kernel_observable" in verification
+    assert "assurance_ceiling" in verification
+
+    # Trusted python fields present and accurate for test env
+    trusted_py = payload["trusted_python_execution"]
+    assert trusted_py["present"] is False
+    assert trusted_py["execution_model"] == "trusted-in-process-python"
+    assert trusted_py["sandboxing"] == "none"
+
+    # runtime_conditions is a list (empty in baseline test env)
+    assert isinstance(payload["runtime_conditions"], list)

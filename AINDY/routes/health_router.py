@@ -574,6 +574,35 @@ async def health_check_domains(request: Request):
     return JSONResponse(status_code=status_code, content=payload)
 
 
+def _sandbox_health_payload() -> dict:
+    from AINDY.platform_layer.health_service import sandbox_verification_posture
+    from AINDY.platform_layer.deployment_contract import (
+        get_api_runtime_conditions,
+        plugin_sandbox_assurance_posture,
+    )
+    from AINDY.platform_layer.extension_runtime_inventory import trusted_python_execution_inventory
+    from AINDY.platform_layer.plugin_host import plugin_host_inventory
+    from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+    plugin_hosts = plugin_host_inventory(probe=True)
+    return {
+        "plugin_sandbox_posture": plugin_sandbox_assurance_posture(),
+        "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
+        "sandbox_verification_posture": sandbox_verification_posture(),
+        "trusted_python_execution": trusted_python_execution_inventory(),
+        "plugin_hosts": plugin_hosts,
+        "plugin_sandbox_attestation": dict(plugin_hosts.get("sandbox_attestation") or {}),
+        "runtime_conditions": get_api_runtime_conditions(),
+    }
+
+
+@router.get("/health/sandbox", summary="Check Sandbox Posture")
+@limiter.limit("60/minute")
+async def health_check_sandbox(request: Request):
+    """Return sandbox posture, verification, and trusted-python inventory."""
+    return JSONResponse(status_code=200, content=_sandbox_health_payload())
+
+
 def _readiness_response() -> JSONResponse:
     """Build readiness response with explicit _http_status handling."""
     from AINDY.platform_layer.health_service import get_readiness_report
