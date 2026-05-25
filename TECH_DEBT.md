@@ -112,15 +112,77 @@ certification suite (`tier_status: certified` at `strong-sandbox-certified`).
 
 Status: Deferred — Verify Before 1.0.0
 
-`pyproject.toml` pins `nodus-lang==1.1.0`. Nodus has shipped through phases 1–7 of
-Nodus 2.0, with at least one breaking CLI change. The runtime's Nodus surface must be
-audited before the 1.0.0 release to determine whether the pin is still safe.
+`pyproject.toml` pins `nodus-lang==1.1.0`. Current Nodus is `3.0.1`. The gap spans
+v1.1.2, v2.0.0, v2.0.1, v2.1.0, v2.1.1, v3.0.0, v3.0.1 — two full major versions.
 
-Action required:
-1. Audit all `from nodus*` / `import nodus*` in `AINDY/` to identify what surfaces are used.
-2. Review Nodus changelog between 1.1.0 and current for breaking changes to those surfaces.
-3. Either bump the pin (update callsites if needed, re-run full test suite) or document
-   a deliberate "stay at 1.1.0" decision with rationale in a comment in `pyproject.toml`.
+**Audit completed 2026-05-25.** Import surface in `AINDY/` is entirely in the
+embedding/VM layer, concentrated in `AINDY/nodus/runtime/aindy_runtime.py`:
+`NodusRuntime`, `ModuleLoader`, `VM`, `coerce_error`, `BuiltinInfo`, `Result`,
+`normalize_filename`, `capture_output`, `configure_vm_limits`.
+Additional probe-only imports in `health_router.py` and `runtime/__init__.py`
+(hasattr checks only — not affected by any breaking change).
+
+**Breaking changes that require action before bumping the pin:**
+
+1. **v2.1.1 CRITICAL — `allowed_paths` sandbox bypass (SECURITY).**
+   Stdlib wrappers (`std:fs`) were not forwarding `allowed_paths` from the calling
+   VM, allowing sandboxed scripts to read arbitrary paths via stdlib calls.
+   `aindy_runtime.py` constructs `VM(..., allowed_paths=self.allowed_paths)` — the
+   sandboxing intent is present but the fix is only in v2.1.1+. Any use of
+   `allowed_paths` for security isolation is currently ineffective at the stdlib
+   boundary. **Must be resolved before any deployment relying on path sandboxing.**
+
+2. **v2.1.0 BUG-005 — `NodusRuntime.run_source` raises vs. returns divergence.**
+   v2.1.0 changed `NodusRuntime.run_source` to return `{"ok": false, "error": ...}`
+   on script error instead of raising. `nodus_flow_compiler.py:255` checks
+   `result.get("ok")` — written for the post-v2.1.0 contract. On v1.1.0, script
+   errors raise before the check is reached; the caller at `nodus_adapter.py:882`
+   catches `(ValueError, RuntimeError)`, but Nodus v1.1.0 exception types may not
+   match. `AINDYNodusRuntime.run_source()` is unaffected — it overrides the method
+   completely and still raises `coerce_error(...)`, which is the correct shape for
+   its callers (`nodus_worker.py` catches `Exception`).
+
+3. **v3.0.0 — err.kind taxonomy changed.**
+   `coerce_error` in `aindy_runtime.py:155` coerces Python exceptions to Nodus
+   errors. The kind taxonomy changed: `"runtime"` splits into `"io_error"`,
+   `"parse_error"`, `"runtime_error"`, etc. No code in aindy-runtime currently
+   inspects `.kind` on the raised error (confirmed by grep — all `.kind` uses are
+   Python `inspect.Parameter.kind` or manifest fields). Low callsite impact; the
+   error message strings seen at the HTTP layer will change.
+
+4. **v3.0.0 — Integer type introduced.**
+   Nodus scripts that check `type(x) == "number"` will break — integers are now a
+   distinct type. This is a script-level concern; the Python embedding API is
+   unaffected. User-authored `.nodus` scripts must be audited.
+
+5. **v3.0.1 BUG-E04 — `HostFunctionError` sentinel for host function exceptions.**
+   Python exceptions raised by host-registered functions (registered via
+   `register_function`) now propagate as `HostFunctionError` (from
+   `nodus.runtime.diagnostics`) rather than propagating directly. The `except
+   Exception as err` handler in `aindy_runtime.py:154` catches it. `coerce_error`
+   on a `HostFunctionError` may produce different error detail than before.
+   Verify error messages surfaced to users remain meaningful.
+
+**Cleanup opportunity on upgrade (not blocking):**
+
+`AINDYNodusRuntime` in `AINDY/nodus/runtime/aindy_runtime.py` was written to work
+around BUG-E03 (`host_globals` not forwarded to `ModuleLoader` by stock
+`NodusRuntime`). v3.0.1 fixes this upstream. On upgrade to 3.0.1, `AINDYNodusRuntime`
+can be deleted and callers can use stock `NodusRuntime` directly. The subclass docstring
+explicitly documents this — the workaround is self-aware.
+`nodus_flow_compiler.py` already uses `NodusRuntime` with `host_globals`; on 3.0.1
+it will behave correctly without a workaround class.
+
+**Resolution path:**
+1. Bump `nodus-lang==1.1.0` → `nodus-lang==3.0.1` in `pyproject.toml`.
+2. Delete `AINDYNodusRuntime` and update all import sites to `NodusRuntime`.
+3. Verify `nodus_flow_compiler.py` error path: test that a bad flow script surfaces a
+   `ValueError` with a readable message (not a raw Nodus exception).
+4. Audit user-authored `.nodus` scripts for `type(x) == "number"` — rename to
+   `type(x) == "integer"` or `type(x) == "float"` as appropriate.
+5. Run the full test suite and the Nodus-specific integration tests.
+6. Manually verify that `allowed_paths` sandboxing is effective after the bump
+   (create a test script that attempts `std:fs` access outside allowed paths).
 
 Trigger: must be resolved before tagging 1.0.0.
 
