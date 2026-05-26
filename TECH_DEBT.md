@@ -110,9 +110,23 @@ certification suite (`tier_status: certified` at `strong-sandbox-certified`).
 
 ## PACK-DEBT-1 — Nodus Pin Staleness
 
-Status: Deferred — Verify Before 1.0.0
+Status: CLOSED (2026-05-25)
 
-`pyproject.toml` pins `nodus-lang==1.1.0`. Current Nodus is `3.0.1`. The gap spans
+**Resolution:** Pin bumped to `nodus-lang==3.0.2` in `pyproject.toml` and
+`AINDY/requirements.txt`. `AINDYNodusRuntime` updated to match the 3.0.2 base class API:
+`initial_globals` now forwarded to `load_module_from_source` / `load_module_from_path`
+(was silently dropped — caused "Undefined variable" for `state`, `user_id`, etc. in
+worker scripts); error handling now returns `Result.failure()` dict instead of raising,
+matching the base class contract and preserving captured stdout on script error;
+`HostFunctionError` unwrapped before the generic error handler.
+
+The class is retained for AINDY-specific extensions that are not in the base class:
+`register_function` stdlib aliases (`recall_from`, `recall_all`, `share`); auto
+`project_root` fallback to the bundled stdlib directory; bare `import memory` rewriting.
+
+**Investigation findings (2026-05-25):**
+
+Nodus is at `3.0.2`. The gap spans
 v1.1.2, v2.0.0, v2.0.1, v2.1.0, v2.1.1, v3.0.0, v3.0.1 — two full major versions.
 
 **Audit completed 2026-05-25.** Import surface in `AINDY/` is entirely in the
