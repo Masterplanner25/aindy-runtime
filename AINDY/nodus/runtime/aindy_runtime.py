@@ -1,14 +1,18 @@
 """
-AINDYNodusRuntime - NodusRuntime subclass with host_globals fix.
+AINDYNodusRuntime - NodusRuntime subclass with AINDY-specific extensions.
 
-The pip-installed nodus package has a bug: NodusRuntime.run_source() accepts
-host_globals but does not forward it to ModuleLoader. This means any object
-injected via host_globals (including memory_bridge for the recall/remember
-built-ins) is silently discarded.
+History: originally written to fix a bug where NodusRuntime.run_source()
+accepted host_globals but did not forward it to ModuleLoader. That fix is now
+in nodus-lang >= 3.0.2, but this subclass is kept for:
+  - register_function() aliases (recall_from, recall_all, share)
+  - auto project_root fallback to bundled stdlib
+  - memory import rewriting ("import memory" -> "import "memory" as memory")
 
-AINDYNodusRuntime.run_source() overrides only the ModuleLoader construction
-call to pass host_globals through. All other behavior is identical to the
-upstream implementation.
+Bug fixes applied vs the original override:
+  - initial_globals now forwarded to load_module_from_source (was silently
+    dropped, causing "Undefined variable" for state/user_id/etc in scripts)
+  - error handling now returns a failure dict instead of raising, matching
+    the base class contract and preserving captured stdout on script error
 """
 from __future__ import annotations
 
@@ -18,8 +22,9 @@ import re
 
 from nodus.builtins.nodus_builtins import BuiltinInfo
 from nodus.result import Result, normalize_filename
+from nodus.runtime.diagnostics import LangRuntimeError, LangSyntaxError, HostFunctionError
 from nodus.runtime.embedding import NodusRuntime
-from nodus.runtime.errors import coerce_error
+from nodus.runtime.errors import coerce_error, legacy_error_dict
 from nodus.runtime.module_loader import ModuleLoader
 from nodus.tooling.sandbox import capture_output, configure_vm_limits
 from nodus.vm.vm import VM
@@ -31,12 +36,23 @@ _STDLIB_DIR = _os.path.join(
 
 
 class AINDYNodusRuntime(NodusRuntime):
-    """NodusRuntime with host_globals correctly forwarded to ModuleLoader.
+    """NodusRuntime subclass with AINDY-specific extensions.
+
+    Extends the base class with:
+    - auto project_root fallback to the bundled stdlib directory
+    - register_function aliases for recall_from / recall_all / share
+    - memory import rewriting so bare ``import memory`` works as a namespace import
+    - initial_globals and host_globals both forwarded to ModuleLoader (base class
+      fix — present in nodus-lang >= 3.0.2, kept here for the other extensions)
 
     Usage:
         rt = AINDYNodusRuntime()
-        rt.register_function("set_state", ..., arity=2)
-        result = rt.run_source(script, host_globals={"memory_bridge": bridge})
+        rt.register_function("set_state", set_state_fn, arity=2)
+        result = rt.run_source(
+            script,
+            initial_globals={"state": {}, "user_id": uid},
+            host_globals={"memory_bridge": bridge},
+        )
     """
 
     def __init__(self, **kwargs):
@@ -70,12 +86,16 @@ class AINDYNodusRuntime(NodusRuntime):
         initial_globals: dict | None = None,
         host_globals: dict | None = None,
     ) -> dict:
-        """Override of NodusRuntime.run_source that passes host_globals to
-        ModuleLoader. This single change makes VM._get_memory_bridge() work
-        correctly so recall(), remember(), suggest() etc. use the injected
-        memory_bridge object.
+        """Run a Nodus script with AINDY extensions applied.
 
-        See NodusRuntime.run_source docstring for all parameter documentation.
+        Differences from NodusRuntime.run_source:
+        - Rewrites bare ``import memory`` to a namespace import before execution.
+        - Forwards both initial_globals and host_globals to ModuleLoader so scripts
+          can read injected values (state, user_id, etc.) as module-level variables.
+        - Returns a failure dict on script error (matching base class contract)
+          rather than raising, preserving captured stdout.
+
+        See NodusRuntime.run_source docstring for parameter documentation.
         """
         self.last_emitted_events: list[dict] = []
         if "memory." in source:
@@ -144,15 +164,27 @@ class AINDYNodusRuntime(NodusRuntime):
                     debugger=debugger,
                 )
                 if filename and os.path.isfile(filename):
-                    loader.load_module_from_path(filename, auto_run_main=True)
+                    loader.load_module_from_path(filename, auto_run_main=True, initial_globals=initial_globals)
                 else:
                     loader.load_module_from_source(
                         source,
                         module_name=filename or "<memory>",
                         auto_run_main=True,
+                        initial_globals=initial_globals,
                     )
+            except HostFunctionError as wrapped:
+                raise wrapped.cause
             except Exception as err:
-                raise coerce_error(err, stage="execute", filename=normalized) from err
+                stage = "parse" if isinstance(err, (LangSyntaxError, SyntaxError)) else "execute"
+                structured = coerce_error(err, stage=stage, filename=normalized)
+                return Result.failure(
+                    stage=stage,
+                    filename=normalized,
+                    stdout=stdout.getvalue(),
+                    stderr=stderr.getvalue(),
+                    errors=[structured.to_dict()],
+                    error=legacy_error_dict(err, filename=normalized),
+                ).to_dict()
 
         # Extract user-emitted events from the VM's event bus.
         # Filter out internal Nodus VM instrumentation events.
