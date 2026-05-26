@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+---
+
+## 1.0.0 — 2026-05-25
+
+Initial PyPI release. Covers the full runtime stack: platform layer with
+sandbox runner and OCI container detection, two-tier extension execution model,
+idempotency gate (NF-1 through NF-5) with EffectRecord persistence and TTL
+cleanup, Alembic migration chain (0001–0004), APScheduler job framework,
+nodus-lang VM integration via `AINDYMemoryBridge`, platform UI (Vite + React
+SPA bundled into the wheel), health and sandbox status HTTP surfaces, and a
+weekly pip-audit CVE workflow. Extracted from aindy-apps-monolith; SDK
+extracted as standalone `aindy-sdk`.
+
 ### Added — Auth dependency CVE monitoring and security policy (2026-05-25)
 
 - **`pyproject.toml`**: New `security` optional-dependencies group — `pip-audit>=2.7.0`
