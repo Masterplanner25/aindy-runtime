@@ -63,7 +63,33 @@ Accepted findings must be documented here under **Accepted Findings**.
 
 ## Accepted Findings
 
-None at this time.
+### PYSEC-2026-161 — starlette host-header URL reconstruction
+- **Package:** starlette (currently pinned at 0.49.1)
+- **Fix version:** 1.0.1 (requires fastapi >= 0.135.0)
+- **Accepted:** 2026-05-25
+- **Rationale:** The fix requires upgrading starlette to 1.0.1, which in turn requires fastapi >= 0.135.0 — a 14-minor-version jump from our current pin (0.121.0). The upgrade is tracked as PACK-DEBT-2 in TECH_DEBT.md. The host-header issue affects URL reconstruction in Starlette middleware; risk is mitigated by the trusted-internal deployment posture described in DEPLOYMENT_PROFILES.md (no direct public internet exposure assumed).
+- **Reopen trigger:** FastAPI upgrade path is planned, or deployment posture changes to include public internet exposure.
+
+### CVE-2024-23342 — ecdsa Minerva timing attack
+- **Package:** ecdsa (transitive dep of python-jose)
+- **Fix version:** None released
+- **Accepted:** 2026-05-25
+- **Rationale:** Not reachable. The runtime uses HS256 (HMAC-SHA256) signing for all JWTs (`ALGORITHM = "HS256"` in `AINDY/services/auth_service.py`). The ecdsa package is pulled in transitively by python-jose but EC key operations are never invoked. A Minerva timing attack requires repeated access to an EC signing oracle, which does not exist in this codebase.
+- **Reopen trigger:** Any addition of ECDSA/ES256 JWT signing or any direct ecdsa import. A fix release from the ecdsa maintainers would also allow removing this exemption.
+
+### PYSEC-2026-97 — nltk filestring() path traversal
+- **Package:** nltk (transitive dep of textstat)
+- **Fix version:** None released
+- **Accepted:** 2026-05-25
+- **Rationale:** Not reachable. nltk is a transitive dependency of textstat; the runtime never imports nltk directly and never calls `nltk.util.filestring()`.
+- **Reopen trigger:** A fix release from the nltk maintainers, or any direct nltk import added to the codebase.
+
+### GHSA-rf74-v2fm-23pw — nltk JSONTaggedDecoder recursion DoS
+- **Package:** nltk (transitive dep of textstat)
+- **Fix version:** None released
+- **Accepted:** 2026-05-25
+- **Rationale:** Not reachable. nltk is a transitive dependency of textstat; the runtime never uses nltk's JSON tag serialization system.
+- **Reopen trigger:** A fix release from the nltk maintainers, or any direct nltk JSON tag usage added to the codebase.
 
 ## Reporting a Vulnerability
 

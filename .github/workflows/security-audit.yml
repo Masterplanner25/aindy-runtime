@@ -32,7 +32,22 @@ jobs:
 
       - name: Run pip-audit
         run: |
-          pip-audit --format json --output audit-results.json; AUDIT_EXIT=$?
+          # PYSEC-2026-161: starlette host-header URL reconstruction — fix requires starlette 1.0.1
+          #   which in turn requires fastapi>=0.135.0 (a significant upgrade). Accepted 2026-05-25;
+          #   tracked in TECH_DEBT.md as PACK-DEBT-2. Revisit when FastAPI upgrade path is planned.
+          # CVE-2024-23342: ecdsa Minerva timing attack — no fix released. Accepted 2026-05-25;
+          #   not reachable: runtime uses HS256 (HMAC) signing only; ecdsa is a transitive dep of
+          #   python-jose that is never exercised by this codebase.
+          # PYSEC-2026-97: nltk filestring() path traversal — no fix released. Accepted 2026-05-25;
+          #   nltk is a transitive dep of textstat; nltk.util.filestring() is never called.
+          # GHSA-rf74-v2fm-23pw: nltk JSONTaggedDecoder recursion DoS — no fix released. Accepted
+          #   2026-05-25; nltk JSON tag decoder is never called by this codebase.
+          pip-audit \
+            --ignore-vuln PYSEC-2026-161 \
+            --ignore-vuln CVE-2024-23342 \
+            --ignore-vuln PYSEC-2026-97 \
+            --ignore-vuln GHSA-rf74-v2fm-23pw \
+            --format json --output audit-results.json; AUDIT_EXIT=$?
           if [ "$AUDIT_EXIT" -eq 0 ]; then
             echo "pip-audit: no vulnerabilities found"
           elif [ "$AUDIT_EXIT" -eq 1 ]; then
