@@ -1,7 +1,7 @@
-name: Publish Runtime to PyPI
+﻿name: Publish Runtime to PyPI
 
 # Requires one-time setup on PyPI and TestPyPI before this workflow can publish.
-# Configure trusted publishing (OIDC — no stored token needed):
+# Configure trusted publishing (OIDC â€” no stored token needed):
 #
 #   TestPyPI: https://test.pypi.org/manage/project/aindy-runtime/settings/publishing/
 #     GitHub owner: Masterplanner25  Repository: aindy-runtime
@@ -11,9 +11,9 @@ name: Publish Runtime to PyPI
 #     GitHub owner: Masterplanner25  Repository: aindy-runtime
 #     Workflow: publish.yml          Environment: production
 #
-# Also create two GitHub Environments (Settings → Environments):
-#   testpypi  — no required reviewers (automatic gate)
-#   production — add yourself as a required reviewer (manual approval gate)
+# Also create two GitHub Environments (Settings â†’ Environments):
+#   testpypi  â€” no required reviewers (automatic gate)
+#   production â€” add yourself as a required reviewer (manual approval gate)
 
 on:
   push:
@@ -31,9 +31,9 @@ jobs:
       version: ${{ steps.check.outputs.version }}
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
 
@@ -71,9 +71,9 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
 
@@ -89,9 +89,9 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - uses: actions/setup-node@cdca7365b2dadb8aad0a33bc7601856ffabcc48e # v4
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "20"
           cache: "npm"
@@ -111,7 +111,7 @@ jobs:
           test -d AINDY/platform/dist/assets
 
       - name: Upload platform UI dist
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: platform-ui-dist
           path: AINDY/platform/dist/
@@ -135,14 +135,14 @@ jobs:
       AINDY_API_KEY: ci-publish-api-key
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
 
       - name: Download platform UI dist
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: platform-ui-dist
           path: AINDY/platform/dist/
@@ -156,7 +156,7 @@ jobs:
           ls -la dist/
 
       - name: Upload dist artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: aindy-runtime-dist
           path: dist/
@@ -185,7 +185,7 @@ jobs:
       AINDY_BOOT_MODE: runtime-only
 
     steps:
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.11"
 
@@ -193,7 +193,7 @@ jobs:
         run: sudo apt-get install -y libpq-dev
 
       - name: Download dist artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aindy-runtime-dist
           path: dist/
@@ -214,7 +214,7 @@ jobs:
           print("Entry points OK:", eps)
           PY
 
-      - name: Import smoke — deployment contract and sandbox surfaces
+      - name: Import smoke â€” deployment contract and sandbox surfaces
         run: |
           smoke_venv/bin/python - <<'PY'
           from AINDY.platform_layer.deployment_contract import deployment_contract_summary
@@ -234,7 +234,7 @@ jobs:
               None,
           )
           assert dist_html_ref is not None, (
-              "platform/dist/index.html not declared in wheel RECORD — "
+              "platform/dist/index.html not declared in wheel RECORD â€” "
               "check that platform/dist/** is in pyproject.toml package-data "
               "and that the UI build artifact was downloaded before python -m build"
           )
@@ -262,7 +262,7 @@ jobs:
 
     steps:
       - name: Download dist artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aindy-runtime-dist
           path: dist/
@@ -283,7 +283,7 @@ jobs:
 
     steps:
       - name: Download dist artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aindy-runtime-dist
           path: dist/
@@ -300,10 +300,10 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
       - name: Download dist artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aindy-runtime-dist
           path: dist/
