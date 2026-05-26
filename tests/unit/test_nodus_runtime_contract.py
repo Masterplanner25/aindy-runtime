@@ -60,11 +60,3 @@ def test_memory_bridge_safe_node_null_tags_defaults_to_empty_list():
 
     result = AINDYMemoryBridge._safe_node({"id": "1", "content": "text", "tags": None})
     assert result["tags"] == []
-
-
-def test_aindy_nodus_runtime_subclasses_nodus_runtime():
-    pytest.importorskip("nodus", reason="nodus-lang not installed")
-    from AINDY.nodus.runtime.aindy_runtime import AINDYNodusRuntime
-    from nodus.runtime.embedding import NodusRuntime
-
-    assert issubclass(AINDYNodusRuntime, NodusRuntime)

@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 import uuid
 from typing import Any, Optional
@@ -11,6 +12,8 @@ from typing import Any, Optional
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
+
+_STDLIB_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "nodus", "stdlib"))
 
 
 class WorkerWaitSignal(Exception):
@@ -105,6 +108,9 @@ def main() -> int:
     payload = json.loads(raw or "{}")
 
     script = str(payload.get("script") or "")
+    if "memory." in script:
+        script = re.sub(r'(?m)^(\s*)import\s+"memory"\s*$', r'\1import "memory" as memory', script)
+        script = re.sub(r"(?m)^(\s*)import\s+memory\s*$", r'\1import "memory" as memory', script)
     state = dict(payload.get("state") or {})
     memory_context = dict(payload.get("memory_context") or {})
     input_payload = dict(payload.get("input_payload") or {})
@@ -114,7 +120,7 @@ def main() -> int:
     filename = str(ctx.get("filename") or f"<nodus:eu:{execution_unit_id}>")
     trace_id = str(ctx.get("trace_id") or execution_unit_id or "")
 
-    from AINDY.nodus.runtime.embedding import AINDYNodusRuntime  # type: ignore[import]
+    from nodus.runtime.embedding import NodusRuntime
     from AINDY.nodus.runtime.memory_bridge import AINDYMemoryBridge
 
     memory_deferral = DeferredMemoryBuiltins(memory_context, user_id, execution_unit_id)
@@ -155,7 +161,7 @@ def main() -> int:
                 "syscall": name,
             }
 
-    runtime = AINDYNodusRuntime()
+    runtime = NodusRuntime(project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None)
     runtime.register_function("set_state", _set_state, arity=2)
     runtime.register_function("get_state", _get_state, arity=1)
     runtime.register_function("sys", _sys_dispatch, arity=2)
@@ -167,19 +173,26 @@ def main() -> int:
     runtime.register_function("recall_from", bridge.recall_from, arity=4)
     runtime.register_function("recall_all", bridge.recall_all_agents, arity=3)
     runtime.register_function("recall_all_agents", bridge.recall_all_agents, arity=3)
+    # stdlib memory.nd calls these private names — must be kept in sync with memory.nd exports.
+    runtime.register_function("__memory_stdlib_recall_from", bridge.recall_from, arity=4)
+    runtime.register_function("__memory_stdlib_recall_all", bridge.recall_all_agents, arity=3)
+    runtime.register_function("__memory_stdlib_share", bridge.share, arity=1)
 
     def _runtime_emitted_events() -> list[dict[str, Any]]:
         _AINDY_INTERNAL = ("vm_", "runtime.", "nodus.")
+        vm = getattr(runtime, "last_vm", None)
+        if vm is None:
+            return []
         return [
             {
-                "type": e.get("type", ""),
-                "event_type": e.get("type", ""),
-                "payload": e.get("data") or {},
+                "type": e.type,
+                "event_type": e.type,
+                "payload": e.data or {},
                 "user_id": user_id,
                 "execution_unit_id": execution_unit_id,
             }
-            for e in getattr(runtime, "last_emitted_events", [])
-            if not any(e.get("type", "").startswith(p) for p in _AINDY_INTERNAL)
+            for e in vm.event_bus.events()
+            if not any(e.type.startswith(p) for p in _AINDY_INTERNAL)
         ]
 
     data_globals = {

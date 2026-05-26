@@ -177,15 +177,7 @@ Additional probe-only imports in `health_router.py` and `runtime/__init__.py`
    on a `HostFunctionError` may produce different error detail than before.
    Verify error messages surfaced to users remain meaningful.
 
-**Cleanup opportunity on upgrade (not blocking):**
-
-`AINDYNodusRuntime` in `AINDY/nodus/runtime/aindy_runtime.py` was written to work
-around BUG-E03 (`host_globals` not forwarded to `ModuleLoader` by stock
-`NodusRuntime`). v3.0.1 fixes this upstream. On upgrade to 3.0.1, `AINDYNodusRuntime`
-can be deleted and callers can use stock `NodusRuntime` directly. The subclass docstring
-explicitly documents this — the workaround is self-aware.
-`nodus_flow_compiler.py` already uses `NodusRuntime` with `host_globals`; on 3.0.1
-it will behave correctly without a workaround class.
+**Cleanup opportunity:** COMPLETED — see OVERRIDE-DRIFT-1 below.
 
 **Resolution path:**
 1. Bump `nodus-lang==1.1.0` → `nodus-lang==3.0.1` in `pyproject.toml`.
@@ -199,6 +191,52 @@ it will behave correctly without a workaround class.
    (create a test script that attempts `std:fs` access outside allowed paths).
 
 Trigger: must be resolved before tagging 1.0.0.
+
+---
+
+## OVERRIDE-DRIFT-1 — AINDYNodusRuntime override class deleted
+
+Status: CLOSED (2026-05-25)
+
+Derived from PACK-DEBT-1 cleanup. `AINDYNodusRuntime` in
+`AINDY/nodus/runtime/aindy_runtime.py` was a `NodusRuntime` subclass written to patch
+BUG-E03 (`host_globals` not forwarded to `ModuleLoader` in nodus-lang 1.1.0). With the
+pin bumped to 3.0.2 (PACK-DEBT-1), the subclass provided no upstream-bug-patch value and
+was the source of three documented divergences:
+
+1. **initial_globals dropped** — `AINDYNodusRuntime.run_source` constructed the VM with
+   `initial_globals` but the value was overwritten by `vm.reset_program` in
+   `_execute_module`. Fixed inline 2026-05-25 before this deletion, confirmed working.
+2. **Raise vs. return semantics** — `AINDYNodusRuntime.run_source` returned a failure
+   dict on error, but the override's error handling had diverged from the base class
+   contract. Aligned to base class behavior 2026-05-25; base class now owns the contract.
+3. **HostFunctionError double-wrap** — `AINDYNodusRuntime.run_source` included an
+   explicit `except HostFunctionError as wrapped: raise wrapped.cause` guard, which
+   could have produced inconsistent exception wrapping if not perfectly aligned with the
+   base class's own guard. Resolved automatically by this deletion — the base class
+   handles it correctly.
+
+**What was inlined into `nodus_worker.py` (AINDY/runtime/nodus_worker.py):**
+- `project_root` defaulting to `_STDLIB_DIR` (bundled stdlib) — now passed explicitly
+  at the `NodusRuntime(project_root=...)` instantiation site.
+- `register_function` stdlib aliases (`recall_from` → `__memory_stdlib_recall_from`,
+  `recall_all` → `__memory_stdlib_recall_all`, `share` → `__memory_stdlib_share`) —
+  now registered as three explicit `register_function` calls in the worker.
+  These aliases are load-bearing: `AINDY/nodus/stdlib/memory.nd` calls the `__*` names
+  directly.
+- Bare `import memory` → `import "memory" as memory` rewriting — now applied to
+  `script` before calling `runtime.run_source`.
+
+**Additional change:** `_runtime_emitted_events()` in the worker now reads from
+`runtime.last_vm.event_bus.events()` (base class exposes `last_vm`). The override had
+populated `runtime.last_emitted_events` as a list of dicts; the base class never set
+that attribute, so we switched to the standard event bus path.
+
+**Files changed:**
+- `AINDY/runtime/nodus_worker.py` — import + instantiation + aliases + rewriting + event collection
+- `AINDY/nodus/runtime/embedding.py` — AINDYNodusRuntime removed from re-export shim
+- `AINDY/nodus/runtime/aindy_runtime.py` — class body replaced with deprecation doc comment
+- `tests/unit/test_nodus_runtime_contract.py` — `test_aindy_nodus_runtime_subclasses_nodus_runtime` removed (tested class existence, not behavior)
 
 ---
 
