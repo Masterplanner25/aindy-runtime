@@ -258,6 +258,22 @@ def test_distributed_api_profile_rejects_non_linux_container_sandbox_host(monkey
     )
     monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.shutil.which", lambda _name: "docker")
     monkeypatch.setattr("AINDY.platform_layer.sandbox_runner.platform.system", lambda: "Windows")
+    # Simulate Windows host without a Linux container backend. Without this patch,
+    # _detect_linux_container_backend runs a real `docker info` subprocess which on
+    # Docker Desktop (WSL2 mode) returns OSType=linux, making production_safe=True and
+    # suppressing the guard. The test intends "docker present, no Linux-container mode."
+    monkeypatch.setattr(
+        "AINDY.platform_layer.sandbox_runner._detect_linux_container_backend",
+        lambda _name: {
+            "runtime": "docker",
+            "runtime_available": True,
+            "linux_container_backend": False,
+            "os_type": None,
+            "detection_method": "patched",
+            "detection_error": None,
+            "operator_note": "",
+        },
+    )
 
     with pytest.raises(RuntimeError, match="requires a Linux host with compatible container sandbox support"):
         validate_api_deployment_profile()
