@@ -17,6 +17,21 @@ Current release posture:
 ## Install
 
 ```bash
+pip install aindy-runtime
+```
+
+**Import name:** The distribution name is `aindy-runtime` but the importable module is `AINDY`
+(uppercase — it is an acronym). `import aindy_runtime` will not work.
+
+```python
+from AINDY._version import __version__  # correct
+from AINDY.platform_layer.deployment_contract import deployment_contract_summary
+# import aindy_runtime  ← ImportError
+```
+
+For local development (editable install from source):
+
+```bash
 python -m pip install -e .
 ```
 
