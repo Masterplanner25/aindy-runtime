@@ -34,7 +34,7 @@ jobs:
         run: |
           # PYSEC-2026-161: starlette host-header URL reconstruction — fix requires starlette 1.0.1
           #   which in turn requires fastapi>=0.135.0 (a significant upgrade). Accepted 2026-05-25;
-          #   tracked in TECH_DEBT.md as PACK-DEBT-2. Revisit when FastAPI upgrade path is planned.
+          #   tracked in TECH_DEBT.md as PACK-DEBT-5. Revisit when FastAPI upgrade path is planned.
           # CVE-2024-23342: ecdsa Minerva timing attack — no fix released. Accepted 2026-05-25;
           #   not reachable: runtime uses HS256 (HMAC) signing only; ecdsa is a transitive dep of
           #   python-jose that is never exercised by this codebase.
