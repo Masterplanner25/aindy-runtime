@@ -113,6 +113,36 @@ and replace the description with what was implemented and any remaining gap.
 
 ---
 
+## CLI entry point — import-chain hazard
+
+`aindy-runtime` (`AINDY/runtime_only.py`) uses module-level `__getattr__` to lazily
+load the FastAPI `app`. This is load-bearing: it prevents `--help`, `--version`, and
+`sandbox` from pulling in `AINDY.main` → `AINDY.db` → `database.py`, which calls
+`create_engine(DATABASE_URL)` at import time and crashes when `DATABASE_URL` is unset.
+
+**Do not add module-level imports to `runtime_only.py` that reach `AINDY.main` or
+`AINDY.db`.** If you need something at module scope that touches either chain, the
+`__getattr__` pattern must cover it, or the import must move inside the function that
+needs it.
+
+The same hazard applies to `_run_sandbox_check()` in `runtime_only.py`. Any import from
+`AINDY.platform_layer.*` added to that function must be verified not to pull in
+`AINDY.db` transitively. Known unsafe: `AINDY.platform_layer.health_service` (imports
+`AINDY.db.schema_contract` at module level, line 48). The existing guard wraps it in
+try/except; new additions need the same treatment or a verified-safe import.
+
+---
+
+## TECH_DEBT.md — prefix registry
+
+- **IDEM-\*** — idempotency audit findings. Next available: **IDEM-10**.
+- **CLI-1** — lazy settings getter / module-level import hazard (deferred post-1.0).
+- **C2, C3** — cross-platform sandbox tiers.
+- **PACK-DEBT-\*** — packaging and dependency findings.
+- **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
+
+---
+
 ## Key file locations
 
 | What | Where |
