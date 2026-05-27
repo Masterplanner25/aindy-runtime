@@ -6,6 +6,30 @@
 
 ## 1.0.0 — 2026-05-25
 
+### Added — CLI subcommand structure (2026-05-26)
+
+- **`aindy-runtime serve`**: New subcommand that starts the HTTP API server.
+  Use this in place of the bare `aindy-runtime` invocation.
+- **`aindy-runtime sandbox`**: Existing sandbox check promoted to a named subcommand.
+- **`aindy-runtime --help`** and **`aindy-runtime --version`**: Now work without any
+  environment configuration. Previously crashed on import if `DATABASE_URL` was absent.
+
+### Fixed — CLI import crash without DATABASE_URL (2026-05-26)
+
+- **`AINDY/config.py`**: `DATABASE_URL` now defaults to `""` instead of being required
+  at import time. `Settings()` no longer raises `ValidationError` when `DATABASE_URL`
+  is absent; validation defers to the point of actual server startup. `aindy-runtime serve`
+  checks for a missing URL and exits with a human-readable error before attempting to
+  start uvicorn.
+
+### Removed — `aindy-runtime-api` entry point (2026-05-26)
+
+- **`pyproject.toml`**: `aindy-runtime-api` console script removed. The underlying module
+  (`AINDY.main`) is unchanged and remains importable. The boot-mode distinction that
+  `aindy-runtime-api` encoded (`AINDY_BOOT_MODE`) is a monolith-internal concern not
+  relevant for the extracted package. For advanced boot mode control, set
+  `AINDY_BOOT_MODE=runtime-only` explicitly before calling `aindy-runtime serve`.
+
 Initial PyPI release. Covers the full runtime stack: platform layer with
 sandbox runner and OCI container detection, two-tier extension execution model,
 idempotency gate (NF-1 through NF-5) with EffectRecord persistence and TTL

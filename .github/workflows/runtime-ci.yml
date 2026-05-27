@@ -143,11 +143,10 @@ jobs:
           console_scripts = {
               ep.name: ep.value
               for ep in md.entry_points(group="console_scripts")
-              if ep.name in {"aindy-runtime", "aindy-runtime-api"}
+              if ep.name in {"aindy-runtime"}
           }
           assert console_scripts == {
               "aindy-runtime": "AINDY.runtime_only:main",
-              "aindy-runtime-api": "AINDY.main:main",
           }
           print(console_scripts)
           PY
@@ -449,11 +448,10 @@ jobs:
           eps = {
               ep.name: ep.value
               for ep in md.entry_points(group="console_scripts")
-              if ep.name in {"aindy-runtime", "aindy-runtime-api"}
+              if ep.name in {"aindy-runtime"}
           }
           expected = {
               "aindy-runtime": "AINDY.runtime_only:main",
-              "aindy-runtime-api": "AINDY.main:main",
           }
           assert eps == expected, f"entry points mismatch: {eps}"
           print("Entry points OK:", eps)

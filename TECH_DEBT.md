@@ -1,5 +1,31 @@
 # Technical Debt
 
+## CLI-1 — Lazy settings getter deferred (post-1.0)
+
+Status: Deferred — Low Priority
+
+Settings() is called at module level in `AINDY/config.py` (line 316) and is load-bearing
+for log initialization on the lines immediately below it. The 1.0.0 fix gave `DATABASE_URL`
+a default of `""` so that import succeeds without configuration, but the module-level
+instantiation remains. A proper fix (Option 1 from the CLI audit) would introduce a
+`get_settings()` lazy getter and defer instantiation until first use, eliminating the
+270+ module-level `settings.` call sites as a migration.
+
+Why deferred: 279 usages across 36 files — not scope-appropriate for the 1.0.0 CLI fix.
+The `DATABASE_URL = ""` default achieves the user-visible goal (--help works without env)
+at zero consumer-side cost.
+
+Reopen triggers:
+- CLI startup time becomes measurable (full Settings() + log init on every `--help` invocation)
+- A future module needs to import config at a point where Settings() must not run
+- Multi-tenant config support requires per-request settings isolation
+
+Resolution path: introduce `get_settings() -> Settings` that caches on first call; replace
+all `settings.` call sites with `get_settings().`; gate log initialization inside a
+`configure_logging()` function called from app startup, not module load.
+
+---
+
 ## IDEM-6 — Multi-Instance Bootstrap Race
 
 Status: Deferred — Low Priority

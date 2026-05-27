@@ -208,8 +208,8 @@ jobs:
         run: |
           smoke_venv/bin/python - <<'PY'
           import importlib.metadata as md
-          eps = {ep.name: ep.value for ep in md.entry_points(group="console_scripts") if ep.name in {"aindy-runtime", "aindy-runtime-api"}}
-          expected = {"aindy-runtime": "AINDY.runtime_only:main", "aindy-runtime-api": "AINDY.main:main"}
+          eps = {ep.name: ep.value for ep in md.entry_points(group="console_scripts") if ep.name in {"aindy-runtime"}}
+          expected = {"aindy-runtime": "AINDY.runtime_only:main"}
           assert eps == expected, f"entry points mismatch: {eps}"
           print("Entry points OK:", eps)
           PY

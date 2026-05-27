@@ -117,7 +117,6 @@ security = [
 
 [project.scripts]
 aindy-runtime = "AINDY.runtime_only:main"
-aindy-runtime-api = "AINDY.main:main"
 
 [tool.setuptools]
 include-package-data = true

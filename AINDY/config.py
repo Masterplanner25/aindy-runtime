@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     ENV: str = "development"
     TESTING: bool = False
     TEST_MODE: bool = False
-    DATABASE_URL: str
+    DATABASE_URL: str = ""
     MONGO_URL: str | None = None
     PERMISSION_SECRET: str = ""  # Deprecated — HMAC removed; kept for backward compat
     OPENAI_API_KEY: str = ""
@@ -255,6 +255,8 @@ class Settings(BaseSettings):
     @field_validator("DATABASE_URL")
     @classmethod
     def ensure_postgres(cls, v: str) -> str:
+        if not v:
+            return v
         allow_sqlite = os.getenv("AINDY_ALLOW_SQLITE", "0").lower() in {
             "1",
             "true",

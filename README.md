@@ -41,19 +41,27 @@ For staged release builds:
 python -m pip install -e .[release]
 ```
 
+## CLI
+
+```
+aindy-runtime serve      Start the HTTP API server (requires DATABASE_URL)
+aindy-runtime sandbox    Report sandbox capabilities and exit
+aindy-runtime --help     Show help and exit
+aindy-runtime --version  Show version and exit
+```
+
 ## Run
 
 Runtime-only API boot:
 
 ```bash
-aindy-runtime
+aindy-runtime serve
 ```
 
 Minimum runtime environment:
 
 ```bash
 DATABASE_URL=postgresql://USER:PASSWORD@HOST:5432/DBNAME
-AINDY_BOOT_MODE=runtime-only
 SECRET_KEY=...
 OPENAI_API_KEY=sk-...
 ```
@@ -64,7 +72,6 @@ explicitly:
 ```bash
 DATABASE_URL=sqlite://
 AINDY_ALLOW_SQLITE=1
-AINDY_BOOT_MODE=runtime-only
 SECRET_KEY=runtime-local-secret-key
 OPENAI_API_KEY=sk-test-placeholder
 ```
@@ -72,18 +79,9 @@ OPENAI_API_KEY=sk-test-placeholder
 Equivalent module and ASGI forms:
 
 ```bash
-python -m AINDY.runtime_only
+python -m AINDY.runtime_only serve
 uvicorn AINDY.runtime_only:app
 ```
-
-Generic API entrypoint:
-
-```bash
-aindy-runtime-api
-```
-
-`aindy-runtime-api` starts the generic API entrypoint. Pair it with
-`AINDY_BOOT_MODE=runtime-only` when you want the runtime-only HTTP surface.
 
 ## Deployment Ownership
 
@@ -146,7 +144,7 @@ runtime-owned push/PR baseline:
 - validate runtime-doc frontmatter under `docs/runtime/`
 - install the runtime package and test extras in editable mode
 - assert runtime code does not import `apps.*`
-- verify `aindy-runtime` and `aindy-runtime-api` console scripts
+- verify the `aindy-runtime` console script
 - smoke `GET /health` and `GET /api/version` in runtime-only mode
 - run the full extracted runtime-owned pytest suite (`tests -m runtime_only`)
 - build wheel and sdist artifacts and run `twine check`

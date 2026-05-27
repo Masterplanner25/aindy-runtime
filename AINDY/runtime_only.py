@@ -1,13 +1,27 @@
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 from typing import NoReturn
 
+from AINDY._version import __version__
 from AINDY.platform_layer.deployment_contract import BOOT_MODE_ENV_VAR, RUNTIME_ONLY_BOOT_MODE
 
-os.environ.setdefault(BOOT_MODE_ENV_VAR, RUNTIME_ONLY_BOOT_MODE)
 
-from AINDY.main import app  # noqa: E402,F401
+def __getattr__(name: str):
+    """Lazy-load ``app`` so importing this module does not pull in the database layer.
+
+    uvicorn resolves ``AINDY.runtime_only:app`` via getattr after import, so the
+    attribute must be reachable from the module namespace — but it does not need to be
+    defined at import time. Deferring the import of AINDY.main keeps ``--help``,
+    ``--version``, and ``sandbox`` from triggering database engine creation.
+    """
+    if name == "app":
+        from AINDY.main import app as _app
+        globals()["app"] = _app
+        return _app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _run_sandbox_check() -> NoReturn:
@@ -19,15 +33,20 @@ def _run_sandbox_check() -> NoReturn:
         plugin_sandbox_assurance_posture,
     )
     from AINDY.platform_layer.extension_runtime_inventory import trusted_python_execution_inventory
-    from AINDY.platform_layer.health_service import sandbox_verification_posture
     from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+    try:
+        from AINDY.platform_layer.health_service import sandbox_verification_posture
+        _sv_posture = sandbox_verification_posture()
+    except Exception:
+        _sv_posture = {"available": False, "reason": "database not configured"}
 
     try:
         posture = plugin_sandbox_assurance_posture()
         payload = {
             "plugin_sandbox_posture": posture,
             "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
-            "sandbox_verification_posture": sandbox_verification_posture(),
+            "sandbox_verification_posture": _sv_posture,
             "trusted_python_execution": trusted_python_execution_inventory(),
             "runtime_conditions": get_api_runtime_conditions(),
         }
@@ -45,19 +64,69 @@ def _run_sandbox_check() -> NoReturn:
         raise SystemExit(2)
 
 
-def main() -> NoReturn:
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "sandbox":
-        _run_sandbox_check()
+def _serve() -> NoReturn:
+    """Start the aindy-runtime HTTP API server."""
+    os.environ.setdefault(BOOT_MODE_ENV_VAR, RUNTIME_ONLY_BOOT_MODE)
+
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print(
+            "error: DATABASE_URL is required to start the server.\n"
+            "Set it before running, for example:\n"
+            "  DATABASE_URL=postgresql://user:password@host:5432/dbname aindy-runtime serve",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     import uvicorn
-
     uvicorn.run(
         "AINDY.runtime_only:app",
         host=os.getenv("AINDY_HOST", "127.0.0.1"),
         port=int(os.getenv("AINDY_PORT", "8000")),
     )
     raise SystemExit(0)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="aindy-runtime",
+        description="A.I.N.D.Y. runtime — HTTP server and diagnostics.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"aindy-runtime {__version__}",
+    )
+
+    subparsers = parser.add_subparsers(dest="command")
+    subparsers.add_parser(
+        "serve",
+        help="Start the aindy-runtime HTTP API server.",
+        description=(
+            "Start the aindy-runtime HTTP API server. "
+            "DATABASE_URL must be set to a valid PostgreSQL URI."
+        ),
+    )
+    subparsers.add_parser(
+        "sandbox",
+        help="Report sandbox capabilities and exit.",
+        description=(
+            "Print sandbox assurance posture as JSON and exit. "
+            "Exit 0 if all requirements are satisfied, 1 if not, 2 on error. "
+            "Does not require a running database."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    if args.command is None:
+        parser.print_help()
+        raise SystemExit(0)
+
+    if args.command == "serve":
+        _serve()
+    elif args.command == "sandbox":
+        _run_sandbox_check()
 
 
 if __name__ == "__main__":

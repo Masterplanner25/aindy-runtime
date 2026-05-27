@@ -11,7 +11,6 @@ import tomllib
 import pytest
 
 from AINDY._version import __version__ as runtime_package_version
-from AINDY.main import main as api_entrypoint_main
 from AINDY.platform_layer import registry
 from AINDY.runtime_only import main as runtime_only_entrypoint_main
 
@@ -31,7 +30,6 @@ def test_runtime_package_metadata_declares_console_entrypoints():
     )
     assert pyproject["project"]["scripts"] == {
         "aindy-runtime": "AINDY.runtime_only:main",
-        "aindy-runtime-api": "AINDY.main:main",
     }
     assert pyproject["project"]["urls"] == {
         "Homepage": "https://github.com/Masterplanner25/aindy-runtime",
@@ -49,7 +47,6 @@ def test_runtime_package_metadata_declares_console_entrypoints():
         "twine==6.2.0",
     ]
     assert callable(runtime_only_entrypoint_main)
-    assert callable(api_entrypoint_main)
 
 
 def test_default_app_manifest_prefers_working_directory_for_installed_runtime(monkeypatch, tmp_path):
@@ -104,7 +101,6 @@ def test_runtime_build_artifacts_include_runtime_owned_assets(tmp_path):
     assert "AINDY/system_manifest.json" in wheel_names
     assert "AINDY/nodus/stdlib/.nodus/deps.json" in wheel_names
     assert "aindy-runtime = AINDY.runtime_only:main" in entry_points
-    assert "aindy-runtime-api = AINDY.main:main" in entry_points
     assert "Home-page: https://github.com/Masterplanner25/aindy-runtime" in metadata
     assert "Project-URL: Documentation, https://github.com/Masterplanner25/aindy-runtime/tree/main/docs/runtime" in metadata
 
