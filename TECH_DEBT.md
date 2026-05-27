@@ -15,10 +15,20 @@ Why deferred: 279 usages across 36 files — not scope-appropriate for the 1.0.0
 The `DATABASE_URL = ""` default achieves the user-visible goal (--help works without env)
 at zero consumer-side cost.
 
-Reopen triggers:
-- CLI startup time becomes measurable (full Settings() + log init on every `--help` invocation)
-- A future module needs to import config at a point where Settings() must not run
-- Multi-tenant config support requires per-request settings isolation
+This pattern already required two workarounds in the 1.0.0 CLI fix:
+1. `AINDY/runtime_only.py` uses module-level `__getattr__` to defer `from AINDY.main import app`
+   so it doesn't pull in the database engine layer on `--help`.
+2. `sandbox_verification_posture()` (in `health_service.py`) is guarded with try/except because
+   `health_service` imports `AINDY.db` at module level.
+
+Reopen triggers (any one is sufficient):
+- A third "I had to add a try/except guard because a platform module imports settings
+  transitively" instance surfaces. Two workarounds is a pattern; three is a signal the
+  root cause needs addressing.
+- CLI startup time becomes measurably slow — `Settings()` + log initialization run on
+  every `--help` invocation including in CI hot loops.
+- Multi-tenant or per-request config support requires settings isolation beyond a single
+  module-level instance.
 
 Resolution path: introduce `get_settings() -> Settings` that caches on first call; replace
 all `settings.` call sites with `get_settings().`; gate log initialization inside a

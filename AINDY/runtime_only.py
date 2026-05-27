@@ -39,7 +39,7 @@ def _run_sandbox_check() -> NoReturn:
         from AINDY.platform_layer.health_service import sandbox_verification_posture
         _sv_posture = sandbox_verification_posture()
     except Exception:
-        _sv_posture = {"available": False, "reason": "database not configured"}
+        _sv_posture = {"skipped": True, "reason": "database not configured"}
 
     try:
         posture = plugin_sandbox_assurance_posture()
