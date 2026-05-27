@@ -137,6 +137,7 @@ try/except; new additions need the same treatment or a verified-safe import.
 
 - **IDEM-\*** — idempotency audit findings. Next available: **IDEM-10**.
 - **CLI-1** — lazy settings getter / module-level import hazard (deferred post-1.0).
+- **CLI-SANDBOX-FORMAT-\*** — `sandbox` subcommand UX findings. CLI-SANDBOX-FORMAT-1: raw JSON wall, deferred to 1.0.1.
 - **C2, C3** — cross-platform sandbox tiers.
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
