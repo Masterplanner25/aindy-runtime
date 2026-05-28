@@ -24,6 +24,27 @@ requires three follow-up steps — in this order — or CI fails:
 - `downgrade()` must drop what `upgrade()` created. For index-only migrations, `DROP INDEX IF EXISTS` is sufficient.
 - Current chain: `0001` → `0002` → `0003` → `0004`.
 
+**Blank-database safety (ALEMBIC-FRESH-DB-1):** In Docker compose deployments, `alembic
+upgrade head` runs before the server starts, so before `_enforce_schema_guard` / `create_all`
+creates any tables. Any migration that touches a specific table in DML (`UPDATE`, `DELETE`) or
+DDL (`CREATE TABLE`, `CREATE INDEX ON`) must wrap that statement in a table-existence guard:
+
+```sql
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_tables
+    WHERE tablename='my_table' AND schemaname='public'
+  ) THEN
+    -- DML or DDL here
+  END IF;
+END $$
+```
+
+On a blank database the block skips; the server's Phase 5 `_enforce_schema_guard` then
+bootstraps the full schema from ORM metadata via `create_all`. On an existing deployment the
+block runs normally. `IF NOT EXISTS` on the index name alone is NOT sufficient — if the table
+doesn't exist, `CREATE INDEX ... ON missing_table` still raises `UndefinedTable`.
+
 ---
 
 ## Scheduler job pattern (`scheduler_service.py`)
@@ -141,6 +162,15 @@ try/except; new additions need the same treatment or a verified-safe import.
 - **C2, C3** — cross-platform sandbox tiers.
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
+- **ALEMBIC-FRESH-DB-\*** — alembic migration blank-database safety. ALEMBIC-FRESH-DB-1: closed 2026-05-27.
+- **COMPOSE-PGVECTOR-\*** — pgvector extension requirement. COMPOSE-PGVECTOR-1: closed 2026-05-27.
+- **PACKAGING-DEP-\*** — pip --prefix bootstrap-package propagation gaps. PACKAGING-DEP-1: closed 2026-05-27.
+- **COMPOSE-HOST-\*** — container host binding issues. COMPOSE-HOST-1: closed 2026-05-27.
+- **EVENTBUS-REDIS-URL-\*** — Redis URL env var consolidation. EVENTBUS-REDIS-URL-CONSOLIDATION-1: open.
+- **PYPI-PUBLISH-\*** — PyPI publish transition. PYPI-PUBLISH-1: open.
+- **MONITORING-GRAFANA-\*** — Grafana monitoring profile gap. MONITORING-GRAFANA-1: open.
+- **COMPOSE-PROD-PORTS-\*** — database ports exposed in prod. COMPOSE-PROD-PORTS-1: open.
+- **PROMETHEUS-PIN-\*** — Prometheus image version pinning. PROMETHEUS-PIN-1: open.
 
 ---
 
@@ -156,3 +186,8 @@ try/except; new additions need the same treatment or a verified-safe import.
 | Alembic migrations | `alembic/versions/` |
 | Idempotency contract | `docs/runtime/IDEMPOTENCY_CONTRACT.md` |
 | Tech debt tracker | `TECH_DEBT.md` |
+| Docker compose | `docker-compose.yml` |
+| Dockerfile | `Dockerfile` |
+| pgvector init script | `docker/init-pgvector.sql` |
+| Prometheus config | `monitoring/prometheus.yml` |
+| Runtime env reference | `AINDY/.env.example` |
