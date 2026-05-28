@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import Depends
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import make_asgi_app as _make_metrics_asgi
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from AINDY.core.execution_guard import require_execution_context
 from AINDY.core.route_execution_guard import enforce_registered_route_execution
@@ -19,6 +20,21 @@ from AINDY.routes import (
 )
 
 _PLATFORM_UI_DIST = Path(__file__).parent / "platform" / "dist"
+
+
+class _SPAStaticFiles(StaticFiles):
+    """StaticFiles with SPA fallback: unknown routes → index.html, missing assets → 404."""
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            # Only fall back for route misses, not missing asset files.
+            # Vite emits all static assets under assets/; a 404 there is a real
+            # missing file, not a client-side route that React Router should handle.
+            if exc.status_code == 404 and not path.startswith("assets/"):
+                return await super().get_response("index.html", scope)
+            raise
 
 
 def home():
@@ -57,4 +73,4 @@ def register_routes(app) -> None:
     enforce_registered_route_execution(app)
 
     if _PLATFORM_UI_DIST.is_dir():
-        app.mount("/platform", StaticFiles(directory=str(_PLATFORM_UI_DIST), html=True), name="platform-ui")
+        app.mount("/platform", _SPAStaticFiles(directory=str(_PLATFORM_UI_DIST), html=True), name="platform-ui")

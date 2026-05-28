@@ -18,3 +18,5 @@ C2_SANDBOX_AUDIT.md
 Idempotency convo.txt
 logs/
 test_c2_verification/
+.claude/settings.local.json
+clean/

@@ -874,6 +874,36 @@ def _init_mongodb() -> None:
         logger.warning("MongoDB init failed â€” social features degraded: %s", exc)
 
 
+def _bootstrap_admin_email() -> None:
+    """Grant is_admin to the user matching AINDY_BOOTSTRAP_ADMIN_EMAIL (grant-only, idempotent)."""
+    email = settings.AINDY_BOOTSTRAP_ADMIN_EMAIL
+    if not email:
+        return
+    try:
+        from AINDY.db.models.user import User
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.email == email).first()
+            if user is None:
+                logger.info(
+                    "[bootstrap] AINDY_BOOTSTRAP_ADMIN_EMAIL=%r set but no matching user found. "
+                    "Register via POST /auth/register, then restart (or run "
+                    "'aindy-runtime auth promote-admin %s').",
+                    email, email,
+                )
+                return
+            if user.is_admin:
+                logger.info("[bootstrap] Admin bootstrap: %r is already admin, no-op.", email)
+                return
+            user.is_admin = True
+            db.commit()
+            logger.info("[bootstrap] Admin bootstrap: granted is_admin=True to %r.", email)
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("[bootstrap] Admin email bootstrap failed (non-fatal): %s", exc)
+
+
 def _bootstrap_dev_api_key() -> None:
     if settings.ENV == "dev":
         _ensure_dev_api_key()
@@ -1420,6 +1450,8 @@ async def lifespan(app: FastAPI):
     _validate_queue_and_workers()
     # Phase 5: bootstrap or validate the runtime-owned schema before DB writes.
     _enforce_schema_guard(SessionLocal)
+    # Phase 5.5: promote AINDY_BOOTSTRAP_ADMIN_EMAIL user to admin (grant-only, idempotent).
+    _bootstrap_admin_email()
     # Phase 6: bootstrap development API key state.
     _bootstrap_dev_api_key()
     # Phase 7: start background services and determine background role.

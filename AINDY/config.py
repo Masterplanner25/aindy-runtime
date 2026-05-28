@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "dev-secret-change-in-production"
     AINDY_API_KEY: str | None = None
     AINDY_SERVICE_KEY: str | None = None
+    # Admin bootstrap: if set, the user with this email is elevated to is_admin=True
+    # on every boot (grant-only — unsetting this var never revokes admin).
+    # Flow: register via POST /auth/register first, then set this var and restart.
+    # The same effect is available post-deploy via: aindy-runtime auth promote-admin <email>
+    AINDY_BOOTSTRAP_ADMIN_EMAIL: str | None = None
     STRIPE_SECRET_KEY: str | None = None
     STRIPE_WEBHOOK_SECRET: str | None = None
 

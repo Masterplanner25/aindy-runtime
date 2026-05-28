@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pytest:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python scripts/check_schema_version.py:*)",
+      "Bash(alembic:*)",
+      "Bash(python -m alembic:*)",
+      "Bash(aindy-runtime:*)",
+      "Bash(python -m AINDY.runtime_only:*)",
+      "Bash(pip install:*)",
+      "Bash(pip install -e:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker logs:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git stash:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(python -c:*)"
+    ],
+    "deny": []
+  }
+}

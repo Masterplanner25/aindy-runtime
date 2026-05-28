@@ -1003,3 +1003,82 @@ published port (`0.0.0.0:8000 → 8000/tcp`) unreachable from the host.
 environment block. This is compose-only: bare `aindy-runtime serve` outside compose
 correctly defaults to localhost for security.
 
+---
+
+## PLATFORM-UI-ENV-1 — VITE_API_BASE_URL bakes localhost into the production bundle
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-28 during PLATFORM-AUTH-ACQUISITION-1 implementation.
+
+**Context:** `platform/src/api/_core.js` resolves the API base at Vite build time:
+```javascript
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
+```
+When `VITE_API_BASE_URL` is unset (which it is in the current Docker build), `http://localhost:8000`
+is baked into `AINDY/platform/dist/assets/index-*.js`. This works for local dev
+(`localhost:8000` resolves to the runtime), but on any remote host the browser's `fetch`
+goes to localhost on the *client machine*, not the server, silently failing all auth and
+API calls.
+
+**Why deferred:** The runtime is currently tested in local/Docker-compose deployments only.
+Remote hosting is not yet in scope for 1.0.x.
+
+**Resolution path (before any remote/cloud deployment):**
+1. Add `ARG VITE_API_BASE_URL` and `ENV VITE_API_BASE_URL` to the Dockerfile platform
+   build stage (if platform is built in Docker) or document it as a required build arg.
+2. Pass it in `docker-compose.yml` under `build.args` keyed to the public-facing runtime URL.
+3. For operator-built deployments, document in README that `VITE_API_BASE_URL` must be set
+   before `npm run build` in `platform/`.
+4. Close PYPI-PUBLISH-1 and PLATFORM-UI-ENV-1 in the same pass — at PyPI publish time,
+   platform/dist will need to be rebuilt with a real URL or ship without the embedded base.
+
+**Reopen trigger:** Any deployment where the runtime is accessed from a hostname other
+than `localhost`.
+
+---
+
+## PLATFORM-AUTH-ACQUISITION-1 — Platform SPA login + admin bootstrap
+
+**Status:** CLOSED (2026-05-28)
+
+**What was implemented:**
+
+*Frontend (`platform/src`):*
+- `LoginPage.tsx` — form calling `useAuth().login()` against `VITE_API_BASE_URL/auth/login`.
+  On success, stores token via `AuthContext` and navigates to `/` within the router tree.
+- `NotAdmin.tsx` — terminal "access denied" view with logout button. Rendered (not navigated
+  to) when authenticated but `is_admin=false`. No redirect loop possible.
+- `PlatformApp.tsx` rewritten — `/login` route lives outside `PlatformGuard`; guard uses
+  `<Navigate to="/login" replace />` for unauthenticated (React Router, respects
+  `basename="/platform"`); authenticated-but-not-admin renders `<NotAdmin />` in-place.
+  `redirectToApp` / `window.location.href` / `VITE_APP_BASE_URL` dependency removed.
+
+*Backend:*
+- `AINDY_BOOTSTRAP_ADMIN_EMAIL` env var (config.py + .env.example) — grant-only, idempotent,
+  no-op if user not yet registered, logged at INFO if absent.
+- `startup.py` Phase 5.5 — `_bootstrap_admin_email()` runs after schema guard, before dev
+  key bootstrap.
+- `aindy-runtime auth promote-admin <email>` CLI subcommand — grant-only, exits 0 if already
+  admin, exits 1 with guidance if user not found, requires DATABASE_URL.
+
+*Routing (`routing.py`):*
+- `_SPAStaticFiles.get_response()` now discriminates route misses from asset misses:
+  paths under `assets/` return 404 (not index.html); all other unmatched paths fall back
+  to index.html.
+
+**Verified end-to-end (2026-05-28):**
+- `GET /platform/` → 200 index.html
+- `GET /platform/login` → 200 index.html (SPA handles the route)
+- `GET /platform/assets/does-not-exist.js` → 404 (not HTML fallback)
+- `GET /platform/assets/index-BGunogPh.js` → 200 application/javascript
+- `POST /auth/register` → 201 with JWT (`is_admin: false`)
+- `AINDY_BOOTSTRAP_ADMIN_EMAIL=admin@aindy.local` + restart → `granted is_admin=True` in logs
+- Second restart → `already admin, no-op` (idempotency confirmed)
+- `aindy-runtime auth promote-admin ops@aindy.local` → `ok: granted` (no restart needed)
+- Second run → `ok: already admin. No change made.`
+- Unknown email → exit 1, clear guidance
+- `POST /auth/login` after promotion → JWT with `is_admin: true`
+
+**Remaining open item:** PLATFORM-UI-ENV-1 (localhost baked into bundle for remote hosts).
+

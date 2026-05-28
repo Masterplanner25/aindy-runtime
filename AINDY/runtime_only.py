@@ -64,6 +64,50 @@ def _run_sandbox_check() -> NoReturn:
         raise SystemExit(2)
 
 
+def _promote_admin(email: str) -> NoReturn:
+    """Grant is_admin=True to the user with the given email. Grant-only — never demotes."""
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print(
+            "error: DATABASE_URL is not set.\n"
+            "Set DATABASE_URL before running this command.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.models.user import User
+    except Exception as exc:
+        print(f"error: could not import database layer: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if user is None:
+            print(
+                f"error: no user with email {email!r}.\n"
+                "Register first via POST /auth/register, then re-run this command.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if user.is_admin:
+            print(f"ok: {email!r} is already admin. No change made.")
+            raise SystemExit(0)
+        user.is_admin = True
+        db.commit()
+        print(f"ok: granted is_admin=True to {email!r}.")
+        raise SystemExit(0)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    finally:
+        db.close()
+
+
 def _serve() -> NoReturn:
     """Start the aindy-runtime HTTP API server."""
     os.environ.setdefault(BOOT_MODE_ENV_VAR, RUNTIME_ONLY_BOOT_MODE)
@@ -124,6 +168,24 @@ def main() -> None:
         ),
     )
 
+    auth_parser = subparsers.add_parser(
+        "auth",
+        help="Auth management commands.",
+        description="Auth management utilities for the aindy-runtime.",
+    )
+    auth_sub = auth_parser.add_subparsers(dest="auth_command")
+    promote_parser = auth_sub.add_parser(
+        "promote-admin",
+        help="Grant is_admin=True to an existing user by email (grant-only, never demotes).",
+        description=(
+            "Grant admin privileges to an existing user. "
+            "The user must already be registered via POST /auth/register. "
+            "This command is grant-only: running it never removes admin from anyone. "
+            "Requires DATABASE_URL to be set."
+        ),
+    )
+    promote_parser.add_argument("email", help="Email address of the user to promote.")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -134,6 +196,12 @@ def main() -> None:
         _serve()
     elif args.command == "sandbox":
         _run_sandbox_check()
+    elif args.command == "auth":
+        if args.auth_command == "promote-admin":
+            _promote_admin(args.email)
+        else:
+            auth_parser.print_help()
+            raise SystemExit(0)
 
 
 if __name__ == "__main__":

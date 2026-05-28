@@ -1,13 +1,13 @@
-# aindy-runtime — Claude Code Instructions
+# aindy-runtime - Codex Instructions
 
 ## Schema contract version protocol
 
 Any change to a file under `AINDY/db/models/` or `AINDY/memory/memory_persistence.py`
-requires three follow-up steps — in this order — or CI fails:
+requires three follow-up steps - in this order - or CI fails:
 
 1. Bump `SCHEMA_CONTRACT_VERSION` in `AINDY/db/schema_contract.py`.
    - Use `"YYYY-MM-DD"` for the first change on a given date.
-   - Use `"YYYY-MM-DD.1"`, `"YYYY-MM-DD.2"`, … for subsequent changes on the same date.
+   - Use `"YYYY-MM-DD.1"`, `"YYYY-MM-DD.2"`, ... for subsequent changes on the same date.
 2. Regenerate the baseline: `python scripts/check_schema_version.py`
    - Exit 0 with "Schema version baseline updated." confirms success.
 3. Update the two hardcoded version-string assertions in
@@ -17,12 +17,12 @@ requires three follow-up steps — in this order — or CI fails:
 
 ## Alembic migration conventions
 
-- All migrations use `IF NOT EXISTS` / `IF EXISTS` guards — every migration must be
+- All migrations use `IF NOT EXISTS` / `IF EXISTS` guards - every migration must be
   idempotent when run against a schema already at that revision.
 - The runtime uses `alembic_version_runtime` (not the monolith's `alembic_version`).
 - Migration naming: `NNNN_short_description.py`, e.g. `0004_effect_records_completed_at_index.py`.
 - `downgrade()` must drop what `upgrade()` created. For index-only migrations, `DROP INDEX IF EXISTS` is sufficient.
-- Current chain: `0001` → `0002` → `0003` → `0004`.
+- Current chain: `0001` -> `0002` -> `0003` -> `0004`.
 
 **Blank-database safety (ALEMBIC-FRESH-DB-1):** In Docker compose deployments, `alembic
 upgrade head` runs before the server starts, so before `_enforce_schema_guard` / `create_all`
@@ -42,7 +42,7 @@ END $$
 
 On a blank database the block skips; the server's Phase 5 `_enforce_schema_guard` then
 bootstraps the full schema from ORM metadata via `create_all`. On an existing deployment the
-block runs normally. `IF NOT EXISTS` on the index name alone is NOT sufficient — if the table
+block runs normally. `IF NOT EXISTS` on the index name alone is NOT sufficient - if the table
 doesn't exist, `CREATE INDEX ... ON missing_table` still raises `UndefinedTable`.
 
 ---
@@ -98,7 +98,7 @@ Patching `AINDY.platform_layer.scheduler_service.SessionLocal` will fail with `A
 
 - `_resolve_effect_record` and `_complete_effect_record` use `db.commit()`, not `db.flush()`.
   This is load-bearing: EffectRecord state must be durable across session close.
-- Pending rows are never eligible for deletion — the TTL cleanup job hard-excludes them.
+- Pending rows are never eligible for deletion - the TTL cleanup job hard-excludes them.
 - Status values: `"pending"` | `"success"` | `"failed"`.
 
 ---
@@ -168,25 +168,25 @@ Add the same pattern for any future exception type that callers are expected to 
 
 ---
 
-## TECH_DEBT.md — IDEM-* numbering
+## TECH_DEBT.md - IDEM-* numbering
 
 Entries are numbered sequentially. Do not reuse a number.
 
 - IDEM-1 through IDEM-7: open or closed idempotency audit findings.
-- **IDEM-8**: APScheduler stub fix — closed 2026-05-23. Do not reassign this number.
-- **IDEM-9**: EffectRecord TTL cleanup — closed 2026-05-24.
+- **IDEM-8**: APScheduler stub fix - closed 2026-05-23. Do not reassign this number.
+- **IDEM-9**: EffectRecord TTL cleanup - closed 2026-05-24.
 - Next available: **IDEM-10**.
 
-When closing an entry, change `Status: Deferred — Low Priority` to `Status: CLOSED (YYYY-MM-DD)`
+When closing an entry, change `Status: Deferred - Low Priority` to `Status: CLOSED (YYYY-MM-DD)`
 and replace the description with what was implemented and any remaining gap.
 
 ---
 
-## CLI entry point — import-chain hazard
+## CLI entry point - import-chain hazard
 
 `aindy-runtime` (`AINDY/runtime_only.py`) uses module-level `__getattr__` to lazily
 load the FastAPI `app`. This is load-bearing: it prevents `--help`, `--version`, and
-`sandbox` from pulling in `AINDY.main` → `AINDY.db` → `database.py`, which calls
+`sandbox` from pulling in `AINDY.main` -> `AINDY.db` -> `database.py`, which calls
 `create_engine(DATABASE_URL)` at import time and crashes when `DATABASE_URL` is unset.
 
 **Do not add module-level imports to `runtime_only.py` that reach `AINDY.main` or
@@ -202,25 +202,25 @@ try/except; new additions need the same treatment or a verified-safe import.
 
 ---
 
-## TECH_DEBT.md — prefix registry
+## TECH_DEBT.md - prefix registry
 
-- **IDEM-\*** — idempotency audit findings. Next available: **IDEM-10**.
-- **CLI-1** — lazy settings getter / module-level import hazard (deferred post-1.0).
-- **CLI-SANDBOX-FORMAT-\*** — `sandbox` subcommand UX findings. CLI-SANDBOX-FORMAT-1: raw JSON wall, deferred to 1.0.1.
-- **C2, C3** — cross-platform sandbox tiers.
-- **PACK-DEBT-\*** — packaging and dependency findings.
-- **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
-- **ALEMBIC-FRESH-DB-\*** — alembic migration blank-database safety. ALEMBIC-FRESH-DB-1: closed 2026-05-27.
-- **COMPOSE-PGVECTOR-\*** — pgvector extension requirement. COMPOSE-PGVECTOR-1: closed 2026-05-27.
-- **PACKAGING-DEP-\*** — pip --prefix bootstrap-package propagation gaps. PACKAGING-DEP-1: closed 2026-05-27.
-- **COMPOSE-HOST-\*** — container host binding issues. COMPOSE-HOST-1: closed 2026-05-27.
-- **EVENTBUS-REDIS-URL-\*** — Redis URL env var consolidation. EVENTBUS-REDIS-URL-CONSOLIDATION-1: open.
-- **PYPI-PUBLISH-\*** — PyPI publish transition. PYPI-PUBLISH-1: open.
-- **MONITORING-GRAFANA-\*** — Grafana monitoring profile gap. MONITORING-GRAFANA-1: open.
-- **COMPOSE-PROD-PORTS-\*** — database ports exposed in prod. COMPOSE-PROD-PORTS-1: open.
-- **PROMETHEUS-PIN-\*** — Prometheus image version pinning. PROMETHEUS-PIN-1: open.
-- **PLATFORM-UI-ENV-\*** — Vite `VITE_API_BASE_URL` bakes localhost into bundle. PLATFORM-UI-ENV-1: open.
-- **PLATFORM-AUTH-ACQUISITION-\*** — Platform SPA first-party auth. PLATFORM-AUTH-ACQUISITION-1: closed 2026-05-28.
+- **IDEM-*** - idempotency audit findings. Next available: **IDEM-10**.
+- **CLI-1** - lazy settings getter / module-level import hazard (deferred post-1.0).
+- **CLI-SANDBOX-FORMAT-*** - `sandbox` subcommand UX findings. CLI-SANDBOX-FORMAT-1: raw JSON wall, deferred to 1.0.1.
+- **C2, C3** - cross-platform sandbox tiers.
+- **PACK-DEBT-*** - packaging and dependency findings.
+- **DEBT-COMPAT-*, TENANT-*, COMPAT-*, DATA-*, LOCAL-*** - architectural gaps.
+- **ALEMBIC-FRESH-DB-*** - alembic migration blank-database safety. ALEMBIC-FRESH-DB-1: closed 2026-05-27.
+- **COMPOSE-PGVECTOR-*** - pgvector extension requirement. COMPOSE-PGVECTOR-1: closed 2026-05-27.
+- **PACKAGING-DEP-*** - pip --prefix bootstrap-package propagation gaps. PACKAGING-DEP-1: closed 2026-05-27.
+- **COMPOSE-HOST-*** - container host binding issues. COMPOSE-HOST-1: closed 2026-05-27.
+- **EVENTBUS-REDIS-URL-*** - Redis URL env var consolidation. EVENTBUS-REDIS-URL-CONSOLIDATION-1: open.
+- **PYPI-PUBLISH-*** - PyPI publish transition. PYPI-PUBLISH-1: open.
+- **MONITORING-GRAFANA-*** - Grafana monitoring profile gap. MONITORING-GRAFANA-1: open.
+- **COMPOSE-PROD-PORTS-*** - database ports exposed in prod. COMPOSE-PROD-PORTS-1: open.
+- **PROMETHEUS-PIN-*** - Prometheus image version pinning. PROMETHEUS-PIN-1: open.
+- **PLATFORM-UI-ENV-*** - Vite `VITE_API_BASE_URL` bakes localhost into bundle. PLATFORM-UI-ENV-1: open.
+- **PLATFORM-AUTH-ACQUISITION-*** - Platform SPA first-party auth. PLATFORM-AUTH-ACQUISITION-1: closed 2026-05-28.
 
 ---
 
@@ -230,7 +230,7 @@ try/except; new additions need the same treatment or a verified-safe import.
 |---|---|
 | Idempotency gate | `AINDY/kernel/syscall_dispatcher.py` |
 | EffectRecord model | `AINDY/db/models/effect_record.py` |
-| Schema version | `AINDY/db/schema_contract.py` — `SCHEMA_CONTRACT_VERSION` |
+| Schema version | `AINDY/db/schema_contract.py` - `SCHEMA_CONTRACT_VERSION` |
 | Schema baseline | `scripts/schema_version_baseline.json` |
 | Scheduler jobs | `AINDY/platform_layer/scheduler_service.py` |
 | Alembic migrations | `alembic/versions/` |
@@ -243,7 +243,7 @@ try/except; new additions need the same treatment or a verified-safe import.
 | Runtime env reference | `AINDY/.env.example` |
 | Auth router (issues JWTs) | `AINDY/routes/auth_router.py` |
 | Auth service (bcrypt, JWT, key ring) | `AINDY/services/auth_service.py` |
-| Admin bootstrap (Phase 5.5) | `AINDY/startup.py` — `_bootstrap_admin_email()` |
-| CLI auth subcommand | `AINDY/runtime_only.py` — `_promote_admin()` |
+| Admin bootstrap (Phase 5.5) | `AINDY/startup.py` - `_bootstrap_admin_email()` |
+| CLI auth subcommand | `AINDY/runtime_only.py` - `_promote_admin()` |
 | Platform SPA entry | `platform/src/PlatformApp.tsx` |
-| SPA static files (asset 404 guard) | `AINDY/routing.py` — `_SPAStaticFiles` |
+| SPA static files (asset 404 guard) | `AINDY/routing.py` - `_SPAStaticFiles` |

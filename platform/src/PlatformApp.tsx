@@ -1,9 +1,12 @@
 import { lazy, type ReactNode } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import ErrorBoundary, { RouteErrorBoundary } from "./components/shared/ErrorBoundary";
 import { AuthProvider, useAuth } from "@aindy/ui-kit";
 import { SystemProvider, useSystem } from "@aindy/ui-kit";
+
+import LoginPage from "./components/platform/LoginPage";
+import NotAdmin from "./components/platform/NotAdmin";
 
 const AgentConsole = lazy(() => import("./components/platform/AgentConsole"));
 const FlowEngineConsole = lazy(() => import("./components/platform/FlowEngineConsole"));
@@ -13,29 +16,6 @@ const ExecutionConsole = lazy(() => import("./components/platform/ExecutionConso
 const AgentApprovalInbox = lazy(() => import("./components/platform/AgentApprovalInbox"));
 const AgentRegistry = lazy(() => import("./components/platform/AgentRegistry"));
 const RippleTraceViewer = lazy(() => import("./components/platform/RippleTraceViewer"));
-
-function redirectToApp(path: string) {
-  const base = import.meta.env.VITE_APP_BASE_URL ?? "/";
-  const normalizedBase = base.endsWith("/") ? base.slice(0, -1) : base;
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  window.location.href = `${normalizedBase}${normalizedPath}` || normalizedPath;
-}
-
-function PlatformGuard({ children }: { children: ReactNode }) {
-  const { isAdmin, isAuthenticated } = useAuth();
-
-  if (!isAuthenticated) {
-    redirectToApp("/login");
-    return null;
-  }
-
-  if (!isAdmin) {
-    redirectToApp("/");
-    return null;
-  }
-
-  return <>{children}</>;
-}
 
 function platformRoute(name: string, element: ReactNode) {
   return (
@@ -51,29 +31,61 @@ function PlatformHomeRedirect() {
   return <Navigate to={runtimeOnly ? "/flows" : "/agent"} replace />;
 }
 
+/**
+ * Guards all routes below it. Renders as a layout route (<Outlet />) so React
+ * Router can nest child routes without re-mounting the guard on each navigation.
+ *
+ * Unauthenticated → /login (router-relative, respects basename; no window.location).
+ * Authenticated but not admin → terminal NotAdmin view (no navigation, no loop).
+ */
+function PlatformGuard() {
+  const { isAuthenticated, isAdmin } = useAuth();
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (!isAdmin) {
+    return <NotAdmin />;
+  }
+
+  return <Outlet />;
+}
+
 export default function PlatformApp() {
   return (
     <AuthProvider>
-      <SystemProvider skipBoot>
-        <BrowserRouter basename="/platform">
-          <PlatformGuard>
-            <ErrorBoundary layer="platform">
-              <Routes>
-                <Route path="/" element={<PlatformHomeRedirect />} />
-                <Route path="/agent" element={platformRoute("Agent Console", <AgentConsole />)} />
-                <Route path="/flows" element={platformRoute("Flow Engine", <FlowEngineConsole />)} />
-                <Route path="/observability" element={platformRoute("Observability", <ObservabilityDashboard />)} />
-                <Route path="/health" element={platformRoute("Health", <HealthDashboard />)} />
-                <Route path="/executions" element={platformRoute("Executions", <ExecutionConsole />)} />
-                <Route path="/approvals" element={platformRoute("Approvals", <AgentApprovalInbox />)} />
-                <Route path="/registry" element={platformRoute("Registry", <AgentRegistry />)} />
-                <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
-                <Route path="*" element={<Navigate to="/agent" replace />} />
-              </Routes>
-            </ErrorBoundary>
-          </PlatformGuard>
-        </BrowserRouter>
-      </SystemProvider>
+      <BrowserRouter basename="/platform">
+        <Routes>
+          {/* Public: login lives outside the guard */}
+          <Route path="/login" element={<LoginPage />} />
+
+          {/* Protected: everything else goes through PlatformGuard */}
+          <Route element={<PlatformGuard />}>
+            <Route
+              path="/*"
+              element={
+                <SystemProvider skipBoot>
+                  <ErrorBoundary layer="platform">
+                    <Routes>
+                      <Route path="/" element={<PlatformHomeRedirect />} />
+                      <Route path="/agent" element={platformRoute("Agent Console", <AgentConsole />)} />
+                      <Route path="/flows" element={platformRoute("Flow Engine", <FlowEngineConsole />)} />
+                      <Route path="/observability" element={platformRoute("Observability", <ObservabilityDashboard />)} />
+                      <Route path="/health" element={platformRoute("Health", <HealthDashboard />)} />
+                      <Route path="/executions" element={platformRoute("Executions", <ExecutionConsole />)} />
+                      <Route path="/approvals" element={platformRoute("Approvals", <AgentApprovalInbox />)} />
+                      <Route path="/registry" element={platformRoute("Registry", <AgentRegistry />)} />
+                      <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
+                      <Route path="*" element={<Navigate to="/agent" replace />} />
+                    </Routes>
+                  </ErrorBoundary>
+                </SystemProvider>
+              }
+            />
+          </Route>
+        </Routes>
+      </BrowserRouter>
     </AuthProvider>
   );
 }
