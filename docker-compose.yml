@@ -1,0 +1,193 @@
+# A.I.N.D.Y. Runtime — Docker Compose
+#
+# Profiles (activate with --profile NAME, or COMPOSE_PROFILES env var):
+#   (default)   postgres + api. In-memory cache, event bus, and job queue.
+#               Single-instance. Enough to boot and reach /platform.
+#   full        + redis + worker. Distributed-capable, multi-process.
+#               The recommended production-shaped deployment.
+#   social      + mongo. Only if using social-layer features.
+#   monitoring  + prometheus, scraping api:8000/metrics (and, when running
+#               full, worker:8001/metrics — see monitoring/prometheus.yml).
+#
+# Config is read from AINDY/.env on the host, bind-mounted to a stable path
+# inside the container and selected via AINDY_ENV_FILE. Copy the template:
+#   cp AINDY/.env.example AINDY/.env   (then edit)
+#
+# Quickstart:
+#   cp AINDY/.env.example AINDY/.env
+#   docker compose up -d
+#   # visit http://localhost:8000/platform
+#
+# Production-shaped:
+#   docker compose --profile full up -d
+#
+# With metrics:
+#   docker compose --profile full --profile monitoring up -d
+
+services:
+  # ─── Database (always present) ──────────────────────────────────────────
+  postgres:
+    # pgvector/pgvector:pg16 — PostgreSQL 16 with the pgvector extension
+    # pre-installed. Required for the runtime's memory embedding column
+    # (VECTOR(1536) in memory_nodes). The plain postgres:16-alpine image
+    # does not ship pgvector and CREATE TABLE fails at schema bootstrap.
+    # docker/init-pgvector.sql runs CREATE EXTENSION IF NOT EXISTS vector
+    # on first container initialization (the postgres entrypoint runs all
+    # *.sql files in /docker-entrypoint-initdb.d/ on a blank data dir).
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aindy}
+      POSTGRES_USER: ${POSTGRES_USER:-aindy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aindy}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro
+    healthcheck:
+      # pg_isready against the configured db/user; api waits on this.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aindy} -d ${POSTGRES_DB:-aindy}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    ports:
+      - "5432:5432"
+
+  # ─── API (always present) ───────────────────────────────────────────────
+  api:
+    # build: . provides the local-source image during the 1.0.0
+    # release-staging period. image: tags it so other services (worker)
+    # reuse the same build. Post-PyPI-publish, operators can drop `build:`
+    # and pull the published image. See TECH_DEBT: PYPI-PUBLISH-1.
+    build: .
+    image: aindy-runtime:1.0.0
+    restart: unless-stopped
+    # alembic upgrade head runs four small additive migrations on boot,
+    # then serve starts. Chained here (not in the Dockerfile CMD) so the
+    # image stays clean for standalone use where migrations are managed
+    # externally (e.g. a Kubernetes Job).
+    command: ["sh", "-c", "alembic upgrade head && aindy-runtime serve"]
+    env_file:
+      - AINDY/.env
+    environment:
+      # Stable, version-independent mount target for the config file.
+      AINDY_ENV_FILE: /etc/aindy/.env
+      # Bind to all interfaces so host-to-container port mapping works.
+      # The default (127.0.0.1) would accept connections only from inside
+      # the container — unreachable from the host via published ports.
+      AINDY_HOST: "0.0.0.0"
+    volumes:
+      - ./AINDY/.env:/etc/aindy/.env:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        # Only enforced when the `full` profile brings redis up. When redis
+        # is absent (quickstart), compose ignores a dependency on a service
+        # that is not started.
+        condition: service_healthy
+        required: false
+    healthcheck:
+      # /ready gates traffic — it checks DB connectivity and schema validity.
+      # (Docker's container-restart HEALTHCHECK in the Dockerfile uses
+      # /health instead, so transient DB hiccups don't trigger restarts.)
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ─── Redis (full profile) ───────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    profiles: ["full"]
+    restart: unless-stopped
+    command: >
+      sh -c '
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server --requirepass "$$REDIS_PASSWORD"
+        else
+          exec redis-server
+        fi
+      '
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a $$REDIS_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    ports:
+      - "6379:6379"
+
+  # ─── Worker (full profile) ──────────────────────────────────────────────
+  # Degenerate without redis: in-process job execution happens in the api
+  # container's thread pool under quickstart. The worker is only meaningful
+  # with EXECUTION_MODE=distributed, which requires redis. Hence `full` only.
+  worker:
+    build: .
+    image: aindy-runtime:1.0.0
+    profiles: ["full"]
+    restart: unless-stopped
+    command: ["python", "-m", "AINDY.worker"]
+    env_file:
+      - AINDY/.env
+    environment:
+      AINDY_ENV_FILE: /etc/aindy/.env
+    volumes:
+      - ./AINDY/.env:/etc/aindy/.env:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Worker exposes /healthz, /readyz, and /metrics on 8001. Port published
+    # only so the monitoring profile (and operators) can reach worker metrics.
+    ports:
+      - "8001:8001"
+
+  # ─── MongoDB (social profile) ───────────────────────────────────────────
+  mongo:
+    image: mongo:7
+    profiles: ["social"]
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:-aindy}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:-aindy}
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    ports:
+      - "27017:27017"
+
+  # ─── Prometheus (monitoring profile) ────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    # No `condition: service_healthy` on api — Prometheus is designed to
+    # retry scrapes against targets that are briefly down. A target being
+    # unavailable is data, not a startup failure.
+    depends_on:
+      - api
+    ports:
+      - "9090:9090"
+
+volumes:
+  postgres_data:
+  redis_data:
+  mongo_data:
+  prometheus_data:

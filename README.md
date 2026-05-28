@@ -14,6 +14,65 @@ Current release posture:
 - does not provide in-process sandboxing for trusted Python extensions
 - `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` is a trusted-code override, not a safe third-party extension mode
 
+## Quickstart
+
+**Prerequisites:** Docker Desktop (or Docker Engine + Compose plugin v2.20+).
+
+```bash
+# 1. Clone
+git clone https://github.com/Masterplanner25/aindy-runtime.git
+cd aindy-runtime
+
+# 2. Configure
+cp AINDY/.env.example AINDY/.env
+#    Open AINDY/.env and set at minimum:
+#      SECRET_KEY  — generate: python3 -c "import secrets; print(secrets.token_hex(32))"
+#      OPENAI_API_KEY
+
+# 3. Start
+docker compose up -d
+
+# 4. Run migrations + wait for ready
+#    (alembic upgrade head runs automatically inside the api container on boot)
+#    Watch progress:
+docker compose logs -f api
+
+# 5. Verify
+curl http://localhost:8000/ready    # → {"status": "ok", ...}
+
+# 6. Visit the platform UI
+#    http://localhost:8000/platform
+```
+
+**Production-shaped deployment** (Redis + distributed worker):
+```bash
+docker compose --profile full up -d
+```
+
+**With metrics** (Prometheus on port 9090):
+```bash
+docker compose --profile full --profile monitoring up -d
+```
+
+> **Note — database host inside compose:** The `DATABASE_URL` in `AINDY/.env`
+> must use the compose service name as the host, not `localhost`:
+> ```
+> DATABASE_URL=postgresql://aindy:aindy@postgres:5432/aindy
+> ```
+> `postgres` resolves on the compose network; `localhost` does not.
+
+> **Note — pgvector required:** The compose file uses `pgvector/pgvector:pg16`
+> instead of the stock `postgres:16-alpine`. The runtime stores memory embeddings
+> as `VECTOR(1536)` columns, which requires the PostgreSQL `pgvector` extension.
+> `docker/init-pgvector.sql` runs `CREATE EXTENSION IF NOT EXISTS vector` on
+> first initialization. If you bring your own PostgreSQL instance, run that
+> statement once before first boot.
+
+> **Note — published database ports:** `postgres` (5432), `redis` (6379), and
+> `mongo` (27017) publish to the host for local development convenience. For
+> production deployments on a cloud VM, remove the `ports:` blocks from those
+> services or use a compose override file. See `TECH_DEBT: COMPOSE-PROD-PORTS-1`.
+
 ## Install
 
 ```bash

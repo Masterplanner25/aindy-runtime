@@ -14,6 +14,35 @@ from pathlib import Path
 utcnow = lambda: datetime.now(timezone.utc)
 logger = logging.getLogger(__name__)
 
+# Resolve the .env file location. Operators (notably containerised deployments)
+# can override the default AINDY/.env path with AINDY_ENV_FILE to mount config
+# at a stable, version-independent path (e.g. /etc/aindy/.env).
+#
+# This must be read from the raw environment here because
+# SettingsConfigDict(env_file=...) is evaluated at class-definition time,
+# before any Settings instance exists — self.AINDY_ENV_FILE is not yet
+# available when model_config is being constructed.
+_DEFAULT_ENV_FILE = Path(__file__).parent / ".env"
+_ENV_FILE: str = os.getenv("AINDY_ENV_FILE") or str(_DEFAULT_ENV_FILE)
+
+
+def _resolve_env_file() -> str:
+    """
+    Return the .env file path the Settings class will read.
+
+    Precedence:
+    1. ``AINDY_ENV_FILE`` environment variable (explicit operator override).
+    2. ``AINDY/.env`` relative to this file (package default).
+
+    Empty-string values are treated as unset and fall through to the default,
+    so ``export AINDY_ENV_FILE=`` clears the override rather than attempting
+    to open an empty-path file. Consistent with ``resolve_event_bus_redis_url``.
+
+    Extracted as a function so the resolution logic is unit-testable
+    without reload gymnastics.
+    """
+    return os.getenv("AINDY_ENV_FILE") or str(Path(__file__).parent / ".env")
+
 def _read_version() -> str:
     import json, pathlib
     _vf = pathlib.Path(__file__).parent / "version.json"
@@ -180,7 +209,20 @@ class Settings(BaseSettings):
     #   WORKER_HEALTH_PORT=8002  - memory ingest worker
     #   WORKER_HEALTH_PORT=8003  - metric writer worker
     LOG_LEVEL: str = "INFO"
+    AINDY_ENV_FILE: str | None = None
+    # Override the .env file location. Default: AINDY/.env relative to the
+    # package. Set to a stable path (e.g. /etc/aindy/.env) for containerised
+    # deployments where the bind-mount target must not change across versions.
+    # Note: the actual env_file used by Settings is resolved at class-definition
+    # time via _ENV_FILE / _resolve_env_file() above, not from this field.
+    # This field exists for introspection and documentation only.
     REDIS_URL: str | None = None
+    # Event-bus Redis URL.
+    # Deprecated since 1.0.0: prefer REDIS_URL. AINDY_REDIS_URL is still honored
+    # for backward compatibility and takes precedence over REDIS_URL when both are
+    # set, preserving deployments that intentionally point the event bus and cache
+    # at different Redis instances. Will be removed in a future major version.
+    AINDY_REDIS_URL: str | None = None
     AINDY_REQUIRE_REDIS: bool = False
     AINDY_CACHE_BACKEND: str = "redis"
 
@@ -246,7 +288,7 @@ class Settings(BaseSettings):
 
     # --- Environment loading config ---
     model_config = SettingsConfigDict(
-        env_file=Path(__file__).parent / ".env",
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )

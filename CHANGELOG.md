@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Fixed — Event bus now honors REDIS_URL (2026-05-27)
+
+- **`AINDY/kernel/event_bus.py`**: Event bus now honors `REDIS_URL` as a
+  fallback when `AINDY_REDIS_URL` is unset. Previously, setting only `REDIS_URL`
+  produced a silently misconfigured event bus that connected to
+  `redis://localhost:6379/0` regardless of the configured URL.
+  `AINDY_REDIS_URL` is still honored and takes precedence when both variables
+  are set, preserving deployments that intentionally route the event bus and
+  cache to different Redis instances. `AINDY_REDIS_URL` is now deprecated;
+  new deployments should use `REDIS_URL` only. The resolution logic is
+  extracted into `resolve_event_bus_redis_url()` for testability.
+  `get_redis_client()` (auxiliary wait-registry path) receives the same fix
+  but does not fall through to the localhost default — it returns `None` when
+  neither variable is set.
+- **`AINDY/config.py`**: `AINDY_REDIS_URL` added as a `Settings` field with
+  a deprecation comment, making it discoverable via settings introspection.
+
 ---
 
 ## 1.0.0 — 2026-05-25

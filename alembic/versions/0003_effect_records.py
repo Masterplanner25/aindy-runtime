@@ -23,6 +23,15 @@ All index creation steps use IF NOT EXISTS so this migration is safe to run
 against schemas bootstrapped via create_all (which already applies __table_args__
 indexes declared on the EffectRecord ORM model).
 
+Fresh-database safety: on a blank Docker deployment, `alembic upgrade head` runs
+before the server's Phase 5 schema bootstrap (create_all). At that point neither
+execution_units nor effect_records exists yet, so the CREATE TABLE (which has a FK
+to execution_units) would fail. The entire block is wrapped in a table-existence
+guard on execution_units. If execution_units is absent, this migration stamps and
+exits cleanly; the server's create_all then creates both tables — with all three
+ORM-declared indexes — correctly. On existing deployments where execution_units
+already exists, the full CREATE TABLE and index creation run normally.
+
 downgrade() drops the table entirely with CASCADE.
 """
 
@@ -36,30 +45,55 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Gate on execution_units existing. On a blank database (fresh Docker
+    # deployment) execution_units has not been created yet and the FK
+    # reference would raise UndefinedTable. The server's create_all handles
+    # table creation with dependency ordering when it runs at startup.
     op.execute("""
-        CREATE TABLE IF NOT EXISTS effect_records (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            action_id TEXT NOT NULL,
-            action_type VARCHAR(256) NOT NULL,
-            input_hash VARCHAR(64) NOT NULL,
-            execution_id UUID REFERENCES execution_units(id) ON DELETE SET NULL,
-            step_id VARCHAR(256),
-            status VARCHAR(32) NOT NULL DEFAULT 'pending',
-            result_payload JSONB,
-            external_receipt JSONB,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            completed_at TIMESTAMPTZ
-        )
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_catalog.pg_tables
+            WHERE tablename='execution_units' AND schemaname='public'
+          ) THEN
+            CREATE TABLE IF NOT EXISTS effect_records (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                action_id TEXT NOT NULL,
+                action_type VARCHAR(256) NOT NULL,
+                input_hash VARCHAR(64) NOT NULL,
+                execution_id UUID REFERENCES execution_units(id) ON DELETE SET NULL,
+                step_id VARCHAR(256),
+                status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                result_payload JSONB,
+                external_receipt JSONB,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                completed_at TIMESTAMPTZ
+            );
+          END IF;
+        END $$
     """)
 
     op.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_effect_records_action_id
-        ON effect_records (action_id)
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_catalog.pg_tables
+            WHERE tablename='effect_records' AND schemaname='public'
+          ) THEN
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_effect_records_action_id
+            ON effect_records (action_id);
+          END IF;
+        END $$
     """)
 
     op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_effect_records_execution_id
-        ON effect_records (execution_id)
+        DO $$ BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_catalog.pg_tables
+            WHERE tablename='effect_records' AND schemaname='public'
+          ) THEN
+            CREATE INDEX IF NOT EXISTS ix_effect_records_execution_id
+            ON effect_records (execution_id);
+          END IF;
+        END $$
     """)
 
 

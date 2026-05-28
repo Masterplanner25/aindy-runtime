@@ -1,0 +1,97 @@
+# A.I.N.D.Y. Runtime — Docker build context exclusions
+#
+# Controls what `COPY . /src` in the builder stage actually copies.
+# Items here do NOT enter the build context, which means:
+#   - Smaller context transfer to the Docker daemon (faster builds)
+#   - No secrets, dev artifacts, or VCS history reach the builder
+#   - .dockerignore exclusions do NOT affect what the wheel contains
+#     (that's controlled by pyproject.toml / MANIFEST.in)
+
+
+# ─── Version control ─────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
+.github/
+
+
+# ─── Python build, cache, and test artifacts ─────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+
+# ─── Virtual environments ────────────────────────────────────────────
+.venv/
+venv/
+env/
+*.venv/
+tempverify-*/
+
+
+# ─── Secrets and local environment ───────────────────────────────────
+.env
+.env.*
+!.env.example
+AINDY/.env
+AINDY/.env.*
+!AINDY/.env.example
+*.pem
+*.key
+secrets/
+
+
+# ─── IDE, editor, and OS metadata ────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+
+# ─── Documentation and meta files not needed in the image ────────────
+docs/
+*.md
+!README.md
+CHANGELOG.md
+TECH_DEBT.md
+ISOLATION_MODEL_PLAN.md
+AINDY_ORIENTATION.md
+
+
+# ─── Tests ───────────────────────────────────────────────────────────
+# Tests are not needed in the production image. They are still
+# available for local development and CI, which read from the
+# repo directly, not from the Docker build context.
+tests/
+conftest.py
+pytest.ini
+pyproject-test.toml
+
+
+# ─── Runtime logs ────────────────────────────────────────────────────
+logs/
+*.log
+AINDY/*.log
+
+
+# ─── Docker artifacts (avoid recursion) ──────────────────────────────
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore

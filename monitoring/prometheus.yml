@@ -1,0 +1,33 @@
+# A.I.N.D.Y. Runtime — Prometheus scrape configuration
+#
+# Mounted into the prometheus container (monitoring profile) at
+# /etc/prometheus/prometheus.yml. Scrapes the runtime's /metrics endpoint,
+# which serves a custom CollectorRegistry (all aindy_* metric families) and
+# is explicitly excluded from auth enforcement — no bearer token required.
+#
+# The endpoint exposes: execution pipeline counters/histograms, scheduler
+# queue depth, DB pool pressure, OpenAI/DeepSeek retry+error counters,
+# embedding latency, async queue depth/DLQ, circuit breaker state per
+# provider, system health tier, event handler durations, and more.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # API process — always present. Service name `api` resolves on the
+  # default compose network.
+  - job_name: aindy-runtime-api
+    static_configs:
+      - targets: ["api:8000"]
+    metrics_path: /metrics
+
+  # Worker process — only present when EXECUTION_MODE=distributed and the
+  # `full` profile is active (the worker service runs under `full`).
+  # The worker exposes prometheus_client metrics on port 8001 alongside its
+  # /healthz and /readyz probes. Uncomment when running distributed.
+  #
+  # - job_name: aindy-runtime-worker
+  #   static_configs:
+  #     - targets: ["worker:8001"]
+  #   metrics_path: /metrics

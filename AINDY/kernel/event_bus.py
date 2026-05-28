@@ -40,7 +40,14 @@ Fault tolerance
 
 Configuration (environment variables)
 --------------------------------------
-  AINDY_REDIS_URL          Redis connection URL (default: redis://localhost:6379/0)
+  REDIS_URL                Redis connection URL. Standard variable honored by cache,
+                           job queue, and event bus. (default: redis://localhost:6379/0)
+  AINDY_REDIS_URL          Deprecated alias for REDIS_URL. Honored for backward
+                           compatibility; takes precedence over REDIS_URL when both are
+                           set, preserving deployments that intentionally point the event
+                           bus and cache at different Redis instances. New deployments
+                           should use REDIS_URL only. Deprecated since 1.0.0; will be
+                           removed in a future major version.
   AINDY_EVENT_BUS_CHANNEL  Pub/sub channel name  (default: aindy:scheduler_events)
   AINDY_EVENT_BUS_ENABLED  "false" / "0" / "no" to disable (default: enabled)
 
@@ -66,7 +73,32 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-REDIS_URL: str = os.getenv("AINDY_REDIS_URL", "redis://localhost:6379/0")
+
+def resolve_event_bus_redis_url() -> str:
+    """
+    Resolve the Redis URL for the event bus.
+
+    Precedence (highest → lowest):
+
+    1. ``AINDY_REDIS_URL`` — legacy alias, honored for backward compatibility.
+       Deprecated since 1.0.0; prefer ``REDIS_URL``. Takes precedence when both
+       are set to preserve deployments that intentionally route the event bus and
+       cache to different Redis instances.
+    2. ``REDIS_URL``        — standard Redis URL shared with cache and job queue.
+    3. ``redis://localhost:6379/0`` — local-dev default.
+
+    Empty-string values are treated as unset and fall through to the next option,
+    so ``export AINDY_REDIS_URL=`` clears the override rather than connecting to
+    an empty URL.
+    """
+    return (
+        os.getenv("AINDY_REDIS_URL")
+        or os.getenv("REDIS_URL")
+        or "redis://localhost:6379/0"
+    )
+
+
+REDIS_URL: str = resolve_event_bus_redis_url()
 CHANNEL: str = os.getenv("AINDY_EVENT_BUS_CHANNEL", "aindy:scheduler_events")
 ENABLED: bool = os.getenv("AINDY_EVENT_BUS_ENABLED", "true").lower() not in {
     "0", "false", "no", "off",
@@ -477,15 +509,23 @@ def get_event_bus() -> EventBus:
 
 
 def get_redis_client():
-    """Return a Redis client for auxiliary wait-registry operations, or None."""
-    configured_url = os.getenv("AINDY_REDIS_URL")
-    if not ENABLED or not configured_url:
+    """Return a Redis client for auxiliary wait-registry operations, or None.
+
+    Only creates a client when Redis has been explicitly configured (via
+    ``AINDY_REDIS_URL`` or ``REDIS_URL``).  Falls back through the same
+    precedence as ``resolve_event_bus_redis_url`` but does *not* fall through
+    to the localhost default — an auxiliary client that no operator asked for
+    would be surprising.
+    """
+    # Resolve the explicit URL without the localhost default.
+    explicit_url = os.getenv("AINDY_REDIS_URL") or os.getenv("REDIS_URL")
+    if not ENABLED or not explicit_url:
         return None
     try:
         import redis as _redis  # noqa: PLC0415
 
         return _redis.from_url(
-            configured_url,
+            explicit_url,
             decode_responses=True,
             socket_connect_timeout=1,
             socket_timeout=1,

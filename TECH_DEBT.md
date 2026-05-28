@@ -511,10 +511,394 @@ Trigger: before the 1.0.0 release.
 
 **Estimated effort on apps-monolith bump:** ~30 minutes (verified: react-hooks 5.x supports eslint 9 and 10; no forced plugin bumps; `eslint-plugin-react-refresh@^0.4.22` is the main compatibility verification needed).
 
+---
+
+## EVENTBUS-REDIS-URL-CONSOLIDATION-1 — Deprecate AINDY_REDIS_URL alias
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27 during `.env.example` drift audit.
+
+**Context:** `AINDY/kernel/event_bus.py` historically read only `AINDY_REDIS_URL`, ignoring
+the standard `REDIS_URL` env var used by cache and job queue. Fixed in 1.0.0 (see CHANGELOG):
+`resolve_event_bus_redis_url()` now implements `AINDY_REDIS_URL → REDIS_URL → localhost default`
+precedence. `AINDY_REDIS_URL` is documented as deprecated since 1.0.0.
+
+**Consolidation path:**
+1. **1.0.x** — both honored; `AINDY_REDIS_URL` takes precedence; deprecation noted in
+   CHANGELOG, `config.py`, and `.env.example` (commented-out form).
+2. **1.x** — emit a `DeprecationWarning` (via Python `warnings.warn`) at startup when
+   `AINDY_REDIS_URL` is set, directing operators to migrate to `REDIS_URL`.
+3. **2.0** — remove `AINDY_REDIS_URL` from `event_bus.py`, `config.py`, and `.env.example`.
+
+**Audit note:** Before 2.0 removal, grep the codebase for any other `AINDY_*` aliases that
+shadow standard env vars (e.g., `AINDY_REDIS_URL` vs `REDIS_URL`, `AINDY_SKIP_MONGO_PING` vs
+`SKIP_MONGO_PING`). Consolidate all of them in a single pass rather than one at a time.
+
+---
+
+## PERMISSION-SECRET-CLEANUP-1 — Remove vestigial PERMISSION_SECRET scaffolding
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27 during `.env.example` drift audit.
+
+**Context:** `PERMISSION_SECRET` was originally a required HMAC field. It has since been
+deprecated (`AINDY/config.py:36`: "HMAC removed; kept for backward compat"). The field now
+has `default=""` and no validator. Three scaffolding call sites remain:
+
+- `tests/conftest.py:65` — `os.environ.setdefault("PERMISSION_SECRET", "test-...")`
+- `alembic/env.py:24` — `os.environ.setdefault("PERMISSION_SECRET", "alembic-...")`
+- `scripts/check_schema_version.py:24` — dict literal with dummy value
+
+All three `setdefault` calls are vestigial — they satisfied the old required-field constraint
+but are no-ops now that the field defaults to `""`. Removed from `.env.example` in 1.0.0.
+
+**Cleanup path (1.x hygiene pass):**
+1. Remove the three `setdefault` / dict-literal call sites.
+2. Remove the `PERMISSION_SECRET` field from `Settings` in `config.py`.
+3. Verify `model_config` uses `extra="ignore"` (confirmed: line 251) so existing `.env` files
+   with `PERMISSION_SECRET=` set do not break after the field is removed.
+4. No migration needed — pydantic ignores unknown fields; operators with stale `.env` files
+   are unaffected.
+
 **Verified during investigation (2026-05-25):**
 - ui-kit `tsconfig.json` has `"strict": true` — TypeScript null-safety guardrails are active.
 - The `safeMap()` invariant in apps-monolith addresses a problem ui-kit's strict-mode TypeScript already prevents at compile time. No need to port the lint rule to ui-kit.
 - `eslint-plugin-react-refresh` correctly absent from ui-kit (Vite HMR dev-server guard, not relevant for a published library).
+
+---
+
+## ENV-EXAMPLE-CONSOLIDATION-1 — Remove root .env.example forwarding stub
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27 during `.env.example` rewrite.
+
+**Context:** The runtime reads `AINDY/.env` at startup (`Settings env_file =
+Path(__file__).parent / ".env"`). The canonical operator reference is therefore
+`AINDY/.env.example` (written 2026-05-27). The repo-root `.env.example` was
+replaced with a forwarding stub that explains the split and routes operators to
+the canonical file.
+
+Two `.env.example` files — one real, one a sign pointing to the real one — is
+documentation debt. The stub earns its keep during the transitional period before
+the Docker Compose port lands, because Compose defaults to reading `root/.env`
+and operators expect to find an example there.
+
+**Resolution condition:** When `docker-compose.yml` is authored with an explicit
+`env_file: AINDY/.env` directive (or the Compose port otherwise makes the
+canonical location self-evident), delete `root/.env.example` entirely. Operators
+copying from `AINDY/.env.example` will have the correct file; Compose's explicit
+`env_file:` directive will confirm the location.
+
+**Do not resolve early** by pointing Compose at root `.env` — that couples this
+cleanup to the wrong decision (root `.env` bypasses the runtime's own `env_file`
+setting and creates a second source of truth for Settings values).
+
+---
+
+## CONFIG-ENV-EXAMPLE-DRIFT-1 — No automated check for .env.example / Settings drift
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27 during `.env.example` drift audit.
+
+**Context:** The drift audit (2026-05-27) identified ~40 environment variables
+active in the codebase that were absent from the then-current `.env.example`.
+The audit was manual: grep `os.getenv(...)` calls across `AINDY/**/*.py`,
+cross-reference against `Settings` fields in `config.py`, diff against
+`.env.example`. This process is not reproducible on demand without repeating the
+manual work.
+
+Every new `os.getenv("NEW_VAR")` call or `Settings` field added without a
+corresponding `.env.example` entry silently widens the drift gap.
+
+**Resolution path:**
+1. Write `scripts/check_env_example_coverage.py` that:
+   - Extracts all `os.getenv("VAR")` string literals from `AINDY/**/*.py` via AST
+     parse (not regex, to handle multi-line calls).
+   - Extracts all field names from `Settings` in `config.py`.
+   - Parses `AINDY/.env.example` for defined variable names (both uncommented and
+     commented-out forms).
+   - Reports variables present in code but absent from `.env.example`.
+2. Add the script to CI as an advisory check (warn, not fail) initially; promote
+   to blocking after a false-positive-free run period.
+
+**Intentional exclusions the script must handle:**
+- Test-only vars: `PYTEST_CURRENT_TEST`, `TESTING`, `TEST_MODE`,
+  `AINDY_TEST_STRICT_SYSTEM_EVENTS`, `AINDY_DEBUG_SYSTEM_EVENTS`.
+- System/OS vars: `HOSTNAME`, `PATH`, `SYSTEMROOT`.
+- Deprecated aliases already documented in `.env.example`: `AINDY_REDIS_URL`,
+  `AINDY_STUCK_RUN_THRESHOLD_MINUTES`.
+- Infrastructure-only Docker Compose vars: `POSTGRES_*`, `MONGO_INITDB_*`.
+- Computed/internal fields: `VERSION`, `API_VERSION`, `API_MIN_CLIENT_VERSION`.
+
+**Design note for implementation:** Consider a sentinel-comment annotation in
+`config.py` itself (e.g., `# env_example: skip`) rather than maintaining a
+separate external exclusion list that drifts from the code. Adding a new
+`Settings` field then forces a conscious decision — annotate it as skip-worthy
+or accept that it needs a `.env.example` entry — rather than silently inheriting
+exclusion-list coverage it never earned.
+
+---
+
+## STRIPE-SETTINGS-CLEANUP-1 — Stripe Settings fields with no readers
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27 during `.env.example` drift audit.
+
+**Context:** `AINDY/config.py` declares two `Settings` fields:
+
+```python
+STRIPE_SECRET_KEY: str | None = None
+STRIPE_WEBHOOK_SECRET: str | None = None
+```
+
+A codebase-wide grep for `STRIPE_` returned zero hits outside `config.py`. No
+route, service, or worker reads these values. They were excluded from
+`AINDY/.env.example` on that basis.
+
+**Two possible states — confirm before closing:**
+1. **Vestigial:** Payments were prototyped and the code was removed but the
+   Settings fields were not. → Remove both fields from `config.py`. File
+   PAYMENTS-ARCHITECTURE-1 as a future arc if payments are still planned.
+2. **Planned but unimplemented:** Payments are on the roadmap and someone added
+   the fields in anticipation. → Fields stay; add `STRIPE_SECRET_KEY` and
+   `STRIPE_WEBHOOK_SECRET` to `AINDY/.env.example` Group 12 (Observability)
+   or a new Group 13 (Payments) once the implementation arc begins.
+
+**Resolution:** Determine which state applies. If vestigial, remove in the same
+hygiene pass as PERMISSION-SECRET-CLEANUP-1.
+
+---
+
+## PAYMENTS-ARCHITECTURE-1 — No payments implementation behind Stripe Settings fields
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27, derived from STRIPE-SETTINGS-CLEANUP-1.
+
+**Context:** `Settings` declares `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`
+but no code reads them (confirmed by grep). If payments are part of the product
+roadmap, the architecture question needs an answer before implementation begins:
+
+1. **In this repo vs. separate service.** The runtime is the execution engine.
+   Billing and subscription management are typically a separate concern (separate
+   service, separate datastore, separate audit trail). Embedding Stripe logic in
+   `aindy-runtime` couples billing failures to runtime availability.
+
+2. **Which layer owns the webhook handler.** Stripe webhooks require idempotent
+   handling (Stripe retries on non-200). The runtime already has an idempotency
+   gate (EffectRecord / NF-1–NF-5). A webhook handler that routes through
+   `SyscallDispatcher` gets idempotency for free; a standalone FastAPI route does
+   not.
+
+3. **Multi-tenant billing identity.** Who is the billing subject — the operator
+   deploying the runtime, or end-users of the operator's product? Determines
+   whether the Stripe customer ID lives on the operator config or on a User row.
+
+**Resolution:** Answer the three questions above before writing any Stripe
+integration code. If the answer to question 1 is "separate service," remove the
+Settings fields from this repo immediately (see STRIPE-SETTINGS-CLEANUP-1).
+
+---
+
+## MEMORY-EMBEDDING-PROVIDER-1 — OpenAI is the sole embedding provider; no abstraction layer
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27 during `.env.example` drift audit (OpenAI timeout /
+retry settings surfaced as the only tunable LLM parameters).
+
+**Context:** `config.py` declares OpenAI-specific embedding and LLM settings
+(`OPENAI_CHAT_TIMEOUT_SECONDS`, `OPENAI_EMBEDDING_TIMEOUT_SECONDS`,
+`OPENAI_MAX_RETRIES`, `OPENAI_RETRY_BACKOFF_BASE_SECONDS`) with no equivalent
+for other providers. `DEEPSEEK_API_KEY` is present but without corresponding
+timeout/retry controls, suggesting DeepSeek was added as a key-only credential
+without a full client integration.
+
+The memory and embedding subsystem (`AINDY/memory/`) appears to be hardwired to
+OpenAI embeddings. There is no provider-abstraction interface (e.g.,
+`EmbeddingProvider` protocol) that would allow swapping to a local model, another
+API provider, or a self-hosted embedding server.
+
+The runtime already has `llm_client.py` as the provider-dispatch facade for
+chat-completion calls. An `EmbeddingProvider` protocol with the same dispatch
+shape (and `AINDY_EMBEDDING_PROVIDER` env var alongside the existing
+`AINDY_AGENT_PLANNER_BACKEND`) keeps the architecture symmetric rather than
+introducing a second dispatch pattern.
+
+**Impact:** Operators running in air-gapped environments, cost-sensitive
+deployments, or regulated environments that prohibit external API calls for memory
+content cannot use the memory subsystem without code changes.
+
+**Resolution path (when prioritized):**
+1. Audit `AINDY/memory/` and `AINDY/memory/embedding_jobs.py` to confirm the
+   hardwiring (grep for `openai` import and embedding API calls).
+2. Define an `EmbeddingProvider` protocol with `embed(texts: list[str]) ->
+   list[list[float]]`.
+3. Implement `OpenAIEmbeddingProvider` as the default. Add a
+   `LocalEmbeddingProvider` stub (sentence-transformers or similar) as the
+   offline alternative.
+4. Add `AINDY_EMBEDDING_PROVIDER: str = "openai"` to `Settings` and
+   `AINDY/.env.example` Group 11 (Agent planner, or a new Embedding group).
+5. Wire `AINDY_AGENT_PLANNER_BACKEND` and `AINDY_AGENT_PLANNER_MODEL` to the
+   same abstraction if the planner and embedding backends should be independently
+   configurable.
+
+**Trigger:** First operator request for a non-OpenAI embedding backend, or when
+the offline / air-gapped deployment profile is formally supported.
+
+**Upstream unlock:** Resolving this entry also unblocks the planned pgvector
+semantic similarity work. At pgvector integration time, the deployment needs to
+choose an embedding provider per-deployment (OpenAI `text-embedding-3-small`,
+a local sentence-transformers model, etc.) to match the vectors stored in
+the index. Without a provider abstraction, pgvector support locks every
+deployment to whatever embedding model is hardwired at that moment.
+
+---
+
+## PYPI-PUBLISH-1 — Dockerfile uses local wheel build pending PyPI publish
+
+**Status:** Deferred — blocks on PyPI publish decision.
+
+**Discovered:** 2026-05-27 during Dockerfile authoring (`pip index versions
+aindy-runtime` returned no matching distribution).
+
+**Context:** `Dockerfile` Stage 1 builds a wheel from local source
+(`python -m build --wheel`) and installs it into a relocatable prefix.
+This works correctly for compose-port and local deployments but means
+every `docker build` rebuilds the wheel from scratch. The intent at 1.0.0
+is that operators `pip install aindy-runtime` from PyPI, not build from
+source.
+
+**Transition path (when aindy-runtime is published to PyPI):**
+1. In `Dockerfile` Stage 1, replace:
+   ```dockerfile
+   WORKDIR /src
+   COPY . /src
+   RUN pip install build \
+       && python -m build --wheel --outdir /dist /src \
+       && pip install --prefix=/install /dist/*.whl
+   ```
+   with:
+   ```dockerfile
+   RUN pip install --prefix=/install "aindy-runtime==1.0.0"
+   ```
+2. Remove the `build-essential` and `libpq-dev` apt packages from Stage 1
+   (no longer needed to compile wheels from source — PyPI ships pre-built
+   wheels for the target platform). Keep `libpq-dev` only if any transitive
+   dependency still requires it at build time.
+3. Stage 2 is unchanged.
+4. Close this entry.
+
+**Reopen trigger:** PyPI publish of `aindy-runtime` at any version.
+
+---
+
+## MONITORING-GRAFANA-1 — Grafana excluded from compose monitoring profile
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27 during `docker-compose.yml` authoring.
+
+**Context:** The runtime ships a fully instrumented Prometheus `/metrics`
+endpoint (`routing.py:29`, `platform_layer/metrics.py`) with 40+ named metric
+families covering execution pipeline, DB pool, scheduler, async queue, LLM
+clients, embedding generation, circuit breakers, and system health tier. The
+compose `monitoring` profile includes a Prometheus service scraping
+`runtime:8000/metrics`. Grafana is excluded because no dashboards or
+provisioning config exist in the repo — a blank Grafana with no datasources
+or panels is noise, not value.
+
+**Resolution path (when dashboards are authored):**
+1. Create `monitoring/grafana/provisioning/datasources/prometheus.yml`
+   (auto-registers the compose Prometheus as a datasource).
+2. Create `monitoring/grafana/dashboards/aindy-runtime.json` (dashboard JSON,
+   can be exported from a running Grafana instance after manual setup).
+3. Add `grafana` service to the `monitoring` profile in `docker-compose.yml`:
+   ```yaml
+   grafana:
+     image: grafana/grafana:10.x.x
+     profiles: [monitoring]
+     ports: ["3001:3000"]
+     volumes:
+       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+       - grafana-data:/var/lib/grafana
+     environment:
+       GF_AUTH_ANONYMOUS_ENABLED: "true"
+       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+     depends_on: [prometheus]
+   ```
+4. Add `grafana-data` to the compose `volumes:` block.
+5. Close this entry.
+
+**Suggested first dashboards** (derived from the metric families in
+`platform_layer/metrics.py`): execution rate/latency by route, DB pool
+pressure gauge, async queue depth + DLQ depth, AI circuit breaker state,
+system health tier.
+
+---
+
+## COMPOSE-PROD-PORTS-1 — Database ports published for dev convenience
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27 during `docker-compose.yml` authoring.
+
+**Context:** `docker-compose.yml` publishes host ports for `postgres` (5432),
+`redis` (6379), and `mongo` (27017). This is deliberate for local development
+and debugging — operators can connect a DB client from the host without
+exec'ing into a container. The `api` service is the only service intended for
+external traffic; DB services should only be reachable on the internal compose
+network in production.
+
+**Risk:** If `docker-compose.yml` is used unchanged on a cloud VM with a
+public IP, `postgres:5432`, `redis:6379`, and `mongo:27017` are exposed to the
+internet. This is a real security footgun.
+
+**Mitigations already in place:**
+- `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `MONGO_INITDB_ROOT_PASSWORD` must
+  be set; the services will not start with empty passwords in production.
+- `README.md` quickstart notes that published DB ports are for local
+  development only.
+
+**Resolution path:**
+1. Author `docker-compose.prod.yml` as a Compose override file that removes
+   `ports:` blocks from `postgres`, `redis`, and `mongo`. Operators deploy
+   with `docker compose -f docker-compose.yml -f docker-compose.prod.yml up`.
+2. Alternatively, document the `ports:` blocks with a `# dev only` comment and
+   gate them on a profile (e.g., `profiles: [dev]`) so the default compose up
+   does not publish them.
+
+**Trigger:** Before any production cloud deployment of the compose stack.
+
+---
+
+## PROMETHEUS-PIN-1 — prom/prometheus uses :latest tag
+
+**Status:** Deferred — Low Priority
+
+**Discovered:** 2026-05-27 during `docker-compose.yml` authoring.
+
+**Context:** `docker-compose.yml` uses `prom/prometheus:latest` for the
+monitoring profile. This is inconsistent with the pin-everything discipline
+elsewhere in the stack (SHA-pinned CI actions, fully pinned Python deps,
+`pip-audit` CVE gating). `:latest` means a `docker compose pull` can silently
+change the Prometheus version.
+
+**Prometheus is an optional monitoring add-on** (not a core dependency), so
+the inconsistency is low-risk — a Prometheus version bump is unlikely to break
+the runtime. But for reproducibility and audit purposes, pinning is correct.
+
+**Resolution:** Replace `prom/prometheus:latest` with a pinned version, e.g.:
+```yaml
+image: prom/prometheus:v2.54.1
+```
+Check https://hub.docker.com/r/prom/prometheus/tags for the current stable
+release at pin time.
 
 ---
 
@@ -535,3 +919,87 @@ https://github.com/Masterplanner25/aindy-sdk-/actions/runs/26343161733
 `aindy-runtime` packaging config confirmed - no explicit sdk include
 required removal. `pyproject.toml` already used `include = ["AINDY*"]`,
 so removing the directory was sufficient.
+
+---
+
+## ALEMBIC-FRESH-DB-1 — Alembic migrations assume tables exist (non-idempotent on blank database)
+
+Status: CLOSED (2026-05-27)
+
+**Root cause:** Migrations 0001–0004 were written assuming the schema had already been
+bootstrapped by `schema_contract.py`'s `create_all` path (the original deployment model).
+On a fresh Docker deployment where `alembic upgrade head` runs before the server creates
+any tables, migrations 0002–0004 failed with `UndefinedTable` because they referenced
+tables (`platform_api_keys`, `execution_units`, `effect_records`, `webhook_subscriptions`,
+`dynamic_flows`, `dynamic_nodes`) that didn't exist yet.
+
+**Fix applied (2026-05-27):** Wrapped all DML (UPDATE, DELETE) and DDL (CREATE TABLE,
+CREATE INDEX) statements in 0002–0004 in `DO $$ BEGIN IF EXISTS (pg_catalog.pg_tables
+WHERE tablename=...) THEN ... END IF; END $$` blocks. On a blank database, the blocks
+skip silently; the server's Phase 5 `_enforce_schema_guard` then calls `create_all`
+which creates all runtime-owned tables with the current ORM-defined constraints.
+
+On existing deployments the blocks run normally: dedup DML cleans up duplicate active
+rows before the unique indexes are created, and effect_records is created if the migration
+was authored after the original deployment.
+
+**Remaining gap:** The hybrid `create_all` + alembic approach means a fresh deployment's
+alembic revision history (stamped at `0004`) doesn't reflect that alembic actually ran
+the migrations — the tables were created by `create_all`. This is operationally correct
+but conceptually impure. A proper fix would be to write `0001` as a full `CREATE TABLE`
+migration for all 32 runtime-owned tables, making alembic the single source of truth.
+Deferred: the monolith alembic history and the runtime history use separate version
+tables, so there's no collision risk; the hybrid approach is sustainable for 1.x.
+
+---
+
+## COMPOSE-PGVECTOR-1 — postgres image must be pgvector/pgvector:pg16
+
+Status: CLOSED (2026-05-27)
+
+The compose file originally used `postgres:16-alpine`. The runtime's `memory_nodes` table
+has an `embedding VECTOR(1536)` column (from `pgvector.sqlalchemy.Vector`), which requires
+the PostgreSQL `pgvector` extension. The stock image does not ship it; schema bootstrap
+fails with `type "vector" does not exist`.
+
+**Fix applied (2026-05-27):**
+- Switched to `pgvector/pgvector:pg16` in `docker-compose.yml`.
+- Added `docker/init-pgvector.sql` (mounted to `/docker-entrypoint-initdb.d/`) to run
+  `CREATE EXTENSION IF NOT EXISTS vector` on first database initialization.
+- Added a Quickstart note in `README.md` explaining the requirement for operators who
+  bring their own PostgreSQL instance.
+
+---
+
+## PACKAGING-DEP-1 — `packaging` not propagated to Docker runtime stage
+
+Status: CLOSED (2026-05-27)
+
+`limits` (a transitive dependency via `slowapi`) declares `packaging` as a runtime
+requirement. In the multi-stage Dockerfile, `pip install --prefix=/install` skips
+`packaging` because it is already satisfied at the builder-stage system level (installed
+as a build tool peer of `pip`/`setuptools`). The runtime stage only copies `/install`,
+so `packaging` was absent and `import packaging` failed at server startup.
+
+**Fix applied (2026-05-27):**
+- Added `"packaging>=24.0"` and `"limits==5.8.0"` as explicit dependencies in
+  `pyproject.toml` (pinning `limits` prevents a silent upgrade to a future version that
+  may change `packaging` requirements).
+- Added `pip install --prefix=/install --ignore-installed "packaging>=24.0"` after the
+  wheel install in the Dockerfile builder stage to force `packaging` into the `/install`
+  prefix regardless of system-level satisfaction.
+
+---
+
+## COMPOSE-HOST-1 — aindy-runtime serve defaults to 127.0.0.1; breaks Docker port mapping
+
+Status: CLOSED (2026-05-27)
+
+`runtime_only.py`'s `_serve()` defaults `AINDY_HOST=127.0.0.1`. Inside a Docker container
+this means the server only accepts connections from within the container, making the
+published port (`0.0.0.0:8000 → 8000/tcp`) unreachable from the host.
+
+**Fix applied (2026-05-27):** Added `AINDY_HOST: "0.0.0.0"` to the compose `api` service
+environment block. This is compose-only: bare `aindy-runtime serve` outside compose
+correctly defaults to localhost for security.
+

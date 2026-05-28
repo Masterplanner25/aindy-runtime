@@ -71,9 +71,16 @@ def _serve() -> NoReturn:
     from AINDY.config import settings
     if not settings.DATABASE_URL:
         print(
-            "error: DATABASE_URL is required to start the server.\n"
-            "Set it before running, for example:\n"
-            "  DATABASE_URL=postgresql://user:password@host:5432/dbname aindy-runtime serve",
+            "error: DATABASE_URL is not set.\n"
+            "\n"
+            "Docker Compose quickstart (recommended):\n"
+            "  cp AINDY/.env.example AINDY/.env   # then edit with real values\n"
+            "  docker compose up -d\n"
+            "\n"
+            "Manual / local dev:\n"
+            "  DATABASE_URL=postgresql://user:password@host:5432/aindy aindy-runtime serve\n"
+            "\n"
+            "For full setup instructions see README.md — Quickstart.",
             file=sys.stderr,
         )
         raise SystemExit(1)

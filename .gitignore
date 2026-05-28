@@ -9,6 +9,7 @@ build/
 dist/
 *.egg-info/
 .env
+AINDY/.env
 ISOLATION_MODEL_PLAN.md
 AINDY_ORIENTATION.md
 IDEMPOTENCY_AUDIT.md
