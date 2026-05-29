@@ -1082,3 +1082,28 @@ than `localhost`.
 
 **Remaining open item:** PLATFORM-UI-ENV-1 (localhost baked into bundle for remote hosts).
 
+---
+
+## PLATFORM-UI-KIT-1 — @aindy/ui-kit npm publish gap
+
+**Status:** CLOSED (2026-05-28)
+
+**What was implemented:**
+
+- `src/api/auth.js` in `aindy-ui-kit`: added `.then(unwrapEnvelope)` to `loginUser`,
+  `registerUser`, and `bootIdentity`. All three were returning the raw
+  `{ data: {...} }` envelope; callers expecting unwrapped payloads silently received
+  the wrong shape. Second-order effect: `bootIdentity` now correctly surfaces
+  `system.runtime.boot_mode`, fixing the silent post-login redirect misfire in
+  `PlatformHomeRedirect`.
+- Published `@aindy/ui-kit@1.0.1` to npm. `platform/package.json` bumped to
+  `^1.0.1` — `npm install` now pulls the corrected version from the registry.
+- Dockerfile `ui-builder` stage added: `npm ci` + `npm run build` runs inside the
+  image build from the registry-pinned ui-kit. `docker compose build --no-cache`
+  from a fresh clone is now self-contained — no prior local UI build required.
+- `.dockerignore` updated: `AINDY/platform/dist/` and `platform/node_modules/`
+  excluded from build context to prevent stale local state from leaking in.
+
+**Verification gate:** fresh clone → `docker compose build --no-cache` →
+`docker exec aindy-runtime-api-1 ls .../AINDY/platform/dist/` shows non-empty dist →
+`curl -I http://localhost:8000/platform/` returns 200.

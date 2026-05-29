@@ -3,12 +3,18 @@
 # A.I.N.D.Y. Runtime — Container Image
 #
 # Multi-stage build:
-#   Stage 1 (builder) — builds a wheel from local source and installs it
-#                       into a relocatable prefix. Carries compilers and
-#                       build headers that do NOT propagate to runtime.
-#   Stage 2 (runtime) — copies only the installed package, runs as a
-#                       non-root user, ships with libpq for psycopg and
-#                       curl for the HEALTHCHECK.
+#   Stage 1 (ui-builder) — installs Node deps and compiles the Platform SPA.
+#                          Output: /build/AINDY/platform/dist/
+#                          (vite.config.ts outDir is ../AINDY/platform/dist
+#                          relative to platform/, so the path steps up a level)
+#   Stage 2 (builder)    — builds a wheel from local source and installs it
+#                          into a relocatable prefix. The SPA dist is copied in
+#                          BEFORE the wheel build so package_data picks it up.
+#                          Carries compilers and build headers that do NOT
+#                          propagate to runtime.
+#   Stage 3 (runtime)    — copies only the installed package, runs as a
+#                          non-root user, ships with libpq for psycopg and
+#                          curl for the HEALTHCHECK.
 #
 # Post-PyPI-publish transition:
 #   When aindy-runtime is published to PyPI, replace the wheel-build
@@ -19,7 +25,25 @@
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Stage 1: builder
+# Stage 1: ui-builder — compile the Platform SPA
+# ═══════════════════════════════════════════════════════════════════════════
+FROM node:20-alpine AS ui-builder
+
+WORKDIR /build
+
+# Layer dependency install before source copy so npm ci is a cache hit
+# on rebuilds that change only source files, not package.json.
+COPY platform/package.json platform/package-lock.json ./platform/
+WORKDIR /build/platform
+RUN npm ci
+
+# Copy full platform source (platform/node_modules excluded via .dockerignore).
+COPY platform/ ./
+RUN npm run build
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Stage 2: builder
 # ═══════════════════════════════════════════════════════════════════════════
 FROM python:3.11-slim AS builder
 
@@ -40,6 +64,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # tests/, and other artifacts into the builder.
 WORKDIR /src
 COPY . /src
+
+# Copy the freshly built SPA into place BEFORE building the wheel.
+# pyproject.toml package-data glob ("AINDY" = [..., "platform/dist/**"]) is
+# resolved at wheel-build time — if the dist is absent when `python -m build`
+# runs, the wheel ships an empty AINDY/platform/dist/ regardless of what is
+# copied in afterward. .dockerignore excludes AINDY/platform/dist/ from the
+# build context so stale local builds never leak into the image.
+COPY --from=ui-builder /build/AINDY/platform/dist/ /src/AINDY/platform/dist/
 
 # Build the wheel from local source, then install it into a relocatable
 # prefix that we copy into the runtime stage.

@@ -130,6 +130,39 @@ remote hosts — do not silently fix; it interacts with the prod ports story.
 
 ---
 
+## Platform UI — build chain
+
+`@aindy/ui-kit` is published to npm (`registry.npmjs.org`) as `@aindy/ui-kit@1.0.1`.
+The local source lives at `C:\dev\aindy-ui-kit\src\`. The installed package in
+`platform/node_modules/@aindy/ui-kit/` is a compiled bundle only (`dist/index.js`,
+`dist/index.cjs`) — no source files. Editing the source repo has no effect on the
+running bundle until you rebuild and replace it.
+
+**Docker build is self-contained.** The Dockerfile `ui-builder` stage runs `npm ci`
+and `npm run build` from the registry-pinned `@aindy/ui-kit`. A fresh
+`docker compose build --no-cache` from a clean clone requires no prior local UI build.
+
+**Local dev loop when ui-kit source changes:**
+1. Edit source in `C:\dev\aindy-ui-kit\src\`
+2. `npm run build` in `C:\dev\aindy-ui-kit` → regenerates `dist/`
+3. Copy new dist into `platform/node_modules/@aindy/ui-kit/dist/`:
+   ```powershell
+   Copy-Item -Path C:\dev\aindy-ui-kit\dist\* `
+     -Destination C:\dev\aindy-runtime\platform\node_modules\@aindy\ui-kit\dist\ `
+     -Recurse -Force
+   ```
+4. `npm run build` in `platform/` → writes new bundles to `AINDY/platform/dist/`
+5. Restart the `api` container: `docker compose restart api`
+
+**`bootIdentity` unwrap invariant:** `AuthContext` calls `bootIdentity` on page load
+to populate `system.runtime.boot_mode` (used by `PlatformHomeRedirect` to choose
+`/agent` vs `/flows`). `bootIdentity` must call `.then(unwrapEnvelope)` — if it
+returns the raw envelope `{ data: {...} }`, `useSystem()` cannot read `boot_mode`
+and the post-login redirect silently misfires. Same applies to `loginUser` and
+`registerUser` — all three must unwrap. Source: `C:\dev\aindy-ui-kit\src\api\auth.js`.
+
+---
+
 ## Admin bootstrap — grant-only constraint
 
 `AINDY_BOOTSTRAP_ADMIN_EMAIL` and `aindy-runtime auth promote-admin <email>` are both
@@ -221,6 +254,7 @@ try/except; new additions need the same treatment or a verified-safe import.
 - **PROMETHEUS-PIN-\*** — Prometheus image version pinning. PROMETHEUS-PIN-1: open.
 - **PLATFORM-UI-ENV-\*** — Vite `VITE_API_BASE_URL` bakes localhost into bundle. PLATFORM-UI-ENV-1: open.
 - **PLATFORM-AUTH-ACQUISITION-\*** — Platform SPA first-party auth. PLATFORM-AUTH-ACQUISITION-1: closed 2026-05-28.
+- **PLATFORM-UI-KIT-\*** — ui-kit npm publish gap; local edits require manual rebuild chain. PLATFORM-UI-KIT-1: closed 2026-05-28.
 
 ---
 
@@ -247,3 +281,6 @@ try/except; new additions need the same treatment or a verified-safe import.
 | CLI auth subcommand | `AINDY/runtime_only.py` — `_promote_admin()` |
 | Platform SPA entry | `platform/src/PlatformApp.tsx` |
 | SPA static files (asset 404 guard) | `AINDY/routing.py` — `_SPAStaticFiles` |
+| Platform SPA Vite config | `platform/vite.config.ts` — `outDir: ../AINDY/platform/dist` |
+| ui-kit source | `C:\dev\aindy-ui-kit\src\` |
+| ui-kit auth API (unwrap invariant) | `C:\dev\aindy-ui-kit\src\api\auth.js` |
