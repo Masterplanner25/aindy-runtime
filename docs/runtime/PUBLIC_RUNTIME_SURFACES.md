@@ -7,6 +7,7 @@ owner: "platform-team"
 ---
 # Public Runtime Surfaces
 
+
 This document defines the external runtime surface in stability terms. It is
 intentionally conservative.
 
@@ -17,6 +18,11 @@ Meanings:
 - `experimental`: shipped and supported enough to use, but still allowed to
   change in minor releases
 - `internal`: not part of the external platform contract
+
+Important reading rule:
+
+- route presence is not, by itself, a broad downstream compatibility promise
+- downstream reliance should prefer the narrower stable and conditionally stable interpretation in `RUNTIME_STABILITY_INDEX.md`
 
 The machine-readable form of this contract is exposed in `GET /api/version`
 under `public_contract`.
@@ -66,6 +72,11 @@ Release posture:
 - `POST /platform/syscall`
   Dispatches a versioned syscall through the public syscall envelope.
 
+Downstream note:
+
+- the minimum stable downstream contract should be interpreted narrowly first
+- `CROSS_REPO_COMPATIBILITY.md` is authoritative for what SDK and UI should treat as compatibility commitments
+
 ## Experimental HTTP Surfaces
 
 - `GET /health/sandbox`
@@ -91,6 +102,12 @@ Release posture:
   Nodus upload and script-management routes remain experimental.
 - `/platform/webhooks*`
   Runtime-owned, but not yet declared stable.
+
+Experimental means:
+
+- available and runtime-owned enough to discuss
+- not automatically safe for SDK/UI compatibility dependence
+- not automatically promoted by runtime-only boot or route visibility
 
 ## Syscall Contract
 

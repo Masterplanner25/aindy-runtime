@@ -902,6 +902,31 @@ release at pin time.
 
 ---
 
+## MCP-BEHAVIOR-1 — MCP tool errors return isError result, not Python exceptions
+
+**Status:** Tracked — Protocol fact. No code change needed; required knowledge for any MCP integration work.
+
+**Discovered:** 2026-05-30 during `nodus-mcp` library implementation (`C:\dev\nodus-mcp`).
+
+**Behavior:** When a tool handler raises a Python exception inside an MCP server, the `mcp` SDK (v1.x) catches it and returns a `CallToolResult(isError=True, content=[...])` to the client. It does **not** propagate a Python exception on the client side. `ClientSession.call_tool()` always returns successfully; callers must check `result.isError` to detect failures.
+
+**Implication for tests:** Any test asserting that `call_tool()` raises on handler failure must instead assert `result.isError is True`:
+```python
+# WRONG — call_tool never raises on tool errors
+with pytest.raises(Exception):
+    await session.call_tool("bad_tool", {})
+
+# CORRECT
+result = await session.call_tool("bad_tool", {})
+assert result.isError is True
+```
+
+**Implication for production callers:** Any AINDY route or service that calls an MCP server must explicitly check `result.isError` and handle the error content — it cannot rely on exception propagation.
+
+**Scope:** Applies to both `NodusServer` (nodus-mcp) and any external MCP server called via `MCPClientAdapter`. Confirmed against mcp SDK 1.x on 2026-05-30.
+
+---
+
 ## SDK Extraction
 
 Status: COMPLETE (2026-05-23)

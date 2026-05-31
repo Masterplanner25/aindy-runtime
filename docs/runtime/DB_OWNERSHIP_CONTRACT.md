@@ -7,8 +7,10 @@ owner: "platform-team"
 ---
 # Database Ownership Contract
 
+
 This document defines the runtime-vs-app database ownership boundary for the
-future `aindy-runtime` / `aindy-apps-monolith` split.
+runtime/app split context, which still includes legacy monolith-era assumptions
+in places.
 
 Ownership note:
 
@@ -18,6 +20,13 @@ Ownership note:
   through app bootstrap
 - the current monolith still uses one Alembic tree, but ownership of revisions
   should now be treated as explicit
+
+Reading rule:
+
+- this doc is about ownership, not about broad downstream stability guarantees
+- use [Cross-Repo Compatibility](./CROSS_REPO_COMPATIBILITY.md) and
+  [Runtime Boundary](./RUNTIME_BOUNDARY.md) when interpreting what downstream
+  repos may rely on operationally
 
 ## Current Registration Contract
 
@@ -102,7 +111,7 @@ Rules:
 
 ## Model Registration After The Split
 
-The future split should preserve one shared metadata object at runtime:
+The split should preserve one shared metadata object at runtime:
 
 - `aindy-runtime` provides `AINDY.db.database.Base`,
   `AINDY.db.model_registry`, engine/session helpers, and runtime-owned models

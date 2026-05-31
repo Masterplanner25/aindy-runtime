@@ -7,6 +7,7 @@ owner: "platform-team"
 ---
 # Runtime CI Ownership
 
+
 This document defines which GitHub Actions checks are authoritative for
 `aindy-runtime`.
 
@@ -31,6 +32,12 @@ Related non-publishing workflow:
 - `.github/workflows/release-staging.yml`
   - manual-only artifact build and staged release verification
   - not a normal push/PR status check
+
+Interpretation note:
+
+- CI ownership is not the same thing as runtime release sufficiency
+- the fact that a check lives in runtime CI does not by itself mean the
+  runtime's current maturity claims are fully defended
 
 ## Checks That Do Not Belong Here
 
@@ -96,6 +103,14 @@ The floor is set with a 4% buffer below the CI baseline (39% − 4% → 35%).
 The `runtime_only` suite enforces `--cov-fail-under=35` in the `runtime-contracts` CI job.
 The integration suite does not yet enforce a floor (set `--cov-fail-under` in `integration-postgres`
 once the combined baseline stabilises above 50%).
+
+Coverage note:
+
+- coverage thresholds are operational baselines, not proof of runtime-grade
+  assurance
+- use [Test Strategy](./TEST_STRATEGY.md) and
+  [Invariant-Test Mapping](./INVARIANT_TEST_MAPPING.md) for higher-value
+  interpretation of what still needs defending
 
 ## Current Gaps
 

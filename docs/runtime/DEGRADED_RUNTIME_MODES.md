@@ -7,6 +7,7 @@ owner: "platform-team"
 ---
 # Degraded Runtime Modes
 
+
 This document defines the runtime-owned degraded-mode contract exposed through
 `AINDY/platform_layer/deployment_contract.py`, `/health`, and `/ready`.
 
@@ -24,6 +25,11 @@ This document defines the runtime-owned degraded-mode contract exposed through
 - `startup_fatal`
   - The runtime must not complete startup in this state.
   - The condition may still be recorded in runtime state just before the startup exception is raised.
+
+Reading rule:
+
+- this file defines classification labels and current condition-code mapping
+- it does not replace the broader profile-aware degraded truth model in `DEGRADED_MODE_MATRIX.md`
 
 ## Current Contract
 

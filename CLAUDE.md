@@ -1,4 +1,95 @@
-# aindy-runtime — Claude Code Instructions
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
+## Commands
+
+```bash
+# Install (editable + test deps)
+pip install -e ".[test]"
+
+# Unit tests — no external services, SQLite in-memory
+pytest tests/unit/ -v
+pytest tests/unit/test_syscall_contract.py::test_name -v   # single test
+
+# Runtime-only CI subset (fastest, no DB required)
+pytest -m runtime_only -q
+
+# Integration tests — require live Postgres + Redis
+pytest -c pytest.integration.ini -v
+docker compose -f docker-compose.test.yml up -d            # spin up deps
+
+# Lint (runs from repo root; config in AINDY/ruff.toml)
+ruff check AINDY/
+ruff format AINDY/
+
+# Regenerate schema baseline after any model change
+python scripts/check_schema_version.py
+
+# Run the server locally (requires DATABASE_URL + SECRET_KEY in env)
+aindy-runtime serve
+uvicorn AINDY.runtime_only:app   # equivalent ASGI form
+
+# Docker compose — full stack
+docker compose up -d                                        # api + postgres + redis + mongo
+docker compose --profile full up -d                        # + worker
+docker compose --profile full --profile monitoring up -d   # + Prometheus
+```
+
+---
+
+## Architecture
+
+### Layer model
+
+```
+AINDY/
+├── kernel/           # Core primitives: SyscallDispatcher, SyscallRegistry, EventBus,
+│                     #   SchedulerEngine, CircuitBreaker, ResourceManager, TenantContext
+├── platform_layer/   # Runtime services: LLM clients (OpenAI/DeepSeek), metrics, OTel,
+│                     #   rate limiter, cache backend, extension ABI + sandbox runner,
+│                     #   scheduler_service (APScheduler maintenance jobs)
+├── core/             # Execution pipeline middleware, RetryPolicy, DistributedQueue,
+│                     #   SystemEventService, RequestMetricWriter, ResumeWatchdog
+├── runtime/          # Flow engine (DAG executor), Nodus script execution,
+│                     #   memory loop, flow definitions
+├── agents/           # Agent runtime, planner backends, tool registry,
+│                     #   AgentCoordinator, AutonomousController
+├── memory/           # MemoryNode persistence, MemoryAddressSpace (MAS), embedding
+│                     #   pipeline, scoring, memory traces
+├── db/               # SQLAlchemy models, Alembic env, DAO layer, schema contract
+├── routes/           # FastAPI routers — auth, flows, agents, memory, platform/*
+├── worker/           # Background worker processes (memory ingestion, metric writing)
+└── nodus/            # Nodus language stdlib (memory.nd) and runtime adapter
+```
+
+### Request → execution pipeline
+
+Every route handler runs inside `ExecutionPipeline` (`core/execution_pipeline/pipeline.py`), a middleware-like wrapper that: sets ContextVars (trace_id, pipeline_active), claims/releases an `ExecutionUnit` in the DB, records Prometheus metrics, captures memory signals from the response, and emits `SystemEvent` records. Handlers interact with the kernel only via `SyscallDispatcher.dispatch()`.
+
+### Syscall system (`sys.v1.domain.action`)
+
+`SyscallDispatcher` (`kernel/syscall_dispatcher.py`) is the single entry point for all capability calls. Every dispatch: validates syscall exists in `SYSCALL_REGISTRY`, enforces the caller's `SyscallContext.capabilities`, checks tenant isolation and resource quota, validates input/output schemas, runs the idempotency gate for `EXACTLY_ONCE` handlers (EffectRecord in DB), wraps the handler in an OTel span, and returns a uniform `{status, data, trace_id, duration_ms, error}` envelope.
+
+### Flow execution and WAIT/RESUME
+
+`FlowRun` rows move through a state machine (`pending → executing → waiting → completed/failed`). The `SchedulerEngine` (`kernel/scheduler/`) runs a priority queue (high/normal/low lanes). When a node calls `sys.v1.event.wait`, the flow suspends: `FlowRun.status` → `waiting`, a callback is registered in the in-memory `_waiting` dict, and `EventBus.publish()` broadcasts the wait via Redis pub/sub to all instances. When `publish_event(event_type)` fires later, the engine re-enqueues the matching flow. On restart, `flow_run_rehydration.py` re-registers all `waiting` rows so no flow is lost.
+
+### Nodus script execution
+
+`nodus_worker.py` (`runtime/`) compiles and runs `.nodus` / `.nd` scripts via `nodus-lang`. It injects `DeferredMemoryBuiltins` (recall/search/write backed by the `memory_context` dict from the flow) and a `WorkerWaitSignal` exception that propagates WAIT semantics back to the flow engine. Memory writes are deferred — collected as a list and committed after the script finishes.
+
+### Agent execution
+
+`execute_run()` (`agents/agent_runtime/execution.py`) is the entry point. It checks `AgentRun.status == "approved"`, validates the scoped capability token, resolves tools via `tool_registry.py`, optionally routes through `AgentCoordinator` for multi-agent delegation, then calls `execute_agent_run_via_nodus()` which compiles the agent objective into a Nodus execution context and runs it through the flow-backed execution path.
+
+### Memory system
+
+Memory nodes live in `memory_nodes` (PostgreSQL, `Vector(1536)` embedding column via pgvector). Writes go through `memory_ingest_service.py` → background embedding queue → `memory_ingest_worker.py` → OpenAI text-embedding API → pgvector upsert. Retrieval is hybrid: vector similarity + tag filter + `MemoryAddressSpace` path queries (`/memory/{tenant}/{namespace}/{type}/{id}`). Scoring uses impact score, usage count, and causal depth. `memory_scoring_service.py` ranks results; a Rust native scorer (`memory/native/`) is an optional performance path compiled via Maturin.
+
+---
 
 ## Schema contract version protocol
 
@@ -132,7 +223,7 @@ remote hosts — do not silently fix; it interacts with the prod ports story.
 
 ## Platform UI — build chain
 
-`@aindy/ui-kit` is published to npm (`registry.npmjs.org`) as `@aindy/ui-kit@1.0.1`.
+`@aindy/ui-kit` is published to npm (`registry.npmjs.org`) as `@aindy/ui-kit@1.0.2`.
 The local source lives at `C:\dev\aindy-ui-kit\src\`. The installed package in
 `platform/node_modules/@aindy/ui-kit/` is a compiled bundle only (`dist/index.js`,
 `dist/index.cjs`) — no source files. Editing the source repo has no effect on the
@@ -255,6 +346,21 @@ try/except; new additions need the same treatment or a verified-safe import.
 - **PLATFORM-UI-ENV-\*** — Vite `VITE_API_BASE_URL` bakes localhost into bundle. PLATFORM-UI-ENV-1: open.
 - **PLATFORM-AUTH-ACQUISITION-\*** — Platform SPA first-party auth. PLATFORM-AUTH-ACQUISITION-1: closed 2026-05-28.
 - **PLATFORM-UI-KIT-\*** — ui-kit npm publish gap; local edits require manual rebuild chain. PLATFORM-UI-KIT-1: closed 2026-05-28.
+- **MCP-BEHAVIOR-\*** — MCP protocol integration facts. MCP-BEHAVIOR-1: `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
+
+---
+
+## MCP protocol integration note (MCP-BEHAVIOR-1)
+
+When working with any MCP server via `mcp.ClientSession.call_tool()`, the SDK **never raises a Python exception** for tool failures. Instead, it returns `CallToolResult(isError=True)`. Always check `result.isError` explicitly:
+
+```python
+result = await session.call_tool("tool_name", args)
+if result.isError:
+    # handle error — result.content[0].text has the error message
+```
+
+Do not write `with pytest.raises(...)` around `call_tool()` — it will never fire.
 
 ---
 

@@ -7,12 +7,16 @@ owner: "platform-team"
 ---
 # Security Policy
 
+
 ## Scope
 
 This policy covers vulnerability response for `aindy-runtime` and its declared
 dependencies. It applies to self-hosted local-install deployments. Cloud-hosted
 deployments will be governed by a separate policy when the cloud runtime is
 operational.
+
+For current support interpretation, treat the runtime first as a trusted-internal
+runtime platform rather than as a broadly hardened external extension platform.
 
 ## CVE Monitoring
 

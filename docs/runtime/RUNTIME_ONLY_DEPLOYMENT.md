@@ -7,6 +7,7 @@ owner: "platform-team"
 ---
 # Runtime-Only Deployment
 
+
 This is the authoritative contract for running AINDY without loading any
 `apps/*` plugins.
 
@@ -19,6 +20,7 @@ Scope limit:
 - extension isolation is not provided for trusted Python code
 - experimental route and extension surfaces keep their experimental status even
   when they are reachable in runtime-only mode
+- frontend or shell behavior described here should not be read as expanding runtime ownership beyond the narrower boundary defined in `RUNTIME_BOUNDARY.md`
 
 This document defines the runtime-only HTTP and extension surface. Deployment
 topology is a separate contract; see [Deployment Profiles](./DEPLOYMENT_PROFILES.md).
@@ -129,7 +131,16 @@ What does not mount:
 - app routers contributed by `apps/*` bootstrap registration such as
   `/apps/tasks/*` or `/apps/social/*`
 
+Important interpretation:
+
+- mounted route presence is not the same thing as stable downstream contract
+- use `PUBLIC_RUNTIME_SURFACES.md` and `RUNTIME_STABILITY_INDEX.md` for stability interpretation
+
 ## Frontend Behavior
+
+This section is descriptive of current runtime-only presentation behavior. It is
+not the authoritative ownership boundary for UI concerns, which remains
+narrower in `RUNTIME_BOUNDARY.md`.
 
 Runtime-only mode is presented intentionally in the shipped client shell:
 

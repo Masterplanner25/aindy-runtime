@@ -7,6 +7,7 @@ owner: "platform-team"
 ---
 # Deployment Profiles
 
+
 This document defines the runtime-owned deployment topology contract.
 
 Boot mode and deployment profile are separate axes:
@@ -29,13 +30,19 @@ If `AINDY_DEPLOYMENT_PROFILE` is unset:
 - API startup infers the profile from `EXECUTION_MODE`
 - worker startup defaults to `distributed-worker`
 
-## Supported Profiles
+## Runtime-Owned Profiles
 
 | Profile | Process role | Required execution mode | Required infrastructure | Notes |
 | --- | --- | --- | --- | --- |
 | `single-instance` | API | `thread` | PostgreSQL, runtime schema | Redis is optional. No separate worker is required. WAIT/RESUME is local-only when Redis is absent. |
 | `distributed-api` | API | `distributed` | PostgreSQL, runtime schema, Redis, event bus, durable queue backend, at least one worker process | This is the multi-instance API contract. `AINDY_EVENT_BUS_ENABLED=false` and `AINDY_CACHE_BACKEND=memory` are rejected. |
 | `distributed-worker` | Worker | `distributed` | PostgreSQL, runtime schema, Redis, durable queue backend | The worker process consumes queued work and can participate in lease-based background leadership. |
+
+Support interpretation:
+
+- these rows describe runtime-owned profile mechanics and dependency requirements
+- they do not by themselves imply identical support level or claim strength across all deployment narratives
+- current supported posture should be interpreted through `PROFILE_SUPPORT_MATRIX.md`
 
 ## Enforcement
 
@@ -53,6 +60,12 @@ For the distributed API profile, worker presence is a required dependency:
 
 - development may surface an explicit unsafe degraded condition when no worker heartbeat is visible yet
 - production startup fails rather than presenting a healthy distributed API with no workers
+
+This should be read together with:
+
+- `DEGRADED_MODE_MATRIX.md` for readiness and fallback truth
+- `DEPENDENCY_CRITICALITY_MATRIX.md` for dependency impact by profile
+- `PROFILE_SUPPORT_MATRIX.md` for what the runtime is currently willing to claim as supported
 
 ## Background Leadership
 

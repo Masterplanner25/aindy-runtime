@@ -7,6 +7,7 @@ owner: "platform-team"
 ---
 # Agent Runtime
 
+
 This document describes the agent runtime subsystem in `AINDY/agents/`. It
 covers the execution contract, public API surface, capability enforcement model,
 recovery behavior, and runtime-owned orchestration guardrails. For the app-layer Agentics feature (gap analysis,
@@ -15,7 +16,7 @@ completion roadmap, Nodus integration plan) see
 
 Repository ownership:
 
-- this document belongs to the future `aindy-runtime` repo
+- this document belongs to `aindy-runtime`
 - app-enrichment planning belongs in `docs/apps/AGENTICS.md`
 - the broader documentation split map lives in
   [Runtime Docset Boundary](./RUNTIME_DOCSET_BOUNDARY.md)
@@ -48,6 +49,13 @@ registered tool registry. The agent HTTP exposure is also runtime-owned now:
 `AINDY/routes/agent_router.py` serves the `/apps/agent/*` surface while keeping
 tool implementations app-owned behind registries.
 
+Boundary note:
+
+- agent execution semantics may be runtime-owned
+- richer agent product behavior, app-domain logic, and presentation-level
+  agent experience are not automatically runtime-owned merely because the
+  runtime exposes part of the subsystem
+
 Baseline runtime behavior is intentionally generic:
 - generic planner prompt
 - runtime-selected planner backend
@@ -58,6 +66,13 @@ Baseline runtime behavior is intentionally generic:
 
 The supported runtime-only deployment surface for that baseline is defined in
 [Runtime-Only Deployment](./RUNTIME_ONLY_DEPLOYMENT.md).
+
+Claim note:
+
+- runtime-owned agent support should be interpreted through the current
+  trusted-internal posture
+- this doc does not imply a stronger third-party agent platform or extension
+  posture than the governing security docs allow
 
 App-enriched behavior is optional:
 - KPI-aware planner prompt enrichment

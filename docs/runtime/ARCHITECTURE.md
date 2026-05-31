@@ -1,149 +1,147 @@
 ---
 title: "Runtime Architecture"
-last_verified: "2026-05-25"
+last_verified: "2026-05-29"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
 # Runtime Architecture
 
-## Local + Cloud Distribution Model
 
-`aindy-runtime` is built to serve two distinct distribution contexts simultaneously:
+## Current Runtime Posture
+
+`aindy-runtime` should currently be understood first as a **trusted-internal runtime platform**.
+
+That means:
+
+- the runtime owns execution-substrate responsibilities
+- the runtime supports explicit local and constrained distributed trusted-internal profiles
+- the runtime does not currently claim a hardened hostile multitenant or arbitrary third-party extension-host posture
+
+This architecture document preserves broader design context, but current support
+claims should be interpreted through the governing docs above.
+
+## Local + Cloud Distribution Context
+
+`aindy-runtime` is designed with two distribution contexts in mind:
 
 **Local install** — the operator owns all infrastructure. The runtime runs on the
 operator's machine, in their network, against their database. They install via
 `pip install aindy-runtime`, manage upgrades, and control every configuration
-surface. Trust is high; isolation needs are lower.
+surface.
 
-**Cloud-hosted** — the provider (Masterplan / A.I.N.D.Y. platform team) owns the
-infrastructure. The runtime runs in a provider-managed environment serving multiple
-tenants. The operator interacts through an SDK and a control plane interface; they
-have no direct filesystem or process access. Trust must be verified; isolation
-requirements are much stricter.
+**Cloud-hosted** — a future provider-managed context in which the runtime could
+run behind a control plane serving tenants that the operator does not directly
+host.
 
-The same runtime codebase targets both contexts. This is not an accident — the
-deployment profile system, sandbox runner selection, and extension isolation tiers
-were all designed with the local-to-cloud continuum in mind.
+The same runtime codebase was shaped with this local-to-cloud continuum in mind.
+However, the future-state cloud framing should not be mistaken for current
+supported posture.
 
-## Why This Framing Shapes Architecture
+## Why This Framing Still Matters
 
-Five areas where the local+cloud model has concrete architectural consequences:
+Five areas where the local-to-cloud design context still has architectural value:
 
 **1. Sandbox runner selection by deployment profile.**
-The `insecure_dev_subprocess` runner is acceptable for local-install trusted
-operators. For cloud-hosted multi-tenant contexts, the runtime requires
-`containerized_oci` or `strong_sandbox_vm`. The deployment profile
-(`hostile-third-party`) gates runner selection — this is the mechanism that
-translates "local vs. cloud" into a runtime enforcement point.
+The `insecure_dev_subprocess` runner is acceptable for trusted-internal local
+operation. Stronger isolation mechanisms such as `containerized_oci` or
+`strong_sandbox_vm` are relevant for stricter future deployment contexts.
+Their presence as technical mechanisms does not automatically establish broader
+current support claims.
 
 **2. Extension isolation tiers are calibrated to deployment context.**
-Tier 1 (kernel-resident, trusted-operator code) has lower overhead because the
-trust model is explicit and the operator controls their install. Tier 2
-(externalized behind a plugin-host subprocess) is the minimum for any code
-that is not first-party in a cloud context. The two-tier model exists because
-different code runs at different trust levels depending on who controls the
-deployment.
+Tier 1 (kernel-resident, trusted-operator code) and Tier 2 (externalized plugin-host
+execution) remain meaningful implementation distinctions. They should not be
+over-read as proof that the runtime currently supports a general hardened
+third-party extension platform.
 
-**3. The SDK is the stability boundary between contexts.**
-In a local install, the SDK is optional — operators can call the HTTP surface
-directly. In the cloud model, the SDK is mandatory: it is the operator's only
-programmatic interface to a runtime they do not control. This asymmetry means
-the SDK's stability and compatibility guarantees matter more than they appear to
-today. See `DEBT-COMPAT-1` in `TECH_DEBT.md`.
+**3. The SDK is a stability boundary.**
+The SDK matters more as the runtime becomes a cleaner substrate. Current
+cross-repo compatibility and support interpretation should be read through
+`CROSS_REPO_COMPATIBILITY.md`, not inferred solely from architecture intent.
 
-**4. Multi-tenancy is implicit today but must be explicit in cloud.**
-The current user model supports multiple users per runtime process, but there
-is no tenant isolation layer (quotas, data boundaries, event bus separation)
-that would be required for a cloud control plane serving adversarial tenants.
-This is intentional deferral, not an oversight. See `LOCAL_AND_CLOUD_AUDIT.md`
-for a full gap analysis.
+**4. Multi-tenancy remains a future-state pressure, not a current broad claim.**
+The runtime carries tenant and capability concepts today, but stronger hostile
+multitenant support is not currently a supported runtime claim.
 
-**5. The deployment contract is the operator's observable signal.**
-`deployment_contract_summary()` and `/health` expose what the runtime believes
-about its own deployment context. In a local install this is informational. In
-a cloud context it becomes a load-bearing monitoring surface — the control plane
-uses it to verify node registration and capability posture.
+**5. The deployment contract is observable and operationally important.**
+`/health`, `/ready`, deployment profile reporting, and runtime state remain
+load-bearing surfaces regardless of whether the runtime is deployed locally or
+in a future more managed context.
 
 ## Three Layers
 
 ### Layer 1 — Runtime Data Plane (`aindy-runtime`)
 
-The runtime is the data plane. It owns:
+The runtime is the execution substrate. It owns:
 
-- The syscall kernel and effect record lifecycle
-- Extension loading, capability gating, and isolation enforcement
-- Database schema, memory persistence, and scheduler jobs
-- All stable HTTP surfaces (`/health`, `/flow/run`, `/memory/**`, etc.)
-- The deployment profile enforcement and boot contract
+- the syscall kernel and effect record lifecycle
+- extension loading, capability gating, and trust enforcement
+- runtime-owned persistence and scheduler jobs
+- runtime-owned stable and conditionally stable HTTP surfaces declared in
+  `PUBLIC_RUNTIME_SURFACES.md` and `RUNTIME_STABILITY_INDEX.md`
+- deployment profile enforcement and the boot contract
 
 The runtime is the thing that runs. It processes requests, executes flows,
-manages state, and enforces all security and isolation policies.
+manages runtime truth, and enforces runtime-owned contracts.
 
 ### Layer 2 — SDK Universal Interface (`aindy-sdk`)
 
-The SDK is the universal interface between app code and the runtime. It targets
-both distribution contexts:
+The SDK is the consumer-facing access layer for stable runtime capabilities.
 
-- Against a local runtime: `base_url="http://localhost:8000"` — the app
-  developer owns both sides.
-- Against a cloud runtime: `base_url="https://runtime.aindy.ai"` — the SDK
-  bridges to infrastructure the app developer does not control.
+It should:
 
-The SDK makes app code portable across deployment contexts. The same application
-code — the same `client.memory.read(...)` and `client.flow.run(...)` calls —
-works against a locally-installed runtime or a cloud-hosted one without
-modification. This is the local+cloud bridge.
+- wrap stable runtime contracts
+- hide consumer ergonomics that do not belong in the runtime
+- help applications target runtime surfaces without depending on runtime internals
 
-The SDK's import boundary with the runtime is defined in
-`PUBLIC_API_CONTRACT.md`. Its HTTP surface targets are defined in
-`PUBLIC_RUNTIME_SURFACES.md`.
+The SDK's downstream contract interpretation should follow
+`CROSS_REPO_COMPATIBILITY.md`.
 
-### Layer 3 — Cloud Control Plane (not yet built)
+### Layer 3 — Future Control Plane (not yet built)
 
-The cloud control plane does not exist yet. When built, it will own:
+A broader cloud control plane may eventually own:
 
-- Tenant registration and billing identity
-- Runtime node registration and fleet management
-- Cross-tenant observability aggregation
-- Upgrade orchestration and migration coordination
-- The API surface that sits above the SDK for administrative operations
+- tenant registration and billing identity
+- runtime node registration and fleet management
+- cross-tenant observability aggregation
+- upgrade orchestration and migration coordination
+- administrative APIs above the runtime substrate
 
-The runtime is designed to accommodate this layer — the deployment contract,
-health surfaces, and sandbox posture reporting are all control-plane-ready.
-The runtime does not depend on the control plane existing.
+The runtime is designed to accommodate such a layer, but it does not currently
+depend on that layer existing, nor does that future-state architecture expand
+today's supported runtime claim by itself.
 
 ## What This Framing Does Not Commit To
 
 **It does not commit to a specific cloud timeline or architecture.**
-There is no cloud control plane today. The framing describes the intent and the
-design constraints, not a ship date.
+There is no cloud control plane today. This framing describes design direction,
+not a present support level.
 
-**It does not commit to multi-tenancy at the runtime level.**
-The current plan is for multi-tenancy to live in the control plane, with the
-runtime receiving tenant context via request headers or configuration, not
-owning tenant lifecycle. This may change.
+**It does not commit to hostile multitenant runtime support.**
+The runtime's current supported posture is narrower and is defined in
+`SECURITY_POSTURE.md` and `PROFILE_SUPPORT_MATRIX.md`.
 
-**It does not commit to a specific SDK compatibility window.**
-The SDK and runtime ship at matching versions today. Cross-version compatibility
-policy (what SDK version N is guaranteed against runtime N+1, N+2) is an open
-question tracked in `DEBT-COMPAT-1`.
+**It does not commit to a specific SDK compatibility window beyond the current documented contract.**
+Cross-repo compatibility should be interpreted through
+`CROSS_REPO_COMPATIBILITY.md`.
 
-**It does not commit to cloud-only features being hidden from local installs.**
-Local operators may have access to cloud-oriented features (like the `/health/sandbox`
-posture reporting) — the features exist in the runtime regardless of deployment
-context. What the cloud control plane does with them is a separate question.
+**It does not commit to all mounted or technically possible surfaces being stable.**
+Stability is governed by `PUBLIC_RUNTIME_SURFACES.md` and
+`RUNTIME_STABILITY_INDEX.md`.
 
 ## Pointers to Other Docs
 
 | Topic | Document |
 |---|---|
+| Foundational execution pattern | [FOUNDATIONAL_PATTERN.md](./FOUNDATIONAL_PATTERN.md) |
+| Runtime support posture | [SECURITY_POSTURE.md](./SECURITY_POSTURE.md) |
+| Supported deployment profiles | [PROFILE_SUPPORT_MATRIX.md](./PROFILE_SUPPORT_MATRIX.md) |
 | Deployment profile enforcement | [DEPLOYMENT_PROFILES.md](./DEPLOYMENT_PROFILES.md) |
-| Extension isolation tiers | [EXTENSION_TRUST_MODEL.md](./EXTENSION_TRUST_MODEL.md) |
+| Extension trust and ownership | [EXTENSION_TRUST_MODEL.md](./EXTENSION_TRUST_MODEL.md) |
 | Extension ABI versioning | [EXTENSION_ABI.md](./EXTENSION_ABI.md) |
-| Stable HTTP surfaces | [PUBLIC_RUNTIME_SURFACES.md](./PUBLIC_RUNTIME_SURFACES.md) |
-| Runtime import boundary (apps ↔ runtime) | [PUBLIC_API_CONTRACT.md](./PUBLIC_API_CONTRACT.md) |
-| Local+cloud gap analysis | [LOCAL_AND_CLOUD_AUDIT.md](./LOCAL_AND_CLOUD_AUDIT.md) |
-| Runtime ↔ apps-monolith version compat | [REPO_COMPATIBILITY_POLICY.md](./REPO_COMPATIBILITY_POLICY.md) |
+| Public runtime surfaces | [PUBLIC_RUNTIME_SURFACES.md](./PUBLIC_RUNTIME_SURFACES.md) |
+| Runtime stability interpretation | [RUNTIME_STABILITY_INDEX.md](./RUNTIME_STABILITY_INDEX.md) |
+| Cross-repo compatibility | [CROSS_REPO_COMPATIBILITY.md](./CROSS_REPO_COMPATIBILITY.md) |
 | Boot and startup contract | [RUNTIME_ONLY_DEPLOYMENT.md](./RUNTIME_ONLY_DEPLOYMENT.md) |
 | Idempotency and effect records | [IDEMPOTENCY_CONTRACT.md](./IDEMPOTENCY_CONTRACT.md) |
