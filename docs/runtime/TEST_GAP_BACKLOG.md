@@ -1,3 +1,10 @@
+---
+title: "Test Gap Backlog"
+last_verified: "2026-05-31"
+api_version: "1.0"
+status: current
+owner: "platform-team"
+---
 # Test Gap Backlog
 
 > Authored by Codex during non coding session. Needs review before repo commit and push.

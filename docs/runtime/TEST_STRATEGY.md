@@ -1,3 +1,10 @@
+---
+title: "Runtime Test Strategy"
+last_verified: "2026-05-31"
+api_version: "1.0"
+status: current
+owner: "platform-team"
+---
 ﻿# Runtime Test Strategy
 
 > Authored by Codex during non coding session. Needs review before repo commit and push.

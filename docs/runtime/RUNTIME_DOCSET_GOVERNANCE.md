@@ -1,3 +1,10 @@
+---
+title: "Runtime Docset Governance"
+last_verified: "2026-05-31"
+api_version: "1.0"
+status: current
+owner: "platform-team"
+---
 ﻿# Runtime Docset Governance
 
 > Authored by Codex during non coding session. Needs review before repo commit and push.

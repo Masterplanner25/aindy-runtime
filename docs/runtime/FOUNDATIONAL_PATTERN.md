@@ -1,5 +1,6 @@
 ---
 title: "Foundational Pattern: The Infinity Algorithm"
+api_version: "1.0"
 last_verified: "2026-05-31"
 status: current
 owner: "platform-team"
