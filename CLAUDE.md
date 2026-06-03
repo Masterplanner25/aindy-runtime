@@ -348,6 +348,7 @@ try/except; new additions need the same treatment or a verified-safe import.
 - **PLATFORM-UI-KIT-\*** — ui-kit npm publish gap; local edits require manual rebuild chain. PLATFORM-UI-KIT-1: closed 2026-05-28.
 - **MCP-BEHAVIOR-\*** — MCP protocol integration facts. MCP-BEHAVIOR-1: `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
 - **AGENT-EVAL-\*** — Agent trigger-evaluator contract issues. AGENT-EVAL-001: swallowed evaluator exception + SUCCESS-on-defer envelope contract; open.
+- **AGENT-APPROVE-\*** — Agent approve endpoint contract issues. AGENT-APPROVE-001: approve blocks on synchronous execution, exceeds client timeout on slow tools; open.
 
 ---
 

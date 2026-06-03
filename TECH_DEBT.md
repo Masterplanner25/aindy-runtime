@@ -1174,3 +1174,43 @@ The swallow itself and the envelope contract issue remain.
 
 **Related:** Same silent-swallow class as SCHED-001/002/003. The envelope-status contract issue
 is shared with `EXEC-CONTRACT` (see existing tracker if present, or open EXEC-CONTRACT-1).
+
+---
+
+## AGENT-APPROVE-001 — Approve endpoint blocks on synchronous execution; exceeds client timeout on slow tools
+
+**Status:** Open
+
+**Discovered:** 2026-06-03 during agent walkthrough (Phase 2).
+
+**Symptom (repro-specific):** Approving a `pending_approval` run with a `memory.recall` step
+held the HTTP request open through the full tool execution. The execution exceeded the browser's
+default 30-second fetch timeout — the approve request was cancelled client-side
+(`(cancelled)`, 30.02 s in the network panel) while the server completed the approval and
+execution successfully. The UI showed a false failure / "needs retry"; the retry immediately
+succeeded because server state was already correct (run already `COMPLETED`). The
+response-vs-reality mismatch: the client believes the operation failed; the server knows it
+succeeded.
+
+**Root cause:** `approve_agent_run_runtime` calls `_decision_or_defer_response` (trigger
+evaluation, synchronous subprocess), then immediately calls `approve_run` → `execute_run` —
+running the full tool-execution loop on the request thread. "Approve to start execution
+immediately" is implemented as a synchronous call, so request duration scales linearly with
+tool runtime. One slow tool (or a multi-step plan) pushes the request past any client timeout.
+
+**Severity:** No data loss observed. But UX is broken: a client-cancelled request leaves the
+user uncertain whether approval landed. The gap widens with slower tools and multi-step plans
+— a long plan would always false-timeout regardless of client configuration. A network retry
+at the wrong moment (before the first execution finishes) could trigger duplicate execution.
+
+**Fix direction:** Ack-then-execute-async. `POST /apps/agent/run/{id}/approve` returns
+promptly (`202 Accepted`, `"approved; execution started"`) and dispatches execution to a
+background thread or task queue. The UI polls `GET /apps/agent/runs/{id}` (or subscribes to
+an event stream) for status changes. Decouples request duration from tool runtime entirely;
+client always gets a definitive success/failure for the approve action itself within
+milliseconds.
+
+**Family:** Same response-vs-reality mismatch class as AGENT-EVAL-001 (client receives
+wrong status relative to actual server outcome). Cross-reference AGENT-EVAL-001 and any
+EXEC-CONTRACT entry when fixing — all three share the "envelope status diverges from actual
+server outcome" root shape.
