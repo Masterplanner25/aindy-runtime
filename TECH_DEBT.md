@@ -1301,7 +1301,7 @@ server outcome" root shape.
 
 ## ROUTES-CONSUMER-SPLIT-1 — Shared `@aindy/ui-kit` ROUTES table serves both monolith and runtime; quarantine as committed breaks monolith on next publish
 
-**Status:** Open — architectural decision required before next ui-kit npm publish.
+**Status:** CLOSED (2026-06-03) — resolved: Option B, shared table universal, policy consumer-local, annotations carry the audit map.
 
 **Discovered:** 2026-06-03 during blast-radius check following `_routes.js` quarantine audit.
 
@@ -1368,7 +1368,7 @@ implemented.** The quarantine commits are safe in source history but must not re
 
 ## API-MODULE-DRIFT-1 — Quarantined route groups left platform SPA API modules reading `undefined` → `TypeError`
 
-**Status:** Open — fix shape depends on ROUTES-CONSUMER-SPLIT-1 architectural decision.
+**Status:** CLOSED (2026-06-03) — dissolved by Option B: all quarantined groups restored to the shared table; all 64 module ROUTES.* references now resolve; graceful-404 behavior restored.
 
 **Discovered:** 2026-06-03 during `_routes.js` audit follow-on.
 
