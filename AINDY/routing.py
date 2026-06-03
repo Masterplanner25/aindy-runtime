@@ -7,6 +7,7 @@ from prometheus_client import make_asgi_app as _make_metrics_asgi
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from AINDY.core.execution_guard import require_execution_context
+from AINDY.spa_fallback import SPAFallbackMiddleware
 from AINDY.core.route_execution_guard import enforce_registered_route_execution
 from AINDY.platform_layer.metrics import REGISTRY as _METRICS_REGISTRY
 from AINDY.platform_layer.registry import get_legacy_root_routers, get_routers
@@ -74,3 +75,6 @@ def register_routes(app) -> None:
 
     if _PLATFORM_UI_DIST.is_dir():
         app.mount("/platform", _SPAStaticFiles(directory=str(_PLATFORM_UI_DIST), html=True), name="platform-ui")
+
+    # Add LAST → outermost wrapper → runs before routing on every request.
+    app.add_middleware(SPAFallbackMiddleware)

@@ -653,22 +653,18 @@ function FlowRunsPanel({ triggerRefresh }) {
     if (triggerRefresh) load();
   }, [triggerRefresh, load]);
 
-  const counts =
-  runs ?
-  runs.runs.reduce(
+  const runList = runs?.runs ?? [];
+  const counts = runList.reduce(
     (acc, r) => {
       acc[r.status] = (acc[r.status] || 0) + 1;
       return acc;
     },
     { running: 0, waiting: 0, success: 0, failed: 0 }
-  ) :
-  { running: 0, waiting: 0, success: 0, failed: 0 };
+  );
 
-  const displayed = runs ?
-  activeStatusFilter ?
-  runs.runs.filter((r) => r.status === activeStatusFilter) :
-  runs.runs :
-  [];
+  const displayed = activeStatusFilter
+    ? runList.filter((r) => r.status === activeStatusFilter)
+    : runList;
 
   return (
     <div>
@@ -1023,24 +1019,20 @@ function AutomationPanel({ triggerRefresh }) {
   useEffect(() => {load();}, [load]);
   useEffect(() => {if (triggerRefresh) load();}, [triggerRefresh, load]);
 
-  const counts =
-  logs ?
-  logs.logs.reduce(
+  const logList = logs?.logs ?? [];
+  const counts = logList.reduce(
     (acc, l) => {
       acc[l.status] = (acc[l.status] || 0) + 1;
       return acc;
     },
     { pending: 0, running: 0, success: 0, failed: 0, retrying: 0 }
-  ) :
-  { pending: 0, running: 0, success: 0, failed: 0, retrying: 0 };
+  );
 
-  const displayed = logs ?
-  activeStatusFilter ?
-  logs.logs.filter((l) => l.status === activeStatusFilter) :
-  logs.logs :
-  [];
+  const displayed = activeStatusFilter
+    ? logList.filter((l) => l.status === activeStatusFilter)
+    : logList;
 
-  const failedLogs = logs ? logs.logs.filter((l) => l.status === "failed") : [];
+  const failedLogs = logList.filter((l) => l.status === "failed");
 
   const replayAll = async () => {
     setReplayingAll(true);
@@ -1132,7 +1124,7 @@ function AutomationPanel({ triggerRefresh }) {
 // ═══════════════════════════════════════════════════════════════════
 
 function FlowGraph({ flowName, registry }) {
-  const flow = registry.flows[flowName];
+  const flow = (registry.flow_definitions ?? {})[flowName];
   if (!flow) return null;
 
   // Build a simple linear node chain from start node
@@ -1187,7 +1179,7 @@ function NodeBox({ name, highlighted }) {
 
 function FlowCard({ flowName, registry, highlightedNode }) {
   const [expanded, setExpanded] = useState(false);
-  const flow = registry.flows[flowName];
+  const flow = (registry.flow_definitions ?? {})[flowName];
   if (!flow) return null;
 
   return (
@@ -1267,14 +1259,14 @@ function RegistryPanel({ triggerRefresh }) {
       {loading && <LoadingPanel label="Loading flow registry..." />}
       {error && <ErrorState error={error} onRetry={load} />}
 
-      {!loading && registry && Object.keys(registry.flows).length === 0 &&
+      {!loading && registry && Object.keys(registry.flow_definitions ?? {}).length === 0 &&
       <EmptyState
         message="No flows registered."
         hint="Flows are registered at server startup." />
 
       }
 
-      {!loading && registry && safeMap(Object.keys(registry.flows), (flowName) =>
+      {!loading && registry && safeMap(Object.keys(registry.flow_definitions ?? {}), (flowName) =>
       <FlowCard
         key={flowName}
         flowName={flowName}
@@ -1284,7 +1276,7 @@ function RegistryPanel({ triggerRefresh }) {
       }
 
       {/* Node registry */}
-      {registry && registry.nodes.length > 0 &&
+      {registry && (registry.nodes?.length ?? 0) > 0 &&
       <div
         style={{
           background: C.bg1,

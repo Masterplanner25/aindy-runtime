@@ -7,6 +7,7 @@ import { SystemProvider, useSystem } from "@aindy/ui-kit";
 
 import LoginPage from "./components/platform/LoginPage";
 import NotAdmin from "./components/platform/NotAdmin";
+import PlatformShell from "./components/platform/PlatformShell";
 
 const AgentConsole = lazy(() => import("./components/platform/AgentConsole"));
 const FlowEngineConsole = lazy(() => import("./components/platform/FlowEngineConsole"));
@@ -68,15 +69,21 @@ export default function PlatformApp() {
                 <SystemProvider skipBoot>
                   <ErrorBoundary layer="platform">
                     <Routes>
+                      {/* Bare redirects render outside the shell (no chrome on a <Navigate>) */}
                       <Route path="/" element={<PlatformHomeRedirect />} />
-                      <Route path="/agent" element={platformRoute("Agent Console", <AgentConsole />)} />
-                      <Route path="/flows" element={platformRoute("Flow Engine", <FlowEngineConsole />)} />
-                      <Route path="/observability" element={platformRoute("Observability", <ObservabilityDashboard />)} />
-                      <Route path="/health" element={platformRoute("Health", <HealthDashboard />)} />
-                      <Route path="/executions" element={platformRoute("Executions", <ExecutionConsole />)} />
-                      <Route path="/approvals" element={platformRoute("Approvals", <AgentApprovalInbox />)} />
-                      <Route path="/registry" element={platformRoute("Registry", <AgentRegistry />)} />
-                      <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
+
+                      {/* All real screens render inside the collapsible-sidebar shell */}
+                      <Route element={<PlatformShell />}>
+                        <Route path="/agent" element={platformRoute("Agent Console", <AgentConsole />)} />
+                        <Route path="/flows" element={platformRoute("Flow Engine", <FlowEngineConsole />)} />
+                        <Route path="/observability" element={platformRoute("Observability", <ObservabilityDashboard />)} />
+                        <Route path="/health" element={platformRoute("Health", <HealthDashboard />)} />
+                        <Route path="/executions" element={platformRoute("Executions", <ExecutionConsole />)} />
+                        <Route path="/approvals" element={platformRoute("Approvals", <AgentApprovalInbox />)} />
+                        <Route path="/registry" element={platformRoute("Registry", <AgentRegistry />)} />
+                        <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
+                      </Route>
+
                       <Route path="*" element={<Navigate to="/agent" replace />} />
                     </Routes>
                   </ErrorBoundary>

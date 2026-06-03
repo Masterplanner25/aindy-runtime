@@ -186,6 +186,15 @@ async def get_flow_registry(
         result = run_flow("flow_registry_get", {}, db=db, user_id=str(current_user["sub"]))
         if result.get("status") == "FAILED":
             raise HTTPException(status_code=500, detail="Registry fetch failed")
-        return result.get("data")
+        raw = result.get("data") or {}
+        # "flows" is in NORMALIZED_ARRAY_KEYS in the frontend, which silently
+        # converts any non-array value to []. Expose the flows dict as
+        # "flow_definitions" so the component can iterate flow names.
+        return {
+            "flow_definitions": raw.get("flows") if isinstance(raw.get("flows"), dict) else {},
+            "nodes": raw.get("nodes", []),
+            "flow_count": raw.get("flow_count", 0),
+            "node_count": raw.get("node_count", 0),
+        }
     return await _execute_flow(request, "flow.registry", handler, user_id=str(current_user["sub"]), db=db)
 
