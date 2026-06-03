@@ -1135,6 +1135,48 @@ than `localhost`.
 
 ---
 
+## RIPPLE-ROUTES-001 — RippleTraceViewer load-trace issues bare monolith path; component bypasses route-table abstraction
+
+**Status:** Open — deferred until runtime serves a per-trace load route.
+
+**Discovered:** 2026-06-03 during RippleTraceViewer walk (ROUTES audit follow-on).
+
+**Symptom 1 — Bare path, no prefix:**
+`RippleTraceViewer`'s "Load Trace" button calls `getRippleTraceGraph(traceId)` in
+`platform/src/api/rippletrace.js`. That function calls
+`authRequest(ROUTES.RIPPLETRACE.TRACE_GRAPH(traceId))`, which resolves to
+`GET /rippletrace/${traceId}` — a bare top-level path with no `/platform` or `/apps` prefix.
+The route is unserved by the runtime (returns 404). It belongs to the quarantined RIPPLETRACE
+monolith group and is served only by aindy-apps.
+
+**Symptom 2 — Component bypasses the route-table abstraction:**
+`ROUTES.RIPPLETRACE` is now quarantined (commented out) in `@aindy/ui-kit/src/api/_routes.js`.
+After the dist is updated, `ROUTES.RIPPLETRACE` is `undefined`, meaning every call in
+`rippletrace.js` that reads `ROUTES.RIPPLETRACE.*` will throw `TypeError: Cannot read
+properties of undefined` at call time. The component delegates to an API module that reads
+a quarantined group rather than any served ROUTES constant — it reached past the route-table
+abstraction rather than checking whether the route was served before constructing a URL.
+
+These are two separate smells: the path is wrong (Symptom 1), and the component architecture
+doesn't honour the route-table contract (Symptom 2).
+
+**Disposition:** Flag-off. `FEATURE_FLAGS.RIPPLETRACE_VIEWER = false` hides the RippleTrace
+sidebar NavLink. The `/trace` route in `PlatformApp.tsx` remains mounted (direct navigation
+still resolves the component); only the NavLink is hidden. No runtime fix is possible because
+there is no runtime route to repoint at.
+
+**Two-condition unblock:**
+1. The runtime serves a per-trace load route under `/platform/observability/rippletrace/{id}`
+   (or equivalent served path) and the route appears in the runtime OpenAPI.
+2. `rippletrace.js:getRippleTraceGraph` is rewired to call `ROUTES.<served-constant>(traceId)`
+   instead of the now-quarantined `ROUTES.RIPPLETRACE.TRACE_GRAPH`.
+
+Both conditions must hold before `FEATURE_FLAGS.RIPPLETRACE_VIEWER` is flipped to `true`.
+Flipping without condition 2 would restore the NavLink but leave the actual fetch issuing a
+bare monolith path.
+
+---
+
 ## OPER-DEFER-001 — `/platform/flows/strategies` not served by runtime
 
 **Status:** Open — deferred until backend route lands.

@@ -1,1 +1,1 @@
-export { ROUTES } from "@aindy/ui-kit";
+export { ROUTES, FEATURE_FLAGS } from "@aindy/ui-kit";

@@ -3,6 +3,7 @@ import { NavLink, Outlet } from "react-router-dom";
 
 import { useAuth } from "@aindy/ui-kit";
 import { useSystem } from "@aindy/ui-kit";
+import { FEATURE_FLAGS } from "../../api/_routes.js";
 
 // ── Icons (inline, no dependency) ──────────────────────────────────────────────
 type IconProps = SVGProps<SVGSVGElement>;
@@ -43,6 +44,8 @@ interface NavItem {
   icon: ComponentType<IconProps>;
   /** false ⇒ this screen is not part of runtime-only surface (marked in sidebar). */
   runtime: boolean;
+  /** If false, the NavLink is hidden entirely (route stays mounted). Gate on FEATURE_FLAGS key. */
+  featureFlag?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -53,7 +56,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/executions", label: "Executions", icon: IconExec, runtime: true },
   { to: "/approvals", label: "Approvals", icon: IconApprovals, runtime: false },
   { to: "/registry", label: "Agent Registry", icon: IconRegistry, runtime: false },
-  { to: "/trace", label: "RippleTrace", icon: IconTrace, runtime: false },
+  { to: "/trace", label: "RippleTrace", icon: IconTrace, runtime: false, featureFlag: FEATURE_FLAGS.RIPPLETRACE_VIEWER },
 ];
 
 export default function PlatformShell() {
@@ -118,7 +121,7 @@ export default function PlatformShell() {
 
         {/* Nav links */}
         <nav className="flex-1 overflow-y-auto custom-scrollbar py-3 px-2 space-y-1">
-          {NAV_ITEMS.map(({ to, label, icon: ItemIcon, runtime }) => {
+          {NAV_ITEMS.filter(({ featureFlag }) => featureFlag !== false).map(({ to, label, icon: ItemIcon, runtime }) => {
             const dimmed = runtimeOnly && !runtime;
             return (
               <NavLink
