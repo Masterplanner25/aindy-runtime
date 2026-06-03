@@ -326,6 +326,53 @@ try/except; new additions need the same treatment or a verified-safe import.
 
 ---
 
+## `_maybe_wrap_runtime_callback` — subprocess isolation hazard
+
+`registry.py:_maybe_wrap_runtime_callback()` routes registered callbacks (trigger
+evaluators, planner context providers, run tool providers, agent completion hooks,
+capability definition providers, startup hooks) through a subprocess via
+`runtime_callback_worker.py`. The subprocess is spawned with:
+
+```python
+cwd=str(Path(__file__).resolve().parents[2])
+```
+
+**In an installed wheel (Docker), this resolves to
+`/usr/local/lib/python3.11/site-packages` — a read-only directory, not `/app`.**
+Any relative-path file I/O at module import time in the wrapped module will fail.
+
+**Silent failure mode:** `invoke_runtime_callback` raises `RuntimeError` when the
+subprocess returns `{"ok": False}`. `evaluate_trigger()` in `autonomous_controller.py`
+catches all exceptions and collapses them to `_decision("defer", 0.0, "trigger evaluator
+failed")`. The HTTP response is still 202 — no 500, no visible error, permanent deferral.
+
+**Correct guard pattern in modules imported by the subprocess (e.g., `config.py`):**
+
+```python
+# For mkdir:
+try:
+    log_dir.mkdir(parents=True, exist_ok=True)
+except PermissionError:
+    pass  # subprocess cwd is site-packages (read-only)
+
+# For FileHandler:
+try:
+    handlers.append(logging.FileHandler(log_file))
+except OSError:  # covers both PermissionError and FileNotFoundError
+    pass
+```
+
+Use `except OSError` (not `except PermissionError`) for file-open operations. `mkdir`
+throws `PermissionError`; `FileHandler` throws `FileNotFoundError` when the parent
+directory doesn't exist. Both are `OSError` subclasses but only the broader catch
+covers both cases.
+
+Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + CWD),
+`AINDY/platform_layer/runtime_callback_worker.py` (subprocess runner),
+`AINDY/config.py` (`_build_log_handler` — the fixed guards).
+
+---
+
 ## TECH_DEBT.md — prefix registry
 
 - **IDEM-\*** — idempotency audit findings. Next available: **IDEM-10**.
@@ -392,3 +439,6 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Platform SPA Vite config | `platform/vite.config.ts` — `outDir: ../AINDY/platform/dist` |
 | ui-kit source | `C:\dev\aindy-ui-kit\src\` |
 | ui-kit auth API (unwrap invariant) | `C:\dev\aindy-ui-kit\src\api\auth.js` |
+| Subprocess callback spawn (CWD hazard) | `AINDY/platform_layer/runtime_callback_host.py` |
+| Subprocess callback runner | `AINDY/platform_layer/runtime_callback_worker.py` |
+| Log handler OSError guard | `AINDY/config.py` — `_build_log_handler` |
