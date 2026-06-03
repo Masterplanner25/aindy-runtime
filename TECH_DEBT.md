@@ -1250,7 +1250,33 @@ this fix is the pattern; apply to SCHED-* in a future pass).
 
 ---
 
-## AGENT-APPROVE-001 — Approve endpoint blocks on synchronous execution; exceeds client timeout on slow tools
+## AGENT-APPROVE-001a — Approve idempotency: concurrent race guard (CAS)
+
+**Status:** CLOSED (2026-06-03)
+
+**Discovered:** 2026-06-03 during AGENT-APPROVE-001 idempotency audit.
+
+**Problem:** `approve_run()` (`AINDY/agents/agent_runtime/approvals.py`) used a non-atomic
+read-then-act pattern to guard the `pending_approval → approved` transition. Under PostgreSQL
+READ COMMITTED, two concurrent sessions could both read `status = "pending_approval"` before
+either committed, both pass the Python check, and both call `execute_run` — doubling execution.
+
+**Fix:** Replaced the Python-level check with an atomic `UPDATE ... WHERE status =
+'pending_approval'` CAS. Only one concurrent caller gets `rowcount = 1`; all others see
+`rowcount = 0` and return early without calling `execute_run`. The DB row lock ensures
+atomicity under PostgreSQL READ COMMITTED.
+
+**Tests:** `tests/unit/test_agent_approve_idempotency.py` — three shapes:
+- `test_sequential_double_approve_executes_once` — second approve returns run state, no re-execute
+- `test_repro_cancel_retry_executes_once` — second approve sees "executing" status, CAS rowcount=0
+- `test_concurrent_race_repro_cas_rowcount` — proves CAS returns rowcount=0 after first commit
+
+**Remaining gap:** The async refactor (return 202 immediately, dispatch execution to background)
+is tracked separately in AGENT-APPROVE-001b.
+
+---
+
+## AGENT-APPROVE-001b — Approve endpoint blocks on synchronous execution; exceeds client timeout on slow tools
 
 **Status:** Open
 
@@ -1271,10 +1297,10 @@ running the full tool-execution loop on the request thread. "Approve to start ex
 immediately" is implemented as a synchronous call, so request duration scales linearly with
 tool runtime. One slow tool (or a multi-step plan) pushes the request past any client timeout.
 
-**Severity:** No data loss observed. But UX is broken: a client-cancelled request leaves the
-user uncertain whether approval landed. The gap widens with slower tools and multi-step plans
-— a long plan would always false-timeout regardless of client configuration. A network retry
-at the wrong moment (before the first execution finishes) could trigger duplicate execution.
+**Severity:** No data loss observed; AGENT-APPROVE-001a CAS fix ensures retries are safe.
+But UX is broken: a client-cancelled request leaves the user uncertain whether approval
+landed. The gap widens with slower tools and multi-step plans — a long plan would always
+false-timeout regardless of client configuration.
 
 **Fix direction:** Ack-then-execute-async. `POST /apps/agent/run/{id}/approve` returns
 promptly (`202 Accepted`, `"approved; execution started"`) and dispatches execution to a

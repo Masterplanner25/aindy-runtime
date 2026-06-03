@@ -23,11 +23,22 @@ def approve_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
         run = db.query(AgentRun).filter(AgentRun.id == db_run_id).first()
         if not run or not compat._user_matches(run.user_id, user_db_id):
             return None
-        if run.status != "pending_approval":
-            return compat._run_to_dict(run)
 
-        run.status = "approved"
-        run.approved_at = datetime.now(timezone.utc)
+        # Atomic CAS: only the first concurrent caller wins; subsequent callers see rowcount=0.
+        from sqlalchemy import update as sqla_update
+        rows = db.execute(
+            sqla_update(AgentRun)
+            .where(AgentRun.id == db_run_id, AgentRun.status == "pending_approval")
+            .values(status="approved", approved_at=datetime.now(timezone.utc))
+            .execution_options(synchronize_session=False)
+        ).rowcount
+        if rows == 0:
+            db.expire(run)
+            db.refresh(run)
+            return compat._run_to_dict(run)
+        db.expire(run)
+        run = db.query(AgentRun).filter(AgentRun.id == db_run_id).first()
+
         token = mint_token(
             run_id=str(run.id),
             user_id=user_db_id,
