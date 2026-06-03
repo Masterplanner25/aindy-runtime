@@ -30,11 +30,7 @@ def evaluate_trigger(trigger: dict[str, Any], context: dict[str, Any]) -> dict[s
     evaluator = get_trigger_evaluator(trigger_type)
     if evaluator is None:
         return _decision("defer", 0.0, "no trigger evaluator registered")
-    try:
-        result = evaluator({"trigger_type": trigger_type, "trigger": trigger, "context": dict(context or {})})
-    except Exception:
-        logger.exception("[AutonomyController] trigger evaluator %r threw; returning defer", trigger_type)
-        return _decision("defer", 0.0, "trigger evaluator failed")
+    result = evaluator({"trigger_type": trigger_type, "trigger": trigger, "context": dict(context or {})})
     return _normalize_evaluation(result)
 
 

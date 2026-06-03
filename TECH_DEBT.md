@@ -1219,43 +1219,34 @@ When the backend paths land, flip `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` to `t
 
 ## AGENT-EVAL-001 — Swallowed trigger-evaluator exception + SUCCESS-on-defer envelope contract
 
-**Status:** Open
+**Status:** CLOSED (2026-06-03)
 
-**Location:** `AINDY/agents/autonomous_controller.py` — `evaluate_trigger()`, lines 33-36.
+**Location:** `AINDY/agents/autonomous_controller.py` — `evaluate_trigger()`.
 
-**Problem:**
+**What was implemented:**
 
-`evaluate_trigger()` wraps the evaluator call in a bare `except Exception` that collapses any
-throw to `_decision("defer", 0.0, "trigger evaluator failed")`. The caller
-(`_decision_or_defer_response`) then returns a 202 DEFERRED response — but the
-`ExecutionPipeline` records this as a successful execution (`execution_envelope.status = SUCCESS`).
-Two separate contract violations:
+Removed the `try/except Exception` block in `evaluate_trigger()` (lines 33-37 pre-fix). The
+evaluator call is now bare — any exception propagates through `evaluate_live_trigger` →
+`_decision_or_defer_response` → `create_agent_run_runtime` → `ExecutionPipeline.run()`, which
+catches it at its generic handler and returns `ExecutionResult(success=False, status_code=500)`.
+`_execute_agent` raises `HTTPException(500, detail=str(exc))`, which the runtime exception
+handler formats as `{"error": "http_error", "message": "<exception message>", "details": null}`.
 
-1. **Silent swallow:** The real exception (import error, missing model, bad return type, etc.) is
-   never logged. The only observable signal is the string `"reason": "trigger evaluator failed"`
-   buried in the deferred response body — invisible at the HTTP layer (still 202 with envelope
-   `status: SUCCESS`). Diagnosis requires reading the defer reason out of a response body that
-   callers typically discard.
+Legitimate `"defer"` decisions (evaluator returning `{"decision": "defer", ...}`) are unaffected:
+`_decision_or_defer_response` processes them as before → 202 DEFERRED with the evaluator's
+actual reason. The no-evaluator path (`evaluator is None → _decision("defer", ..., "no trigger
+evaluator registered")`) is also unaffected.
 
-2. **Envelope status contract:** A deferred agent run is not a successful execution.
-   `execution_envelope.status` should be `DEFERRED` (or equivalent), not `SUCCESS`.
-   This is the same class as the scheduler swallow issues (SCHED-001/002/003) where control
-   flow that exits via a non-success branch still reports `ok=True`.
+**Evidence:** `tests/unit/test_agent_eval_contract.py`:
+- `test_evaluator_crash_surfaces_as_500` — regression test; injected exploding evaluator → 500
+  with exception message; zero AgentRun rows written.
+- `test_evaluator_genuine_defer_returns_202` — legitimate defer path preserved; 202 DEFERRED
+  with evaluator's reason.
+- `test_happy_path_evaluator_execute_calls_create_run` — approve path flows correctly → 200.
 
-**Interim fix (2026-06-03):** Added `logger.exception(...)` to surface the traceback.
-The swallow itself and the envelope contract issue remain.
-
-**Correct fix:**
-
-- Re-raise or return a sentinel that forces a non-success HTTP response (422 or 500) when the
-  evaluator throws. A failed evaluator is not a deferral — it is a runtime error.
-- Or: narrow the `except` to expected evaluator contract violations only; let unexpected exceptions
-  propagate so the standard pipeline error handler records them correctly.
-- Separately: `_decision_or_defer_response` returning a 202 should not produce
-  `execution_envelope.status = SUCCESS`. Audit the pipeline wrapper for the DEFERRED exit path.
-
-**Related:** Same silent-swallow class as SCHED-001/002/003. The envelope-status contract issue
-is shared with `EXEC-CONTRACT` (see existing tracker if present, or open EXEC-CONTRACT-1).
+**Remaining gap (not in scope):** The `execution_envelope.status = SUCCESS` on the 202 DEFERRED
+path is a separate envelope-contract issue shared with SCHED-001/002/003 (same swallow family —
+this fix is the pattern; apply to SCHED-* in a future pass).
 
 ---
 
