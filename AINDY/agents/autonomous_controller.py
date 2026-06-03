@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -10,6 +11,8 @@ from AINDY.core.execution_envelope import success
 from AINDY.core.system_event_types import SystemEventTypes
 from AINDY.platform_layer.registry import get_symbol, get_trigger_evaluator
 from AINDY.utils.uuid_utils import normalize_uuid
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_DEFER_SECONDS = 300
@@ -57,7 +60,13 @@ def record_decision(
     job_log_id: str | None = None,
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    AutonomyDecision = _autonomy_decision_model()
+    try:
+        AutonomyDecision = _autonomy_decision_model()
+    except RuntimeError:
+        # AutonomyDecision is an app-layer model registered by the monolith plugin.
+        # In standalone runtime mode it is absent — skip persistence, return a stub.
+        logger.debug("[AutonomyController] AutonomyDecision not registered; skipping decision persistence")
+        return {"decision": evaluation.get("decision"), "reason": evaluation.get("reason")}
     decision = AutonomyDecision(
         user_id=normalize_uuid(user_id) if user_id is not None else None,
         trigger_type=str(trigger.get("trigger_type") or "system"),
