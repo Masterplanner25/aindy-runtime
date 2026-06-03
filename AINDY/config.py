@@ -368,7 +368,12 @@ settings = Settings()
 # Logging Initialization
 # --------------------------------------------------------------------
 log_path = Path("logs")
-log_path.mkdir(exist_ok=True)
+try:
+    log_path.mkdir(exist_ok=True)
+except PermissionError:
+    # Subprocess workers (runtime_callback_worker) run from site-packages where
+    # the cwd is not writable. FileHandler creation is already guarded separately.
+    pass
 
 def _build_log_handler(use_file: bool, log_file: Path) -> list[logging.Handler]:
     handlers: list[logging.Handler] = []
