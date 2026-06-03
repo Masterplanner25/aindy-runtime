@@ -1135,6 +1135,57 @@ than `localhost`.
 
 ---
 
+## OPER-DEFER-001 — `/platform/flows/strategies` not served by runtime
+
+**Status:** Open — deferred until backend route lands.
+
+**Discovered:** 2026-06-03 during `_routes.js` audit (ROUTES reconcile pass against live OpenAPI).
+
+**Context:** `ROUTES.OPERATOR.FLOW_STRATEGIES` resolves to `/platform/flows/strategies`. No
+handler for this path exists in the runtime OpenAPI (verified 2026-06-03). The constant is
+syntactically live in `@aindy/ui-kit/src/api/_routes.js`; any NavLink referencing it must
+check `FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES` (default `false`) before rendering.
+
+The route likely belongs in `AINDY/routes/platform/flows_router.py` alongside the existing
+`/platform/flows/registry` handler. It would expose the set of registered flow strategies
+(priority tier configuration, scheduling policies, etc.) for operator visibility.
+
+**What unblocks it:** A `GET /platform/flows/strategies` handler is registered and visible
+in the runtime OpenAPI. Flip `FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES` to `true` in
+`@aindy/ui-kit/src/api/_routes.js`.
+
+---
+
+## OPER-DEFER-002 — `/automation/logs` group not served by runtime
+
+**Status:** Open — lives in monolith (aindy-apps); migration path TBD.
+
+**Discovered:** 2026-06-03 during `_routes.js` audit (ROUTES reconcile pass against live OpenAPI).
+
+**Context:** Three constants are deferred behind `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS`
+(default `false`):
+
+| Constant | Path |
+|---|---|
+| `AUTOMATION_LOGS` | `GET /automation/logs` |
+| `AUTOMATION_LOG` | `GET /automation/logs/{logId}` |
+| `AUTOMATION_REPLAY` | `POST /automation/logs/{logId}/replay` |
+
+None resolve in the runtime OpenAPI. These routes currently live in the aindy-apps monolith.
+All three constants remain syntactically live in `ROUTES.OPERATOR`; NavLinks must check
+`FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` before rendering.
+
+**What unblocks it:** Either:
+1. The automation logging subsystem is migrated to aindy-runtime (adds the three paths to the
+   runtime OpenAPI), or
+2. A monolith-proxy pattern is established that routes `/automation/logs` from the runtime
+   SPA to the monolith host.
+
+When the backend paths land, flip `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` to `true` in
+`@aindy/ui-kit/src/api/_routes.js`.
+
+---
+
 ## AGENT-EVAL-001 — Swallowed trigger-evaluator exception + SUCCESS-on-defer envelope contract
 
 **Status:** Open

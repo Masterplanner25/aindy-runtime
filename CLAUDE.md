@@ -396,6 +396,8 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **MCP-BEHAVIOR-\*** — MCP protocol integration facts. MCP-BEHAVIOR-1: `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
 - **AGENT-EVAL-\*** — Agent trigger-evaluator contract issues. AGENT-EVAL-001: swallowed evaluator exception + SUCCESS-on-defer envelope contract; open.
 - **AGENT-APPROVE-\*** — Agent approve endpoint contract issues. AGENT-APPROVE-001: approve blocks on synchronous execution, exceeds client timeout on slow tools; open.
+- **OPER-DEFER-\*** — Operator panel deferred-runtime routes (constant live, NavLink gated on FEATURE_FLAGS). OPER-DEFER-001: `/platform/flows/strategies` not yet served; OPER-DEFER-002: `/automation/logs` group (monolith today); both open.
+- **SCHED-\*** — Scheduler status endpoint issues. SCHED-001/002/003: `/platform/observability/scheduler/status` returns 500 in platform-only profile (tasks domain absent); referenced in AGENT-EVAL-001 and FEATURE_FLAGS.OPERATOR_SCHEDULER_STATUS.
 
 ---
 
