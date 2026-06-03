@@ -1132,3 +1132,45 @@ than `localhost`.
 **Verification gate:** fresh clone → `docker compose build --no-cache` →
 `docker exec aindy-runtime-api-1 ls .../AINDY/platform/dist/` shows non-empty dist →
 `curl -I http://localhost:8000/platform/` returns 200.
+
+---
+
+## AGENT-EVAL-001 — Swallowed trigger-evaluator exception + SUCCESS-on-defer envelope contract
+
+**Status:** Open
+
+**Location:** `AINDY/agents/autonomous_controller.py` — `evaluate_trigger()`, lines 33-36.
+
+**Problem:**
+
+`evaluate_trigger()` wraps the evaluator call in a bare `except Exception` that collapses any
+throw to `_decision("defer", 0.0, "trigger evaluator failed")`. The caller
+(`_decision_or_defer_response`) then returns a 202 DEFERRED response — but the
+`ExecutionPipeline` records this as a successful execution (`execution_envelope.status = SUCCESS`).
+Two separate contract violations:
+
+1. **Silent swallow:** The real exception (import error, missing model, bad return type, etc.) is
+   never logged. The only observable signal is the string `"reason": "trigger evaluator failed"`
+   buried in the deferred response body — invisible at the HTTP layer (still 202 with envelope
+   `status: SUCCESS`). Diagnosis requires reading the defer reason out of a response body that
+   callers typically discard.
+
+2. **Envelope status contract:** A deferred agent run is not a successful execution.
+   `execution_envelope.status` should be `DEFERRED` (or equivalent), not `SUCCESS`.
+   This is the same class as the scheduler swallow issues (SCHED-001/002/003) where control
+   flow that exits via a non-success branch still reports `ok=True`.
+
+**Interim fix (2026-06-03):** Added `logger.exception(...)` to surface the traceback.
+The swallow itself and the envelope contract issue remain.
+
+**Correct fix:**
+
+- Re-raise or return a sentinel that forces a non-success HTTP response (422 or 500) when the
+  evaluator throws. A failed evaluator is not a deferral — it is a runtime error.
+- Or: narrow the `except` to expected evaluator contract violations only; let unexpected exceptions
+  propagate so the standard pipeline error handler records them correctly.
+- Separately: `_decision_or_defer_response` returning a 202 should not produce
+  `execution_envelope.status = SUCCESS`. Audit the pipeline wrapper for the DEFERRED exit path.
+
+**Related:** Same silent-swallow class as SCHED-001/002/003. The envelope-status contract issue
+is shared with `EXEC-CONTRACT` (see existing tracker if present, or open EXEC-CONTRACT-1).
