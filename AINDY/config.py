@@ -372,7 +372,7 @@ try:
     log_path.mkdir(exist_ok=True)
 except PermissionError:
     # Subprocess workers (runtime_callback_worker) run from site-packages where
-    # the cwd is not writable. FileHandler creation is already guarded separately.
+    # the cwd is not writable. FileHandler is guarded with OSError below.
     pass
 
 def _build_log_handler(use_file: bool, log_file: Path) -> list[logging.Handler]:
@@ -380,7 +380,7 @@ def _build_log_handler(use_file: bool, log_file: Path) -> list[logging.Handler]:
     if use_file:
         try:
             handlers.append(logging.FileHandler(log_file))
-        except PermissionError:
+        except OSError:
             pass
     handlers.append(logging.StreamHandler())
     return handlers
