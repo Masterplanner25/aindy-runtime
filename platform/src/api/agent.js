@@ -2,18 +2,18 @@ import { authRequest, unwrapEnvelope } from "./_core.js";
 import { ROUTES } from "./_routes.js";
 
 export function getAgents() {
-  return authRequest(ROUTES.AGENT.LIST, { method: "GET" }).then(unwrapEnvelope);
+  return authRequest(ROUTES.MEMORY.AGENTS, { method: "GET" }).then(unwrapEnvelope);
 }
 
 export function recallFromAgent(agentId, query) {
-  return authRequest(ROUTES.AGENT.RECALL(agentId), {
+  return authRequest(ROUTES.MEMORY.AGENT_RECALL(agentId), {
     method: "POST",
     body: JSON.stringify({ query }),
   }).then(unwrapEnvelope);
 }
 
 export function getFederatedMemory(query) {
-  return authRequest(ROUTES.AGENT.FEDERATED_MEMORY, {
+  return authRequest(ROUTES.MEMORY.FEDERATED_RECALL, {
     method: "POST",
     body: JSON.stringify({ query }),
   }).then(unwrapEnvelope);

@@ -1411,7 +1411,7 @@ affect the runtime's primary flows.
 
 ## AGENT-API-001 — `getAgents` / `recallFromAgent` / `getFederatedMemory` in platform SPA reference never-existed ROUTES constants
 
-**Status:** Open — pre-audit latent bug; safe to fix independently of ROUTES-CONSUMER-SPLIT-1.
+**Status:** CLOSED (2026-06-03) — fixed in `platform/src/api/agent.js`; all three functions now use correct `ROUTES.MEMORY.*` constants. Consumer `AgentRegistry.jsx` (lines 4–6, 58/267/455) unaffected — no component changes needed.
 
 **Discovered:** 2026-06-03 during `_routes.js` audit, agent.js review pass.
 
