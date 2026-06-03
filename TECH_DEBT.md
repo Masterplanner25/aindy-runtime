@@ -1135,45 +1135,34 @@ than `localhost`.
 
 ---
 
-## RIPPLE-ROUTES-001 — RippleTraceViewer load-trace issues bare monolith path; component bypasses route-table abstraction
+## RIPPLE-ROUTES-001 — RippleTraceViewer load-trace issues bare monolith-era path; no served runtime route
 
 **Status:** Open — deferred until runtime serves a per-trace load route.
 
 **Discovered:** 2026-06-03 during RippleTraceViewer walk (ROUTES audit follow-on).
 
-**Symptom 1 — Bare path, no prefix:**
+**Symptom — Bare path, no prefix:**
 `RippleTraceViewer`'s "Load Trace" button calls `getRippleTraceGraph(traceId)` in
-`platform/src/api/rippletrace.js`. That function calls
-`authRequest(ROUTES.RIPPLETRACE.TRACE_GRAPH(traceId))`, which resolves to
+`platform/src/api/rippletrace.js`. That function correctly reads
+`ROUTES.RIPPLETRACE.TRACE_GRAPH(traceId)` from the route table. However, `TRACE_GRAPH`
+was defined in the monolith-era RIPPLETRACE group with `BASE = ""`, so it resolves to
 `GET /rippletrace/${traceId}` — a bare top-level path with no `/platform` or `/apps` prefix.
-The route is unserved by the runtime (returns 404). It belongs to the quarantined RIPPLETRACE
-monolith group and is served only by aindy-apps.
-
-**Symptom 2 — Component bypasses the route-table abstraction:**
-`ROUTES.RIPPLETRACE` is now quarantined (commented out) in `@aindy/ui-kit/src/api/_routes.js`.
-After the dist is updated, `ROUTES.RIPPLETRACE` is `undefined`, meaning every call in
-`rippletrace.js` that reads `ROUTES.RIPPLETRACE.*` will throw `TypeError: Cannot read
-properties of undefined` at call time. The component delegates to an API module that reads
-a quarantined group rather than any served ROUTES constant — it reached past the route-table
-abstraction rather than checking whether the route was served before constructing a URL.
-
-These are two separate smells: the path is wrong (Symptom 1), and the component architecture
-doesn't honour the route-table contract (Symptom 2).
+The route is unserved by the runtime (returns 404). The route-table abstraction is honoured;
+the problem is that the constant itself pointed at a monolith path that was never ported to
+the runtime.
 
 **Disposition:** Flag-off. `FEATURE_FLAGS.RIPPLETRACE_VIEWER = false` hides the RippleTrace
-sidebar NavLink. The `/trace` route in `PlatformApp.tsx` remains mounted (direct navigation
-still resolves the component); only the NavLink is hidden. No runtime fix is possible because
-there is no runtime route to repoint at.
+sidebar NavLink. The `/trace` route in `PlatformApp.tsx` remains mounted; only the NavLink is
+hidden. No runtime fix is possible because there is no runtime route to repoint at.
 
 **Two-condition unblock:**
-1. The runtime serves a per-trace load route under `/platform/observability/rippletrace/{id}`
-   (or equivalent served path) and the route appears in the runtime OpenAPI.
-2. `rippletrace.js:getRippleTraceGraph` is rewired to call `ROUTES.<served-constant>(traceId)`
-   instead of the now-quarantined `ROUTES.RIPPLETRACE.TRACE_GRAPH`.
+1. The runtime serves a per-trace load route (e.g., `/platform/observability/rippletrace/{id}`)
+   visible in the runtime OpenAPI.
+2. A served ROUTES constant (e.g., `ROUTES.OPERATOR.RIPPLETRACE_TRACE`) is added for that path
+   and `rippletrace.js:getRippleTraceGraph` is updated to use it.
 
-Both conditions must hold before `FEATURE_FLAGS.RIPPLETRACE_VIEWER` is flipped to `true`.
-Flipping without condition 2 would restore the NavLink but leave the actual fetch issuing a
-bare monolith path.
+The component already reads from ROUTES correctly — no architectural rewire needed, only a
+new served constant and a one-line update in `rippletrace.js`.
 
 ---
 
@@ -1307,3 +1296,149 @@ milliseconds.
 wrong status relative to actual server outcome). Cross-reference AGENT-EVAL-001 and any
 EXEC-CONTRACT entry when fixing — all three share the "envelope status diverges from actual
 server outcome" root shape.
+
+---
+
+## ROUTES-CONSUMER-SPLIT-1 — Shared `@aindy/ui-kit` ROUTES table serves both monolith and runtime; quarantine as committed breaks monolith on next publish
+
+**Status:** Open — architectural decision required before next ui-kit npm publish.
+
+**Discovered:** 2026-06-03 during blast-radius check following `_routes.js` quarantine audit.
+
+**Root cause:** `@aindy/ui-kit/src/api/_routes.js` is the single ROUTES source of truth for
+**both** consumers. Both shims are identical:
+
+```js
+// platform/src/api/_routes.js (aindy-runtime)
+export { ROUTES, FEATURE_FLAGS } from "@aindy/ui-kit";
+
+// client/src/api/_routes.js (aindy-apps-monolith)
+export { ROUTES } from "@aindy/ui-kit";
+```
+
+The quarantine commits (`002de1e`, `77d9956`) removed ANALYTICS, SOCIAL, TASKS, RIPPLETRACE,
+ARM, MASTERPLAN, FREELANCE, IDENTITY, and SEARCH from `ROUTES` in ui-kit source. The monolith
+has **94 callsites** across these groups that will `TypeError: Cannot read properties of
+undefined` at call-time the moment the monolith upgrades to a version of `@aindy/ui-kit`
+that includes the quarantine:
+
+| Group | Callsites |
+|---|---|
+| RIPPLETRACE | 27 |
+| ANALYTICS | 21 |
+| MASTERPLAN | 13 |
+| ARM | 8 |
+| SEARCH | 8 |
+| SOCIAL | 6 |
+| IDENTITY | 4 |
+| TASKS | 4 |
+| FREELANCE | 3 |
+| **Total** | **94** |
+
+**Current safety window:** The monolith is pinned to `@aindy/ui-kit@^1.0.0`, installed at
+`1.0.0`. Quarantine commits are post-`1.0.4`. As long as `1.0.5+` (or any version including
+the quarantine) is not published to npm, the monolith is unaffected. Publishing triggers the
+break.
+
+**Two architectural options:**
+
+1. **Per-consumer route overlay** — Keep all routes in the shared table (un-quarantine in
+   ui-kit source). Each consumer applies its own filter. The runtime platform SPA applies
+   the "only served routes" filter locally; the monolith keeps all groups. The quarantine
+   comment block currently in ui-kit source moves to `platform/src/api/_routes.js` as a
+   runtime-side filter — not applicable because the platform SPA's shim is a one-liner
+   re-export; it would need to become an explicit re-export with the monolith-group keys
+   omitted.
+
+2. **Un-quarantine from shared + gate runtime-side** — Restore the commented-out route
+   groups in `@aindy/ui-kit/src/api/_routes.js` (making the quarantine transparent to both
+   consumers), and gate runtime access at the platform SPA level only (FEATURE_FLAGS,
+   NavLink hiding, API module guards). The monolith retains its routes; the runtime SPA
+   never renders NavLinks for unserved groups; API module functions in the runtime SPA are
+   guarded individually. More code in the platform SPA; zero monolith breakage.
+
+**What API-MODULE-DRIFT-1 depends on:** The fix shape for platform SPA API modules
+(`rippletrace.js`, `analytics.js`, `platform.js`) referencing quarantined ROUTES groups
+is determined by which option is chosen here.
+
+**Do not publish `@aindy/ui-kit@1.0.5+` until the architectural option is selected and
+implemented.** The quarantine commits are safe in source history but must not reach npm.
+
+---
+
+## API-MODULE-DRIFT-1 — Quarantined route groups left platform SPA API modules reading `undefined` → `TypeError`
+
+**Status:** Open — fix shape depends on ROUTES-CONSUMER-SPLIT-1 architectural decision.
+
+**Discovered:** 2026-06-03 during `_routes.js` audit follow-on.
+
+**Root cause:** When route groups are quarantined (commented out) in
+`@aindy/ui-kit/src/api/_routes.js`, any API-module function in the platform SPA that
+reads `ROUTES.<QUARANTINED_GROUP>.*` receives `undefined` instead of a path string.
+Calling `undefined(args)` or using `undefined` as a URL in `authRequest()` throws
+`TypeError` at call-time — a regression from the pre-audit behavior of silently returning
+a graceful 404 (wrong but non-crashing).
+
+**Affected modules and callsite counts:**
+
+| File | Quarantined group | Function count |
+|---|---|---|
+| `platform/src/api/rippletrace.js` | `ROUTES.RIPPLETRACE` | 16 |
+| `platform/src/api/analytics.js` | `ROUTES.ANALYTICS` | 19 |
+| `platform/src/api/platform.js` (unserved subset) | `ROUTES.PLATFORM.*` (quarantined constants) | 4 |
+
+**Disposition principle:** API module functions follow their route group. When a route group
+is quarantined, its API module must be either (a) quarantined alongside it (module functions
+guarded or removed), or (b) the route group must be restored (un-quarantine).
+
+**Why not implemented now:** The correct fix shape depends on the ROUTES-CONSUMER-SPLIT-1
+architectural decision:
+- If Option 1 (per-consumer overlay): route groups remain in the shared table; platform SPA
+  API modules continue reading them; no TypeError.
+- If Option 2 (un-quarantine shared + gate runtime-side): same — modules keep their routes.
+- If quarantine stays in the shared table: each affected module must be guarded (either
+  deleted, `if (ROUTES.RIPPLETRACE)` guarded, or the consuming component gated via
+  FEATURE_FLAGS before calling the module).
+
+**Interim risk:** Any platform SPA component that calls a function from `rippletrace.js`,
+`analytics.js`, or the unserved-subset functions in `platform.js` will throw `TypeError` at
+call-time, not at import time. Components that are never navigated to are safe; components
+reachable via the router but whose NavLink is hidden (e.g., RIPPLETRACE_VIEWER gated) are
+safe as long as the user does not navigate directly to the route. The quarantine does not
+affect the runtime's primary flows.
+
+---
+
+## AGENT-API-001 — `getAgents` / `recallFromAgent` / `getFederatedMemory` in platform SPA reference never-existed ROUTES constants
+
+**Status:** Open — pre-audit latent bug; safe to fix independently of ROUTES-CONSUMER-SPLIT-1.
+
+**Discovered:** 2026-06-03 during `_routes.js` audit, agent.js review pass.
+
+**Location:** `platform/src/api/agent.js`
+
+**Bug:** Three exported functions reference `ROUTES.AGENT.*` constants that were never
+defined in any version of `@aindy/ui-kit`:
+
+| Function | Uses | Should use |
+|---|---|---|
+| `getAgents()` | `ROUTES.AGENT.LIST` | `ROUTES.MEMORY.AGENTS` |
+| `recallFromAgent(agentId, query)` | `ROUTES.AGENT.RECALL(agentId)` | `ROUTES.MEMORY.AGENT_RECALL(agentId)` |
+| `getFederatedMemory(query)` | `ROUTES.AGENT.FEDERATED_MEMORY` | `ROUTES.MEMORY.FEDERATED_RECALL` |
+
+`ROUTES.AGENT.LIST`, `ROUTES.AGENT.RECALL`, and `ROUTES.AGENT.FEDERATED_MEMORY` do not exist
+— not in the audited 1.0.0–1.0.4 builds, not in any reconcile state. All three were always
+`undefined`. All three calls throw `TypeError` at call-time.
+
+The correct constants (`ROUTES.MEMORY.AGENTS`, `ROUTES.MEMORY.AGENT_RECALL`,
+`ROUTES.MEMORY.FEDERATED_RECALL`) are served, correctly defined, and used correctly in the
+monolith's `client/src/api/agent.js`.
+
+**Consumer:** `platform/src/components/platform/AgentRegistry.jsx`
+- Import: lines 4–6 (`import { getAgents, recallFromAgent, getFederatedMemory }`)
+- Call sites: line 58 (`getAgents()`), line 267 (`recallFromAgent(...)`), line 455 (`getFederatedMemory(...)`)
+
+**Fix:** Update the three function bodies in `platform/src/api/agent.js` to use the correct
+`ROUTES.MEMORY.*` constants. This is a one-file fix independent of the ROUTES-CONSUMER-SPLIT-1
+architectural decision (the target constants are in the served MEMORY group, unaffected by
+quarantine). No ui-kit change needed.
