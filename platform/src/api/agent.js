@@ -20,7 +20,7 @@ export function getFederatedMemory(query) {
 }
 
 export function createAgentRun(payload) {
-  return authRequest(ROUTES.AGENT.RUNS, {
+  return authRequest(ROUTES.AGENT.CREATE_RUN, {
     method: "POST",
     body: JSON.stringify(payload),
   }).then(unwrapEnvelope);
@@ -35,15 +35,15 @@ export function getAgentRun(runId) {
 }
 
 export function approveAgentRun(runId) {
-  return authRequest(ROUTES.AGENT.RUN_APPROVE(runId), { method: "POST" }).then(unwrapEnvelope);
+  return authRequest(ROUTES.AGENT.APPROVE(runId), { method: "POST" }).then(unwrapEnvelope);
 }
 
 export function rejectAgentRun(runId) {
-  return authRequest(ROUTES.AGENT.RUN_REJECT(runId), { method: "POST" }).then(unwrapEnvelope);
+  return authRequest(ROUTES.AGENT.REJECT(runId), { method: "POST" }).then(unwrapEnvelope);
 }
 
 export function getAgentRunSteps(runId) {
-  return authRequest(ROUTES.AGENT.RUN_STEPS(runId), { method: "GET" }).then(unwrapEnvelope);
+  return authRequest(ROUTES.AGENT.STEPS(runId), { method: "GET" }).then(unwrapEnvelope);
 }
 
 export function getAgentTools() {
@@ -66,5 +66,5 @@ export function getAgentSuggestions() {
 }
 
 export function fetchRunEvents(runId) {
-  return authRequest(ROUTES.AGENT.RUN_EVENTS(runId), { method: "GET" }).then(unwrapEnvelope);
+  return authRequest(ROUTES.AGENT.EVENTS(runId), { method: "GET" }).then(unwrapEnvelope);
 }
