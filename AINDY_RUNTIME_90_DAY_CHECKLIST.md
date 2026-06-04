@@ -51,8 +51,8 @@ By day 90, `aindy-runtime` should have:
 Tighten runtime identity, ownership, and critical contracts.
 
 ### Ownership Boundary
-- [ ] Write one canonical definition of what `aindy-runtime` owns
-- [ ] Write one canonical definition of what `aindy-runtime` explicitly does **not** own
+- [x] Write one canonical definition of what `aindy-runtime` owns
+- [x] Write one canonical definition of what `aindy-runtime` explicitly does **not** own
 - [ ] Review current repo surface and tag directories/modules as:
   - [ ] core runtime
   - [ ] platform support
