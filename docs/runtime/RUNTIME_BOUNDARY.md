@@ -1,14 +1,11 @@
 ---
 title: "Runtime Boundary"
-last_verified: "2026-05-31"
+last_verified: "2026-06-04"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
 ﻿# Runtime Boundary
-
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 
 This document defines what `aindy-runtime` owns, what it does not own, and how responsibility should be split between:
 
@@ -120,6 +117,14 @@ The runtime should not own:
 
 Those belong in `aindy-ui-kit` and UI-consuming applications.
 
+**Current state — platform SPA:** The runtime bundles and serves the platform
+operator SPA from `AINDY/platform/dist/`, mounted at `/platform` via
+`_SPAStaticFiles` (`AINDY/routing.py`). Serving the SPA is a runtime deployment
+responsibility — it is how operators reach the management UI without a separate
+frontend host. What the runtime does not own is the component system, design
+tokens, and visual patterns that comprise the SPA; those belong in `aindy-ui-kit`.
+The build chain and ownership boundary are documented in `CLAUDE.md`.
+
 ### 3. Product-Level Workflow UX
 The runtime should not own:
 - product-facing workflow authoring UX
@@ -131,6 +136,13 @@ The runtime should avoid owning:
 - routes that exist mainly as app convenience wrappers
 - business-domain aggregation APIs that do not define runtime contracts
 - product-specific orchestration helpers that can live above the runtime
+
+**Current state:** Some routes in the runtime today may qualify as convenience
+surfaces rather than execution contracts. These are under active boundary review
+and treated as extraction candidates. The "Extraction Candidates" section below
+provides the evaluation framework. No routes have been formally extracted yet —
+this section describes direction and the discipline to apply when reviewing new or
+existing route additions.
 
 ### 5. General Platform Gravity
 The runtime should not become the default home for anything that is:
@@ -341,20 +353,16 @@ Use this when reviewing a new module, route, service, or refactor.
 
 ---
 
-## Future Companion Docs
+## Companion Documents
 
-This document should eventually align with:
+These documents answer adjacent but distinct questions. All four exist under
+`docs/runtime/`.
 
-- `EXECUTION_INVARIANTS.md`
-- `SECURITY_POSTURE.md`
-- `CROSS_REPO_COMPATIBILITY.md`
-- `DEGRADED_MODE_MATRIX.md`
-
-These documents answer different questions:
-
-- `RUNTIME_BOUNDARY.md`: what the runtime owns
-- `EXECUTION_INVARIANTS.md`: what runtime behavior must not drift
-- `SECURITY_POSTURE.md`: what trust and isolation claims are actually true
-- `CROSS_REPO_COMPATIBILITY.md`: what SDK/UI/runtime consumers may rely on
-- `DEGRADED_MODE_MATRIX.md`: what remains safe under partial failure
+| Document | Answers | Status |
+|---|---|---|
+| `RUNTIME_BOUNDARY.md` (this document) | What the runtime owns and does not own | Reviewed |
+| `EXECUTION_INVARIANTS.md` | What runtime behavior must not drift across releases | Draft — unreviewed Codex output; next in review queue |
+| `SECURITY_POSTURE.md` | What trust and isolation claims are actually true today | Exists — review status unknown |
+| `CROSS_REPO_COMPATIBILITY.md` | What SDK/UI/runtime consumers may rely on across versions | Exists — review status unknown |
+| `DEGRADED_MODE_MATRIX.md` | What remains safe under partial infrastructure failure | Exists — review status unknown |
 

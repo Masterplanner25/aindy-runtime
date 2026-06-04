@@ -142,24 +142,18 @@ python -m AINDY.runtime_only serve
 uvicorn AINDY.runtime_only:app
 ```
 
-## Deployment Ownership
+## Ownership Boundary
 
-`aindy-runtime` owns the runtime deployment contract:
+`aindy-runtime` is the execution substrate of the AINDY platform. It owns the
+runtime responsibilities required to accept and validate execution requests, manage
+runtime lifecycle, execute and resume orchestrated work, enforce tenant/capability
+contracts, and expose stable health, version, and execution surfaces.
 
-- runtime-only boot and runtime entrypoints
-- the runtime manifest at `AINDY/runtime_plugins.json`
-- runtime packaging and release staging
-- runtime-owned health, readiness, and compatibility behavior
-- runtime deployment documentation under `docs/runtime/`
+It does **not** own SDK ergonomics, UI component systems, or backend convenience
+surfaces that are not execution-critical. App deployment assets (`aindy_plugins.json`,
+`apps.bootstrap`, `alembic/`, `client/`) belong in `aindy-apps-monolith`.
 
-It does not own app deployment assets such as:
-
-- repo-root `aindy_plugins.json`
-- `apps.bootstrap`
-- `alembic/`
-- `client/`
-
-Those belong in `aindy-apps-monolith`.
+Full canonical definition: [`docs/runtime/RUNTIME_BOUNDARY.md`](docs/runtime/RUNTIME_BOUNDARY.md)
 
 ## Supported Use Today
 
