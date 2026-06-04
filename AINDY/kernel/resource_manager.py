@@ -7,7 +7,7 @@ Thread-safe; designed as a process-level singleton.
 
 Quota defaults
 --------------
-  MAX_CPU_TIME_MS             30 000   (30 seconds per execution unit)
+  MAX_CPU_TIME_MS            300 000   (5 minutes wall-clock per execution unit)
   MAX_MEMORY_BYTES           268 435 456  (256 MiB)
   MAX_SYSCALLS_PER_EXECUTION 100
   MAX_CONCURRENT_PER_TENANT  5
@@ -68,7 +68,7 @@ def _int_env(key: str, default: int) -> int:
         return default
 
 
-MAX_CPU_TIME_MS: int = _int_env("AINDY_QUOTA_CPU_MS", 30_000)
+MAX_CPU_TIME_MS: int = _int_env("AINDY_QUOTA_CPU_MS", 300_000)
 MAX_MEMORY_BYTES: int = _int_env("AINDY_QUOTA_MEMORY_BYTES", 256 * 1024 * 1024)
 MAX_SYSCALLS_PER_EXECUTION: int = _int_env("AINDY_QUOTA_MAX_SYSCALLS", 100)
 MAX_CONCURRENT_PER_TENANT: int = _int_env("AINDY_QUOTA_MAX_CONCURRENT", 5)

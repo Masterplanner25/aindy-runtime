@@ -194,6 +194,44 @@ Patching `AINDY.platform_layer.scheduler_service.SessionLocal` will fail with `A
 
 ---
 
+## Agent approve path — invariants and known gaps
+
+`approve_run()` (`AINDY/agents/agent_runtime/approvals.py`) guards the
+`pending_approval → approved` transition with an atomic SQLAlchemy CAS:
+
+```python
+rows = db.execute(
+    sqla_update(AgentRun)
+    .where(AgentRun.id == run_id, AgentRun.status == "pending_approval")
+    .values(status="approved", ...)
+    .execution_options(synchronize_session=False)
+).rowcount
+if rows == 0:
+    db.expire(run); db.refresh(run)
+    return compat._run_to_dict(run)  # already-approved or terminal — no re-execute
+```
+
+**CAS fires only from `pending_approval`.** A process crash mid-execution leaves the run
+stranded in `approved` with no retry path — the watchdog/reaper in AGENT-APPROVE-001b must
+recover orphaned `approved` states. Do not add a second CAS guard here; fix belongs in 001b.
+
+**The approve path bypasses `SyscallDispatcher` entirely.** No EffectRecord idempotency
+gate is available for approve. Do not assume syscall-level idempotency applies here.
+
+**Unit test patching:** `execute_run` is re-exported via `AINDY/agents/agent_runtime/__init__.py`,
+so patch at:
+```python
+patch("AINDY.agents.agent_runtime.execute_run", ...)          # correct
+# NOT: patch("AINDY.agents.agent_runtime.execution.execute_run", ...)
+```
+`mint_token` and `record_agent_event` are imported directly in `approvals.py`:
+```python
+patch("AINDY.agents.agent_runtime.approvals.mint_token", ...)
+patch("AINDY.agents.agent_runtime.approvals.record_agent_event", ...)
+```
+
+---
+
 ## Platform UI — SPA routing invariants
 
 The platform SPA is served by `_SPAStaticFiles` (a `StaticFiles` subclass) mounted at
@@ -399,6 +437,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **ROUTES-CONSUMER-SPLIT-\*** — Shared @aindy/ui-kit ROUTES table consumed identically by monolith and runtime; quarantine breaks monolith on next publish. ROUTES-CONSUMER-SPLIT-1: open.
 - **API-MODULE-DRIFT-\*** — Quarantined ROUTES groups left platform SPA API modules reading undefined → TypeError. API-MODULE-DRIFT-1: rippletrace.js ×16, analytics.js ×19, platform.js ×4; open; fix depends on ROUTES-CONSUMER-SPLIT-1.
 - **AGENT-API-\*** — Platform SPA agent.js functions reference never-existed ROUTES.AGENT.* constants. AGENT-API-001: getAgents/recallFromAgent/getFederatedMemory; consumer AgentRegistry.jsx; open.
+- **AGENT-RESLIMIT-\*** — Agent execution resource limit conflicts with real workloads. AGENT-RESLIMIT-001: cpu_time_ms measures wall-clock time (monotonic, includes I/O wait); default raised to 300 000 ms (5 min) in v1.0.0; accounting fix (exclude I/O or rename field) deferred post-GA; open.
 - **OPER-DEFER-\*** — Operator panel deferred-runtime routes (constant live, NavLink gated on FEATURE_FLAGS). OPER-DEFER-001: `/platform/flows/strategies` not yet served; OPER-DEFER-002: `/automation/logs` group (monolith today); both open.
 - **SCHED-\*** — Scheduler status endpoint issues. SCHED-001/002/003: `/platform/observability/scheduler/status` returns 500 in platform-only profile (tasks domain absent); referenced in AGENT-EVAL-001 and FEATURE_FLAGS.OPERATOR_SCHEDULER_STATUS.
 

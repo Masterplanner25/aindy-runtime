@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Changed — Default resource quota raised for real agent workloads (2026-06-03)
+
+- **`AINDY/kernel/resource_manager.py`**: Default `AINDY_QUOTA_CPU_MS` raised from
+  30 000 ms to 300 000 ms (5 minutes). A realistic single agent step — one
+  `memory.recall` call with three OpenAI embedding round-trips — consumes ~34 s of
+  wall-clock time (trace 4cc32073; see AGENT-RESLIMIT-001). The prior 30 s default
+  caused `RESOURCE_LIMIT_EXCEEDED` on the very first approve of any non-trivial agent,
+  a first-user experience cliff. The new 5-minute cap accommodates multi-step runs.
+  **Note:** `cpu_time_ms` measures monotonic wall-clock elapsed time (including all
+  network I/O wait), not actual CPU time. This is a known misnomer documented in
+  `AINDY/.env.example` (Group 12) and tracked as AGENT-RESLIMIT-001 for post-GA fix.
+  Configure via `AINDY_QUOTA_CPU_MS=<ms>`.
+- **`AINDY/.env.example`**: New Group 12 "Resource quotas" documents all four
+  `AINDY_QUOTA_*` variables with sizing guidance. The `AINDY_QUOTA_CPU_MS` entry
+  carries an explicit warning that the field measures wall-clock time.
+- **`tests/unit/test_resource_quota_defaults.py`**: New test pins the 300 000 ms
+  default so it cannot silently drift.
+
 ### Fixed — Event bus now honors REDIS_URL (2026-05-27)
 
 - **`AINDY/kernel/event_bus.py`**: Event bus now honors `REDIS_URL` as a

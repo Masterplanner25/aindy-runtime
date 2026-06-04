@@ -1309,10 +1309,67 @@ an event stream) for status changes. Decouples request duration from tool runtim
 client always gets a definitive success/failure for the approve action itself within
 milliseconds.
 
+**Liveness gap — orphaned `approved` state:** The CAS fix (001a) only fires from
+`pending_approval`. If the winning caller's execution dies mid-flight (process crash, OOM,
+SIGKILL — any unhandled termination, not a caught failure), the run is stranded in `approved`
+forever: `execute_run` never ran to completion, but no subsequent caller can re-trigger it
+because `status != "pending_approval"`. No retry, no recovery path. The async design **must**
+include a watchdog/reaper that detects runs stuck in `approved` beyond a deadline and either
+re-enqueues them for execution or marks them `failed` with a recoverable reason. This is a
+liveness gap, not a correctness gap — but it means the CAS fix alone is not a complete
+solution in the presence of process crashes.
+
 **Family:** Same response-vs-reality mismatch class as AGENT-EVAL-001 (client receives
 wrong status relative to actual server outcome). Cross-reference AGENT-EVAL-001 and any
 EXEC-CONTRACT entry when fixing — all three share the "envelope status diverges from actual
 server outcome" root shape.
+
+---
+
+## AGENT-RESLIMIT-001 — cpu_time_ms accounting semantics: field measures wall-clock, not CPU time
+
+**Status:** Open (default raised to 300 000 ms in v1.0.0 as mitigation; accounting fix deferred)
+
+**Discovered:** 2026-06-03 during AGENT-APPROVE-001a live smoke test.
+
+**Symptom:** A single-step agent run (`memory.recall` with OpenAI embedding API calls)
+hit `RESOURCE_LIMIT_EXCEEDED: eu exceeded cpu_time_ms limit (34021 > 30000)`. The run was
+marked `failed`; the step itself completed successfully. Total request duration: 65s — the
+execution thread blocked the approve request for 65s before returning a `FAILED` result.
+The 65s duration is also another data point for AGENT-APPROVE-001b's priority.
+
+**Root cause:** `cpu_time_ms` measures monotonic wall-clock elapsed time (not CPU time).
+Every timing path — `runner_steps.py:112–143`, `execution_pipeline/resources.py:120`,
+`syscall_dispatcher.py:666` — uses `time.monotonic()`. Network I/O wait (OpenAI embedding
+calls, database round-trips) is counted in full. A realistic single agent step with three
+embedding round-trips is ~34 s wall-clock time. The field name is a misnomer.
+
+**Scope:** Per-run, accumulated across all steps. Each node's elapsed wall-clock time is
+added to `UsageSnapshot.cpu_time_ms` via `+=`. `check_quota` compares the accumulated
+total before each step.
+
+**Mitigation applied (v1.0.0):** Default raised from 30 000 ms to 300 000 ms (5 minutes)
+via `AINDY_QUOTA_CPU_MS`. Documented in `AINDY/.env.example` (Group 12) with a clear
+warning that the field measures wall-clock time. Default pinned by
+`tests/unit/test_resource_quota_defaults.py`. Note: raising the cap makes synchronous
+approve (AGENT-APPROVE-001b) more likely to exceed client timeouts on slow workloads —
+that is the correct trade-off until 001b lands.
+
+**Remaining fix:** Accounting semantics — either:
+1. Exclude network I/O wait from the timer (measure actual CPU time, e.g. via
+   `os.times()` or by wrapping only CPU-bound segments).
+2. Rename the field to `wall_time_ms` (or split into `wall_time_ms` + `cpu_time_ms`)
+   so the name matches what is measured.
+
+This requires changes to `ResourceManager.record_cpu`, all three timing call sites,
+the `UsageSnapshot` dataclass, the DB column in `ExecutionUnit`, and the API envelope.
+Schema change → SCHEMA_CONTRACT_VERSION bump required.
+
+**Coupling:** `AINDY/runtime/nodus_worker.py:209` and `nodus_runtime_adapter.py` have
+a parallel per-script subprocess timeout (also defaulting to 30 000 ms via
+`max_execution_ms`). That is a separate Nodus VM execution limit, not the ResourceManager
+quota. Operators who need individual Nodus script steps > 30 s must also configure that
+timeout — it is not controlled by `AINDY_QUOTA_CPU_MS`.
 
 ---
 

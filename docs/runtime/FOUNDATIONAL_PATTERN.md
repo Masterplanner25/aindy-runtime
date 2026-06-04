@@ -105,7 +105,9 @@ Everything that prevents invalid state transitions:
 - **Tenant isolation**: Every dispatch requires a `user_id`. Extension calls
   must match the context tenant. Hard deny on mismatch.
 - **Resource quota**: `ResourceManager` enforces per-tenant concurrency
-  (≤ 5 simultaneous executions), per-EU CPU time (≤ 30s), and syscall count
+  (≤ 5 simultaneous executions), per-EU wall-clock time (≤ 300 s / 5 min,
+  configurable via `AINDY_QUOTA_CPU_MS`; note: the field is named `cpu_time_ms`
+  but measures monotonic wall-clock time including I/O wait), and syscall count
   (≤ 100). Fails closed in production when Redis is unavailable.
 - **Idempotency gate**: `EXACTLY_ONCE` handlers check `EffectRecord` before
   executing. Cached results are returned for completed actions. Live concurrent
