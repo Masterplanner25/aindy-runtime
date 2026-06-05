@@ -438,12 +438,20 @@ def _platform_matrix_entry(
             "minimal_environment",
         ],
     }
-    if linux and runtime_available:
+    # Basic kernel controls work when running Linux containers — native Linux OR
+    # Docker Desktop with a Linux container backend (WSL2/Hyper-V), proven by Phase 0.
+    if (linux or linux_container_backend_available) and runtime_available:
         available_hardening_controls["containerized_oci"].extend(
             [
                 "no_new_privileges",
                 "drop_all_capabilities",
                 "pids_limit",
+            ]
+        )
+    # Profile-based controls require a native Linux host.
+    if linux and runtime_available:
+        available_hardening_controls["containerized_oci"].extend(
+            [
                 "seccomp_profile",
                 "apparmor_profile",
                 "selinux_label",
@@ -478,13 +486,23 @@ def _platform_matrix_entry(
         )
         unsupported_guarantees.append("strong sandbox VM third-party plugin execution")
     if windows or macos or platform_name == PLATFORM_OTHER:
-        degraded_modes.append(
-            "containerized_oci cannot report Linux-only kernel controls such as no_new_privileges, "
-            "seccomp, AppArmor, or SELinux on this host platform"
-        )
-        unsupported_guarantees.append(
-            "Linux-grade hardened third-party plugin sandbox guarantees on non-Linux hosts"
-        )
+        if linux_container_backend_available:
+            # Basic controls work (proven by Phase 0 escape suite); profile controls don't.
+            degraded_modes.append(
+                "seccomp, AppArmor, and SELinux profile controls require a native Linux host "
+                "and are not available via Docker Desktop Linux container backend"
+            )
+            unsupported_guarantees.append(
+                "seccomp/AppArmor/SELinux profile enforcement on non-Linux host"
+            )
+        else:
+            degraded_modes.append(
+                "containerized_oci cannot report Linux-only kernel controls such as no_new_privileges, "
+                "seccomp, AppArmor, or SELinux on this host platform"
+            )
+            unsupported_guarantees.append(
+                "Linux-grade hardened third-party plugin sandbox guarantees on non-Linux hosts"
+            )
         degraded_modes.append(
             "strong_sandbox_vm is currently characterized only for Linux hosts with a compatible VM sandbox launcher"
         )
@@ -502,9 +520,9 @@ def _platform_matrix_entry(
     if not linux and runtime_available:
         if linux_container_backend_available:
             degraded_modes.append(
-                "containerized_oci runs Linux containers via host virtualization; Linux kernel "
-                "hardening controls are active inside the container but are not host-introspectable "
-                "from this platform"
+                "containerized_oci runs Linux containers via host virtualization (WSL2/Hyper-V); "
+                "no_new_privileges, drop_all_capabilities, and pids_limit are active inside the "
+                "container but are not host-introspectable from this platform"
             )
         else:
             degraded_modes.append(
@@ -572,6 +590,7 @@ def sandbox_platform_capability_matrix(
 
     backend_detection = _detect_linux_container_backend(runtime_name)
     linux_container_backend_available = bool(backend_detection.get("linux_container_backend"))
+    wsl2_detection = _detect_wsl2(runtime_name)
 
     supported_platforms = {
         PLATFORM_LINUX: _platform_matrix_entry(
@@ -663,6 +682,7 @@ def sandbox_platform_capability_matrix(
             linux_container_backend_available=linux_container_backend_available,
         ),
         "current_container_backend_detection": backend_detection,
+        "current_wsl2_detection": wsl2_detection,
         "support_contract": support_contract,
         "supported_platforms": supported_platforms,
     }
@@ -1293,6 +1313,12 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
         self.selinux_label = str(settings.AINDY_PLUGIN_CONTAINER_SELINUX_LABEL or "").strip()
         self.writable_tmp = bool(settings.AINDY_PLUGIN_CONTAINER_WRITABLE_TMP)
         self.tmpfs_size = str(settings.AINDY_PLUGIN_CONTAINER_TMPFS_SIZE or "64m").strip() or "64m"
+        # Detect Linux container backend once at construction time.  On Windows/macOS
+        # with Docker Desktop in Linux containers mode this is True, which enables
+        # no_new_privileges / drop_all_capabilities / pids_limit reporting.
+        self._linux_container_backend: bool = bool(
+            _detect_linux_container_backend(self.container_runtime).get("linux_container_backend")
+        )
 
     @property
     def runner_type(self) -> str:
@@ -1326,6 +1352,7 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
                 "apparmor_profile": bool(self.apparmor_profile),
                 "selinux_label": bool(self.selinux_label),
             },
+            linux_container_backend=self._linux_container_backend,
         )
         resource_limits = inspect_container_resource_limits(
             container_runtime=self.container_runtime,
@@ -1404,6 +1431,7 @@ class ContainerizedOciSandboxRunner(_JsonRpcProcessRunner):
                 "apparmor_profile": bool(self.apparmor_profile),
                 "selinux_label": bool(self.selinux_label),
             },
+            linux_container_backend=self._linux_container_backend,
         )
         requested_controls = list(kernel_controls.get("requested_controls") or [])
         active_controls = list(kernel_controls.get("active_controls") or [])
@@ -2016,20 +2044,31 @@ def _normalized_platform_system() -> str:
     return str(platform.system() or "").strip().lower()
 
 
-def _supports_linux_container_kernel_controls() -> bool:
-    return _normalized_platform_system() == "linux"
+def _supports_linux_container_kernel_controls(*, linux_container_backend: bool = False) -> bool:
+    """
+    Return True when Linux kernel controls are available inside containers.
+
+    Accepts ``linux_container_backend=True`` when the caller has already confirmed
+    that a Linux container backend is active (e.g. Docker Desktop on Windows/macOS
+    with WSL2 or Hyper-V backend). Basic kernel controls — ``--cap-drop ALL``,
+    ``--pids-limit``, ``--security-opt no-new-privileges`` — work in that case
+    because containers run inside a Linux VM. Profile-based controls (seccomp,
+    AppArmor, SELinux) require a native Linux host and do NOT honour this flag;
+    they always call the zero-argument form.
+    """
+    return _normalized_platform_system() == "linux" or linux_container_backend
 
 
 def _supports_seccomp(container_runtime: str) -> bool:
-    return _supports_linux_container_kernel_controls() and container_runtime in {"docker", "podman"}
+    return _normalized_platform_system() == "linux" and container_runtime in {"docker", "podman"}
 
 
 def _supports_apparmor(container_runtime: str) -> bool:
-    return _supports_linux_container_kernel_controls() and container_runtime == "docker"
+    return _normalized_platform_system() == "linux" and container_runtime == "docker"
 
 
 def _supports_selinux_label(container_runtime: str) -> bool:
-    return _supports_linux_container_kernel_controls() and container_runtime in {"docker", "podman"}
+    return _normalized_platform_system() == "linux" and container_runtime in {"docker", "podman"}
 
 
 def _detect_linux_container_backend(container_runtime: str) -> dict[str, Any]:
@@ -2170,22 +2209,98 @@ def _detect_linux_container_backend(container_runtime: str) -> dict[str, Any]:
     }
 
 
+def _detect_wsl2(container_runtime: str = "docker") -> dict[str, Any]:
+    """
+    Detect WSL2 availability in the current execution context.
+
+    Two cases are detected:
+
+    - ``is_inside_wsl2``: the Python process itself is running inside WSL2.
+      Detected by checking ``/proc/version`` for "microsoft" or "wsl2" on a
+      Linux host. In this case the platform already reports Linux, but it is
+      useful to know the kernel is Microsoft-hosted for logging purposes.
+
+    - ``docker_wsl2_backend``: the process is on a Windows host but Docker
+      Desktop is configured with a Linux container backend (WSL2 or Hyper-V),
+      meaning containers have full Linux kernel semantics even though the host
+      Python process is a Windows process.
+
+    ``wsl2_kernel_available`` is True in either case.  The practical meaning:
+    ``no_new_privileges``, ``--cap-drop ALL``, and ``--pids-limit`` are active
+    inside containers even on non-native-Linux hosts when this is True.
+    """
+    host_platform = _normalized_platform_system()
+    is_inside_wsl2 = False
+    docker_wsl2_backend = False
+    detection_method = "platform_check_only"
+    detection_error: str | None = None
+
+    if host_platform == PLATFORM_LINUX:
+        try:
+            proc_version = Path("/proc/version").read_text(encoding="utf-8", errors="replace")
+            lower = proc_version.lower()
+            if "microsoft" in lower or "wsl2" in lower:
+                is_inside_wsl2 = True
+            detection_method = "proc_version"
+        except OSError as exc:
+            detection_error = str(exc)
+            detection_method = "proc_version_unavailable"
+
+    if host_platform == PLATFORM_WINDOWS:
+        backend = _detect_linux_container_backend(container_runtime)
+        detection_method = backend.get("detection_method") or "docker_info_json"
+        if backend.get("linux_container_backend"):
+            docker_wsl2_backend = True
+        elif backend.get("detection_error"):
+            detection_error = backend["detection_error"]
+
+    wsl2_kernel_available = is_inside_wsl2 or docker_wsl2_backend
+
+    if docker_wsl2_backend:
+        note = (
+            "Docker Desktop is running a Linux container backend (WSL2 or Hyper-V). "
+            "Linux kernel controls — no_new_privileges, drop_all_capabilities, pids_limit — "
+            "are active inside containers."
+        )
+    elif is_inside_wsl2:
+        note = "Python process is running inside WSL2; native Linux kernel controls available."
+    else:
+        note = "WSL2 not detected; Linux-only kernel controls unavailable on this host."
+
+    return {
+        "is_inside_wsl2": is_inside_wsl2,
+        "docker_wsl2_backend": docker_wsl2_backend,
+        "wsl2_kernel_available": wsl2_kernel_available,
+        "host_platform": host_platform,
+        "detection_method": detection_method,
+        "detection_error": detection_error,
+        "operator_note": note,
+    }
+
+
 def inspect_container_kernel_controls(
     *,
     container_runtime: str,
     requested_controls: dict[str, bool] | None = None,
+    linux_container_backend: bool = False,
 ) -> dict[str, Any]:
     requested = dict(requested_controls or {})
     system_name = _normalized_platform_system()
     runtime_found = shutil.which(container_runtime) is not None
-    linux_controls = _supports_linux_container_kernel_controls()
+    # Basic controls work when running Linux containers — native Linux OR a
+    # Docker Desktop Linux backend (WSL2/Hyper-V). Proven by Phase 0 escape suite.
+    basic_linux_controls = _supports_linux_container_kernel_controls(
+        linux_container_backend=linux_container_backend
+    )
+    # Profile-based controls (seccomp, AppArmor, SELinux) require a native Linux
+    # host and are NOT available via Docker Desktop on Windows/macOS.
 
     supported_controls: dict[str, bool] = {
-        "no_new_privileges": linux_controls and runtime_found,
-        "drop_all_capabilities": linux_controls and runtime_found,
+        "no_new_privileges": basic_linux_controls and runtime_found,
+        "drop_all_capabilities": basic_linux_controls and runtime_found,
         "disable_network": runtime_found,
         "read_only_rootfs": runtime_found,
-        "pids_limit": linux_controls and runtime_found,
+        "pids_limit": basic_linux_controls and runtime_found,
         "seccomp_profile": _supports_seccomp(container_runtime) and runtime_found,
         "apparmor_profile": _supports_apparmor(container_runtime) and runtime_found,
         "selinux_label": _supports_selinux_label(container_runtime) and runtime_found,

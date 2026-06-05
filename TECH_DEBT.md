@@ -178,9 +178,25 @@ Marker: `sandbox_escape`. Image: `python:3.11-alpine` (configurable via `SANDBOX
 Platform note: all tests run on any platform with Docker Linux containers; Linux-only kernel
 control tests (privilege escalation, process/pids) skip on non-Linux backends.
 
-**Phase 1 — WSL2/Windows strong sandbox path: open**
-Implement `_detect_wsl2()`, `_wsl2_path()`, `_run_in_wsl2_strong_sandbox()` in
-`sandbox_runner.py`. Phase 0 escape suite must pass on WSL2 backend before certification.
+**Phase 1 (2026-06-06) — WSL2/Windows Linux backend detection: COMPLETE**
+Implemented `_detect_wsl2()` in `sandbox_runner.py`. Detects two cases: (1) Python
+process running inside WSL2 (Linux host, `/proc/version` contains "microsoft"); (2) Windows
+host with Docker Desktop Linux container backend (WSL2 or Hyper-V, from `docker info`).
+Updated `_supports_linux_container_kernel_controls()` to accept `linux_container_backend`
+parameter. Updated `inspect_container_kernel_controls()` to pass it through, enabling
+`no_new_privileges`, `drop_all_capabilities`, and `pids_limit` to be reported as supported
+and active on Windows + Docker Desktop Linux containers mode. `seccomp_profile`,
+`apparmor_profile`, and `selinux_label` remain native-Linux-host-only (not tested in Phase 0).
+`ContainerizedOciSandboxRunner` caches backend detection at construction time.
+`sandbox_platform_capability_matrix()` now includes `current_wsl2_detection` field.
+Platform matrix hardening controls split: basic kernel controls available when
+`linux_container_backend_available=True`; profile controls Linux-host-only.
+21 new unit tests in `tests/unit/test_sandbox_runner.py`.
+
+Gap remaining: strong sandbox VM (`RUNNER_STRONG_SANDBOX_VM`) still requires native Linux
+or WSL2-native Python (when `platform.system() == "Linux"`). A Windows-native path to the
+strong sandbox tier requires a Windows `aindy-sandbox-vm` binary that bridges to WSL2 —
+out of scope until the launcher exists.
 
 **Phase 2 — macOS Docker Desktop policy: open**
 Document the policy decision confirming Docker Desktop Linux VM boundary equals

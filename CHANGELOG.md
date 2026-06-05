@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Added — C3 Phase 1: WSL2/Linux backend detection for OCI sandbox runner (2026-06-06)
+
+- **`AINDY/platform_layer/sandbox_runner.py`**: Added `_detect_wsl2(container_runtime)`.
+  Detects two cases: Python process running inside WSL2 (Linux host + `/proc/version` contains
+  "microsoft"); or Windows host with Docker Desktop in Linux containers mode (via `docker info`
+  `OSType=linux`). Returns `{is_inside_wsl2, docker_wsl2_backend, wsl2_kernel_available, ...}`.
+
+- **`_supports_linux_container_kernel_controls()`** now accepts a `linux_container_backend`
+  keyword argument. When `True`, the function returns `True` even on non-native-Linux hosts,
+  enabling `no_new_privileges`, `drop_all_capabilities`, and `pids_limit` to be treated as
+  available controls for OCI containers running on Docker Desktop Linux backends.
+
+- **`inspect_container_kernel_controls()`** has a new `linux_container_backend: bool = False`
+  parameter. Basic kernel controls (cap_drop, pids_limit, no_new_privileges) are now correctly
+  reported as supported/active on Windows + Docker Desktop Linux containers mode.
+  Profile-based controls (seccomp, AppArmor, SELinux) remain native-Linux-host-only — they
+  were not tested in Phase 0 and are not claimed.
+
+- **`ContainerizedOciSandboxRunner`** caches `_detect_linux_container_backend()` at
+  construction time (`self._linux_container_backend`) and passes it to all
+  `inspect_container_kernel_controls()` calls so runner metadata is accurate.
+
+- **`sandbox_platform_capability_matrix()`** now includes a `current_wsl2_detection` field
+  in its return dict, alongside the existing `current_container_backend_detection`.
+
+- **Platform matrix hardening controls split**: `_platform_matrix_entry()` now correctly
+  separates controls. When `linux_container_backend_available=True` on Windows: basic kernel
+  controls added to available list; degraded modes updated to name seccomp/AppArmor/SELinux
+  (not no_new_privileges/pids_limit) as requiring native Linux.
+
+- **21 new unit tests** in `tests/unit/test_sandbox_runner.py` across four new classes:
+  `TestDetectWsl2` (6), `TestInspectContainerKernelControlsLinuxBackend` (8),
+  `TestPlatformMatrixHardeningControlsWithLinuxBackend` (6), `TestSandboxPlatformCapabilityMatrixWsl2Field` (1).
+
 ### Added — C3 Phases 3+4: threat model, posture API, release gate (2026-06-05)
 
 - **`docs/runtime/SANDBOX_ESCAPE_AUDIT.md`** (new, append-only): Formal threat model mapping

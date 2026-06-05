@@ -1172,3 +1172,375 @@ def test_extension_execution_model_production_safe_platforms_populated_on_window
     production_safe_platforms = third_party_surface["platform_support"]["production_safe_host_platforms"]
     assert "windows" in production_safe_platforms
     assert "linux" in production_safe_platforms
+
+
+# ---------------------------------------------------------------------------
+# C3 Phase 1 — WSL2 detection and Linux container backend propagation
+# ---------------------------------------------------------------------------
+
+
+class TestDetectWsl2:
+    """Tests for _detect_wsl2() covering all four detection paths."""
+
+    def test_linux_host_with_microsoft_proc_version_is_wsl2(self, monkeypatch, tmp_path):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_wsl2
+
+        # Simulate /proc/version containing Microsoft kernel string
+        fake_proc = tmp_path / "version"
+        fake_proc.write_text("Linux version 5.15.0-microsoft-standard-WSL2 (gcc) #1 SMP")
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(sandbox_runner, "Path", lambda p: fake_proc if "/proc/version" in str(p) else type(sandbox_runner.Path)(p))
+
+        # Use a simpler approach: patch Path reads directly
+        import builtins
+        original_open = builtins.open
+
+        def fake_path_read(path_str, encoding="utf-8", errors="replace"):
+            if "/proc/version" in str(path_str):
+                return "Linux version 5.15.0-microsoft-standard-WSL2"
+            raise FileNotFoundError(str(path_str))
+
+        # Patch at the sandbox_runner module's Path usage
+        class FakePath:
+            def __init__(self, p):
+                self._p = str(p)
+            def read_text(self, encoding="utf-8", errors="replace"):
+                if "/proc/version" in self._p:
+                    return "Linux version 5.15.0-microsoft-standard-WSL2"
+                raise FileNotFoundError(self._p)
+
+        monkeypatch.setattr(sandbox_runner, "Path", FakePath)
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "/usr/bin/docker")
+
+        result = _detect_wsl2("docker")
+
+        assert result["is_inside_wsl2"] is True
+        assert result["docker_wsl2_backend"] is False
+        assert result["wsl2_kernel_available"] is True
+        assert result["host_platform"] == "linux"
+        assert result["detection_method"] == "proc_version"
+        assert result["detection_error"] is None
+
+    def test_linux_host_without_microsoft_kernel_not_wsl2(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_wsl2
+
+        class FakePath:
+            def __init__(self, p):
+                self._p = str(p)
+            def read_text(self, encoding="utf-8", errors="replace"):
+                if "/proc/version" in self._p:
+                    return "Linux version 6.1.0-generic (Ubuntu) #1 SMP"
+                raise FileNotFoundError(self._p)
+
+        monkeypatch.setattr(sandbox_runner, "Path", FakePath)
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "/usr/bin/docker")
+
+        result = _detect_wsl2("docker")
+
+        assert result["is_inside_wsl2"] is False
+        assert result["docker_wsl2_backend"] is False
+        assert result["wsl2_kernel_available"] is False
+        assert result["detection_method"] == "proc_version"
+
+    def test_linux_host_proc_version_oserror_not_wsl2(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_wsl2
+
+        class FakePath:
+            def __init__(self, p):
+                self._p = str(p)
+            def read_text(self, encoding="utf-8", errors="replace"):
+                raise OSError("no such file")
+
+        monkeypatch.setattr(sandbox_runner, "Path", FakePath)
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "/usr/bin/docker")
+
+        result = _detect_wsl2("docker")
+
+        assert result["is_inside_wsl2"] is False
+        assert result["wsl2_kernel_available"] is False
+        assert result["detection_method"] == "proc_version_unavailable"
+        assert result["detection_error"] is not None
+
+    def test_windows_with_linux_container_backend_is_docker_wsl2(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_wsl2
+
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "C:\\docker\\docker.exe")
+
+        docker_info_output = '{"OSType":"linux","OperatingSystem":"Docker Desktop"}'
+        monkeypatch.setattr(
+            sandbox_runner.subprocess,
+            "run",
+            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": docker_info_output, "stderr": ""})(),
+        )
+
+        result = _detect_wsl2("docker")
+
+        assert result["is_inside_wsl2"] is False
+        assert result["docker_wsl2_backend"] is True
+        assert result["wsl2_kernel_available"] is True
+        assert result["host_platform"] == "windows"
+        assert result["detection_error"] is None
+
+    def test_windows_without_linux_container_backend_not_wsl2(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_wsl2
+
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "C:\\docker\\docker.exe")
+
+        docker_info_output = '{"OSType":"windows","OperatingSystem":"Windows Server"}'
+        monkeypatch.setattr(
+            sandbox_runner.subprocess,
+            "run",
+            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": docker_info_output, "stderr": ""})(),
+        )
+
+        result = _detect_wsl2("docker")
+
+        assert result["is_inside_wsl2"] is False
+        assert result["docker_wsl2_backend"] is False
+        assert result["wsl2_kernel_available"] is False
+
+    def test_result_has_required_keys(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_wsl2
+
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "darwin")
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: None)
+
+        result = _detect_wsl2("docker")
+
+        assert set(result.keys()) >= {
+            "is_inside_wsl2",
+            "docker_wsl2_backend",
+            "wsl2_kernel_available",
+            "host_platform",
+            "detection_method",
+            "detection_error",
+            "operator_note",
+        }
+
+
+class TestInspectContainerKernelControlsLinuxBackend:
+    """
+    Tests for the updated inspect_container_kernel_controls() behaviour when
+    linux_container_backend=True is passed (the WSL2/Hyper-V path).
+    """
+
+    def _call(self, monkeypatch, *, host="windows", linux_container_backend: bool, requested: dict):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import inspect_container_kernel_controls
+
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: host.capitalize())
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "/path/to/docker")
+        return inspect_container_kernel_controls(
+            container_runtime="docker",
+            requested_controls=requested,
+            linux_container_backend=linux_container_backend,
+        )
+
+    def test_basic_controls_supported_when_linux_backend_true(self, monkeypatch):
+        result = self._call(
+            monkeypatch,
+            host="windows",
+            linux_container_backend=True,
+            requested={"no_new_privileges": True, "drop_all_capabilities": True, "pids_limit": True},
+        )
+        supported = result["supported_controls"]
+        assert "no_new_privileges" in supported
+        assert "drop_all_capabilities" in supported
+        assert "pids_limit" in supported
+
+    def test_basic_controls_active_when_linux_backend_true(self, monkeypatch):
+        result = self._call(
+            monkeypatch,
+            host="windows",
+            linux_container_backend=True,
+            requested={"no_new_privileges": True, "drop_all_capabilities": True, "pids_limit": True},
+        )
+        active = result["active_controls"]
+        assert "no_new_privileges" in active
+        assert "drop_all_capabilities" in active
+        assert "pids_limit" in active
+
+    def test_basic_controls_not_supported_when_linux_backend_false(self, monkeypatch):
+        result = self._call(
+            monkeypatch,
+            host="windows",
+            linux_container_backend=False,
+            requested={"no_new_privileges": True, "drop_all_capabilities": True, "pids_limit": True},
+        )
+        supported = result["supported_controls"]
+        assert "no_new_privileges" not in supported
+        assert "drop_all_capabilities" not in supported
+        assert "pids_limit" not in supported
+
+    def test_seccomp_not_supported_on_windows_even_with_linux_backend(self, monkeypatch):
+        result = self._call(
+            monkeypatch,
+            host="windows",
+            linux_container_backend=True,
+            requested={"seccomp_profile": True},
+        )
+        assert "seccomp_profile" not in result["supported_controls"]
+
+    def test_apparmor_not_supported_on_windows_even_with_linux_backend(self, monkeypatch):
+        result = self._call(
+            monkeypatch,
+            host="windows",
+            linux_container_backend=True,
+            requested={"apparmor_profile": True},
+        )
+        assert "apparmor_profile" not in result["supported_controls"]
+
+    def test_selinux_not_supported_on_windows_even_with_linux_backend(self, monkeypatch):
+        result = self._call(
+            monkeypatch,
+            host="windows",
+            linux_container_backend=True,
+            requested={"selinux_label": True},
+        )
+        assert "selinux_label" not in result["supported_controls"]
+
+    def test_network_and_rootfs_supported_regardless_of_linux_backend(self, monkeypatch):
+        result = self._call(
+            monkeypatch,
+            host="windows",
+            linux_container_backend=False,
+            requested={"disable_network": True, "read_only_rootfs": True},
+        )
+        assert "disable_network" in result["supported_controls"]
+        assert "read_only_rootfs" in result["supported_controls"]
+
+    def test_native_linux_host_unaffected_by_default_parameter(self, monkeypatch):
+        result = self._call(
+            monkeypatch,
+            host="linux",
+            linux_container_backend=False,
+            requested={"no_new_privileges": True, "drop_all_capabilities": True, "pids_limit": True},
+        )
+        # Native Linux already returns True without linux_container_backend flag
+        assert "no_new_privileges" in result["supported_controls"]
+        assert "drop_all_capabilities" in result["supported_controls"]
+        assert "pids_limit" in result["supported_controls"]
+
+
+class TestPlatformMatrixHardeningControlsWithLinuxBackend:
+    """
+    Tests for _platform_matrix_entry() hardening controls split and degraded mode
+    messages when linux_container_backend_available=True on Windows.
+    """
+
+    def _entry(self, monkeypatch, *, platform_name: str, linux_backend: bool):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _platform_matrix_entry
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "/path/to/docker")
+        return _platform_matrix_entry(
+            platform_name=platform_name,
+            container_runtime="docker",
+            runtime_available=True,
+            strong_launcher="aindy-sandbox-vm",
+            strong_runtime_available=False,
+            linux_container_backend_available=linux_backend,
+        )
+
+    def test_windows_linux_backend_includes_basic_controls(self, monkeypatch):
+        entry = self._entry(monkeypatch, platform_name="windows", linux_backend=True)
+        oci_controls = entry["available_hardening_controls"]["containerized_oci"]
+        assert "no_new_privileges" in oci_controls
+        assert "drop_all_capabilities" in oci_controls
+        assert "pids_limit" in oci_controls
+
+    def test_windows_linux_backend_excludes_profile_controls(self, monkeypatch):
+        entry = self._entry(monkeypatch, platform_name="windows", linux_backend=True)
+        oci_controls = entry["available_hardening_controls"]["containerized_oci"]
+        assert "seccomp_profile" not in oci_controls
+        assert "apparmor_profile" not in oci_controls
+        assert "selinux_label" not in oci_controls
+
+    def test_windows_no_linux_backend_excludes_all_kernel_controls(self, monkeypatch):
+        entry = self._entry(monkeypatch, platform_name="windows", linux_backend=False)
+        oci_controls = entry["available_hardening_controls"]["containerized_oci"]
+        for ctrl in ["no_new_privileges", "drop_all_capabilities", "pids_limit",
+                     "seccomp_profile", "apparmor_profile", "selinux_label"]:
+            assert ctrl not in oci_controls
+
+    def test_windows_linux_backend_degraded_mode_mentions_seccomp_not_unavailable(self, monkeypatch):
+        entry = self._entry(monkeypatch, platform_name="windows", linux_backend=True)
+        degraded = " ".join(entry["degraded_modes"])
+        # Profile controls should be called out as requiring native Linux
+        assert "seccomp" in degraded.lower() or "apparmor" in degraded.lower()
+        # The word "cannot report" must NOT appear — basic controls ARE available
+        assert "cannot report Linux-only kernel controls" not in degraded
+
+    def test_windows_no_linux_backend_degraded_mode_mentions_no_new_privileges(self, monkeypatch):
+        entry = self._entry(monkeypatch, platform_name="windows", linux_backend=False)
+        degraded = " ".join(entry["degraded_modes"])
+        assert "no_new_privileges" in degraded
+
+    def test_linux_native_includes_all_controls(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _platform_matrix_entry
+
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "/usr/bin/docker")
+        entry = _platform_matrix_entry(
+            platform_name="linux",
+            container_runtime="docker",
+            runtime_available=True,
+            strong_launcher="aindy-sandbox-vm",
+            strong_runtime_available=True,
+            linux_container_backend_available=True,
+        )
+        oci_controls = entry["available_hardening_controls"]["containerized_oci"]
+        for ctrl in ["no_new_privileges", "drop_all_capabilities", "pids_limit",
+                     "seccomp_profile", "apparmor_profile", "selinux_label"]:
+            assert ctrl in oci_controls
+
+
+class TestSandboxPlatformCapabilityMatrixWsl2Field:
+    """sandbox_platform_capability_matrix() exposes current_wsl2_detection."""
+
+    def test_matrix_includes_wsl2_detection_key(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+
+        monkeypatch.setattr(
+            sandbox_runner,
+            "_detect_linux_container_backend",
+            lambda _runtime: {
+                "runtime": "docker",
+                "runtime_available": True,
+                "linux_container_backend": False,
+                "os_type": None,
+                "detection_method": "docker_info_json",
+                "detection_error": None,
+                "operator_note": "test",
+            },
+        )
+        monkeypatch.setattr(
+            sandbox_runner,
+            "_detect_wsl2",
+            lambda _runtime: {
+                "is_inside_wsl2": False,
+                "docker_wsl2_backend": False,
+                "wsl2_kernel_available": False,
+                "host_platform": "darwin",
+                "detection_method": "platform_check_only",
+                "detection_error": None,
+                "operator_note": "WSL2 not detected",
+            },
+        )
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda name: None if name == "aindy-sandbox-vm" else "/usr/bin/docker")
+
+        matrix = sandbox_platform_capability_matrix()
+
+        assert "current_wsl2_detection" in matrix
+        assert "wsl2_kernel_available" in matrix["current_wsl2_detection"]
