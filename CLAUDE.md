@@ -378,6 +378,41 @@ Add the same pattern for any future exception type that callers are expected to 
 
 ---
 
+## `docs/runtime/` — required YAML frontmatter
+
+Every `*.md` file under `docs/runtime/` must start with a YAML frontmatter block containing all five required keys or CI fails (`Runtime Docs Validation` job):
+
+```markdown
+---
+title: "Document Title"
+api_version: "1.0"
+last_verified: "YYYY-MM-DD"
+status: current
+owner: "platform-team"
+---
+```
+
+**Missing any key → `Runtime Docs Validation` exits 1 and blocks merge.** This bit us when `SANDBOX_ESCAPE_AUDIT.md` was created without `api_version`/`last_verified` and `MACOS_CONTAINER_POLICY.md` had no frontmatter at all. Always add all five keys when creating a new doc in this directory.
+
+---
+
+## Branch protection — `main`
+
+`main` is protected. Direct pushes by anyone (including admin) are blocked — `enforce_admins: true`.
+
+**Required status checks (must pass before merge):**
+- `Runtime Lint` — ruff check
+- `Runtime Docs Validation` — frontmatter check on `docs/runtime/`
+- `Runtime Contracts` — unit tests, schema contract, smoke
+
+**Full CI pipeline** (required before version tag — see `docs/runtime/RELEASE_CHECKLIST.md`):
+- `Integration Tests (PostgreSQL + Redis)`
+- `Platform UI Build`
+- `Runtime Package Build`
+- `Install Smoke Test`
+
+---
+
 ## `pytest.mark.integration` — skip hazard for Docker-only tests
 
 `pytest.mark.integration` triggers a global conftest guard (`tests/conftest.py`) that **skips the entire test when `DATABASE_URL` is not a live PostgreSQL URL**. This fires even in the default dev environment where `DATABASE_URL=sqlite:///:memory:`.
@@ -571,3 +606,5 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Sandbox escape results artifact | `tests/sandbox/sandbox_escape_results.json` |
 | Sandbox escape audit log (append-only) | `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` |
 | Sandbox escape posture function | `AINDY/platform_layer/sandbox_runner.py` — `sandbox_escape_test_posture()` |
+| macOS container sandbox policy | `docs/runtime/MACOS_CONTAINER_POLICY.md` |
+| WSL2 / macOS backend detection | `AINDY/platform_layer/sandbox_runner.py` — `_detect_wsl2()` |
