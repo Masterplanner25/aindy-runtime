@@ -168,6 +168,39 @@ pytest tests/unit/test_runtime_compatibility_metadata.py -v
 
 ---
 
+## Sandbox Escape Gate
+
+Run before any GA release. Requires Docker with Linux containers mode.
+
+### 16. Sandbox Escape Suite
+
+```bash
+pytest -m sandbox_escape -v
+# Expected: all non-skipped tests PASS (17 total, 0 FAIL)
+# Skips are acceptable for Linux-kernel-only tests on non-Linux Docker backends.
+# FAIL on any test = release is blocked until root cause is resolved and re-run passes.
+```
+
+Inspect the posture summary programmatically:
+
+```python
+from AINDY.platform_layer.sandbox_runner import sandbox_escape_test_posture
+posture = sandbox_escape_test_posture()
+assert posture["posture"] == "all_pass", posture["operator_note"]
+print(f"Covered vectors: {posture['coverage']}")
+print(f"Last run: {posture['last_run']} on {posture['host_platform']}")
+```
+
+**Gate condition:** `posture["posture"] == "all_pass"` — no FAIL results in any category.
+Skipped tests (Linux-only controls on non-Linux backends) do not block the gate.
+
+**Audit trail:** Append a new entry to `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` after each
+pre-release run. Include platform, Docker version, image digest, commit, and the summary line
+from the test output. The artifact `tests/sandbox/sandbox_escape_results.json` is the
+machine-readable record.
+
+---
+
 ## Release Notes Verification
 
 - [ ] CHANGELOG.md updated for this release
@@ -175,3 +208,4 @@ pytest tests/unit/test_runtime_compatibility_metadata.py -v
 - [ ] Schema contract version bump is noted if any model changed
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
 - [ ] TECH_DEBT.md updated for any newly closed or opened entries
+- [ ] `sandbox_escape_test_posture()["posture"] == "all_pass"` for this release platform

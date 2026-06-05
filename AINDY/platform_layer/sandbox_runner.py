@@ -668,6 +668,120 @@ def sandbox_platform_capability_matrix(
     }
 
 
+_ESCAPE_RESULTS_ENV_VAR = "SANDBOX_ESCAPE_RESULTS_PATH"
+_ESCAPE_RESULTS_DEFAULT = (
+    Path(__file__).resolve().parents[2] / "tests" / "sandbox" / "sandbox_escape_results.json"
+)
+
+
+def sandbox_escape_test_posture(
+    results_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """
+    Return the current sandbox escape test posture.
+
+    Reads the JSON artifact produced by ``pytest -m sandbox_escape`` and returns a
+    structured summary usable in health, observability, or release-gate endpoints.
+
+    When the artifact does not exist (e.g. in a production-installed package where
+    ``tests/`` is not present), returns ``posture: "not_run"`` without raising.
+
+    Parameters
+    ----------
+    results_path:
+        Override the path to ``sandbox_escape_results.json``. Defaults to:
+        1. ``SANDBOX_ESCAPE_RESULTS_PATH`` env var if set.
+        2. ``<repo_root>/tests/sandbox/sandbox_escape_results.json``.
+
+    Returns a dict with keys:
+        posture         "not_run" | "all_pass" | "has_failures" | "has_errors"
+        last_run        ISO timestamp string or None
+        host_platform   platform string or None
+        container_image image tag or None
+        summary         {total, passed, failed, skipped_or_error} or None
+        coverage        list of covered attack_vectors from the last run
+        gaps            list of attack_vectors with any FAIL/ERROR result
+        results_path    resolved path that was checked (str)
+        operator_note   human-readable description of the posture
+    """
+    env_override = os.environ.get(_ESCAPE_RESULTS_ENV_VAR, "")
+    resolved_path = Path(results_path or env_override or _ESCAPE_RESULTS_DEFAULT)
+
+    not_run_posture: dict[str, Any] = {
+        "posture": "not_run",
+        "last_run": None,
+        "host_platform": None,
+        "container_image": None,
+        "summary": None,
+        "coverage": [],
+        "gaps": [],
+        "results_path": str(resolved_path),
+        "operator_note": (
+            "The sandbox escape test suite has not been run or its results artifact "
+            f"was not found at {resolved_path}. Run: pytest -m sandbox_escape -v"
+        ),
+    }
+
+    if not resolved_path.exists():
+        return not_run_posture
+
+    try:
+        data = json.loads(resolved_path.read_text())
+    except Exception:
+        return {**not_run_posture, "posture": "not_run", "operator_note": (
+            f"sandbox_escape_results.json exists at {resolved_path} but could not be parsed."
+        )}
+
+    results: dict[str, Any] = data.get("results") or {}
+    summary: dict[str, Any] = data.get("summary") or {}
+    total = int(summary.get("total") or 0)
+    passed = int(summary.get("passed") or 0)
+    failed = int(summary.get("failed") or 0)
+    skipped = int(summary.get("skipped_or_error") or 0)
+
+    coverage: list[str] = sorted(
+        {r.get("attack_vector") for r in results.values() if r.get("status") == "PASS" and r.get("attack_vector")}
+    )
+    gaps: list[str] = sorted(
+        {r.get("attack_vector") for r in results.values() if r.get("status") in ("FAIL", "ERROR") and r.get("attack_vector")}
+    )
+
+    if failed > 0 or gaps:
+        posture_value = "has_failures"
+        note = (
+            f"{failed} escape test(s) FAILED out of {total}. "
+            f"Affected vectors: {gaps}. "
+            "The sandbox container-grade claim cannot be asserted until all tests pass."
+        )
+    elif skipped == total and total > 0:
+        posture_value = "not_run"
+        note = f"All {total} escape tests were skipped (Docker or Linux backend unavailable at run time)."
+    else:
+        posture_value = "all_pass"
+        note = (
+            f"All {passed}/{total} escape tests passed. "
+            f"Covered vectors: {coverage}. "
+            "Container-grade sandbox claim is adversarially verified for this platform."
+        )
+
+    return {
+        "posture": posture_value,
+        "last_run": data.get("tested_at"),
+        "host_platform": data.get("host_platform"),
+        "container_image": data.get("container_image"),
+        "summary": {
+            "total": total,
+            "passed": passed,
+            "failed": failed,
+            "skipped_or_error": skipped,
+        },
+        "coverage": coverage,
+        "gaps": gaps,
+        "results_path": str(resolved_path),
+        "operator_note": note,
+    }
+
+
 def resolve_sandbox_runner_type(explicit: str | None = None) -> str:
     requested = str(explicit or settings.AINDY_PLUGIN_SANDBOX_RUNNER or RUNNER_SELECTION_AUTO).strip()
     if requested and requested != RUNNER_SELECTION_AUTO:

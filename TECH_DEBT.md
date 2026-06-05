@@ -186,13 +186,18 @@ Implement `_detect_wsl2()`, `_wsl2_path()`, `_run_in_wsl2_strong_sandbox()` in
 Document the policy decision confirming Docker Desktop Linux VM boundary equals
 strong-sandbox-tier on macOS. Phase 0 escape suite must pass.
 
-**Phase 3 — Formal threat model + sandbox_escape_test_posture(): open**
-Create `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (append-only log). Each escape test
-category maps to a threat model entry. Implement `sandbox_escape_test_posture()` API.
+**Phase 3 (2026-06-05) — Formal threat model + sandbox_escape_test_posture(): COMPLETE**
+Created `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (append-only log, Entry 001 committed).
+Each escape vector maps to a threat model entry documenting threat, control, and failure
+interpretation. `sandbox_escape_test_posture()` added to `sandbox_runner.py` — reads
+`tests/sandbox/sandbox_escape_results.json`, returns structured posture dict (posture,
+last_run, host_platform, coverage, gaps, operator_note). Returns `"not_run"` gracefully
+when artifact is absent (production install without tests/).
 
-**Phase 4 — Release gate: open**
-Add pre-release escape suite gate to `docs/runtime/RELEASE_CHECKLIST.md`.
-Gate condition: all non-skipped escape tests PASS before any GA tag.
+**Phase 4 (2026-06-05) — Release gate: COMPLETE**
+Step 16 added to `docs/runtime/RELEASE_CHECKLIST.md`. Gate condition:
+`sandbox_escape_test_posture()["posture"] == "all_pass"`. Skips acceptable; FAILs block.
+Audit trail instruction added: append to SANDBOX_ESCAPE_AUDIT.md after each pre-release run.
 
 Trigger: when there is a platform-specific sandbox runtime delivering strong-sandbox-tier
 assurance on a non-Linux host.

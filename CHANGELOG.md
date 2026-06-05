@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added — C3 Phases 3+4: threat model, posture API, release gate (2026-06-05)
+
+- **`docs/runtime/SANDBOX_ESCAPE_AUDIT.md`** (new, append-only): Formal threat model mapping
+  each of the 6 escape vector categories to the specific threat it blocks, the Docker/kernel
+  control that prevents it, and the failure interpretation. Includes Entry 001 — the first
+  live audit run (2026-06-05, Windows + Docker Desktop, 17/17 PASS).
+
+- **`AINDY/platform_layer/sandbox_runner.py`**: Added `sandbox_escape_test_posture()` function.
+  Reads `tests/sandbox/sandbox_escape_results.json` and returns a structured posture dict:
+  `posture` (`"all_pass"` / `"has_failures"` / `"not_run"`), `last_run`, `host_platform`,
+  `summary`, `coverage` (list of passing vectors), `gaps` (failing vectors), `operator_note`.
+  Returns `"not_run"` gracefully when the artifact is absent (production install without tests/).
+  Path is configurable via `SANDBOX_ESCAPE_RESULTS_PATH` env var.
+
+- **`docs/runtime/RELEASE_CHECKLIST.md`**: Added Step 16 — Sandbox Escape Gate. Gate condition:
+  `sandbox_escape_test_posture()["posture"] == "all_pass"`. Skips acceptable; FAILs block release.
+  Includes audit trail instruction: append to `SANDBOX_ESCAPE_AUDIT.md` after each pre-release run.
+
 ### Added — C3 Phase 0: adversarial sandbox escape test suite (2026-06-04)
 
 - **`tests/sandbox/`** (8 new files, 17 tests): Adversarial escape test suite that proves
