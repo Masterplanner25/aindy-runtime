@@ -1,6 +1,6 @@
 ---
 title: "Security Policy"
-last_verified: "2026-05-25"
+last_verified: "2026-06-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -66,13 +66,6 @@ it by adding `--ignore-vuln <GHSA-ID>` to the pip-audit invocation in
 Accepted findings must be documented here under **Accepted Findings**.
 
 ## Accepted Findings
-
-### PYSEC-2026-161 — starlette host-header URL reconstruction
-- **Package:** starlette (currently pinned at 0.49.1)
-- **Fix version:** 1.0.1 (requires fastapi >= 0.135.0)
-- **Accepted:** 2026-05-25
-- **Rationale:** The fix requires upgrading starlette to 1.0.1, which in turn requires fastapi >= 0.135.0 — a 14-minor-version jump from our current pin (0.121.0). The upgrade is tracked as PACK-DEBT-2 in TECH_DEBT.md. The host-header issue affects URL reconstruction in Starlette middleware; risk is mitigated by the trusted-internal deployment posture described in DEPLOYMENT_PROFILES.md (no direct public internet exposure assumed).
-- **Reopen trigger:** FastAPI upgrade path is planned, or deployment posture changes to include public internet exposure.
 
 ### CVE-2024-23342 — ecdsa Minerva timing attack
 - **Package:** ecdsa (transitive dep of python-jose)
