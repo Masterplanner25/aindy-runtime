@@ -1351,10 +1351,12 @@ immediately. The HTTP approve request returns with `status: APPROVED` in millise
 clients poll `GET /apps/agent/runs/{id}` for status transitions. Tests updated to use
 `threading.Event` for deterministic background-thread coordination.
 
-**Remaining gap:** Orphaned-`approved` watchdog (AGENT-APPROVE-001b liveness gap) is
-not implemented — a process crash mid-background-execution leaves the run stranded in
-`approved` forever. The watchdog/reaper is tracked as part of the AGENT-APPROVE-001b
-family and must be addressed before GA hardening.
+**Watchdog implemented (2026-06-06):** `_recover_orphaned_approved_runs()` in
+`scheduler_service.py` runs every 5 minutes. It queries `AgentRun` rows where
+`status='approved'` and `approved_at < now - 10 min` (cap 50 per sweep), then
+re-dispatches `execute_run` in a fresh daemon thread for each. `execute_run` guards on
+`status == 'approved'` at entry so re-dispatch is safe if the original thread recovered
+late. Tests: `tests/unit/test_agent_approve_watchdog.py` (4 shapes). All gaps closed.
 
 **Discovered:** 2026-06-03 during agent walkthrough (Phase 2).
 
