@@ -38,26 +38,22 @@ all `settings.` call sites with `get_settings().`; gate log initialization insid
 
 ## CLI-SANDBOX-FORMAT-1: aindy-runtime sandbox returns raw JSON to terminal
 
-**Status:** Tracked, deferred to 1.0.1 or 1.1.
+**Status:** CLOSED (2026-06-05)
 
-**Discovered:** 2026-05-26 during pre-tag UX visual verification.
-
-**Context:** `aindy-runtime sandbox` currently emits a 297-line structured JSON document directly to stdout. The data is correct and complete (platform detection, container backend status with real failure-mode details, full capability matrix for all four supported platforms, sandbox verification posture, trusted Python inventory). The format is appropriate for machine consumption (API endpoints, audit pipelines, capability-matching engines) but presents friction for a human running the command at a terminal.
-
-The most actionable information — e.g., "Docker Desktop daemon not reachable, start Docker Desktop and enable Linux containers mode" — is nested five levels deep in `plugin_sandbox_platform.current_container_backend_detection.operator_note`. A human user wanting to know "does sandboxing work on my system, and if not what do I do" must mentally parse the JSON to extract that answer.
-
-**Resolution path:**
-1. Add a human-readable default output mode that summarizes the JSON document into ~15 lines covering: platform, highest supported sandbox tier, production-safe status, container runtime detection, the most relevant degraded-mode reason and its fix, database verification status, trusted Python summary.
-2. Move current JSON output behind a `--json` flag for machine consumers.
-3. Keep the underlying posture-collection logic unchanged. This is a presentation-layer fix, not a data-layer change.
-
-**Open question for resolution time:** Should `--json` be the only path to machine output, or should there be other formats (`--format yaml`, `--format compact`)? Defer the decision until use cases surface; YAGNI until then.
-
-**Reopen trigger:** Pre-1.0.1 release work, OR first user report of sandbox output confusion, whichever comes first.
-
-**Estimated effort:** ~1 hour for the human-readable formatter + `--json` flag plumbing. Low regression risk because the change is additive.
-
-**Discovered via:** Pre-tag UX visual verification (the audit-arc that found this also confirmed every other v1.0 surface, and the JSON-wall finding was deemed correct-but-unpolished rather than incorrect — see conversation history for the full reasoning). The "Discovered via" line is intentional — it captures the reasoning for not fixing now, so future-you doesn't reopen this thinking "why was this allowed to ship."
+**Implemented:**
+- `_format_sandbox_summary(payload)` in `AINDY/runtime_only.py` — renders the full
+  payload as a ~25-line human-readable summary: platform, highest tier, production-safe
+  status, container backend detection + operator note, active runner/assurance/certification,
+  requirements met, sandbox verification method, escape test posture (from
+  `sandbox_escape_test_posture()`), trusted Python extension count, degraded modes list.
+- Default `aindy-runtime sandbox` output is now human-readable.
+- `aindy-runtime sandbox --json` restores the full machine-readable JSON (now also
+  includes `escape_test_posture` key alongside the original five).
+- `_run_sandbox_check(output_json=False)` — new parameter; `--json` flag wired through
+  argparse `dest="output_json"`.
+- Tests updated in `test_runtime_cli.py` (9 total pass): JSON tests updated to pass
+  `output_json=True`; new `test_sandbox_check_default_produces_human_readable_summary`
+  verifies the human-readable format; patch list extended with `sandbox_escape_test_posture`.
 
 ---
 
