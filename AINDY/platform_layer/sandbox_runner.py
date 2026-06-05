@@ -607,7 +607,8 @@ def sandbox_platform_capability_matrix(
             runtime_available=True,
             strong_launcher=strong_launcher,
             strong_runtime_available=False,
-            linux_container_backend_available=False,
+            # Docker Desktop on Windows supports Linux containers (WSL2 or Hyper-V backend).
+            linux_container_backend_available=True,
         ),
         PLATFORM_MACOS: _platform_matrix_entry(
             platform_name=PLATFORM_MACOS,
@@ -615,7 +616,8 @@ def sandbox_platform_capability_matrix(
             runtime_available=True,
             strong_launcher=strong_launcher,
             strong_runtime_available=False,
-            linux_container_backend_available=False,
+            # Docker Desktop on macOS supports Linux containers (VF or HyperKit backend).
+            linux_container_backend_available=True,
         ),
         PLATFORM_OTHER: _platform_matrix_entry(
             platform_name=PLATFORM_OTHER,
@@ -2211,27 +2213,38 @@ def _detect_linux_container_backend(container_runtime: str) -> dict[str, Any]:
 
 def _detect_wsl2(container_runtime: str = "docker") -> dict[str, Any]:
     """
-    Detect WSL2 availability in the current execution context.
+    Detect whether a Linux VM container backend is available in the current context.
 
-    Two cases are detected:
+    Three cases are detected:
 
     - ``is_inside_wsl2``: the Python process itself is running inside WSL2.
       Detected by checking ``/proc/version`` for "microsoft" or "wsl2" on a
-      Linux host. In this case the platform already reports Linux, but it is
-      useful to know the kernel is Microsoft-hosted for logging purposes.
+      Linux host. The platform already reports Linux, but it is useful to know
+      the kernel is Microsoft-hosted for logging purposes.
 
     - ``docker_wsl2_backend``: the process is on a Windows host but Docker
-      Desktop is configured with a Linux container backend (WSL2 or Hyper-V),
-      meaning containers have full Linux kernel semantics even though the host
-      Python process is a Windows process.
+      Desktop is configured with a Linux container backend (WSL2 or Hyper-V).
+      Containers have full Linux kernel semantics even though the host Python
+      process is a Windows process.
 
-    ``wsl2_kernel_available`` is True in either case.  The practical meaning:
-    ``no_new_privileges``, ``--cap-drop ALL``, and ``--pids-limit`` are active
-    inside containers even on non-native-Linux hosts when this is True.
+    - ``docker_macos_backend``: the process is on a macOS host but Docker
+      Desktop is configured with a Linux container backend (Apple Virtualization
+      Framework on macOS 12+ or HyperKit on older versions). Same result as the
+      Windows case: containers run inside a Linux VM and Linux kernel controls
+      apply inside them.
+
+    ``wsl2_kernel_available`` is True in any of these cases. The practical
+    meaning: ``no_new_privileges``, ``--cap-drop ALL``, and ``--pids-limit`` are
+    active inside containers even on non-native-Linux hosts when this is True.
+
+    Note on naming: the field ``wsl2_kernel_available`` predates macOS support.
+    It covers all Linux VM container backends, not just WSL2. Use the individual
+    ``docker_wsl2_backend`` / ``docker_macos_backend`` fields to distinguish.
     """
     host_platform = _normalized_platform_system()
     is_inside_wsl2 = False
     docker_wsl2_backend = False
+    docker_macos_backend = False
     detection_method = "platform_check_only"
     detection_error: str | None = None
 
@@ -2254,9 +2267,24 @@ def _detect_wsl2(container_runtime: str = "docker") -> dict[str, Any]:
         elif backend.get("detection_error"):
             detection_error = backend["detection_error"]
 
-    wsl2_kernel_available = is_inside_wsl2 or docker_wsl2_backend
+    if host_platform == PLATFORM_MACOS:
+        backend = _detect_linux_container_backend(container_runtime)
+        detection_method = backend.get("detection_method") or "docker_info_json"
+        if backend.get("linux_container_backend"):
+            docker_macos_backend = True
+        elif backend.get("detection_error"):
+            detection_error = backend["detection_error"]
 
-    if docker_wsl2_backend:
+    wsl2_kernel_available = is_inside_wsl2 or docker_wsl2_backend or docker_macos_backend
+
+    if docker_macos_backend:
+        note = (
+            "Docker Desktop is running a Linux container backend "
+            "(Apple Virtualization Framework or HyperKit). "
+            "Linux kernel controls — no_new_privileges, drop_all_capabilities, pids_limit — "
+            "are active inside containers."
+        )
+    elif docker_wsl2_backend:
         note = (
             "Docker Desktop is running a Linux container backend (WSL2 or Hyper-V). "
             "Linux kernel controls — no_new_privileges, drop_all_capabilities, pids_limit — "
@@ -2265,11 +2293,12 @@ def _detect_wsl2(container_runtime: str = "docker") -> dict[str, Any]:
     elif is_inside_wsl2:
         note = "Python process is running inside WSL2; native Linux kernel controls available."
     else:
-        note = "WSL2 not detected; Linux-only kernel controls unavailable on this host."
+        note = "No Linux VM container backend detected; Linux-only kernel controls unavailable on this host."
 
     return {
         "is_inside_wsl2": is_inside_wsl2,
         "docker_wsl2_backend": docker_wsl2_backend,
+        "docker_macos_backend": docker_macos_backend,
         "wsl2_kernel_available": wsl2_kernel_available,
         "host_platform": host_platform,
         "detection_method": detection_method,

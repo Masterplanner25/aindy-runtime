@@ -198,9 +198,19 @@ or WSL2-native Python (when `platform.system() == "Linux"`). A Windows-native pa
 strong sandbox tier requires a Windows `aindy-sandbox-vm` binary that bridges to WSL2 —
 out of scope until the launcher exists.
 
-**Phase 2 — macOS Docker Desktop policy: open**
-Document the policy decision confirming Docker Desktop Linux VM boundary equals
-strong-sandbox-tier on macOS. Phase 0 escape suite must pass.
+**Phase 2 (2026-06-06) — macOS Docker Desktop Linux backend detection + policy: COMPLETE**
+Extended `_detect_wsl2()` to handle macOS: new `docker_macos_backend` field detects
+Docker Desktop with Linux container backend (Apple Virtualization Framework or HyperKit)
+via `docker info`. `wsl2_kernel_available` is now True on macOS + Docker Desktop Linux mode.
+Updated static platform matrix entries for Windows and macOS: both now show
+`linux_container_backend_available=True` (Docker Desktop on both platforms supports Linux
+containers). Static matrix now correctly reports `no_new_privileges`, `drop_all_capabilities`,
+`pids_limit` as available hardening controls for both platforms.
+Policy document created: `docs/runtime/MACOS_CONTAINER_POLICY.md`. Records what IS and is
+NOT claimed (seccomp/AppArmor/SELinux not claimed — not tested), assurance tier
+(container-grade, not strong-sandbox-vm), and that macOS escape suite certification is
+pending — first run required before certifying a macOS deployment.
+2 new unit tests in `tests/unit/test_sandbox_runner.py` (64 total).
 
 **Phase 3 (2026-06-05) — Formal threat model + sandbox_escape_test_posture(): COMPLETE**
 Created `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (append-only log, Entry 001 committed).

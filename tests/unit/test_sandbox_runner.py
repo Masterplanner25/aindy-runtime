@@ -1028,9 +1028,13 @@ class TestPlatformMatrixWithLinuxContainerBackend:
 
         matrix = sandbox_platform_capability_matrix()
 
+        # Linux is natively production-safe.
         assert matrix["supported_platforms"]["linux"]["production_safe_third_party_plugin_execution"] is True
-        assert matrix["supported_platforms"]["windows"]["production_safe_third_party_plugin_execution"] is False
-        assert matrix["supported_platforms"]["darwin"]["production_safe_third_party_plugin_execution"] is False
+        # Windows and macOS now show production-safe in the static matrix because Docker
+        # Desktop on both platforms supports Linux containers (WSL2/Hyper-V, VF/HyperKit).
+        assert matrix["supported_platforms"]["windows"]["production_safe_third_party_plugin_execution"] is True
+        assert matrix["supported_platforms"]["darwin"]["production_safe_third_party_plugin_execution"] is True
+        # PLATFORM_OTHER has no container runtime — not production-safe.
         assert matrix["supported_platforms"]["other"]["production_safe_third_party_plugin_execution"] is False
         assert matrix["current_environment"]["production_safe_third_party_plugin_execution"] is True
 
@@ -1308,6 +1312,48 @@ class TestDetectWsl2:
         assert result["docker_wsl2_backend"] is False
         assert result["wsl2_kernel_available"] is False
 
+    def test_macos_with_linux_container_backend_is_docker_macos(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_wsl2
+
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "/usr/local/bin/docker")
+
+        docker_info_output = '{"OSType":"linux","OperatingSystem":"Docker Desktop"}'
+        monkeypatch.setattr(
+            sandbox_runner.subprocess,
+            "run",
+            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": docker_info_output, "stderr": ""})(),
+        )
+
+        result = _detect_wsl2("docker")
+
+        assert result["is_inside_wsl2"] is False
+        assert result["docker_wsl2_backend"] is False
+        assert result["docker_macos_backend"] is True
+        assert result["wsl2_kernel_available"] is True
+        assert result["host_platform"] == "darwin"
+        assert result["detection_error"] is None
+
+    def test_macos_without_linux_container_backend_not_detected(self, monkeypatch):
+        import AINDY.platform_layer.sandbox_runner as sandbox_runner
+        from AINDY.platform_layer.sandbox_runner import _detect_wsl2
+
+        monkeypatch.setattr(sandbox_runner.platform, "system", lambda: "Darwin")
+        monkeypatch.setattr(sandbox_runner.shutil, "which", lambda _: "/usr/local/bin/docker")
+
+        docker_info_output = '{"OSType":"linux","OperatingSystem":"Boot2Docker"}'
+        monkeypatch.setattr(
+            sandbox_runner.subprocess,
+            "run",
+            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": docker_info_output, "stderr": ""})(),
+        )
+
+        # OSType=linux is still linux backend — should be True
+        result = _detect_wsl2("docker")
+        assert result["docker_macos_backend"] is True
+        assert result["wsl2_kernel_available"] is True
+
     def test_result_has_required_keys(self, monkeypatch):
         import AINDY.platform_layer.sandbox_runner as sandbox_runner
         from AINDY.platform_layer.sandbox_runner import _detect_wsl2
@@ -1320,6 +1366,7 @@ class TestDetectWsl2:
         assert set(result.keys()) >= {
             "is_inside_wsl2",
             "docker_wsl2_backend",
+            "docker_macos_backend",
             "wsl2_kernel_available",
             "host_platform",
             "detection_method",

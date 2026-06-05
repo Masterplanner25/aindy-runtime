@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added — C3 Phase 2: macOS Docker Desktop Linux backend detection + policy (2026-06-06)
+
+- **`AINDY/platform_layer/sandbox_runner.py`**: Extended `_detect_wsl2()` to handle macOS.
+  New `docker_macos_backend` field: detects Docker Desktop running a Linux container backend
+  via Apple Virtualization Framework (macOS 12+) or HyperKit (older). `wsl2_kernel_available`
+  is now True on macOS + Docker Desktop Linux containers mode.
+
+- **Static platform matrix** (`sandbox_platform_capability_matrix()`): Updated `PLATFORM_WINDOWS`
+  and `PLATFORM_MACOS` static entries to `linux_container_backend_available=True`. Docker Desktop
+  on both platforms supports Linux containers. Both now correctly show `no_new_privileges`,
+  `drop_all_capabilities`, and `pids_limit` as available hardening controls.
+
+- **`docs/runtime/MACOS_CONTAINER_POLICY.md`** (new): Policy document recording what IS and is
+  NOT claimed for macOS + Docker Desktop Linux containers. Assurance tier: `container-grade-sandbox`
+  (same as Windows + Docker Desktop). Seccomp/AppArmor/SELinux not claimed — not tested. Strong
+  sandbox VM still requires native Linux. Escape suite certification pending.
+
+- **2 new unit tests** in `test_sandbox_runner.py` (64 total): `test_macos_with_linux_container_backend_is_docker_macos`,
+  `test_macos_without_linux_container_backend_not_detected`. `test_result_has_required_keys` updated
+  to check `docker_macos_backend` field.
+
 ### Added — C3 Phase 1: WSL2/Linux backend detection for OCI sandbox runner (2026-06-06)
 
 - **`AINDY/platform_layer/sandbox_runner.py`**: Added `_detect_wsl2(container_runtime)`.
