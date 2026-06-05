@@ -11,6 +11,17 @@ Operational verification checklist for each `aindy-runtime` release.  Run these 
 against the built artifact in a clean environment before publishing.  This is a
 verification checklist — not a release-gate policy (see `RELEASE_GATES.md` for that).
 
+> **Before tagging or bumping the version:** confirm the full CI pipeline has passed on
+> the exact commit being tagged — not just the three required branch-protection checks
+> (Lint, Docs Validation, Runtime Contracts).  The full pipeline includes:
+>
+> - `Integration Tests (PostgreSQL + Redis)` — Alembic migration + integration suite
+> - `Platform UI Build` — Vite build produces a clean dist
+> - `Runtime Package Build` — wheel builds and passes `twine check`
+> - `Install Smoke Test` — wheel installs cleanly, entry points and sandbox surface verified
+>
+> All four must be green on the release commit before creating the tag.
+
 ---
 
 ## Pre-Publish (Source + Artifact)
