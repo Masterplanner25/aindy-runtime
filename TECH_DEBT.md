@@ -429,27 +429,15 @@ entry rather than re-disabling the gate.
 
 ## PACK-DEBT-5 — starlette 0.49.1 / FastAPI 0.121.0: PYSEC-2026-161 host-header CVE deferred
 
-**Status:** Deferred — Medium Priority (next minor release window)
+**Status:** CLOSED (2026-06-05)
 
-**Context:** pip-audit flags PYSEC-2026-161 (starlette reconstructs the requested URL
-from the HTTP `Host` header without sanitization). The fix is starlette 1.0.1, which
-requires fastapi >= 0.135.0. The 2026-05-25 security pass bumped us from fastapi 0.119.0
-to 0.121.0 + starlette 0.49.1 (the minimum compatible pairing that fixed CVE-2025-62727,
-the Range-header DoS). Going further to starlette 1.0.1 + fastapi 0.135.0 is a
-14-minor-version FastAPI jump and is deferred to avoid unplanned scope creep.
-
-PYSEC-2026-161 is exempted in `.github/workflows/security-audit.yml` with a comment;
-documented in `docs/runtime/SECURITY_POLICY.md` under Accepted Findings.
-
-**Resolution path:**
-1. Upgrade `fastapi` from `0.121.0` to `0.135.0` in `requirements.txt` and `pyproject.toml`.
-2. Upgrade `starlette` from `0.49.1` to `1.0.1` in the same files.
-3. Remove `--ignore-vuln PYSEC-2026-161` from `security-audit.yml`.
-4. Remove the PYSEC-2026-161 entry from `docs/runtime/SECURITY_POLICY.md` Accepted Findings.
-5. Run full integration tests — FastAPI 0.135 may have breaking changes vs 0.121.
-
-**Reopen trigger:** Any planned maintenance window with ~1 hour budget; or if deployment
-posture shifts to include direct public internet exposure (elevates urgency to High SLA).
+**Implemented:** Upgraded `fastapi` 0.121.0 → 0.135.0, `starlette` 0.49.1 → 1.0.1, and
+`prometheus-fastapi-instrumentator` 7.1.0 → 8.0.0 (7.x required `starlette<1.0.0`; 8.0.0
+requires `starlette>=1.0.0,<2.0.0`). Pins updated in both `AINDY/requirements.txt` and
+`pyproject.toml`. `--ignore-vuln PYSEC-2026-161` removed from `security-audit.yml`.
+PYSEC-2026-161 Accepted Findings entry removed from `docs/runtime/SECURITY_POLICY.md`.
+Unit tests pass; no API-level breakage detected (direct starlette usage in the codebase
+is limited to `starlette.exceptions.HTTPException` — a stable import).
 
 ---
 
