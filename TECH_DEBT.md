@@ -63,16 +63,25 @@ The most actionable information — e.g., "Docker Desktop daemon not reachable, 
 
 ## IDEM-6 — Multi-Instance Bootstrap Race
 
-Status: Deferred — Low Priority
+Status: CLOSED (2026-06-05)
 
 Source: `docs/runtime/IDEMPOTENCY_CONTRACT.md` Open Question #1.
 
-First-ever blank-DB deploy with multiple runtime instances starting simultaneously can
-race on `CREATE TABLE`. `checkfirst=True` in `create_all` mitigates but does not fully
-eliminate the race. Fix is `pg_try_advisory_lock` around the bootstrap path in
-`AINDY/db/database.py` (or whichever function calls `Base.metadata.create_all`).
+Implemented: `pg_advisory_lock(_BOOTSTRAP_ADVISORY_LOCK_KEY)` wraps the blank-DB
+bootstrap path in `reconcile_runtime_schema()` (`AINDY/db/schema_contract.py`).
+The lock is acquired with a blocking call (waits rather than fails), the schema state
+is re-inspected under the lock (TOCTOU guard — a second instance that wins the wait
+finds the DB already bootstrapped and skips `create_all`), and the lock is explicitly
+released in a `finally` block so it is freed even when `create_all` raises.
 
-Trigger: revisit before any multi-instance cold-start deployment in production.
+Lock key: `_BOOTSTRAP_ADVISORY_LOCK_KEY = 4149443900` (stable bigint, must not change).
+SQLite paths are not affected (advisory lock is PostgreSQL-only; the check gates on
+`not url.startswith("sqlite")`).
+
+Regression coverage: 3 new unit tests in `tests/unit/test_runtime_schema_contract.py`
+(`test_reconcile_blank_db_acquires_advisory_lock_for_postgres`,
+`test_reconcile_blank_db_skips_create_all_when_another_instance_bootstrapped`,
+`test_reconcile_blank_db_advisory_unlock_called_even_on_create_all_failure`).
 
 ---
 
