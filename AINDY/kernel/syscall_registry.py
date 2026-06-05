@@ -1305,3 +1305,9 @@ def get_registered_syscalls() -> list[str]:
         return []
 
 
+# Minimum number of syscalls expected after a complete boot (all static built-ins).
+# Any count below this floor means Phase 8 did not finish, or a registration was lost.
+# Add 1 per new static entry added to this file.  Do not lower this value.
+SYSCALL_REGISTRY_MIN_COUNT: int = 17
+
+

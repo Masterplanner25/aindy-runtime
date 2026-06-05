@@ -360,6 +360,23 @@ def _check_ai_providers_status() -> dict:
     }
 
 
+def _check_syscall_registry_status() -> dict:
+    from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY, SYSCALL_REGISTRY_MIN_COUNT
+
+    count = len(SYSCALL_REGISTRY)
+    if count >= SYSCALL_REGISTRY_MIN_COUNT:
+        return {"status": "ok", "count": count, "minimum_expected": SYSCALL_REGISTRY_MIN_COUNT}
+    return {
+        "status": "incomplete",
+        "count": count,
+        "minimum_expected": SYSCALL_REGISTRY_MIN_COUNT,
+        "detail": (
+            f"Only {count} syscalls registered; expected >= {SYSCALL_REGISTRY_MIN_COUNT}. "
+            "Phase 8 (domain handler registration) may not have completed."
+        ),
+    }
+
+
 def _check_quota_backend_status() -> dict:
     from AINDY.kernel.resource_manager import get_resource_manager
 
@@ -499,7 +516,7 @@ async def report_client_vitals(
 
 
 async def _build_deep_health_payload() -> dict:
-    database, redis, mongo, scheduler, flow_registry, worker, nodus, ai_providers, quota_backend = await gather(
+    database, redis, mongo, scheduler, flow_registry, worker, nodus, ai_providers, quota_backend, syscall_registry = await gather(
         _run_deep_check(_check_database_status, timeout=0.5),
         _run_deep_check(_check_redis_status, timeout=1.0),
         _run_deep_check(_check_mongo_status, timeout=1.0),
@@ -509,6 +526,7 @@ async def _build_deep_health_payload() -> dict:
         _run_deep_check(_check_nodus_status, timeout=1.0),
         _run_deep_check(_check_ai_providers_status, timeout=0.5),
         _run_deep_check(_check_quota_backend_status, timeout=0.5),
+        _run_deep_check(_check_syscall_registry_status, timeout=0.5),
     )
 
     checks = {
@@ -521,6 +539,7 @@ async def _build_deep_health_payload() -> dict:
         "nodus": nodus if nodus.get("status") != "error" else {"status": "unavailable", "detail": nodus.get("detail")},
         "ai_providers": ai_providers if ai_providers.get("status") != "error" else {"status": "unavailable", "detail": ai_providers.get("detail")},
         "quota_backend": quota_backend,
+        "syscall_registry": syscall_registry,
     }
     overall_status = "degraded" if any(
         check.get("status") not in {"ok", "not_configured", "not_applicable"} for check in checks.values()

@@ -2,6 +2,116 @@
 
 ## Unreleased
 
+### Added — Phase 3 hardening: cross-repo compatibility, release discipline, core debt (2026-06-04)
+
+- **`tests/unit/test_cross_repo_compatibility.py`** (new, 7 tests): Regression suite for
+  aindy-sdk and aindy-ui-kit compatibility assumptions. SDK tests (`-k sdk`): version
+  envelope shape, stable syscall names present, watcher endpoint (`/watcher/signals`)
+  registered in ROOT_ROUTERS. UI tests (`-k ui`): `boot_mode` field in
+  `RuntimeSurfaceResponse`, `runtime_ui_surface_state()` returns non-empty `boot_mode`,
+  all expected platform route prefixes served.
+
+- **`tests/unit/test_runtime_readiness_contract.py`** (new, 7 tests): Covers IDEM-7
+  (syscall registry floor), `_check_syscall_registry_status()` ok/incomplete paths,
+  `/health/deep` includes `syscall_registry` check, and SCHED-001/002/003 (scheduler
+  status graceful when tasks domain absent, stuck-run-watchdog fields always present).
+
+- **`docs/runtime/SDK_CONTRACT.md`** (new): Defines what `aindy-sdk` can rely on from
+  `aindy-runtime` — version envelope shape, auth contract, watcher endpoint paths, memory
+  API, stable syscall table, health/readiness HTTP semantics, and known leakage risks.
+
+- **`docs/runtime/UI_CONTRACT.md`** (new): Defines what the platform SPA
+  (`@aindy/ui-kit` + `platform/src/`) can rely on — boot mode detection path
+  (`/api/version → data.system.runtime.boot_mode`), auth flow fields, ROUTES table
+  invariants, SPA asset 404 discrimination, operator endpoint availability, leakage risks.
+
+- **`docs/runtime/CROSS_REPO_COMPATIBILITY.md`** (new): Policy document listing the
+  5 obligations that must hold before any release touching stable surfaces, dependency
+  tables for aindy-sdk and aindy-ui-kit, and the breaking-change policy.
+
+- **`docs/runtime/RELEASE_CHECKLIST.md`** (new): 15-step operator verification checklist
+  covering schema contract, unit tests, build artifacts, installed-artifact smoke, Docker
+  compose stack, health endpoints, syscall registry count, watcher endpoint, platform SPA,
+  and cross-repo compatibility assertions.
+
+- **`AINDY_RUNTIME_90_DAY_CHECKLIST.md`**: Phase 3 complete — Runtime Core Debt
+  Reduction, Verification Standards, Release Discipline, and Cross-Repo Boundary Proof
+  items checked off. Final score: **77.5 / 100** (target was 76-80). Category deltas,
+  blockers to 80+, and blockers to 85+ recorded in the Final 90-Day Review section.
+
+### Fixed — IDEM-7: syscall registry completeness now visible in `/health/deep` (2026-06-04)
+
+- **`AINDY/kernel/syscall_registry.py`**: Added `SYSCALL_REGISTRY_MIN_COUNT = 17` — the
+  floor for expected static built-in syscalls. Serves as a canary: if Phase 8
+  `_register_domain_handlers()` crashes, the count drops and `/health/deep` reports it.
+- **`AINDY/routes/health_router.py`**: Added `_check_syscall_registry_status()` and wired
+  it into `_build_deep_health_payload()`. The `checks.syscall_registry` field now appears
+  in every `/health/deep` response with `status`, `count`, and `minimum_expected`.
+
+### Fixed — SCHED-001/002/003: scheduler status no longer returns 500 in platform-only profile (2026-06-04)
+
+- **`AINDY/routes/observability_router.py`**: Replaced the flow-engine-dependent
+  `observability_scheduler_status_node` flow with a direct `_build_scheduler_status_payload(db)`
+  helper. The new helper checks `get_symbol("task_is_background_leader")` and returns
+  `tasks_domain_available: false` (not a 500) when the tasks domain plugin is absent.
+  `FEATURE_FLAGS.OPERATOR_SCHEDULER_STATUS` in `platform/src/api/_routes.js` updated to
+  `true` — the scheduler status NavLink is now enabled for all deployments.
+
+### Fixed — PERMISSION-SECRET-CLEANUP-1: vestigial `PERMISSION_SECRET` scaffolding removed (2026-06-04)
+
+- **`tests/conftest.py`**, **`alembic/env.py`**, **`scripts/check_schema_version.py`**:
+  Removed `os.environ.setdefault("PERMISSION_SECRET", ...)` from all three sites. The
+  field has `default=""` in `Settings` (no validator), so it requires no env var. Removing
+  these defaults has no runtime effect but eliminates confusion about whether
+  `PERMISSION_SECRET` is a required secret.
+
+### Added — Phase 2 hardening: operability contracts and security isolation (2026-06-03)
+
+- **`tests/unit/test_operability_contracts.py`** (new, 14 tests): Operability contract
+  coverage for the three stable runtime surfaces (`GET /health`, `GET /ready`,
+  `GET /api/version`). Covers `derive_public_status` tier mapping (critical →
+  unhealthy, degraded database → unhealthy, non-critical degraded → 200),
+  `_build_health_response` HTTP 503 path, `/ready` response body shape for
+  `restore_pending` and `registry_restore_incomplete` 503 cases, and `/api/version`
+  stable envelope fields.
+
+- **`tests/unit/test_security_isolation.py`** (new, 25 tests): Security isolation
+  regression coverage. Covers all 11 `_BLOCKED_ROOT_KEYS` stripped from extension
+  context, `AINDY.*` object redaction in extension payloads, extension tenant mismatch
+  rejection via `_validate_runtime_owned_call_metadata`, quota backend fail-open in
+  dev/test and fail-closed in production.
+
+- **`docs/runtime/SECURITY_MATRIX.md`** (new): Runtime security matrix mapping five
+  dimensions (trusted internal execution, extension capability boundaries, tenant
+  enforcement, deployment profile differences, degraded security posture) to their
+  enforcement paths, test coverage, and known limitations. Includes explicit
+  safe/unsafe/unsupported table for extension execution.
+
+- **`AINDY_RUNTIME_90_DAY_CHECKLIST.md`**: Phase 2 complete — all Operability Review
+  and Security Hardening items checked off; Phase 2 Exit Criteria met.
+
+### Fixed — `watcher_router` and `db_verify_router` were never registered (2026-06-03)
+
+- **`AINDY/routes/__init__.py`**: `watcher_router` added to `ROOT_ROUTERS` — `POST /watcher/signals`
+  and `GET /watcher/signals` were returning 404 in all deployments. `db_verify_router` added to
+  `PLATFORM_ROUTERS` — `GET /platform/db/verify` (live schema inspection) was also unreachable.
+  Both routers existed and were correctly implemented but were never imported or mounted.
+
+### Changed — Watcher client process extracted to aindy-sdk (2026-06-03)
+
+- **`AINDY/watcher/`**: Client-process files (`classifier.py`, `window_detector.py`,
+  `session_tracker.py`, `signal_emitter.py`, `config.py`, `watcher.py`) moved to
+  `aindy_sdk/watcher/` in the `aindy-sdk` repo. Run the watcher client with
+  `python -m aindy_sdk.watcher.watcher`. The server-side signal constants
+  (`constants.py`) remain in `AINDY/watcher/` — `watcher_router.py` and
+  `watcher_contract.py` continue to import from `AINDY.watcher.constants` unchanged.
+- **`signal_emitter.py` (SDK)**: Rewritten to use stdlib `urllib.request` in place
+  of `httpx` and the runtime-internal `perform_external_call` wrapper. The SDK
+  watcher module has no runtime dependency and no new external dependencies.
+- **`tests/unit/test_watcher_contract.py`**: Trimmed to constants-only assertions
+  (signal types, activity types, timestamp parsing). Classifier and session-tracker
+  tests migrated to `aindy-sdk/tests/test_watcher.py`.
+
 ### Changed — Default resource quota raised for real agent workloads (2026-06-03)
 
 - **`AINDY/kernel/resource_manager.py`**: Default `AINDY_QUOTA_CPU_MS` raised from

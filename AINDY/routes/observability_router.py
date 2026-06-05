@@ -108,6 +108,101 @@ def get_rippletrace_status(
 # ------------------------------
 # SCHEDULER STATUS
 # ------------------------------
+def _build_scheduler_status_payload(db: Session) -> dict:
+    """Build scheduler status directly — no flow engine dependency."""
+    from AINDY.agents.stuck_run_watchdog import get_last_scan_result
+    from AINDY.config import settings
+    from AINDY.platform_layer import scheduler_service
+    from AINDY.platform_layer.registry import get_symbol
+
+    # --- scheduler running state ---
+    scheduler_running = False
+    try:
+        scheduler = scheduler_service.get_scheduler()
+        scheduler_running = bool(getattr(scheduler, "running", False))
+    except Exception:
+        scheduler = None
+
+    # --- tasks-domain leader lease (not available in platform-only profile) ---
+    is_leader_fn = get_symbol("task_is_background_leader")
+    if is_leader_fn is not None:
+        try:
+            is_leader = is_leader_fn()
+        except Exception:
+            is_leader = None
+    else:
+        is_leader = None
+
+    lease = None
+    if is_leader_fn is not None:
+        try:
+            from AINDY.db.models.background_task_lease import BackgroundTaskLease
+            _lease_name = get_symbol("task_background_lease_name") or "task_background_runner"
+            lease_row = db.query(BackgroundTaskLease).filter(
+                BackgroundTaskLease.name == _lease_name
+            ).first()
+            if lease_row:
+                lease = {
+                    "owner_id": lease_row.owner_id,
+                    "acquired_at": lease_row.acquired_at.isoformat() if lease_row.acquired_at else None,
+                    "heartbeat_at": lease_row.heartbeat_at.isoformat() if lease_row.heartbeat_at else None,
+                    "expires_at": lease_row.expires_at.isoformat() if lease_row.expires_at else None,
+                }
+        except Exception:
+            pass
+
+    result = {
+        "observability_scheduler_status_result": {
+            "scheduler_running": scheduler_running,
+            "is_leader": is_leader,
+            "lease": lease,
+            "tasks_domain_available": is_leader_fn is not None,
+        }
+    }
+
+    # --- stuck-run watchdog ---
+    last_scan = get_last_scan_result()
+    if scheduler is None or not scheduler_running:
+        result["stuck_run_watchdog"] = {
+            "registered": False,
+            "next_run_time": None,
+            "last_run_at": last_scan["last_run_at"],
+            "last_recovered": last_scan["recovered"],
+            "last_dead_lettered": last_scan["dead_lettered"],
+            "last_had_error": last_scan["had_error"],
+            "last_error_message": last_scan["error_message"],
+            "recovery_sla_minutes": settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
+            "stuck_threshold_minutes": settings.STUCK_RUN_THRESHOLD_MINUTES,
+        }
+        return result
+
+    job = None
+    if callable(getattr(scheduler, "get_job", None)):
+        job = scheduler.get_job("stuck_run_watchdog")
+    elif callable(getattr(scheduler, "get_jobs", None)):
+        job = next(
+            (c for c in scheduler.get_jobs() if getattr(c, "id", None) == "stuck_run_watchdog"),
+            None,
+        )
+    result["stuck_run_watchdog"] = {
+        "registered": job is not None,
+        "next_run_time": (
+            job.next_run_time.isoformat()
+            if job is not None and getattr(job, "next_run_time", None) is not None
+            else None
+        ),
+        "interval_minutes": settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
+        "last_run_at": last_scan["last_run_at"],
+        "last_recovered": last_scan["recovered"],
+        "last_dead_lettered": last_scan["dead_lettered"],
+        "last_had_error": last_scan["had_error"],
+        "last_error_message": last_scan["error_message"],
+        "recovery_sla_minutes": settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
+        "stuck_threshold_minutes": settings.STUCK_RUN_THRESHOLD_MINUTES,
+    }
+    return result
+
+
 @router.get("/scheduler/status")
 @limiter.limit("60/minute")
 def get_scheduler_status(
@@ -118,71 +213,7 @@ def get_scheduler_status(
     user_id = str(current_user["sub"])
 
     def handler(ctx):
-        result = _run_flow_observability("observability_scheduler_status", {}, db, user_id)
-        from AINDY.agents.stuck_run_watchdog import get_last_scan_result
-        from AINDY.config import settings
-        from AINDY.platform_layer import scheduler_service
-        last_scan = get_last_scan_result()
-
-        try:
-            scheduler = scheduler_service.get_scheduler()
-        except Exception:
-            result["stuck_run_watchdog"] = {
-                "registered": False,
-                "next_run_time": None,
-                "last_run_at": last_scan["last_run_at"],
-                "last_recovered": last_scan["recovered"],
-                "last_dead_lettered": last_scan["dead_lettered"],
-                "last_had_error": last_scan["had_error"],
-                "last_error_message": last_scan["error_message"],
-                "recovery_sla_minutes": settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
-                "stuck_threshold_minutes": settings.STUCK_RUN_THRESHOLD_MINUTES,
-            }
-            return result
-
-        if not getattr(scheduler, "running", False):
-            result["stuck_run_watchdog"] = {
-                "registered": False,
-                "next_run_time": None,
-                "last_run_at": last_scan["last_run_at"],
-                "last_recovered": last_scan["recovered"],
-                "last_dead_lettered": last_scan["dead_lettered"],
-                "last_had_error": last_scan["had_error"],
-                "last_error_message": last_scan["error_message"],
-                "recovery_sla_minutes": settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
-                "stuck_threshold_minutes": settings.STUCK_RUN_THRESHOLD_MINUTES,
-            }
-            return result
-
-        job = None
-        if callable(getattr(scheduler, "get_job", None)):
-            job = scheduler.get_job("stuck_run_watchdog")
-        elif callable(getattr(scheduler, "get_jobs", None)):
-            job = next(
-                (
-                    candidate
-                    for candidate in scheduler.get_jobs()
-                    if getattr(candidate, "id", None) == "stuck_run_watchdog"
-                ),
-                None,
-            )
-        result["stuck_run_watchdog"] = {
-            "registered": job is not None,
-            "next_run_time": (
-                job.next_run_time.isoformat()
-                if job is not None and getattr(job, "next_run_time", None) is not None
-                else None
-            ),
-            "interval_minutes": settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
-            "last_run_at": last_scan["last_run_at"],
-            "last_recovered": last_scan["recovered"],
-            "last_dead_lettered": last_scan["dead_lettered"],
-            "last_had_error": last_scan["had_error"],
-            "last_error_message": last_scan["error_message"],
-            "recovery_sla_minutes": settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
-            "stuck_threshold_minutes": settings.STUCK_RUN_THRESHOLD_MINUTES,
-        }
-        return result
+        return _build_scheduler_status_payload(db)
 
     return _execute_observability(request, "observability_scheduler_status", handler, db=db, user_id=user_id)
 

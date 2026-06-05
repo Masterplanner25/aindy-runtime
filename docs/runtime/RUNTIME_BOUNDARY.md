@@ -21,9 +21,9 @@ This is a boundary document, not an implementation inventory.
 
 ## Canonical Definition
 
-`aindy-runtime` is the execution substrate of the AINDY platform.
+`aindy-runtime` is the execution substrate of the AINDY platform: the layer that accepts execution requests, manages the startup lifecycle, runs and resumes orchestrated work through the syscall dispatcher and flow engine, enforces tenant/capability/readiness contracts, and exposes the stable health, version, and execution surfaces that SDK and UI depend on. It does not own app-domain logic, UI, or external AI provider clients.
 
-It owns the runtime responsibilities required to:
+Ownership detail:
 
 - accept and validate execution requests
 - manage runtime lifecycle and startup
@@ -361,7 +361,9 @@ These documents answer adjacent but distinct questions. All four exist under
 | Document | Answers | Status |
 |---|---|---|
 | `RUNTIME_BOUNDARY.md` (this document) | What the runtime owns and does not own | Reviewed |
-| `EXECUTION_INVARIANTS.md` | What runtime behavior must not drift across releases | Draft — unreviewed Codex output; next in review queue |
+| `RUNTIME_MODULE_MAP.md` | Every directory/module tagged as core runtime / platform support / legacy spillover / extraction candidate | Reviewed 2026-06-03 |
+| `EXECUTION_INVARIANTS.md` | What runtime behavior must not drift across releases | Reviewed 2026-06-03 |
+| `ARCHITECTURE_RISK.md` | Top modules by complexity/change risk and blast radius; coupling hotspots | Reviewed 2026-06-03 |
 | `SECURITY_POSTURE.md` | What trust and isolation claims are actually true today | Exists — review status unknown |
 | `CROSS_REPO_COMPATIBILITY.md` | What SDK/UI/runtime consumers may rely on across versions | Exists — review status unknown |
 | `DEGRADED_MODE_MATRIX.md` | What remains safe under partial infrastructure failure | Exists — review status unknown |

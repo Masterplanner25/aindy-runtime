@@ -1,6 +1,6 @@
 ---
 title: Runtime-Only Deployment
-last_verified: "2026-05-20"
+last_verified: "2026-06-03"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -24,6 +24,8 @@ Scope limit:
 
 This document defines the runtime-only HTTP and extension surface. Deployment
 topology is a separate contract; see [Deployment Profiles](./DEPLOYMENT_PROFILES.md).
+The runtime invariants that must hold across refactors and releases are catalogued
+in [Execution Invariants](./EXECUTION_INVARIANTS.md).
 
 Repository ownership:
 
@@ -73,7 +75,9 @@ Ownership boundary:
 - The selected boot profile is `platform-only`.
 - Startup state reports `boot_mode=runtime-only`.
 - `AINDY/runtime_plugins.json` resolves that profile to an empty plugin list.
-- Startup remains strict for explicitly requested non-empty profiles.
+- If `AINDY_BOOT_PROFILE` or `AINDY_PLUGIN_PROFILE` explicitly requests a non-empty
+  profile that does not resolve or has no registered extensions, startup aborts rather
+  than silently proceeding with an empty extension set.
 - No `apps/*` bootstrap module is loaded in runtime-only mode.
 
 This means the runtime repo can boot on its own as long as it ships the
@@ -232,6 +236,19 @@ Readiness scope:
   checks for the active deployment profile
 - it does not imply third-party extension trust, sandboxing, or a guarantee
   that every experimental surface is production-hardened
+
+Readiness probe timing:
+
+- `startup_complete=True` is published only after all startup phases finish
+  (schema enforcement, syscall registration, flow registration, event bus start,
+  WAIT-state rehydration, and startup hooks)
+- `/ready` returns `503` until that point — a readiness probe hitting the runtime
+  during startup will correctly receive not-ready; this is expected, not a defect
+- `/health` remains reachable during startup for liveness checks; only `/ready`
+  enforces the startup-complete gate
+- admin account promotion (`AINDY_BOOTSTRAP_ADMIN_EMAIL`) runs before
+  `startup_complete=True` is published, so it completes before the runtime serves
+  any authenticated traffic
 
 ## Intentionally Unavailable Without Apps
 

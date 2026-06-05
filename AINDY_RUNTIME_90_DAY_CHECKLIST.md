@@ -5,8 +5,9 @@
 
 This plan is for `aindy-runtime` as a **trusted-internal runtime platform** with kernel, execution, orchestration, syscall, deployment, and runtime-contract responsibilities.
 
-Current maturity score: `71.5 / 100`
-90-day target score: `76-80 / 100`
+Start maturity score: `71.5 / 100`
+End maturity score: `77.5 / 100` (2026-06-04)
+90-day target score: `76-80 / 100` ✓ attained
 Longer-term target: `85 / 100`
 
 This checklist is designed to move the runtime from:
@@ -34,14 +35,14 @@ By day 90, `aindy-runtime` should have:
 
 ## Success Criteria
 
-- [ ] Runtime ownership boundary is documented and enforced more strictly
-- [ ] Stable vs experimental runtime surfaces are clearer in critical paths
-- [ ] Canonical execution invariants are documented
-- [ ] Recovery, restart, wait/resume, and syscall availability behavior have stronger regression coverage
-- [ ] Trusted-internal security posture is materially stronger and easier to explain
-- [ ] Runtime-critical verification bar is higher than the current baseline
-- [ ] Artifact validation and cross-repo compatibility checks are improved
-- [ ] Maturity score improves from `71.5` to at least `76-80`
+- [x] Runtime ownership boundary is documented and enforced more strictly — `RUNTIME_BOUNDARY.md`, `RUNTIME_MODULE_MAP.md`
+- [x] Stable vs experimental runtime surfaces are clearer in critical paths — `PUBLIC_RUNTIME_SURFACES.md`, `RUNTIME_STABILITY_INDEX.md`
+- [x] Canonical execution invariants are documented — `EXECUTION_INVARIANTS.md`
+- [x] Recovery, restart, wait/resume, and syscall availability behavior have stronger regression coverage — 9 new test files covering startup, scheduler, syscall not-ready, rehydration, partial infra, security isolation, cross-repo compatibility
+- [x] Trusted-internal security posture is materially stronger and easier to explain — `SECURITY_MATRIX.md`, security isolation tests
+- [x] Runtime-critical verification bar is higher than the current baseline — explicit contract tests for health, readiness, version envelope, syscall registry, compatibility
+- [x] Artifact validation and cross-repo compatibility checks are improved — `RELEASE_CHECKLIST.md`, `CROSS_REPO_COMPATIBILITY.md`, `SDK_CONTRACT.md`, `UI_CONTRACT.md`, 7 automated compatibility tests
+- [x] Maturity score improves from `71.5` to at least `76-80` — **attained: 77.5 / 100**
 
 ---
 
@@ -53,41 +54,41 @@ Tighten runtime identity, ownership, and critical contracts.
 ### Ownership Boundary
 - [x] Write one canonical definition of what `aindy-runtime` owns
 - [x] Write one canonical definition of what `aindy-runtime` explicitly does **not** own
-- [ ] Review current repo surface and tag directories/modules as:
-  - [ ] core runtime
-  - [ ] platform support
-  - [ ] legacy spillover
-  - [ ] candidate for extraction or de-emphasis
-- [ ] Publish a runtime boundary note that aligns with SDK and UI responsibilities
+- [x] Review current repo surface and tag directories/modules as:
+  - [x] core runtime
+  - [x] platform support
+  - [x] legacy spillover
+  - [x] candidate for extraction or de-emphasis
+- [x] Publish a runtime boundary note that aligns with SDK and UI responsibilities
 
 ### Public Surface Tightening
-- [ ] Review `docs/runtime/PUBLIC_RUNTIME_SURFACES.md`
-- [ ] Mark critical runtime surfaces as:
-  - [ ] stable
-  - [ ] conditionally stable
-  - [ ] experimental
-- [ ] Reduce ambiguity in docs around runtime-only boot guarantees
-- [ ] Confirm extension ABI and syscall stability language is consistent across docs
+- [x] Review `docs/runtime/PUBLIC_RUNTIME_SURFACES.md`
+- [x] Mark critical runtime surfaces as:
+  - [x] stable
+  - [x] conditionally stable
+  - [x] experimental
+- [x] Reduce ambiguity in docs around runtime-only boot guarantees
+- [x] Confirm extension ABI and syscall stability language is consistent across docs
 
 ### Execution Contract Inventory
-- [ ] Create a canonical list of runtime invariants to preserve across releases
-- [ ] Include invariants for:
-  - [ ] scheduler lifecycle
-  - [ ] wait/resume registration
-  - [ ] syscall dispatcher availability
-  - [ ] startup ordering
-  - [ ] tenant/capability enforcement
-  - [ ] readiness and degraded mode behavior
+- [x] Create a canonical list of runtime invariants to preserve across releases
+- [x] Include invariants for:
+  - [x] scheduler lifecycle
+  - [x] wait/resume registration
+  - [x] syscall dispatcher availability
+  - [x] startup ordering
+  - [x] tenant/capability enforcement
+  - [x] readiness and degraded mode behavior
 
 ### Architecture Risk Review
-- [ ] Identify top 5 runtime-critical modules by complexity and change risk
-- [ ] Identify top 5 runtime-critical modules by operational blast radius
-- [ ] Record where bootstrap, configuration, and lifecycle coupling are still too high
+- [x] Identify top 5 runtime-critical modules by complexity and change risk
+- [x] Identify top 5 runtime-critical modules by operational blast radius
+- [x] Record where bootstrap, configuration, and lifecycle coupling are still too high
 
 ### Phase 1 Exit Criteria
-- [ ] Runtime boundary is easier to explain in one paragraph
-- [ ] Critical runtime contracts are listed in one place
-- [ ] Stable vs experimental is clearer for the most important runtime surfaces
+- [x] Runtime boundary is easier to explain in one paragraph
+- [x] Critical runtime contracts are listed in one place
+- [x] Stable vs experimental is clearer for the most important runtime surfaces
 
 ---
 
@@ -97,46 +98,46 @@ Tighten runtime identity, ownership, and critical contracts.
 Harden correctness, startup behavior, recovery, and security posture.
 
 ### Execution Invariants
-- [ ] Create `docs/runtime/EXECUTION_INVARIANTS.md`
-- [ ] Define and document invariants for:
-  - [ ] startup sequencing
-  - [ ] scheduler registration lifecycle
-  - [ ] syscall readiness behavior
-  - [ ] event delivery and resume matching
-  - [ ] restart/rehydration behavior
-  - [ ] readiness transitions
-  - [ ] degraded-mode behavior
+- [x] Create `docs/runtime/EXECUTION_INVARIANTS.md`
+- [x] Define and document invariants for:
+  - [x] startup sequencing
+  - [x] scheduler registration lifecycle
+  - [x] syscall readiness behavior
+  - [x] event delivery and resume matching
+  - [x] restart/rehydration behavior
+  - [x] readiness transitions
+  - [x] degraded-mode behavior
 
 ### Verification Expansion
-- [ ] Add regression coverage for startup sequencing
-- [ ] Add regression coverage for scheduler wait/resume behavior
-- [ ] Add regression coverage for syscall not-ready windows
-- [ ] Add regression coverage for recovery/rehydration paths
-- [ ] Add regression coverage for readiness behavior against partial infrastructure
+- [x] Add regression coverage for startup sequencing
+- [x] Add regression coverage for scheduler wait/resume behavior
+- [x] Add regression coverage for syscall not-ready windows
+- [x] Add regression coverage for recovery/rehydration paths
+- [x] Add regression coverage for readiness behavior against partial infrastructure
 - [ ] Add integration checks for Redis/Postgres-backed execution paths where relevant
 
 ### Security and Isolation Hardening
-- [ ] Create or update a runtime security matrix covering:
-  - [ ] trusted internal execution
-  - [ ] extension capability boundaries
-  - [ ] tenant enforcement boundaries
-  - [ ] deployment profile differences
-  - [ ] degraded security posture under missing dependencies
-- [ ] Audit all extension trust assumptions documented in runtime docs
-- [ ] Verify high-risk capability paths have regression tests
-- [ ] Document what is safe, unsafe, and unsupported for extension execution
+- [x] Create or update a runtime security matrix covering:
+  - [x] trusted internal execution
+  - [x] extension capability boundaries
+  - [x] tenant enforcement boundaries
+  - [x] deployment profile differences
+  - [x] degraded security posture under missing dependencies
+- [x] Audit all extension trust assumptions documented in runtime docs
+- [x] Verify high-risk capability paths have regression tests
+- [x] Document what is safe, unsafe, and unsupported for extension execution
 
 ### Operability Review
-- [ ] Review `/health`, `/ready`, and `/api/version` expectations as runtime contracts
-- [ ] Add tests for failure and partial-readiness cases
-- [ ] Confirm observability expectations are explicit enough for operators
-- [ ] Identify top 3 operational failure modes not yet well covered by tests
+- [x] Review `/health`, `/ready`, and `/api/version` expectations as runtime contracts
+- [x] Add tests for failure and partial-readiness cases
+- [x] Confirm observability expectations are explicit enough for operators
+- [x] Identify top 3 operational failure modes not yet well covered by tests
 
 ### Phase 2 Exit Criteria
-- [ ] Runtime invariants are documented
-- [ ] Startup, recovery, and wait/resume confidence is higher
-- [ ] Security posture is clearer and less assumption-driven
-- [ ] Operational behavior under degraded conditions is better defined
+- [x] Runtime invariants are documented
+- [x] Startup, recovery, and wait/resume confidence is higher
+- [x] Security posture is clearer and less assumption-driven
+- [x] Operational behavior under degraded conditions is better defined
 
 ---
 
@@ -146,46 +147,46 @@ Harden correctness, startup behavior, recovery, and security posture.
 Reduce core debt, improve release discipline, and prove platform boundaries.
 
 ### Runtime Core Debt Reduction
-- [ ] Prioritize runtime-critical debt from `TECH_DEBT.md`
-- [ ] Reduce bootstrap/settings coupling in the highest-risk paths
-- [ ] Reduce lifecycle ordering ambiguity in startup/runtime initialization
-- [ ] Reduce not-ready syscall window risk where practical
-- [ ] Simplify at least one runtime-critical module boundary
+- [x] Prioritize runtime-critical debt from `TECH_DEBT.md` — closed IDEM-7, SCHED-001/002/003, PERMISSION-SECRET-CLEANUP-1
+- [ ] Reduce bootstrap/settings coupling in the highest-risk paths — `DATABASE_URL`/`SECRET_KEY` module-level coupling remains; minor gains only (PERMISSION_SECRET removed from 3 scaffolding sites)
+- [x] Reduce lifecycle ordering ambiguity in startup/runtime initialization — SCHED-001/002/003: scheduler status decoupled from flow engine; no longer requires domain plugin presence
+- [x] Reduce not-ready syscall window risk where practical — IDEM-7: `/health/deep` now reports `syscall_registry` count with floor check; window itself is at module import (unavoidable), visibility added
+- [x] Simplify at least one runtime-critical module boundary — `observability_router` scheduler status helper no longer depends on the flow engine or tasks domain
 
 ### Verification and Coverage Standards
-- [ ] Raise the effective verification bar for runtime-critical code paths
-- [ ] Add explicit contract tests for:
-  - [ ] public runtime endpoints
-  - [ ] boot/runtime metadata surfaces
-  - [ ] runtime-only packaging assumptions
-- [ ] Review whether current coverage thresholds are defensible for runtime-critical modules
-- [ ] Add targeted checks where raw coverage percentage is hiding critical-path gaps
+- [x] Raise the effective verification bar for runtime-critical code paths — 9 new test files (phase 2+3 combined)
+- [x] Add explicit contract tests for:
+  - [x] public runtime endpoints — `tests/unit/test_cross_repo_compatibility.py`, `test_operability_contracts.py`
+  - [x] boot/runtime metadata surfaces — `test_cross_repo_compatibility.py -k ui`
+  - [x] runtime-only packaging assumptions — `test_runtime_readiness_contract.py` syscall registry floor
+- [ ] Review whether current coverage thresholds are defensible for runtime-critical modules — not done; coverage tooling exists but no threshold change made
+- [x] Add targeted checks where raw coverage percentage is hiding critical-path gaps — `test_runtime_readiness_contract.py` covers the IDEM-7 and SCHED-* paths not reachable via end-to-end coverage
 
 ### Release and Artifact Discipline
-- [ ] Add stronger artifact validation for built runtime packages
-- [ ] Verify installed-artifact behavior, not just source-tree behavior
-- [ ] Add a release checklist for runtime-only deployment verification
-- [ ] Verify compatibility assumptions with `aindy-sdk` and `aindy-ui-kit`
-- [ ] Define what compatibility must hold across the three repos before release
+- [ ] Add stronger artifact validation for built runtime packages — `RELEASE_CHECKLIST.md` documents manual steps; automated artifact CI not added
+- [ ] Verify installed-artifact behavior, not just source-tree behavior — referenced in `RELEASE_CHECKLIST.md` steps 4-5 (manual); no new automated test
+- [x] Add a release checklist for runtime-only deployment verification — `docs/runtime/RELEASE_CHECKLIST.md`
+- [x] Verify compatibility assumptions with `aindy-sdk` and `aindy-ui-kit` — `docs/runtime/CROSS_REPO_COMPATIBILITY.md` + 7 regression tests
+- [x] Define what compatibility must hold across the three repos before release — `CROSS_REPO_COMPATIBILITY.md`, `SDK_CONTRACT.md`, `UI_CONTRACT.md`
 
 ### Cross-Repo Boundary Proof
-- [ ] Document runtime-to-SDK contract expectations
-- [ ] Document runtime-to-UI contract expectations
-- [ ] Identify current leakage where SDK or UI implicitly depends on unstable runtime internals
-- [ ] Add at least one compatibility check or smoke path spanning runtime and SDK
-- [ ] Add at least one compatibility check or smoke path spanning runtime-facing UI assumptions
+- [x] Document runtime-to-SDK contract expectations — `docs/runtime/SDK_CONTRACT.md`
+- [x] Document runtime-to-UI contract expectations — `docs/runtime/UI_CONTRACT.md`
+- [x] Identify current leakage where SDK or UI implicitly depends on unstable runtime internals — documented in both contract docs (leakage risks sections)
+- [x] Add at least one compatibility check or smoke path spanning runtime and SDK — `test_cross_repo_compatibility.py -k sdk` (syscall names, version envelope, watcher path)
+- [x] Add at least one compatibility check or smoke path spanning runtime-facing UI assumptions — `test_cross_repo_compatibility.py -k ui` (boot_mode, platform route prefixes)
 
 ### Final Review
-- [ ] Re-score the runtime using the maturity rubric
-- [ ] Record category deltas
-- [ ] Record the top 3 blockers to `80+`
-- [ ] Record the top 3 blockers to `85+`
+- [x] Re-score the runtime using the maturity rubric — **77.5 / 100** (see Final 90-Day Review below)
+- [x] Record category deltas — see Final 90-Day Review below
+- [x] Record the top 3 blockers to `80+` — see Final 90-Day Review below
+- [x] Record the top 3 blockers to `85+` — see Final 90-Day Review below
 
 ### Phase 3 Exit Criteria
-- [ ] Runtime core is less coupled in its most fragile paths
-- [ ] Release confidence is higher for built artifacts
-- [ ] Runtime boundaries with SDK and UI are clearer and more testable
-- [ ] The runtime can defend a score in the `76-80` range
+- [x] Runtime core is less coupled in its most fragile paths — scheduler status flow-engine dependency removed
+- [x] Release confidence is higher for built artifacts — `RELEASE_CHECKLIST.md` and cross-repo compatibility tests in place
+- [x] Runtime boundaries with SDK and UI are clearer and more testable — `SDK_CONTRACT.md`, `UI_CONTRACT.md`, `CROSS_REPO_COMPATIBILITY.md`, 7 automated tests
+- [x] The runtime can defend a score in the `76-80` range — **77.5 / 100** attained
 
 ---
 
@@ -257,23 +258,66 @@ If time gets tight, do work in this order:
 ## Final 90-Day Review
 
 Review date:
-- [ ] YYYY-MM-DD
+- [x] 2026-06-04
 
 Reviewer:
-- [ ] Name / role
+- [x] Shawn Knight / platform-team
 
 Start score:
 - [x] `71.5 / 100`
 
+End score:
+- [x] `77.5 / 100`
+
 Target score:
-- [ ] `76-80 / 100`
+- [x] `76-80 / 100` — **attained**
 
 Stretch target:
 - [ ] `80+ / 100`
 
-Top wins:
-- [ ] Add summary here
+### Category Deltas
 
-Top remaining blockers:
-- [ ] Add summary here
+| Category | Before | After | Delta | Key deliverable |
+|---|---|---|---|---|
+| Ownership boundary | ~7.0 | ~9.0 | +2.0 | `RUNTIME_BOUNDARY.md`, `RUNTIME_MODULE_MAP.md` |
+| Documentation completeness | ~7.0 | ~9.0 | +2.0 | `EXECUTION_INVARIANTS.md`, `ARCHITECTURE_RISK.md`, `SECURITY_MATRIX.md`, `SDK_CONTRACT.md`, `UI_CONTRACT.md` |
+| Verification depth | ~6.5 | ~8.5 | +2.0 | 9 new test files; syscall floor, scheduler, startup, rehydration, security isolation |
+| Security posture | ~7.0 | ~8.0 | +1.0 | `SECURITY_MATRIX.md`, security isolation tests, trust model documented |
+| Cross-repo compatibility | ~4.5 | ~7.5 | +3.0 | `CROSS_REPO_COMPATIBILITY.md`, `RELEASE_CHECKLIST.md`, 7 automated compatibility tests |
+| Debt reduction | ~7.0 | ~7.5 | +0.5 | IDEM-7, SCHED-001/002/003, PERMISSION_SECRET closed |
+| Artifact discipline | ~5.0 | ~6.0 | +1.0 | `RELEASE_CHECKLIST.md` (manual); automated artifact CI not added |
+
+### Top 3 Blockers to `80+`
+
+1. **AGENT-APPROVE-001b** — approve endpoint blocks synchronously on `execute_run()`,
+   causing client timeouts on slow agent tools. Core runtime surface reliability gap;
+   requires async execution or a background job + polling pattern for the approve path.
+
+2. **Automated installed-artifact smoke tests** — `RELEASE_CHECKLIST.md` documents
+   manual artifact verification steps (install wheel into `/tmp/`, run `--version`, `--help`).
+   No automated CI artifact test exists. A single `test_runtime_packaging.py::test_installed_cli_help`
+   that builds and installs the wheel would close this.
+
+3. **Bootstrap/settings coupling** — `DATABASE_URL` and `SECRET_KEY` are consumed at
+   module import time in `db/database.py` via `create_engine(settings.DATABASE_URL)`.
+   This crash path is partially mitigated by `__getattr__` lazy loading in `runtime_only.py`,
+   but the underlying coupling is tracked as CLI-1 and remains unresolved.
+
+### Top 3 Blockers to `85+`
+
+1. **Integration test coverage for Redis/Postgres execution paths** — the Phase 2
+   checkbox for integration checks was explicitly left open. No live-infrastructure
+   execution path tests exist. Event delivery, WAIT/RESUME rehydration, and EffectRecord
+   idempotency under real Postgres+Redis are tested only in unit (mocked) form.
+
+2. **API-MODULE-DRIFT-1 + ROUTES-CONSUMER-SPLIT-1** — the platform SPA has 39 dead
+   API call sites (`rippletrace.js` ×16, `analytics.js` ×19, `platform.js` ×4) because
+   ROUTES quarantine left `@aindy/ui-kit` exporting undefined for the monolith-only groups.
+   This is a silent UI error that corrupts the operator panel without a visible runtime error.
+
+3. **AGENT-RESLIMIT-001 accounting** — `cpu_time_ms` measures monotonic wall-clock elapsed
+   time including all I/O wait. Renaming the field or excluding I/O requires changes to
+   `ResourceManager`, the quota env-var name, operator documentation, and `TECH_DEBT.md`.
+   Deferred post-GA by design, but the semantic gap is a correctness claim the runtime
+   cannot currently defend at 85+.
 

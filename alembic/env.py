@@ -21,7 +21,6 @@ os.environ.setdefault("AINDY_ALLOW_SQLITE", "false")
 os.environ.setdefault("OPENAI_API_KEY", "sk-alembic-placeholder")
 os.environ.setdefault("DEEPSEEK_API_KEY", "ds-alembic-placeholder")
 os.environ.setdefault("SECRET_KEY", "alembic-secret-key")
-os.environ.setdefault("PERMISSION_SECRET", "alembic-permission-secret")
 os.environ.setdefault("AINDY_API_KEY", "alembic-api-key")
 
 from AINDY.db.database import Base  # noqa: E402

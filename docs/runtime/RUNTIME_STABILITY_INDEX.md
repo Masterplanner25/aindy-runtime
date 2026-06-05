@@ -1,14 +1,11 @@
 ---
 title: "Runtime Stability Index"
-last_verified: "2026-05-31"
+last_verified: "2026-06-03"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
-﻿# Runtime Stability Index
-
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
+# Runtime Stability Index
 
 This document classifies the major surfaces of `aindy-runtime` into one of four stability levels:
 
@@ -112,7 +109,8 @@ These are intended for real use, but the contract is narrower than the total imp
 ### Syscall System
 | Surface | Stability | Why |
 |---|---|---|
-| `sys.v1.*` baseline contract | `conditionally stable` | The repo documents a stable baseline, but per-entry stability remains authoritative. |
+| `sys.v1.*` version prefix | `stable` | The `v1` family will not be removed. Per-entry stability is distinct — see `GET /platform/syscalls` `stable` field. |
+| `sys.v1.*` per-entry stability | `conditionally stable` | Individual syscall entries vary; some are stable, others experimental. The per-entry `stable` field in `/platform/syscalls` is authoritative. |
 | required runtime syscalls | `conditionally stable` | Operationally important, but exact required sets may evolve with runtime profile and platform changes. |
 | syscall capability enforcement model | `conditionally stable` | A real runtime contract, but not every implementation detail is public or frozen. |
 
@@ -126,7 +124,7 @@ These are intended for real use, but the contract is narrower than the total imp
 ### Extension and Trust Contracts
 | Surface | Stability | Why |
 |---|---|---|
-| manifest-level extension ABI v1 | `conditionally stable` | Explicitly documented as stable or closest to stable. |
+| manifest-level extension ABI v1 (`aindy.extension.manifest/v1`) | `stable` | Explicitly declared stable in `EXTENSION_ABI.md`; other dynamic registration ABIs remain experimental. |
 | extension trust posture for trusted-internal use | `conditionally stable` | Real and documented, but should be consumed with strict scope limits. |
 
 ---

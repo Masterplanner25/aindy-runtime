@@ -1,6 +1,6 @@
 ---
 title: "Extension ABI"
-last_verified: "2026-05-20"
+last_verified: "2026-06-03"
 api_version: "1.0"
 status: current
 owner: "platform-team"

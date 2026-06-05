@@ -6,6 +6,6 @@ export { ROUTES } from "@aindy/ui-kit";
 export const FEATURE_FLAGS = Object.freeze({
   OPERATOR_FLOW_STRATEGIES:  false, // OPER-DEFER-001: /platform/flows/strategies not served
   OPERATOR_AUTOMATION_LOGS:  false, // OPER-DEFER-002: /automation/logs lives in monolith
-  OPERATOR_SCHEDULER_STATUS: false, // SCHED-001/002/003: returns 500 in platform-only profile
+  OPERATOR_SCHEDULER_STATUS: true,  // SCHED-001/002/003: fixed 2026-06-04 — direct impl, no flow dependency
   RIPPLETRACE_VIEWER:        false, // RIPPLE-ROUTES-001: load-trace path is bare monolith path
 });

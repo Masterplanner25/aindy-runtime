@@ -21,7 +21,6 @@ def _configure_import_environment() -> None:
         "OPENAI_API_KEY": "sk-test-placeholder",
         "DEEPSEEK_API_KEY": "ds-test-placeholder",
         "AINDY_API_KEY": "schema-contract-api-key",
-        "PERMISSION_SECRET": "schema-contract-permission-secret",
         "ALLOWED_ORIGINS": "http://localhost:3000",
     }
     for key, value in defaults.items():

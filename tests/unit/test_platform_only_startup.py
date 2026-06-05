@@ -320,6 +320,119 @@ def test_runtime_only_deployment_contract_is_explicit():
     ]
 
 
+# ---------------------------------------------------------------------------
+# INV-STARTUP-001: startup sequencing regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_startup_complete_is_false_before_lifespan_finishes(platform_only_runtime, monkeypatch):
+    """INV-STARTUP-001: startup_complete must remain False until all phases complete."""
+    _startup, main = _reload_platform_only_modules()
+    _patch_minimal_lifespan(monkeypatch, main)
+
+    # The lifespan is interrupted at emit_event (Phase 7) via _StopStartup.
+    # startup_complete must still be False at that point.
+    with pytest.raises(_StopStartup):
+        asyncio.run(main.lifespan(main.app).__aenter__())
+
+    runtime_state = get_api_runtime_state()
+    assert runtime_state["startup_complete"] is False
+
+
+def test_verify_required_syscalls_registered_warns_in_dev_when_missing(monkeypatch):
+    """INV-STARTUP-001: missing required syscalls produce a warning in non-prod, not a raise."""
+    import AINDY.startup as startup_mod
+
+    monkeypatch.setattr(
+        "AINDY.kernel.syscall_registry.get_registered_syscalls",
+        lambda: ["sys.v1.memory.read"],
+    )
+    monkeypatch.setattr(
+        "AINDY.platform_layer.registry.get_required_syscalls",
+        lambda: ["sys.v1.memory.read", "sys.v1.flow.wait"],
+    )
+    monkeypatch.setattr(startup_mod.settings, "TESTING", False)
+    monkeypatch.setattr(startup_mod.settings, "TEST_MODE", False)
+    monkeypatch.setattr(startup_mod.settings, "ENV", "development")
+
+    startup_mod._verify_required_syscalls_registered()
+
+
+def test_verify_required_syscalls_registered_raises_in_prod_when_missing(monkeypatch):
+    """INV-STARTUP-001: missing required syscalls raise RuntimeError in production."""
+    import AINDY.startup as startup_mod
+
+    monkeypatch.setattr(
+        "AINDY.kernel.syscall_registry.get_registered_syscalls",
+        lambda: ["sys.v1.memory.read"],
+    )
+    monkeypatch.setattr(
+        "AINDY.platform_layer.registry.get_required_syscalls",
+        lambda: ["sys.v1.memory.read", "sys.v1.flow.wait"],
+    )
+    monkeypatch.setattr(startup_mod.settings, "TESTING", False)
+    monkeypatch.setattr(startup_mod.settings, "TEST_MODE", False)
+    monkeypatch.setattr(startup_mod.settings, "ENV", "production")
+
+    with pytest.raises(RuntimeError, match="Required syscalls not registered after bootstrap"):
+        startup_mod._verify_required_syscalls_registered()
+
+
+def test_verify_required_syscalls_registered_passes_when_all_present(monkeypatch):
+    """INV-STARTUP-001: no error when all required syscalls are registered."""
+    import AINDY.startup as startup_mod
+
+    monkeypatch.setattr(
+        "AINDY.kernel.syscall_registry.get_registered_syscalls",
+        lambda: ["sys.v1.memory.read", "sys.v1.flow.wait"],
+    )
+    monkeypatch.setattr(
+        "AINDY.platform_layer.registry.get_required_syscalls",
+        lambda: ["sys.v1.memory.read", "sys.v1.flow.wait"],
+    )
+
+    startup_mod._verify_required_syscalls_registered()
+
+
+def test_event_bus_starts_before_wait_rehydration(platform_only_runtime, monkeypatch):
+    """INV-STARTUP-001: _start_event_bus (Phase 13) must precede _rehydrate_waiting_state (Phase 14)."""
+    startup_mod, main = _reload_platform_only_modules()
+    _patch_minimal_lifespan(monkeypatch, main)
+
+    # Patch phases 7-12 to no-ops so the lifespan can advance to phases 13 and 14.
+    monkeypatch.setattr(startup_mod, "_start_background_services", lambda db_factory: False)
+    monkeypatch.setattr(startup_mod, "_register_domain_handlers", lambda: None)
+    monkeypatch.setattr(startup_mod, "_register_flow_engine", lambda: None)
+
+    async def _noop_restore(db_factory):
+        pass
+
+    monkeypatch.setattr(startup_mod, "_restore_dynamic_registry", _noop_restore)
+    monkeypatch.setattr(startup_mod, "_validate_router_boundary", lambda: None)
+    monkeypatch.setattr(startup_mod, "_recover_stuck_runs", lambda db_factory, bg: None)
+
+    call_order: list[str] = []
+    monkeypatch.setattr(startup_mod, "_start_event_bus", lambda: call_order.append("event_bus"))
+    monkeypatch.setattr(
+        startup_mod,
+        "_rehydrate_waiting_state",
+        lambda db_factory, is_testing: call_order.append("rehydrate"),
+    )
+
+    def _stop_after_rehydrate(db_factory):
+        raise _StopStartup()
+
+    monkeypatch.setattr(startup_mod, "_run_startup_hooks", _stop_after_rehydrate)
+
+    with pytest.raises(_StopStartup):
+        asyncio.run(main.lifespan(main.app).__aenter__())
+
+    assert call_order == ["event_bus", "rehydrate"], (
+        f"Expected event_bus before rehydrate; got {call_order!r}. "
+        "Phase 13 (_start_event_bus) must precede Phase 14 (_rehydrate_waiting_state)."
+    )
+
+
 def test_startup_fails_when_default_profile_plugin_is_missing(platform_only_runtime, monkeypatch, tmp_path):
     manifest = tmp_path / "aindy_plugins.json"
     manifest.write_text(

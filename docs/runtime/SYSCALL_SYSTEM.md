@@ -1,6 +1,6 @@
 ---
 title: "Syscall System"
-last_verified: "2026-05-09"
+last_verified: "2026-06-03"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -133,7 +133,7 @@ Step 0 is the trace propagation gate — see §12 for detail.
 
 ### SyscallEntry
 
-Defined in `services/syscall_registry.py`.
+Defined in `kernel/syscall_registry.py`.
 
 ```python
 class SyscallEntry:
@@ -195,7 +195,10 @@ register_syscall(
 ### Version Rules
 
 - Every syscall declares a version in its name: `sys.v{N}.{domain}.{action}`.
-- `v1` is the current stable baseline. `v2` exists as an example evolution (`sys.v2.memory.read`).
+- `v1` is the stable version prefix — the `v1` family will not be removed or renamed. This
+  is distinct from per-entry stability: not every `sys.v1.*` syscall is individually stable.
+  The authoritative per-entry marker is the `stable` field in `GET /platform/syscalls`.
+  `v2` exists as an example evolution (`sys.v2.memory.read`).
 - Breaking changes **must** use a new version prefix. Adding optional params is non-breaking.
 - Removing a field, changing a type, or changing semantics = breaking = new version.
 
@@ -228,7 +231,7 @@ Deprecated syscalls still execute. The dispatcher sets `warning` in the response
 
 ## 7. Input / Output Validation
 
-Defined in `services/syscall_versioning.py`.
+Defined in `kernel/syscall_versioning.py`.
 
 ### Schema Format
 

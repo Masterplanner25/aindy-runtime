@@ -313,6 +313,50 @@ set but no matching user exists yet.
 
 ---
 
+## `AINDY.routes` namespace shadow — import hazard for tests
+
+`AINDY/routes/__init__.py` re-exports sub-router objects under the same names as the submodules:
+
+```python
+from AINDY.routes.health_router import router as health_router  # APIRouter object
+```
+
+This means **`from AINDY.routes import health_router` returns the `APIRouter` object, not the module**. Any attribute access like `health_router._check_syscall_registry_status()` raises `AttributeError: 'APIRouter' object has no attribute '_check_syscall_registry_status'`. The same failure happens with `import AINDY.routes.health_router as _hr` because Python resolves the package attribute first.
+
+**Workaround for tests that need module-level functions:**
+
+```python
+# Option A — direct function import (cleanest):
+from AINDY.routes.health_router import _check_syscall_registry_status
+
+# Option B — sys.modules bypass (needed if module isn't yet imported):
+import sys, importlib
+_hr = sys.modules.get("AINDY.routes.health_router") or importlib.import_module("AINDY.routes.health_router")
+result = _hr._check_syscall_registry_status()
+```
+
+The same shadow exists for every router exported from `AINDY/routes/__init__.py`
+(`observability_router`, `flow_router`, etc.).
+
+---
+
+## PLATFORM_ROUTERS prefix structure
+
+`PLATFORM_ROUTERS` in `AINDY/routes/__init__.py` contains child routers with bare prefixes
+(`/flows`, `/observability`, `/db`). In `AINDY/routing.py` they are registered as:
+
+```python
+app.include_router(route, prefix="/platform", ...)
+```
+
+So the effective HTTP paths are `/platform/flows`, `/platform/observability`, `/platform/db`.
+
+`platform_router` (prefix `/platform` already baked in) is registered separately and carries
+direct routes like `GET /platform/syscalls`. **Do not look for `/platform/syscalls` in
+`PLATFORM_ROUTERS` — it lives on `platform_router.routes`.**
+
+---
+
 ## SyscallContractViolation guard
 
 `SyscallDispatcher.dispatch()` has a broad `except Exception` handler (belt-and-suspenders
@@ -334,7 +378,8 @@ Add the same pattern for any future exception type that callers are expected to 
 
 Entries are numbered sequentially. Do not reuse a number.
 
-- IDEM-1 through IDEM-7: open or closed idempotency audit findings.
+- IDEM-1 through IDEM-6: open or closed idempotency audit findings.
+- **IDEM-7**: Syscall registry not-ready window visibility — closed 2026-06-04. Added `SYSCALL_REGISTRY_MIN_COUNT = 17` to `syscall_registry.py` and `_check_syscall_registry_status()` wired into `/health/deep`.
 - **IDEM-8**: APScheduler stub fix — closed 2026-05-23. Do not reassign this number.
 - **IDEM-9**: EffectRecord TTL cleanup — closed 2026-05-24.
 - Next available: **IDEM-10**.
@@ -439,7 +484,8 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **AGENT-API-\*** — Platform SPA agent.js functions reference never-existed ROUTES.AGENT.* constants. AGENT-API-001: getAgents/recallFromAgent/getFederatedMemory; consumer AgentRegistry.jsx; open.
 - **AGENT-RESLIMIT-\*** — Agent execution resource limit conflicts with real workloads. AGENT-RESLIMIT-001: cpu_time_ms measures wall-clock time (monotonic, includes I/O wait); default raised to 300 000 ms (5 min) in v1.0.0; accounting fix (exclude I/O or rename field) deferred post-GA; open.
 - **OPER-DEFER-\*** — Operator panel deferred-runtime routes (constant live, NavLink gated on FEATURE_FLAGS). OPER-DEFER-001: `/platform/flows/strategies` not yet served; OPER-DEFER-002: `/automation/logs` group (monolith today); both open.
-- **SCHED-\*** — Scheduler status endpoint issues. SCHED-001/002/003: `/platform/observability/scheduler/status` returns 500 in platform-only profile (tasks domain absent); referenced in AGENT-EVAL-001 and FEATURE_FLAGS.OPERATOR_SCHEDULER_STATUS.
+- **SCHED-\*** — Scheduler status endpoint issues. SCHED-001/002/003: `/platform/observability/scheduler/status` returns 500 in platform-only profile (tasks domain absent); closed 2026-06-04 — direct impl replaces flow dependency; `FEATURE_FLAGS.OPERATOR_SCHEDULER_STATUS` flipped to `true`.
+- **ROUTE-REG-\*** — Router files that exist but are never registered; their endpoints return 404. ROUTE-REG-001: `watcher_router` and `db_verify_router` unregistered; closed 2026-06-03 — watcher added to ROOT_ROUTERS, db_verify added to PLATFORM_ROUTERS.
 
 ---
 
@@ -468,6 +514,17 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Scheduler jobs | `AINDY/platform_layer/scheduler_service.py` |
 | Alembic migrations | `alembic/versions/` |
 | Idempotency contract | `docs/runtime/IDEMPOTENCY_CONTRACT.md` |
+| 90-day hardening checklist | `AINDY_RUNTIME_90_DAY_CHECKLIST.md` |
+| Runtime module map (tagged inventory) | `docs/runtime/RUNTIME_MODULE_MAP.md` |
+| Runtime execution invariants | `docs/runtime/EXECUTION_INVARIANTS.md` |
+| Architecture risk (complexity/blast-radius) | `docs/runtime/ARCHITECTURE_RISK.md` |
+| Runtime security matrix | `docs/runtime/SECURITY_MATRIX.md` |
+| Cross-repo compatibility policy | `docs/runtime/CROSS_REPO_COMPATIBILITY.md` |
+| Runtime → SDK contract | `docs/runtime/SDK_CONTRACT.md` |
+| Runtime → UI contract | `docs/runtime/UI_CONTRACT.md` |
+| Release verification checklist | `docs/runtime/RELEASE_CHECKLIST.md` |
+| Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
+| Syscall registry floor constant | `AINDY/kernel/syscall_registry.py` — `SYSCALL_REGISTRY_MIN_COUNT` |
 | Tech debt tracker | `TECH_DEBT.md` |
 | Docker compose | `docker-compose.yml` |
 | Dockerfile | `Dockerfile` |

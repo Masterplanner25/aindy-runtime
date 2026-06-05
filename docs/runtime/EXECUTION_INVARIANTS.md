@@ -1,14 +1,11 @@
 ---
 title: "Execution Invariants"
-last_verified: "2026-05-31"
+last_verified: "2026-06-03"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
-﻿# Execution Invariants
-
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
+# Execution Invariants
 
 This document defines the runtime behaviors that `aindy-runtime` must preserve across refactors, releases, and deployment profiles.
 
@@ -26,7 +23,7 @@ Scope:
 
 Status:
 
-- Draft
+- Enforcement paths verified 2026-06-03 against live code; individual invariants tagged accordingly
 - Intended audience: runtime maintainers, reviewers, release owners
 - Companion docs:
   - `ARCHITECTURE.md`
@@ -60,7 +57,7 @@ Suggested tags:
 ## 1. Startup Sequencing Invariants
 
 ### INV-STARTUP-001
-**Status:** `draft`
+**Status:** `internal-stable`
 
 **Invariant**
 Runtime startup must initialize critical execution dependencies in a predictable order before accepting execution that depends on them.
@@ -88,14 +85,15 @@ Runtime startup must initialize critical execution dependencies in a predictable
 - `AINDY/platform_layer/health_service.py::get_readiness_report()`
 
 **Tests**
-- [ ] Add startup-order regression tests here
-- [ ] Add readiness-before-bootstrap tests here
+- [x] `tests/unit/test_platform_only_startup.py::test_startup_complete_is_false_before_lifespan_finishes`
+- [x] `tests/unit/test_platform_only_startup.py::test_event_bus_starts_before_wait_rehydration`
+- [x] `tests/unit/test_platform_only_startup.py::test_verify_required_syscalls_registered_*`
 
 **Release Impact If Broken**
 - Undefined startup behavior, misleading readiness, or execution before dependency availability.
 
 ### INV-STARTUP-002
-**Status:** `draft`
+**Status:** `internal-stable`
 
 **Invariant**
 Runtime metadata surfaces must remain available even when deeper execution subsystems are not yet fully ready, unless startup has failed completely.
@@ -119,15 +117,17 @@ Runtime metadata surfaces must remain available even when deeper execution subsy
 - `AINDY/platform_layer/health_service.py::get_readiness_report()`
 
 **Tests**
-- [ ] Add endpoint behavior tests here
-- [ ] Add liveness-vs-readiness distinction tests here
+- [x] `tests/unit/test_startup_readiness.py::test_readiness_returns_503_when_restore_pending`
+- [x] `tests/unit/test_startup_readiness.py::test_health_returns_200_independent_of_restore_gate`
+- [x] `tests/unit/test_startup_readiness.py::test_startup_incomplete_blocks_readiness_outside_testing_mode`
+- [x] `tests/unit/test_startup_readiness.py::test_readiness_passes_once_startup_complete_and_restore_ok`
 
 ---
 
 ## 2. Scheduler Lifecycle Invariants
 
 ### INV-SCHED-001
-**Status:** `draft`
+**Status:** `internal-stable`
 
 **Invariant**
 The scheduler lifecycle must not allow a run or execution unit to appear actively resumable unless the scheduler can actually service the resume path.
@@ -155,11 +155,13 @@ The scheduler lifecycle must not allow a run or execution unit to appear activel
 - `AINDY/core/flow_run_rehydration.py::rehydrate_waiting_flow_runs()`
 
 **Tests**
-- [ ] Add wait registration lifecycle tests here
-- [ ] Add post-restart resumability tests here
+- [x] `tests/unit/test_scheduler_wait_resume.py::test_register_wait_stores_entry`
+- [x] `tests/unit/test_scheduler_wait_resume.py::test_mark_rehydration_complete_replays_buffered_events`
+- [x] `tests/unit/test_rehydration_paths.py::test_valid_event_eu_is_registered`
+- [x] `tests/unit/test_rehydration_paths.py::test_rehydrated_eu_resumes_on_matching_event`
 
 ### INV-SCHED-002
-**Status:** `draft`
+**Status:** `internal-stable`
 
 **Invariant**
 Scheduler recovery after restart must not duplicate completed work or silently drop resumable work.
@@ -187,15 +189,16 @@ Scheduler recovery after restart must not duplicate completed work or silently d
 - `AINDY/kernel/event_bus.py` DB-claim model notes and subscriber flow
 
 **Tests**
-- [ ] Add restart/rehydration regression tests here
-- [ ] Add duplicate-resume prevention tests here
+- [x] `tests/unit/test_rehydration_paths.py::test_double_rehydration_is_idempotent`
+- [x] `tests/unit/test_rehydration_paths.py::test_eu_already_in_scheduler_is_skipped`
+- [x] `tests/unit/test_rehydration_paths.py::test_multiple_waiting_eus_all_rehydrated`
 
 ---
 
 ## 3. Wait/Resume Invariants
 
 ### INV-WAIT-001
-**Status:** `draft`
+**Status:** `internal-stable`
 
 **Invariant**
 A registered wait must have a well-defined correlation model for the event or condition that resumes it.
@@ -222,11 +225,14 @@ A registered wait must have a well-defined correlation model for the event or co
 - `AINDY/kernel/scheduler/waits.py::peek_matching_run_ids()`
 
 **Tests**
-- [ ] Add matching-behavior tests here
-- [ ] Add event-vs-time wait tests here
+- [x] `tests/unit/test_scheduler_wait_resume.py::test_notify_event_skips_when_corr_ids_both_set_and_differ`
+- [x] `tests/unit/test_scheduler_wait_resume.py::test_notify_event_resumes_when_emit_carries_no_corr`
+- [x] `tests/unit/test_scheduler_wait_resume.py::test_tick_fires_past_due_time_wait`
+- [x] `tests/unit/test_scheduler_wait_resume.py::test_tick_does_not_fire_future_time_wait`
+- [x] `tests/unit/test_scheduler_wait_resume.py::test_peek_respects_correlation_id_filter`
 
 ### INV-WAIT-002
-**Status:** `draft`
+**Status:** `internal-stable`
 
 **Invariant**
 Resume signals must not produce uncontrolled duplicate wakeups for the same resumable unit.
@@ -252,15 +258,16 @@ Resume signals must not produce uncontrolled duplicate wakeups for the same resu
 - `AINDY/kernel/scheduler/cross_instance.py::_cross_instance_resume()`
 
 **Tests**
-- [ ] Add duplicate-delivery tests here
-- [ ] Add pre-rehydration buffer overflow tests here
+- [x] `tests/unit/test_scheduler_wait_resume.py::test_pre_rehydration_buffer_overflow_drops_excess`
+- [x] `tests/unit/test_scheduler_wait_resume.py::test_duplicate_register_overwrites_previous_callback`
+- [x] `tests/unit/test_rehydration_paths.py::test_double_rehydration_is_idempotent`
 
 ---
 
 ## 4. Syscall Readiness And Dispatch Invariants
 
 ### INV-SYSCALL-001
-**Status:** `draft`
+**Status:** `stable`
 
 **Invariant**
 A syscall must not be reported as available before its registry and dispatch prerequisites are actually ready.
@@ -287,11 +294,12 @@ A syscall must not be reported as available before its registry and dispatch pre
 - `AINDY/kernel/syscall_dispatcher.py::_dispatch()`
 
 **Tests**
-- [ ] Add syscall-not-ready tests here
-- [ ] Add startup registration race tests here
+- [x] `tests/unit/test_syscall_not_ready.py::test_unknown_syscall_returns_error_envelope`
+- [x] `tests/unit/test_syscall_not_ready.py::test_unknown_syscall_does_not_raise`
+- [x] `tests/unit/test_platform_only_startup.py::test_verify_required_syscalls_registered_*`
 
 ### INV-SYSCALL-002
-**Status:** `draft`
+**Status:** `stable`
 
 **Invariant**
 Syscall dispatch must preserve capability, tenant, and schema enforcement before side effects occur.
@@ -319,16 +327,19 @@ Syscall dispatch must preserve capability, tenant, and schema enforcement before
 - `AINDY/kernel/resource_manager.py`
 
 **Tests**
-- [ ] Add dispatcher enforcement tests here
-- [ ] Add exact-once idempotency gate tests here
-- [ ] Add tenant/capability bypass regression tests here
+- [x] `tests/unit/test_syscall_not_ready.py::test_missing_capability_returns_error_envelope`
+- [x] `tests/unit/test_syscall_not_ready.py::test_missing_capability_handler_is_never_called`
+- [x] `tests/unit/test_syscall_not_ready.py::test_missing_user_id_returns_tenant_violation_envelope`
+- [x] `tests/unit/test_syscall_not_ready.py::test_missing_user_id_handler_is_never_called`
+- [x] `tests/unit/test_syscall_not_ready.py::test_syscall_contract_violation_propagates_through_dispatch`
+- [x] `tests/unit/test_syscall_contract.py` (quota, output schema, idempotency gate paths)
 
 ---
 
 ## 5. Tenant And Capability Enforcement Invariants
 
 ### INV-TENANT-001
-**Status:** `draft`
+**Status:** `stable`
 
 **Invariant**
 Execution state belonging to one tenant must not be observable or mutable by another tenant except through explicitly authorized cross-tenant mechanisms.
@@ -358,7 +369,7 @@ Execution state belonging to one tenant must not be observable or mutable by ano
 - [ ] Add resumed-execution tenant continuity tests here
 
 ### INV-TENANT-002
-**Status:** `draft`
+**Status:** `internal-stable`
 
 **Invariant**
 Capability enforcement must remain effective across direct execution, resumed execution, and extension-mediated execution.
@@ -379,8 +390,8 @@ Capability enforcement must remain effective across direct execution, resumed ex
 **Enforcement Path**
 - `AINDY/kernel/syscall_dispatcher.py::_dispatch()` capability checks
 - `AINDY/kernel/syscall_registry.py` capability declarations
-- `AINDY/docs/runtime/EXTENSION_CAPABILITIES.md`
-- `AINDY/docs/runtime/EXTENSION_TRUST_MODEL.md`
+- `docs/runtime/EXTENSION_CAPABILITIES.md`
+- `docs/runtime/EXTENSION_TRUST_MODEL.md`
 
 **Tests**
 - [ ] Add cross-path capability enforcement tests here
@@ -391,7 +402,7 @@ Capability enforcement must remain effective across direct execution, resumed ex
 ## 6. Event Delivery And Recovery Invariants
 
 ### INV-EVENT-001
-**Status:** `draft`
+**Status:** `deployment-dependent`
 
 **Invariant**
 Event delivery that participates in resume behavior must be either durable enough for the documented deployment profile or explicitly documented as best-effort.
@@ -421,7 +432,7 @@ Event delivery that participates in resume behavior must be either durable enoug
 - [ ] Add local-only degradation tests here
 
 ### INV-EVENT-002
-**Status:** `draft`
+**Status:** `internal-stable`
 
 **Invariant**
 Recovery logic must surface orphaned or unrecoverable waiting work rather than leaving it indefinitely silent.
@@ -447,15 +458,16 @@ Recovery logic must surface orphaned or unrecoverable waiting work rather than l
 - `AINDY/platform_layer/health_service.py` runtime condition reporting
 
 **Tests**
-- [ ] Add orphaned-wait detection tests here
-- [ ] Add stranded-wait surfacing tests here
+- [x] `tests/unit/test_rehydration_paths.py::test_eu_with_no_wait_condition_is_skipped`
+- [x] `tests/unit/test_rehydration_paths.py::test_event_eu_without_event_name_is_skipped`
+- [x] `tests/unit/test_rehydration_paths.py::test_no_waiting_eus_returns_zero`
 
 ---
 
 ## 7. Readiness And Degraded-Mode Invariants
 
 ### INV-READY-001
-**Status:** `draft`
+**Status:** `stable`
 
 **Invariant**
 Readiness must reflect whether the runtime can safely perform the class of work it claims to be ready for.
@@ -482,11 +494,23 @@ Readiness must reflect whether the runtime can safely perform the class of work 
 - `AINDY/startup.py` runtime condition publication helpers
 
 **Tests**
-- [ ] Add readiness-behavior tests here
-- [ ] Add partial-infrastructure readiness tests here
+- [x] `tests/unit/test_partial_infrastructure_readiness.py::test_postgres_down_blocks_readiness`
+- [x] `tests/unit/test_partial_infrastructure_readiness.py::test_critical_schema_down_blocks_readiness`
+- [x] `tests/unit/test_partial_infrastructure_readiness.py::test_redis_down_does_not_block_readiness_when_not_required`
+- [x] `tests/unit/test_partial_infrastructure_readiness.py::test_all_critical_deps_healthy_returns_ready`
+- [x] `tests/unit/test_startup_readiness.py::test_readiness_returns_503_when_restore_pending`
+- [x] `tests/unit/test_startup_readiness.py::test_startup_incomplete_blocks_readiness_outside_testing_mode`
+- [x] `tests/unit/test_operability_contracts.py::test_critical_tier_derives_unhealthy_status`
+- [x] `tests/unit/test_operability_contracts.py::test_degraded_database_derives_unhealthy_status`
+- [x] `tests/unit/test_operability_contracts.py::test_degraded_execution_engine_derives_unhealthy_status`
+- [x] `tests/unit/test_operability_contracts.py::test_degraded_non_critical_service_derives_degraded_status`
+- [x] `tests/unit/test_operability_contracts.py::test_health_endpoint_returns_503_when_system_is_critical`
+- [x] `tests/unit/test_operability_contracts.py::test_health_endpoint_returns_200_for_degraded_non_critical_system`
+- [x] `tests/unit/test_operability_contracts.py::test_ready_503_on_restore_pending_has_status_and_reason`
+- [x] `tests/unit/test_operability_contracts.py::test_ready_503_on_registry_incomplete_has_parseable_detail`
 
 ### INV-READY-002
-**Status:** `draft`
+**Status:** `internal-stable`
 
 **Invariant**
 Degraded mode must be explicit about what remains safe and what is unavailable.
@@ -524,20 +548,20 @@ Populate this section as invariants are adopted.
 
 | Invariant ID | Test File(s) | Test Type | Status |
 |---|---|---|---|
-| INV-STARTUP-001 |  | startup/regression | pending |
-| INV-STARTUP-002 |  | route/health | pending |
-| INV-SCHED-001 |  | scheduler/regression | pending |
-| INV-SCHED-002 |  | recovery/regression | pending |
-| INV-WAIT-001 |  | scheduler/matching | pending |
-| INV-WAIT-002 |  | scheduler/duplication | pending |
-| INV-SYSCALL-001 |  | bootstrap/dispatch | pending |
-| INV-SYSCALL-002 |  | dispatch/security | pending |
-| INV-TENANT-001 |  | isolation/regression | pending |
-| INV-TENANT-002 |  | capability/regression | pending |
-| INV-EVENT-001 |  | integration/deployment-profile | pending |
-| INV-EVENT-002 |  | recovery/watchdog | pending |
-| INV-READY-001 |  | readiness/integration | pending |
-| INV-READY-002 |  | degraded-mode/integration | pending |
+| INV-STARTUP-001 | tests/unit/test_platform_only_startup.py | startup/regression | covered |
+| INV-STARTUP-002 | tests/unit/test_startup_readiness.py, tests/unit/test_runtime_public_contract.py | route/health | covered |
+| INV-SCHED-001 | tests/unit/test_scheduler_wait_resume.py, tests/unit/test_rehydration_paths.py | scheduler/regression | covered |
+| INV-SCHED-002 | tests/unit/test_rehydration_paths.py | recovery/regression | covered |
+| INV-WAIT-001 | tests/unit/test_scheduler_wait_resume.py | scheduler/matching | covered |
+| INV-WAIT-002 | tests/unit/test_scheduler_wait_resume.py, tests/unit/test_rehydration_paths.py | scheduler/duplication | covered |
+| INV-SYSCALL-001 | tests/unit/test_syscall_not_ready.py, tests/unit/test_syscall_contract.py | bootstrap/dispatch | covered |
+| INV-SYSCALL-002 | tests/unit/test_syscall_not_ready.py, tests/unit/test_syscall_contract.py, tests/unit/test_idempotency_gate.py | dispatch/security | covered |
+| INV-TENANT-001 | tests/unit/test_extension_boundary_contract.py, tests/unit/test_security_isolation.py, tests/unit/test_syscall_not_ready.py | isolation/regression | covered |
+| INV-TENANT-002 | tests/unit/test_extension_boundary_contract.py, tests/unit/test_security_isolation.py | capability/regression | covered |
+| INV-EVENT-001 | tests/unit/test_deployment_profiles.py | deployment-profile | partial |
+| INV-EVENT-002 | tests/unit/test_rehydration_paths.py | recovery/watchdog | covered |
+| INV-READY-001 | tests/unit/test_partial_infrastructure_readiness.py, tests/unit/test_startup_readiness.py, tests/unit/test_runtime_degraded_modes.py, tests/unit/test_operability_contracts.py | readiness/integration | covered |
+| INV-READY-002 | tests/unit/test_runtime_degraded_modes.py | degraded-mode/integration | partial |
 
 ---
 

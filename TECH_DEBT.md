@@ -78,20 +78,19 @@ Trigger: revisit before any multi-instance cold-start deployment in production.
 
 ## IDEM-7 — Syscall Registry Not-Ready Window
 
-Status: Deferred — Low Priority
+Status: CLOSED (2026-06-04)
 
-Source: `docs/runtime/IDEMPOTENCY_CONTRACT.md` Open Question #2.
+Implemented: `SYSCALL_REGISTRY_MIN_COUNT = 17` added to `AINDY/kernel/syscall_registry.py`.
+`_check_syscall_registry_status()` added to `AINDY/routes/health_router.py` and wired into
+`/health/deep` — the response now includes `syscall_registry: {status, count, minimum_expected}`.
 
-Syscall registration is not complete until Phase 8 of startup. HTTP traffic that arrives
-between DB-ready and syscall-registry-ready may dispatch against an incomplete registry
-and receive spurious "syscall not found" errors. The health endpoint (`/health`) does not
-currently assert registry completion, so load balancers may route traffic too early.
+The timing-window risk (HTTP traffic before Phase 8) is already covered by the `startup_complete`
+check in the readiness report (`get_readiness_report` in `health_service.py:800`) — the ready
+endpoint returns 503 `startup_incomplete` until Phase 8 finishes and `publish_api_runtime_state`
+sets `startup_complete=True`. The `/health/deep` addition makes the registry count visible to
+operators and surfaces an `incomplete` status if a future registration is lost.
 
-Fix is small: extend the health check to assert that `len(SYSCALL_REGISTRY) >= N` (where
-N is the expected count of registered syscalls after full boot). See
-`AINDY/kernel/syscall_registry.py` and whichever route/service exposes `/health`.
-
-Trigger: revisit the next time the health endpoint is touched for any reason.
+Regression coverage: `tests/unit/test_runtime_readiness_contract.py`.
 
 ---
 
@@ -539,7 +538,7 @@ shadow standard env vars (e.g., `AINDY_REDIS_URL` vs `REDIS_URL`, `AINDY_SKIP_MO
 
 ## PERMISSION-SECRET-CLEANUP-1 — Remove vestigial PERMISSION_SECRET scaffolding
 
-**Status:** Deferred — Low Priority
+**Status:** CLOSED (2026-06-04)
 
 **Discovered:** 2026-05-27 during `.env.example` drift audit.
 
@@ -1516,3 +1515,69 @@ monolith's `client/src/api/agent.js`.
 `ROUTES.MEMORY.*` constants. This is a one-file fix independent of the ROUTES-CONSUMER-SPLIT-1
 architectural decision (the target constants are in the served MEMORY group, unaffected by
 quarantine). No ui-kit change needed.
+
+---
+
+## SCHED-001/002/003 — `/platform/observability/scheduler/status` returns 500 in platform-only profile
+
+**Status:** CLOSED (2026-06-04)
+
+**Root cause:** The endpoint called `_run_flow_observability("observability_scheduler_status", ...)` which
+invoked the `observability_scheduler_status` flow. That flow node checks for `task_is_background_leader`
+via the plugin registry and for `BackgroundTaskLease` rows. In the platform-only profile, neither the tasks
+domain nor the `background_task_lease` table is available, so the node returned `{"status": "FAILURE"}`,
+propagating as HTTP 500.
+
+**Fix (2026-06-04):** Replaced the flow engine call with `_build_scheduler_status_payload(db)` in
+`AINDY/routes/observability_router.py`. The new helper:
+- Reads `scheduler_running` directly from `scheduler_service.get_scheduler()`
+- Looks up `task_is_background_leader` from the plugin registry; sets `is_leader=null` and
+  `tasks_domain_available=false` when the tasks domain is absent (platform-only profile)
+- Populates `stuck_run_watchdog` directly from `get_last_scan_result()`
+- Never calls the flow engine — zero flow dependency
+
+`FEATURE_FLAGS.OPERATOR_SCHEDULER_STATUS` flipped to `true` in `platform/src/api/_routes.js`.
+
+---
+
+## ROUTE-REG-001 — `watcher_router` and `db_verify_router` are never registered; their endpoints return 404
+
+**Status:** CLOSED (2026-06-03)
+
+**Discovered:** 2026-06-03 during `PUBLIC_RUNTIME_SURFACES.md` review.
+
+**Location:**
+- `AINDY/routes/watcher_router.py` — `APIRouter(prefix="/watcher", ...)`
+- `AINDY/routes/db_verify_router.py`
+
+**Bug:** Both router files exist and define endpoints, but neither is included in
+`ROOT_ROUTERS`, `PLATFORM_ROUTERS`, `APP_ROUTERS`, or any other group in
+`AINDY/routes/__init__.py`. Neither is imported or registered anywhere in
+`AINDY/routing.py`, `AINDY/startup.py`, or `AINDY/main.py`. All defined endpoints
+return 404 in production.
+
+**Impact:**
+- `POST /watcher/signals` and `GET /watcher/signals` — used by the watcher client
+  (`aindy_sdk/watcher/signal_emitter.py`). The watcher client cannot deliver signals
+  until this router is registered.
+- `db_verify_router` endpoints — unknown; the file's purpose needs investigation
+  before registration.
+
+**Fix for watcher_router:** Add `watcher_router` to `ROOT_ROUTERS` in
+`AINDY/routes/__init__.py`. The router uses `dependencies=[Depends(verify_api_key)]`
+(API key auth, correct for a headless client process) and its prefix `/watcher` gives
+the final paths `/watcher/signals`. Mounting in ROOT_ROUTERS (no `/apps` prefix)
+matches the URL the watcher client already targets.
+
+```python
+# AINDY/routes/__init__.py
+from AINDY.routes.watcher_router import router as watcher_router
+
+ROOT_ROUTERS = [
+    health_router,
+    auth_router,
+    watcher_router,   # add here
+]
+```
+
+**Fix for db_verify_router:** Investigate intended audience and prefix before mounting.

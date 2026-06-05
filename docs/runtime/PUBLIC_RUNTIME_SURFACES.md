@@ -1,6 +1,6 @@
 ---
 title: "Public Runtime Surfaces"
-last_verified: "2026-05-25"
+last_verified: "2026-06-03"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -15,6 +15,9 @@ Meanings:
 
 - `stable`: expected to remain compatible within the current runtime-package
   and API MAJOR series
+- `conditionally stable`: core execution surfaces deployed at v1.0.0 and
+  unlikely to break, but HTTP shape not yet formally frozen; SDK and UI
+  consumption should prefer these over experimental surfaces
 - `experimental`: shipped and supported enough to use, but still allowed to
   change in minor releases
 - `internal`: not part of the external platform contract
@@ -28,11 +31,11 @@ The machine-readable form of this contract is exposed in `GET /api/version`
 under `public_contract`.
 
 Extension ABI policy is documented in
-[EXTENSION_ABI.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_ABI.md).
+[EXTENSION_ABI.md](./EXTENSION_ABI.md).
 Extension capability policy is documented in
-[EXTENSION_CAPABILITIES.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_CAPABILITIES.md).
+[EXTENSION_CAPABILITIES.md](./EXTENSION_CAPABILITIES.md).
 Extension provenance policy is documented in
-[EXTENSION_PROVENANCE.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_PROVENANCE.md).
+[EXTENSION_PROVENANCE.md](./EXTENSION_PROVENANCE.md).
 
 Release posture:
 
@@ -77,6 +80,23 @@ Downstream note:
 - the minimum stable downstream contract should be interpreted narrowly first
 - `CROSS_REPO_COMPATIBILITY.md` is authoritative for what SDK and UI should treat as compatibility commitments
 
+## Conditionally Stable HTTP Surfaces
+
+These are the core execution APIs shipped at v1.0.0. They are runtime-owned,
+actively used by SDK and platform UI, and unlikely to break. Their HTTP shape
+is not formally frozen — callers should prefer `aindy-sdk` wrappers over
+direct HTTP reliance.
+
+- `/apps/agent/*`
+  Agent creation, approval, execution, and run-status surfaces. Mounted at
+  `prefix=/apps` via `agent_router` (`prefix=/agent`).
+- `/apps/memory/*`
+  Memory read, write, search, and trace surfaces. Mounted at `prefix=/apps`
+  via `memory_router` (`prefix=/memory`).
+- `/apps/coordination/*`
+  Multi-agent coordination surfaces. Mounted at `prefix=/apps` via
+  `coordination_router` (`prefix=/coordination`).
+
 ## Experimental HTTP Surfaces
 
 - `GET /health/sandbox`
@@ -86,14 +106,10 @@ Downstream note:
   attestation, and active runtime conditions. Intended for integrators and
   operators who need sandbox status without parsing the full `/health` blob.
   Also the backing source for the `aindy-runtime sandbox` CLI subcommand.
-- `/apps/agent/*`
-  Runtime-owned and supported, but the external orchestration semantics are
-  still evolving.
-- `/apps/memory/*`
-  Runtime-owned and available, but the HTTP shape is not yet frozen as a long
-  term public contract.
-- `/apps/coordination/*`
-  Available but not declared stable.
+- `POST /watcher/signals` / `GET /watcher/signals`
+  Watcher signal ingestion and query. Signal emission uses API key auth
+  (headless client process). Mounted in `ROOT_ROUTERS` at `/watcher`.
+  The watcher client process ships in `aindy-sdk` as `aindy_sdk.watcher`.
 - `/platform/flows*`
   Dynamic flow management remains experimental.
 - `/platform/nodes*`
