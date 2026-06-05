@@ -50,7 +50,7 @@ import pytest
 
 from tests.sandbox.conftest import SENSITIVE_ENV_KEYS, record_result, run_escape_attempt
 
-pytestmark = [pytest.mark.sandbox_escape, pytest.mark.integration]
+pytestmark = pytest.mark.sandbox_escape
 
 # The minimal env that ContainerizedOciSandboxRunner passes to the container.
 _ALLOWED_ENV = {

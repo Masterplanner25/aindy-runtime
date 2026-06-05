@@ -42,7 +42,7 @@ import pytest
 
 from tests.sandbox.conftest import record_result, run_escape_attempt
 
-pytestmark = [pytest.mark.sandbox_escape, pytest.mark.integration]
+pytestmark = pytest.mark.sandbox_escape
 
 
 # ---------------------------------------------------------------------------

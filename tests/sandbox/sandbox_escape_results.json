@@ -1,0 +1,371 @@
+{
+  "schema_version": "2026-06-04",
+  "tested_at": "2026-06-05T03:43:06.485320Z",
+  "host_platform": "windows",
+  "container_image": "python:3.11-alpine",
+  "results": {
+    "tests/sandbox/test_allowed_path_boundary.py::test_unmounted_host_dir_inaccessible": {
+      "status": "PASS",
+      "attack_vector": "path_boundary",
+      "hardening_control": "no_ambient_host_paths",
+      "docker_flag": "--mount type=bind,src=<plugin_root>,dst=/plugin-root,readonly (only)",
+      "description": "Plugin searches known dangerous paths (/proc/1/root, /host, etc.) for a canary sentinel placed in an unmounted host directory. Canary must not be found.",
+      "duration_ms": 3563,
+      "exit_code": 1,
+      "evidence": "exit 1; stdout: 'PASS: canary not reachable from any candidate path'",
+      "docker_args": [
+        "--read-only",
+        "--mount",
+        "type=bind,src=C:\\Users\\shawn\\AppData\\Local\\Temp\\tmpaevs4_pl,dst=/plugin-root,readonly",
+        "--mount",
+        "type=tmpfs,dst=/tmp,tmpfs-size=8m"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, os\nsentinel = 'AINDY_HOST_SECRET_CANARY_8f3k2j9a'\nfound_in = []\n# Try paths that might expose host files\ncandidate_paths = [\n    '/host',\n    '/hostfs',\n    '/proc/1/root/tmp',\n    '/proc/1/root/etc',\n]\nfor base in candidate_paths:\n    try:\n        for root, dirs, files in os.walk(base):\n            for fn in files:\n                try:\n                    content = open(os.path.join(root, fn), 'rb').read(512)\n                    if sentinel.encode() in content:\n                        found_in.append(os.path.join(root, fn))\n                except Exception:\n                    pass\n    except PermissionError:\n        pass  # access denied is expected and correct\n    except OSError:\n        pass  # path doesn't exist \u2014 correct\nif found_in:\n    print(f'FAIL: canary found at {found_in}', flush=True)\n    sys.exit(0)  # canary found = test FAILS (with expect_failure=True)\nelse:\n    print('PASS: canary not reachable from any candidate path', flush=True)\n    sys.exit(1)  # canary absent = test PASSES (with expect_failure=True)\n"
+      ]
+    },
+    "tests/sandbox/test_allowed_path_boundary.py::test_plugin_root_accessible": {
+      "status": "PASS",
+      "attack_vector": "path_boundary",
+      "hardening_control": "no_ambient_host_paths",
+      "docker_flag": "--mount type=bind,src=<plugin_root>,dst=/plugin-root,readonly",
+      "description": "Positive check: /plugin-root/handler.py must be readable inside the container, confirming the bind mount works correctly.",
+      "duration_ms": 1484,
+      "exit_code": 0,
+      "evidence": "exit 0; stdout: 'PASS: /plugin-root/handler.py readable'",
+      "docker_args": [
+        "--read-only",
+        "--mount",
+        "type=bind,src=C:\\Users\\shawn\\AppData\\Local\\Temp\\tmpjhplfn5q,dst=/plugin-root,readonly",
+        "--mount",
+        "type=tmpfs,dst=/tmp,tmpfs-size=8m"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys\ntry:\n    content = open('/plugin-root/handler.py').read()\nexcept OSError as e:\n    print(f'FAIL: could not read /plugin-root/handler.py: {e}', flush=True)\n    sys.exit(1)\nif 'PLUGIN_MARKER' not in content:\n    print('FAIL: handler.py content unexpected', flush=True)\n    sys.exit(1)\nprint('PASS: /plugin-root/handler.py readable', flush=True)\nsys.exit(0)\n"
+      ]
+    },
+    "tests/sandbox/test_allowed_path_boundary.py::test_path_traversal_stays_in_container": {
+      "status": "PASS",
+      "attack_vector": "path_boundary",
+      "hardening_control": "no_ambient_host_paths",
+      "docker_flag": "--mount type=bind,...,readonly (bind mount isolation)",
+      "description": "Path traversal /plugin-root/../../../etc/passwd must resolve to the container's own /etc/passwd, not the host's. Both paths must return identical content.",
+      "duration_ms": 1234,
+      "exit_code": 0,
+      "evidence": "exit 0; stdout: 'PASS: both paths same (17-line /etc/passwd)'",
+      "docker_args": [
+        "--read-only",
+        "--mount",
+        "type=bind,src=C:\\Users\\shawn\\AppData\\Local\\Temp\\tmps__5h22x,dst=/plugin-root,readonly",
+        "--mount",
+        "type=tmpfs,dst=/tmp,tmpfs-size=8m"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, os\n# Read via direct path\ntry:\n    direct = open('/etc/passwd').read()\nexcept OSError as e:\n    print(f'FAIL: cannot read /etc/passwd: {e}', flush=True)\n    sys.exit(1)\n# Read via traversal path (should resolve to same file)\ntry:\n    traversal = open('/plugin-root/../../../etc/passwd').read()\nexcept OSError as e:\n    print(f'FAIL: traversal read failed: {e}', flush=True)\n    sys.exit(1)\nif direct != traversal:\n    print('FAIL: traversal resolves to a DIFFERENT /etc/passwd ')\n    print('(may indicate host namespace escape)', flush=True)\n    sys.exit(1)\n# Both paths lead to same file (container's own /etc/passwd)\nlines = direct.strip().splitlines()\nprint(f'PASS: both paths same ({len(lines)}-line /etc/passwd)', flush=True)\nsys.exit(0)\n"
+      ]
+    },
+    "tests/sandbox/test_filesystem_escape.py::test_readonly_rootfs_blocks_write": {
+      "status": "PASS",
+      "attack_vector": "filesystem_escape",
+      "hardening_control": "read_only_rootfs",
+      "docker_flag": "--read-only",
+      "description": "Plugin attempts to write to /etc with --read-only rootfs active. Blocked by EROFS (Read-only file system).",
+      "duration_ms": 1530,
+      "exit_code": 1,
+      "evidence": "exit 1",
+      "docker_args": [
+        "--read-only"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys\ntry:\n    open('/etc/aindy_escape_probe.txt', 'w').write('escaped')\n    sys.exit(0)  # FAIL: write succeeded\nexcept (OSError, PermissionError):\n    sys.exit(1)  # PASS: write was blocked\n"
+      ]
+    },
+    "tests/sandbox/test_filesystem_escape.py::test_plugin_mount_read_only": {
+      "status": "PASS",
+      "attack_vector": "filesystem_escape",
+      "hardening_control": "read_only_bind_mount",
+      "docker_flag": "--mount type=bind,...,readonly",
+      "description": "Plugin attempts to overwrite its own handler.py via the read-only plugin-root bind mount. Blocked by read-only mount flag.",
+      "duration_ms": 1688,
+      "exit_code": 1,
+      "evidence": "exit 1",
+      "docker_args": [
+        "--mount",
+        "type=bind,src=C:\\Users\\shawn\\AppData\\Local\\Temp\\tmp0pzun2o8,dst=/plugin-root,readonly"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys\ntry:\n    open('/plugin-root/handler.py', 'w').write('# injected')\n    sys.exit(0)  # FAIL: write succeeded\nexcept (OSError, PermissionError):\n    sys.exit(1)  # PASS: write was blocked\n"
+      ]
+    },
+    "tests/sandbox/test_filesystem_escape.py::test_tmpfs_writable_rootfs_read_only": {
+      "status": "PASS",
+      "attack_vector": "filesystem_escape",
+      "hardening_control": "read_only_rootfs_with_tmpfs",
+      "docker_flag": "--read-only --mount type=tmpfs,dst=/tmp",
+      "description": "Verifies that --read-only + tmpfs:/tmp gives writable /tmp for plugin scratch space while /etc remains read-only. Both conditions must hold for PASS.",
+      "duration_ms": 1421,
+      "exit_code": 0,
+      "evidence": "exit 0; stdout: 'PASS: /tmp writable, /etc read-only'",
+      "docker_args": [
+        "--read-only",
+        "--mount",
+        "type=tmpfs,dst=/tmp,tmpfs-size=16m"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, os\n# (a) /tmp must be writable\ntry:\n    open('/tmp/sandbox_probe.txt', 'w').write('ok')\nexcept Exception as e:\n    print(f'FAIL: /tmp not writable: {e}', flush=True)\n    sys.exit(1)\n# (b) /etc must NOT be writable\ntry:\n    open('/etc/aindy_escape_probe.txt', 'w').write('escaped')\n    print('FAIL: /etc is writable despite --read-only', flush=True)\n    sys.exit(2)\nexcept (OSError, PermissionError):\n    pass  # expected\nprint('PASS: /tmp writable, /etc read-only', flush=True)\nsys.exit(0)\n"
+      ]
+    },
+    "tests/sandbox/test_host_env_leak.py::test_sensitive_env_vars_absent": {
+      "status": "PASS",
+      "attack_vector": "env_leak",
+      "hardening_control": "minimal_env_set",
+      "docker_flag": "--env PYTHONIOENCODING=utf-8 (explicit-only env)",
+      "description": "Verify that production-sensitive env vars (SECRET_KEY, DATABASE_URL, OPENAI_API_KEY, etc.) are absent inside the container when only the minimal allowed env is passed via --env.",
+      "duration_ms": 1547,
+      "exit_code": 0,
+      "evidence": "exit 0; stdout: '{\"env_keys\": [\"GPG_KEY\", \"HOME\", \"HOSTNAME\", \"LANG\", \"PATH\", \"PYTHONIOENCODING\", \"PYTHON_SHA256\", \"PYTHON_VERSION\"], \"leaked\": {}}'",
+      "docker_args": [
+        "--env",
+        "PYTHONIOENCODING=utf-8"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, os, json\nsensitive = ['AINDY_API_KEY', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'DATABASE_URL', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'PERMISSION_SECRET', 'SECRET_KEY']\nfound = {k: v[:4]+'***' for k, v in os.environ.items() if k in sensitive}\nallowed = sorted(os.environ.keys())\nprint(json.dumps({'env_keys': allowed, 'leaked': found}), flush=True)\nsys.exit(1 if found else 0)\n"
+      ]
+    },
+    "tests/sandbox/test_host_env_leak.py::test_only_allowed_env_keys_present": {
+      "status": "PASS",
+      "attack_vector": "env_leak",
+      "hardening_control": "minimal_env_set",
+      "docker_flag": "--env PYTHONIOENCODING=utf-8",
+      "description": "Allowlist check: PYTHONIOENCODING must be present (--env transmitted) and no SENSITIVE_ENV_KEYS must be present.",
+      "duration_ms": 1719,
+      "exit_code": 0,
+      "evidence": "exit 0; stdout: 'PASS: PYTHONIOENCODING present, no sensitive keys found'",
+      "docker_args": [
+        "--env",
+        "PYTHONIOENCODING=utf-8"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, os\nenv_keys = set(os.environ.keys())\n# Must have PYTHONIOENCODING\nif 'PYTHONIOENCODING' not in env_keys:\n    print('FAIL: PYTHONIOENCODING not present \u2014 --env was not transmitted', flush=True)\n    sys.exit(1)\nsensitive = ['AINDY_API_KEY', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'DATABASE_URL', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'PERMISSION_SECRET', 'SECRET_KEY']\nleaked = [k for k in sensitive if k in env_keys]\nif leaked:\n    print(f'FAIL: sensitive keys present: {leaked}', flush=True)\n    sys.exit(1)\nprint(f'PASS: PYTHONIOENCODING present, no sensitive keys found', flush=True)\nsys.exit(0)\n"
+      ]
+    },
+    "tests/sandbox/test_network_escape.py::test_network_none_blocks_tcp_outbound": {
+      "status": "PASS",
+      "attack_vector": "network_escape",
+      "hardening_control": "disable_network",
+      "docker_flag": "--network none",
+      "description": "Plugin attempts TCP connect to 8.8.8.8:53 with --network none active. Network unreachable / connection refused expected; connection must not succeed.",
+      "duration_ms": 1530,
+      "exit_code": 1,
+      "evidence": "exit 1",
+      "docker_args": [
+        "--network",
+        "none"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, socket\ns = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\ns.settimeout(2)\ntry:\n    s.connect(('8.8.8.8', 53))\n    s.close()\n    sys.exit(0)  # FAIL: connection succeeded despite --network none\nexcept OSError:\n    sys.exit(1)  # PASS: connection was blocked\n"
+      ]
+    },
+    "tests/sandbox/test_network_escape.py::test_network_none_blocks_udp_outbound": {
+      "status": "PASS",
+      "attack_vector": "network_escape",
+      "hardening_control": "disable_network",
+      "docker_flag": "--network none",
+      "description": "Plugin sends a UDP datagram to 8.8.8.8:53 with --network none active. No reply should be receivable; ENETUNREACH or socket.timeout expected.",
+      "duration_ms": 1546,
+      "exit_code": 1,
+      "evidence": "exit 1",
+      "docker_args": [
+        "--network",
+        "none"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, socket\ns = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\ns.settimeout(1)\ntry:\n    # Minimal DNS query header (12 bytes)\n    s.sendto(b'\\x00\\x01' + b'\\x00' * 10, ('8.8.8.8', 53))\n    s.recvfrom(512)  # should not receive a reply\n    sys.exit(0)  # FAIL: received a reply from the network\nexcept OSError:\n    sys.exit(1)  # PASS: blocked by network isolation\n"
+      ]
+    },
+    "tests/sandbox/test_network_escape.py::test_network_none_only_loopback_interface": {
+      "status": "PASS",
+      "attack_vector": "network_escape",
+      "hardening_control": "disable_network",
+      "docker_flag": "--network none",
+      "description": "Kernel-observable check: only the loopback interface (lo) must be present in the container's network namespace when --network none is active.",
+      "duration_ms": 1421,
+      "exit_code": 0,
+      "evidence": "exit 0; stdout: \"interfaces: ['lo']\\nPASS: only lo present\"",
+      "docker_args": [
+        "--network",
+        "none"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, socket\ninterfaces = [name for _, name in socket.if_nameindex()]\nnon_lo = [i for i in interfaces if i != 'lo']\nprint(f'interfaces: {interfaces}', flush=True)\nif non_lo:\n    print(f'FAIL: non-loopback interfaces present: {non_lo}', flush=True)\n    sys.exit(1)\nprint('PASS: only lo present', flush=True)\nsys.exit(0)\n"
+      ]
+    },
+    "tests/sandbox/test_privilege_escalation.py::test_cap_drop_all_blocks_raw_socket": {
+      "status": "PASS",
+      "attack_vector": "privilege_escalation",
+      "hardening_control": "drop_all_capabilities",
+      "docker_flag": "--cap-drop ALL",
+      "description": "Plugin attempts to create a raw ICMP socket (requires CAP_NET_RAW). With --cap-drop ALL, kernel returns EPERM. Raw socket must not be created.",
+      "duration_ms": 1703,
+      "exit_code": 1,
+      "evidence": "exit 1",
+      "docker_args": [
+        "--cap-drop",
+        "ALL"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, socket\ntry:\n    s = socket.socket(\n        socket.AF_INET,\n        socket.SOCK_RAW,\n        socket.IPPROTO_ICMP,\n    )\n    s.close()\n    sys.exit(0)  # FAIL: raw socket was created\nexcept PermissionError:\n    sys.exit(1)  # PASS: EPERM \u2014 CAP_NET_RAW is gone\n"
+      ]
+    },
+    "tests/sandbox/test_privilege_escalation.py::test_cap_drop_all_blocks_chown": {
+      "status": "PASS",
+      "attack_vector": "privilege_escalation",
+      "hardening_control": "drop_all_capabilities",
+      "docker_flag": "--cap-drop ALL",
+      "description": "Plugin attempts to chown a file to uid=1 (requires CAP_CHOWN). With --cap-drop ALL, kernel returns EPERM. Chown must fail.",
+      "duration_ms": 1405,
+      "exit_code": 1,
+      "evidence": "exit 1",
+      "docker_args": [
+        "--cap-drop",
+        "ALL",
+        "--read-only",
+        "--mount",
+        "type=tmpfs,dst=/tmp,tmpfs-size=8m"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, os\npath = '/tmp/chown_probe.txt'\nopen(path, 'w').write('probe')\ntry:\n    os.chown(path, 1, 1)  # try chown to uid=1,gid=1\n    sys.exit(0)  # FAIL: chown succeeded without CAP_CHOWN\nexcept PermissionError:\n    sys.exit(1)  # PASS: EPERM \u2014 CAP_CHOWN is gone\n"
+      ]
+    },
+    "tests/sandbox/test_privilege_escalation.py::test_no_new_privileges_in_proc_status": {
+      "status": "PASS",
+      "attack_vector": "privilege_escalation",
+      "hardening_control": "no_new_privileges",
+      "docker_flag": "--security-opt no-new-privileges",
+      "description": "Kernel-observable check: /proc/self/status must show NoNewPrivs: 1 when --security-opt no-new-privileges is active. Proves the kernel acknowledged the PR_SET_NO_NEW_PRIVS request.",
+      "duration_ms": 1547,
+      "exit_code": 0,
+      "evidence": "exit 0; stdout: 'NoNewPrivs: 1'",
+      "docker_args": [
+        "--security-opt",
+        "no-new-privileges"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys\ntry:\n    status = open('/proc/self/status').read()\nexcept OSError as e:\n    print(f'FAIL: could not read /proc/self/status: {e}', flush=True)\n    sys.exit(1)\nfor line in status.splitlines():\n    if line.startswith('NoNewPrivs:'):\n        value = line.split(':')[1].strip()\n        print(f'NoNewPrivs: {value}', flush=True)\n        if value == '1':\n            sys.exit(0)  # PASS: kernel confirmed no-new-privileges\n        else:\n            print('FAIL: NoNewPrivs is not 1', flush=True)\n            sys.exit(1)\nprint('FAIL: NoNewPrivs line not found in /proc/self/status', flush=True)\nsys.exit(1)\n"
+      ]
+    },
+    "tests/sandbox/test_privilege_escalation.py::test_cap_drop_and_no_new_privs_combined": {
+      "status": "PASS",
+      "attack_vector": "privilege_escalation",
+      "hardening_control": "cap_drop_all+no_new_privileges",
+      "docker_flag": "--cap-drop ALL --security-opt no-new-privileges",
+      "description": "Combined check: --cap-drop ALL + no-new-privileges must both be active. NoNewPrivs=1 in /proc, CAP_NET_RAW absent, CAP_CHOWN absent.",
+      "duration_ms": 1610,
+      "exit_code": 0,
+      "evidence": "exit 0; stdout: 'PASS: NoNewPrivs=1, CAP_NET_RAW absent, CAP_CHOWN absent'",
+      "docker_args": [
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--read-only",
+        "--mount",
+        "type=tmpfs,dst=/tmp,tmpfs-size=8m"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, os, socket\nerrors = []\n# (a) NoNewPrivs must be 1\ntry:\n    status = open('/proc/self/status').read()\n    nnp = {l.split(':')[0]: l.split(':')[1].strip()\n           for l in status.splitlines() if ':' in l}\n    if nnp.get('NoNewPrivs') != '1':\n        errors.append(f'NoNewPrivs={nnp.get(\"NoNewPrivs\")} (expected 1)')\nexcept OSError as e:\n    errors.append(f'proc read failed: {e}')\n# (b) CAP_NET_RAW must be gone\ntry:\n    s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)\n    s.close()\n    errors.append('CAP_NET_RAW still present (raw socket succeeded)')\nexcept PermissionError:\n    pass  # expected\n# (c) CAP_CHOWN must be gone\ntry:\n    path = '/tmp/chown_probe.txt'\n    open(path, 'w').write('probe')\n    os.chown(path, 1, 1)\n    errors.append('CAP_CHOWN still present (chown succeeded)')\nexcept PermissionError:\n    pass  # expected\nif errors:\n    for e in errors: print(f'FAIL: {e}', flush=True)\n    sys.exit(1)\nprint('PASS: NoNewPrivs=1, CAP_NET_RAW absent, CAP_CHOWN absent', flush=True)\nsys.exit(0)\n"
+      ]
+    },
+    "tests/sandbox/test_process_escape.py::test_pids_limit_blocks_fork_bomb": {
+      "status": "PASS",
+      "attack_vector": "process_escape",
+      "hardening_control": "pids_limit",
+      "docker_flag": "--pids-limit 10",
+      "description": "Plugin attempts to spawn 30 child processes with --pids-limit 10. Cgroup pids controller must block spawning before all attempts succeed.",
+      "duration_ms": 1796,
+      "exit_code": 1,
+      "evidence": "exit 1; stdout: 'pids limit hit after 9 spawns: [Errno 11] Resource temporarily unavailable'",
+      "docker_args": [
+        "--pids-limit",
+        "10"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import subprocess, sys\nprocs = []\nhit_limit = False\nfor i in range(30):\n    try:\n        p = subprocess.Popen(\n            ['sleep', '60'],\n            stdout=subprocess.DEVNULL,\n            stderr=subprocess.DEVNULL,\n        )\n        procs.append(p)\n    except (BlockingIOError, OSError) as e:\n        hit_limit = True\n        print(f'pids limit hit after {len(procs)} spawns: {e}', flush=True)\n        break\nfor p in procs:\n    try: p.kill()\n    except: pass\nif hit_limit:\n    sys.exit(1)  # PASS: limit was enforced\nelse:\n    print(f'all 30 spawns succeeded \u2014 limit NOT enforced', flush=True)\n    sys.exit(0)  # FAIL: limit was not enforced\n"
+      ]
+    },
+    "tests/sandbox/test_process_escape.py::test_pids_limit_visible_in_cgroup": {
+      "status": "PASS",
+      "attack_vector": "process_escape",
+      "hardening_control": "pids_limit",
+      "docker_flag": "--pids-limit 10",
+      "description": "Kernel-observable check: /sys/fs/cgroup/pids.max or /proc/self/cgroup must confirm the pids cgroup controller is active for the container.",
+      "duration_ms": 1530,
+      "exit_code": 0,
+      "evidence": "exit 0; stdout: 'cgroup pids limit: /sys/fs/cgroup/pids.max = 10'",
+      "docker_args": [
+        "--pids-limit",
+        "10"
+      ],
+      "image": "python:3.11-alpine",
+      "cmd": [
+        "python",
+        "-c",
+        "import sys, os\n# Try cgroups v1 path first\nfor path in [\n    '/sys/fs/cgroup/pids/pids.max',\n    '/sys/fs/cgroup/pids.max',\n]:\n    try:\n        val = open(path).read().strip()\n        print(f'cgroup pids limit: {path} = {val}', flush=True)\n        if val not in ('max', ''):\n            sys.exit(0)  # PASS: limit is set\n    except OSError:\n        pass\n# Fallback: check /proc/self/cgroup for 'pids' entry\ntry:\n    cgroup = open('/proc/self/cgroup').read()\n    if 'pids' in cgroup or '0::' in cgroup:  # v2 unified\n        print('pids entry found in /proc/self/cgroup', flush=True)\n        sys.exit(0)  # PASS: in a pids cgroup\nexcept OSError:\n    pass\nprint('FAIL: no pids cgroup evidence found', flush=True)\nsys.exit(1)\n"
+      ]
+    }
+  },
+  "summary": {
+    "total": 17,
+    "passed": 17,
+    "failed": 0,
+    "skipped_or_error": 0
+  }
+}

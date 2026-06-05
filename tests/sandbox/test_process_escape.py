@@ -48,7 +48,7 @@ import pytest
 
 from tests.sandbox.conftest import record_result, run_escape_attempt
 
-pytestmark = [pytest.mark.sandbox_escape, pytest.mark.integration]
+pytestmark = pytest.mark.sandbox_escape
 
 # How many processes the container is allowed. Must be low enough that the
 # escape script hits the limit, but high enough that the Python interpreter
