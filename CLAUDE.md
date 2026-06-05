@@ -461,7 +461,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **IDEM-\*** — idempotency audit findings. Next available: **IDEM-10**.
 - **CLI-1** — lazy settings getter / module-level import hazard (deferred post-1.0).
 - **CLI-SANDBOX-FORMAT-\*** — `sandbox` subcommand UX findings. CLI-SANDBOX-FORMAT-1: raw JSON wall, deferred to 1.0.1.
-- **C2, C3** — cross-platform sandbox tiers.
+- **C2, C3** — cross-platform sandbox tiers. C2: container-grade, closed 2026-05-24. C3: strong-sandbox cross-platform; Phase 0 (adversarial escape test suite — 17 tests in `tests/sandbox/`, marker `sandbox_escape`, artifact `tests/sandbox/sandbox_escape_results.json`) complete 2026-06-04; Phases 1-4 (WSL2, macOS, threat model, release gate) open.
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
 - **ALEMBIC-FRESH-DB-\*** — alembic migration blank-database safety. ALEMBIC-FRESH-DB-1: closed 2026-05-27.

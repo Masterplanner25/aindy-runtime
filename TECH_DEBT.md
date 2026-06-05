@@ -147,7 +147,7 @@ Matrix rewritten (NF-8). NF-2 contract decision documented in the new
 
 ## C3 — Cross-Platform Strong Sandbox
 
-Status: Deferred — Low Priority
+Status: PHASE 0 COMPLETE (2026-06-04) — Phases 1-4 open
 
 Source: `C2_SANDBOX_AUDIT.md` "What This Audit Does NOT Cover" / `ISOLATION_MODEL_PLAN.md` Gap 4 (C3 remainder).
 
@@ -155,16 +155,51 @@ Strong-sandbox and `hostile-third-party` profile support remains Linux-only.
 `STRONG_SANDBOX_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)` and
 `HOSTILE_THIRD_PARTY_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)` are unchanged.
 Non-Linux hosts can reach `container-sandbox-certified` (C2 — closed) but not
-`strong-sandbox-certified`. Closing this requires platform-specific sandbox runtimes
-(Windows Containers, WSL-mediated isolation, macOS Virtualization.framework) —
-infrastructure work outside current scope.
+`strong-sandbox-certified`. Closing requires platform-specific sandbox runtimes
+(Windows Containers, WSL-mediated isolation, macOS Virtualization.framework).
+
+**Phase 0 (2026-06-04) — Adversarial escape test suite: COMPLETE**
+
+Created `tests/sandbox/` with 17 adversarial escape tests across 6 categories,
+gated under `pytest -m sandbox_escape`. Tests prove the existing Linux
+container-grade sandbox claim with real Docker invocations (no mocking). Each test
+documents exactly what was tested and why the specific vector matters.
+
+Categories and test counts:
+- Filesystem escape (3): read-only rootfs, read-only bind mount, tmpfs isolation
+- Network escape (3): TCP outbound, UDP outbound, loopback-only kernel evidence
+- Process escape (2): pids limit enforcement, cgroup kernel evidence (Linux-only)
+- Privilege escalation (4): CAP_NET_RAW, CAP_CHOWN, no-new-privileges /proc evidence, combined (Linux-only)
+- Host env leak (2): sensitive keys absent, allowlist verification
+- Path boundary (3): unmounted dir inaccessible, plugin root accessible, path traversal stays in container
+
+Result artifact: `tests/sandbox/sandbox_escape_results.json` — written at session end.
+Marker: `sandbox_escape`. Image: `python:3.11-alpine` (configurable via `SANDBOX_ESCAPE_IMAGE`).
+Platform note: all tests run on any platform with Docker Linux containers; Linux-only kernel
+control tests (privilege escalation, process/pids) skip on non-Linux backends.
+
+**Phase 1 — WSL2/Windows strong sandbox path: open**
+Implement `_detect_wsl2()`, `_wsl2_path()`, `_run_in_wsl2_strong_sandbox()` in
+`sandbox_runner.py`. Phase 0 escape suite must pass on WSL2 backend before certification.
+
+**Phase 2 — macOS Docker Desktop policy: open**
+Document the policy decision confirming Docker Desktop Linux VM boundary equals
+strong-sandbox-tier on macOS. Phase 0 escape suite must pass.
+
+**Phase 3 — Formal threat model + sandbox_escape_test_posture(): open**
+Create `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (append-only log). Each escape test
+category maps to a threat model entry. Implement `sandbox_escape_test_posture()` API.
+
+**Phase 4 — Release gate: open**
+Add pre-release escape suite gate to `docs/runtime/RELEASE_CHECKLIST.md`.
+Gate condition: all non-skipped escape tests PASS before any GA tag.
 
 Trigger: when there is a platform-specific sandbox runtime delivering strong-sandbox-tier
 assurance on a non-Linux host.
 
-Condition to reopen: A non-Linux host platform gains a supported sandbox runner type
-with assurance class `strong-sandbox-tier`, verified through the shared worker policy
-certification suite (`tier_status: certified` at `strong-sandbox-certified`).
+Condition to close C3 fully: A non-Linux host platform gains a supported sandbox runner type
+with assurance class `strong-sandbox-tier`, verified through the escape test suite and the
+shared worker policy certification suite (`tier_status: certified` at `strong-sandbox-certified`).
 
 ---
 

@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Added — C3 Phase 0: adversarial sandbox escape test suite (2026-06-04)
+
+- **`tests/sandbox/`** (8 new files, 17 tests): Adversarial escape test suite that proves
+  the existing Linux container-grade sandbox claim with real Docker invocations. No mocking.
+  Each test documents exactly what attack vector is tested and why it matters.
+
+  Test categories:
+  - **Filesystem** (`test_filesystem_escape.py`, 3 tests): read-only rootfs blocks writes,
+    plugin bind mount is read-only, tmpfs at `/tmp` is writable while `/etc` remains frozen.
+  - **Network** (`test_network_escape.py`, 3 tests): `--network none` blocks outbound TCP
+    and UDP; kernel-observable proof that only loopback interface is present.
+  - **Process** (`test_process_escape.py`, 2 tests, Linux-only): `--pids-limit` enforcement
+    via fork-bomb attempt; cgroup kernel evidence via `/sys/fs/cgroup/pids.max`.
+  - **Privilege escalation** (`test_privilege_escalation.py`, 4 tests, Linux-only):
+    `--cap-drop ALL` removes `CAP_NET_RAW` (raw socket blocked) and `CAP_CHOWN`;
+    `--security-opt no-new-privileges` reflected in `/proc/self/status` (`NoNewPrivs: 1`);
+    combined controls verified together.
+  - **Host env leak** (`test_host_env_leak.py`, 2 tests): `SECRET_KEY`, `DATABASE_URL`,
+    `OPENAI_API_KEY` and other production secrets absent from container; allowed key
+    (`PYTHONIOENCODING`) present (confirms `--env` was transmitted).
+  - **Path boundary** (`test_allowed_path_boundary.py`, 3 tests): unmounted host directory
+    with canary file is inaccessible; plugin root is accessible at `/plugin-root`; path
+    traversal (`/plugin-root/../../../etc/passwd`) resolves to container's own `/etc/passwd`.
+
+- **`tests/sandbox/sandbox_escape_results.json`** (runtime artifact): written after each
+  escape test session with schema_version, tested_at, host_platform, per-test results
+  (status, evidence, docker_args, cmd), and pass/fail summary.
+
+- **`pytest.ini`** + **`pytest.integration.ini`**: registered `sandbox_escape` marker.
+
+  To run: `pytest -m sandbox_escape -v`
+  Requires: Docker with Linux containers mode, internet access to pull `python:3.11-alpine`.
+  Override image: `SANDBOX_ESCAPE_IMAGE=python:3.12-alpine pytest -m sandbox_escape -v`
+
 ### Fixed — AGENT-APPROVE-001b: async approve dispatch (2026-06-04)
 
 - **`AINDY/agents/agent_runtime/approvals.py`**: `approve_run()` now fires `execute_run`
