@@ -1,6 +1,6 @@
 """Pin the ResourceManager quota defaults so they cannot silently drift.
 
-cpu_time_ms measures wall-clock elapsed time (monotonic clock), including
+wall_time_ms measures wall-clock elapsed time (monotonic clock), including
 all network I/O wait.  The 300 000 ms default accommodates real agent steps
 that include embedding API round-trips (~34 s observed; see trace 4cc32073).
 """
@@ -35,20 +35,20 @@ def _reload_resource_manager(env: dict[str, str] | None = None):
                 os.environ.pop(k, None)
 
 
-def test_default_cpu_time_ms_is_300s():
+def test_default_wall_time_ms_is_300s():
     """Default AINDY_QUOTA_CPU_MS must be 300 000 ms (5-minute wall-clock limit)."""
     rm = _reload_resource_manager()
-    assert rm.MAX_CPU_TIME_MS == 300_000, (
-        f"Default cpu_time_ms cap changed unexpectedly: got {rm.MAX_CPU_TIME_MS}. "
+    assert rm.MAX_WALL_TIME_MS == 300_000, (
+        f"Default wall_time_ms cap changed unexpectedly: got {rm.MAX_WALL_TIME_MS}. "
         "This measures wall-clock time (including I/O wait). "
         "See AGENT-RESLIMIT-001 before lowering this value."
     )
 
 
-def test_cpu_time_ms_env_override():
+def test_wall_time_ms_env_override():
     """AINDY_QUOTA_CPU_MS must override the default."""
     rm = _reload_resource_manager({"AINDY_QUOTA_CPU_MS": "60000"})
-    assert rm.MAX_CPU_TIME_MS == 60_000
+    assert rm.MAX_WALL_TIME_MS == 60_000
 
 
 def test_other_quota_defaults_unchanged():
