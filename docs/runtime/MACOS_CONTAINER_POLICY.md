@@ -1,3 +1,10 @@
+---
+title: "macOS Container Sandbox Policy"
+api_version: "1.0"
+last_verified: "2026-06-06"
+status: current
+owner: "platform-team"
+---
 # macOS Container Sandbox Policy
 
 **Status:** Policy defined 2026-06-06. Escape suite certification pending (see Verification section).

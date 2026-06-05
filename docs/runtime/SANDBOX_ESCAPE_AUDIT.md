@@ -1,5 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
+api_version: "1.0"
+last_verified: "2026-06-06"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
