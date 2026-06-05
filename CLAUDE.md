@@ -17,6 +17,10 @@ pytest tests/unit/test_syscall_contract.py::test_name -v   # single test
 # Runtime-only CI subset (fastest, no DB required)
 pytest -m runtime_only -q
 
+# Sandbox escape suite — requires Docker, Linux containers mode, NO database needed
+pytest -m sandbox_escape -v
+SANDBOX_ESCAPE_IMAGE=python:3.12-alpine pytest -m sandbox_escape -v  # custom image
+
 # Integration tests — require live Postgres + Redis
 pytest -c pytest.integration.ini -v
 docker compose -f docker-compose.test.yml up -d            # spin up deps
@@ -374,6 +378,26 @@ Add the same pattern for any future exception type that callers are expected to 
 
 ---
 
+## `pytest.mark.integration` — skip hazard for Docker-only tests
+
+`pytest.mark.integration` triggers a global conftest guard (`tests/conftest.py`) that **skips the entire test when `DATABASE_URL` is not a live PostgreSQL URL**. This fires even in the default dev environment where `DATABASE_URL=sqlite:///:memory:`.
+
+Tests that only need Docker (not a database) — such as the sandbox escape suite — **must NOT carry `pytest.mark.integration`**. Using that marker on Docker-only tests causes them to be silently skipped in the standard dev environment with no obvious error message.
+
+**Rule:** Sandbox / Docker-only tests use `pytest.mark.sandbox_escape` exclusively. Never add `pytest.mark.integration` to any test that doesn't actually open a database connection.
+
+```python
+# CORRECT — Docker-only test
+pytestmark = pytest.mark.sandbox_escape
+
+# WRONG — silently skips when DATABASE_URL=sqlite://
+pytestmark = [pytest.mark.sandbox_escape, pytest.mark.integration]
+```
+
+This bit us during C3 Phase 0: all 17 escape tests were silently skipped on first run because the files initially carried both markers.
+
+---
+
 ## TECH_DEBT.md — IDEM-* numbering
 
 Entries are numbered sequentially. Do not reuse a number.
@@ -461,7 +485,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **IDEM-\*** — idempotency audit findings. Next available: **IDEM-10**.
 - **CLI-1** — lazy settings getter / module-level import hazard (deferred post-1.0).
 - **CLI-SANDBOX-FORMAT-\*** — `sandbox` subcommand UX findings. CLI-SANDBOX-FORMAT-1: raw JSON wall, deferred to 1.0.1.
-- **C2, C3** — cross-platform sandbox tiers. C2: container-grade, closed 2026-05-24. C3: strong-sandbox cross-platform; Phase 0 (adversarial escape test suite — 17 tests in `tests/sandbox/`, marker `sandbox_escape`, artifact `tests/sandbox/sandbox_escape_results.json`) complete 2026-06-04; Phases 1-4 (WSL2, macOS, threat model, release gate) open.
+- **C2, C3** — cross-platform sandbox tiers. C2: container-grade, closed 2026-05-24. C3: strong-sandbox cross-platform; Phase 0 (adversarial escape test suite — 17 tests in `tests/sandbox/`, marker `sandbox_escape`, artifact `tests/sandbox/sandbox_escape_results.json`) complete 2026-06-04; Phase 3 (threat model `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` + `sandbox_escape_test_posture()` in `sandbox_runner.py`) complete 2026-06-05; Phase 4 (release gate Step 16 in `docs/runtime/RELEASE_CHECKLIST.md`) complete 2026-06-05; Phases 1 (WSL2) and 2 (macOS) open.
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
 - **ALEMBIC-FRESH-DB-\*** — alembic migration blank-database safety. ALEMBIC-FRESH-DB-1: closed 2026-05-27.
@@ -543,3 +567,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Subprocess callback spawn (CWD hazard) | `AINDY/platform_layer/runtime_callback_host.py` |
 | Subprocess callback runner | `AINDY/platform_layer/runtime_callback_worker.py` |
 | Log handler OSError guard | `AINDY/config.py` — `_build_log_handler` |
+| Sandbox escape test suite | `tests/sandbox/` — marker `sandbox_escape`, image `python:3.11-alpine` |
+| Sandbox escape results artifact | `tests/sandbox/sandbox_escape_results.json` |
+| Sandbox escape audit log (append-only) | `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` |
+| Sandbox escape posture function | `AINDY/platform_layer/sandbox_runner.py` — `sandbox_escape_test_posture()` |
