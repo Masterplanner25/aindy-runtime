@@ -104,6 +104,10 @@ EFFECT_RECORD_TTL_DAYS = 90
 EFFECT_RECORD_CLEANUP_INTERVAL_HOURS = 24
 EFFECT_RECORD_DELETE_BATCH_SIZE = 10_000
 
+# AgentRun rows in 'approved' status older than this threshold had their
+# background execution thread die before committing 'executing'.
+ORPHANED_APPROVED_THRESHOLD_MINUTES = 10
+
 # Global scheduler instance â€” initialized once on startup
 _scheduler: Optional[BackgroundScheduler] = None
 
@@ -289,6 +293,16 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         max_instances=1,
     )
 
+    scheduler.add_job(
+        _recover_orphaned_approved_runs,
+        trigger=IntervalTrigger(minutes=5),
+        id="recover_orphaned_approved_runs",
+        name="Recover orphaned approved agent runs",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
     for job in get_scheduled_jobs():
         scheduler.add_job(
             job["handler"],
@@ -461,6 +475,57 @@ def _cleanup_expired_effect_records() -> None:
     except Exception as exc:
         logger.error("[effect_record_cleanup] failed: %s", exc)
 
+
+
+def _recover_orphaned_approved_runs() -> None:
+    """Re-dispatch execute_run for AgentRun rows stranded in 'approved' after a process crash."""
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.models import AgentRun
+        from datetime import timedelta
+        import threading
+
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=ORPHANED_APPROVED_THRESHOLD_MINUTES)
+        db = SessionLocal()
+        orphaned = [
+            (run.id, run.user_id)
+            for run in db.query(AgentRun)
+            .filter(
+                AgentRun.status == "approved",
+                AgentRun.approved_at < cutoff,
+            )
+            .limit(50)
+            .all()
+        ]
+        db.close()
+
+        if not orphaned:
+            return
+
+        logger.warning(
+            "[agent_watchdog] %d orphaned approved run(s) found (approved_at < %s); re-dispatching",
+            len(orphaned),
+            cutoff.isoformat(),
+        )
+
+        for run_id, user_id in orphaned:
+            def _bg_recover(run_id=run_id, user_id=user_id):
+                try:
+                    from AINDY.db.database import SessionLocal
+                    from AINDY.agents.agent_runtime import execute_run
+                    bg_db = SessionLocal()
+                    try:
+                        execute_run(run_id=run_id, user_id=str(user_id), db=bg_db)
+                    finally:
+                        bg_db.close()
+                except Exception as exc:
+                    logger.warning(
+                        "[agent_watchdog] re-dispatch failed for run_id=%s: %s", run_id, exc
+                    )
+
+            threading.Thread(target=_bg_recover, daemon=True).start()
+    except Exception as exc:
+        logger.error("[agent_watchdog] failed: %s", exc)
 
 
 # Job execution
