@@ -1,5 +1,6 @@
 """
 AGENT-APPROVE-001a: approve idempotency contract.
+AGENT-APPROVE-001b: approve returns immediately; execution runs in a background thread.
 
 Three shapes covering the realistic failure modes described in the ticket:
   1. Sequential double-approve — second call returns run state, never calls execute_run again.
@@ -11,9 +12,13 @@ Three shapes covering the realistic failure modes described in the ticket:
 Tests 1 and 2 exercise the real route (POST /apps/agent/runs/{run_id}/approve) so that
 the full ExecutionPipeline → approve_agent_run_runtime → approve_run chain is covered.
 Test 3 validates the CAS rowcount invariant directly against the shared session.
+
+Since AGENT-APPROVE-001b, execute_run fires in a daemon background thread. All three
+shapes use threading.Event to wait for the background thread before asserting call counts.
 """
 from __future__ import annotations
 
+import threading
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -69,7 +74,11 @@ def _approving_evaluator(_payload: dict) -> dict:
 def test_sequential_double_approve_executes_once(
     runtime_only_app, runtime_only_client, mock_db, monkeypatch
 ):
-    """Second approve on an already-approved run must not call execute_run a second time."""
+    """Second approve on an already-approved run must not call execute_run a second time.
+
+    Since AGENT-APPROVE-001b, execute_run fires in a background thread. The test
+    uses threading.Event to wait for the first execution before asserting call counts.
+    """
     user = _fake_user()
     uid = user["sub"]
     runtime_only_app.dependency_overrides[get_current_user] = lambda: user
@@ -79,9 +88,11 @@ def test_sequential_double_approve_executes_once(
     run_id = str(run.id)
 
     execute_calls: list[str] = []
+    execute_event = threading.Event()
 
     def _fake_execute(*, run_id, user_id, db):
         execute_calls.append(str(run_id))
+        execute_event.set()
         return {"run_id": str(run_id), "status": "completed"}
 
     with (
@@ -90,6 +101,7 @@ def test_sequential_double_approve_executes_once(
         patch("AINDY.agents.agent_runtime.approvals.record_agent_event", return_value="evt-1"),
     ):
         r1 = runtime_only_client.post(f"/apps/agent/runs/{run_id}/approve")
+        assert execute_event.wait(timeout=5), "background execute_run did not fire within 5 s"
         r2 = runtime_only_client.post(f"/apps/agent/runs/{run_id}/approve")
 
     assert r1.status_code == 200, f"first approve failed: {r1.status_code} {r1.json()}"
@@ -107,8 +119,11 @@ def test_repro_cancel_retry_executes_once(
     runtime_only_app, runtime_only_client, mock_db, monkeypatch
 ):
     """
-    Repro shape: first approve starts, execute_run is in-progress (status='executing').
+    Repro shape: first approve starts, execute_run runs in background (status='executing').
     Client retries. Second approve sees status 'executing', CAS returns rowcount=0.
+
+    Since AGENT-APPROVE-001b, execute_run fires in a background thread. The test
+    waits for the first execution to commit 'executing' before issuing the retry.
     """
     user = _fake_user()
     uid = user["sub"]
@@ -120,6 +135,7 @@ def test_repro_cancel_retry_executes_once(
     run_db_id = run.id
 
     execute_calls: list[str] = []
+    execute_event = threading.Event()
 
     def _fake_execute_sets_executing(*, run_id, user_id, db):
         execute_calls.append(str(run_id))
@@ -131,6 +147,7 @@ def test_repro_cancel_retry_executes_once(
             .execution_options(synchronize_session=False)
         )
         db.commit()
+        execute_event.set()
         return {"run_id": str(run_id), "status": "executing"}
 
     with (
@@ -139,6 +156,8 @@ def test_repro_cancel_retry_executes_once(
         patch("AINDY.agents.agent_runtime.approvals.record_agent_event", return_value="evt-2"),
     ):
         r1 = runtime_only_client.post(f"/apps/agent/runs/{run_id}/approve")
+        # Wait for background execution to commit 'executing' before the retry sees it.
+        assert execute_event.wait(timeout=5), "background execute_run did not fire within 5 s"
         # r1 represents the request the client cancelled; server kept running and set "executing".
         r2 = runtime_only_client.post(f"/apps/agent/runs/{run_id}/approve")
 
@@ -171,9 +190,11 @@ def test_concurrent_race_repro_cas_rowcount(mock_db, monkeypatch):
     run_db_id = run.id
 
     execute_calls: list[str] = []
+    execute_event = threading.Event()
 
     def _fake_execute(*, run_id, user_id, db):
         execute_calls.append(str(run_id))
+        execute_event.set()
         return {"run_id": str(run_id), "status": "completed"}
 
     with (
@@ -183,6 +204,7 @@ def test_concurrent_race_repro_cas_rowcount(mock_db, monkeypatch):
     ):
         approve_run(run_id=str(run.id), user_id=str(user_id), db=mock_db)
 
+    assert execute_event.wait(timeout=5), "background execute_run did not fire within 5 s"
     assert len(execute_calls) == 1
 
     # Simulate what the "second concurrent caller's" CAS UPDATE would see.

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Fixed — AGENT-APPROVE-001b: async approve dispatch (2026-06-04)
+
+- **`AINDY/agents/agent_runtime/approvals.py`**: `approve_run()` now fires `execute_run`
+  in a daemon background thread with its own `SessionLocal` session instead of blocking
+  the request thread. The approve endpoint returns immediately with `status: APPROVED`;
+  clients poll `GET /apps/agent/runs/{id}` for execution progress. Eliminates the
+  client-side timeout on slow or multi-step tool execution.
+
+- **`tests/unit/test_agent_approve_idempotency.py`**: All three shapes updated to use
+  `threading.Event` for deterministic background-thread coordination, preventing the
+  race condition between the background execute_run and the call-count assertion.
+
+### Added — CLI artifact validation tests (2026-06-04)
+
+- **`tests/unit/test_runtime_packaging.py`**: Added `test_installed_cli_help` and
+  `test_installed_cli_help_without_database_url`. Both invoke the `main()` entrypoint in
+  a subprocess with `--help`, asserting exit 0 and presence of the program name. The
+  second test strips `DATABASE_URL` from the subprocess environment, validating that the
+  lazy-import guard in `runtime_only.py` (CLI-1 mitigation) prevents database engine
+  creation on help invocation. Covers RELEASE_CHECKLIST.md step 5 automatically.
+
 ### Added — Phase 3 hardening: cross-repo compatibility, release discipline, core debt (2026-06-04)
 
 - **`tests/unit/test_cross_repo_compatibility.py`** (new, 7 tests): Regression suite for

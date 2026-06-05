@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -70,7 +71,24 @@ def approve_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
             payload={"auto_executed": False},
             required=True,
         )
-        return compat.execute_run(run_id=run.id, user_id=user_db_id, db=db)
+        _run_dict = compat._run_to_dict(run)
+        _bg_run_id = run.id
+
+        def _bg_execute():
+            try:
+                from AINDY.db.database import SessionLocal
+                bg_db = SessionLocal()
+                try:
+                    compat.execute_run(run_id=_bg_run_id, user_id=user_db_id, db=bg_db)
+                finally:
+                    bg_db.close()
+            except Exception as exc:
+                logger.warning(
+                    "[AgentRuntime] background execute_run failed for %s: %s", _bg_run_id, exc
+                )
+
+        threading.Thread(target=_bg_execute, daemon=True).start()
+        return _run_dict
     except Exception as exc:
         compat = get_runtime_compat_module()
         logger.warning("[AgentRuntime] approve_run failed for %s: %s", run_id, exc)

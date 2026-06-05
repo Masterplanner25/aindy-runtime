@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tarfile
@@ -111,3 +112,51 @@ def test_runtime_build_artifacts_include_runtime_owned_assets(tmp_path):
     assert f"{sdist_root}/docs/runtime/DEPLOYMENT_PROFILES.md" in sdist_names
     assert f"{sdist_root}/AINDY/runtime_plugins.json" in sdist_names
     assert f"{sdist_root}/AINDY/nodus/stdlib/.nodus/deps.json" in sdist_names
+
+
+def test_installed_cli_help():
+    """main() invoked with --help exits 0 and prints usage without touching the database layer.
+
+    This is the automated equivalent of RELEASE_CHECKLIST.md step 5:
+    ``aindy-runtime --help`` must exit 0 and display the program name.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.argv=['aindy-runtime', '--help']; "
+            "from AINDY.runtime_only import main; main()",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"aindy-runtime --help exited {result.returncode}; stderr: {result.stderr!r}"
+    )
+    assert "aindy-runtime" in result.stdout, (
+        f"expected 'aindy-runtime' in help output; got: {result.stdout!r}"
+    )
+
+
+def test_installed_cli_help_without_database_url():
+    """--help must exit 0 even when DATABASE_URL is absent (CLI-1 guard validation).
+
+    Verifies that the lazy-import guard in runtime_only.py prevents database engine
+    creation on --help even when no DATABASE_URL is configured in the environment.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "SECRET_KEY")}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.argv=['aindy-runtime', '--help']; "
+            "from AINDY.runtime_only import main; main()",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, (
+        f"aindy-runtime --help failed without DATABASE_URL; stderr: {result.stderr!r}"
+    )
+    assert "aindy-runtime" in result.stdout

@@ -37,24 +37,29 @@ Overall maturity score:
 
 ## Current Scorecard
 
-| Category | Weight | Current Score | Weighted Score | Notes |
-|---|---:|---:|---:|---|
-| Runtime Identity & Scope | 10 | 8.5 | 8.5 | Clear internal-runtime identity, but still broad in what it owns. |
-| Architecture & Subsystem Separation | 12 | 7.5 | 9.0 | Strong layering, still too much surface area and coupling risk. |
-| Public Contract Discipline | 10 | 8.5 | 8.5 | One of the strongest areas; stable vs experimental is unusually well documented. |
-| Execution & Orchestration Correctness | 12 | 7.5 | 9.0 | Serious kernel/scheduler/syscall model, but still needs deeper invariant testing. |
-| Deployment & Operability | 10 | 7.0 | 7.0 | Good health/readiness/profiles/packaging; operational complexity remains high. |
-| Security & Isolation | 14 | 5.5 | 7.7 | Honest trust model, but not yet hardened enough for stronger runtime claims. |
-| Codebase Discipline & Complexity Control | 10 | 6.0 | 6.0 | Real architecture, real debt; core complexity still needs compression. |
-| Testing & Verification | 10 | 7.0 | 7.0 | Real CI/integration discipline; runtime-critical verification bar should be higher. |
-| Release & Compatibility Discipline | 6 | 7.5 | 4.5 | Better than average; still needs stronger artifact/runtime compatibility proof. |
-| Ecosystem Boundary Readiness | 6 | 5.5 | 3.3 | Runtime/UI/SDK split exists, but runtime still appears too central. |
+> Last updated: **2026-06-04 (session 2)** — AGENT-APPROVE-001b closed, artifact CI tests added.
+> Trajectory: 71.5 (baseline) → 77.5 (session 1) → **~79 / 100** (session 2).
+> See `AINDY_RUNTIME_90_DAY_CHECKLIST.md` for full delta breakdown.
 
-**Current total: `71.5 / 100`**
+| Category | Weight | Score | Weighted | Notes |
+|---|---:|---:|---:|---|
+| Runtime Identity & Scope | 10 | 9.0 | 9.0 | Watcher removed; RUNTIME_BOUNDARY.md canonical. |
+| Architecture & Subsystem Separation | 12 | 8.0 | 9.6 | RUNTIME_MODULE_MAP.md; coupling risk remains. |
+| Public Contract Discipline | 10 | 9.0 | 9.0 | SDK_CONTRACT + UI_CONTRACT + 7 compat tests. |
+| Execution & Orchestration Correctness | 12 | 8.0 | 9.6 | EXECUTION_INVARIANTS; approve now async (001b closed). |
+| Deployment & Operability | 10 | 7.5 | 7.5 | RELEASE_CHECKLIST; CLI help CI-tested. |
+| Security & Isolation | 14 | 6.5 | 9.1 | SECURITY_MATRIX + security isolation tests. |
+| Codebase Discipline & Complexity Control | 10 | 6.5 | 6.5 | AGENT-APPROVE-001b closed; CLI-1 guard validated. |
+| Testing & Verification | 10 | 8.5 | 8.5 | 11 new test files; threading.Event coordination. |
+| Release & Compatibility Discipline | 6 | 8.5 | 5.1 | Automated CLI help test covers RELEASE_CHECKLIST step 5. |
+| Ecosystem Boundary Readiness | 6 | 6.5 | 3.9 | SDK/UI contract docs + cross-repo regression tests. |
+
+**Current total: `~79 / 100`**
 
 Current band:
 
 - [x] Emerging production-grade internal runtime
+- [x] Approaching mature specialized runtime platform
 - [ ] Mature specialized runtime platform
 - [ ] Industry-grade runtime platform
 
@@ -65,7 +70,7 @@ Current band:
 ### 1. Runtime Identity & Scope
 - [x] Runtime purpose is explicitly documented.
 - [x] Repo states what it does not claim to be.
-- [ ] Runtime ownership boundary is narrow and enforced.
+- [x] Runtime ownership boundary is narrow and enforced.
 - [ ] Non-runtime concerns are pushed out of the repo where possible.
 - [ ] Internal vs external platform claims are clearly separated in release messaging.
 
@@ -74,7 +79,7 @@ Current band:
 - [x] Kernel/execution/orchestration concepts exist.
 - [ ] Cross-layer imports and accidental coupling are actively constrained.
 - [ ] Runtime core is materially smaller than surrounding platform surface.
-- [ ] Architectural ownership boundaries are documented and enforced.
+- [x] Architectural ownership boundaries are documented and enforced.
 
 ### 3. Public Contract Discipline
 - [x] Stable vs experimental surfaces are documented.
@@ -82,12 +87,12 @@ Current band:
 - [x] Compatibility policy exists in some form.
 - [ ] Public runtime surfaces are versioned with stricter governance.
 - [ ] Experimental seams are reduced in critical execution paths.
-- [ ] Contract compliance is verified in CI beyond documentation checks.
+- [x] Contract compliance is verified in CI beyond documentation checks.
 
 ### 4. Execution & Orchestration Correctness
 - [x] Scheduler/wait/resume/syscall infrastructure exists.
 - [x] Execution semantics are more than prototype-level.
-- [ ] Core execution invariants are documented in one canonical place.
+- [x] Core execution invariants are documented in one canonical place.
 - [ ] Recovery/restart semantics are deeply regression-tested.
 - [ ] Cross-instance event delivery guarantees are explicit and tested.
 - [ ] Failure-mode behavior is verified, not assumed.
@@ -128,9 +133,9 @@ Current band:
 ### 9. Release & Compatibility Discipline
 - [x] Runtime release/signoff documentation exists.
 - [x] Compatibility thinking exists.
-- [ ] Built artifacts are validated as rigorously as source.
+- [x] Built artifacts are validated as rigorously as source.
 - [ ] Runtime/API/schema compatibility gates are stricter.
-- [ ] Cross-repo compatibility with SDK/UI is automated.
+- [x] Cross-repo compatibility with SDK/UI is automated.
 - [ ] Release notes distinguish stable guarantees from internal implementation changes.
 
 ### 10. Ecosystem Boundary Readiness

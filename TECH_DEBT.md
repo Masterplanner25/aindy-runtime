@@ -1277,7 +1277,18 @@ is tracked separately in AGENT-APPROVE-001b.
 
 ## AGENT-APPROVE-001b — Approve endpoint blocks on synchronous execution; exceeds client timeout on slow tools
 
-**Status:** Open
+**Status:** CLOSED (2026-06-04)
+
+**Implemented:** `approve_run()` (`approvals.py`) now fires `execute_run` in a daemon
+background thread with its own `SessionLocal` session, returning `_run_to_dict(run)`
+immediately. The HTTP approve request returns with `status: APPROVED` in milliseconds;
+clients poll `GET /apps/agent/runs/{id}` for status transitions. Tests updated to use
+`threading.Event` for deterministic background-thread coordination.
+
+**Remaining gap:** Orphaned-`approved` watchdog (AGENT-APPROVE-001b liveness gap) is
+not implemented — a process crash mid-background-execution leaves the run stranded in
+`approved` forever. The watchdog/reaper is tracked as part of the AGENT-APPROVE-001b
+family and must be addressed before GA hardening.
 
 **Discovered:** 2026-06-03 during agent walkthrough (Phase 2).
 
