@@ -236,7 +236,7 @@ def _record_resource_usage(self, exec_ms: int) -> None:
         if eu_id_str:
             get_rm().record_usage(
                 eu_id_str,
-                {"cpu_time_ms": exec_ms, "syscall_count": 0},
+                {"wall_time_ms": exec_ms, "syscall_count": 0},
             )
     except Exception as exc:
         logger.debug("[Flow] resource record skipped: %s", exc)
