@@ -414,6 +414,32 @@ Together, aindy-runtime + Nodus implement the I→T→C→R→O→Feedback loop 
 
 ---
 
+## User-Facing Wiki
+
+The aindy-runtime GitHub wiki is the canonical user-facing reference for operators,
+app builders, and integrators — covering installation through production operations.
+
+**Wiki home:** https://github.com/Masterplanner25/aindy-runtime/wiki
+
+| Page | URL | Covers |
+|---|---|---|
+| Getting Started | https://github.com/Masterplanner25/aindy-runtime/wiki/Getting-Started | Docker Compose, first request, first agent |
+| Architecture | https://github.com/Masterplanner25/aindy-runtime/wiki/Architecture | Layer model, execution pipeline, state machines |
+| Configuration | https://github.com/Masterplanner25/aindy-runtime/wiki/Configuration | All env vars in tables by category |
+| Deployment Profiles | https://github.com/Masterplanner25/aindy-runtime/wiki/Deployment-Profiles | 4 profiles with Docker commands and env vars |
+| Syscall System | https://github.com/Masterplanner25/aindy-runtime/wiki/Syscall-System | Dispatcher, envelope, 12-syscall reference |
+| Flow Engine | https://github.com/Masterplanner25/aindy-runtime/wiki/Flow-Engine | DAG, WAIT/RESUME, crash safety |
+| Agent Runtime | https://github.com/Masterplanner25/aindy-runtime/wiki/Agent-Runtime | Lifecycle, approval, capability tokens |
+| Memory System | https://github.com/Masterplanner25/aindy-runtime/wiki/Memory-System | MemoryNode, MAS paths, hybrid retrieval |
+| Plugin Registry | https://github.com/Masterplanner25/aindy-runtime/wiki/Plugin-Registry | Registration APIs, sandbox, enrichment types |
+| REST API | https://github.com/Masterplanner25/aindy-runtime/wiki/REST-API | All endpoints with curl examples |
+| Operator Guide | https://github.com/Masterplanner25/aindy-runtime/wiki/Operator-Guide | Health triage, schema migration, common issues |
+| Condition Codes | https://github.com/Masterplanner25/aindy-runtime/wiki/Condition-Codes | All stable condition and status codes |
+| Security | https://github.com/Masterplanner25/aindy-runtime/wiki/Security | Trust model, admin bootstrap, sandbox tiers |
+| Changelog | https://github.com/Masterplanner25/aindy-runtime/wiki/Changelog | Version history |
+
+---
+
 ## Key File Locations
 
 | What | Where |
