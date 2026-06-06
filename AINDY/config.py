@@ -222,12 +222,6 @@ class Settings(BaseSettings):
     # time via _ENV_FILE / _resolve_env_file() above, not from this field.
     # This field exists for introspection and documentation only.
     REDIS_URL: str | None = None
-    # Event-bus Redis URL.
-    # Deprecated since 1.0.0: prefer REDIS_URL. AINDY_REDIS_URL is still honored
-    # for backward compatibility and takes precedence over REDIS_URL when both are
-    # set, preserving deployments that intentionally point the event bus and cache
-    # at different Redis instances. Will be removed in a future major version.
-    AINDY_REDIS_URL: str | None = None
     AINDY_REQUIRE_REDIS: bool = False
     AINDY_CACHE_BACKEND: str = "redis"
 
@@ -321,7 +315,7 @@ class Settings(BaseSettings):
     @classmethod
     def ensure_mongo_url(cls, v: str) -> str:
         normalized = (v or "").strip()
-        skip_ping = os.getenv("AINDY_SKIP_MONGO_PING", "0").lower() in {"1", "true", "yes"}
+        skip_ping = os.getenv("SKIP_MONGO_PING", "0").lower() in {"1", "true", "yes"}
         mongo_required = os.getenv("MONGO_REQUIRED", "0").lower() in {"1", "true", "yes"}
         if not normalized:
             if skip_ping or not mongo_required:

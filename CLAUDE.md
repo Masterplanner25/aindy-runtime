@@ -533,7 +533,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **COMPOSE-PGVECTOR-\*** — pgvector extension requirement. COMPOSE-PGVECTOR-1: closed 2026-05-27.
 - **PACKAGING-DEP-\*** — pip --prefix bootstrap-package propagation gaps. PACKAGING-DEP-1: closed 2026-05-27.
 - **COMPOSE-HOST-\*** — container host binding issues. COMPOSE-HOST-1: closed 2026-05-27.
-- **EVENTBUS-REDIS-URL-\*** — Redis URL env var consolidation. EVENTBUS-REDIS-URL-CONSOLIDATION-1: open.
+- **EVENTBUS-REDIS-URL-\*** — Redis URL env var consolidation. EVENTBUS-REDIS-URL-CONSOLIDATION-1: closed 2026-06-06 (AINDY_REDIS_URL + AINDY_SKIP_MONGO_PING removed).
 - **PYPI-PUBLISH-\*** — PyPI publish transition. PYPI-PUBLISH-1: open.
 - **MONITORING-GRAFANA-\*** — Grafana monitoring profile gap. MONITORING-GRAFANA-1: closed 2026-06-05.
 - **COMPOSE-PROD-PORTS-\*** — database ports exposed in prod. COMPOSE-PROD-PORTS-1: closed 2026-06-05.
