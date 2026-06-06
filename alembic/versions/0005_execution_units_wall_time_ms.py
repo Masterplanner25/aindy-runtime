@@ -26,11 +26,16 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Guard on the COLUMN, not just the table. On a fresh deployment, create_all
+    # runs from the updated ORM model which already has wall_time_ms, so
+    # cpu_time_ms never exists and nothing needs renaming.
     op.execute("""
         DO $$ BEGIN
           IF EXISTS (
-            SELECT 1 FROM pg_catalog.pg_tables
-            WHERE tablename='execution_units' AND schemaname='public'
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name   = 'execution_units'
+              AND column_name  = 'cpu_time_ms'
           ) THEN
             ALTER TABLE execution_units
               RENAME COLUMN cpu_time_ms TO wall_time_ms;
@@ -43,8 +48,10 @@ def downgrade() -> None:
     op.execute("""
         DO $$ BEGIN
           IF EXISTS (
-            SELECT 1 FROM pg_catalog.pg_tables
-            WHERE tablename='execution_units' AND schemaname='public'
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name   = 'execution_units'
+              AND column_name  = 'wall_time_ms'
           ) THEN
             ALTER TABLE execution_units
               RENAME COLUMN wall_time_ms TO cpu_time_ms;
