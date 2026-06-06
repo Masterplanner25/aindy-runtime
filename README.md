@@ -54,6 +54,50 @@ docker compose --profile full up -d
 docker compose --profile full --profile monitoring up -d
 ```
 
+### After the server starts
+
+Once `curl http://localhost:8000/ready` returns `{"status": "ok"}`, create your first account and API key:
+
+```bash
+# Register
+curl -s -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "yourpassword", "display_name": "You"}' \
+  | python -m json.tool
+
+# Log in — copy access_token from the response
+curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "yourpassword"}' \
+  | python -m json.tool
+
+# Promote yourself to admin (needed to create Platform API keys)
+aindy-runtime auth promote-admin you@example.com
+
+# Create a Platform API key (save the 'key' field — shown only once)
+curl -s -X POST http://localhost:8000/platform/keys \
+  -H "Authorization: Bearer <your-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-app", "scopes": ["memory.read", "memory.write", "flow.run", "event.emit"]}' \
+  | python -m json.tool
+```
+
+Then install the SDK and make your first call:
+
+```bash
+pip install aindy-sdk
+```
+
+```python
+from aindy_sdk import AINDYClient
+
+client = AINDYClient("http://localhost:8000", api_key="aindy_your_key")
+registry = client.syscalls.list()
+print(registry["total_count"], "syscalls available")
+```
+
+Full SDK documentation and examples: [aindy-sdk](https://github.com/Masterplanner25/aindy-sdk)
+
 > **Note — database host inside compose:** The `DATABASE_URL` in `AINDY/.env`
 > must use the compose service name as the host, not `localhost`:
 > ```
