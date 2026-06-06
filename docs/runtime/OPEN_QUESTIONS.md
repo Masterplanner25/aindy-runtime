@@ -153,12 +153,22 @@ vs `default-apps` (with `apps.bootstrap` loading the 16 domain apps from
 
 ### 10. Which Legacy Route Groups Are Intentional Runtime Ownership Versus Extraction Candidates?
 
-**Status: PARTIALLY RESOLVED**
+**Status: RESOLVED (2026-06-05)**
 
-`ROUTE-REG-001` is closed — `watcher_router` and `db_verify_router` were unregistered
-and are now registered. No formal extraction-candidate inventory exists. Route existence
-should not be mistaken for mature runtime ownership; this question is still worth a
-deliberate pass before claiming higher maturity.
+Full inventory in `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md`. Summary:
+
+- **Core (keep):** `health_router`, `auth_router`, `version_router`, `flow_router`
+- **Operator (keep — coupled to live runtime state):** `watcher_router`,
+  `observability_router`, `db_verify_router`, `platform_router` (composite)
+- **Extraction candidates (`/apps/` layer → `aindy-apps-monolith`):**
+  `agent_router` (high readiness, blocker: `AGENT-API-001`),
+  `memory_metrics_router` + `memory_trace_router` (high readiness, move with memory),
+  `memory_router` CRUD/search (medium — split required; execution endpoints blocked by
+  Nodus service interface),
+  `coordination_router` (low — `AgentRegistry` model ownership gap)
+
+Route existence no longer implies mature runtime ownership — the inventory makes the
+distinction explicit and adds decision rules for future route additions.
 
 ### 11. Which Runtime Conditions Should Become Stable Operator-Facing Codes?
 
@@ -178,7 +188,7 @@ distributed degraded-mode signaling.
 - [x] maximum defensible security claim — resolved
 - [x] absolute readiness blockers by profile — substantially resolved (behavior enforced; declarative table pending)
 - [x] cross-repo compatibility commitments — substantially resolved
-- [ ] extraction candidates for legacy route groups (Q10)
+- [x] extraction candidates for legacy route groups — resolved, see `ROUTE_OWNERSHIP_INVENTORY.md`
 - [ ] stable operator-facing condition codes (Q11)
 
 ---

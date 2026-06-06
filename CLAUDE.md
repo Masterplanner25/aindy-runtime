@@ -542,7 +542,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **PLATFORM-AUTH-ACQUISITION-\*** — Platform SPA first-party auth. PLATFORM-AUTH-ACQUISITION-1: closed 2026-05-28.
 - **PLATFORM-UI-KIT-\*** — ui-kit npm publish gap; local edits require manual rebuild chain. PLATFORM-UI-KIT-1: closed 2026-05-28.
 - **MCP-BEHAVIOR-\*** — MCP protocol integration facts. MCP-BEHAVIOR-1: `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
-- **AGENT-EVAL-\*** — Agent trigger-evaluator contract issues. AGENT-EVAL-001: swallowed evaluator exception + SUCCESS-on-defer envelope contract; open.
+- **AGENT-EVAL-\*** — Agent trigger-evaluator contract issues. AGENT-EVAL-001: swallowed evaluator exception + SUCCESS-on-defer envelope contract; closed 2026-06-03.
 - **AGENT-APPROVE-\*** — Agent approve endpoint contract issues. AGENT-APPROVE-001a: concurrent race guard (CAS fix); closed 2026-06-03. AGENT-APPROVE-001b: background execution dispatch (approve returns immediately, execute_run fires in daemon thread); closed 2026-06-04. Orphaned-`approved` watchdog: open (liveness gap remains).
 - **ROUTES-CONSUMER-SPLIT-\*** — Shared @aindy/ui-kit ROUTES table consumed identically by monolith and runtime; quarantine breaks monolith on next publish. ROUTES-CONSUMER-SPLIT-1: open.
 - **API-MODULE-DRIFT-\*** — Quarantined ROUTES groups left platform SPA API modules reading undefined → TypeError. API-MODULE-DRIFT-1: rippletrace.js ×16, analytics.js ×19, platform.js ×4; open; fix depends on ROUTES-CONSUMER-SPLIT-1.
