@@ -1,13 +1,11 @@
 ---
 title: "Open Questions"
-last_verified: "2026-05-31"
+last_verified: "2026-06-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
-﻿# Open Questions
-
-> Authored by Codex during non coding session. Needs review before repo commit and push.
+# Open Questions
 
 This document tracks the highest-leverage unresolved questions affecting the maturity of `aindy-runtime`.
 
@@ -38,186 +36,160 @@ These are the questions that should shape decisions, not merely follow them.
 
 ## 1. What Is The Narrowest Defensible Scope Of `aindy-runtime`?
 
-Why this matters:
-- scope ambiguity is one of the runtime’s biggest maturity risks
-- broad ownership makes architecture, security, and release discipline harder
+**Status: RESOLVED (2026-06-05)**
 
-Current tension:
-- the repo wants to be a runtime substrate
-- but it still appears to carry broader platform surface inherited from earlier structure
-
-Question:
-- what must remain in `aindy-runtime` for execution truth and runtime contract integrity, and what should be pushed to SDK, UI, or higher layers?
-
-What a good answer would produce:
-- a smaller, stronger runtime core
-- clearer extraction candidates
-- less accidental platform gravity
+The repo split and `RUNTIME_BOUNDARY.md` answer this. The runtime is the execution
+substrate: SyscallDispatcher, flow engine, memory, scheduler, kernel, platform layer,
+readiness, and health surfaces. It does not own SDK ergonomics, UI components, app
+deployment assets (`aindy_plugins.json`, `apps.bootstrap`, `alembic/`, `client/`),
+or backend convenience surfaces that are not execution-critical. Those live in
+`aindy-apps-monolith`, `aindy-sdk`, or `aindy-ui-kit`. The `README.md` "Ownership
+Boundary" section and `docs/runtime/RUNTIME_BOUNDARY.md` are the canonical references.
 
 ---
 
 ## 2. Which Runtime Surfaces Are Truly Stable Enough For Downstream Reliance?
 
-Why this matters:
-- SDK and UI maturity depend on trustworthy runtime contracts
-- release discipline gets weaker when “public enough” is treated as “stable”
+**Status: SUBSTANTIALLY RESOLVED (2026-06-05)**
 
-Current tension:
-- some surfaces clearly should be stable
-- others exist in practice but are not yet governed tightly enough
-
-Question:
-- which routes, payload fields, readiness semantics, and execution-facing surfaces should be treated as real compatibility commitments?
-
-What a good answer would produce:
-- narrower stable surface area
-- fewer accidental downstream dependencies
-- stronger cross-repo release confidence
+Stable surfaces are declared in `docs/runtime/SDK_CONTRACT.md`,
+`docs/runtime/UI_CONTRACT.md`, and `docs/runtime/PUBLIC_RUNTIME_SURFACES.md`.
+Machine-verified in `tests/unit/test_cross_repo_compatibility.py` — breakage on these
+surfaces is a release failure. Experimental surfaces are explicitly not promised and
+not tested as stable contracts. The remaining open edge is
+`AGENT-EVAL-001` / `AGENT-API-001` — agent surfaces partially consumed by the SPA
+without a stable surface declaration.
 
 ---
 
 ## 3. How Far Does The Runtime Want To Go On Extension Support?
 
-Why this matters:
-- extension posture drives security claims, support claims, and architecture pressure
+**Status: RESOLVED (2026-06-05)**
 
-Current tension:
-- the runtime documents a trusted-internal posture
-- but extension-heavy usage creates pressure toward broader platform claims
-
-Question:
-- is the intended future a constrained trusted-internal extension runtime, or a stronger general extension platform?
-
-What a good answer would produce:
-- a clearer security roadmap
-- fewer ambiguous claims
-- better boundaries around extension UX vs runtime truth
+The committed answer: constrained trusted-internal extension runtime, not a general
+extension platform. This is stated explicitly in `README.md` ("not a hardened
+third-party extension platform"), enforced by the C3 sandbox escape suite
+(`pytest -m sandbox_escape`), and reflected in `PROFILE_SUPPORT_MATRIX.md` marking
+"Third-party plugin host" and "Hostile multitenant compute substrate" as unsupported.
+`AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` is a trusted-code override, not a safe
+third-party extension mode — documented in `README.md` and `SECURITY_MATRIX.md`.
 
 ---
 
 ## 4. What Is The Real Supported Distributed Profile?
 
-Why this matters:
-- distributed runtime claims are among the easiest to overstate
-- readiness and degraded-mode truth become much harder in distributed operation
+**Status: RESOLVED (2026-06-05)**
 
-Current tension:
-- the runtime appears to support distributed behavior under certain conditions
-- but fallback and dependency loss can narrow guarantees sharply
-
-Question:
-- what exact distributed profile is supported today, and what prerequisites must be true before the runtime may honestly claim it?
-
-What a good answer would produce:
-- clearer deployment guidance
-- stronger readiness semantics
-- fewer misleading distributed claims
+`PROFILE_SUPPORT_MATRIX.md` documents the exact prerequisites: primary DB, schema
+readiness, Redis/event bus, worker presence where required, required syscalls, and
+restore/rehydration correctness. Allowed fallback (local-only degraded liveness) and
+what invalidates full distributed support are both explicit. The operator runbook
+(`OPERATOR_RUNBOOK.md`) translates this into actionable triage guidance.
 
 ---
 
 ## 5. What Security Posture Is The Team Willing To Defend Publicly?
 
-Why this matters:
-- runtime maturity depends on matching claims to actual trust boundaries
+**Status: RESOLVED (2026-06-05)**
 
-Current tension:
-- the trusted-internal claim is defendable
-- stronger sandbox/plugin/multitenant claims are not yet clearly defendable
-
-Question:
-- what security wording is the maximum honest claim for current releases, and what is intentionally deferred?
-
-What a good answer would produce:
-- safer release language
-- better prioritization of security hardening work
-- fewer implicit promises to downstream repos or operators
+Trusted-internal is the maximum honest claim for current releases. Third-party plugin
+host and hostile multitenant compute substrate are explicitly unsupported until stronger
+isolation is built. Documented in `SECURITY_MATRIX.md` and `PROFILE_SUPPORT_MATRIX.md`.
+The C3 sandbox escape suite (`sandbox_escape_test_posture()`) makes the current posture
+machine-readable and ties it to the release gate.
 
 ---
 
 ## 6. What Failure Modes Must Block Readiness Absolutely?
 
-Why this matters:
-- readiness truth is one of the most important runtime promises
+**Status: SUBSTANTIALLY RESOLVED (2026-06-05)**
 
-Current tension:
-- some degraded modes clearly should block readiness
-- others appear profile-dependent or partially recoverable
-
-Question:
-- which exact classes of failure are absolute readiness blockers, and which are allowed degraded continuations under which profiles?
-
-What a good answer would produce:
-- less ambiguous operator behavior
-- stronger degraded-mode consistency
-- fewer runtime states that “survive” without being safely ready
+The `/ready` endpoint enforces: DB unavailable, schema not ready, required syscalls
+missing (floor: `SYSCALL_REGISTRY_MIN_COUNT = 17`), restore pending, and
+startup_incomplete. Profile-aware degraded-mode guidance lives in
+`OPERATOR_RUNBOOK.md` and `PROFILE_SUPPORT_MATRIX.md`. The remaining gap: no single
+"readiness blockers by profile" reference table — the behavior is correct and enforced
+in code, but the cross-profile declarative summary does not yet exist as a standalone doc.
 
 ---
 
 ## 7. How Much Test Assurance Is Enough For Runtime-Critical Change?
 
-Why this matters:
-- the runtime needs stronger confidence on dangerous paths, not just more tests in aggregate
+**Status: SUBSTANTIALLY RESOLVED (2026-06-05)**
 
-Current tension:
-- CI and tests exist
-- but not every runtime-critical behavior appears equally defended
-
-Question:
-- what explicit assurance bar should apply to startup, scheduler, rehydration, syscall, readiness, and distributed-profile changes?
-
-What a good answer would produce:
-- clearer release gates
-- stronger review discipline
-- better targeting of verification effort
+`docs/runtime/RELEASE_CHECKLIST.md` formalizes the required bar: branch protection
+requires Runtime Lint, Docs Validation, and Runtime Contracts; a version tag additionally
+requires Integration Tests, Platform UI Build, Runtime Package Build, Install Smoke,
+and the Sandbox Escape Gate. The remaining open question is whether specific runtime-critical
+paths (scheduler rehydration, EffectRecord idempotency, distributed resume) need their
+own explicit assurance floor beyond the current suite.
 
 ---
 
 ## 8. What Cross-Repo Breakage Is Acceptable?
 
-Why this matters:
-- platform maturity depends on whether runtime, SDK, and UI evolve by contract or by coincidence
+**Status: SUBSTANTIALLY RESOLVED (2026-06-05)**
 
-Current tension:
-- some breakage is expected while contracts tighten
-- too much tolerated breakage means there is no real platform boundary
-
-Question:
-- which downstream breaks are acceptable because the surface is not yet stable, and which should be treated as release failures?
-
-What a good answer would produce:
-- more predictable coordination across repos
-- better classification of stable vs incidental behavior
-- more honest compatibility promises
+`docs/runtime/CROSS_REPO_COMPATIBILITY.md` and `tests/unit/test_cross_repo_compatibility.py`
+answer this. Breakage on stable surfaces (SDK contract, UI contract, public runtime
+surfaces) is a release failure. Experimental and undeclared surfaces may change without
+a compatibility obligation. The remaining gap: `AGENT-API-001` (agent.js ROUTES
+constants) and `API-MODULE-DRIFT-1` (rippletrace.js, analytics.js, platform.js
+undefined ROUTES groups) are known cross-repo breakage points not yet behind stable
+declarations — tracked in `TECH_DEBT.md`.
 
 ---
 
 ## Secondary Open Questions
 
-These are important, but slightly less foundational than the set above.
-
 ### 9. What Belongs In Runtime-Only Deployment Versus Broader Platform Deployment?
-- how thin can the runtime-only deployment contract become while still being operationally useful?
+
+**Status: RESOLVED (2026-06-05)**
+
+Answered by the boot profile split: `platform-only` (runtime-only, no app plugins)
+vs `default-apps` (with `apps.bootstrap` loading the 16 domain apps from
+`aindy-apps-monolith`). The manifest owns profile selection;
+`docs/architecture/BOOT_PROFILES.md` in the monolith documents the distinction.
 
 ### 10. Which Legacy Route Groups Are Intentional Runtime Ownership Versus Extraction Candidates?
-- route existence should not be mistaken for mature runtime ownership
+
+**Status: RESOLVED (2026-06-05)**
+
+Full inventory in `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md`. Summary:
+
+- **Core (keep):** `health_router`, `auth_router`, `version_router`, `flow_router`
+- **Operator (keep — coupled to live runtime state):** `watcher_router`,
+  `observability_router`, `db_verify_router`, `platform_router` (composite)
+- **Extraction candidates (`/apps/` layer → `aindy-apps-monolith`):**
+  `agent_router` (high readiness, blocker: `AGENT-API-001`),
+  `memory_metrics_router` + `memory_trace_router` (high readiness, move with memory),
+  `memory_router` CRUD/search (medium — split required; execution endpoints blocked by
+  Nodus service interface),
+  `coordination_router` (low — `AgentRegistry` model ownership gap)
+
+Route existence no longer implies mature runtime ownership — the inventory makes the
+distinction explicit and adds decision rules for future route additions.
 
 ### 11. Which Runtime Conditions Should Become Stable Operator-Facing Codes?
-- useful for UI, SDK, automation, and incident tooling consistency
+
+**Status: OPEN**
+
+No progress. Structured operator-facing condition codes (useful for UI, SDK, automation,
+and incident tooling) have not been defined. Relevant for `AGENT-EVAL-001` and
+distributed degraded-mode signaling.
 
 ---
 
 ## Questions That Need Resolution Before Claiming Higher Maturity
 
-The following should be answered before the runtime can credibly claim a substantially higher maturity tier:
-
-- [ ] narrow runtime ownership boundary
-- [ ] stable vs conditional runtime surface boundaries
-- [ ] supported distributed profile definition
-- [ ] maximum defensible security claim
-- [ ] absolute readiness blockers by profile
-- [ ] cross-repo compatibility commitments
-
-These are not optional polish questions. They shape what the runtime is allowed to claim.
+- [x] narrow runtime ownership boundary — resolved
+- [x] stable vs conditional runtime surface boundaries — substantially resolved
+- [x] supported distributed profile definition — resolved
+- [x] maximum defensible security claim — resolved
+- [x] absolute readiness blockers by profile — substantially resolved (behavior enforced; declarative table pending)
+- [x] cross-repo compatibility commitments — substantially resolved
+- [x] extraction candidates for legacy route groups — resolved, see `ROUTE_OWNERSHIP_INVENTORY.md`
+- [ ] stable operator-facing condition codes (Q11)
 
 ---
 
