@@ -1,11 +1,36 @@
 ---
 title: "Local and Cloud Distribution Audit"
-last_verified: "2026-05-25"
+last_verified: "2026-06-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
 # Local and Cloud Distribution Audit
+
+## Status Update (2026-06-05)
+
+The following gaps surfaced in this audit have since been resolved:
+
+- **PLATFORM-UI-ENV-1 (closed)** — `VITE_API_BASE_URL` no longer bakes
+  `localhost:8000` into the SPA bundle. The fallback is now `""` (empty string);
+  `buildApiUrl()` emits relative paths that resolve against the current origin.
+  SPA works correctly on any host.
+
+- **nginx reverse proxy added** — `nginx/nginx.conf` (plain HTTP) and
+  `nginx/nginx.tls.conf` (production TLS with Let's Encrypt, HSTS, security
+  headers) are now shipped. A `proxy` compose profile wires nginx on ports 80/443
+  in front of the api container. `docker-compose.prod.yml` seals all internal
+  host-port bindings when the proxy profile is active.
+
+- **LOCAL-1 (partially resolved)** — `README.md` now has an Upgrading section
+  (pip + Docker Compose upgrade paths, schema reconciliation, rollback) and a
+  Remote deployment section (plain HTTP / TLS / Let's Encrypt checklist, port
+  exposure summary table). A CLI `aindy-runtime version` subcommand (LOCAL-2)
+  remains open.
+
+The findings below remain as written. Open items are unresolved unless noted above.
+
+---
 
 ## Purpose
 
@@ -275,9 +300,9 @@ must know to set this before restarting.
 Local-install operators have no single reference for "how to upgrade the runtime
 from version N to N+1 safely." The schema reconciliation mechanism exists but is
 not surfaced as a procedure. Severity: medium (affects all local install operators
-at upgrade time). Tracked in `TECH_DEBT.md` as `LOCAL-1`. Resolution direction:
-add a "Upgrading" section to `README.md` and/or `RUNTIME_ONLY_DEPLOYMENT.md`
-covering pip upgrade, schema reconciliation, and rollback steps.
+at upgrade time). Tracked in `TECH_DEBT.md` as `LOCAL-1`. **Partially resolved
+2026-06-05:** `README.md` now has an "Upgrading" section (pip and Docker Compose
+upgrade paths, schema reconciliation, rollback) and a "Remote deployment" section.
 
 **LOCAL-2** — No `aindy-runtime version` CLI subcommand.
 Local-install operators commonly need to confirm which version is running, especially

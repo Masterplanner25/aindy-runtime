@@ -1,13 +1,11 @@
 ---
 title: "Operator Runbook"
-last_verified: "2026-05-31"
+last_verified: "2026-06-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
-﻿# Operator Runbook
-
-> Authored by Codex during non coding session. Needs review before repo commit and push.
+# Operator Runbook
 
 This document is a high-level operator runbook for `aindy-runtime`.
 
@@ -343,6 +341,64 @@ When a significant runtime incident occurs, record at least:
 - whether downstream SDK/UI behavior was affected
 - whether profile claims had to be narrowed during the incident
 - what invariant or dependency classification failed in practice
+
+---
+
+## Compose Profiles and Deployment Shapes
+
+The runtime ships with a Docker Compose stack that maps directly to deployment
+shapes. Profile combinations are cumulative.
+
+| Command | Services started | Use case |
+|---|---|---|
+| `docker compose up -d` | api, postgres | Local dev, minimal |
+| `+ --profile full` | + redis, worker | Distributed / production-shaped |
+| `+ --profile monitoring` | + prometheus, grafana | Metrics visibility |
+| `+ --profile proxy` | + nginx (ports 80/443) | Remote VM / domain deployment |
+
+### nginx reverse proxy (`proxy` profile)
+
+Two nginx configs ship in `nginx/`:
+
+- `nginx/nginx.conf` — plain HTTP port 80. Use behind a TLS-terminating load
+  balancer (AWS ALB, GCP LB, Cloudflare) or for local network deployments.
+- `nginx/nginx.tls.conf` — production HTTPS. Terminates TLS using Let's Encrypt
+  certs, redirects HTTP → HTTPS, adds HSTS and security headers.
+
+Select the config at compose parse time via the `NGINX_CONF` env var:
+
+```bash
+# Plain HTTP (default):
+docker compose --profile proxy up -d
+
+# HTTPS with TLS:
+NGINX_CONF=nginx.tls.conf docker compose --profile proxy up -d
+```
+
+### Sealing internal ports for production
+
+`docker-compose.prod.yml` removes all host-port bindings from every service
+(postgres, redis, mongo, api, worker) so nothing is reachable from outside the
+host except nginx on ports 80 and 443:
+
+```bash
+NGINX_CONF=nginx.tls.conf \
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile full --profile proxy up -d
+```
+
+### Required env changes before remote deployment
+
+- `ALLOWED_ORIGINS=https://yourdomain.com` — update from the localhost default
+- `server_name yourdomain.com` — set in `nginx/nginx.tls.conf`
+- Cert mount — add to `docker-compose.override.yml` (see `nginx/nginx.tls.conf` header)
+
+### Cert renewal
+
+Add to host cron (`crontab -e`):
+```
+0 3 * * * certbot renew --quiet && docker compose exec nginx nginx -s reload
+```
 
 ---
 

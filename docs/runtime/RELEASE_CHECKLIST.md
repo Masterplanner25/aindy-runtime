@@ -1,6 +1,6 @@
 ---
 title: "Runtime Release Checklist"
-last_verified: "2026-06-04"
+last_verified: "2026-06-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -139,11 +139,12 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/platform/assets/doe
 ### 12. Docker Compose Stack
 
 ```bash
+# Default profile: api + postgres only (redis/mongo require --profile full/social)
 docker compose up -d
 docker compose ps
-# Expected: api, postgres, redis, mongo all "Up"
+# Expected: api and postgres "Up" (redis/mongo absent is correct for default profile)
 
-docker compose exec api aindy-runtime version
+docker compose exec api aindy-runtime --version
 # Expected: version string
 
 docker compose logs api 2>&1 | grep -E "startup complete|boot_mode"
@@ -209,6 +210,34 @@ Skipped tests (Linux-only controls on non-Linux backends) do not block the gate.
 pre-release run. Include platform, Docker version, image digest, commit, and the summary line
 from the test output. The artifact `tests/sandbox/sandbox_escape_results.json` is the
 machine-readable record.
+
+---
+
+## nginx Proxy Profile
+
+### 17. Proxy Profile Smoke Test
+
+Verify that the nginx `proxy` profile starts and can reach the API. Requires
+Docker with Linux containers mode.
+
+```bash
+docker compose --profile proxy up -d
+docker compose ps nginx
+# Expected: nginx container "Up", ports 0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp
+
+# Plain HTTP through nginx
+curl -s -o /dev/null -w "%{http_code}" http://localhost/ready
+# Expected: 200 (nginx proxies to api:8000/ready)
+
+curl -s -o /dev/null -w "%{http_code}" http://localhost/platform/
+# Expected: 200
+
+docker compose down
+```
+
+Note: HTTPS (nginx.tls.conf) is not gate-checked in CI — it requires valid certs
+that cannot be generated in a clean-room environment. Verify manually before any
+deployment that introduces TLS termination.
 
 ---
 
