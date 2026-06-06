@@ -563,17 +563,14 @@ version; note that rolling back across a schema change requires a DB restore).
 
 ## EVENTBUS-REDIS-URL-CONSOLIDATION-1 — Deprecate AINDY_REDIS_URL alias
 
-**Status:** 1.x step CLOSED (2026-06-05) — 2.0 removal still pending.
+**Status:** CLOSED (2026-06-06)
 
-**1.x implemented:** `resolve_event_bus_redis_url()` now emits `DeprecationWarning`
-when `AINDY_REDIS_URL` is set, directing operators to migrate to `REDIS_URL`.
-`import warnings` added to `event_bus.py`; 2 regression tests added to
-`tests/unit/test_event_bus_redis_url.py` (9 total pass).
-
-**Remaining (2.0 step):** Remove `AINDY_REDIS_URL` from `event_bus.py`, `config.py`,
-and `.env.example`. Before that removal, grep for other `AINDY_*` aliases that shadow
-standard env vars (e.g., `AINDY_SKIP_MONGO_PING` vs `SKIP_MONGO_PING`) and consolidate
-them in a single pass.
+Removed `AINDY_REDIS_URL` from `event_bus.py` (function simplified, `import warnings`
+dropped), `config.py` (field removed), and `.env.example`. `get_redis_client()` now
+reads `REDIS_URL` only. In the same pass: `AINDY_SKIP_MONGO_PING` alias removed from
+`config.py` `ensure_mongo_url` validator (now reads `SKIP_MONGO_PING` directly);
+`tests/conftest.py` setdefault cleaned up; `.env.example` updated to `SKIP_MONGO_PING`.
+Test file reduced from 9 to 5 tests — AINDY_REDIS_URL-specific cases removed.
 
 ---
 

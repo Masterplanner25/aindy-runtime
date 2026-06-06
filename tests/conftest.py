@@ -68,7 +68,6 @@ os.environ.setdefault("AINDY_ENABLE_BACKGROUND_TASKS", "false")
 os.environ.setdefault("AINDY_ENFORCE_SCHEMA", "false")
 os.environ.setdefault("AINDY_ENABLE_LEGACY_SURFACE", "true")
 os.environ.setdefault("SKIP_MONGO_PING", "1")
-os.environ.setdefault("AINDY_SKIP_MONGO_PING", "1")
 os.environ.setdefault("AINDY_BOOT_MODE", "runtime-only")
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
