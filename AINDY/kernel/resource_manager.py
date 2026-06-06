@@ -7,13 +7,13 @@ Thread-safe; designed as a process-level singleton.
 
 Quota defaults
 --------------
-  MAX_CPU_TIME_MS            300 000   (5 minutes wall-clock per execution unit)
+  MAX_WALL_TIME_MS           300 000   (5 minutes wall-clock per execution unit)
   MAX_MEMORY_BYTES           268 435 456  (256 MiB)
   MAX_SYSCALLS_PER_EXECUTION 100
   MAX_CONCURRENT_PER_TENANT  5
 
 These can be overridden via environment variables:
-  AINDY_QUOTA_CPU_MS
+  AINDY_QUOTA_CPU_MS         (sets MAX_WALL_TIME_MS; env var name kept for compatibility)
   AINDY_QUOTA_MEMORY_BYTES
   AINDY_QUOTA_MAX_SYSCALLS
   AINDY_QUOTA_MAX_CONCURRENT
@@ -32,7 +32,7 @@ Usage
     rm.mark_started("user-123", "eu-abc")
     try:
         ...
-        rm.record_usage("eu-abc", {"cpu_time_ms": 250, "syscall_count": 3})
+        rm.record_usage("eu-abc", {"wall_time_ms": 250, "syscall_count": 3})
         ok, reason = rm.check_quota("eu-abc")
         if not ok:
             raise ResourceLimitError(reason)
@@ -68,7 +68,7 @@ def _int_env(key: str, default: int) -> int:
         return default
 
 
-MAX_CPU_TIME_MS: int = _int_env("AINDY_QUOTA_CPU_MS", 300_000)
+MAX_WALL_TIME_MS: int = _int_env("AINDY_QUOTA_CPU_MS", 300_000)  # env var kept for operator compatibility
 MAX_MEMORY_BYTES: int = _int_env("AINDY_QUOTA_MEMORY_BYTES", 256 * 1024 * 1024)
 MAX_SYSCALLS_PER_EXECUTION: int = _int_env("AINDY_QUOTA_MAX_SYSCALLS", 100)
 MAX_CONCURRENT_PER_TENANT: int = _int_env("AINDY_QUOTA_MAX_CONCURRENT", 5)
@@ -96,7 +96,7 @@ class UsageSnapshot:
 
     eu_id: str
     tenant_id: str
-    cpu_time_ms: int = 0
+    wall_time_ms: int = 0
     memory_bytes: int = 0
     syscall_count: int = 0
 
@@ -104,7 +104,7 @@ class UsageSnapshot:
         return {
             "eu_id": self.eu_id,
             "tenant_id": self.tenant_id,
-            "cpu_time_ms": self.cpu_time_ms,
+            "wall_time_ms": self.wall_time_ms,
             "memory_bytes": self.memory_bytes,
             "syscall_count": self.syscall_count,
         }
@@ -601,21 +601,21 @@ class ResourceManager:
             snap = self._usage.get(eid)
             if snap is None:
                 return True, None
-            local_cpu_time_ms = snap.cpu_time_ms
+            local_wall_time_ms = snap.wall_time_ms
             local_syscall_count = snap.syscall_count
 
-        redis_cpu_time_ms = self._backend_get_cpu_ms(eid)
-        if redis_cpu_time_ms is None:
-            redis_cpu_time_ms = local_cpu_time_ms
+        redis_wall_time_ms = self._backend_get_cpu_ms(eid)
+        if redis_wall_time_ms is None:
+            redis_wall_time_ms = local_wall_time_ms
 
         redis_syscall_count = self._backend_get_syscalls(eid)
         if redis_syscall_count is None:
             redis_syscall_count = local_syscall_count
 
-        if redis_cpu_time_ms > MAX_CPU_TIME_MS:
+        if redis_wall_time_ms > MAX_WALL_TIME_MS:
             reason = (
                 f"{RESOURCE_LIMIT_EXCEEDED}: eu {eu_id!r} exceeded "
-                f"cpu_time_ms limit ({redis_cpu_time_ms} > {MAX_CPU_TIME_MS})"
+                f"wall_time_ms limit ({redis_wall_time_ms} > {MAX_WALL_TIME_MS})"
             )
             logger.warning("[ResourceManager] %s", reason)
             return False, reason
@@ -776,7 +776,7 @@ class ResourceManager:
         with self._lock:
             if eid not in self._usage:
                 self._usage[eid] = UsageSnapshot(eu_id=eid, tenant_id="")
-            self._usage[eid].cpu_time_ms += delta
+            self._usage[eid].wall_time_ms += delta
         self._backend_add_cpu_ms(eid, delta)
 
     def record_memory(self, eu_id: str, bytes_used: int) -> None:
@@ -808,10 +808,10 @@ class ResourceManager:
 
         Args:
             eu_id:  ExecutionUnit ID.
-            usage:  Dict with keys: cpu_time_ms (int), memory_bytes (int),
+            usage:  Dict with keys: wall_time_ms (int), memory_bytes (int),
                     syscall_count (int).  Missing keys are treated as 0.
         """
-        self.record_cpu(eu_id, int(usage.get("cpu_time_ms", 0)))
+        self.record_cpu(eu_id, int(usage.get("wall_time_ms", 0)))
         self.record_memory(eu_id, int(usage.get("memory_bytes", 0)))
         self.record_syscall(eu_id, int(usage.get("syscall_count", 0)))
 
@@ -825,7 +825,7 @@ class ResourceManager:
         with self._lock:
             snap = self._usage.get(str(eu_id))
             if snap is None:
-                return {"eu_id": eu_id, "cpu_time_ms": 0, "memory_bytes": 0, "syscall_count": 0}
+                return {"eu_id": eu_id, "wall_time_ms": 0, "memory_bytes": 0, "syscall_count": 0}
             return snap.to_dict()
 
     def get_tenant_active(self, tenant_id: str) -> int:
@@ -857,11 +857,11 @@ class ResourceManager:
                 "tenant_id": tid,
                 "active_executions": active_executions,
                 "execution_count": len(snaps),
-                "total_cpu_time_ms": sum(s.cpu_time_ms for s in snaps),
+                "total_wall_time_ms": sum(s.wall_time_ms for s in snaps),
                 "peak_memory_bytes": max((s.memory_bytes for s in snaps), default=0),
                 "total_syscalls": sum(s.syscall_count for s in snaps),
                 "quota_limits": {
-                    "max_cpu_time_ms": MAX_CPU_TIME_MS,
+                    "max_wall_time_ms": MAX_WALL_TIME_MS,
                     "max_memory_bytes": MAX_MEMORY_BYTES,
                     "max_syscalls_per_execution": MAX_SYSCALLS_PER_EXECUTION,
                     "max_concurrent_executions": MAX_CONCURRENT_PER_TENANT,

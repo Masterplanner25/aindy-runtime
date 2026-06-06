@@ -115,7 +115,7 @@ class ExecutionUnit(Base):
     # str(user_id). Indexed for fast per-tenant quota queries.
 
     # ── Resource tracking (OS layer) ──────────────────────────────────────────
-    cpu_time_ms = Column(Integer, nullable=False, default=0)
+    wall_time_ms = Column(Integer, nullable=False, default=0)
     # Accumulated wall-clock execution time in milliseconds. Updated after each
     # flow node or syscall. Enforced by ResourceManager.
 

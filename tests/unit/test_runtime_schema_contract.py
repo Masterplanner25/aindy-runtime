@@ -209,7 +209,7 @@ def test_runtime_schema_report_exports_machine_readable_operator_payload():
         report = ensure_runtime_schema(engine, allow_bootstrap=True)
         payload = report.to_dict()
 
-        assert payload["schema_contract_version"] == "2026-05-24.1"
+        assert payload["schema_contract_version"] == "2026-06-05"
         assert payload["state"] == "upgrade_required"
         assert payload["operator_action"] == "startup_reconcile"
         assert payload["inspection"]["entrypoints"]["module"] == "python -m AINDY.db.schema_ops inspect --format json"
@@ -243,7 +243,7 @@ def test_runtime_schema_ops_inspect_command_emits_machine_readable_payload(capsy
 
         assert exit_code == 0
         assert '"state": "upgrade_required"' in output
-        assert '"schema_contract_version": "2026-05-24.1"' in output
+        assert '"schema_contract_version": "2026-06-05"' in output
         assert '"owned_by": "aindy-runtime"' in output
     finally:
         engine.dispose()
@@ -418,3 +418,115 @@ def test_worker_schema_readiness_reconciles_partial_schema_when_explicit(monkeyp
 def report_table_names(engine) -> set[str]:
     with engine.connect() as conn:
         return set(conn.dialect.get_table_names(conn))
+
+
+# ── Advisory lock (IDEM-6) ────────────────────────────────────────────────────
+
+def _make_postgres_mock_engine():
+    """Return a MagicMock that passes the postgres URL detection check.
+
+    isinstance(mock, Engine) is False for a MagicMock, so the code takes the
+    nullcontext(resolved) branch and _conn == mock_engine inside the with block.
+    str(mock.engine.url) returns the default MagicMock repr, which does not start
+    with "sqlite", so _is_postgres = True.
+    Advisory lock execute() calls land on mock_engine.execute.
+    """
+    from unittest.mock import MagicMock
+    return MagicMock()
+
+
+def test_reconcile_blank_db_acquires_advisory_lock_for_postgres():
+    """pg_advisory_lock + pg_advisory_unlock bracket create_all for PostgreSQL."""
+    from unittest.mock import MagicMock, patch
+    from AINDY.db.schema_contract import (
+        SCHEMA_STATE_BLANK_DATABASE,
+        SCHEMA_STATE_BLANK_BOOTSTRAP,
+        reconcile_runtime_schema,
+    )
+
+    mock_engine = _make_postgres_mock_engine()
+
+    blank_report = MagicMock()
+    blank_report.state = SCHEMA_STATE_BLANK_DATABASE
+    post_lock_report = MagicMock()
+    post_lock_report.state = SCHEMA_STATE_BLANK_DATABASE
+    validated = MagicMock()
+    validated.state = SCHEMA_STATE_BLANK_BOOTSTRAP
+    validated.ok = True
+
+    with patch(
+        "AINDY.db.schema_contract.inspect_runtime_schema",
+        side_effect=[blank_report, post_lock_report, validated],
+    ):
+        with patch("AINDY.db.schema_contract.Base.metadata.create_all") as mock_create_all:
+            result = reconcile_runtime_schema(mock_engine)
+
+    # isinstance(mock_engine, Engine) = False → nullcontext path → _conn = mock_engine.
+    # c.args[0] is the TextClause; str() yields the SQL text.
+    execute_sqls = [str(c.args[0]) for c in mock_engine.execute.call_args_list]
+    assert any("pg_advisory_lock" in s for s in execute_sqls), execute_sqls
+    assert any("pg_advisory_unlock" in s for s in execute_sqls), execute_sqls
+    mock_create_all.assert_called_once()
+    assert result.bootstrapped is True
+
+
+def test_reconcile_blank_db_skips_create_all_when_another_instance_bootstrapped():
+    """TOCTOU guard: if DB is no longer blank after acquiring the lock, skip create_all."""
+    from unittest.mock import MagicMock, patch
+    from AINDY.db.schema_contract import (
+        SCHEMA_STATE_BLANK_DATABASE,
+        SCHEMA_STATE_COMPATIBLE,
+        reconcile_runtime_schema,
+    )
+
+    mock_engine = _make_postgres_mock_engine()
+
+    blank_report = MagicMock()
+    blank_report.state = SCHEMA_STATE_BLANK_DATABASE
+    post_lock_report = MagicMock()
+    post_lock_report.state = SCHEMA_STATE_COMPATIBLE  # already bootstrapped by peer
+    validated = MagicMock()
+    validated.state = SCHEMA_STATE_COMPATIBLE
+    validated.ok = True
+
+    with patch(
+        "AINDY.db.schema_contract.inspect_runtime_schema",
+        side_effect=[blank_report, post_lock_report, validated],
+    ):
+        with patch("AINDY.db.schema_contract.Base.metadata.create_all") as mock_create_all:
+            reconcile_runtime_schema(mock_engine)
+
+    execute_sqls = [str(c.args[0]) for c in mock_engine.execute.call_args_list]
+    assert any("pg_advisory_lock" in s for s in execute_sqls), execute_sqls
+    assert any("pg_advisory_unlock" in s for s in execute_sqls), execute_sqls
+    mock_create_all.assert_not_called()
+
+
+def test_reconcile_blank_db_advisory_unlock_called_even_on_create_all_failure():
+    """Advisory lock is always released even if create_all raises."""
+    from unittest.mock import MagicMock, patch
+    from AINDY.db.schema_contract import (
+        SCHEMA_STATE_BLANK_DATABASE,
+        reconcile_runtime_schema,
+    )
+
+    mock_engine = _make_postgres_mock_engine()
+
+    blank_report = MagicMock()
+    blank_report.state = SCHEMA_STATE_BLANK_DATABASE
+    post_lock_report = MagicMock()
+    post_lock_report.state = SCHEMA_STATE_BLANK_DATABASE
+
+    with patch(
+        "AINDY.db.schema_contract.inspect_runtime_schema",
+        side_effect=[blank_report, post_lock_report],
+    ):
+        with patch(
+            "AINDY.db.schema_contract.Base.metadata.create_all",
+            side_effect=RuntimeError("DDL error"),
+        ):
+            with pytest.raises(RuntimeError, match="DDL error"):
+                reconcile_runtime_schema(mock_engine)
+
+    execute_sqls = [str(c.args[0]) for c in mock_engine.execute.call_args_list]
+    assert any("pg_advisory_unlock" in s for s in execute_sqls), execute_sqls

@@ -117,7 +117,7 @@ def _safe_rm_record_and_complete(self, ctx, duration_ms: float) -> None:
         from AINDY.kernel.resource_manager import get_resource_manager
 
         rm = get_resource_manager()
-        rm.record_usage(eu_id, {"cpu_time_ms": int(duration_ms)})
+        rm.record_usage(eu_id, {"wall_time_ms": int(duration_ms)})
         rm.mark_completed(str(ctx.user_id), eu_id)
     except Exception:
         logger.warning("execution.rm_record_and_complete_failed (non-fatal)", exc_info=True)

@@ -49,6 +49,7 @@ _PLATFORM_MATRIX = {"current_platform": "windows"}
 _VERIFICATION = {"verification_method": "runner-metadata-only", "kernel_observable": False, "assurance_ceiling": "container-process-boundary"}
 _TRUSTED_PY = {"present": False, "total_count": 0}
 _CONDITIONS: list = []
+_ESCAPE_POSTURE = {"posture": "not_run", "last_run": None, "host_platform": None, "gaps": [], "operator_note": ""}
 
 
 def _patch_sandbox_fns(posture=_SATISFIED_POSTURE):
@@ -72,6 +73,10 @@ def _patch_sandbox_fns(posture=_SATISFIED_POSTURE):
         patch(
             "AINDY.platform_layer.deployment_contract.get_api_runtime_conditions",
             return_value=_CONDITIONS,
+        ),
+        patch(
+            "AINDY.platform_layer.sandbox_runner.sandbox_escape_test_posture",
+            return_value=_ESCAPE_POSTURE,
         ),
     ]
 
@@ -109,7 +114,7 @@ def test_unrecognised_argv_does_not_dispatch_to_sandbox_check(monkeypatch):
 
 def test_sandbox_check_exits_zero_when_requirements_satisfied(capsys):
     patches = _patch_sandbox_fns(_SATISFIED_POSTURE)
-    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
         with pytest.raises(SystemExit) as exc_info:
             _run_sandbox_check()
     assert exc_info.value.code == 0
@@ -117,37 +122,55 @@ def test_sandbox_check_exits_zero_when_requirements_satisfied(capsys):
 
 def test_sandbox_check_exits_one_when_requirements_unsatisfied(capsys):
     patches = _patch_sandbox_fns(_UNSATISFIED_POSTURE)
-    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
         with pytest.raises(SystemExit) as exc_info:
             _run_sandbox_check()
     assert exc_info.value.code == 1
 
 
 def test_sandbox_check_prints_valid_json(capsys):
+    """--json flag produces a parseable payload with all expected top-level keys."""
     patches = _patch_sandbox_fns(_SATISFIED_POSTURE)
-    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
         with pytest.raises(SystemExit):
-            _run_sandbox_check()
+            _run_sandbox_check(output_json=True)
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert "plugin_sandbox_posture" in payload
     assert "plugin_sandbox_platform" in payload
     assert "sandbox_verification_posture" in payload
+    assert "escape_test_posture" in payload
     assert "trusted_python_execution" in payload
     assert "runtime_conditions" in payload
 
 
 def test_sandbox_check_payload_contains_posture_values(capsys):
+    """--json flag payload carries the expected nested values."""
     patches = _patch_sandbox_fns(_SATISFIED_POSTURE)
-    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
         with pytest.raises(SystemExit):
-            _run_sandbox_check()
+            _run_sandbox_check(output_json=True)
     payload = json.loads(capsys.readouterr().out)
     assert payload["plugin_sandbox_posture"]["current"]["runner_type"] == "insecure_dev_subprocess"
     assert payload["plugin_sandbox_posture"]["requirement_status"]["assurance_class_satisfied"] is True
     assert payload["plugin_sandbox_platform"] == _PLATFORM_MATRIX
     assert payload["trusted_python_execution"] == _TRUSTED_PY
     assert payload["runtime_conditions"] == []
+    assert payload["escape_test_posture"] == _ESCAPE_POSTURE
+
+
+def test_sandbox_check_default_produces_human_readable_summary(capsys):
+    """Default output (no --json) is a human-readable summary, not JSON."""
+    patches = _patch_sandbox_fns(_SATISFIED_POSTURE)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+        with pytest.raises(SystemExit):
+            _run_sandbox_check(output_json=False)
+    out = capsys.readouterr().out
+    assert "aindy-runtime sandbox" in out
+    assert "Platform:" in out
+    assert "Highest sandbox tier:" in out
+    assert "Requirements met:" in out
+    assert "aindy-runtime sandbox --json" in out
 
 
 def test_sandbox_check_exits_two_on_unexpected_error(capsys):
