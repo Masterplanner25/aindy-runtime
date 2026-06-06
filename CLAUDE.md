@@ -614,3 +614,9 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Sandbox escape posture function | `AINDY/platform_layer/sandbox_runner.py` — `sandbox_escape_test_posture()` |
 | macOS container sandbox policy | `docs/runtime/MACOS_CONTAINER_POLICY.md` |
 | WSL2 / macOS backend detection | `AINDY/platform_layer/sandbox_runner.py` — `_detect_wsl2()` |
+| Open questions tracker | `docs/runtime/OPEN_QUESTIONS.md` |
+| Route ownership inventory | `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md` |
+| nginx plain HTTP config | `nginx/nginx.conf` |
+| nginx TLS config (Let's Encrypt) | `nginx/nginx.tls.conf` |
+| Compose production port override | `docker-compose.prod.yml` |
+| Apps monolith project instructions | `C:\dev\aindy-apps-monolith\CLAUDE.md` |
