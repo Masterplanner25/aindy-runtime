@@ -1,0 +1,22 @@
+# A.I.N.D.Y. Runtime — production port overrides
+#
+# Removes host port bindings from database services so they are reachable only
+# within the compose network. The API (8000) and worker (8001) remain published.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full up -d
+#
+# Requires Docker Compose v2.24+ (supports the !reset merge tag).
+# Check your version: docker compose version
+
+services:
+  postgres:
+    # Remove host binding — DB is only reachable within the compose network.
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  mongo:
+    ports: !reset []
