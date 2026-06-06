@@ -4,7 +4,10 @@ Tests for resolve_event_bus_redis_url() and get_redis_client() precedence logic.
 Covers the fix for the silent-misconfiguration defect where event_bus.py ignored
 REDIS_URL and always fell back to redis://localhost:6379/0 when AINDY_REDIS_URL
 was unset.  See CHANGELOG 2026-05-27 and EVENTBUS-REDIS-URL-CONSOLIDATION-1.
+
+Also covers the 1.x deprecation warning emitted when AINDY_REDIS_URL is set.
 """
+import warnings
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -81,6 +84,43 @@ def test_get_redis_client_returns_none_when_neither_set(monkeypatch):
 
     from AINDY.kernel.event_bus import get_redis_client
     assert get_redis_client() is None
+
+
+# ---------------------------------------------------------------------------
+# Deprecation warning — EVENTBUS-REDIS-URL-CONSOLIDATION-1 (1.x step)
+# ---------------------------------------------------------------------------
+
+def test_aindy_redis_url_emits_deprecation_warning(monkeypatch):
+    """Setting AINDY_REDIS_URL emits a DeprecationWarning pointing operators to REDIS_URL."""
+    monkeypatch.setenv("AINDY_REDIS_URL", "redis://legacy-host:6379/0")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    from AINDY.kernel.event_bus import resolve_event_bus_redis_url
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = resolve_event_bus_redis_url()
+
+    assert result == "redis://legacy-host:6379/0"
+    deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert len(deprecation_warnings) == 1
+    assert "AINDY_REDIS_URL" in str(deprecation_warnings[0].message)
+    assert "REDIS_URL" in str(deprecation_warnings[0].message)
+
+
+def test_no_deprecation_warning_when_only_redis_url_set(monkeypatch):
+    """No DeprecationWarning when operator uses the canonical REDIS_URL."""
+    monkeypatch.delenv("AINDY_REDIS_URL", raising=False)
+    monkeypatch.setenv("REDIS_URL", "redis://canonical-host:6379/0")
+
+    from AINDY.kernel.event_bus import resolve_event_bus_redis_url
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        resolve_event_bus_redis_url()
+
+    deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert deprecation_warnings == []
 
 
 def test_get_redis_client_returns_none_when_bus_disabled(monkeypatch):

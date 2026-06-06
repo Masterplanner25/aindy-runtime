@@ -68,6 +68,7 @@ import os
 import socket
 import threading
 import time
+import warnings
 
 logger = logging.getLogger(__name__)
 
@@ -91,11 +92,16 @@ def resolve_event_bus_redis_url() -> str:
     so ``export AINDY_REDIS_URL=`` clears the override rather than connecting to
     an empty URL.
     """
-    return (
-        os.getenv("AINDY_REDIS_URL")
-        or os.getenv("REDIS_URL")
-        or "redis://localhost:6379/0"
-    )
+    aindy_redis_url = os.getenv("AINDY_REDIS_URL")
+    if aindy_redis_url:
+        warnings.warn(
+            "AINDY_REDIS_URL is deprecated since aindy-runtime 1.0.0 and will be removed "
+            "in a future major version. Set REDIS_URL instead and unset AINDY_REDIS_URL.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return aindy_redis_url
+    return os.getenv("REDIS_URL") or "redis://localhost:6379/0"
 
 
 REDIS_URL: str = resolve_event_bus_redis_url()
@@ -518,6 +524,8 @@ def get_redis_client():
     would be surprising.
     """
     # Resolve the explicit URL without the localhost default.
+    # Note: AINDY_REDIS_URL emits a DeprecationWarning in resolve_event_bus_redis_url()
+    # at module load time; no duplicate warning needed here.
     explicit_url = os.getenv("AINDY_REDIS_URL") or os.getenv("REDIS_URL")
     if not ENABLED or not explicit_url:
         return None
