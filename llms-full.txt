@@ -1,0 +1,433 @@
+# aindy-runtime — Full Content Summary for AI Indexers
+
+> A self-hostable AI agent execution runtime for building and operating AI-powered systems.
+> Created by Shawn Knight — [Masterplan Infinite Weave](https://www.the-master-plan.com/)
+> Version: 1.0.0 | Package: `aindy-runtime` | Module: `AINDY` | License: proprietary
+
+---
+
+## What aindy-runtime Is
+
+aindy-runtime is the execution substrate of the A.I.N.D.Y. (Artificially Intelligent
+Networked Dynamic You) platform. It is a production-grade FastAPI application and Python
+package that provides:
+
+- A **syscall-based execution contract** — all capability calls flow through a single
+  `SyscallDispatcher` with schema validation, capability enforcement, tenant isolation,
+  idempotency gates, and OTel tracing
+- A **DAG flow engine** — directed acyclic graph execution with WAIT/RESUME semantics,
+  three-lane priority scheduling, and crash-safe flow rehydration
+- A **persistent vector memory system** — `MemoryNode` rows with pgvector embeddings,
+  hybrid retrieval (vector similarity + tag filter + path query), and memory traces
+- A **structured agent runtime** — goal → plan → approval gate → execute loop with
+  scoped capability tokens, trigger evaluation, and multi-agent coordination
+- An **extensible plugin registry** — mount routers, flows, jobs, syscalls, and event
+  handlers from external Python packages at boot time
+- A **platform operator UI** — SPA dashboard served at `/platform` for flows, agents,
+  scheduler observability, and memory inspection
+
+The runtime ships as `aindy-runtime` on PyPI. The importable module is `AINDY` (uppercase
+— it is an acronym). Deployable via Docker Compose in minutes. Tested on Python 3.11+.
+
+---
+
+## Who aindy-runtime Is For
+
+**Platform operators** — deploy and run the full A.I.N.D.Y. runtime stack. Interact via
+`aindy-runtime serve`, Docker Compose, the platform UI at `/platform`, and the operator
+CLI (`aindy-runtime auth promote-admin`, `aindy-runtime sandbox`).
+
+**App builders (SDK / HTTP)** — any service that can make HTTP requests. Install
+`aindy-sdk`, create a Platform API key with the scopes you need, and use `AINDYClient`.
+No in-process code required.
+
+**App builders (plugin layer)** — Python teams building domain apps that run inside the
+runtime process. Set `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true`, register your package
+via `aindy_plugins.json`, and use the 18-category plugin registry API to mount routers,
+flows, jobs, syscalls, and event handlers. Reference: `aindy-apps-monolith` (16 domain apps).
+
+**AI orchestration engineers** — building multi-step agent workflows that require
+structured approval gates, capability-scoped tool access, WAIT/RESUME semantics, and
+persistent memory across runs.
+
+---
+
+## Install and Quickstart
+
+```bash
+pip install aindy-runtime
+
+# Or from source:
+git clone https://github.com/Masterplanner25/aindy-runtime.git
+pip install -e ".[test]"
+```
+
+Minimum environment:
+```bash
+DATABASE_URL=postgresql://user:pass@host:5432/dbname
+SECRET_KEY=<hex-32-bytes>
+OPENAI_API_KEY=sk-...
+```
+
+Docker Compose quickstart:
+```bash
+cp AINDY/.env.example AINDY/.env   # fill SECRET_KEY + OPENAI_API_KEY
+docker compose up -d
+curl http://localhost:8000/ready   # → {"status": "ok"}
+# Platform UI: http://localhost:8000/platform
+```
+
+Profiles:
+- `docker compose up -d` — api + postgres + redis + mongo
+- `--profile full` — adds distributed worker
+- `--profile full --profile monitoring` — adds Prometheus on port 9090
+- `--profile full --profile proxy` + `docker-compose.prod.yml` — nginx TLS, all internal ports closed
+
+CLI:
+```bash
+aindy-runtime serve      # start the HTTP API server
+aindy-runtime sandbox    # report sandbox capabilities
+aindy-runtime --version  # show version
+```
+
+---
+
+## Core Architecture
+
+### Syscall System
+
+`SyscallDispatcher` (`AINDY/kernel/syscall_dispatcher.py`) is the single entry point for
+all capability calls within the runtime. Every `dispatch()` call:
+
+1. Validates the syscall exists in the `SYSCALL_REGISTRY`
+2. Enforces the caller's `SyscallContext.capabilities`
+3. Checks tenant isolation and resource quota
+4. Validates input and output schemas
+5. Runs the idempotency gate for `EXACTLY_ONCE` handlers (EffectRecord in DB)
+6. Wraps the handler in an OTel span
+7. Returns a uniform envelope: `{status, data, trace_id, duration_ms, error}`
+
+Syscall names follow the `sys.v1.domain.action` convention:
+
+```python
+result = await dispatcher.dispatch(
+    "sys.v1.memory.write",
+    context=syscall_context,
+    payload={"namespace": "agent/run-123", "content": "...", "type": "fact"},
+)
+# result → {"status": "ok", "data": {...}, "trace_id": "...", "duration_ms": 12}
+```
+
+The `SyscallContractViolation` exception propagates out of `dispatch()` (explicit re-raise
+before the broad handler). All other exceptions are caught and returned as error envelopes.
+
+The registry floor constant (`SYSCALL_REGISTRY_MIN_COUNT = 17`) is checked by
+`/health/deep` to detect a partially-initialized registry.
+
+### Execution Pipeline
+
+Every route handler runs inside `ExecutionPipeline`
+(`AINDY/core/execution_pipeline/pipeline.py`). It:
+- Sets ContextVars (`trace_id`, `pipeline_active`)
+- Claims and releases an `ExecutionUnit` in the DB
+- Records Prometheus metrics
+- Captures memory signals from the response
+- Emits `SystemEvent` records
+
+Handlers interact with the kernel only through `SyscallDispatcher.dispatch()`. Direct
+DB access from route handlers bypasses the execution contract.
+
+### Flow Engine (DAG Executor)
+
+`FlowRun` rows move through a documented state machine:
+`pending → executing → waiting → completed / failed`
+
+The `SchedulerEngine` (`AINDY/kernel/scheduler/`) runs a priority queue with three lanes:
+high, normal, and low. When a node calls `sys.v1.event.wait`:
+
+1. `FlowRun.status` → `waiting`
+2. A callback is registered in the in-memory `_waiting` dict
+3. `EventBus.publish()` broadcasts the wait via Redis pub/sub to all instances
+
+When `publish_event(event_type)` fires later, the engine re-enqueues the matching flow.
+On restart, `flow_run_rehydration.py` re-registers all `waiting` rows so no flow is lost
+after a process crash.
+
+### Agent Runtime
+
+Agent run lifecycle — `AINDY/agents/agent_runtime/execution.py`:
+
+1. **Create** — `POST /apps/agent/run` — submits goal + capability token
+2. **Plan** — planner backend (OpenAI or DeepSeek) decomposes the goal into steps
+3. **Approve** — atomic CAS transition `pending_approval → approved`; runs as a
+   background daemon thread to return the HTTP response immediately
+4. **Execute** — `execute_run()` validates the scoped capability token, resolves tools
+   via `tool_registry.py`, optionally routes through `AgentCoordinator` for multi-agent
+   delegation, then compiles the agent objective into a Nodus execution context and runs
+   it through the flow-backed execution path
+
+The approve path is guarded by a CAS update that fires only from `pending_approval`.
+A concurrent second approval returns the already-approved state without re-executing.
+
+The orphaned-approved watchdog (`_recover_orphaned_approved_runs` in
+`AINDY/platform_layer/scheduler_service.py`) runs every 5 minutes and re-dispatches
+any `AgentRun` that has been in `approved` state for more than 10 minutes without completing.
+
+### Memory System
+
+Memory nodes live in `memory_nodes` (PostgreSQL, `Vector(1536)` embedding column via
+pgvector). The write path:
+
+```
+Route → memory_ingest_service.py → background embedding queue
+      → memory_ingest_worker.py → OpenAI text-embedding-3-small
+      → pgvector upsert
+```
+
+Retrieval is hybrid: vector similarity + tag filter + `MemoryAddressSpace` path queries.
+MAS paths follow the convention `/memory/{tenant}/{namespace}/{type}/{id}`.
+
+Scoring uses impact score, usage count, and causal depth.
+`memory_scoring_service.py` ranks results. A Rust native scorer
+(`AINDY/memory/native/`, compiled via Maturin) is an optional performance path.
+
+### Plugin Registry
+
+18 registration categories exposed via the plugin ABI (`AINDY/platform_layer/registry.py`):
+
+```python
+# In your extension package's boot hook:
+from aindy_sdk.plugin import register_router, register_flow, register_job, register_syscall
+
+register_router(my_router, prefix="/apps/myapp")
+register_flow("myapp.etl_flow", etl_flow_definition)
+register_job("myapp.cleanup", _cleanup_fn, interval_hours=24)
+register_syscall("sys.v1.myapp.ingest", handler=_ingest_handler, schema=IngestSchema)
+```
+
+Enable via env:
+```bash
+AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true
+```
+
+Extensions are loaded at boot time from `aindy_plugins.json` in the working directory.
+Trust posture: trusted-internal only. Extension code runs in-process without isolation.
+Do not load untrusted third-party packages via this mechanism.
+
+Reference implementation: `aindy-apps-monolith` — 16 domain apps, all 18 categories used.
+
+### Platform UI
+
+The platform SPA (`AINDY/platform/dist/`) is a React + Vite application served by
+`_SPAStaticFiles` (a `StaticFiles` subclass mounted at `/platform`).
+
+Key invariants:
+- `/login` is outside the `PlatformGuard` layout route
+- Asset 404 discrimination: `/platform/assets/*` returns real 404; all other paths fall
+  back to `index.html` for client-side routing
+- `VITE_API_BASE_URL` defaults to `""` (relative URL at runtime origin)
+- `bootIdentity` must call `.then(unwrapEnvelope)` to populate `system.runtime.boot_mode`
+
+---
+
+## Deployment Patterns
+
+### Single-instance (default)
+
+```bash
+docker compose up -d
+```
+
+API + PostgreSQL + Redis + MongoDB. All on one host. Redis optional (event bus degrades
+gracefully when Redis is unavailable). MongoDB optional (disabled by `SKIP_MONGO_PING=1`).
+
+### Distributed (production)
+
+```bash
+docker compose --profile full up -d
+```
+
+Adds a background worker process for memory ingestion and metric writing. The worker and
+API share the same PostgreSQL and Redis; scale the API horizontally behind a load balancer.
+
+### With observability
+
+```bash
+docker compose --profile full --profile monitoring up -d
+```
+
+Adds Prometheus (port 9090). All runtime metrics exported via `/metrics` (prometheus_client).
+
+### Cloud VM with nginx + TLS
+
+```bash
+NGINX_CONF=nginx.tls.conf \
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile full --profile proxy up -d
+```
+
+`docker-compose.prod.yml` closes all internal port bindings. nginx handles TLS termination
+and forwards to the API container. Certificates via Let's Encrypt (certbot) or bring-your-own.
+
+### Runtime-only (no plugin apps)
+
+```bash
+AINDY_BOOT_MODE=runtime-only aindy-runtime serve
+```
+
+Loads no app plugins. All platform surfaces are available; app-layer routes (e.g.
+`/apps/agent/*`) return 404 unless explicitly registered by a plugin.
+
+---
+
+## Stable Public Surfaces
+
+**HTTP (Stable):**
+- `GET /health` — basic health check
+- `GET /health/deep` — full health with syscall registry status
+- `GET /ready` — readiness gate (used by compose healthcheck)
+- `GET /api/version` — runtime version and compatibility metadata
+- `POST /auth/register`, `POST /auth/login` — JWT auth
+- `GET /platform/syscalls` — syscall registry listing
+- `GET /platform/keys`, `POST /platform/keys` — Platform API key management
+- `GET /platform/observability/scheduler/status` — scheduler status
+
+**Syscall (Stable):**
+- `sys.v1.memory.write` — write a memory node
+- `sys.v1.memory.read` — read by path
+- `sys.v1.memory.search` — hybrid retrieval
+- `sys.v1.event.wait` — suspend flow pending event
+- `sys.v1.event.publish` — publish event (resumes waiting flows)
+- `sys.v1.llm.complete` — structured LLM completion (OpenAI or DeepSeek backend)
+
+Full inventory: `docs/runtime/PUBLIC_RUNTIME_SURFACES.md`
+
+**Extension ABI (Experimental):**
+- `register_router()`, `register_flow()`, `register_job()`, `register_syscall()`
+- `register_event_handler()`, `register_startup_hook()`, `register_capability()`
+- May change between minor versions. Pin to a version range when building plugins.
+
+---
+
+## Schema Contract
+
+Any change to a file under `AINDY/db/models/` or `AINDY/memory/memory_persistence.py`
+requires:
+
+1. Bump `SCHEMA_CONTRACT_VERSION` in `AINDY/db/schema_contract.py` (format: `"YYYY-MM-DD"`)
+2. Regenerate baseline: `python scripts/check_schema_version.py`
+3. Update two version string assertions in `tests/unit/test_runtime_schema_contract.py`
+
+On a blank database, the runtime bootstraps runtime-owned tables from ORM metadata via
+`create_all` (Phase 5 of startup). On an existing deployment, `AINDY_SCHEMA_RECONCILE=true`
+is required before startup will run schema mutations. `AINDY_ENFORCE_SCHEMA=true` causes
+the server to refuse to start on schema drift.
+
+---
+
+## Idempotency Contract
+
+`EXACTLY_ONCE` syscall handlers use the `EffectRecord` gate:
+- Before executing, the dispatcher writes a `pending` EffectRecord
+- After success, it updates to `success` (db.commit — durable across session close)
+- On duplicate call with same idempotency key, the existing result is returned without
+  re-executing the handler
+- Pending rows are never eligible for deletion — the TTL cleanup job hard-excludes them
+
+EffectRecord model: `AINDY/db/models/effect_record.py`
+Full specification: `docs/runtime/IDEMPOTENCY_CONTRACT.md`
+
+---
+
+## Ecosystem Context
+
+### A.I.N.D.Y. Platform
+
+aindy-runtime is the execution substrate of A.I.N.D.Y. — the Artificially Intelligent
+Networked Dynamic You platform. The platform consists of:
+
+- **aindy-runtime** (this package) — HTTP API, kernel, flow engine, agent runtime, memory, platform UI
+- **aindy-apps-monolith** — 16 domain app plugins built on the runtime's plugin registry
+- **aindy-sdk** — Python SDK for external HTTP integration via Platform API keys
+- **nodus-lang** — the orchestration DSL that powers flow and agent execution
+
+### Nodus
+
+Nodus is an orchestration scripting language created by Shawn Knight. aindy-runtime
+executes `.nodus` / `.nd` scripts via the `nodus-lang` Python package.
+
+`nodus_worker.py` (`AINDY/runtime/`) compiles and runs Nodus scripts with:
+- `DeferredMemoryBuiltins` (recall/search/write backed by the flow's `memory_context`)
+- `WorkerWaitSignal` — propagates WAIT semantics back to the flow engine
+- Deferred memory writes — collected during script execution, committed after completion
+
+Nodus and aindy-runtime together implement the full Infinity Algorithm execution loop.
+
+### Masterplan Infinite Weave and the Infinity Algorithm
+
+Masterplan Infinite Weave is the broader ecosystem created by Shawn Knight
+(https://www.the-master-plan.com/). The Infinity Algorithm is its core execution model —
+a structured loop of five phases: **Intake → Think → Create → Refine → Output → Feedback**.
+
+aindy-runtime's flow engine DAG executor IS the execution layer for the Infinity Algorithm:
+- Each phase maps to a flow node or agent step
+- `sys.v1.event.wait` / `sys.v1.event.publish` implement the feedback gate between phases
+- Memory nodes persist state across iterations
+- The agent approval gate (pending_approval → approved) enforces human-in-the-loop at
+  the Create → Refine boundary when configured
+
+Together, aindy-runtime + Nodus implement the I→T→C→R→O→Feedback loop in production.
+
+---
+
+## Key File Locations
+
+| What | Where |
+|---|---|
+| Entry point (CLI + ASGI) | `AINDY/runtime_only.py` |
+| Syscall dispatcher | `AINDY/kernel/syscall_dispatcher.py` |
+| Syscall registry | `AINDY/kernel/syscall_registry.py` |
+| Event bus | `AINDY/kernel/event_bus.py` |
+| Scheduler engine | `AINDY/kernel/scheduler/` |
+| Execution pipeline | `AINDY/core/execution_pipeline/pipeline.py` |
+| Agent execution entry | `AINDY/agents/agent_runtime/execution.py` |
+| Agent approve path | `AINDY/agents/agent_runtime/approvals.py` |
+| Memory ingest service | `AINDY/memory/memory_ingest_service.py` |
+| Memory address space | `AINDY/memory/memory_address_space.py` |
+| Plugin registry | `AINDY/platform_layer/registry.py` |
+| Scheduler jobs | `AINDY/platform_layer/scheduler_service.py` |
+| Route assembly | `AINDY/routing.py` |
+| Route re-exports | `AINDY/routes/__init__.py` |
+| Platform SPA mount | `AINDY/routing.py` — `_SPAStaticFiles` |
+| Auth service | `AINDY/services/auth_service.py` |
+| Schema contract | `AINDY/db/schema_contract.py` |
+| Alembic migrations | `alembic/versions/` |
+| Docker Compose | `docker-compose.yml` |
+| Production overlay | `docker-compose.prod.yml` |
+| nginx plain HTTP | `nginx/nginx.conf` |
+| nginx TLS | `nginx/nginx.tls.conf` |
+| Environment reference | `AINDY/.env.example` |
+
+---
+
+## Related Projects
+
+- **aindy-apps-monolith** — https://github.com/Masterplanner25/aindy-apps-monolith
+  16 domain apps; reference implementation for the plugin registry pattern
+- **aindy-sdk** — https://github.com/Masterplanner25/aindy-sdk
+  Python SDK for external HTTP integration via Platform API keys
+- **nodus-lang** — https://github.com/Masterplanner25/Nodus
+  Orchestration DSL; powers aindy-runtime's flow and agent execution
+- **nodus-circuit-breaker** — standalone circuit breaker extracted from nodus-lang
+- **nodus-auth** — standalone auth primitives extracted from nodus-lang
+- **nodus-observability** — standalone observability hooks extracted from nodus-lang
+- **Masterplan Infinite Weave** — https://www.the-master-plan.com/
+  The broader ecosystem; aindy-runtime is its AI execution infrastructure layer
+
+---
+
+## Maintainer
+
+Created and maintained by **Shawn Knight** ([@Masterplanner25](https://github.com/Masterplanner25)).
+Part of the Masterplan Infinite Weave ecosystem.
+Contact: shawnknight@the-master-plan.com
