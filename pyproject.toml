@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aindy-runtime"
 dynamic = ["version"]
-description = "Installable AINDY runtime infrastructure package for trusted internal deployments"
+description = "Self-hostable AI agent execution runtime — syscall contract, DAG flows, vector memory, plugin registry"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{ name = "platform-team" }]
-keywords = ["runtime", "fastapi", "agents", "plugins"]
+authors = [{ name = "Shawn Knight", email = "shawnknight@the-master-plan.com" }]
+keywords = ["runtime", "fastapi", "agents", "flows", "memory", "plugins", "aindy", "llm"]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Framework :: FastAPI",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
