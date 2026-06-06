@@ -67,6 +67,26 @@ Deploy in minutes via Docker Compose. Extend via a Python plugin registry.
 - [docs/runtime/CROSS_REPO_COMPATIBILITY.md](docs/runtime/CROSS_REPO_COMPATIBILITY.md): Compatibility policy between aindy-runtime, aindy-sdk, and aindy-apps-monolith
 - [TECH_DEBT.md](TECH_DEBT.md): Open known issues with status and fix directions
 
+## Wiki
+
+The aindy-runtime wiki is the user-facing reference for operators, app builders, and integrators.
+
+- [aindy-runtime Wiki](https://github.com/Masterplanner25/aindy-runtime/wiki) — 15 pages covering deployment, syscalls, flows, agents, memory, plugins, and operations
+  - [Getting Started](https://github.com/Masterplanner25/aindy-runtime/wiki/Getting-Started)
+  - [Architecture](https://github.com/Masterplanner25/aindy-runtime/wiki/Architecture)
+  - [Configuration](https://github.com/Masterplanner25/aindy-runtime/wiki/Configuration)
+  - [Deployment Profiles](https://github.com/Masterplanner25/aindy-runtime/wiki/Deployment-Profiles)
+  - [Syscall System](https://github.com/Masterplanner25/aindy-runtime/wiki/Syscall-System)
+  - [Flow Engine](https://github.com/Masterplanner25/aindy-runtime/wiki/Flow-Engine)
+  - [Agent Runtime](https://github.com/Masterplanner25/aindy-runtime/wiki/Agent-Runtime)
+  - [Memory System](https://github.com/Masterplanner25/aindy-runtime/wiki/Memory-System)
+  - [Plugin Registry](https://github.com/Masterplanner25/aindy-runtime/wiki/Plugin-Registry)
+  - [REST API](https://github.com/Masterplanner25/aindy-runtime/wiki/REST-API)
+  - [Operator Guide](https://github.com/Masterplanner25/aindy-runtime/wiki/Operator-Guide)
+  - [Condition Codes](https://github.com/Masterplanner25/aindy-runtime/wiki/Condition-Codes)
+  - [Security](https://github.com/Masterplanner25/aindy-runtime/wiki/Security)
+  - [Changelog](https://github.com/Masterplanner25/aindy-runtime/wiki/Changelog)
+
 ## Ecosystem
 
 aindy-runtime is the execution substrate of the A.I.N.D.Y. platform and part of the
@@ -77,3 +97,46 @@ Masterplan Infinite Weave ecosystem.
 - [aindy-apps-monolith](https://github.com/Masterplanner25/aindy-apps-monolith) — 16 domain apps built on the plugin registry; reference implementation
 - [aindy-sdk](https://github.com/Masterplanner25/aindy-sdk) — Python SDK for external HTTP integration
 - [nodus-lang](https://github.com/Masterplanner25/Nodus) — orchestration DSL that powers aindy-runtime's flow and agent execution layer
+
+## Creator
+
+Shawn Knight — creator of A.I.N.D.Y. and architect of the Masterplan Infinite Weave.
+
+- Web: [the-master-plan.com](https://www.the-master-plan.com/)
+- GitHub: [Masterplanner25](https://github.com/Masterplanner25)
+
+## Key Concepts
+
+- **aindy-runtime** — the execution substrate of the A.I.N.D.Y. platform; a self-hostable FastAPI + Python package that runs agent workflows, DAG flows, and vector memory
+- **A.I.N.D.Y.** — Artificially Intelligent Networked Dynamic You; the AI platform aindy-runtime powers
+- **Masterplan Infinite Weave** — the AI-native ecosystem aindy-runtime is the execution layer of; built on the Infinity Algorithm model
+- **Infinity Algorithm** — the I→T→C→R→O→Feedback execution model implemented by aindy-runtime's agent and flow systems
+- **SyscallDispatcher** — the single entry point for all capability calls; validates, enforces capabilities, gates idempotency, and returns a uniform envelope
+- **syscall** — a named capability call in the format `sys.v1.domain.action`; validated, schema-checked, capability-enforced
+- **ExecutionUnit** — the abstract DB row that tracks any in-flight execution (flow, agent, job) with status and timestamps
+- **FlowRun** — a single execution instance of a DAG flow; states: `running`, `waiting`, `completed`, `failed`
+- **WAIT/RESUME** — the flow suspension model: `sys.v1.event.wait` suspends a flow; `sys.v1.event.emit` resumes it; crash-safe via rehydration
+- **AgentRun** — a structured agent execution; states: `pending_approval`, `approved`, `executing`, `delegated`, `completed`, `failed`
+- **approval gate** — every agent run must be approved before execution begins; enforced atomically via CAS on the DB row
+- **capability token** — a scoped credential minted at agent approval time; limits which syscalls the agent may call during execution
+- **MemoryNode** — the persistent memory unit; stored in PostgreSQL with a 1536-dim pgvector embedding, namespace, type, tags, and MAS path
+- **MAS (Memory Address Space)** — path-based addressing for memory: `/memory/{tenant}/{namespace}/{type}/{id}`
+- **hybrid retrieval** — memory search combining vector similarity, tag filter, and MAS path query; ranked by impact score × usage count × causal depth
+- **EffectRecord** — the idempotency gate for `EXACTLY_ONCE` syscall handlers; prevents double-execution on retried requests
+- **PluginRegistry** — the extension mechanism; plugins register routers, flows, jobs, syscalls, capabilities, tools, event handlers, and startup hooks
+- **deployment profile** — controls infrastructure requirements and scheduler leadership; values: `single-instance`, `distributed-api`, `distributed-worker`, `hostile-third-party`
+- **RuntimeConditionCode** — a stable string code emitted when the runtime enters a degraded state; appears in `/ready` and `/health` responses
+- **condition classification** — severity of a runtime condition: `safe_degraded` (advisory), `unsafe_degraded` (blocks /ready), `startup_fatal` (blocks startup in production)
+- **nodus-lang** — the orchestration DSL that powers aindy-runtime's flow and agent execution layer; `.nd` scripts execute via `sys.v1.nodus.execute`
+- **platform-only boot** — `AINDY_BOOT_MODE=runtime-only`; starts the runtime without loading any app plugins; all core syscalls, flows, memory, and platform UI remain available
+- **trusted-internal** — the maximum security claim for v1.0; all connected plugins and operators are assumed to be under operator control; hostile third-party workloads require the `hostile-third-party` profile
+
+## Package
+
+- PyPI: `aindy-runtime` (v1.0.0 — current)
+- Install: `pip install aindy-runtime`
+- Module: `AINDY` (uppercase — it is an acronym)
+- Console script: `aindy-runtime serve` (API), `aindy-runtime worker` (background worker)
+- Python >= 3.11
+- PostgreSQL with pgvector extension required
+- Redis optional (required for distributed profiles)
