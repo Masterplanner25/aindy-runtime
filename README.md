@@ -107,6 +107,33 @@ print(registry["total_count"], "syscalls available")
 
 Full SDK documentation and examples: [aindy-sdk](https://github.com/Masterplanner25/aindy-sdk)
 
+### Building apps on aindy-runtime
+
+Three integration patterns, listed by increasing coupling:
+
+**1. SDK (external HTTP)** — Any service that can make HTTP requests can integrate
+via Platform API keys. Install `aindy-sdk`, create a key with the scopes you need,
+and use `AINDYClient`. See [After the server starts](#after-the-server-starts) above.
+
+**2. Agent runs** — Submit agent objectives via `POST /apps/agent/run`. The runtime
+executes the objective through its flow engine. No in-process code needed — just an
+authenticated HTTP call with a capability token.
+
+**3. Trusted Python extensions (in-process)** — Set
+`AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` to load a Python package into the
+runtime process at startup. Extensions register routers, flows, jobs, syscalls, and
+event handlers through the plugin registry. This is the pattern used by
+`aindy-apps-monolith`.
+
+**Reference implementation:** [`aindy-apps-monolith`](https://github.com/Masterplanner25/aindy-apps-monolith)
+contains 16 working domain apps built on this pattern. The canonical how-to doc is
+[`docs/architecture/PLUGIN_REGISTRY_PATTERN.md`](https://github.com/Masterplanner25/aindy-apps-monolith/blob/main/docs/architecture/PLUGIN_REGISTRY_PATTERN.md)
+— it covers all 18 registration categories, boot-order dependency declarations, and a
+step-by-step guide for adding a new domain app.
+
+> **Trust posture note:** option 3 is a trusted-internal mechanism. It does not sandbox
+> extension code. Do not use it to load untrusted third-party packages.
+
 > **Note — database host inside compose:** The `DATABASE_URL` in `AINDY/.env`
 > must use the compose service name as the host, not `localhost`:
 > ```
