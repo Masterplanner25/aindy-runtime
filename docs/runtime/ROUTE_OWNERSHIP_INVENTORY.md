@@ -150,8 +150,10 @@ Already self-identified as an extraction candidate in the source comment. The ro
 stays mounted at `/apps/agent/*` for URL stability. The execution logic lives in
 `agents/agent_runtime/` (kernel-side), not in the router itself.
 
-**Blocker:** `AGENT-API-001` — the SPA's `agent.js` references ROUTES constants that
-don't exist yet. The route paths themselves are stable; the SPA API module is the gap.
+**Blocker:** None. `AGENT-API-001` closed 2026-06-03 — broken ROUTES references fixed.
+All 13 router endpoints now have matching `ROUTES.AGENT.*` constants and `agent.js`
+functions (`recover`/`replay` added 2026-06-06). No SPA components consume recover/replay
+yet — first use will drive the component work.
 
 ### `memory_router.py`
 Endpoints: Full CRUD, semantic search, graph traversal, recall (v1/v3), federated
@@ -204,7 +206,7 @@ interface that the app can call. The conflict detection endpoints also touch
 
 | Candidate | Extraction readiness | Primary blocker |
 |---|---|---|
-| `agent_router.py` | High — logic already in kernel layer | `AGENT-API-001` SPA API module |
+| `agent_router.py` | High — logic already in kernel layer | None — SPA API module complete as of 2026-06-06 |
 | `memory_metrics_router.py` | High — no runtime coupling | Move with memory layer |
 | `memory_trace_router.py` | High — no runtime coupling | Move with memory layer |
 | `memory_router.py` (CRUD/search) | Medium — split required | Nodus execution endpoints must stay until service interface exists |
