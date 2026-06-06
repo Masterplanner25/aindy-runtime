@@ -6,7 +6,6 @@ import sys
 from typing import NoReturn
 
 from AINDY._version import __version__
-from AINDY.platform_layer.deployment_contract import BOOT_MODE_ENV_VAR, RUNTIME_ONLY_BOOT_MODE
 
 
 def __getattr__(name: str):
@@ -192,7 +191,18 @@ def _promote_admin(email: str) -> NoReturn:
     except SystemExit:
         raise
     except Exception as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        # Detect DB connection failures and surface a clean message rather than
+        # leaking SQLAlchemy / psycopg2 internals.
+        exc_str = str(exc)
+        if any(k in exc_str for k in ("OperationalError", "could not connect", "could not translate", "Connection refused")):
+            print(
+                "error: could not connect to database.\n"
+                "Check that DATABASE_URL points to a reachable PostgreSQL instance.\n"
+                f"  detail: {exc.__cause__ or exc}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2)
     finally:
         db.close()
@@ -200,6 +210,7 @@ def _promote_admin(email: str) -> NoReturn:
 
 def _serve() -> NoReturn:
     """Start the aindy-runtime HTTP API server."""
+    from AINDY.platform_layer.deployment_contract import BOOT_MODE_ENV_VAR, RUNTIME_ONLY_BOOT_MODE
     os.environ.setdefault(BOOT_MODE_ENV_VAR, RUNTIME_ONLY_BOOT_MODE)
 
     from AINDY.config import settings
@@ -229,9 +240,15 @@ def _serve() -> NoReturn:
 
 
 def main() -> None:
+    import logging as _logging
+    # Suppress INFO logs from config.py's Settings() initialization so that
+    # every CLI invocation (including --help) stays visually clean.
+    # WARNING and above still propagate (e.g. misconfiguration messages).
+    _logging.disable(_logging.INFO)
+
     parser = argparse.ArgumentParser(
         prog="aindy-runtime",
-        description="A.I.N.D.Y. runtime — HTTP server and diagnostics.",
+        description="A.I.N.D.Y. runtime - HTTP server and diagnostics.",
     )
     parser.add_argument(
         "--version",
@@ -245,7 +262,9 @@ def main() -> None:
         help="Start the aindy-runtime HTTP API server.",
         description=(
             "Start the aindy-runtime HTTP API server. "
-            "DATABASE_URL must be set to a valid PostgreSQL URI."
+            "DATABASE_URL must be set to a valid PostgreSQL URI. "
+            "AINDY_HOST (default 127.0.0.1) and AINDY_PORT (default 8000) "
+            "control the bind address."
         ),
     )
     sandbox_parser = subparsers.add_parser(
