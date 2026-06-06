@@ -1,0 +1,78 @@
+# aindy-runtime
+
+> A self-hostable AI agent execution runtime for building and operating AI-powered systems.
+> Created by Shawn Knight — [Masterplan Infinite Weave](https://www.the-master-plan.com/)
+
+aindy-runtime is the execution substrate of the A.I.N.D.Y. platform. It provides a
+syscall-based execution contract, a DAG flow engine with WAIT/RESUME semantics, persistent
+vector memory, structured agent runs with capability tokens, and an extensible plugin
+registry for mounting domain-specific app layers. Ships as `aindy-runtime` on PyPI.
+Deploy in minutes via Docker Compose. Extend via a Python plugin registry.
+
+## Core Documentation
+
+- [README.md](README.md): Quickstart, install, CLI, deployment profiles, building apps on aindy-runtime
+- [docs/runtime/ARCHITECTURE.md](docs/runtime/ARCHITECTURE.md): Layer model, execution pipeline, kernel internals, flow engine, agent runtime, memory system
+- [docs/runtime/SYSCALL_SYSTEM.md](docs/runtime/SYSCALL_SYSTEM.md): SyscallDispatcher contract, registry, capability enforcement, idempotency gate, envelope format
+- [docs/runtime/EXECUTION_CONTRACT.md](docs/runtime/EXECUTION_CONTRACT.md): Execution guarantees, state machine, resource limits, failure model
+- [docs/runtime/EXECUTION_INVARIANTS.md](docs/runtime/EXECUTION_INVARIANTS.md): Documented runtime invariants — flow engine, scheduler, memory, agent, syscall
+- [docs/runtime/AGENT_RUNTIME.md](docs/runtime/AGENT_RUNTIME.md): Agent run lifecycle — create, plan, approve, execute, capability tokens, trigger evaluation
+- [docs/runtime/IDEMPOTENCY_CONTRACT.md](docs/runtime/IDEMPOTENCY_CONTRACT.md): EXACTLY_ONCE handlers, EffectRecord gate, per-syscall idempotency guarantees
+- [docs/runtime/RUNTIME_STABILITY_INDEX.md](docs/runtime/RUNTIME_STABILITY_INDEX.md): Per-surface stability tiers (Stable / Experimental) for HTTP, syscall, extension, and memory surfaces
+- [docs/runtime/PUBLIC_RUNTIME_SURFACES.md](docs/runtime/PUBLIC_RUNTIME_SURFACES.md): Complete inventory of stable public HTTP and syscall surfaces
+- [llms-full.txt](llms-full.txt): Full content summaries for AI indexers
+
+## Architecture
+
+- [docs/runtime/RUNTIME_MODULE_MAP.md](docs/runtime/RUNTIME_MODULE_MAP.md): Tagged inventory of every module — layer, owner, stability, blast radius
+- [docs/runtime/RUNTIME_BOUNDARY.md](docs/runtime/RUNTIME_BOUNDARY.md): What aindy-runtime owns vs. what belongs in aindy-apps-monolith
+- [docs/runtime/FOUNDATIONAL_PATTERN.md](docs/runtime/FOUNDATIONAL_PATTERN.md): Design patterns — ExecutionPipeline, SyscallDispatcher, plugin registry, capability model
+- [docs/runtime/MEMORY_ADDRESS_SPACE.md](docs/runtime/MEMORY_ADDRESS_SPACE.md): MemoryNode storage, MAS path structure, hybrid retrieval, embedding pipeline
+- [docs/runtime/SCHEMA_LIFECYCLE.md](docs/runtime/SCHEMA_LIFECYCLE.md): Schema contract versioning, blank-bootstrap, reconcile, enforce-schema flow
+- [docs/runtime/RETRY_POLICY.md](docs/runtime/RETRY_POLICY.md): RetryPolicy model, backoff strategies, syscall-level retry contract
+- [docs/runtime/DEGRADED_RUNTIME_MODES.md](docs/runtime/DEGRADED_RUNTIME_MODES.md): What degrades when Redis, Mongo, or the scheduler is unavailable
+
+## Extension and Plugin System
+
+- [docs/runtime/EXTENSION_ABI.md](docs/runtime/EXTENSION_ABI.md): Plugin ABI — register_router, register_flow, register_job, register_syscall, boot-order hooks
+- [docs/runtime/EXTENSION_TRUST_MODEL.md](docs/runtime/EXTENSION_TRUST_MODEL.md): Trust levels (trusted-internal vs. untrusted), sandbox policy, capability grant model
+- [docs/runtime/EXTENSION_CAPABILITIES.md](docs/runtime/EXTENSION_CAPABILITIES.md): Per-extension capability definitions and enforcement
+- [docs/runtime/EXTENSION_PROVENANCE.md](docs/runtime/EXTENSION_PROVENANCE.md): Extension identity, origin tracking, inventory at runtime
+
+## SDK and Integrations
+
+- [docs/runtime/SDK_CONTRACT.md](docs/runtime/SDK_CONTRACT.md): Stable surfaces the aindy-sdk depends on — auth, version, memory, platform keys
+- [docs/runtime/UI_CONTRACT.md](docs/runtime/UI_CONTRACT.md): Platform SPA contracts — auth flow, boot identity, route gating, API base URL
+
+## Deployment and Operations
+
+- [docs/runtime/DEPLOYMENT_PROFILES.md](docs/runtime/DEPLOYMENT_PROFILES.md): All deployment profiles — single-instance, distributed-api, distributed-worker, hostile-third-party
+- [docs/runtime/RUNTIME_ONLY_DEPLOYMENT.md](docs/runtime/RUNTIME_ONLY_DEPLOYMENT.md): Runtime-only (no app plugins) deployment guide
+- [docs/runtime/OPERATOR_RUNBOOK.md](docs/runtime/OPERATOR_RUNBOOK.md): Production runbook — health checks, schema reconcile, Redis failover, stuck-run recovery
+- [docs/runtime/PROFILE_SUPPORT_MATRIX.md](docs/runtime/PROFILE_SUPPORT_MATRIX.md): Feature support matrix across all deployment profiles
+- [docs/runtime/DEGRADED_MODE_MATRIX.md](docs/runtime/DEGRADED_MODE_MATRIX.md): Service degradation matrix — which features fail, which degrade, which are unaffected
+
+## Security
+
+- [docs/runtime/SECURITY_POSTURE.md](docs/runtime/SECURITY_POSTURE.md): Security boundaries, enforcement paths, capability model, auth surface
+- [docs/runtime/SECURITY_MATRIX.md](docs/runtime/SECURITY_MATRIX.md): Threat-model matrix — attack surfaces, mitigations, residual risks
+- [docs/runtime/SANDBOX_ESCAPE_AUDIT.md](docs/runtime/SANDBOX_ESCAPE_AUDIT.md): Container sandbox escape audit, test posture, macOS/Linux/WSL2 results
+- [docs/runtime/EXTENSION_TRUST_MODEL.md](docs/runtime/EXTENSION_TRUST_MODEL.md): In-process extension trust enforcement
+
+## Governance and Release
+
+- [docs/runtime/RELEASE_CHECKLIST.md](docs/runtime/RELEASE_CHECKLIST.md): Full release verification checklist — 16 gates including sandbox certification
+- [docs/runtime/RELEASE_GATES.md](docs/runtime/RELEASE_GATES.md): Release gate definitions and pass/fail criteria
+- [docs/runtime/CROSS_REPO_COMPATIBILITY.md](docs/runtime/CROSS_REPO_COMPATIBILITY.md): Compatibility policy between aindy-runtime, aindy-sdk, and aindy-apps-monolith
+- [TECH_DEBT.md](TECH_DEBT.md): Open known issues with status and fix directions
+
+## Ecosystem
+
+aindy-runtime is the execution substrate of the A.I.N.D.Y. platform and part of the
+Masterplan Infinite Weave ecosystem.
+
+- [Masterplan Infinite Weave](https://www.the-master-plan.com/) — the broader ecosystem
+- [github.com/Masterplanner25](https://github.com/Masterplanner25) — all repos
+- [aindy-apps-monolith](https://github.com/Masterplanner25/aindy-apps-monolith) — 16 domain apps built on the plugin registry; reference implementation
+- [aindy-sdk](https://github.com/Masterplanner25/aindy-sdk) — Python SDK for external HTTP integration
+- [nodus-lang](https://github.com/Masterplanner25/Nodus) — orchestration DSL that powers aindy-runtime's flow and agent execution layer
