@@ -551,6 +551,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **OPER-DEFER-\*** — Operator panel deferred-runtime routes (constant live, NavLink gated on FEATURE_FLAGS). OPER-DEFER-001: `/platform/flows/strategies` not yet served; OPER-DEFER-002: `/automation/logs` group (monolith today); both open.
 - **SCHED-\*** — Scheduler status endpoint issues. SCHED-001/002/003: `/platform/observability/scheduler/status` returns 500 in platform-only profile (tasks domain absent); closed 2026-06-04 — direct impl replaces flow dependency; `FEATURE_FLAGS.OPERATOR_SCHEDULER_STATUS` flipped to `true`.
 - **ROUTE-REG-\*** — Router files that exist but are never registered; their endpoints return 404. ROUTE-REG-001: `watcher_router` and `db_verify_router` unregistered; closed 2026-06-03 — watcher added to ROOT_ROUTERS, db_verify added to PLATFORM_ROUTERS.
+- **ROUTE-EXTRACT-\*** — Route extraction from runtime to plugin layer. ROUTE-EXTRACT-001: `agent_router`, `memory_metrics_router`, `memory_trace_router` extracted to `aindy-apps-monolith` via `register_router()` at bootstrap time; closed 2026-06-06 (PR #37). Remaining candidates: `memory_router` (split required — Nodus execution endpoints stay), `coordination_router` (AgentRegistry model ownership gap).
 
 ---
 

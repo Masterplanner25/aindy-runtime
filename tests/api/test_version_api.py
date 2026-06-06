@@ -188,7 +188,6 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     assert "GET /api/version" in stable_routes
     assert "GET /platform/syscalls" in stable_routes
     experimental_prefixes = {entry["route_prefix"] for entry in payload["public_contract"]["http"]["experimental"]}
-    assert "/apps/agent/" in experimental_prefixes
     assert "/platform/nodes" in experimental_prefixes
     assert payload["public_contract"]["extensions"]["external_python_override"]["env_var"] == "AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS"
     assert payload["public_contract"]["extensions"]["external_python_override"]["sandboxing"] == "subprocess-boundary"
