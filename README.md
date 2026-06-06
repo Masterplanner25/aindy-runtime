@@ -1,18 +1,25 @@
 # aindy-runtime
 
-`aindy-runtime` is the extracted runtime infrastructure package from the former monolith.
+`aindy-runtime` is a self-hostable AI agent execution runtime. It provides the
+infrastructure layer for building and operating AI-powered systems: a syscall-based
+execution contract, a DAG flow engine, persistent vector memory, structured agent runs
+with approval gates, and an extensible plugin architecture for mounting domain-specific
+app layers.
 
-It contains the runtime code under `AINDY/`, the runtime-only manifests and entrypoints,
-runtime-owned documentation, and the runtime contract test suite. It does not include
-`apps/`, `apps.bootstrap`, or app-profile-only tests and docs.
+Deployable in minutes via Docker Compose. Extensible via a Python plugin registry.
+Operable via a built-in platform UI and a REST API backed by the `aindy-sdk`.
 
-Current release posture:
+**What it gives you:**
+- **Flow engine** — DAG-based execution with WAIT/RESUME semantics, priority scheduling, and dead-letter recovery
+- **Agent runtime** — structured goal → plan → approval → execute loop with capability tokens and trigger evaluation
+- **Memory system** — persistent `MemoryNode` storage with pgvector embeddings, hybrid retrieval, and memory traces
+- **Syscall contract** — single `SyscallDispatcher` entry point with schema validation, idempotency gates, and tenant isolation
+- **Platform UI** — operator dashboard for flows, agents, scheduler, and observability (served at `/platform`)
+- **Plugin registry** — mount routers, flows, jobs, syscalls, and event handlers from external Python packages at boot time
 
-- suitable for trusted internal runtime deployments
-- stable only for the explicitly declared public surfaces under `docs/runtime/`
-- not a hardened third-party extension platform
-- does not provide in-process sandboxing for trusted Python extensions
-- `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` is a trusted-code override, not a safe third-party extension mode
+**Stability:** public surfaces declared under `docs/runtime/` are stable. Extension and
+orchestration surfaces marked experimental may change between minor versions. In-process
+extensions require trusted code — this is not a sandboxed third-party plugin host.
 
 ## Quickstart
 
@@ -331,30 +338,17 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml \
 | `+ proxy profile` | 8000 (api), 80, 443 |
 | `+ proxy + docker-compose.prod.yml` | 80, 443 only |
 
-## Ownership Boundary
+## What lives here
 
-`aindy-runtime` is the execution substrate of the AINDY platform. It owns the
-runtime responsibilities required to accept and validate execution requests, manage
-runtime lifecycle, execute and resume orchestrated work, enforce tenant/capability
-contracts, and expose stable health, version, and execution surfaces.
+`aindy-runtime` owns the execution substrate: the runtime kernel, flow engine, memory
+system, agent runtime, syscall registry, platform UI, and all stable operator surfaces
+declared under `docs/runtime/`.
 
-It does **not** own SDK ergonomics, UI component systems, or backend convenience
-surfaces that are not execution-critical. App deployment assets (`aindy_plugins.json`,
-`apps.bootstrap`, `alembic/`, `client/`) belong in `aindy-apps-monolith`.
+App-layer code (`apps/`, `aindy_plugins.json`, app-profile Alembic migrations) belongs
+in [`aindy-apps-monolith`](https://github.com/Masterplanner25/aindy-apps-monolith), which
+demonstrates the plugin pattern at scale across 16 domain apps.
 
-Full canonical definition: [`docs/runtime/RUNTIME_BOUNDARY.md`](docs/runtime/RUNTIME_BOUNDARY.md)
-
-## Supported Use Today
-
-- runtime-only HTTP deployment with the documented deployment profiles
-- first-party app integration through the documented trust and ownership model
-- operator-managed use of experimental extension and orchestration surfaces
-
-Not claimed by this repo today:
-
-- third-party extension isolation
-- sandboxed in-process plugin execution
-- fully frozen external semantics for experimental HTTP, syscall-adjacent, or extension surfaces
+Full boundary definition: [`docs/runtime/RUNTIME_BOUNDARY.md`](docs/runtime/RUNTIME_BOUNDARY.md)
 
 ## Branch And PR Model
 
@@ -440,24 +434,3 @@ Deployment topology guidance lives in `docs/runtime/DEPLOYMENT_PROFILES.md`.
 Manual GitHub branch-protection and review settings guidance lives in
 `docs/runtime/GITHUB_SETTINGS_CHECKLIST.md`.
 
-## Validated Split Check
-
-Validated on `2026-05-17` in the extracted repo:
-
-```bash
-python -m pytest \
-  tests/unit/test_runtime_only_test_fixtures.py \
-  tests/unit/test_platform_only_startup.py \
-  tests/unit/test_runtime_packaging.py \
-  tests/unit/test_runtime_boundary.py \
-  tests/unit/test_runtime_compatibility_metadata.py \
-  tests/api/test_version_api.py \
-  -m runtime_only -q
-python -c "import os, json; os.environ.update({'AINDY_BOOT_MODE':'runtime-only','DATABASE_URL':'sqlite://','MONGO_URL':'','AINDY_ALLOW_SQLITE':'1','OPENAI_API_KEY':'sk-test-placeholder','DEEPSEEK_API_KEY':'ds-test-placeholder','SECRET_KEY':'runtime-integration-secret','AINDY_API_KEY':'runtime-integration-api-key','PERMISSION_SECRET':'runtime-integration-permission-secret','AINDY_SKIP_MONGO_PING':'1','SKIP_MONGO_PING':'1'}); from fastapi.testclient import TestClient; import AINDY.main as main; payload=TestClient(main.app, raise_server_exceptions=False).get('/api/version').json(); print(json.dumps(payload['runtime'], sort_keys=True)); print(json.dumps(payload['compatibility'], sort_keys=True))"
-```
-
-Observed result:
-
-- runtime-only `/api/version` reported `boot_profile=platform-only`
-- `app_plugins_loaded` was `False`
-- compatibility metadata reported `runtime_package.name=aindy-runtime`
