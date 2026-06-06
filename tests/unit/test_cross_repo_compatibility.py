@@ -11,8 +11,12 @@ Run only SDK-specific or UI-specific assertions:
     pytest tests/unit/test_cross_repo_compatibility.py -v -k sdk
     pytest tests/unit/test_cross_repo_compatibility.py -v -k ui
 
+Run only condition code assertions:
+
+    pytest tests/unit/test_cross_repo_compatibility.py -v -k condition
+
 See docs/runtime/CROSS_REPO_COMPATIBILITY.md for the policy.
-See docs/runtime/SDK_CONTRACT.md and UI_CONTRACT.md for the full surface definition.
+See docs/runtime/SDK_CONTRACT.md, UI_CONTRACT.md, and CONDITION_CODES.md for surface definitions.
 """
 from __future__ import annotations
 
@@ -243,4 +247,146 @@ def test_served_platform_routes_match_expected_prefixes_ui():
         f"Expected platform prefixes not served: {missing}. "
         "The platform SPA operator panel depends on these routes being registered. "
         "See docs/runtime/UI_CONTRACT.md §Operator Endpoint Availability."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stable operator-facing condition codes — operator / automation contract
+# ---------------------------------------------------------------------------
+
+_STABLE_RUNTIME_CONDITION_CODES = [
+    "external_python_override_enabled",
+    "redis_single_instance_mode",
+    "event_bus_local_only",
+    "event_bus_rehydration_drain_failed",
+    "event_bus_subscriber_unavailable",
+    "distributed_worker_unavailable",
+    "queue_backend_fallback",
+    "mongo_required_unavailable",
+    "mongo_optional_unavailable",
+    "dynamic_registry_restore_incomplete",
+    "dynamic_registry_restore_failed",
+    "wait_eus_rehydration_failed",
+    "flow_run_rehydration_failed",
+]
+
+_STABLE_READINESS_BLOCKER_CODES = [
+    "startup_incomplete",
+    "postgres",
+    "schema",
+    "redis",
+    "queue",
+    "event_bus",
+    "worker",
+    "scheduler",
+    "plugin_hosts",
+    "plugin_sandbox_attestation",
+]
+
+_STABLE_CONDITION_CLASSIFICATIONS = [
+    "safe_degraded",
+    "unsafe_degraded",
+    "startup_fatal",
+]
+
+_STABLE_FLOW_RUN_STATUSES = ["running", "waiting", "completed", "failed"]
+
+_STABLE_AGENT_RUN_STATUSES = [
+    "pending_approval",
+    "approved",
+    "executing",
+    "delegated",
+    "completed",
+    "failed",
+]
+
+
+def test_runtime_condition_codes_stable_operator():
+    """All stable RuntimeConditionCode values must remain importable by string.
+
+    Operators, automation tooling, and incident systems key on these string values
+    from /ready and /health responses. Removing or renaming requires a MAJOR bump.
+    See docs/runtime/CONDITION_CODES.md.
+    """
+    from AINDY.kernel.condition_codes import RuntimeConditionCode
+
+    enum_values = {member.value for member in RuntimeConditionCode}
+    missing = [code for code in _STABLE_RUNTIME_CONDITION_CODES if code not in enum_values]
+    assert missing == [], (
+        f"Stable RuntimeConditionCode value(s) removed: {missing}. "
+        "These codes appear in /ready and /health responses. "
+        "Removing them breaks operator automation. "
+        "See docs/runtime/CONDITION_CODES.md and CROSS_REPO_COMPATIBILITY.md."
+    )
+
+
+def test_readiness_blocker_codes_stable_operator():
+    """All stable ReadinessBlockerCode values must remain importable by string.
+
+    These codes appear in the required_failures list of /ready (HTTP 503) responses.
+    Operators and monitoring dashboards key on them for alerting.
+    See docs/runtime/CONDITION_CODES.md.
+    """
+    from AINDY.kernel.condition_codes import ReadinessBlockerCode
+
+    enum_values = {member.value for member in ReadinessBlockerCode}
+    missing = [code for code in _STABLE_READINESS_BLOCKER_CODES if code not in enum_values]
+    assert missing == [], (
+        f"Stable ReadinessBlockerCode value(s) removed: {missing}. "
+        "These codes appear in /ready required_failures. "
+        "See docs/runtime/CONDITION_CODES.md."
+    )
+
+
+def test_condition_classifications_stable_operator():
+    """ConditionClassification values must match the documented set."""
+    from AINDY.kernel.condition_codes import ConditionClassification
+
+    enum_values = {member.value for member in ConditionClassification}
+    missing = [c for c in _STABLE_CONDITION_CLASSIFICATIONS if c not in enum_values]
+    assert missing == [], (
+        f"Stable ConditionClassification value(s) removed: {missing}. "
+        "These classifications gate /ready readiness. "
+        "See docs/runtime/CONDITION_CODES.md."
+    )
+
+
+def test_flow_run_statuses_stable_operator():
+    """FlowRunStatus values must remain consistent with the DB schema."""
+    from AINDY.kernel.condition_codes import FlowRunStatus
+
+    enum_values = {member.value for member in FlowRunStatus}
+    missing = [s for s in _STABLE_FLOW_RUN_STATUSES if s not in enum_values]
+    assert missing == [], (
+        f"Stable FlowRunStatus value(s) removed: {missing}. "
+        "Flow status strings are stored in the database and returned in API responses. "
+        "See docs/runtime/CONDITION_CODES.md."
+    )
+
+
+def test_agent_run_statuses_stable_operator():
+    """AgentRunStatus values must remain consistent with the DB schema."""
+    from AINDY.kernel.condition_codes import AgentRunStatus
+
+    enum_values = {member.value for member in AgentRunStatus}
+    missing = [s for s in _STABLE_AGENT_RUN_STATUSES if s not in enum_values]
+    assert missing == [], (
+        f"Stable AgentRunStatus value(s) removed: {missing}. "
+        "Agent run status strings are stored in the database and returned in API responses. "
+        "See docs/runtime/CONDITION_CODES.md."
+    )
+
+
+def test_condition_codes_module_importable_operator():
+    """AINDY.kernel.condition_codes must be importable with all expected classes."""
+    from AINDY.kernel.condition_codes import (  # noqa: F401
+        AgentRunStatus,
+        AutonomyDecision,
+        ConditionClassification,
+        DependencyStatus,
+        FlowRunStatus,
+        PublicHealthStatus,
+        ReadinessBlockerCode,
+        RuntimeConditionCode,
+        SyscallResponseStatus,
     )

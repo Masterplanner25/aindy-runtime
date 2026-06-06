@@ -172,11 +172,16 @@ distinction explicit and adds decision rules for future route additions.
 
 ### 11. Which Runtime Conditions Should Become Stable Operator-Facing Codes?
 
-**Status: OPEN**
+**Status: RESOLVED (2026-06-06)**
 
-No progress. Structured operator-facing condition codes (useful for UI, SDK, automation,
-and incident tooling) have not been defined. Relevant for `AGENT-EVAL-001` and
-distributed degraded-mode signaling.
+Implemented in `AINDY/kernel/condition_codes.py`. Nine enum classes cover all
+operator-facing runtime strings: `RuntimeConditionCode` (13 codes), `ReadinessBlockerCode`
+(10 codes), `ConditionClassification` (3 tiers), `FlowRunStatus`, `AgentRunStatus`,
+`SyscallResponseStatus`, `DependencyStatus`, `PublicHealthStatus`, and `AutonomyDecision`.
+
+`startup.py` and `distributed_queue.py` import and use the enum values — no more raw
+strings in condition-emitting code paths. Machine-verified by 6 new tests in
+`tests/unit/test_cross_repo_compatibility.py`. Reference: `docs/runtime/CONDITION_CODES.md`.
 
 ---
 
@@ -189,7 +194,7 @@ distributed degraded-mode signaling.
 - [x] absolute readiness blockers by profile — substantially resolved (behavior enforced; declarative table pending)
 - [x] cross-repo compatibility commitments — substantially resolved
 - [x] extraction candidates for legacy route groups — resolved, see `ROUTE_OWNERSHIP_INVENTORY.md`
-- [ ] stable operator-facing condition codes (Q11)
+- [x] stable operator-facing condition codes (Q11) — resolved 2026-06-06, `AINDY/kernel/condition_codes.py`
 
 ---
 

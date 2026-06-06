@@ -43,6 +43,7 @@ Deploy in minutes via Docker Compose. Extend via a Python plugin registry.
 
 - [docs/runtime/SDK_CONTRACT.md](docs/runtime/SDK_CONTRACT.md): Stable surfaces the aindy-sdk depends on — auth, version, memory, platform keys
 - [docs/runtime/UI_CONTRACT.md](docs/runtime/UI_CONTRACT.md): Platform SPA contracts — auth flow, boot identity, route gating, API base URL
+- [docs/runtime/CONDITION_CODES.md](docs/runtime/CONDITION_CODES.md): Stable operator-facing condition codes — RuntimeConditionCode, ReadinessBlockerCode, FlowRunStatus, AgentRunStatus, and all status enums
 
 ## Deployment and Operations
 

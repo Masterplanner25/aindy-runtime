@@ -70,6 +70,7 @@ from AINDY.config import settings
 from AINDY.core.distributed_queue import QueueSaturatedError, validate_queue_backend
 from AINDY.core.observability_events import emit_observability_event, emit_recovery_failure
 from AINDY.kernel.circuit_breaker import CircuitOpenError
+from AINDY.kernel.condition_codes import ConditionClassification, RuntimeConditionCode
 from AINDY.kernel.errors import BootstrapDependencyError
 from AINDY.platform_layer.extension_policy import (
     external_python_override_state,
@@ -118,9 +119,9 @@ logger = logging.getLogger("AINDY.main")
 _OPENAI_PROJECT_KEY_PREFIX = "sk-" + "proj-"
 _pool_was_near_exhaustion: bool = False
 
-_SAFE_DEGRADED = "safe_degraded"
-_UNSAFE_DEGRADED = "unsafe_degraded"
-_STARTUP_FATAL = "startup_fatal"
+_SAFE_DEGRADED = ConditionClassification.SAFE_DEGRADED
+_UNSAFE_DEGRADED = ConditionClassification.UNSAFE_DEGRADED
+_STARTUP_FATAL = ConditionClassification.STARTUP_FATAL
 
 
 def _record_runtime_condition(
@@ -189,7 +190,7 @@ def _publish_boot_runtime_state() -> None:
 def _enforce_external_python_override_policy() -> None:
     override_state = external_python_override_state()
     if not override_state["enabled"]:
-        clear_api_runtime_condition("external_python_override_enabled")
+        clear_api_runtime_condition(RuntimeConditionCode.EXTERNAL_PYTHON_OVERRIDE_ENABLED)
         publish_api_runtime_state(
             external_python_override_active=False,
             external_python_override_execution_model=str(
@@ -205,7 +206,7 @@ def _enforce_external_python_override_policy() -> None:
         ),
     )
     _record_runtime_condition(
-        code="external_python_override_enabled",
+        code=RuntimeConditionCode.EXTERNAL_PYTHON_OVERRIDE_ENABLED,
         component="extension_policy",
         classification=_SAFE_DEGRADED,
         detail=(
@@ -818,7 +819,7 @@ def _validate_startup_config() -> None:
     if not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
         if not settings.REDIS_URL and not event_bus_required():
             _record_runtime_condition(
-                code="redis_single_instance_mode",
+                code=RuntimeConditionCode.REDIS_SINGLE_INSTANCE_MODE,
                 component="redis",
                 classification=_SAFE_DEGRADED,
                 detail=(
@@ -834,7 +835,7 @@ def _validate_startup_config() -> None:
                 "AINDY_REQUIRE_REDIS=true for multi-instance deployments."
             )
         else:
-            clear_api_runtime_condition("redis_single_instance_mode")
+            clear_api_runtime_condition(RuntimeConditionCode.REDIS_SINGLE_INSTANCE_MODE)
     logger.info(
         "Startup config: ENV=%s deployment_profile=%s execution_mode=%s redis_required=%s cache=%s",
         settings.ENV,
@@ -851,7 +852,7 @@ def _init_mongodb() -> None:
         mongo_status = ping_mongo()
         if mongo_status.get("status") != "ok":
             _record_runtime_condition(
-                code="mongo_optional_unavailable",
+                code=RuntimeConditionCode.MONGO_OPTIONAL_UNAVAILABLE,
                 component="mongo",
                 classification=_SAFE_DEGRADED,
                 detail=str(mongo_status.get("reason") or "MongoDB unavailable"),
@@ -862,10 +863,10 @@ def _init_mongodb() -> None:
                 mongo_status.get("reason"),
             )
         else:
-            clear_api_runtime_condition("mongo_optional_unavailable")
+            clear_api_runtime_condition(RuntimeConditionCode.MONGO_OPTIONAL_UNAVAILABLE)
     except Exception as exc:
         _handle_runtime_degradation(
-            code="mongo_required_unavailable" if settings.MONGO_REQUIRED else "mongo_optional_unavailable",
+            code=RuntimeConditionCode.MONGO_REQUIRED_UNAVAILABLE if settings.MONGO_REQUIRED else RuntimeConditionCode.MONGO_OPTIONAL_UNAVAILABLE,
             component="mongo",
             classification=_STARTUP_FATAL if settings.MONGO_REQUIRED else _SAFE_DEGRADED,
             detail=str(exc),
@@ -923,7 +924,7 @@ def _validate_queue_and_workers() -> None:
                 or "Queue backend is running in degraded fallback mode."
             )
             _handle_runtime_degradation(
-                code="queue_backend_fallback",
+                code=RuntimeConditionCode.QUEUE_BACKEND_FALLBACK,
                 component="queue",
                 classification=_UNSAFE_DEGRADED if event_bus_required() else _SAFE_DEGRADED,
                 detail=detail,
@@ -933,7 +934,7 @@ def _validate_queue_and_workers() -> None:
                 ),
             )
         else:
-            clear_api_runtime_condition("queue_backend_fallback")
+            clear_api_runtime_condition(RuntimeConditionCode.QUEUE_BACKEND_FALLBACK)
     if (
         not settings.is_testing
         and not os.getenv("PYTEST_CURRENT_TEST")
@@ -941,7 +942,7 @@ def _validate_queue_and_workers() -> None:
     ):
         if not _check_worker_presence(logger):
             _handle_runtime_degradation(
-                code="distributed_worker_unavailable",
+                code=RuntimeConditionCode.DISTRIBUTED_WORKER_UNAVAILABLE,
                 component="worker",
                 classification=_UNSAFE_DEGRADED,
                 detail=(
@@ -954,7 +955,7 @@ def _validate_queue_and_workers() -> None:
                 ),
             )
         else:
-            clear_api_runtime_condition("distributed_worker_unavailable")
+            clear_api_runtime_condition(RuntimeConditionCode.DISTRIBUTED_WORKER_UNAVAILABLE)
     try:
         from AINDY.kernel.resource_manager import get_resource_manager as _get_rm
         from AINDY.platform_layer.metrics import quota_redis_mode as _quota_mode
@@ -1161,7 +1162,7 @@ async def _restore_dynamic_registry(db_factory) -> None:
             )
         except Exception as _loader_exc:
             _handle_runtime_degradation(
-                code="dynamic_registry_restore_failed",
+                code=RuntimeConditionCode.DYNAMIC_REGISTRY_RESTORE_FAILED,
                 component="plugin_restore",
                 classification=_UNSAFE_DEGRADED,
                 detail=str(_loader_exc),
@@ -1187,7 +1188,7 @@ async def _restore_dynamic_registry(db_factory) -> None:
             )
             if not _restore_result["all_ok"]:
                 _handle_runtime_degradation(
-                    code="dynamic_registry_restore_incomplete",
+                    code=RuntimeConditionCode.DYNAMIC_REGISTRY_RESTORE_INCOMPLETE,
                     component="plugin_restore",
                     classification=_UNSAFE_DEGRADED,
                     detail=(
@@ -1205,8 +1206,8 @@ async def _restore_dynamic_registry(db_factory) -> None:
                     "Registry restore INCOMPLETE â€” some capabilities were not restored"
                 )
             if _restore_result["all_ok"]:
-                clear_api_runtime_condition("dynamic_registry_restore_failed")
-                clear_api_runtime_condition("dynamic_registry_restore_incomplete")
+                clear_api_runtime_condition(RuntimeConditionCode.DYNAMIC_REGISTRY_RESTORE_FAILED)
+                clear_api_runtime_condition(RuntimeConditionCode.DYNAMIC_REGISTRY_RESTORE_INCOMPLETE)
         finally:
             _restore_verify_db.close()
 
@@ -1268,7 +1269,7 @@ def _start_event_bus() -> None:
             from AINDY.kernel.event_bus import get_event_bus
             get_event_bus().start_subscriber()
             publish_api_runtime_state(event_bus_ready=True)
-            clear_api_runtime_condition("event_bus_subscriber_unavailable")
+            clear_api_runtime_condition(RuntimeConditionCode.EVENT_BUS_SUBSCRIBER_UNAVAILABLE)
         except Exception as _bus_exc:
             publish_api_runtime_state(event_bus_ready=False)
             if event_bus_required():
@@ -1276,7 +1277,7 @@ def _start_event_bus() -> None:
                     f"Event bus subscriber failed to start: {_bus_exc}"
                 ) from _bus_exc
             _record_runtime_condition(
-                code="event_bus_subscriber_unavailable",
+                code=RuntimeConditionCode.EVENT_BUS_SUBSCRIBER_UNAVAILABLE,
                 component="event_bus",
                 classification=_SAFE_DEGRADED,
                 detail=str(_bus_exc),
@@ -1292,7 +1293,7 @@ def _start_event_bus() -> None:
             _bus_status = _bus.get_status()
             if _bus_status.get("mode") == "local-only" and not event_bus_required():
                 _record_runtime_condition(
-                    code="event_bus_local_only",
+                    code=RuntimeConditionCode.EVENT_BUS_LOCAL_ONLY,
                     component="event_bus",
                     classification=_SAFE_DEGRADED,
                     detail=(
@@ -1309,7 +1310,7 @@ def _start_event_bus() -> None:
                     "the event bus subscriber is running (AINDY_EVENT_BUS_ENABLED=true)."
                 )
             elif _bus_status.get("mode") == "cross-instance":
-                clear_api_runtime_condition("event_bus_local_only")
+                clear_api_runtime_condition(RuntimeConditionCode.EVENT_BUS_LOCAL_ONLY)
                 logger.info(
                     "[startup] WAIT/RESUME propagation: cross-instance (Redis pub/sub active)."
                 )
@@ -1328,10 +1329,10 @@ def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
             _n_rehydrated = rehydrate_waiting_eus(_rehydrate_db)
             if _n_rehydrated:
                 logger.info("[startup] WAIT rehydration registered %d EU(s)", _n_rehydrated)
-            clear_api_runtime_condition("wait_eus_rehydration_failed")
+            clear_api_runtime_condition(RuntimeConditionCode.WAIT_EUS_REHYDRATION_FAILED)
         except Exception as _rehydrate_exc:
             _handle_runtime_degradation(
-                code="wait_eus_rehydration_failed",
+                code=RuntimeConditionCode.WAIT_EUS_REHYDRATION_FAILED,
                 component="rehydration",
                 classification=_UNSAFE_DEGRADED,
                 detail=str(_rehydrate_exc),
@@ -1357,10 +1358,10 @@ def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
                 logger.info(
                     "[startup] FlowRun rehydration registered %d run(s)", _n_flow_rehydrated
                 )
-            clear_api_runtime_condition("flow_run_rehydration_failed")
+            clear_api_runtime_condition(RuntimeConditionCode.FLOW_RUN_REHYDRATION_FAILED)
         except Exception as _flow_rehydrate_exc:
             _handle_runtime_degradation(
-                code="flow_run_rehydration_failed",
+                code=RuntimeConditionCode.FLOW_RUN_REHYDRATION_FAILED,
                 component="rehydration",
                 classification=_UNSAFE_DEGRADED,
                 detail=str(_flow_rehydrate_exc),
@@ -1380,10 +1381,10 @@ def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
             from AINDY.kernel.event_bus import get_event_bus
             get_scheduler_engine().mark_rehydration_complete()
             get_event_bus().drain_buffered_events()
-            clear_api_runtime_condition("event_bus_rehydration_drain_failed")
+            clear_api_runtime_condition(RuntimeConditionCode.EVENT_BUS_REHYDRATION_DRAIN_FAILED)
         except Exception as _drain_exc:
             _handle_runtime_degradation(
-                code="event_bus_rehydration_drain_failed",
+                code=RuntimeConditionCode.EVENT_BUS_REHYDRATION_DRAIN_FAILED,
                 component="rehydration",
                 classification=_UNSAFE_DEGRADED,
                 detail=str(_drain_exc),

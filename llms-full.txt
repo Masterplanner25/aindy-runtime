@@ -309,6 +309,40 @@ Full inventory: `docs/runtime/PUBLIC_RUNTIME_SURFACES.md`
 
 ---
 
+## Operator-Facing Condition Codes
+
+`AINDY/kernel/condition_codes.py` defines nine enum classes that formalize all
+operator-facing status strings returned by the runtime. These are the stable codes
+that operators, monitoring dashboards, automation pipelines, and the platform UI read
+from `/ready` and `/health` responses.
+
+**RuntimeConditionCode** — 13 codes emitted by `set_api_runtime_condition()` at startup.
+Appear in `required_failures` when classification is `unsafe_degraded` or `startup_fatal`,
+and in `runtime_conditions` array otherwise. Key codes: `redis_single_instance_mode`,
+`event_bus_local_only`, `queue_backend_fallback`, `distributed_worker_unavailable`,
+`wait_eus_rehydration_failed`, `flow_run_rehydration_failed`.
+
+**ReadinessBlockerCode** — 10 codes in the `required_failures` list of `/ready` (HTTP 503).
+Any code here means `status: "not_ready"`. Key codes: `startup_incomplete`, `postgres`,
+`schema`, `redis`, `worker`, `scheduler`.
+
+**ConditionClassification** — `safe_degraded` (advisory only), `unsafe_degraded` (blocks
+/ready in all profiles), `startup_fatal` (blocks /ready, fatal in production).
+
+**Entity status enums** — `FlowRunStatus` (running/waiting/completed/failed),
+`AgentRunStatus` (pending_approval/approved/executing/delegated/completed/failed).
+Stored as VARCHAR in the database; stable surface.
+
+**Other enums** — `SyscallResponseStatus` (success/error in syscall envelope),
+`DependencyStatus` (ok/degraded/unavailable/not_configured/not_running/not_applicable in
+/health/deep), `PublicHealthStatus` (ok/degraded/unhealthy), `AutonomyDecision`
+(execute/defer/ignore from trigger evaluator).
+
+Machine-verified in `tests/unit/test_cross_repo_compatibility.py` (6 new tests).
+Reference: `docs/runtime/CONDITION_CODES.md`.
+
+---
+
 ## Schema Contract
 
 Any change to a file under `AINDY/db/models/` or `AINDY/memory/memory_persistence.py`
