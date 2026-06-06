@@ -6,8 +6,9 @@
 #   full        + redis + worker. Distributed-capable, multi-process.
 #               The recommended production-shaped deployment.
 #   social      + mongo. Only if using social-layer features.
-#   monitoring  + prometheus, scraping api:8000/metrics (and, when running
-#               full, worker:8001/metrics — see monitoring/prometheus.yml).
+#   monitoring  + prometheus + grafana. Prometheus scrapes api:8000/metrics
+#               (and worker:8001/metrics when full is active). Grafana at
+#               :3000 provisions the aindy-runtime dashboard automatically.
 #
 # Config is read from AINDY/.env on the host, bind-mounted to a stable path
 # inside the container and selected via AINDY_ENV_FILE. Copy the template:
@@ -186,8 +187,27 @@ services:
     ports:
       - "9090:9090"
 
+  # ─── Grafana (monitoring profile) ───────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.6.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+
 volumes:
   postgres_data:
   redis_data:
   mongo_data:
   prometheus_data:
+  grafana_data:

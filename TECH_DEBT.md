@@ -611,30 +611,11 @@ but are no-ops now that the field defaults to `""`. Removed from `.env.example` 
 
 ## ENV-EXAMPLE-CONSOLIDATION-1 — Remove root .env.example forwarding stub
 
-**Status:** Deferred — Low Priority
+**Status:** CLOSED (2026-06-05)
 
-**Discovered:** 2026-05-27 during `.env.example` rewrite.
-
-**Context:** The runtime reads `AINDY/.env` at startup (`Settings env_file =
-Path(__file__).parent / ".env"`). The canonical operator reference is therefore
-`AINDY/.env.example` (written 2026-05-27). The repo-root `.env.example` was
-replaced with a forwarding stub that explains the split and routes operators to
-the canonical file.
-
-Two `.env.example` files — one real, one a sign pointing to the real one — is
-documentation debt. The stub earns its keep during the transitional period before
-the Docker Compose port lands, because Compose defaults to reading `root/.env`
-and operators expect to find an example there.
-
-**Resolution condition:** When `docker-compose.yml` is authored with an explicit
-`env_file: AINDY/.env` directive (or the Compose port otherwise makes the
-canonical location self-evident), delete `root/.env.example` entirely. Operators
-copying from `AINDY/.env.example` will have the correct file; Compose's explicit
-`env_file:` directive will confirm the location.
-
-**Do not resolve early** by pointing Compose at root `.env` — that couples this
-cleanup to the wrong decision (root `.env` bypasses the runtime's own `env_file`
-setting and creates a second source of truth for Settings values).
+**Implemented:** Deleted root `.env.example`. The unblock condition was already met:
+`docker-compose.yml` uses `env_file: AINDY/.env`, making `AINDY/.env.example` the
+self-evident canonical reference. The forwarding stub was no longer earning its keep.
 
 ---
 
@@ -820,80 +801,45 @@ source.
 
 ## MONITORING-GRAFANA-1 — Grafana excluded from compose monitoring profile
 
-**Status:** Deferred — Low Priority
+**Status:** CLOSED (2026-06-05)
 
-**Discovered:** 2026-05-27 during `docker-compose.yml` authoring.
+**Implemented:**
+- `monitoring/grafana/provisioning/datasources/prometheus.yml` — auto-registers the compose
+  Prometheus instance as the default Grafana datasource (proxy mode, `http://prometheus:9090`,
+  15 s scrape interval).
+- `monitoring/grafana/provisioning/dashboards/aindy.yml` — file-provider provisioning config,
+  reads dashboards from `/etc/grafana/dashboards` every 30 s.
+- `monitoring/grafana/dashboards/aindy-runtime.json` — starter dashboard with 8 panels:
+  System Health Tier (stat, threshold-colored), Active Executions (stat), Execution Rate 5m
+  (stat, reqps), DB Pool Pressure (gauge, 0–1 with yellow at 0.7 / red at 0.9), AI Circuit
+  Breaker State (stat per provider), Async Queue Depth (stat), Execution Duration p50/p95/p99
+  (timeseries, seconds), Execution Total by Status (timeseries, reqps).
+- `grafana` service added to `docker-compose.yml` monitoring profile: `grafana/grafana:11.6.1`,
+  `GF_SECURITY_ADMIN_USER/PASSWORD` from env (default `admin/admin`), `GF_USERS_ALLOW_SIGN_UP=false`,
+  provisioning + dashboards bind-mounted read-only, `grafana_data` volume, depends on Prometheus, port 3000.
+- `grafana_data` volume added to compose volumes block.
+- Compose header comment updated to mention Grafana.
 
-**Context:** The runtime ships a fully instrumented Prometheus `/metrics`
-endpoint (`routing.py:29`, `platform_layer/metrics.py`) with 40+ named metric
-families covering execution pipeline, DB pool, scheduler, async queue, LLM
-clients, embedding generation, circuit breakers, and system health tier. The
-compose `monitoring` profile includes a Prometheus service scraping
-`runtime:8000/metrics`. Grafana is excluded because no dashboards or
-provisioning config exist in the repo — a blank Grafana with no datasources
-or panels is noise, not value.
-
-**Resolution path (when dashboards are authored):**
-1. Create `monitoring/grafana/provisioning/datasources/prometheus.yml`
-   (auto-registers the compose Prometheus as a datasource).
-2. Create `monitoring/grafana/dashboards/aindy-runtime.json` (dashboard JSON,
-   can be exported from a running Grafana instance after manual setup).
-3. Add `grafana` service to the `monitoring` profile in `docker-compose.yml`:
-   ```yaml
-   grafana:
-     image: grafana/grafana:10.x.x
-     profiles: [monitoring]
-     ports: ["3001:3000"]
-     volumes:
-       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-       - grafana-data:/var/lib/grafana
-     environment:
-       GF_AUTH_ANONYMOUS_ENABLED: "true"
-       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-     depends_on: [prometheus]
-   ```
-4. Add `grafana-data` to the compose `volumes:` block.
-5. Close this entry.
-
-**Suggested first dashboards** (derived from the metric families in
-`platform_layer/metrics.py`): execution rate/latency by route, DB pool
-pressure gauge, async queue depth + DLQ depth, AI circuit breaker state,
-system health tier.
+**Usage:** `docker compose --profile monitoring up -d` → Grafana at `http://localhost:3000`.
 
 ---
 
 ## COMPOSE-PROD-PORTS-1 — Database ports published for dev convenience
 
-**Status:** Deferred — Low Priority
+**Status:** CLOSED (2026-06-05)
 
-**Discovered:** 2026-05-27 during `docker-compose.yml` authoring.
+**Implemented:** `docker-compose.prod.yml` — Compose v2 override file that uses the
+`!reset []` merge tag to clear the host port bindings on `postgres`, `redis`, and `mongo`.
+All three DB services remain reachable within the compose network; only the `api` service
+(8000) and `worker` service (8001) remain published to the host.
 
-**Context:** `docker-compose.yml` publishes host ports for `postgres` (5432),
-`redis` (6379), and `mongo` (27017). This is deliberate for local development
-and debugging — operators can connect a DB client from the host without
-exec'ing into a container. The `api` service is the only service intended for
-external traffic; DB services should only be reachable on the internal compose
-network in production.
+**Usage:**
+```
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full up -d
+```
 
-**Risk:** If `docker-compose.yml` is used unchanged on a cloud VM with a
-public IP, `postgres:5432`, `redis:6379`, and `mongo:27017` are exposed to the
-internet. This is a real security footgun.
-
-**Mitigations already in place:**
-- `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `MONGO_INITDB_ROOT_PASSWORD` must
-  be set; the services will not start with empty passwords in production.
-- `README.md` quickstart notes that published DB ports are for local
-  development only.
-
-**Resolution path:**
-1. Author `docker-compose.prod.yml` as a Compose override file that removes
-   `ports:` blocks from `postgres`, `redis`, and `mongo`. Operators deploy
-   with `docker compose -f docker-compose.yml -f docker-compose.prod.yml up`.
-2. Alternatively, document the `ports:` blocks with a `# dev only` comment and
-   gate them on a profile (e.g., `profiles: [dev]`) so the default compose up
-   does not publish them.
-
-**Trigger:** Before any production cloud deployment of the compose stack.
+Requires Docker Compose v2.24+ (`!reset` merge tag). Version noted in the file header.
 
 ---
 
