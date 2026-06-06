@@ -24,8 +24,91 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _run_sandbox_check() -> NoReturn:
-    """Print sandbox posture as JSON. Exit 0 if requirements satisfied, 1 if not, 2 on error."""
+def _format_sandbox_summary(payload: dict) -> str:
+    """Render sandbox payload as a concise human-readable summary (~20 lines)."""
+    lines: list[str] = []
+    w = lines.append
+
+    posture = payload.get("plugin_sandbox_posture", {})
+    platform_data = payload.get("plugin_sandbox_platform", {})
+    sv = payload.get("sandbox_verification_posture", {})
+    escape = payload.get("escape_test_posture", {})
+    trusted = payload.get("trusted_python_execution", {})
+
+    current = posture.get("current", {})
+    req = posture.get("requirement_status", {})
+    env = platform_data.get("current_environment", {})
+    backend = platform_data.get("current_container_backend_detection", {})
+
+    platform_label = env.get("label") or platform_data.get("current_platform", "unknown")
+    highest_tier = env.get("highest_supported_assurance_class", "unknown")
+    prod_safe = env.get("production_safe_third_party_plugin_execution", False)
+    reqs_met = req.get("assurance_class_satisfied", False) and req.get("certification_tier_satisfied", False)
+
+    w(f"aindy-runtime sandbox  (v{__version__})")
+    w("")
+    w(f"Platform:             {platform_label}")
+    w(f"Highest sandbox tier: {highest_tier}")
+    w(f"Production-safe:      {'YES' if prod_safe else 'NO'}")
+    w("")
+
+    runtime_name = backend.get("runtime", "unknown")
+    linux_backend = backend.get("linux_container_backend", False)
+    backend_note = backend.get("operator_note") or backend.get("detection_error") or ""
+    w("Container backend:")
+    w(f"  Runtime:          {runtime_name}")
+    w(f"  Linux containers: {'YES' if linux_backend else 'NO'}")
+    if backend_note:
+        w(f"  Note:             {backend_note}")
+    w("")
+
+    runner = current.get("runner_type", "unknown")
+    assurance = current.get("assurance_class", "unknown")
+    cert_tier = current.get("certification_tier", "unknown")
+    cert_status = current.get("certification_status", "unknown")
+    w(f"Active runner:        {runner}")
+    w(f"Assurance class:      {assurance}")
+    w(f"Certification tier:   {cert_tier}  [{cert_status}]")
+    w(f"Requirements met:     {'YES' if reqs_met else 'NO'}")
+    w("")
+
+    # Sandbox verification (DB-layer: kernel-observable vs worker-self-report)
+    sv_method = sv.get("verification_method", "skipped" if sv.get("skipped") else "unknown")
+    sv_ceiling = sv.get("assurance_ceiling", "")
+    w(f"Sandbox verification: {sv_method}" + (f"  [{sv_ceiling}]" if sv_ceiling else ""))
+
+    # Escape test suite posture (from tests/sandbox/sandbox_escape_results.json)
+    ep = escape.get("posture", "not_run")
+    ep_last = escape.get("last_run", "")
+    ep_host = escape.get("host_platform", "")
+    ep_gaps = escape.get("gaps", [])
+    ep_note = escape.get("operator_note", "")
+    w(f"Escape test posture:  {ep}" + (f"  (last run: {ep_last}, platform: {ep_host})" if ep_last else ""))
+    if ep_note and ep != "not_run":
+        w(f"  note: {ep_note}")
+    if ep_gaps:
+        for gap in ep_gaps[:3]:
+            w(f"  gap: {gap}")
+
+    w("")
+    trusted_count = trusted.get("total_count", 0)
+    exec_model = trusted.get("execution_model", "")
+    w(f"Trusted Python extensions: {trusted_count}  ({exec_model})" if exec_model else f"Trusted Python extensions: {trusted_count}")
+
+    degraded = env.get("degraded_modes", [])
+    if degraded:
+        w("")
+        w("Degraded modes:")
+        for mode in degraded[:4]:
+            w(f"  - {mode}")
+
+    w("")
+    w("For full machine-readable output: aindy-runtime sandbox --json")
+    return "\n".join(lines)
+
+
+def _run_sandbox_check(output_json: bool = False) -> NoReturn:
+    """Print sandbox posture. Human-readable by default; --json for raw JSON output."""
     import json
     import sys as _sys
     from AINDY.platform_layer.deployment_contract import (
@@ -33,7 +116,10 @@ def _run_sandbox_check() -> NoReturn:
         plugin_sandbox_assurance_posture,
     )
     from AINDY.platform_layer.extension_runtime_inventory import trusted_python_execution_inventory
-    from AINDY.platform_layer.sandbox_runner import sandbox_platform_capability_matrix
+    from AINDY.platform_layer.sandbox_runner import (
+        sandbox_escape_test_posture,
+        sandbox_platform_capability_matrix,
+    )
 
     try:
         from AINDY.platform_layer.health_service import sandbox_verification_posture
@@ -47,6 +133,7 @@ def _run_sandbox_check() -> NoReturn:
             "plugin_sandbox_posture": posture,
             "plugin_sandbox_platform": sandbox_platform_capability_matrix(),
             "sandbox_verification_posture": _sv_posture,
+            "escape_test_posture": sandbox_escape_test_posture(),
             "trusted_python_execution": trusted_python_execution_inventory(),
             "runtime_conditions": get_api_runtime_conditions(),
         }
@@ -55,7 +142,10 @@ def _run_sandbox_check() -> NoReturn:
             req_status.get("assurance_class_satisfied", False)
             and req_status.get("certification_tier_satisfied", False)
         )
-        print(json.dumps(payload, indent=2))
+        if output_json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(_format_sandbox_summary(payload))
         raise SystemExit(0 if satisfied else 1)
     except SystemExit:
         raise
@@ -158,14 +248,22 @@ def main() -> None:
             "DATABASE_URL must be set to a valid PostgreSQL URI."
         ),
     )
-    subparsers.add_parser(
+    sandbox_parser = subparsers.add_parser(
         "sandbox",
         help="Report sandbox capabilities and exit.",
         description=(
-            "Print sandbox assurance posture as JSON and exit. "
+            "Report sandbox assurance posture and exit. "
+            "Prints a human-readable summary by default. "
             "Exit 0 if all requirements are satisfied, 1 if not, 2 on error. "
             "Does not require a running database."
         ),
+    )
+    sandbox_parser.add_argument(
+        "--json",
+        dest="output_json",
+        action="store_true",
+        default=False,
+        help="Output raw JSON instead of the human-readable summary.",
     )
 
     auth_parser = subparsers.add_parser(
@@ -195,7 +293,7 @@ def main() -> None:
     if args.command == "serve":
         _serve()
     elif args.command == "sandbox":
-        _run_sandbox_check()
+        _run_sandbox_check(output_json=getattr(args, "output_json", False))
     elif args.command == "auth":
         if args.auth_command == "promote-admin":
             _promote_admin(args.email)
