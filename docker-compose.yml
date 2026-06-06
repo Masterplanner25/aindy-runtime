@@ -9,6 +9,10 @@
 #   monitoring  + prometheus + grafana. Prometheus scrapes api:8000/metrics
 #               (and worker:8001/metrics when full is active). Grafana at
 #               :3000 provisions the aindy-runtime dashboard automatically.
+#   proxy       + nginx reverse proxy on ports 80/443. Use for cloud VM or
+#               any deployment where a domain name / TLS is required.
+#               Set NGINX_CONF=nginx.tls.conf for HTTPS (see nginx/nginx.tls.conf).
+#               Combine with docker-compose.prod.yml to close internal ports.
 #
 # Config is read from AINDY/.env on the host, bind-mounted to a stable path
 # inside the container and selected via AINDY_ENV_FILE. Copy the template:
@@ -24,6 +28,11 @@
 #
 # With metrics:
 #   docker compose --profile full --profile monitoring up -d
+#
+# Cloud / remote (nginx + TLS, ports locked down):
+#   NGINX_CONF=nginx.tls.conf \
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     --profile full --profile proxy up -d
 
 services:
   # ─── Database (always present) ──────────────────────────────────────────
@@ -204,6 +213,31 @@ services:
       - prometheus
     ports:
       - "3000:3000"
+
+  # ─── nginx reverse proxy (proxy profile) ───────────────────────────────
+  #
+  # Sits in front of the api container and handles port 80/443.
+  # Plain HTTP by default; set NGINX_CONF=nginx.tls.conf for production TLS.
+  #
+  # TLS quickstart:
+  #   1. Obtain certs: certbot certonly --standalone -d yourdomain.com
+  #   2. Mount certs via docker-compose.override.yml (see nginx/nginx.tls.conf)
+  #   3. Set server_name in nginx/nginx.tls.conf
+  #   4. Set ALLOWED_ORIGINS=https://yourdomain.com in AINDY/.env
+  #   5. NGINX_CONF=nginx.tls.conf docker compose --profile proxy up -d
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: ["proxy"]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/${NGINX_CONF:-nginx.conf}:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:

@@ -40,6 +40,9 @@ uvicorn AINDY.runtime_only:app   # equivalent ASGI form
 docker compose up -d                                        # api + postgres + redis + mongo
 docker compose --profile full up -d                        # + worker
 docker compose --profile full --profile monitoring up -d   # + Prometheus
+NGINX_CONF=nginx.tls.conf \
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile full --profile proxy up -d                     # + nginx TLS, all internal ports closed
 ```
 
 ---

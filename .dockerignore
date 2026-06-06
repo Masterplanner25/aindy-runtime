@@ -105,3 +105,7 @@ Dockerfile
 Dockerfile.*
 docker-compose*.yml
 .dockerignore
+
+
+# ─── nginx — compose-only, not needed inside the api image ───────────
+nginx/

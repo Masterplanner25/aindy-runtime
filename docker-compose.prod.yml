@@ -1,10 +1,16 @@
 # A.I.N.D.Y. Runtime — production port overrides
 #
-# Removes host port bindings from database services so they are reachable only
-# within the compose network. The API (8000) and worker (8001) remain published.
+# Removes all host port bindings so no service is reachable from outside the
+# compose network. Use this overlay whenever the proxy profile (nginx) handles
+# external traffic — only ports 80 and 443 on the nginx container are exposed.
 #
 # Usage:
-#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   # With nginx (recommended for cloud/VM):
+#   NGINX_CONF=nginx.tls.conf \
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#     --profile full --profile proxy up -d
+#
+#   # Without nginx (direct access, own firewall):
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full up -d
 #
 # Requires Docker Compose v2.24+ (supports the !reset merge tag).
@@ -12,11 +18,21 @@
 
 services:
   postgres:
-    # Remove host binding — DB is only reachable within the compose network.
+    # Remove host binding — DB reachable only within the compose network.
     ports: !reset []
 
   redis:
     ports: !reset []
 
   mongo:
+    ports: !reset []
+
+  api:
+    # Remove host binding — nginx handles all external traffic on 80/443.
+    # Direct access to :8000 from outside the host is blocked.
+    ports: !reset []
+
+  worker:
+    # Metrics endpoint (:8001) is internal-only when using this overlay.
+    # Prometheus reaches it via the compose network; no external exposure needed.
     ports: !reset []
