@@ -38,26 +38,22 @@ all `settings.` call sites with `get_settings().`; gate log initialization insid
 
 ## CLI-SANDBOX-FORMAT-1: aindy-runtime sandbox returns raw JSON to terminal
 
-**Status:** Tracked, deferred to 1.0.1 or 1.1.
+**Status:** CLOSED (2026-06-05)
 
-**Discovered:** 2026-05-26 during pre-tag UX visual verification.
-
-**Context:** `aindy-runtime sandbox` currently emits a 297-line structured JSON document directly to stdout. The data is correct and complete (platform detection, container backend status with real failure-mode details, full capability matrix for all four supported platforms, sandbox verification posture, trusted Python inventory). The format is appropriate for machine consumption (API endpoints, audit pipelines, capability-matching engines) but presents friction for a human running the command at a terminal.
-
-The most actionable information — e.g., "Docker Desktop daemon not reachable, start Docker Desktop and enable Linux containers mode" — is nested five levels deep in `plugin_sandbox_platform.current_container_backend_detection.operator_note`. A human user wanting to know "does sandboxing work on my system, and if not what do I do" must mentally parse the JSON to extract that answer.
-
-**Resolution path:**
-1. Add a human-readable default output mode that summarizes the JSON document into ~15 lines covering: platform, highest supported sandbox tier, production-safe status, container runtime detection, the most relevant degraded-mode reason and its fix, database verification status, trusted Python summary.
-2. Move current JSON output behind a `--json` flag for machine consumers.
-3. Keep the underlying posture-collection logic unchanged. This is a presentation-layer fix, not a data-layer change.
-
-**Open question for resolution time:** Should `--json` be the only path to machine output, or should there be other formats (`--format yaml`, `--format compact`)? Defer the decision until use cases surface; YAGNI until then.
-
-**Reopen trigger:** Pre-1.0.1 release work, OR first user report of sandbox output confusion, whichever comes first.
-
-**Estimated effort:** ~1 hour for the human-readable formatter + `--json` flag plumbing. Low regression risk because the change is additive.
-
-**Discovered via:** Pre-tag UX visual verification (the audit-arc that found this also confirmed every other v1.0 surface, and the JSON-wall finding was deemed correct-but-unpolished rather than incorrect — see conversation history for the full reasoning). The "Discovered via" line is intentional — it captures the reasoning for not fixing now, so future-you doesn't reopen this thinking "why was this allowed to ship."
+**Implemented:**
+- `_format_sandbox_summary(payload)` in `AINDY/runtime_only.py` — renders the full
+  payload as a ~25-line human-readable summary: platform, highest tier, production-safe
+  status, container backend detection + operator note, active runner/assurance/certification,
+  requirements met, sandbox verification method, escape test posture (from
+  `sandbox_escape_test_posture()`), trusted Python extension count, degraded modes list.
+- Default `aindy-runtime sandbox` output is now human-readable.
+- `aindy-runtime sandbox --json` restores the full machine-readable JSON (now also
+  includes `escape_test_posture` key alongside the original five).
+- `_run_sandbox_check(output_json=False)` — new parameter; `--json` flag wired through
+  argparse `dest="output_json"`.
+- Tests updated in `test_runtime_cli.py` (9 total pass): JSON tests updated to pass
+  `output_json=True`; new `test_sandbox_check_default_produces_human_readable_summary`
+  verifies the human-readable format; patch list extended with `sandbox_escape_test_posture`.
 
 ---
 
@@ -528,23 +524,13 @@ Trigger: when cloud onboarding begins or when a regulated operator requires it.
 
 ## LOCAL-1 — No documented production upgrade path for local installs
 
-Status: Deferred — Low Priority
+Status: CLOSED (2026-06-05)
 
-Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area E, finding LOCAL-1.
-
-The README documents only the dev install path (`pip install -e .`). There is no
-documented production upgrade procedure: pip upgrade command, environment variable
-sequence (`AINDY_SCHEMA_RECONCILE=true`), or rollback guidance. Local-install
-operators face this gap at every upgrade.
-
-Resolution path: add an "Upgrading" section to `README.md` and/or
-`RUNTIME_ONLY_DEPLOYMENT.md` covering:
-1. `pip install --upgrade aindy-runtime`
-2. Verify new version: `aindy-runtime version` (or `/api/version` while running)
-3. Set `AINDY_SCHEMA_RECONCILE=true` before restart when a schema bump is expected
-4. Rollback: reinstall the previous version and restart without reconcile
-
-Trigger: before the 1.0.0 release.
+Added `## Upgrading` section to `README.md` covering: `pip install --upgrade`,
+version verification via `aindy-runtime --version` / `/api/version`, the
+`AINDY_SCHEMA_RECONCILE=true` restart sequence for schema-bumping releases,
+Docker Compose pull-and-up flow, and rollback guidance (reinstall previous
+version; note that rolling back across a schema change requires a DB restore).
 
 ---
 
@@ -568,25 +554,17 @@ Trigger: before the 1.0.0 release.
 
 ## EVENTBUS-REDIS-URL-CONSOLIDATION-1 — Deprecate AINDY_REDIS_URL alias
 
-**Status:** Deferred — Low Priority
+**Status:** 1.x step CLOSED (2026-06-05) — 2.0 removal still pending.
 
-**Discovered:** 2026-05-27 during `.env.example` drift audit.
+**1.x implemented:** `resolve_event_bus_redis_url()` now emits `DeprecationWarning`
+when `AINDY_REDIS_URL` is set, directing operators to migrate to `REDIS_URL`.
+`import warnings` added to `event_bus.py`; 2 regression tests added to
+`tests/unit/test_event_bus_redis_url.py` (9 total pass).
 
-**Context:** `AINDY/kernel/event_bus.py` historically read only `AINDY_REDIS_URL`, ignoring
-the standard `REDIS_URL` env var used by cache and job queue. Fixed in 1.0.0 (see CHANGELOG):
-`resolve_event_bus_redis_url()` now implements `AINDY_REDIS_URL → REDIS_URL → localhost default`
-precedence. `AINDY_REDIS_URL` is documented as deprecated since 1.0.0.
-
-**Consolidation path:**
-1. **1.0.x** — both honored; `AINDY_REDIS_URL` takes precedence; deprecation noted in
-   CHANGELOG, `config.py`, and `.env.example` (commented-out form).
-2. **1.x** — emit a `DeprecationWarning` (via Python `warnings.warn`) at startup when
-   `AINDY_REDIS_URL` is set, directing operators to migrate to `REDIS_URL`.
-3. **2.0** — remove `AINDY_REDIS_URL` from `event_bus.py`, `config.py`, and `.env.example`.
-
-**Audit note:** Before 2.0 removal, grep the codebase for any other `AINDY_*` aliases that
-shadow standard env vars (e.g., `AINDY_REDIS_URL` vs `REDIS_URL`, `AINDY_SKIP_MONGO_PING` vs
-`SKIP_MONGO_PING`). Consolidate all of them in a single pass rather than one at a time.
+**Remaining (2.0 step):** Remove `AINDY_REDIS_URL` from `event_bus.py`, `config.py`,
+and `.env.example`. Before that removal, grep for other `AINDY_*` aliases that shadow
+standard env vars (e.g., `AINDY_SKIP_MONGO_PING` vs `SKIP_MONGO_PING`) and consolidate
+them in a single pass.
 
 ---
 
