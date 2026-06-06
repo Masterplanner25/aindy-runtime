@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router-dom
 import ErrorBoundary, { RouteErrorBoundary } from "./components/shared/ErrorBoundary";
 import { AuthProvider, useAuth } from "@aindy/ui-kit";
 import { SystemProvider, useSystem } from "@aindy/ui-kit";
+import { FEATURE_FLAGS } from "./api/_routes.js";
 
 import LoginPage from "./components/platform/LoginPage";
 import NotAdmin from "./components/platform/NotAdmin";
@@ -81,7 +82,9 @@ export default function PlatformApp() {
                         <Route path="/executions" element={platformRoute("Executions", <ExecutionConsole />)} />
                         <Route path="/approvals" element={platformRoute("Approvals", <AgentApprovalInbox />)} />
                         <Route path="/registry" element={platformRoute("Registry", <AgentRegistry />)} />
-                        <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
+                        {FEATURE_FLAGS.RIPPLETRACE_VIEWER && (
+                          <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
+                        )}
                       </Route>
 
                       <Route path="*" element={<Navigate to="/agent" replace />} />
