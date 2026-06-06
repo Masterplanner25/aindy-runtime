@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,6 +28,10 @@ SCHEMA_STATE_BLANK_BOOTSTRAP = "blank_bootstrap"
 SCHEMA_STATE_COMPATIBLE = "compatible"
 SCHEMA_STATE_UPGRADE_REQUIRED = "upgrade_required"
 SCHEMA_STATE_INCOMPATIBLE_MANUAL = "incompatible_manual"
+
+# Fixed bigint key for the blank-DB bootstrap advisory lock.
+# Must never change once deployed — advisory locks are keyed by this integer.
+_BOOTSTRAP_ADVISORY_LOCK_KEY = 4149443900
 
 _SAFE_RECONCILE_CODES = {"missing_table", "missing_column"}
 REMEDIATION_BOOTSTRAP = "bootstrap"
@@ -525,7 +530,31 @@ def reconcile_runtime_schema(bind: Engine | Connection | Session) -> SchemaRepor
     report = inspect_runtime_schema(resolved)
 
     if report.state == SCHEMA_STATE_BLANK_DATABASE:
-        Base.metadata.create_all(bind=resolved, tables=_runtime_owned_tables(), checkfirst=True)
+        _url = str(resolved.url if isinstance(resolved, Engine) else resolved.engine.url)
+        _is_postgres = not _url.startswith("sqlite")
+        if _is_postgres:
+            # Acquire a PostgreSQL session-level advisory lock to prevent a multi-instance
+            # cold-start CREATE TABLE race. pg_advisory_lock blocks until the lock is free,
+            # so the second instance waits while the first bootstraps. Re-inspect after
+            # acquiring to detect the case where another instance bootstrapped while we waited.
+            _conn_ctx = resolved.begin() if isinstance(resolved, Engine) else nullcontext(resolved)
+            with _conn_ctx as _conn:
+                _conn.execute(
+                    text("SELECT pg_advisory_lock(:key)"),
+                    {"key": _BOOTSTRAP_ADVISORY_LOCK_KEY},
+                )
+                try:
+                    if inspect_runtime_schema(_conn).state == SCHEMA_STATE_BLANK_DATABASE:
+                        Base.metadata.create_all(
+                            bind=_conn, tables=_runtime_owned_tables(), checkfirst=True
+                        )
+                finally:
+                    _conn.execute(
+                        text("SELECT pg_advisory_unlock(:key)"),
+                        {"key": _BOOTSTRAP_ADVISORY_LOCK_KEY},
+                    )
+        else:
+            Base.metadata.create_all(bind=resolved, tables=_runtime_owned_tables(), checkfirst=True)
         validated = inspect_runtime_schema(resolved)
         return SchemaReport(
             ok=validated.ok,

@@ -38,41 +38,46 @@ all `settings.` call sites with `get_settings().`; gate log initialization insid
 
 ## CLI-SANDBOX-FORMAT-1: aindy-runtime sandbox returns raw JSON to terminal
 
-**Status:** Tracked, deferred to 1.0.1 or 1.1.
+**Status:** CLOSED (2026-06-05)
 
-**Discovered:** 2026-05-26 during pre-tag UX visual verification.
-
-**Context:** `aindy-runtime sandbox` currently emits a 297-line structured JSON document directly to stdout. The data is correct and complete (platform detection, container backend status with real failure-mode details, full capability matrix for all four supported platforms, sandbox verification posture, trusted Python inventory). The format is appropriate for machine consumption (API endpoints, audit pipelines, capability-matching engines) but presents friction for a human running the command at a terminal.
-
-The most actionable information — e.g., "Docker Desktop daemon not reachable, start Docker Desktop and enable Linux containers mode" — is nested five levels deep in `plugin_sandbox_platform.current_container_backend_detection.operator_note`. A human user wanting to know "does sandboxing work on my system, and if not what do I do" must mentally parse the JSON to extract that answer.
-
-**Resolution path:**
-1. Add a human-readable default output mode that summarizes the JSON document into ~15 lines covering: platform, highest supported sandbox tier, production-safe status, container runtime detection, the most relevant degraded-mode reason and its fix, database verification status, trusted Python summary.
-2. Move current JSON output behind a `--json` flag for machine consumers.
-3. Keep the underlying posture-collection logic unchanged. This is a presentation-layer fix, not a data-layer change.
-
-**Open question for resolution time:** Should `--json` be the only path to machine output, or should there be other formats (`--format yaml`, `--format compact`)? Defer the decision until use cases surface; YAGNI until then.
-
-**Reopen trigger:** Pre-1.0.1 release work, OR first user report of sandbox output confusion, whichever comes first.
-
-**Estimated effort:** ~1 hour for the human-readable formatter + `--json` flag plumbing. Low regression risk because the change is additive.
-
-**Discovered via:** Pre-tag UX visual verification (the audit-arc that found this also confirmed every other v1.0 surface, and the JSON-wall finding was deemed correct-but-unpolished rather than incorrect — see conversation history for the full reasoning). The "Discovered via" line is intentional — it captures the reasoning for not fixing now, so future-you doesn't reopen this thinking "why was this allowed to ship."
+**Implemented:**
+- `_format_sandbox_summary(payload)` in `AINDY/runtime_only.py` — renders the full
+  payload as a ~25-line human-readable summary: platform, highest tier, production-safe
+  status, container backend detection + operator note, active runner/assurance/certification,
+  requirements met, sandbox verification method, escape test posture (from
+  `sandbox_escape_test_posture()`), trusted Python extension count, degraded modes list.
+- Default `aindy-runtime sandbox` output is now human-readable.
+- `aindy-runtime sandbox --json` restores the full machine-readable JSON (now also
+  includes `escape_test_posture` key alongside the original five).
+- `_run_sandbox_check(output_json=False)` — new parameter; `--json` flag wired through
+  argparse `dest="output_json"`.
+- Tests updated in `test_runtime_cli.py` (9 total pass): JSON tests updated to pass
+  `output_json=True`; new `test_sandbox_check_default_produces_human_readable_summary`
+  verifies the human-readable format; patch list extended with `sandbox_escape_test_posture`.
 
 ---
 
 ## IDEM-6 — Multi-Instance Bootstrap Race
 
-Status: Deferred — Low Priority
+Status: CLOSED (2026-06-05)
 
 Source: `docs/runtime/IDEMPOTENCY_CONTRACT.md` Open Question #1.
 
-First-ever blank-DB deploy with multiple runtime instances starting simultaneously can
-race on `CREATE TABLE`. `checkfirst=True` in `create_all` mitigates but does not fully
-eliminate the race. Fix is `pg_try_advisory_lock` around the bootstrap path in
-`AINDY/db/database.py` (or whichever function calls `Base.metadata.create_all`).
+Implemented: `pg_advisory_lock(_BOOTSTRAP_ADVISORY_LOCK_KEY)` wraps the blank-DB
+bootstrap path in `reconcile_runtime_schema()` (`AINDY/db/schema_contract.py`).
+The lock is acquired with a blocking call (waits rather than fails), the schema state
+is re-inspected under the lock (TOCTOU guard — a second instance that wins the wait
+finds the DB already bootstrapped and skips `create_all`), and the lock is explicitly
+released in a `finally` block so it is freed even when `create_all` raises.
 
-Trigger: revisit before any multi-instance cold-start deployment in production.
+Lock key: `_BOOTSTRAP_ADVISORY_LOCK_KEY = 4149443900` (stable bigint, must not change).
+SQLite paths are not affected (advisory lock is PostgreSQL-only; the check gates on
+`not url.startswith("sqlite")`).
+
+Regression coverage: 3 new unit tests in `tests/unit/test_runtime_schema_contract.py`
+(`test_reconcile_blank_db_acquires_advisory_lock_for_postgres`,
+`test_reconcile_blank_db_skips_create_all_when_another_instance_bootstrapped`,
+`test_reconcile_blank_db_advisory_unlock_called_even_on_create_all_failure`).
 
 ---
 
@@ -528,23 +533,13 @@ Trigger: when cloud onboarding begins or when a regulated operator requires it.
 
 ## LOCAL-1 — No documented production upgrade path for local installs
 
-Status: Deferred — Low Priority
+Status: CLOSED (2026-06-05)
 
-Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area E, finding LOCAL-1.
-
-The README documents only the dev install path (`pip install -e .`). There is no
-documented production upgrade procedure: pip upgrade command, environment variable
-sequence (`AINDY_SCHEMA_RECONCILE=true`), or rollback guidance. Local-install
-operators face this gap at every upgrade.
-
-Resolution path: add an "Upgrading" section to `README.md` and/or
-`RUNTIME_ONLY_DEPLOYMENT.md` covering:
-1. `pip install --upgrade aindy-runtime`
-2. Verify new version: `aindy-runtime version` (or `/api/version` while running)
-3. Set `AINDY_SCHEMA_RECONCILE=true` before restart when a schema bump is expected
-4. Rollback: reinstall the previous version and restart without reconcile
-
-Trigger: before the 1.0.0 release.
+Added `## Upgrading` section to `README.md` covering: `pip install --upgrade`,
+version verification via `aindy-runtime --version` / `/api/version`, the
+`AINDY_SCHEMA_RECONCILE=true` restart sequence for schema-bumping releases,
+Docker Compose pull-and-up flow, and rollback guidance (reinstall previous
+version; note that rolling back across a schema change requires a DB restore).
 
 ---
 
@@ -568,25 +563,17 @@ Trigger: before the 1.0.0 release.
 
 ## EVENTBUS-REDIS-URL-CONSOLIDATION-1 — Deprecate AINDY_REDIS_URL alias
 
-**Status:** Deferred — Low Priority
+**Status:** 1.x step CLOSED (2026-06-05) — 2.0 removal still pending.
 
-**Discovered:** 2026-05-27 during `.env.example` drift audit.
+**1.x implemented:** `resolve_event_bus_redis_url()` now emits `DeprecationWarning`
+when `AINDY_REDIS_URL` is set, directing operators to migrate to `REDIS_URL`.
+`import warnings` added to `event_bus.py`; 2 regression tests added to
+`tests/unit/test_event_bus_redis_url.py` (9 total pass).
 
-**Context:** `AINDY/kernel/event_bus.py` historically read only `AINDY_REDIS_URL`, ignoring
-the standard `REDIS_URL` env var used by cache and job queue. Fixed in 1.0.0 (see CHANGELOG):
-`resolve_event_bus_redis_url()` now implements `AINDY_REDIS_URL → REDIS_URL → localhost default`
-precedence. `AINDY_REDIS_URL` is documented as deprecated since 1.0.0.
-
-**Consolidation path:**
-1. **1.0.x** — both honored; `AINDY_REDIS_URL` takes precedence; deprecation noted in
-   CHANGELOG, `config.py`, and `.env.example` (commented-out form).
-2. **1.x** — emit a `DeprecationWarning` (via Python `warnings.warn`) at startup when
-   `AINDY_REDIS_URL` is set, directing operators to migrate to `REDIS_URL`.
-3. **2.0** — remove `AINDY_REDIS_URL` from `event_bus.py`, `config.py`, and `.env.example`.
-
-**Audit note:** Before 2.0 removal, grep the codebase for any other `AINDY_*` aliases that
-shadow standard env vars (e.g., `AINDY_REDIS_URL` vs `REDIS_URL`, `AINDY_SKIP_MONGO_PING` vs
-`SKIP_MONGO_PING`). Consolidate all of them in a single pass rather than one at a time.
+**Remaining (2.0 step):** Remove `AINDY_REDIS_URL` from `event_bus.py`, `config.py`,
+and `.env.example`. Before that removal, grep for other `AINDY_*` aliases that shadow
+standard env vars (e.g., `AINDY_SKIP_MONGO_PING` vs `SKIP_MONGO_PING`) and consolidate
+them in a single pass.
 
 ---
 
@@ -653,46 +640,26 @@ setting and creates a second source of truth for Settings values).
 
 ## CONFIG-ENV-EXAMPLE-DRIFT-1 — No automated check for .env.example / Settings drift
 
-**Status:** Deferred — Low Priority
+**Status:** CLOSED (2026-06-05)
 
-**Discovered:** 2026-05-27 during `.env.example` drift audit.
+**Implemented:**
+- `scripts/check_env_example_coverage.py` — AST-parses all `AINDY/**/*.py` for
+  `os.getenv()` / `os.environ.get()` calls and `Settings` field names; parses
+  `AINDY/.env.example` for all variable names (commented-out and uncommented);
+  reports uncovered gaps. Exclusion list covers test-only, OS/system, deprecated
+  aliases, Docker Compose infra, and computed/internal vars.
+- `python scripts/check_env_example_coverage.py --verbose` for full counts.
+- `python scripts/check_env_example_coverage.py --strict` exits 1 on any gap
+  (for future enforcement).
+- Added as advisory CI step in `.github/workflows/runtime-ci.yml` ("Check
+  env-example coverage (advisory)") — runs, reports, exits 0 until gap list is
+  resolved. Comment in CI step explains how to promote to `--strict`.
 
-**Context:** The drift audit (2026-05-27) identified ~40 environment variables
-active in the codebase that were absent from the then-current `.env.example`.
-The audit was manual: grep `os.getenv(...)` calls across `AINDY/**/*.py`,
-cross-reference against `Settings` fields in `config.py`, diff against
-`.env.example`. This process is not reproducible on demand without repeating the
-manual work.
-
-Every new `os.getenv("NEW_VAR")` call or `Settings` field added without a
-corresponding `.env.example` entry silently widens the drift gap.
-
-**Resolution path:**
-1. Write `scripts/check_env_example_coverage.py` that:
-   - Extracts all `os.getenv("VAR")` string literals from `AINDY/**/*.py` via AST
-     parse (not regex, to handle multi-line calls).
-   - Extracts all field names from `Settings` in `config.py`.
-   - Parses `AINDY/.env.example` for defined variable names (both uncommented and
-     commented-out forms).
-   - Reports variables present in code but absent from `.env.example`.
-2. Add the script to CI as an advisory check (warn, not fail) initially; promote
-   to blocking after a false-positive-free run period.
-
-**Intentional exclusions the script must handle:**
-- Test-only vars: `PYTEST_CURRENT_TEST`, `TESTING`, `TEST_MODE`,
-  `AINDY_TEST_STRICT_SYSTEM_EVENTS`, `AINDY_DEBUG_SYSTEM_EVENTS`.
-- System/OS vars: `HOSTNAME`, `PATH`, `SYSTEMROOT`.
-- Deprecated aliases already documented in `.env.example`: `AINDY_REDIS_URL`,
-  `AINDY_STUCK_RUN_THRESHOLD_MINUTES`.
-- Infrastructure-only Docker Compose vars: `POSTGRES_*`, `MONGO_INITDB_*`.
-- Computed/internal fields: `VERSION`, `API_VERSION`, `API_MIN_CLIENT_VERSION`.
-
-**Design note for implementation:** Consider a sentinel-comment annotation in
-`config.py` itself (e.g., `# env_example: skip`) rather than maintaining a
-separate external exclusion list that drifts from the code. Adding a new
-`Settings` field then forces a conscious decision — annotate it as skip-worthy
-or accept that it needs a `.env.example` entry — rather than silently inheriting
-exclusion-list coverage it never earned.
+**First-run result (2026-06-05):** 68 gaps found — mostly `AINDY_PLUGIN_CONTAINER_*`,
+`AINDY_PLUGIN_STRONG_SANDBOX_*`, `OPENAI_*` timeout/retry tuning, and `MONGO_*`
+connection pool tuning fields not yet in `.env.example`. Gaps are advisory; each
+should be reviewed and either added to `.env.example` or to the EXCLUSIONS list in
+the script with a reason comment.
 
 ---
 
