@@ -1388,8 +1388,9 @@ break.
 (`rippletrace.js`, `analytics.js`, `platform.js`) referencing quarantined ROUTES groups
 is determined by which option is chosen here.
 
-**Do not publish `@aindy/ui-kit@1.0.5+` until the architectural option is selected and
-implemented.** The quarantine commits are safe in source history but must not reach npm.
+~~**Do not publish `@aindy/ui-kit@1.0.5+`**~~ — restriction lifted 2026-06-03. Option B is
+implemented: all route groups are in the shared table; publish is safe. Monolith compatibility
+verified 2026-06-06 against full import surface (ROUTES + 20 other symbols). See closure note.
 
 ---
 
