@@ -524,23 +524,13 @@ Trigger: when cloud onboarding begins or when a regulated operator requires it.
 
 ## LOCAL-1 — No documented production upgrade path for local installs
 
-Status: Deferred — Low Priority
+Status: CLOSED (2026-06-05)
 
-Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area E, finding LOCAL-1.
-
-The README documents only the dev install path (`pip install -e .`). There is no
-documented production upgrade procedure: pip upgrade command, environment variable
-sequence (`AINDY_SCHEMA_RECONCILE=true`), or rollback guidance. Local-install
-operators face this gap at every upgrade.
-
-Resolution path: add an "Upgrading" section to `README.md` and/or
-`RUNTIME_ONLY_DEPLOYMENT.md` covering:
-1. `pip install --upgrade aindy-runtime`
-2. Verify new version: `aindy-runtime version` (or `/api/version` while running)
-3. Set `AINDY_SCHEMA_RECONCILE=true` before restart when a schema bump is expected
-4. Rollback: reinstall the previous version and restart without reconcile
-
-Trigger: before the 1.0.0 release.
+Added `## Upgrading` section to `README.md` covering: `pip install --upgrade`,
+version verification via `aindy-runtime --version` / `/api/version`, the
+`AINDY_SCHEMA_RECONCILE=true` restart sequence for schema-bumping releases,
+Docker Compose pull-and-up flow, and rollback guidance (reinstall previous
+version; note that rolling back across a schema change requires a DB restore).
 
 ---
 
@@ -564,25 +554,17 @@ Trigger: before the 1.0.0 release.
 
 ## EVENTBUS-REDIS-URL-CONSOLIDATION-1 — Deprecate AINDY_REDIS_URL alias
 
-**Status:** Deferred — Low Priority
+**Status:** 1.x step CLOSED (2026-06-05) — 2.0 removal still pending.
 
-**Discovered:** 2026-05-27 during `.env.example` drift audit.
+**1.x implemented:** `resolve_event_bus_redis_url()` now emits `DeprecationWarning`
+when `AINDY_REDIS_URL` is set, directing operators to migrate to `REDIS_URL`.
+`import warnings` added to `event_bus.py`; 2 regression tests added to
+`tests/unit/test_event_bus_redis_url.py` (9 total pass).
 
-**Context:** `AINDY/kernel/event_bus.py` historically read only `AINDY_REDIS_URL`, ignoring
-the standard `REDIS_URL` env var used by cache and job queue. Fixed in 1.0.0 (see CHANGELOG):
-`resolve_event_bus_redis_url()` now implements `AINDY_REDIS_URL → REDIS_URL → localhost default`
-precedence. `AINDY_REDIS_URL` is documented as deprecated since 1.0.0.
-
-**Consolidation path:**
-1. **1.0.x** — both honored; `AINDY_REDIS_URL` takes precedence; deprecation noted in
-   CHANGELOG, `config.py`, and `.env.example` (commented-out form).
-2. **1.x** — emit a `DeprecationWarning` (via Python `warnings.warn`) at startup when
-   `AINDY_REDIS_URL` is set, directing operators to migrate to `REDIS_URL`.
-3. **2.0** — remove `AINDY_REDIS_URL` from `event_bus.py`, `config.py`, and `.env.example`.
-
-**Audit note:** Before 2.0 removal, grep the codebase for any other `AINDY_*` aliases that
-shadow standard env vars (e.g., `AINDY_REDIS_URL` vs `REDIS_URL`, `AINDY_SKIP_MONGO_PING` vs
-`SKIP_MONGO_PING`). Consolidate all of them in a single pass rather than one at a time.
+**Remaining (2.0 step):** Remove `AINDY_REDIS_URL` from `event_bus.py`, `config.py`,
+and `.env.example`. Before that removal, grep for other `AINDY_*` aliases that shadow
+standard env vars (e.g., `AINDY_SKIP_MONGO_PING` vs `SKIP_MONGO_PING`) and consolidate
+them in a single pass.
 
 ---
 
