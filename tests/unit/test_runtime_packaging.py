@@ -27,7 +27,7 @@ def test_runtime_package_metadata_declares_console_entrypoints():
     assert pyproject["project"]["name"] == "aindy-runtime"
     assert pyproject["project"]["dynamic"] == ["version"]
     assert pyproject["project"]["description"] == (
-        "Installable AINDY runtime infrastructure package for trusted internal deployments"
+        "Self-hostable AI agent execution runtime — syscall contract, DAG flows, vector memory, plugin registry"
     )
     assert pyproject["project"]["scripts"] == {
         "aindy-runtime": "AINDY.runtime_only:main",
