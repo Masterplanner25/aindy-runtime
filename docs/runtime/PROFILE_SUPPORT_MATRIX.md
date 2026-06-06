@@ -1,13 +1,11 @@
 ---
 title: "Profile Support Matrix"
-last_verified: "2026-05-31"
+last_verified: "2026-06-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
-﻿# Profile Support Matrix
-
-> Authored by Codex during non coding session. Needs review before repo commit and push.
+# Profile Support Matrix
 
 This document defines which deployment profiles `aindy-runtime` supports, what each profile is allowed to claim, and which capabilities are required, optional, degraded, or unsupported in each mode.
 

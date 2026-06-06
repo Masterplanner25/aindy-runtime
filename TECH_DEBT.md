@@ -982,34 +982,24 @@ correctly defaults to localhost for security.
 
 ## PLATFORM-UI-ENV-1 — VITE_API_BASE_URL bakes localhost into the production bundle
 
-**Status:** Deferred — Low Priority
+**Status:** CLOSED (2026-06-05)
 
 **Discovered:** 2026-05-28 during PLATFORM-AUTH-ACQUISITION-1 implementation.
 
-**Context:** `platform/src/api/_core.js` resolves the API base at Vite build time:
-```javascript
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
-```
-When `VITE_API_BASE_URL` is unset (which it is in the current Docker build), `http://localhost:8000`
-is baked into `AINDY/platform/dist/assets/index-*.js`. This works for local dev
-(`localhost:8000` resolves to the runtime), but on any remote host the browser's `fetch`
-goes to localhost on the *client machine*, not the server, silently failing all auth and
-API calls.
+**Resolution:** Changed the fallback in `@aindy/ui-kit` `src/api/_core.js` from
+`"http://localhost:8000"` to `""`. When `VITE_API_BASE_URL` is unset, `API_BASE`
+is now an empty string. `buildApiUrl()` already had a falsy guard (`API_BASE ?
+... : path`) so all API calls become relative paths (e.g. `/auth/login`) that the
+browser resolves against the current origin — correct since the SPA and API are
+always co-served.
 
-**Why deferred:** The runtime is currently tested in local/Docker-compose deployments only.
-Remote hosting is not yet in scope for 1.0.x.
+Local dev gap (Vite on port 5173, API on 8000) is closed by `server.proxy` entries
+added to `platform/vite.config.ts` — no `VITE_API_BASE_URL` env var required for
+local dev. `VITE_API_BASE_URL` still works as an explicit override for non-standard
+host configurations.
 
-**Resolution path (before any remote/cloud deployment):**
-1. Add `ARG VITE_API_BASE_URL` and `ENV VITE_API_BASE_URL` to the Dockerfile platform
-   build stage (if platform is built in Docker) or document it as a required build arg.
-2. Pass it in `docker-compose.yml` under `build.args` keyed to the public-facing runtime URL.
-3. For operator-built deployments, document in README that `VITE_API_BASE_URL` must be set
-   before `npm run build` in `platform/`.
-4. Close PYPI-PUBLISH-1 and PLATFORM-UI-ENV-1 in the same pass — at PyPI publish time,
-   platform/dist will need to be rebuilt with a real URL or ship without the embedded base.
-
-**Reopen trigger:** Any deployment where the runtime is accessed from a hostname other
-than `localhost`.
+Bundle verified: `grep localhost:8000` returns no matches in the rebuilt
+`AINDY/platform/dist/assets/*.js`.
 
 ---
 
@@ -1055,7 +1045,7 @@ than `localhost`.
 - Unknown email → exit 1, clear guidance
 - `POST /auth/login` after promotion → JWT with `is_admin: true`
 
-**Remaining open item:** PLATFORM-UI-ENV-1 (localhost baked into bundle for remote hosts).
+PLATFORM-UI-ENV-1 (localhost baked into bundle) closed 2026-06-05 — relative-URL fix.
 
 ---
 

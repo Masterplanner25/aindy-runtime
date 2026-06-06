@@ -54,6 +54,15 @@ docker compose --profile full up -d
 docker compose --profile full --profile monitoring up -d
 ```
 
+**Cloud / remote VM with nginx + TLS** (ports locked down, HTTPS):
+```bash
+NGINX_CONF=nginx.tls.conf \
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile full --profile proxy up -d
+```
+
+> See [Remote deployment](#remote-deployment) below for the full TLS checklist.
+
 ### After the server starts
 
 Once `curl http://localhost:8000/ready` returns `{"status": "ok"}`, create your first account and API key:
@@ -233,6 +242,67 @@ docker compose down && docker compose up -d   # after reverting the image tag in
 
 Rolling back across a schema change requires a database restore — schema
 migrations are not automatically reversed on downgrade.
+
+## Remote deployment
+
+For cloud VM or any deployment where a domain name and HTTPS are required.
+The `proxy` profile brings up an nginx container on ports 80 and 443 that
+forwards all traffic to the api container. The `docker-compose.prod.yml`
+overlay closes all internal port bindings so nothing is reachable from
+outside the host except nginx.
+
+### Plain HTTP (behind a TLS-terminating load balancer)
+
+Suitable for AWS ALB, GCP Load Balancer, Cloudflare Proxy, etc. that
+terminate TLS and forward plain HTTP to the backend.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile full --profile proxy up -d
+```
+
+Set `ALLOWED_ORIGINS=https://yourdomain.com` in `AINDY/.env`.
+
+### HTTPS with Let's Encrypt (direct VM, no load balancer)
+
+```bash
+# 1. On the host — obtain a certificate (certbot must be installed)
+certbot certonly --standalone -d yourdomain.com
+
+# 2. Edit nginx/nginx.tls.conf — replace `server_name _;` with your domain:
+#      server_name yourdomain.com;
+
+# 3. Mount your certs — create docker-compose.override.yml:
+cat > docker-compose.override.yml << 'EOF'
+services:
+  nginx:
+    volumes:
+      - /etc/letsencrypt/live/yourdomain.com/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro
+      - /etc/letsencrypt/live/yourdomain.com/privkey.pem:/etc/nginx/certs/privkey.pem:ro
+EOF
+
+# 4. In AINDY/.env set:
+#      ALLOWED_ORIGINS=https://yourdomain.com
+
+# 5. Start
+NGINX_CONF=nginx.tls.conf \
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile full --profile proxy up -d
+```
+
+**Certificate renewal** — add to host cron (`crontab -e`):
+```
+0 3 * * * certbot renew --quiet && docker compose exec nginx nginx -s reload
+```
+
+### Port exposure summary
+
+| Profile combination | Ports exposed to host |
+|---|---|
+| Default (no overlay) | 8000 (api), 5432, 6379, 27017 |
+| `+ docker-compose.prod.yml` | 8000 (api) only |
+| `+ proxy profile` | 8000 (api), 80, 443 |
+| `+ proxy + docker-compose.prod.yml` | 80, 443 only |
 
 ## Ownership Boundary
 

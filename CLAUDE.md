@@ -40,6 +40,9 @@ uvicorn AINDY.runtime_only:app   # equivalent ASGI form
 docker compose up -d                                        # api + postgres + redis + mongo
 docker compose --profile full up -d                        # + worker
 docker compose --profile full --profile monitoring up -d   # + Prometheus
+NGINX_CONF=nginx.tls.conf \
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile full --profile proxy up -d                     # + nginx TLS, all internal ports closed
 ```
 
 ---
@@ -256,10 +259,13 @@ this to an unconditional fallback — `/platform/assets/does-not-exist.js` must 
 - `VITE_APP_BASE_URL` is removed and must not be reintroduced as a load-bearing redirect
   target. It may be documented as a future federation hook but must not drive any navigation.
 
-**`VITE_API_BASE_URL`** is the build-time base for all API calls (defaults to
-`http://localhost:8000`). It is distinct from the removed `VITE_APP_BASE_URL`. Tracked
-as PLATFORM-UI-ENV-1: the default bakes `localhost` into the bundle, which breaks on
-remote hosts — do not silently fix; it interacts with the prod ports story.
+**`VITE_API_BASE_URL`** is the build-time base for all API calls (defaults to `""`
+— empty string, resolved at runtime as a relative URL against the current origin).
+It is distinct from the removed `VITE_APP_BASE_URL`. PLATFORM-UI-ENV-1 is closed
+(2026-06-05): the `"http://localhost:8000"` hardcoded fallback was replaced with `""`
+in `@aindy/ui-kit` `src/api/_core.js`; `platform/vite.config.ts` now includes
+`server.proxy` entries for local dev so `VITE_API_BASE_URL` is not required. Set it
+explicitly only when deploying the API at a non-standard origin.
 
 ---
 
@@ -532,7 +538,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **MONITORING-GRAFANA-\*** — Grafana monitoring profile gap. MONITORING-GRAFANA-1: closed 2026-06-05.
 - **COMPOSE-PROD-PORTS-\*** — database ports exposed in prod. COMPOSE-PROD-PORTS-1: closed 2026-06-05.
 - **PROMETHEUS-PIN-\*** — Prometheus image version pinning. PROMETHEUS-PIN-1: open.
-- **PLATFORM-UI-ENV-\*** — Vite `VITE_API_BASE_URL` bakes localhost into bundle. PLATFORM-UI-ENV-1: open.
+- **PLATFORM-UI-ENV-\*** — Vite `VITE_API_BASE_URL` bakes localhost into bundle. PLATFORM-UI-ENV-1: closed 2026-06-05 — relative-URL fallback + vite.config.ts proxy.
 - **PLATFORM-AUTH-ACQUISITION-\*** — Platform SPA first-party auth. PLATFORM-AUTH-ACQUISITION-1: closed 2026-05-28.
 - **PLATFORM-UI-KIT-\*** — ui-kit npm publish gap; local edits require manual rebuild chain. PLATFORM-UI-KIT-1: closed 2026-05-28.
 - **MCP-BEHAVIOR-\*** — MCP protocol integration facts. MCP-BEHAVIOR-1: `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
