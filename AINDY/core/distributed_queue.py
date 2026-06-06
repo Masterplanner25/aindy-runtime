@@ -431,10 +431,11 @@ def _fallback_to_memory_backend(exc: Exception) -> "InMemoryQueueBackend":
         "Set AINDY_REQUIRE_REDIS=true to prevent degraded-mode startup.",
         exc,
     )
+    from AINDY.kernel.condition_codes import ConditionClassification, RuntimeConditionCode
     set_api_runtime_condition(
-        code="queue_backend_fallback",
+        code=RuntimeConditionCode.QUEUE_BACKEND_FALLBACK,
         component="queue",
-        classification="unsafe_degraded" if settings.EXECUTION_MODE == "distributed" else "safe_degraded",
+        classification=ConditionClassification.UNSAFE_DEGRADED if settings.EXECUTION_MODE == "distributed" else ConditionClassification.SAFE_DEGRADED,
         detail=str(exc),
         production_behavior="startup-fatal" if settings.EXECUTION_MODE == "distributed" else "explicitly degraded",
     )
