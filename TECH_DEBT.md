@@ -1361,7 +1361,7 @@ server outcome" root shape.
 
 ## AGENT-RESLIMIT-001 — cpu_time_ms accounting semantics: field measures wall-clock, not CPU time
 
-**Status:** Open (default raised to 300 000 ms in v1.0.0 as mitigation; accounting fix deferred)
+**Status:** CLOSED (2026-06-05) — field renamed to `wall_time_ms` across all layers; schema migration 0005 added; `SCHEMA_CONTRACT_VERSION` bumped to "2026-06-05"; `MAX_CPU_TIME_MS` → `MAX_WALL_TIME_MS` (env var `AINDY_QUOTA_CPU_MS` unchanged for operator compatibility).
 
 **Discovered:** 2026-06-03 during AGENT-APPROVE-001a live smoke test.
 

@@ -666,7 +666,7 @@ class SyscallDispatcher:
             duration_so_far = int((time.monotonic() - t_start) * 1000)
             _get_rm().record_usage(
                 context.execution_unit_id,
-                {"syscall_count": 1, "cpu_time_ms": duration_so_far},
+                {"syscall_count": 1, "wall_time_ms": duration_so_far},
             )
         except Exception as _rm_exc:
             logger.debug("[SyscallDispatcher] resource record skipped: %s", _rm_exc)
