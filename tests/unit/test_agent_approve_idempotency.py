@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import update as sqla_update
 
 from AINDY.db.models import AgentRun
@@ -31,6 +32,16 @@ from AINDY.platform_layer import registry
 from AINDY.services.auth_service import get_current_user
 
 pytestmark = pytest.mark.runtime_only
+
+
+@pytest.fixture
+def runtime_only_client(runtime_only_app):
+    # agent_router was extracted to aindy-apps-monolith; include the deprecated
+    # runtime copy here so these HTTP-contract tests can reach /apps/agent/* routes.
+    from AINDY.routes.agent_router import router as _agent_router
+    runtime_only_app.include_router(_agent_router, prefix="/apps")
+    with TestClient(runtime_only_app, raise_server_exceptions=False) as c:
+        yield c
 
 _FAKE_TOKEN = {
     "execution_token": "test-execution-token",
