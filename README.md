@@ -142,6 +142,54 @@ python -m AINDY.runtime_only serve
 uvicorn AINDY.runtime_only:app
 ```
 
+## Upgrading
+
+### pip (local install)
+
+```bash
+pip install --upgrade aindy-runtime
+```
+
+Verify the new version:
+
+```bash
+aindy-runtime --version
+# or, while the server is running:
+curl http://localhost:8000/api/version
+```
+
+If this release includes a schema change, set `AINDY_SCHEMA_RECONCILE=true`
+before restarting. The startup log will tell you whether reconciliation is
+needed; if `AINDY_ENFORCE_SCHEMA=true` is set, the server will refuse to start
+rather than silently run against a mismatched schema.
+
+```bash
+AINDY_SCHEMA_RECONCILE=true aindy-runtime serve
+```
+
+Once the server confirms a clean startup you can unset the flag.
+
+### Docker Compose
+
+```bash
+docker compose pull          # fetch the new image
+docker compose up -d         # recreate containers with zero-downtime rolling update
+```
+
+If the release bumps the schema, set the reconcile flag in `AINDY/.env` before
+restarting, then remove it after the first clean boot.
+
+### Rollback
+
+```bash
+pip install "aindy-runtime==<previous-version>"
+# or, for Docker:
+docker compose down && docker compose up -d   # after reverting the image tag in docker-compose.yml
+```
+
+Rolling back across a schema change requires a database restore — schema
+migrations are not automatically reversed on downgrade.
+
 ## Ownership Boundary
 
 `aindy-runtime` is the execution substrate of the AINDY platform. It owns the
