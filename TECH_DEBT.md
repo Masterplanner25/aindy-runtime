@@ -899,26 +899,10 @@ internet. This is a real security footgun.
 
 ## PROMETHEUS-PIN-1 — prom/prometheus uses :latest tag
 
-**Status:** Deferred — Low Priority
+**Status:** CLOSED (2026-06-05)
 
-**Discovered:** 2026-05-27 during `docker-compose.yml` authoring.
-
-**Context:** `docker-compose.yml` uses `prom/prometheus:latest` for the
-monitoring profile. This is inconsistent with the pin-everything discipline
-elsewhere in the stack (SHA-pinned CI actions, fully pinned Python deps,
-`pip-audit` CVE gating). `:latest` means a `docker compose pull` can silently
-change the Prometheus version.
-
-**Prometheus is an optional monitoring add-on** (not a core dependency), so
-the inconsistency is low-risk — a Prometheus version bump is unlikely to break
-the runtime. But for reproducibility and audit purposes, pinning is correct.
-
-**Resolution:** Replace `prom/prometheus:latest` with a pinned version, e.g.:
-```yaml
-image: prom/prometheus:v2.54.1
-```
-Check https://hub.docker.com/r/prom/prometheus/tags for the current stable
-release at pin time.
+Pinned `prom/prometheus:latest` → `prom/prometheus:v3.4.1` in `docker-compose.yml`
+(current stable at close time). Consistent with pin-everything discipline elsewhere.
 
 ---
 

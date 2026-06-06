@@ -172,7 +172,7 @@ services:
 
   # ─── Prometheus (monitoring profile) ────────────────────────────────────
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.4.1
     profiles: ["monitoring"]
     restart: unless-stopped
     volumes:
