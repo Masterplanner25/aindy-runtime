@@ -1,20 +1,22 @@
 """
 routes/__init__.py - runtime route registry.
 
-AINDY/routes owns root and platform routers plus runtime-owned `/apps/*`
-surfaces that belong to the platform layer rather than any app plugin.
+AINDY/routes owns root and platform routers. App-layer /apps/* surfaces
+are registered by plugin bootstraps (aindy-apps-monolith) via register_router().
+
+Extracted to plugin layer (no longer runtime-owned):
+  - agent_router       → apps.agent.routes.agent_router
+  - memory_metrics_router → apps.memory.routes.memory_metrics_router
+  - memory_trace_router   → apps.memory.routes.memory_trace_router
 """
 import os
 
-from AINDY.routes.agent_router import router as agent_router
 from AINDY.routes.auth_router import router as auth_router
 from AINDY.routes.coordination_router import router as coordination_router
 from AINDY.routes.db_verify_router import router as db_verify_router
 from AINDY.routes.flow_router import router as flow_router
 from AINDY.routes.health_router import router as health_router
-from AINDY.routes.memory_metrics_router import router as memory_metrics_router
 from AINDY.routes.memory_router import router as memory_router
-from AINDY.routes.memory_trace_router import router as memory_trace_router
 from AINDY.routes.observability_router import router as observability_router
 from AINDY.routes.platform_router import router as platform_router
 from AINDY.routes.watcher_router import router as watcher_router
@@ -34,12 +36,10 @@ PLATFORM_ROUTERS = [
     db_verify_router,  # operator schema inspection at /platform/db/verify
 ]
 
-# Platform primitives still exposed on the historical /apps surface.
+# Remaining runtime-owned /apps surface (memory CRUD/search/recall + coordination).
+# agent_router, memory_metrics_router, memory_trace_router moved to plugin layer.
 APP_ROUTERS = [
-    agent_router,
     memory_router,
-    memory_metrics_router,
-    memory_trace_router,
     coordination_router,
 ]
 

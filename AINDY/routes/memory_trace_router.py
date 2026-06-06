@@ -1,3 +1,12 @@
+"""
+Deprecated: memory trace HTTP surface — now plugin-owned.
+
+This file is no longer registered in AINDY/routes/__init__.py APP_ROUTERS.
+The canonical implementation lives in apps/memory/routes/memory_trace_router.py
+(aindy-apps-monolith), registered via register_router() at bootstrap time.
+
+This file is retained for reference only. Do not import the router from here.
+"""
 import logging
 from typing import Optional
 

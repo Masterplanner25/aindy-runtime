@@ -101,10 +101,6 @@ def _http_surface_contract() -> dict[str, object]:
         ],
         "experimental": [
             {
-                "route_prefix": "/apps/agent/",
-                "notes": "Agent runtime HTTP semantics and orchestration behavior are still evolving.",
-            },
-            {
                 "route_prefix": "/apps/memory/",
                 "notes": "Runtime-owned memory APIs are shipped, but the external HTTP surface is not frozen.",
             },

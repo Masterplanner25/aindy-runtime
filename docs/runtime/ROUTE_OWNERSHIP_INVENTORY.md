@@ -1,6 +1,6 @@
 ---
 title: "Route Ownership Inventory"
-last_verified: "2026-06-05"
+last_verified: "2026-06-06"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -23,6 +23,7 @@ This answers Open Question 10 from `OPEN_QUESTIONS.md`.
 | **core** | Execution/readiness/auth critical. Must stay in runtime. |
 | **operator** | Admin/observability surface. Correctly runtime-owned today; extraction would lose tight coupling to live runtime state. |
 | **candidate** | Application-layer primitive. Could migrate to `aindy-apps-monolith`; runtime ownership is accidental rather than essential. |
+| **extracted** | Migrated to `aindy-apps-monolith`; runtime file is a deprecated reference copy only. |
 
 ---
 
@@ -38,10 +39,10 @@ This answers Open Question 10 from `OPEN_QUESTIONS.md`.
 | `observability_router.py` | `/platform/observability` | **operator** | Scheduler/LLM/queue diagnostics; coupled to live runtime state |
 | `db_verify_router.py` | `/platform/db` | **operator** | Schema inspection diagnostic |
 | `platform_router.py` (composite) | `/platform/flows`, `/platform/nodes`, `/platform/webhooks`, `/platform/keys`, `/platform/nodus`, `/platform/ops`, `/platform/queue` | **operator** | Platform administration; tight syscall/flow/key coupling |
-| `agent_router.py` | `/apps/agent` | **candidate** | Self-documented extraction candidate; stays for URL stability |
+| `agent_router.py` | `/apps/agent` | **extracted** | Canonical owner: `apps/agent/routes/agent_router.py` (2026-06-06) |
 | `memory_router.py` | `/apps/memory` | **candidate** | Platform primitive; Nodus execution coupling is the key blocker |
-| `memory_metrics_router.py` | `/apps/memory/metrics` | **candidate** | Moves with memory layer |
-| `memory_trace_router.py` | `/apps/memory/traces` | **candidate** | Moves with memory layer |
+| `memory_metrics_router.py` | `/apps/memory/metrics` | **extracted** | Canonical owner: `apps/memory/routes/memory_metrics_router.py` (2026-06-06) |
+| `memory_trace_router.py` | `/apps/memory/traces` | **extracted** | Canonical owner: `apps/memory/routes/memory_trace_router.py` (2026-06-06) |
 | `coordination_router.py` | `/apps/coordination` | **candidate** | Multi-agent feature; needs service-layer wrapper before extraction |
 
 ---
@@ -138,21 +139,22 @@ a formal extraction plan was written.
 clean path: each candidate would move to `aindy-apps-monolith` and re-register its
 router via `register_router()` at bootstrap time. URL paths do not need to change.
 
-### `agent_router.py`
-Endpoints: `POST /apps/agent/run`, `GET /apps/agent/runs`, `GET /apps/agent/runs/{id}`,
+### `agent_router.py` — **EXTRACTED 2026-06-06**
+
+Canonical implementation: `apps/agent/routes/agent_router.py` (aindy-apps-monolith).
+Registered by `apps.agent.bootstrap._register_routers()` at plugin bootstrap time.
+`AINDY/routes/agent_router.py` is a deprecated reference copy — retained for reference,
+not registered, does not define a live API surface.
+
+Endpoints (unchanged URLs): `POST /apps/agent/run`, `GET /apps/agent/runs`, `GET /apps/agent/runs/{id}`,
 `POST /apps/agent/runs/{id}/approve`, `POST /apps/agent/runs/{id}/reject`,
 `POST /apps/agent/runs/{id}/recover`, `POST /apps/agent/runs/{id}/replay`,
 `GET /apps/agent/runs/{id}/steps`, `GET /apps/agent/runs/{id}/events`,
 `GET /apps/agent/tools`, `GET /apps/agent/trust`, `GET /apps/agent/suggestions`,
 `PUT /apps/agent/trust`
 
-Already self-identified as an extraction candidate in the source comment. The router
-stays mounted at `/apps/agent/*` for URL stability. The execution logic lives in
-`agents/agent_runtime/` (kernel-side), not in the router itself.
-
-**Blocker:** None. `AGENT-API-001` closed 2026-06-03 — broken ROUTES references fixed.
-All 13 router endpoints now have matching `ROUTES.AGENT.*` constants and `agent.js`
-functions (`recover`/`replay` added 2026-06-06). No SPA components consume recover/replay
+All 13 endpoints have matching `ROUTES.AGENT.*` constants and `agent.js` functions
+(`recover`/`replay` added 2026-06-06). No SPA components consume recover/replay
 yet — first use will drive the component work.
 
 ### `memory_router.py`
@@ -169,19 +171,24 @@ stable execution service interface.
 **Recommended split:** extract memory CRUD/search/recall endpoints first; leave
 `/nodus/execute` and `/execute` in runtime until the Nodus service interface is stable.
 
-### `memory_metrics_router.py`
-Endpoints: `GET /apps/memory/metrics`, `GET /apps/memory/metrics/detail`,
+### `memory_metrics_router.py` — **EXTRACTED 2026-06-06**
+
+Canonical implementation: `apps/memory/routes/memory_metrics_router.py` (aindy-apps-monolith).
+Registered by `apps.memory.bootstrap._register_routers()`.
+`AINDY/routes/memory_metrics_router.py` is a deprecated reference copy.
+
+Endpoints (unchanged): `GET /apps/memory/metrics`, `GET /apps/memory/metrics/detail`,
 `GET /apps/memory/metrics/dashboard`
 
-No runtime coupling beyond `MemoryMetricsStore`. Moves cleanly with the memory layer.
+### `memory_trace_router.py` — **EXTRACTED 2026-06-06**
 
-### `memory_trace_router.py`
-Endpoints: `POST /apps/memory/traces`, `GET /apps/memory/traces`,
+Canonical implementation: `apps/memory/routes/memory_trace_router.py` (aindy-apps-monolith).
+Registered by `apps.memory.bootstrap._register_routers()`.
+`AINDY/routes/memory_trace_router.py` is a deprecated reference copy.
+
+Endpoints (unchanged): `POST /apps/memory/traces`, `GET /apps/memory/traces`,
 `GET /apps/memory/traces/{id}`, `GET /apps/memory/traces/{id}/nodes`,
 `POST /apps/memory/traces/{id}/append`
-
-No runtime coupling beyond `MemoryTraceDAO` and `MemoryNodeDAO`. Moves cleanly with
-the memory layer.
 
 ### `coordination_router.py`
 Endpoints: `GET /apps/coordination/agents`, `GET /apps/coordination/agents/status`,
@@ -204,11 +211,11 @@ interface that the app can call. The conflict detection endpoints also touch
 
 ## Extraction Readiness Summary
 
-| Candidate | Extraction readiness | Primary blocker |
+| Candidate | Extraction readiness | Status |
 |---|---|---|
-| `agent_router.py` | High — logic already in kernel layer | None — SPA API module complete as of 2026-06-06 |
-| `memory_metrics_router.py` | High — no runtime coupling | Move with memory layer |
-| `memory_trace_router.py` | High — no runtime coupling | Move with memory layer |
+| `agent_router.py` | — | **EXTRACTED 2026-06-06** — canonical router in `apps/agent/routes/agent_router.py`; registered via `apps.agent.bootstrap._register_routers()` |
+| `memory_metrics_router.py` | — | **EXTRACTED 2026-06-06** — canonical router in `apps/memory/routes/memory_metrics_router.py`; registered via `apps.memory.bootstrap._register_routers()` |
+| `memory_trace_router.py` | — | **EXTRACTED 2026-06-06** — canonical router in `apps/memory/routes/memory_trace_router.py`; registered via `apps.memory.bootstrap._register_routers()` |
 | `memory_router.py` (CRUD/search) | Medium — split required | Nodus execution endpoints must stay until service interface exists |
 | `memory_router.py` (execution) | Low — deeply coupled | `execute_nodus_task_payload()` / `NodusSecurityError` |
 | `coordination_router.py` | Low — model ownership gap | `AgentRegistry` model in runtime DB layer |

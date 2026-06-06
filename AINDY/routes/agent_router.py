@@ -1,8 +1,11 @@
 """
-Runtime-owned agent HTTP surface.
+Deprecated: agent HTTP surface — now plugin-owned.
 
-These routes stay mounted under `/apps/agent/*` for URL stability, but the
-ownership boundary is the runtime layer under `AINDY/`, not `apps/agent/`.
+This file is no longer registered in AINDY/routes/__init__.py APP_ROUTERS.
+The canonical implementation lives in apps/agent/routes/agent_router.py
+(aindy-apps-monolith), registered via register_router() at bootstrap time.
+
+This file is retained for reference only. Do not import the router from here.
 """
 import logging
 from typing import Optional

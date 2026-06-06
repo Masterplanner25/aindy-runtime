@@ -18,7 +18,6 @@ def test_runtime_public_contract_marks_only_selected_http_surfaces_stable():
     assert "GET /api/version" in stable_routes
     assert "GET /platform/syscalls" in stable_routes
     assert "POST /platform/syscall" in stable_routes
-    assert "/apps/agent/" in experimental_prefixes
     assert "/platform/nodes" in experimental_prefixes
 
 

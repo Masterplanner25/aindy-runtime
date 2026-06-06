@@ -41,15 +41,12 @@ SUPPORTED_DEPLOYMENT_PROFILES = (
 RUNTIME_ONLY_REQUIRED_ROUTES = (
     "/health",
     "/ready",
-    "/apps/agent/run",
-    "/apps/agent/tools",
     "/apps/memory/recall",
     "/apps/memory/nodes",
     "/platform/syscalls",
 )
 RUNTIME_ONLY_REQUIRED_ROUTE_PREFIXES = (
     "/platform/",
-    "/apps/agent/",
     "/apps/memory/",
 )
 RUNTIME_ONLY_BASELINE_AGENT_TOOLS = (
