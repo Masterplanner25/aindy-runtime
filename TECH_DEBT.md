@@ -1470,6 +1470,11 @@ monolith's `client/src/api/agent.js`.
 architectural decision (the target constants are in the served MEMORY group, unaffected by
 quarantine). No ui-kit change needed.
 
+**Follow-on (2026-06-06):** `ROUTES.AGENT.RECOVER` and `ROUTES.AGENT.REPLAY` constants added
+to ui-kit; `recoverAgentRun()` and `replayAgentRun()` added to `platform/src/api/agent.js`.
+No SPA component consumes recover/replay yet — first component that needs orphan recovery or
+run replay will drive the UI work.
+
 ---
 
 ## SCHED-001/002/003 — `/platform/observability/scheduler/status` returns 500 in platform-only profile
