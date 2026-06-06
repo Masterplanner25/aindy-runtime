@@ -528,23 +528,13 @@ Trigger: when cloud onboarding begins or when a regulated operator requires it.
 
 ## LOCAL-1 — No documented production upgrade path for local installs
 
-Status: Deferred — Low Priority
+Status: CLOSED (2026-06-05)
 
-Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area E, finding LOCAL-1.
-
-The README documents only the dev install path (`pip install -e .`). There is no
-documented production upgrade procedure: pip upgrade command, environment variable
-sequence (`AINDY_SCHEMA_RECONCILE=true`), or rollback guidance. Local-install
-operators face this gap at every upgrade.
-
-Resolution path: add an "Upgrading" section to `README.md` and/or
-`RUNTIME_ONLY_DEPLOYMENT.md` covering:
-1. `pip install --upgrade aindy-runtime`
-2. Verify new version: `aindy-runtime version` (or `/api/version` while running)
-3. Set `AINDY_SCHEMA_RECONCILE=true` before restart when a schema bump is expected
-4. Rollback: reinstall the previous version and restart without reconcile
-
-Trigger: before the 1.0.0 release.
+Added `## Upgrading` section to `README.md` covering: `pip install --upgrade`,
+version verification via `aindy-runtime --version` / `/api/version`, the
+`AINDY_SCHEMA_RECONCILE=true` restart sequence for schema-bumping releases,
+Docker Compose pull-and-up flow, and rollback guidance (reinstall previous
+version; note that rolling back across a schema change requires a DB restore).
 
 ---
 
