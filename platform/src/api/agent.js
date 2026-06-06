@@ -68,3 +68,13 @@ export function getAgentSuggestions() {
 export function fetchRunEvents(runId) {
   return authRequest(ROUTES.AGENT.EVENTS(runId), { method: "GET" }).then(unwrapEnvelope);
 }
+
+export function recoverAgentRun(runId, force = false) {
+  return authRequest(`${ROUTES.AGENT.RECOVER(runId)}${force ? "?force=true" : ""}`, {
+    method: "POST",
+  }).then(unwrapEnvelope);
+}
+
+export function replayAgentRun(runId) {
+  return authRequest(ROUTES.AGENT.REPLAY(runId), { method: "POST" }).then(unwrapEnvelope);
+}
