@@ -631,46 +631,26 @@ setting and creates a second source of truth for Settings values).
 
 ## CONFIG-ENV-EXAMPLE-DRIFT-1 — No automated check for .env.example / Settings drift
 
-**Status:** Deferred — Low Priority
+**Status:** CLOSED (2026-06-05)
 
-**Discovered:** 2026-05-27 during `.env.example` drift audit.
+**Implemented:**
+- `scripts/check_env_example_coverage.py` — AST-parses all `AINDY/**/*.py` for
+  `os.getenv()` / `os.environ.get()` calls and `Settings` field names; parses
+  `AINDY/.env.example` for all variable names (commented-out and uncommented);
+  reports uncovered gaps. Exclusion list covers test-only, OS/system, deprecated
+  aliases, Docker Compose infra, and computed/internal vars.
+- `python scripts/check_env_example_coverage.py --verbose` for full counts.
+- `python scripts/check_env_example_coverage.py --strict` exits 1 on any gap
+  (for future enforcement).
+- Added as advisory CI step in `.github/workflows/runtime-ci.yml` ("Check
+  env-example coverage (advisory)") — runs, reports, exits 0 until gap list is
+  resolved. Comment in CI step explains how to promote to `--strict`.
 
-**Context:** The drift audit (2026-05-27) identified ~40 environment variables
-active in the codebase that were absent from the then-current `.env.example`.
-The audit was manual: grep `os.getenv(...)` calls across `AINDY/**/*.py`,
-cross-reference against `Settings` fields in `config.py`, diff against
-`.env.example`. This process is not reproducible on demand without repeating the
-manual work.
-
-Every new `os.getenv("NEW_VAR")` call or `Settings` field added without a
-corresponding `.env.example` entry silently widens the drift gap.
-
-**Resolution path:**
-1. Write `scripts/check_env_example_coverage.py` that:
-   - Extracts all `os.getenv("VAR")` string literals from `AINDY/**/*.py` via AST
-     parse (not regex, to handle multi-line calls).
-   - Extracts all field names from `Settings` in `config.py`.
-   - Parses `AINDY/.env.example` for defined variable names (both uncommented and
-     commented-out forms).
-   - Reports variables present in code but absent from `.env.example`.
-2. Add the script to CI as an advisory check (warn, not fail) initially; promote
-   to blocking after a false-positive-free run period.
-
-**Intentional exclusions the script must handle:**
-- Test-only vars: `PYTEST_CURRENT_TEST`, `TESTING`, `TEST_MODE`,
-  `AINDY_TEST_STRICT_SYSTEM_EVENTS`, `AINDY_DEBUG_SYSTEM_EVENTS`.
-- System/OS vars: `HOSTNAME`, `PATH`, `SYSTEMROOT`.
-- Deprecated aliases already documented in `.env.example`: `AINDY_REDIS_URL`,
-  `AINDY_STUCK_RUN_THRESHOLD_MINUTES`.
-- Infrastructure-only Docker Compose vars: `POSTGRES_*`, `MONGO_INITDB_*`.
-- Computed/internal fields: `VERSION`, `API_VERSION`, `API_MIN_CLIENT_VERSION`.
-
-**Design note for implementation:** Consider a sentinel-comment annotation in
-`config.py` itself (e.g., `# env_example: skip`) rather than maintaining a
-separate external exclusion list that drifts from the code. Adding a new
-`Settings` field then forces a conscious decision — annotate it as skip-worthy
-or accept that it needs a `.env.example` entry — rather than silently inheriting
-exclusion-list coverage it never earned.
+**First-run result (2026-06-05):** 68 gaps found — mostly `AINDY_PLUGIN_CONTAINER_*`,
+`AINDY_PLUGIN_STRONG_SANDBOX_*`, `OPENAI_*` timeout/retry tuning, and `MONGO_*`
+connection pool tuning fields not yet in `.env.example`. Gaps are advisory; each
+should be reviewed and either added to `.env.example` or to the EXCLUSIONS list in
+the script with a reason comment.
 
 ---
 
