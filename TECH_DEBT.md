@@ -2032,3 +2032,25 @@ If step 3 fails, the exception is caught and logged as a `WARNING` (line 72) and
 **Resolution direction:** Wrap all three operations in a single transaction with explicit `db.commit()` at the end and `db.rollback()` on any failure. Requires the worker to own the session and pass it through all three DAO calls rather than relying on per-DAO auto-commit.
 
 **Risk:** Low frequency (append_node rarely fails when save succeeds), but produces silently inconsistent data rather than a clean miss.
+
+---
+
+## OBS-1 — Pipeline _safe_* failures log at DEBUG, invisible in production
+
+**Status:** Open — Known observability gap
+
+**Problem:** Three pipeline failure paths emit at `logger.debug`, which is off in production:
+
+| Failure path | File | Line | Level |
+|---|---|---|---|
+| `_safe_require_eu` — EU creation fails | `execution_pipeline/resources.py` | 38, 53 | `DEBUG` |
+| `_safe_finalize_eu` — EU finalization fails | `execution_pipeline/resources.py` | 160 | `DEBUG` |
+| `_safe_emit_event` — event emission fails | `execution_pipeline/pipeline.py` | 347 | `DEBUG` |
+
+All three are recorded in `ctx.metadata["side_effects"]` as `status: "failed"`, but that dict is only visible by querying the DB for the ExecutionUnit's metadata — not in logs. A production operator whose EU creation is silently failing (e.g. due to DB schema drift) will see no log output, no alert, and no metric. The execution continues without an EU, without scope tracking, and without lifecycle events.
+
+**Contrast:** Quota check failures (`_safe_quota_check`) and ResourceManager failures (`_safe_rm_mark_started/completed`) were already upgraded to `WARNING`. The three above were not.
+
+**Resolution direction:** Promote `_safe_require_eu`, `_safe_finalize_eu`, and `_safe_emit_event` failures to `logger.warning`. These are non-fatal by design (the pipeline continues) but are degraded-mode conditions that operators need to see without attaching a debugger.
+
+**Risk:** Low probability of triggering, but when it does trigger the operator has no signal without reading the DB directly.

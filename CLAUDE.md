@@ -563,6 +563,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **EXEC-EU-\*** — ExecutionUnit lifecycle gaps. EXEC-EU-1: `_safe_finalize_eu` not in `finally` block of `ExecutionPipeline.run()` — a `BaseException` subclass escaping all `except` branches leaves the EU in `executing` indefinitely; open, low-probability trigger.
 - **EVENT-\*** — Event system integrity gaps. EVENT-1: emission error loop prevention is implicit — `_safe_emit_event` absorbs `SystemEventEmissionError` via broad `except`, not an explicit in-progress guard; safe today, latent risk if emission error surface is hardened.
 - **MEMORY-\*** — Memory system integrity gaps. MEMORY-1: `persist_memory_ingest_payload` partial-write — `append_node` failure leaves `MemoryNode` + `MemoryTrace` committed but unlinked; node is queryable but invisible in trace views (linked to fire-and-forget gap).
+- **OBS-\*** — Observability gaps. OBS-1: `_safe_require_eu`, `_safe_finalize_eu`, `_safe_emit_event` failures log at `DEBUG` — invisible in production; operators have no signal without querying the DB directly.
 
 ---
 
