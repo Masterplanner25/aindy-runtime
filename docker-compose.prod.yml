@@ -31,6 +31,12 @@ services:
     # Remove host binding — nginx handles all external traffic on 80/443.
     # Direct access to :8000 from outside the host is blocked.
     ports: !reset []
+    environment:
+      # Production overlay enforces distributed mode so the API dispatches
+      # to the Redis queue and the worker picks up jobs durably.
+      # Thread mode (the .env.example default) is dev-only; jobs are lost
+      # on restart and the 100-job queue cap applies.
+      EXECUTION_MODE: distributed
 
   worker:
     # Metrics endpoint (:8001) is internal-only when using this overlay.

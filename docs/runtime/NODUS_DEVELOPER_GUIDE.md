@@ -208,6 +208,25 @@ Any unhandled exception in the script causes the worker to exit with
 Use `try/catch` for recoverable errors; let genuine programming errors propagate so
 they appear in the execution log.
 
+### Per-node execution limits
+
+Each flow node runs as a single execution unit (EU) with hard caps:
+
+| Limit | Default | Env var override |
+|-------|---------|-----------------|
+| Syscalls per node | 100 | `AINDY_MAX_SYSCALLS_PER_EXECUTION` |
+| Wall-clock time | 5 minutes | `AINDY_MAX_WALL_TIME_MS` |
+
+A node that exceeds either limit is terminated mid-execution with
+`RESOURCE_LIMIT_EXCEEDED` and no retry. The limits apply per node, not per flow —
+a 10-node flow with 50 syscalls per node works fine.
+
+**Design guideline:** If your logic requires more than ~60 syscalls or multiple
+LLM round trips, split it across multiple nodes connected by a WAIT/RESUME
+checkpoint. Each WAIT creates a new EU with a fresh quota. A single monolithic
+node doing 101 syscalls fails at syscall 101; two nodes doing 50 each complete
+normally.
+
 ---
 
 ## 6. Type quick-reference (nodus-lang 3.0.2)

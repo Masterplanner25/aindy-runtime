@@ -1760,6 +1760,61 @@ ROOT_ROUTERS = [
 
 ---
 
+## SYSMAX-1 — Thread-mode queue hard cap is still the .env.example default
+
+**Status:** Partially mitigated (2026-06-07)
+
+**Problem:** `EXECUTION_MODE=thread` defaults a 10-worker `ThreadPoolExecutor` + 100-job in-memory queue (hard cap). At ~15s/job this sustains 0.67 jobs/second. Any burst beyond 100 queued jobs returns `QueueSaturatedError` (503). Jobs are dropped outright — no overflow, no DLQ, no retry. An automated trigger scheduler hitting this ceiling gets 503 permanently (back-pressure gap also mitigated below).
+
+**Mitigation applied (2026-06-07):**
+- `docker-compose.prod.yml` now sets `EXECUTION_MODE: distributed` on the `api` service, so anyone running the production overlay gets distributed mode without needing to edit `.env`.
+- `AINDY/.env.example` already carries a `WARNING: Do NOT use in production deployments where uptime matters` comment under `EXECUTION_MODE=thread` (OPER-EXEC-001, 2026-06-06).
+- The worker service in `docker-compose.yml` already sets `EXECUTION_MODE: distributed` (OPER-EXEC-001, 2026-06-06).
+
+**Remaining gap:** `AINDY/.env.example` still ships `EXECUTION_MODE=thread` as the literal default value — a developer who copies `.env.example` directly to `.env` and doesn't run the prod overlay still gets thread mode. Changing the default to `distributed` breaks local dev without Redis. Resolution direction: separate dev and prod `.env` templates, or a first-run wizard that detects the deployment context. Deferred until DEPLOY-TARGET-1 is addressed.
+
+---
+
+## SYSMAX-2 — Autonomous trigger scheduler has no queue back-pressure
+
+**Status:** CLOSED (2026-06-07)
+
+**Problem:** `submit_autonomous_async_job()` in `async_job_service.py` called `submit_async_job()` bare — any `QueueSaturatedError` propagated up to the route handler as 503. The trigger scheduler had no mechanism to slow down on saturation: it received 503 and could keep retrying, hammering the queue rather than backing off.
+
+**Fix applied:** Added a `try/except QueueSaturatedError` block around the `submit_async_job()` call in `submit_autonomous_async_job()`. On saturation the submission is converted to a 60-second deferred job via `defer_async_job()` — the same path as a trigger-evaluator `"defer"` decision. The caller receives `status: DEFERRED` with `reason: "Execution queue saturated — automatically deferred for retry."` and a `defer_seconds: 60` signal. A `logger.warning` fires so operators see the saturation event.
+
+**Effect:** Autonomous triggers that hit a full queue now self-regulate at 60s intervals instead of producing a stream of 503s. The deferred job re-enters `process_deferred_jobs()` after the cooldown, where `evaluate_live_trigger()` is called again before re-submission.
+
+---
+
+## SYSMAX-3 — Memory bytes not enforced per execution unit
+
+**Status:** Deferred — requires OS integration
+
+**Problem:** `check_quota()` in the syscall dispatcher tracks memory bytes consumed but does not enforce a hard cap. The comment in the source reads "requires OS integration." A memory-heavy node (large embedding batch, large LLM context) can OOM the API process with no prior warning or quota enforcement.
+
+**Gap:** No `/proc/{pid}/status` or `resource.getrusage()` integration exists. The value tracked is the syscall-reported estimate, not actual process RSS.
+
+**Resolution direction:** When per-EU memory limits become production-critical (multi-tenant SaaS, hostile-third-party profile with untrusted extensions), wire `resource.getrusage(RUSAGE_SELF).ru_maxrss` into the quota check and enforce `MAX_MEMORY_BYTES_PER_EXECUTION`. On Linux, `ru_maxrss` is kilobytes; on macOS, bytes — the platform difference must be normalized.
+
+**Reopen trigger:** First OOM incident in a production deployment, or when `hostile-third-party` deployment profile becomes the active default.
+
+---
+
+## SYSMAX-4 — Per-EU syscall cap (100) and wall-time cap (5min) may be tight for LLM-heavy flows
+
+**Status:** Tracked — advisory
+
+**Context:** `MAX_SYSCALLS_PER_EXECUTION = 100` (hard, mid-execution termination on breach) and `MAX_WALL_TIME_MS = 300_000` (5 minutes) are the per-execution-unit caps. A single flow node calling an LLM 3 times, doing 5 memory reads, and writing back results across multiple iterations can approach 100 syscalls non-trivially. A slow model with multiple round trips can exceed 5 minutes.
+
+**Not a bug:** The caps are correct safety defaults for single-process deployments. A multi-node DAG flow bypasses per-EU caps by design (each WAIT/RESUME creates a new EU). The risk is a developer building a complex single-node flow who hits a mid-execution `RESOURCE_LIMIT_EXCEEDED` with no retry path.
+
+**Resolution direction:** Both caps are tunable via env vars (`AINDY_MAX_SYSCALLS_PER_EXECUTION`, `AINDY_MAX_WALL_TIME_MS`). Document the advisory in `NODUS_DEVELOPER_GUIDE.md` §3 ("Design complex flows as multi-node DAGs rather than single nodes with many syscalls"). Raise caps only when a real workload requires it — do not raise speculatively.
+
+**Reopen trigger:** First production `RESOURCE_LIMIT_EXCEEDED` from a legitimate (non-runaway) flow.
+
+---
+
 ## AUTH-V1 — AINDY/auth/__init__.py was a verbatim duplicate of api_key_auth.py
 
 **Status:** CLOSED (2026-06-06)
