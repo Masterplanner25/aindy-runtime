@@ -1898,3 +1898,55 @@ ROOT_ROUTERS = [
 - 13 new unit tests in `tests/unit/test_tier3_structural.py`.
 
 **V3 architectural note:** The parallel auth system (`get_authenticated_principal` + `require_scope()` in `api_key_auth.py`) remains. `enforce_api_key_scope` uses `get_current_user` to avoid a second DB lookup. Full V3 resolution (collapsing the two auth paths) is deferred.
+
+---
+
+## LAYER-1 — execution_dispatcher.py opens its own SessionLocal() for event emission
+
+**Status:** Deferred — Known architectural gap
+
+**Problem:** `AINDY/core/execution_dispatcher.py:_enqueue_distributed()` opens a `SessionLocal()` directly at lines 305–307 and 368–370 to emit a `job_enqueued` observability event. The execution dispatcher layer is directly managing DB sessions — a responsibility that belongs to the service or event layer. This violates the "one session per request" convention and places session lifecycle management in the wrong layer.
+
+**Why deferred:** The dispatcher runs outside the request context in the distributed path; no request-scoped session is available. Fixing this properly requires routing the event emission through an injected event service or background event queue rather than opening a raw session. That refactor touches the dispatcher/event boundary across multiple call sites and is a non-trivial scope change.
+
+---
+
+## LAYER-2 — auth_router.py routes auth primitives through execute_with_pipeline_sync
+
+**Status:** Deferred — Known architectural gap
+
+**Problem:** `AINDY/routes/auth_router.py` sends all four handlers (login, register, logout, admin_invalidate_sessions) through `execute_with_pipeline_sync`. Auth requests create an `ExecutionUnit`, emit `execution.started`/`execution.completed` events, and go through quota checks. Every login and register is an "execution" with full resource-tracking overhead. The pipeline was not designed for auth primitives — this creates event noise and DB writes on every unauthenticated request.
+
+**Why deferred:** Removing auth routes from the pipeline requires a lighter-weight route wrapper that still provides tracing and error normalization without ExecutionUnit creation. That wrapper doesn't exist yet. The overhead is real but not a correctness issue at current load.
+
+---
+
+## LAYER-3 — exception_handlers.py falls back to decode_access_token for user attribution
+
+**Status:** Deferred — Partially mitigated
+
+**Problem:** `AINDY/exception_handlers.py:_extract_user_id_from_request()` calls `decode_access_token` as a fallback when `request.state.user_id` is not set (line 158). This is a cross-layer dependency: the exception handler layer doing auth work for logging purposes.
+
+**Partial mitigation (2026-06-07):** The function now checks `request.state.user_id` first (set by the pipeline for all authenticated requests that reached the handler). The `decode_access_token` fallback only fires for requests that failed before the pipeline set state — e.g. 401s on unauthenticated routes. This is the scenario where you most need user attribution for logs, so removing the fallback entirely would lose observability.
+
+**Why deferred:** The correct fix is a dedicated lightweight user-extraction utility that reads the JWT sub claim without the full verification path (similar to the rate-limiter's unverified decode pattern). Until that utility exists, the fallback is the least-bad option.
+
+---
+
+## LAYER-4 — memory_ingest_service.py opens SessionLocal() outside request context
+
+**Status:** Deferred — Known architectural gap, intentional by design
+
+**Problem:** `AINDY/memory/memory_ingest_service.py` imports and opens `SessionLocal()` at construction time (line 40), outside any request context. This creates a second concurrent session to the same tables as the request session. It breaks the "one session per request" convention and creates independent transaction boundaries.
+
+**Why deferred:** Memory ingestion is intentionally decoupled from the request session — writes are queued and flushed after the script finishes, not within the request transaction. The independent session is architecturally correct for this use case (deferred background writes shouldn't be rolled back if the request session rolls back). The violation is a convention mismatch, not a correctness bug. Resolving it would require a formal background-session pattern or session factory abstraction.
+
+---
+
+## LAYER-5 — execute_with_pipeline_sync uses asyncio.run(); coordination_router calls it on every endpoint
+
+**Status:** Deferred — Known performance gap
+
+**Problem:** `execute_with_pipeline_sync()` (`AINDY/core/execution_helper.py:69`) bridges synchronous routes into the async pipeline via `asyncio.run()`. `coordination_router.py` calls this on 9+ endpoints — each call creates and tears down a new event loop. No technical correctness issue in FastAPI's threadpool model, but it introduces non-trivial async machinery overhead on every coordination route invocation.
+
+**Why deferred:** Fixing this requires either making the coordination routes fully async (straightforward but high-churn across all endpoints) or providing a sync-native pipeline path that doesn't use `asyncio.run()`. The coordination domain is a candidate for extraction (see ROUTE-EXTRACT-001 remaining candidates), so the refactor may be moot if those routes move to the monolith.
