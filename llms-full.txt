@@ -2,7 +2,7 @@
 
 > A self-hostable AI agent execution runtime for building and operating AI-powered systems.
 > Created by Shawn Knight — [Masterplan Infinite Weave](https://www.the-master-plan.com/)
-> Version: 1.0.0 | Package: `aindy-runtime` | Module: `AINDY` | License: proprietary
+> Version: 1.0.0 | Package: `aindy-runtime` | Module: `AINDY` | License: MIT
 
 ---
 

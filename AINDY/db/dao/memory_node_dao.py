@@ -176,6 +176,7 @@ class MemoryNodeDAO:
         namespace: str | None = None,
         addr_type: str | None = None,
         parent_path: str | None = None,
+        commit: bool = True,
     ) -> dict:
         """Insert a new memory node and return its dict representation."""
         node_extra = dict(extra or {})
@@ -208,7 +209,10 @@ class MemoryNodeDAO:
 
         try:
             self.db.add(db_node)
-            self.db.commit()
+            if commit:
+                self.db.commit()
+            else:
+                self.db.flush()
             self.db.refresh(db_node)
         except SQLAlchemyError:
             self.db.rollback()
@@ -237,7 +241,10 @@ class MemoryNodeDAO:
                 except (ValueError, SQLAlchemyError) as exc:
                     logger.warning("[MemoryNodeDAO] child link creation skipped: %s", exc)
             try:
-                self.db.commit()
+                if commit:
+                    self.db.commit()
+                else:
+                    self.db.flush()
             except SQLAlchemyError:
                 self.db.rollback()
 

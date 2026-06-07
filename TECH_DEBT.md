@@ -1977,42 +1977,24 @@ ROOT_ROUTERS = [
 
 ## EVENT-1 — Emission error loop prevention is implicit, not explicit
 
-**Status:** Open — Known fragility
+**Status:** CLOSED (2026-06-08)
 
-**Problem:** When `emit_system_event` raises `SystemEventEmissionError` (required event, DB failure), the call is inside `_safe_emit_event`, which catches all exceptions and returns `None` without re-raising. This means the error never propagates back into the pipeline's `except Exception` branch — so no infinite loop occurs.
+**Implementation:** Added explicit `_emission_failed` flag to `ctx.metadata` in `_safe_emit_event` (`pipeline.py`). On any emission exception the flag is set to `True`. On every subsequent call to `_safe_emit_event` for the same context, the guard short-circuits and returns `None` immediately — before touching the DB or calling `emit_system_event`. This makes loop prevention a first-class invariant rather than a side effect of the broad `except` catch.
 
-The loop prevention is implicit: it relies on `_safe_emit_event`'s broad `except Exception` absorbing the `SystemEventEmissionError`. There is no explicit guard that says "if we are already in an emission failure path, do not attempt another emission." If `_safe_emit_event` is ever modified to let certain exceptions propagate (e.g. to surface required-event failures more loudly), the pipeline's `except Exception` branch will attempt to emit `execution.failed` using the same failed DB session, which calls `_safe_emit_event` again — a loop bounded only by the same implicit catch.
-
-**The specific scenario:**
-1. `execution.completed` emission fails → `SystemEventEmissionError` raised inside `emit_system_event`
-2. `_safe_emit_event` catches it → returns `None` (loop prevented)
-3. If step 2 is changed to re-raise: `SystemEventEmissionError` escapes into pipeline `except Exception`
-4. Pipeline tries to emit `execution.failed` via `_safe_emit_event` with the same broken DB session
-5. That also fails → caught by `_safe_emit_event` → returns `None` → loop exits
-
-**Resolution direction:** Add an explicit `_emission_in_progress` flag or `_failed_event_types` set to the execution context so the pipeline's failure handler can skip re-emission when the failure itself was an emission error. This makes the loop prevention a first-class invariant rather than an incidental side effect of exception swallowing.
-
-**Risk:** Low today — `_safe_emit_event` has been stable. Becomes a latent correctness bug if the emission error surface is ever hardened.
+- The guard fires only on the second+ call in a failure sequence; it does not affect the first failed call.
+- A successful emission never sets the flag.
+- 4 new regression tests in `tests/unit/test_memory1_event1_fixes.py` (flag-set-on-failure, skip-on-flag, no-flag-on-success, loop-terminates-after-one-real-call).
 
 ---
 
 ## MEMORY-1 — persist_memory_ingest_payload can produce orphaned nodes on partial write failure
 
-**Status:** Open — Known gap (see also: memory writes are fire-and-forget)
+**Status:** CLOSED (2026-06-08)
 
-**Problem:** `AINDY/memory/memory_ingest_service.py:persist_memory_ingest_payload()` performs three sequential DAO operations with independent commit boundaries:
-
-1. `trace_dao.create_trace()` — creates and commits a `MemoryTrace` row
-2. `node_dao.save()` — creates and commits a `MemoryNode` row
-3. `trace_dao.append_node()` — links the node to the trace
-
-If step 3 fails, the exception is caught and logged as a `WARNING` (line 72) and execution continues. The result: a `MemoryNode` row exists in the DB, a `MemoryTrace` row exists in the DB, but they are not linked. The node is queryable but causal-trace navigation will not surface it via the trace. No rollback, no retry, no error surfaced to the user.
-
-**Why this is worse than the general fire-and-forget gap:** The general fire-and-forget gap means a write may not happen at all (queue full, worker crash). This gap means a write *partially* happened — data was committed but in an inconsistent state. The node appears in vector search results but is invisible in trace views, creating a split-brain between the two memory query surfaces.
-
-**Resolution direction:** Wrap all three operations in a single transaction with explicit `db.commit()` at the end and `db.rollback()` on any failure. Requires the worker to own the session and pass it through all three DAO calls rather than relying on per-DAO auto-commit.
-
-**Risk:** Low frequency (append_node rarely fails when save succeeds), but produces silently inconsistent data rather than a clean miss.
+**Implementation:**
+- Added `commit: bool = True` parameter to `MemoryTraceDAO.create_trace()`, `MemoryTraceDAO.append_node()`, and `MemoryNodeDAO.save()`. When `commit=False` each method uses `db.flush()` instead of `db.commit()`, leaving the changes pending in the caller's transaction.
+- `persist_memory_ingest_payload()` now passes `commit=False` to all three DAO calls and issues a single `db.commit()` on success. On any exception it calls `db.rollback()` and returns `IngestResult(status="failed")` rather than silently continuing with partial state.
+- 4 new regression tests in `tests/unit/test_memory1_event1_fixes.py` (success path commits once, append failure rolls back, create failure rolls back, session always closed).
 
 ---
 

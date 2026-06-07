@@ -25,6 +25,7 @@ class MemoryTraceDAO:
         description: Optional[str] = None,
         source: Optional[str] = None,
         extra: Optional[dict] = None,
+        commit: bool = True,
     ) -> dict:
         trace = MemoryTrace(
             user_id=require_user_id(user_id),
@@ -36,7 +37,10 @@ class MemoryTraceDAO:
         if trace.id is None:
             trace.id = uuid.uuid4()
         self.db.add(trace)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         self.db.refresh(trace)
         return self._trace_to_dict(trace)
 
@@ -47,6 +51,7 @@ class MemoryTraceDAO:
         node_id: str,
         user_id: str,
         position: Optional[int] = None,
+        commit: bool = True,
     ) -> Optional[dict]:
         trace = self._get_trace_model(trace_id, user_id=user_id)
         if not trace:
@@ -64,7 +69,10 @@ class MemoryTraceDAO:
             trace_node.id = uuid.uuid4()
 
         self.db.add(trace_node)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         self.db.refresh(trace_node)
         return self._trace_node_to_dict(trace_node)
 
