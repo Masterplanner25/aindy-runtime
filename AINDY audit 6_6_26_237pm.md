@@ -1071,3 +1071,171 @@ Fix: `copy_context()` (Python stdlib 3.7+) captures a snapshot of the current co
 New tests: `tests/unit/test_contextvar_thread_propagation.py` — 3 shapes (trace_id, eu_id, pipeline_active) — 3/3 green.
 TECH_DEBT.md: added OPER-EXEC-002 entry (closed).
 CLAUDE.md prefix registry: included in OPER-EXEC-\* family.
+
+---
+# TIER 2 AUTH WIRING — ADDRESSED 2026-06-06/07
+
+PRs: #46 (auth wiring V1/V4/V6), #47 (guard split hotfix — reverted over-tightening)
+Tests: `tests/unit/test_auth_wiring.py` — 14 tests, all green
+
+---
+
+## V1 — Duplicate auth implementation (AINDY/auth/__init__.py was 211-line verbatim copy)
+STATUS: CLOSED 2026-06-06
+
+Finding: `AINDY/auth/__init__.py` contained a 211-line verbatim copy of the canonical
+`api_key_auth.py` implementation. Two divergent copies of `AuthPrincipal`, `Scopes`,
+`get_authenticated_principal`, and `require_scope` — any bug fix or scope addition
+in one would silently not apply to the other.
+
+Fix: Replaced `AINDY/auth/__init__.py` with a 7-line re-export shim:
+```python
+"""auth package — canonical implementation lives in api_key_auth.py."""
+from AINDY.auth.api_key_auth import (  # noqa: F401
+    AuthPrincipal,
+    Scopes,
+    get_authenticated_principal,
+    require_scope,
+)
+```
+All imports from `AINDY.auth` now resolve to the single canonical source.
+`TECH_DEBT.md`: AUTH-V1 entry (closed).
+
+---
+
+## V4 — Frontend logout did not call server-side logout endpoint
+STATUS: CLOSED 2026-06-06 (ui-kit repo — separate commit)
+
+Finding: Platform SPA `logout()` in `AuthContext.jsx` cleared localStorage and set
+`isAuthenticated=false` but never called `POST /auth/logout`. The server-side JWT
+invalidation endpoint (token version bump) was effectively unreachable from the SPA.
+
+Fix (in `C:\dev\aindy-ui-kit\src\`):
+- `api/_routes.js`: added `LOGOUT: \`${BASE}/auth/logout\`` to the `AUTH` routes object
+- `api/auth.js`: added `logoutUser()` best-effort function calling `POST /auth/logout`
+- `context/AuthContext.jsx`: `logout()` now calls `logoutUser()` before clearing local
+  state. Best-effort — client-side state is always cleared regardless of server response.
+`TECH_DEBT.md`: AUTH-V4 entry (closed).
+
+---
+
+## V6 — admin_invalidate_sessions lacked scope enforcement for API keys
+STATUS: CLOSED 2026-06-06
+
+Finding: `POST /auth/admin/invalidate-sessions` accepted any authenticated caller and
+relied on an in-handler `is_admin` check — but this check only applied to JWT users.
+An API key (which lacks `is_admin`) would fail the check, but the gate was inconsistent
+with the rest of the platform's auth model.
+
+Fix: Introduced two distinct admin guards in `AINDY/services/auth_service.py`:
+
+1. `require_platform_admin_access` (REVERTED to original semantics):
+   - API keys: always pass (scope enforcement per-endpoint)
+   - JWT: requires `is_admin=True`
+   - Used on `/platform` router boundary — over-tightening this broke API key access
+     to all platform endpoints (PR #47 hotfix reverted the V6a change)
+
+2. `require_admin_principal` (NEW — strict guard):
+   - API keys: requires `platform.admin` scope
+   - JWT: requires `is_admin=True`
+   - Used only on `admin_invalidate_sessions` and similarly privileged endpoints
+
+`AINDY/routes/auth_router.py`: `admin_invalidate_sessions` dependency changed from
+`Depends(get_current_user)` (+ manual in-handler guard) to `Depends(require_admin_principal)`.
+Manual in-handler scope check and `is_admin` check removed.
+`TECH_DEBT.md`: AUTH-V6 entry (closed).
+
+---
+
+## V2/V3 — API key scope enforcement not wired on any platform endpoint
+STATUS: CLOSED 2026-06-06 (scope guard wired; V3 parallel auth system deferred)
+
+Finding: `Scopes` constants and `require_scope()` in `api_key_auth.py` were fully
+implemented but called by no route handler. API keys with any scope (or no scope)
+could call any `/platform` endpoint without restriction.
+
+Fix: Introduced `enforce_api_key_scope(scope: str)` dependency factory in
+`AINDY/services/auth_service.py`. Uses `Depends(get_current_user)` internally — FastAPI
+dependency caching means no second DB lookup occurs when the route also declares
+`current_user: dict = Depends(get_current_user)`.
+
+- JWT users: always pass (full trust at platform boundary)
+- API key users: must have the required scope OR `platform.admin`
+
+Wired on:
+- `AINDY/routes/platform/flows_router.py`:
+  - `GET /platform/flows` → `Scopes.FLOW_READ`
+  - `GET /platform/flows/{name}` → `Scopes.FLOW_READ`
+  - `POST /platform/flows/{name}/run` → `Scopes.FLOW_EXECUTE`
+- `AINDY/routes/platform/platform_ops_router.py`:
+  - `GET /platform/memory` → `Scopes.MEMORY_READ`
+  - `GET /platform/memory/tree` → `Scopes.MEMORY_READ`
+  - `GET /platform/memory/trace` → `Scopes.MEMORY_READ`
+  - `POST /platform/syscall` → domain-level enforcement inline (see below)
+
+`POST /platform/syscall` inline domain enforcement:
+Maps syscall name prefix to required scope for API key callers:
+- `sys.v1.memory.*` → `memory.write`
+- `sys.v1.flow.*` → `flow.execute`
+- `sys.v1.agent.*` → `agent.run`
+- `sys.v1.webhook.*` → `webhook.manage`
+`platform.admin` scope bypasses all domain checks.
+
+Deferred: `get_authenticated_principal` / `require_scope()` parallel auth system in
+`api_key_auth.py` — fully built but not integrated; deferred (V3 parallel system gap).
+`TECH_DEBT.md`: AUTH-V2V3 entry (scope enforcement wired, V3 deferred).
+
+---
+# TIER 3 STRUCTURAL CLEANUP — ADDRESSED 2026-06-07
+
+PR: #48 (fix/tier3-structural)
+Tests: `tests/unit/test_tier3_structural.py` — 13 tests, all green
+
+---
+
+## Item 8 — MemoryIngestQueue silent drops (no observable signal on loss)
+STATUS: CLOSED 2026-06-07
+
+Finding: `MemoryIngestQueue.enqueue()` incremented `_dropped_total` and a Prometheus
+counter on queue-full and not-accepting conditions but emitted no log message. Silent
+drops in production left no trace in logs — only the Prometheus counter (if scraped)
+signaled the loss.
+
+Fix: Added `logger.warning(...)` in both drop paths in `AINDY/memory/ingest_queue.py`:
+- Not-accepting path: `"[MemoryIngestQueue] not accepting (stopped or not started); dropped write (total_dropped=%d)"`
+- Queue-full path: `"[MemoryIngestQueue] queue full (depth=%d capacity=%d); dropped write (total_dropped=%d)"`
+
+Both messages include the running `total_dropped` count.
+`TECH_DEBT.md`: TIER3-8 entry (closed).
+
+---
+
+## Item 9 — db.flush() in _persist_system_event pushed all pending ORM objects
+STATUS: CLOSED 2026-06-07
+
+Finding: `AINDY/core/system_event_service.py` called bare `db.flush()` after adding a
+SystemEvent to the session. SQLAlchemy's bare flush pushes ALL pending identity map
+objects — meaning any uncommitted handler changes already in the session (e.g., an
+executing FlowRun state update) would be flushed to the DB as a side effect of event
+emission, before the handler's own commit/rollback decision.
+
+Fix: Changed `db.flush()` → `db.flush([event])` at line 107. SQLAlchemy's
+selective flush accepts a list of objects and flushes only those instances.
+```python
+db.flush([event])  # flush only this object — avoids committing pending handler changes as a side effect
+```
+`TECH_DEBT.md`: TIER3-9 entry (closed).
+
+---
+
+## Item 10 — async_job_service / AutonomousController tight coupling
+STATUS: DEFERRED (architectural — no bounded fix this session)
+
+Finding: `async_job_service.py` directly imports from and calls into `AutonomousController`,
+mixing job orchestration with agent-policy evaluation in a single module. No clear seam
+for extraction without a larger refactor of the job orchestration path.
+
+Deferred: The fix would require extracting `evaluate_live_trigger()` and the job
+orchestration responsibilities into separate concerns. No bounded change available
+without risk of regression. Tracked as `TIER3-10` in `TECH_DEBT.md`.
+`TECH_DEBT.md`: TIER3-10 entry (open).
