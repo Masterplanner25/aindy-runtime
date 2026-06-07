@@ -276,8 +276,14 @@ def get_current_user(
 def require_platform_admin_access(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """Allow platform API keys, but require admin privilege for JWT users."""
+    """Require platform.admin scope for API keys, is_admin flag for JWT users."""
     if current_user.get("auth_type") == "api_key":
+        scopes = set(current_user.get("api_key_scopes") or [])
+        if "platform.admin" not in scopes:
+            raise HTTPException(
+                status_code=403,
+                detail="Admin privileges required for this endpoint.",
+            )
         return current_user
     if not current_user.get("is_admin", False):
         raise HTTPException(

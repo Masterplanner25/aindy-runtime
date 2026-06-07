@@ -20,6 +20,7 @@ from AINDY.services.auth_service import (
     create_access_token,
     get_current_user,
     register_user,
+    require_platform_admin_access,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -149,17 +150,10 @@ def admin_invalidate_sessions(
     user_id: str,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_platform_admin_access),
 ):
     def handler(ctx):
         from AINDY.db.models.user import User
-
-        if current_user.get("auth_type") == "api_key":
-            scopes = set(current_user.get("api_key_scopes") or [])
-            if "platform.admin" not in scopes:
-                raise HTTPException(status_code=403, detail="Admin required")
-        elif not current_user.get("is_admin"):
-            raise HTTPException(status_code=403, detail="Admin required")
 
         target_id = parse_user_id(user_id)
         if not target_id:

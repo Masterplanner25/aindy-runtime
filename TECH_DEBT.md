@@ -1576,3 +1576,40 @@ ROOT_ROUTERS = [
 - `tests/unit/test_contextvar_thread_propagation.py` — 3 shapes verifying `trace_id`, `eu_id`, and `pipeline_active` each propagate correctly.
 
 **`copy_context()` is Python stdlib (3.7+), zero new dependencies.**
+
+---
+
+## AUTH-V1 — AINDY/auth/__init__.py was a verbatim duplicate of api_key_auth.py
+
+**Status:** CLOSED (2026-06-06)
+
+**Problem:** `AINDY/auth/__init__.py` and `AINDY/auth/api_key_auth.py` were byte-for-byte identical (211 lines each). Any change to one had to be mirrored to the other or behavior would silently diverge. The `__init__.py` was not re-exporting — it was fully re-implementing.
+
+**Fix applied:** Replaced `AINDY/auth/__init__.py` with a 7-line re-export shim. Canonical implementation lives exclusively in `api_key_auth.py`.
+
+---
+
+## AUTH-V4 — Frontend logout() never called POST /auth/logout
+
+**Status:** CLOSED (2026-06-06)
+
+**Problem:** `AuthContext.jsx:logout()` called `clearStoredToken()` and `setToken(null)` only. `POST /auth/logout` increments `User.token_version`, invalidating the JWT on all subsequent requests. Without the backend call, a "logged-out" user's token remained valid on the server for up to 24 hours — enough for replay or session-fixation if the token was captured.
+
+**Fix applied:**
+- Added `ROUTES.AUTH.LOGOUT` to `@aindy/ui-kit` `_routes.js`.
+- Added `logoutUser()` function to `auth.js` (best-effort: `.catch(() => null)` so network failure never blocks local state clear).
+- Updated `AuthContext.jsx:logout()` to call `logoutUser()` before clearing local state.
+- Rebuilt `@aindy/ui-kit` and platform SPA dist.
+
+---
+
+## AUTH-V6 — require_platform_admin_access() passed ALL API keys regardless of scope
+
+**Status:** CLOSED (2026-06-06)
+
+**Problem:** `auth_service.py:require_platform_admin_access()` checked `is_admin` for JWT users but returned immediately for any `auth_type == "api_key"` user with no scope check. An API key with `flow.read` scope could call any admin route (flow management, session invalidation) guarded by this dependency. `admin_invalidate_sessions` in `auth_router.py` had a manual in-handler copy of the correct logic instead of using the shared dependency — the two drifted.
+
+**Fix applied:**
+- `AINDY/services/auth_service.py`: `require_platform_admin_access()` now checks `"platform.admin" in api_key_scopes` for API key callers, 403 if absent.
+- `AINDY/routes/auth_router.py`: `admin_invalidate_sessions` dependency changed from `Depends(get_current_user)` to `Depends(require_platform_admin_access)`; manual in-handler guard removed.
+- `tests/unit/test_auth_wiring.py`: 11 tests covering V1 re-exports (5 shapes) and V6 guard (6 shapes).
