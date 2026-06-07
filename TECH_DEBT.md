@@ -1991,3 +1991,24 @@ finally:
 ```
 
 **Why not fixed immediately:** Requires careful testing — `_safe_finalize_eu` is idempotent in intent but the double-call behavior should be verified. Low-probability trigger path makes this low urgency.
+
+---
+
+## EVENT-1 — Emission error loop prevention is implicit, not explicit
+
+**Status:** Open — Known fragility
+
+**Problem:** When `emit_system_event` raises `SystemEventEmissionError` (required event, DB failure), the call is inside `_safe_emit_event`, which catches all exceptions and returns `None` without re-raising. This means the error never propagates back into the pipeline's `except Exception` branch — so no infinite loop occurs.
+
+The loop prevention is implicit: it relies on `_safe_emit_event`'s broad `except Exception` absorbing the `SystemEventEmissionError`. There is no explicit guard that says "if we are already in an emission failure path, do not attempt another emission." If `_safe_emit_event` is ever modified to let certain exceptions propagate (e.g. to surface required-event failures more loudly), the pipeline's `except Exception` branch will attempt to emit `execution.failed` using the same failed DB session, which calls `_safe_emit_event` again — a loop bounded only by the same implicit catch.
+
+**The specific scenario:**
+1. `execution.completed` emission fails → `SystemEventEmissionError` raised inside `emit_system_event`
+2. `_safe_emit_event` catches it → returns `None` (loop prevented)
+3. If step 2 is changed to re-raise: `SystemEventEmissionError` escapes into pipeline `except Exception`
+4. Pipeline tries to emit `execution.failed` via `_safe_emit_event` with the same broken DB session
+5. That also fails → caught by `_safe_emit_event` → returns `None` → loop exits
+
+**Resolution direction:** Add an explicit `_emission_in_progress` flag or `_failed_event_types` set to the execution context so the pipeline's failure handler can skip re-emission when the failure itself was an emission error. This makes the loop prevention a first-class invariant rather than an incidental side effect of exception swallowing.
+
+**Risk:** Low today — `_safe_emit_event` has been stable. Becomes a latent correctness bug if the emission error surface is ever hardened.
