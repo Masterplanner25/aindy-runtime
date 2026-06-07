@@ -20,7 +20,7 @@ from AINDY.services.auth_service import (
     create_access_token,
     get_current_user,
     register_user,
-    require_platform_admin_access,
+    require_admin_principal,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -150,7 +150,7 @@ def admin_invalidate_sessions(
     user_id: str,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(require_platform_admin_access),
+    current_user: dict = Depends(require_admin_principal),
 ):
     def handler(ctx):
         from AINDY.db.models.user import User
