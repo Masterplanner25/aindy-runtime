@@ -115,6 +115,7 @@ class MemoryIngestQueue:
             self._dropped_total += 1
             _increment_drop_metrics()
             self._update_metrics()
+            logger.warning("[MemoryIngestQueue] not accepting (stopped or not started); dropped write (total_dropped=%d)", self._dropped_total)
             return False
         try:
             self._queue.put_nowait(ingest_payload)
@@ -124,6 +125,7 @@ class MemoryIngestQueue:
             self._dropped_total += 1
             _increment_drop_metrics()
             self._update_metrics()
+            logger.warning("[MemoryIngestQueue] queue full (depth=%d capacity=%d); dropped write (total_dropped=%d)", self.depth, self.maxsize, self._dropped_total)
             return False
 
     def worker_loop(self) -> None:

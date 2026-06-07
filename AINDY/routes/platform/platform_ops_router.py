@@ -8,7 +8,8 @@ from AINDY.core.execution_helper import execute_with_pipeline_sync
 from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.routes.platform.schemas import SyscallDispatchRequest
-from AINDY.services.auth_service import get_current_user
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 
 router = APIRouter()
 
@@ -77,7 +78,7 @@ def get_tenant_usage(request: Request, tenant_id: str, current_user: dict = Depe
 
 @router.get("/memory", response_model=None)
 @limiter.limit("60/minute")
-def list_memory_path(request: Request, path: str, limit: int = 50, query: Optional[str] = None, tags: Optional[str] = None, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_memory_path(request: Request, path: str, limit: int = 50, query: Optional[str] = None, tags: Optional[str] = None, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db), _s: None = Depends(enforce_api_key_scope(Scopes.MEMORY_READ))):
     def handler(ctx):
         from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
         from AINDY.memory.memory_address_space import normalize_path, validate_tenant_path
@@ -97,7 +98,7 @@ def list_memory_path(request: Request, path: str, limit: int = 50, query: Option
 
 @router.get("/memory/tree", response_model=None)
 @limiter.limit("60/minute")
-def memory_tree(request: Request, path: str, limit: int = 200, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+def memory_tree(request: Request, path: str, limit: int = 200, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db), _s: None = Depends(enforce_api_key_scope(Scopes.MEMORY_READ))):
     def handler(ctx):
         from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
         from AINDY.memory.memory_address_space import build_tree, is_exact, normalize_path, validate_tenant_path, wildcard_prefix
@@ -117,7 +118,7 @@ def memory_tree(request: Request, path: str, limit: int = 200, current_user: dic
 
 @router.get("/memory/trace", response_model=None)
 @limiter.limit("60/minute")
-def memory_trace(request: Request, path: str, depth: int = 5, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+def memory_trace(request: Request, path: str, depth: int = 5, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db), _s: None = Depends(enforce_api_key_scope(Scopes.MEMORY_READ))):
     def handler(ctx):
         from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
         from AINDY.memory.memory_address_space import normalize_path, validate_tenant_path
@@ -182,8 +183,24 @@ def dispatch_syscall(request: Request, body: SyscallDispatchRequest, current_use
 
         user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
         if current_user.get("auth_type") == "api_key":
-            api_key_scopes = current_user.get("api_key_scopes") or []
-            capabilities = [scope for scope in api_key_scopes if scope in DEFAULT_NODUS_CAPABILITIES]
+            api_key_scopes = set(current_user.get("api_key_scopes") or [])
+            # Enforce domain-level scope for API key callers based on syscall name prefix.
+            _SYSCALL_REQUIRED_SCOPE: dict[str, str] = {
+                "sys.v1.memory.": Scopes.MEMORY_WRITE,
+                "sys.v1.flow.": Scopes.FLOW_EXECUTE,
+                "sys.v1.agent.": Scopes.AGENT_RUN,
+                "sys.v1.webhook.": Scopes.WEBHOOK_MANAGE,
+            }
+            if Scopes.PLATFORM_ADMIN not in api_key_scopes:
+                for prefix, required in _SYSCALL_REQUIRED_SCOPE.items():
+                    if body.name.startswith(prefix):
+                        if required not in api_key_scopes:
+                            raise HTTPException(
+                                status_code=403,
+                                detail=f"API key scope '{required}' required for syscall '{body.name}'",
+                            )
+                        break
+            capabilities = [s for s in api_key_scopes if s in DEFAULT_NODUS_CAPABILITIES]
         else:
             capabilities = list(DEFAULT_NODUS_CAPABILITIES)
         syscall_ctx = make_syscall_ctx_from_tool(user_id=user_id, capabilities=capabilities)
