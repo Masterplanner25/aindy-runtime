@@ -213,9 +213,15 @@ containers). Static matrix now correctly reports `no_new_privileges`, `drop_all_
 `pids_limit` as available hardening controls for both platforms.
 Policy document created: `docs/runtime/MACOS_CONTAINER_POLICY.md`. Records what IS and is
 NOT claimed (seccomp/AppArmor/SELinux not claimed — not tested), assurance tier
-(container-grade, not strong-sandbox-vm), and that macOS escape suite certification is
-pending — first run required before certifying a macOS deployment.
+(container-grade, not strong-sandbox-vm).
 2 new unit tests in `tests/unit/test_sandbox_runner.py` (64 total).
+
+**Phase 5 (2026-06-06) — macOS CI certification workflow: COMPLETE**
+`.github/workflows/macos-sandbox.yml` added (PR merged 2026-06-06). `workflow_dispatch`
+job targets `macos-14` (Apple Silicon), installs Colima as the Linux-backend Docker
+provider, and runs `pytest -m sandbox_escape -v` against the full 17-test escape suite.
+Uploads `sandbox_escape_results.json` as a workflow artifact. macOS escape suite
+certification is now gated through CI — run the workflow before each macOS deployment.
 
 **Phase 3 (2026-06-05) — Formal threat model + sandbox_escape_test_posture(): COMPLETE**
 Created `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (append-only log, Entry 001 committed).
