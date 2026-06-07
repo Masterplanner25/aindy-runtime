@@ -286,6 +286,8 @@ class ExecutionPipeline:
                     pass
             if rm_started:
                 self._safe_rm_mark_completed(ctx)
+            if ctx.metadata.get("eu_status") != "waiting":
+                self._safe_finalize_eu(ctx, "failed")
             self._safe_reset_current_execution_context(execution_ctx_token)
             self._safe_reset_pipeline_active(pipeline_token)
             self._safe_reset_parent_event(parent_token)
@@ -344,5 +346,5 @@ class ExecutionPipeline:
                 required=required,
                 error=exc,
             )
-            logger.debug("execution.event_emit_skipped", exc_info=True)
+            logger.warning("execution.event_emit_skipped", exc_info=True)
             return None
