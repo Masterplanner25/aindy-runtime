@@ -1950,3 +1950,107 @@ ROOT_ROUTERS = [
 **Problem:** `execute_with_pipeline_sync()` (`AINDY/core/execution_helper.py:69`) bridges synchronous routes into the async pipeline via `asyncio.run()`. `coordination_router.py` calls this on 9+ endpoints — each call creates and tears down a new event loop. No technical correctness issue in FastAPI's threadpool model, but it introduces non-trivial async machinery overhead on every coordination route invocation.
 
 **Why deferred:** Fixing this requires either making the coordination routes fully async (straightforward but high-churn across all endpoints) or providing a sync-native pipeline path that doesn't use `asyncio.run()`. The coordination domain is a candidate for extraction (see ROUTE-EXTRACT-001 remaining candidates), so the refactor may be moot if those routes move to the monolith.
+
+---
+
+## EXEC-EU-1 — _safe_finalize_eu not called from the finally block in ExecutionPipeline.run()
+
+**Status:** Open — Known gap
+
+**Problem:** `AINDY/core/execution_pipeline/pipeline.py` calls `_safe_finalize_eu` in three places — the happy path (line 183), the `HTTPException` branch (line 248), and the broad `except Exception` branch (line 269) — but NOT in the `finally` block (line 281). The `finally` block only covers `_safe_rm_mark_completed` (ResourceManager counter) and context reset.
+
+If a genuinely novel exception escapes all three `except` branches (which the broad `except Exception` makes architecturally near-impossible but not provably impossible — e.g. a `BaseException` subclass like `KeyboardInterrupt` or `SystemExit` raised inside the handler), the EU row stays in `executing` status indefinitely with no recovery path.
+
+**Impact:** An EU stuck in `executing` holds a ResourceManager slot permanently and does not emit `execution.completed` or `execution.failed`. Under the right conditions (repeated crashes at exactly this point) the ResourceManager counter drifts from reality.
+
+**Resolution direction:** Move `_safe_finalize_eu(ctx, "failed")` into the `finally` block with a guard flag (e.g. `eu_finalized`) so it only fires if it wasn't already called on a normal path. Pattern:
+
+```python
+eu_finalized = False
+try:
+    ...
+    self._safe_finalize_eu(ctx, "completed")
+    eu_finalized = True
+    ...
+except HTTPException as exc:
+    ...
+    self._safe_finalize_eu(ctx, "failed")
+    eu_finalized = True
+    ...
+except Exception as exc:
+    ...
+    self._safe_finalize_eu(ctx, "failed")
+    eu_finalized = True
+    ...
+finally:
+    if not eu_finalized:
+        self._safe_finalize_eu(ctx, "failed")
+    if rm_started:
+        self._safe_rm_mark_completed(ctx)
+    ...
+```
+
+**Why not fixed immediately:** Requires careful testing — `_safe_finalize_eu` is idempotent in intent but the double-call behavior should be verified. Low-probability trigger path makes this low urgency.
+
+---
+
+## EVENT-1 — Emission error loop prevention is implicit, not explicit
+
+**Status:** Open — Known fragility
+
+**Problem:** When `emit_system_event` raises `SystemEventEmissionError` (required event, DB failure), the call is inside `_safe_emit_event`, which catches all exceptions and returns `None` without re-raising. This means the error never propagates back into the pipeline's `except Exception` branch — so no infinite loop occurs.
+
+The loop prevention is implicit: it relies on `_safe_emit_event`'s broad `except Exception` absorbing the `SystemEventEmissionError`. There is no explicit guard that says "if we are already in an emission failure path, do not attempt another emission." If `_safe_emit_event` is ever modified to let certain exceptions propagate (e.g. to surface required-event failures more loudly), the pipeline's `except Exception` branch will attempt to emit `execution.failed` using the same failed DB session, which calls `_safe_emit_event` again — a loop bounded only by the same implicit catch.
+
+**The specific scenario:**
+1. `execution.completed` emission fails → `SystemEventEmissionError` raised inside `emit_system_event`
+2. `_safe_emit_event` catches it → returns `None` (loop prevented)
+3. If step 2 is changed to re-raise: `SystemEventEmissionError` escapes into pipeline `except Exception`
+4. Pipeline tries to emit `execution.failed` via `_safe_emit_event` with the same broken DB session
+5. That also fails → caught by `_safe_emit_event` → returns `None` → loop exits
+
+**Resolution direction:** Add an explicit `_emission_in_progress` flag or `_failed_event_types` set to the execution context so the pipeline's failure handler can skip re-emission when the failure itself was an emission error. This makes the loop prevention a first-class invariant rather than an incidental side effect of exception swallowing.
+
+**Risk:** Low today — `_safe_emit_event` has been stable. Becomes a latent correctness bug if the emission error surface is ever hardened.
+
+---
+
+## MEMORY-1 — persist_memory_ingest_payload can produce orphaned nodes on partial write failure
+
+**Status:** Open — Known gap (see also: memory writes are fire-and-forget)
+
+**Problem:** `AINDY/memory/memory_ingest_service.py:persist_memory_ingest_payload()` performs three sequential DAO operations with independent commit boundaries:
+
+1. `trace_dao.create_trace()` — creates and commits a `MemoryTrace` row
+2. `node_dao.save()` — creates and commits a `MemoryNode` row
+3. `trace_dao.append_node()` — links the node to the trace
+
+If step 3 fails, the exception is caught and logged as a `WARNING` (line 72) and execution continues. The result: a `MemoryNode` row exists in the DB, a `MemoryTrace` row exists in the DB, but they are not linked. The node is queryable but causal-trace navigation will not surface it via the trace. No rollback, no retry, no error surfaced to the user.
+
+**Why this is worse than the general fire-and-forget gap:** The general fire-and-forget gap means a write may not happen at all (queue full, worker crash). This gap means a write *partially* happened — data was committed but in an inconsistent state. The node appears in vector search results but is invisible in trace views, creating a split-brain between the two memory query surfaces.
+
+**Resolution direction:** Wrap all three operations in a single transaction with explicit `db.commit()` at the end and `db.rollback()` on any failure. Requires the worker to own the session and pass it through all three DAO calls rather than relying on per-DAO auto-commit.
+
+**Risk:** Low frequency (append_node rarely fails when save succeeds), but produces silently inconsistent data rather than a clean miss.
+
+---
+
+## OBS-1 — Pipeline _safe_* failures log at DEBUG, invisible in production
+
+**Status:** Open — Known observability gap
+
+**Problem:** Three pipeline failure paths emit at `logger.debug`, which is off in production:
+
+| Failure path | File | Line | Level |
+|---|---|---|---|
+| `_safe_require_eu` — EU creation fails | `execution_pipeline/resources.py` | 38, 53 | `DEBUG` |
+| `_safe_finalize_eu` — EU finalization fails | `execution_pipeline/resources.py` | 160 | `DEBUG` |
+| `_safe_emit_event` — event emission fails | `execution_pipeline/pipeline.py` | 347 | `DEBUG` |
+
+All three are recorded in `ctx.metadata["side_effects"]` as `status: "failed"`, but that dict is only visible by querying the DB for the ExecutionUnit's metadata — not in logs. A production operator whose EU creation is silently failing (e.g. due to DB schema drift) will see no log output, no alert, and no metric. The execution continues without an EU, without scope tracking, and without lifecycle events.
+
+**Contrast:** Quota check failures (`_safe_quota_check`) and ResourceManager failures (`_safe_rm_mark_started/completed`) were already upgraded to `WARNING`. The three above were not.
+
+**Resolution direction:** Promote `_safe_require_eu`, `_safe_finalize_eu`, and `_safe_emit_event` failures to `logger.warning`. These are non-fatal by design (the pipeline continues) but are degraded-mode conditions that operators need to see without attaching a debugger.
+
+**Risk:** Low probability of triggering, but when it does trigger the operator has no signal without reading the DB directly.
