@@ -2012,3 +2012,23 @@ The loop prevention is implicit: it relies on `_safe_emit_event`'s broad `except
 **Resolution direction:** Add an explicit `_emission_in_progress` flag or `_failed_event_types` set to the execution context so the pipeline's failure handler can skip re-emission when the failure itself was an emission error. This makes the loop prevention a first-class invariant rather than an incidental side effect of exception swallowing.
 
 **Risk:** Low today — `_safe_emit_event` has been stable. Becomes a latent correctness bug if the emission error surface is ever hardened.
+
+---
+
+## MEMORY-1 — persist_memory_ingest_payload can produce orphaned nodes on partial write failure
+
+**Status:** Open — Known gap (see also: memory writes are fire-and-forget)
+
+**Problem:** `AINDY/memory/memory_ingest_service.py:persist_memory_ingest_payload()` performs three sequential DAO operations with independent commit boundaries:
+
+1. `trace_dao.create_trace()` — creates and commits a `MemoryTrace` row
+2. `node_dao.save()` — creates and commits a `MemoryNode` row
+3. `trace_dao.append_node()` — links the node to the trace
+
+If step 3 fails, the exception is caught and logged as a `WARNING` (line 72) and execution continues. The result: a `MemoryNode` row exists in the DB, a `MemoryTrace` row exists in the DB, but they are not linked. The node is queryable but causal-trace navigation will not surface it via the trace. No rollback, no retry, no error surfaced to the user.
+
+**Why this is worse than the general fire-and-forget gap:** The general fire-and-forget gap means a write may not happen at all (queue full, worker crash). This gap means a write *partially* happened — data was committed but in an inconsistent state. The node appears in vector search results but is invisible in trace views, creating a split-brain between the two memory query surfaces.
+
+**Resolution direction:** Wrap all three operations in a single transaction with explicit `db.commit()` at the end and `db.rollback()` on any failure. Requires the worker to own the session and pass it through all three DAO calls rather than relying on per-DAO auto-commit.
+
+**Risk:** Low frequency (append_node rarely fails when save succeeds), but produces silently inconsistent data rather than a clean miss.

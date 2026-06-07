@@ -562,6 +562,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **LAYER-\*** — Layer boundary violations (2026-06-07 audit). All deferred. LAYER-1: `execution_dispatcher.py` opens `SessionLocal()` directly for event emission. LAYER-2: auth routes run through `execute_with_pipeline_sync` (ExecutionUnit overhead on login/register). LAYER-3: `exception_handlers.py` falls back to `decode_access_token` for user attribution (partially mitigated — `request.state.user_id` checked first). LAYER-4: `memory_ingest_service.py` opens `SessionLocal()` outside request context (intentional by design — deferred writes). LAYER-5: `execute_with_pipeline_sync` uses `asyncio.run()`; coordination_router calls it on 9+ endpoints.
 - **EXEC-EU-\*** — ExecutionUnit lifecycle gaps. EXEC-EU-1: `_safe_finalize_eu` not in `finally` block of `ExecutionPipeline.run()` — a `BaseException` subclass escaping all `except` branches leaves the EU in `executing` indefinitely; open, low-probability trigger.
 - **EVENT-\*** — Event system integrity gaps. EVENT-1: emission error loop prevention is implicit — `_safe_emit_event` absorbs `SystemEventEmissionError` via broad `except`, not an explicit in-progress guard; safe today, latent risk if emission error surface is hardened.
+- **MEMORY-\*** — Memory system integrity gaps. MEMORY-1: `persist_memory_ingest_payload` partial-write — `append_node` failure leaves `MemoryNode` + `MemoryTrace` committed but unlinked; node is queryable but invisible in trace views (linked to fire-and-forget gap).
 
 ---
 
