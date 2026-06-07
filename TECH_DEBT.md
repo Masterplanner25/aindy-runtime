@@ -1872,6 +1872,18 @@ ROOT_ROUTERS = [
 
 ---
 
+## AUTH-V5 — SECRET_KEY module-level string exported from auth_service.py
+
+**Status:** Open
+
+**Problem:** `auth_service.py:94` exports `SECRET_KEY: str = settings.SECRET_KEY` as a module-level attribute alongside the `_key_ring` instance. The attribute is updated by `rotate_signing_key()` and `_reload_key_on_sighup()`, but any code that imports `SECRET_KEY` before a rotation holds a stale copy forever — the import binding is not updated, only the module attribute is. No external code currently imports it (grep confirms zero consumers outside `auth_service.py`), but the exported name is a trap: a future developer looking for the signing key string will find it and import it directly, bypassing the ring.
+
+**Resolution direction:** Remove the module-level export once all callers inside `auth_service.py` use `_key_ring.active_key` directly. The backward-compat comment (`# backward compat — use _get_signing_key() in new code`) is the right signal; the attribute just needs to actually be removed.
+
+**Risk:** Low — no external consumers today. Becomes high the moment any code imports it directly.
+
+---
+
 ## TIER3-V2V3 — require_scope() / enforce_api_key_scope() wired to platform routes
 
 **Status:** CLOSED (2026-06-07)
