@@ -1760,6 +1760,61 @@ ROOT_ROUTERS = [
 
 ---
 
+## SYSMAX-1 — Thread-mode queue hard cap is still the .env.example default
+
+**Status:** Partially mitigated (2026-06-07)
+
+**Problem:** `EXECUTION_MODE=thread` defaults a 10-worker `ThreadPoolExecutor` + 100-job in-memory queue (hard cap). At ~15s/job this sustains 0.67 jobs/second. Any burst beyond 100 queued jobs returns `QueueSaturatedError` (503). Jobs are dropped outright — no overflow, no DLQ, no retry. An automated trigger scheduler hitting this ceiling gets 503 permanently (back-pressure gap also mitigated below).
+
+**Mitigation applied (2026-06-07):**
+- `docker-compose.prod.yml` now sets `EXECUTION_MODE: distributed` on the `api` service, so anyone running the production overlay gets distributed mode without needing to edit `.env`.
+- `AINDY/.env.example` already carries a `WARNING: Do NOT use in production deployments where uptime matters` comment under `EXECUTION_MODE=thread` (OPER-EXEC-001, 2026-06-06).
+- The worker service in `docker-compose.yml` already sets `EXECUTION_MODE: distributed` (OPER-EXEC-001, 2026-06-06).
+
+**Remaining gap:** `AINDY/.env.example` still ships `EXECUTION_MODE=thread` as the literal default value — a developer who copies `.env.example` directly to `.env` and doesn't run the prod overlay still gets thread mode. Changing the default to `distributed` breaks local dev without Redis. Resolution direction: separate dev and prod `.env` templates, or a first-run wizard that detects the deployment context. Deferred until DEPLOY-TARGET-1 is addressed.
+
+---
+
+## SYSMAX-2 — Autonomous trigger scheduler has no queue back-pressure
+
+**Status:** CLOSED (2026-06-07)
+
+**Problem:** `submit_autonomous_async_job()` in `async_job_service.py` called `submit_async_job()` bare — any `QueueSaturatedError` propagated up to the route handler as 503. The trigger scheduler had no mechanism to slow down on saturation: it received 503 and could keep retrying, hammering the queue rather than backing off.
+
+**Fix applied:** Added a `try/except QueueSaturatedError` block around the `submit_async_job()` call in `submit_autonomous_async_job()`. On saturation the submission is converted to a 60-second deferred job via `defer_async_job()` — the same path as a trigger-evaluator `"defer"` decision. The caller receives `status: DEFERRED` with `reason: "Execution queue saturated — automatically deferred for retry."` and a `defer_seconds: 60` signal. A `logger.warning` fires so operators see the saturation event.
+
+**Effect:** Autonomous triggers that hit a full queue now self-regulate at 60s intervals instead of producing a stream of 503s. The deferred job re-enters `process_deferred_jobs()` after the cooldown, where `evaluate_live_trigger()` is called again before re-submission.
+
+---
+
+## SYSMAX-3 — Memory bytes not enforced per execution unit
+
+**Status:** Deferred — requires OS integration
+
+**Problem:** `check_quota()` in the syscall dispatcher tracks memory bytes consumed but does not enforce a hard cap. The comment in the source reads "requires OS integration." A memory-heavy node (large embedding batch, large LLM context) can OOM the API process with no prior warning or quota enforcement.
+
+**Gap:** No `/proc/{pid}/status` or `resource.getrusage()` integration exists. The value tracked is the syscall-reported estimate, not actual process RSS.
+
+**Resolution direction:** When per-EU memory limits become production-critical (multi-tenant SaaS, hostile-third-party profile with untrusted extensions), wire `resource.getrusage(RUSAGE_SELF).ru_maxrss` into the quota check and enforce `MAX_MEMORY_BYTES_PER_EXECUTION`. On Linux, `ru_maxrss` is kilobytes; on macOS, bytes — the platform difference must be normalized.
+
+**Reopen trigger:** First OOM incident in a production deployment, or when `hostile-third-party` deployment profile becomes the active default.
+
+---
+
+## SYSMAX-4 — Per-EU syscall cap (100) and wall-time cap (5min) may be tight for LLM-heavy flows
+
+**Status:** Tracked — advisory
+
+**Context:** `MAX_SYSCALLS_PER_EXECUTION = 100` (hard, mid-execution termination on breach) and `MAX_WALL_TIME_MS = 300_000` (5 minutes) are the per-execution-unit caps. A single flow node calling an LLM 3 times, doing 5 memory reads, and writing back results across multiple iterations can approach 100 syscalls non-trivially. A slow model with multiple round trips can exceed 5 minutes.
+
+**Not a bug:** The caps are correct safety defaults for single-process deployments. A multi-node DAG flow bypasses per-EU caps by design (each WAIT/RESUME creates a new EU). The risk is a developer building a complex single-node flow who hits a mid-execution `RESOURCE_LIMIT_EXCEEDED` with no retry path.
+
+**Resolution direction:** Both caps are tunable via env vars (`AINDY_MAX_SYSCALLS_PER_EXECUTION`, `AINDY_MAX_WALL_TIME_MS`). Document the advisory in `NODUS_DEVELOPER_GUIDE.md` §3 ("Design complex flows as multi-node DAGs rather than single nodes with many syscalls"). Raise caps only when a real workload requires it — do not raise speculatively.
+
+**Reopen trigger:** First production `RESOURCE_LIMIT_EXCEEDED` from a legitimate (non-runaway) flow.
+
+---
+
 ## AUTH-V1 — AINDY/auth/__init__.py was a verbatim duplicate of api_key_auth.py
 
 **Status:** CLOSED (2026-06-06)
@@ -1817,6 +1872,18 @@ ROOT_ROUTERS = [
 
 ---
 
+## AUTH-V5 — SECRET_KEY module-level string exported from auth_service.py
+
+**Status:** Open
+
+**Problem:** `auth_service.py:94` exports `SECRET_KEY: str = settings.SECRET_KEY` as a module-level attribute alongside the `_key_ring` instance. The attribute is updated by `rotate_signing_key()` and `_reload_key_on_sighup()`, but any code that imports `SECRET_KEY` before a rotation holds a stale copy forever — the import binding is not updated, only the module attribute is. No external code currently imports it (grep confirms zero consumers outside `auth_service.py`), but the exported name is a trap: a future developer looking for the signing key string will find it and import it directly, bypassing the ring.
+
+**Resolution direction:** Remove the module-level export once all callers inside `auth_service.py` use `_key_ring.active_key` directly. The backward-compat comment (`# backward compat — use _get_signing_key() in new code`) is the right signal; the attribute just needs to actually be removed.
+
+**Risk:** Low — no external consumers today. Becomes high the moment any code imports it directly.
+
+---
+
 ## TIER3-V2V3 — require_scope() / enforce_api_key_scope() wired to platform routes
 
 **Status:** CLOSED (2026-06-07)
@@ -1831,3 +1898,55 @@ ROOT_ROUTERS = [
 - 13 new unit tests in `tests/unit/test_tier3_structural.py`.
 
 **V3 architectural note:** The parallel auth system (`get_authenticated_principal` + `require_scope()` in `api_key_auth.py`) remains. `enforce_api_key_scope` uses `get_current_user` to avoid a second DB lookup. Full V3 resolution (collapsing the two auth paths) is deferred.
+
+---
+
+## LAYER-1 — execution_dispatcher.py opens its own SessionLocal() for event emission
+
+**Status:** Deferred — Known architectural gap
+
+**Problem:** `AINDY/core/execution_dispatcher.py:_enqueue_distributed()` opens a `SessionLocal()` directly at lines 305–307 and 368–370 to emit a `job_enqueued` observability event. The execution dispatcher layer is directly managing DB sessions — a responsibility that belongs to the service or event layer. This violates the "one session per request" convention and places session lifecycle management in the wrong layer.
+
+**Why deferred:** The dispatcher runs outside the request context in the distributed path; no request-scoped session is available. Fixing this properly requires routing the event emission through an injected event service or background event queue rather than opening a raw session. That refactor touches the dispatcher/event boundary across multiple call sites and is a non-trivial scope change.
+
+---
+
+## LAYER-2 — auth_router.py routes auth primitives through execute_with_pipeline_sync
+
+**Status:** Deferred — Known architectural gap
+
+**Problem:** `AINDY/routes/auth_router.py` sends all four handlers (login, register, logout, admin_invalidate_sessions) through `execute_with_pipeline_sync`. Auth requests create an `ExecutionUnit`, emit `execution.started`/`execution.completed` events, and go through quota checks. Every login and register is an "execution" with full resource-tracking overhead. The pipeline was not designed for auth primitives — this creates event noise and DB writes on every unauthenticated request.
+
+**Why deferred:** Removing auth routes from the pipeline requires a lighter-weight route wrapper that still provides tracing and error normalization without ExecutionUnit creation. That wrapper doesn't exist yet. The overhead is real but not a correctness issue at current load.
+
+---
+
+## LAYER-3 — exception_handlers.py falls back to decode_access_token for user attribution
+
+**Status:** Deferred — Partially mitigated
+
+**Problem:** `AINDY/exception_handlers.py:_extract_user_id_from_request()` calls `decode_access_token` as a fallback when `request.state.user_id` is not set (line 158). This is a cross-layer dependency: the exception handler layer doing auth work for logging purposes.
+
+**Partial mitigation (2026-06-07):** The function now checks `request.state.user_id` first (set by the pipeline for all authenticated requests that reached the handler). The `decode_access_token` fallback only fires for requests that failed before the pipeline set state — e.g. 401s on unauthenticated routes. This is the scenario where you most need user attribution for logs, so removing the fallback entirely would lose observability.
+
+**Why deferred:** The correct fix is a dedicated lightweight user-extraction utility that reads the JWT sub claim without the full verification path (similar to the rate-limiter's unverified decode pattern). Until that utility exists, the fallback is the least-bad option.
+
+---
+
+## LAYER-4 — memory_ingest_service.py opens SessionLocal() outside request context
+
+**Status:** Deferred — Known architectural gap, intentional by design
+
+**Problem:** `AINDY/memory/memory_ingest_service.py` imports and opens `SessionLocal()` at construction time (line 40), outside any request context. This creates a second concurrent session to the same tables as the request session. It breaks the "one session per request" convention and creates independent transaction boundaries.
+
+**Why deferred:** Memory ingestion is intentionally decoupled from the request session — writes are queued and flushed after the script finishes, not within the request transaction. The independent session is architecturally correct for this use case (deferred background writes shouldn't be rolled back if the request session rolls back). The violation is a convention mismatch, not a correctness bug. Resolving it would require a formal background-session pattern or session factory abstraction.
+
+---
+
+## LAYER-5 — execute_with_pipeline_sync uses asyncio.run(); coordination_router calls it on every endpoint
+
+**Status:** Deferred — Known performance gap
+
+**Problem:** `execute_with_pipeline_sync()` (`AINDY/core/execution_helper.py:69`) bridges synchronous routes into the async pipeline via `asyncio.run()`. `coordination_router.py` calls this on 9+ endpoints — each call creates and tears down a new event loop. No technical correctness issue in FastAPI's threadpool model, but it introduces non-trivial async machinery overhead on every coordination route invocation.
+
+**Why deferred:** Fixing this requires either making the coordination routes fully async (straightforward but high-churn across all endpoints) or providing a sync-native pipeline path that doesn't use `asyncio.run()`. The coordination domain is a candidate for extraction (see ROUTE-EXTRACT-001 remaining candidates), so the refactor may be moot if those routes move to the monolith.

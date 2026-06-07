@@ -834,18 +834,44 @@ def submit_autonomous_async_job(
                 decision=decision,
             )
 
-        log_id = submit_async_job(
-            task_name=task_name,
-            payload=payload_with_autonomy,
-            user_id=user_id,
-            source=source,
-            max_attempts=max_attempts,
-        )
-        return build_queued_response(
-            log_id,
-            task_name=task_name,
-            source=source,
-        )
+        try:
+            log_id = submit_async_job(
+                task_name=task_name,
+                payload=payload_with_autonomy,
+                user_id=user_id,
+                source=source,
+                max_attempts=max_attempts,
+            )
+            return build_queued_response(log_id, task_name=task_name, source=source)
+        except QueueSaturatedError:
+            # Queue is full — defer instead of surfacing 503 to the trigger caller.
+            # This gives the autonomous scheduler natural back-pressure: submissions
+            # that can't execute immediately are rescheduled after a 60s cooldown
+            # rather than failing permanently or hammering the queue with retries.
+            logger.warning(
+                "[AutonomousSubmit] Queue saturated for task=%s source=%s — deferring 60s",
+                task_name,
+                source,
+            )
+            saturated_decision = {
+                **decision,
+                "decision": "defer",
+                "defer_seconds": 60,
+                "reason": "Execution queue saturated — automatically deferred for retry.",
+            }
+            log_id = defer_async_job(
+                task_name=task_name,
+                payload=payload_with_autonomy,
+                user_id=user_id,
+                source=source,
+                decision=saturated_decision,
+            )
+            return build_deferred_response(
+                log_id,
+                task_name=task_name,
+                source=source,
+                decision=saturated_decision,
+            )
     finally:
         if _owns_db:
             db.close()
