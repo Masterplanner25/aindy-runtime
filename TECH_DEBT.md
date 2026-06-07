@@ -1897,7 +1897,7 @@ ROOT_ROUTERS = [
 - `platform_ops_router.py:dispatch_syscall`: inline domain-level scope enforcement for API key callers — maps syscall name prefix to required scope (`sys.v1.memory.*` → `memory.write`, `sys.v1.flow.*` → `flow.execute`, `sys.v1.agent.*` → `agent.run`, `sys.v1.webhook.*` → `webhook.manage`); `platform.admin` bypasses all.
 - 13 new unit tests in `tests/unit/test_tier3_structural.py`.
 
-**V3 architectural note:** The parallel auth system (`get_authenticated_principal` + `require_scope()` in `api_key_auth.py`) remains. `enforce_api_key_scope` uses `get_current_user` to avoid a second DB lookup. Full V3 resolution (collapsing the two auth paths) is deferred.
+**V3 — CLOSED 2026-06-07:** Removed the dead parallel auth path (`get_authenticated_principal`, `require_scope`, `AuthPrincipal`, header extractors) from `api_key_auth.py`. File now contains only `Scopes`. `__init__.py` re-exports `Scopes` only. Three dead export-check tests removed from `test_auth_wiring.py`.
 
 ---
 
