@@ -1,0 +1,60 @@
+name: macOS Sandbox Boundary Tests
+
+# Manual trigger only — macOS runners are expensive and this is a certification
+# milestone, not a per-commit gate. Run once to certify the macOS Docker backend,
+# then re-run when sandbox controls change (see C3 Phase 4 in TECH_DEBT.md).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox-macos:
+    name: Sandbox Escape Tests (macOS / Apple Silicon)
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    env:
+      PYTHONPATH: .
+      SANDBOX_ESCAPE_IMAGE: "python:3.11-alpine"
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Install Colima + Docker CLI
+        run: |
+          brew install colima docker
+          colima start --cpu 2 --memory 4
+          docker info
+
+      - name: Show host and Docker backend info
+        run: |
+          sw_vers
+          uname -m
+          docker info --format '{{json .}}' | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          print(f'OSType={d[\"OSType\"]}  ServerVersion={d[\"ServerVersion\"]}  Architecture={d.get(\"Architecture\",\"unknown\")}')
+          "
+
+      - name: Install test runner
+        run: pip install pytest
+
+      - name: Pull escape test image
+        run: docker pull "$SANDBOX_ESCAPE_IMAGE"
+
+      - name: Run sandbox escape tests
+        run: pytest tests/sandbox/ -m sandbox_escape -v
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-sandbox-escape-results
+          path: tests/sandbox/sandbox_escape_results.json
+          if-no-files-found: warn
