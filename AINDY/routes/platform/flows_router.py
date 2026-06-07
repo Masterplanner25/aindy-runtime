@@ -6,7 +6,8 @@ from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.routes.platform.nodus_shared import _run_flow_platform
 from AINDY.routes.platform.schemas import FlowDefinition, FlowRunRequest
-from AINDY.services.auth_service import get_current_user
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 
 router = APIRouter()
 
@@ -88,7 +89,7 @@ def create_flow(request: Request, body: FlowDefinition, db: Session = Depends(ge
 
 @router.get("/flows", response_model=None)
 @limiter.limit("60/minute")
-def list_flows(request: Request, current_user: dict = Depends(get_current_user)):
+def list_flows(request: Request, current_user: dict = Depends(get_current_user), _s: None = Depends(enforce_api_key_scope(Scopes.FLOW_READ))):
     def handler(ctx):
         from AINDY.runtime.flow_registry import list_dynamic_flows
 
@@ -104,7 +105,7 @@ def list_flows(request: Request, current_user: dict = Depends(get_current_user))
 
 @router.get("/flows/{name}", response_model=None)
 @limiter.limit("60/minute")
-def get_flow(request: Request, name: str, current_user: dict = Depends(get_current_user)):
+def get_flow(request: Request, name: str, current_user: dict = Depends(get_current_user), _s: None = Depends(enforce_api_key_scope(Scopes.FLOW_READ))):
     def handler(ctx):
         from AINDY.runtime.flow_registry import get_dynamic_flow
 
@@ -124,7 +125,7 @@ def get_flow(request: Request, name: str, current_user: dict = Depends(get_curre
 
 @router.post("/flows/{name}/run", response_model=None)
 @limiter.limit("30/minute")
-def run_flow_endpoint(request: Request, name: str, body: FlowRunRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def run_flow_endpoint(request: Request, name: str, body: FlowRunRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _s: None = Depends(enforce_api_key_scope(Scopes.FLOW_EXECUTE))):
     from AINDY.runtime.flow_engine import FLOW_REGISTRY
 
     user_id = str(current_user["sub"])

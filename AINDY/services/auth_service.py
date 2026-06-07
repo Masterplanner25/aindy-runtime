@@ -315,6 +315,32 @@ def require_admin_principal(
     return current_user
 
 
+def enforce_api_key_scope(scope: str):
+    """FastAPI dependency factory: enforce a scope for API key callers; JWT users always pass.
+
+    Uses the already-resolved current_user dict so no second DB lookup occurs.
+    JWT users carry full trust and are never gated by this check.
+
+    Usage:
+        @router.get("/platform/flows")
+        def list_flows(
+            current_user: dict = Depends(get_current_user),
+            _: None = Depends(enforce_api_key_scope(Scopes.FLOW_READ)),
+        ): ...
+    """
+    def _check(current_user: dict = Depends(get_current_user)) -> None:
+        if current_user.get("auth_type") == "api_key":
+            scopes = set(current_user.get("api_key_scopes") or [])
+            from AINDY.auth.api_key_auth import Scopes
+            if scope not in scopes and Scopes.PLATFORM_ADMIN not in scopes:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"API key scope '{scope}' required. Granted: {sorted(scopes) or ['(none)']}",
+                )
+    _check.__name__ = f"enforce_scope_{scope.replace('.', '_')}"
+    return _check
+
+
 def _resolve_platform_key_as_user(raw_key: str, db: Session) -> dict:
     """Validate a platform API key and return a user dict compatible with get_current_user."""
     import hashlib

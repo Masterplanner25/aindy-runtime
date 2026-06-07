@@ -104,7 +104,7 @@ def _persist_system_event(
         timestamp=datetime.now(timezone.utc),
     )
     db.add(event)
-    db.flush()
+    db.flush([event])  # flush only this object — avoids committing pending handler changes as a side effect
     event_id = event.id
     if normalized_parent_event_id:
         relationship_type = "related_to"

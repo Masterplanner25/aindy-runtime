@@ -1613,3 +1613,40 @@ ROOT_ROUTERS = [
 - `AINDY/services/auth_service.py`: `require_platform_admin_access()` now checks `"platform.admin" in api_key_scopes` for API key callers, 403 if absent.
 - `AINDY/routes/auth_router.py`: `admin_invalidate_sessions` dependency changed from `Depends(get_current_user)` to `Depends(require_platform_admin_access)`; manual in-handler guard removed.
 - `tests/unit/test_auth_wiring.py`: 11 tests covering V1 re-exports (5 shapes) and V6 guard (6 shapes).
+
+---
+
+## TIER3-8 — MemoryIngestQueue.enqueue() dropped writes were silent at the queue level
+
+**Status:** CLOSED (2026-06-07)
+
+**Problem:** `MemoryIngestQueue.enqueue()` incremented Prometheus metrics on queue-full and not-accepting drops, but emitted no log. The service wrapper (`memory_ingest_service.py`) warned on drops, but direct callers had no visibility.
+
+**Fix applied:** Added `logger.warning` in both drop paths inside `enqueue()` — queue-full (with depth/capacity) and not-accepting — so all drop paths produce a WARNING log regardless of call site.
+
+---
+
+## TIER3-9 — db.flush() in event emission committed pending handler ORM changes
+
+**Status:** CLOSED (2026-06-07)
+
+**Problem:** `_persist_system_event()` called bare `db.flush()` after `db.add(event)`. SQLAlchemy's `session.flush()` pushes ALL pending identity-map changes to the DB — not just the event. Any ORM object a route handler had staged with `db.add()` but not yet committed would be flushed as a side effect of event emission and committed by the subsequent `db.commit()`. Data and event writes were not atomic, and handler data could be committed by a different code path than the handler itself.
+
+**Fix applied:** Changed `db.flush()` to `db.flush([event])` — SQLAlchemy supports flushing a specific object list. The event gets its DB-assigned `id` for use in `link_events()` while all other pending session changes stay unflushed until the handler's own commit.
+
+---
+
+## TIER3-V2V3 — require_scope() / enforce_api_key_scope() wired to platform routes
+
+**Status:** CLOSED (2026-06-07)
+
+**Problem:** `require_scope()` and `AuthPrincipal` in `AINDY/auth/api_key_auth.py` were fully implemented but wired to zero routes. Any API key with any scope (or no scope) could call flows, memory, and syscall routes as if it had full access — the stored scope list was consulted only at key creation for validation, never at request time.
+
+**Fix applied:**
+- Added `enforce_api_key_scope(scope)` to `auth_service.py` — a FastAPI dependency factory using the already-resolved `current_user` dict (no second DB lookup). JWT users always pass; API keys must have the required scope or `platform.admin`.
+- `flows_router.py`: `list_flows`/`get_flow` → `flow.read`; `run_flow_endpoint` → `flow.execute`.
+- `platform_ops_router.py`: `list_memory_path`/`memory_tree`/`memory_trace` → `memory.read`.
+- `platform_ops_router.py:dispatch_syscall`: inline domain-level scope enforcement for API key callers — maps syscall name prefix to required scope (`sys.v1.memory.*` → `memory.write`, `sys.v1.flow.*` → `flow.execute`, `sys.v1.agent.*` → `agent.run`, `sys.v1.webhook.*` → `webhook.manage`); `platform.admin` bypasses all.
+- 13 new unit tests in `tests/unit/test_tier3_structural.py`.
+
+**V3 architectural note:** The parallel auth system (`get_authenticated_principal` + `require_scope()` in `api_key_auth.py`) remains. `enforce_api_key_scope` uses `get_current_user` to avoid a second DB lookup. Full V3 resolution (collapsing the two auth paths) is deferred.
