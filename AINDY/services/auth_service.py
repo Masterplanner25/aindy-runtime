@@ -276,7 +276,29 @@ def get_current_user(
 def require_platform_admin_access(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """Require platform.admin scope for API keys, is_admin flag for JWT users."""
+    """Allow any authenticated API key; require is_admin for JWT users.
+
+    Used on the /platform router where API keys are pre-authorized at the
+    platform level (scope enforcement happens per-endpoint or per-syscall).
+    """
+    if current_user.get("auth_type") == "api_key":
+        return current_user
+    if not current_user.get("is_admin", False):
+        raise HTTPException(
+            status_code=403,
+            detail="Admin privileges required for this endpoint.",
+        )
+    return current_user
+
+
+def require_admin_principal(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Require admin for both JWT users (is_admin) and API keys (platform.admin scope).
+
+    Use this on endpoints that are admin-only regardless of auth method, such
+    as session invalidation and user management operations.
+    """
     if current_user.get("auth_type") == "api_key":
         scopes = set(current_user.get("api_key_scopes") or [])
         if "platform.admin" not in scopes:
