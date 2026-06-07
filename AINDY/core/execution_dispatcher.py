@@ -450,7 +450,9 @@ def dispatch(
         getattr(execution_unit, "type", "?"),
         getattr(execution_unit, "id", "?"),
     )
-    future: Future[Any] = _get_executor().submit(handler_fn)
+    from contextvars import copy_context
+    _ctx = copy_context()
+    future: Future[Any] = _get_executor().submit(_ctx.run, handler_fn)
     return DispatchResult(mode=mode, future=future, meta=meta)
 
 

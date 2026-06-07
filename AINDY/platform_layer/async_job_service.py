@@ -617,7 +617,9 @@ def submit_async_job(
                 finally:
                     sem.release()
 
-            _track_future(_get_executor().submit(_submit_and_release))
+            from contextvars import copy_context as _copy_context
+            _ctx = _copy_context()
+            _track_future(_get_executor().submit(_ctx.run, _submit_and_release))
         return log_id
     except Exception as exc:
         if log_id is not None:

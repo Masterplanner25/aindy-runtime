@@ -23,7 +23,10 @@
 #   docker compose up -d
 #   # visit http://localhost:8000/platform
 #
-# Production-shaped:
+# Production-shaped (durable, distributed queue):
+#   # Set EXECUTION_MODE=distributed in AINDY/.env so the API dispatches
+#   # jobs to the Redis queue where the worker picks them up. Without this
+#   # the worker is idle and jobs remain ephemeral (lost on restart).
 #   docker compose --profile full up -d
 #
 # With metrics:
@@ -149,6 +152,10 @@ services:
       - AINDY/.env
     environment:
       AINDY_ENV_FILE: /etc/aindy/.env
+      # Workers must always consume from the distributed queue. This overrides
+      # whatever EXECUTION_MODE is set in .env so the worker is never silently
+      # idle while the API dispatches to its own thread pool instead of Redis.
+      EXECUTION_MODE: distributed
     volumes:
       - ./AINDY/.env:/etc/aindy/.env:ro
     depends_on:

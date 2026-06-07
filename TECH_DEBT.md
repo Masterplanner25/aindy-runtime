@@ -213,9 +213,15 @@ containers). Static matrix now correctly reports `no_new_privileges`, `drop_all_
 `pids_limit` as available hardening controls for both platforms.
 Policy document created: `docs/runtime/MACOS_CONTAINER_POLICY.md`. Records what IS and is
 NOT claimed (seccomp/AppArmor/SELinux not claimed — not tested), assurance tier
-(container-grade, not strong-sandbox-vm), and that macOS escape suite certification is
-pending — first run required before certifying a macOS deployment.
+(container-grade, not strong-sandbox-vm).
 2 new unit tests in `tests/unit/test_sandbox_runner.py` (64 total).
+
+**Phase 5 (2026-06-06) — macOS CI certification workflow: COMPLETE**
+`.github/workflows/macos-sandbox.yml` added (PR merged 2026-06-06). `workflow_dispatch`
+job targets `macos-14` (Apple Silicon), installs Colima as the Linux-backend Docker
+provider, and runs `pytest -m sandbox_escape -v` against the full 17-test escape suite.
+Uploads `sandbox_escape_results.json` as a workflow artifact. macOS escape suite
+certification is now gated through CI — run the workflow before each macOS deployment.
 
 **Phase 3 (2026-06-05) — Formal threat model + sandbox_escape_test_posture(): COMPLETE**
 Created `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (append-only log, Entry 001 committed).
@@ -1538,3 +1544,35 @@ ROOT_ROUTERS = [
 ```
 
 **Fix for db_verify_router:** Investigate intended audience and prefix before mounting.
+
+---
+
+## OPER-EXEC-001 — Thread-mode async is not durable; distributed mode not wired as production default
+
+**Status:** CLOSED (2026-06-06)
+
+**Problem:** `EXECUTION_MODE=thread` (the default) uses a `ThreadPoolExecutor` with a 100-job in-memory queue. Any job in-flight or queued when the API process restarts is permanently lost — no DLQ, no recovery. The distributed mode (Redis queue + separate worker process, `--profile full`) is fully implemented and handles restarts correctly via `requeue_stale_jobs()`, but operators could spin up the worker without the API ever routing to it if `EXECUTION_MODE=thread` remained in `.env`.
+
+**Root cause:** The `docker-compose.yml` worker service did not set `EXECUTION_MODE=distributed`, so the compose `--profile full` command brought Redis and the worker online while the API continued dispatching to the in-process thread pool. Worker was idle; jobs remained ephemeral.
+
+**Fix applied:**
+- `docker-compose.yml` worker service: added `EXECUTION_MODE: distributed` to the `environment:` block — overrides `.env` so the worker is never silently idle.
+- `docker-compose.yml` header: updated the "Production-shaped" comment to explicitly state `EXECUTION_MODE=distributed` must also be set in `.env` for the API.
+- `AINDY/.env.example`: added a WARNING under the `EXECUTION_MODE=thread` line documenting that thread mode has no durability and directing operators to `distributed` + `--profile full` for production.
+
+**No code change required.** The distributed queue backend, worker process, DLQ, stale-job recovery, and retry backoff were already production-grade; the gap was purely an operational default.
+
+---
+
+## OPER-EXEC-002 — ContextVar state not propagated to ThreadPoolExecutor worker threads
+
+**Status:** CLOSED (2026-06-06)
+
+**Problem:** `ThreadPoolExecutor.submit(fn)` runs `fn` in a fresh context where all `ContextVar` values revert to their defaults. The trace context (`trace_id`, `parent_event_id`, `pipeline_active` in `platform_layer/trace_context.py`) and syscall context (`syscall_trace_id`, `syscall_eu_id` in `kernel/syscall_dispatcher.py`) were lost at every async thread boundary. Events and logs emitted from worker threads had no trace_id / eu_id — cross-thread correlation was impossible. Distributed mode already restored context from `QueueJobPayload.context` on the worker; thread mode had no equivalent.
+
+**Fix applied:**
+- `AINDY/core/execution_dispatcher.py:453` — `copy_context()` snapshot captured before submit; `_ctx.run` passed as the callable so the worker thread inherits the full context.
+- `AINDY/platform_layer/async_job_service.py:620` — same pattern for the `submit_async_job()` thread-pool path.
+- `tests/unit/test_contextvar_thread_propagation.py` — 3 shapes verifying `trace_id`, `eu_id`, and `pipeline_active` each propagate correctly.
+
+**`copy_context()` is Python stdlib (3.7+), zero new dependencies.**
