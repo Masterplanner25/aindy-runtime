@@ -33,6 +33,7 @@ const IconHealth = Icon("M3 12h3l2-5 4 10 2-5h7");
 const IconExec = Icon("M8 5l8 7-8 7M4 5v14");
 const IconApprovals = Icon("M9 12l2 2 4-4M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z");
 const IconRegistry = Icon("M4 4h16v6H4zM4 14h16v6H4z");
+const IconUsers = Icon("M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75");
 const IconTrace = Icon("M5 12a7 7 0 0 1 14 0M9 12a3 3 0 0 1 6 0M12 12v.01");
 const IconLogout = Icon("M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9");
 const IconChevron = Icon("M15 18l-6-6 6-6");
@@ -49,14 +50,15 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: "/agent", label: "Agent Console", icon: IconAgent, runtime: false },
-  { to: "/flows", label: "Flow Engine", icon: IconFlows, runtime: true },
-  { to: "/observability", label: "Observability", icon: IconObs, runtime: true },
-  { to: "/health", label: "Health", icon: IconHealth, runtime: true },
-  { to: "/executions", label: "Executions", icon: IconExec, runtime: true },
-  { to: "/approvals", label: "Approvals", icon: IconApprovals, runtime: false },
-  { to: "/registry", label: "Agent Registry", icon: IconRegistry, runtime: false },
-  { to: "/trace", label: "RippleTrace", icon: IconTrace, runtime: false, featureFlag: FEATURE_FLAGS.RIPPLETRACE_VIEWER },
+  { to: "/agent",        label: "Agent Console",  icon: IconAgent,     runtime: false },
+  { to: "/flows",        label: "Flow Engine",    icon: IconFlows,     runtime: true  },
+  { to: "/observability",label: "Observability",  icon: IconObs,       runtime: true  },
+  { to: "/health",       label: "Health",         icon: IconHealth,    runtime: true  },
+  { to: "/executions",   label: "Executions",     icon: IconExec,      runtime: true  },
+  { to: "/approvals",    label: "Approvals",      icon: IconApprovals, runtime: false },
+  { to: "/registry",     label: "Agent Registry", icon: IconRegistry,  runtime: false },
+  { to: "/users",        label: "Users",          icon: IconUsers,     runtime: true  },
+  { to: "/trace",        label: "RippleTrace",    icon: IconTrace,     runtime: false, featureFlag: FEATURE_FLAGS.RIPPLETRACE_VIEWER },
 ];
 
 export default function PlatformShell() {
@@ -143,7 +145,9 @@ export default function PlatformShell() {
                   <span className="flex-1 truncate flex items-center gap-2">
                     {label}
                     {dimmed && (
-                      <span className="text-[8px] uppercase tracking-wider text-zinc-600 border border-zinc-700/60 rounded px-1 py-0.5">
+                      <span
+                        title="Available in full deployment (requires aindy-apps-monolith)"
+                        className="text-[8px] uppercase tracking-wider text-zinc-600 border border-zinc-700/60 rounded px-1 py-0.5 cursor-help">
                         app
                       </span>
                     )}

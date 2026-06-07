@@ -18,6 +18,7 @@ from AINDY.routes.flow_router import router as flow_router
 from AINDY.routes.health_router import router as health_router
 from AINDY.routes.memory_router import router as memory_router
 from AINDY.routes.observability_router import router as observability_router
+from AINDY.routes.platform.admin_router import router as admin_router
 from AINDY.routes.platform_router import router as platform_router
 from AINDY.routes.watcher_router import router as watcher_router
 
@@ -34,6 +35,7 @@ PLATFORM_ROUTERS = [
     flow_router,
     observability_router,
     db_verify_router,  # operator schema inspection at /platform/db/verify
+    admin_router,      # user management at /platform/admin/*
 ]
 
 # Remaining runtime-owned /apps surface (memory CRUD/search/recall + coordination).

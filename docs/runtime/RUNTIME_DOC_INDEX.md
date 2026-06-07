@@ -57,6 +57,12 @@ Start with:
 - `PUBLIC_RUNTIME_SURFACES.md`
 - `PROFILE_SUPPORT_MATRIX.md`
 
+### Developers writing Nodus scripts
+Start with:
+- `NODUS_DEVELOPER_GUIDE.md`
+- `SYSCALL_REFERENCE.md`
+- `SYSCALL_SYSTEM.md` (architecture detail)
+
 ### Release / QA Reviewers
 Start with:
 - `RELEASE_GATES.md`
@@ -113,6 +119,16 @@ These docs explain how the current runtime docset is being tightened.
 - `RUNTIME_DOC_ALIGNMENT_AUDIT.md`
 - `HIGH_CONFLICT_DOC_RECONCILIATION_PLAN.md`
 - `RUNTIME_DOCSET_GOVERNANCE.md`
+
+---
+
+## Developer Reference
+
+Docs for developers integrating with or scripting against the runtime.
+
+- `NODUS_DEVELOPER_GUIDE.md` — writing Nodus scripts in A.I.N.D.Y.: injected globals, built-ins, WAIT/RESUME, error semantics
+- `SYSCALL_REFERENCE.md` — all registered syscalls with payloads and return shapes
+- `SYSCALL_SYSTEM.md` — dispatcher pipeline, ABI versioning, registration guide
 
 ---
 

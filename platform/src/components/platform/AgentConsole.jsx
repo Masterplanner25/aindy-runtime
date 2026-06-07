@@ -250,6 +250,19 @@ const PlanPreview = ({ run, steps, loading, runtimeOnly = false }) => {
               </div>)
           }
           </div> :
+        (run.status === "completed" || run.status === "failed") ?
+        <div className="bg-zinc-900/40 border border-zinc-800/60 rounded-lg p-4 text-xs text-zinc-500">
+            <p className="font-semibold text-zinc-400 mb-1">No execution steps recorded.</p>
+            {run.error ?
+          <p className="text-red-400 mb-2">Error: {run.error}</p> :
+          null
+          }
+            <p>Possible causes:</p>
+            <ul className="list-disc list-inside mt-1 space-y-0.5">
+              <li><code className="text-zinc-400">OPENAI_API_KEY</code> is not set — the planner requires an LLM to generate execution steps.</li>
+              <li>The planner backend returned an empty plan. Check server logs for detail.</li>
+            </ul>
+          </div> :
         null}
 
         {run.result &&
@@ -396,6 +409,49 @@ const TrustPanel = ({ trust, onUpdate, tools }) => {
     </div>);
 
 };
+
+// ── Starter templates (shown when no runs exist) ─────────────────────────────
+
+const STARTER_TEMPLATES = [
+  {
+    title: "Summarize recent activity",
+    goal: "Summarize what you remember about recent activity and surface any open items",
+    description: "A safe first run — the agent reads its memory and reports back.",
+  },
+  {
+    title: "Create a follow-up task",
+    goal: "Create a follow-up task to review the current system configuration",
+    description: "Creates a trackable item in your workflow using the task tool.",
+  },
+  {
+    title: "Recall a topic from memory",
+    goal: "Recall everything you know about the current project goals and status",
+    description: "Tests the memory system — works best after prior runs have built up context.",
+  },
+  {
+    title: "Audit available tools",
+    goal: "List the tools available to you and describe what each one can do",
+    description: "Read-only inspection — safe to approve with no side effects.",
+  },
+];
+
+const StarterTemplates = ({ onSelect }) => (
+  <div className="mb-5">
+    <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-3">Start with a template</p>
+    <div className="grid grid-cols-2 gap-2">
+      {STARTER_TEMPLATES.map((t) => (
+        <button
+          key={t.title}
+          onClick={() => onSelect(t.goal)}
+          className="text-left border border-zinc-800/60 hover:border-zinc-700 rounded-xl px-4 py-3 bg-zinc-950/40 hover:bg-zinc-900/60 transition-all group"
+        >
+          <p className="text-xs font-semibold text-zinc-300 group-hover:text-zinc-100 mb-1">{t.title}</p>
+          <p className="text-[10px] text-zinc-600 leading-relaxed">{t.description}</p>
+        </button>
+      ))}
+    </div>
+  </div>
+);
 
 // ── Suggestion chips ─────────────────────────────────────────────────────────
 
@@ -612,11 +668,15 @@ export default function AgentConsole() {
         </p>
       </div>
 
-      {/* Suggestion chips */}
+      {/* Suggestion chips (API-sourced) */}
       <SuggestionChips
         suggestions={suggestions}
         onSelect={(suggestedGoal) => setGoal(suggestedGoal)} />
 
+      {/* Static starter templates — shown only before first run */}
+      {runs.length === 0 && !goal && !runsLoading && (
+        <StarterTemplates onSelect={(g) => setGoal(g)} />
+      )}
 
       {/* Goal input */}
       <div className="mb-6">
@@ -696,7 +756,7 @@ export default function AgentConsole() {
             runs.length === 0 ?
             <EmptyState
               message="No agent runs yet."
-              hint="Submit an objective above to start an agent run." /> : safeMap(
+              hint="Type a goal above or pick a starter template to begin." /> : safeMap(
 
               runs, (run) =>
               <RunCard

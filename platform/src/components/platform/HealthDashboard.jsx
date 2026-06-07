@@ -10,6 +10,39 @@ const YELLOW = "#ffb300";
 const RED = "#f44336";
 const DIM = "#888";
 
+// Human-readable labels for technical field names
+const FIELD_LABELS = {
+  runner_type:                  "Extension runner",
+  assurance_class:              "Isolation strength",
+  assurance_class_satisfied:    "Isolation requirement met",
+  runtime_trust_status:         "Trust level",
+  trust_status:                 "Trust level",
+  certification_tier:           "Security certification",
+  certification_tier_satisfied: "Certification requirement met",
+  current_platform:             "Host platform",
+  platform_equivalence:         "Platform compatibility",
+  required_assurance_class:     "Required isolation (minimum)",
+  verification_method:          "Verification method",
+  kernel_observable:            "Runtime inspection enabled",
+  assurance_ceiling:            "Maximum achievable isolation",
+  trusted_python_present:       "Operator-authorized modules loaded",
+  total_trusted_modules:        "Authorized module count",
+  owner_classes_present:        "Module owner types",
+};
+
+// One-line descriptions shown as tooltips on confusing fields
+const FIELD_DESCRIPTIONS = {
+  runner_type:                  "Controls whether extensions run in-process or inside an isolated container.",
+  assurance_class:              "The level of isolation active. Higher = stronger containment of extensions.",
+  assurance_class_satisfied:    "Whether active isolation meets the minimum required for this deployment.",
+  runtime_trust_status:         "Whether the runtime considers the current environment safe to execute in.",
+  certification_tier:           "The security certification level achieved by the current sandbox configuration.",
+  kernel_observable:            "Whether host OS tooling can inspect code running inside the sandbox.",
+  assurance_ceiling:            "The strongest isolation this platform can provide, regardless of configuration.",
+  trusted_python_present:       "Pre-authorized Python modules are loaded. Expected in enterprise deployments.",
+  verification_method:          "How the system validates what code is running inside the extension sandbox.",
+};
+
 function boolColor(val) {
   return val ? GREEN : RED;
 }
@@ -23,8 +56,12 @@ function statusColor(val) {
 }
 
 function Card({ label, value, color }) {
+  const key = label.replace(/ /g, "_");
+  const displayLabel = FIELD_LABELS[key] ?? label.replace(/_/g, " ");
+  const tip = FIELD_DESCRIPTIONS[key];
   return (
     <div
+      title={tip}
       style={{
         display: "flex",
         justifyContent: "space-between",
@@ -32,29 +69,38 @@ function Card({ label, value, color }) {
         border: "1px solid #333",
         borderRadius: "0.75rem",
         background: "#111",
+        cursor: tip ? "help" : undefined,
       }}
     >
       <span style={{ color: "#aaa", textTransform: "capitalize" }}>
-        {label.replace(/_/g, " ")}
+        {displayLabel}
+        {tip && <span style={{ color: "#555", fontSize: "0.65rem", marginLeft: "0.4rem" }}>ⓘ</span>}
       </span>
       <span style={{ color: color ?? "#ccc" }}>{value == null ? "—" : String(value)}</span>
     </div>
   );
 }
 
-function SectionLabel({ children }) {
+function SectionLabel({ children, description }) {
   return (
-    <p
-      style={{
-        color: BLUE,
-        fontSize: "0.8rem",
-        textTransform: "uppercase",
-        letterSpacing: "0.07em",
-        margin: "1.25rem 0 0.5rem",
-      }}
-    >
-      {children}
-    </p>
+    <div style={{ margin: "1.25rem 0 0.5rem" }}>
+      <p
+        style={{
+          color: BLUE,
+          fontSize: "0.8rem",
+          textTransform: "uppercase",
+          letterSpacing: "0.07em",
+          margin: 0,
+        }}
+      >
+        {children}
+      </p>
+      {description && (
+        <p style={{ color: DIM, fontSize: "0.75rem", margin: "0.2rem 0 0" }}>
+          {description}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -94,73 +140,98 @@ export default function HealthDashboard() {
   const trustedPy = health?.trusted_python_execution || {};
   const conditions = health?.runtime_conditions || [];
 
+  // Overall status banner logic
+  const allOk = health?.status === "ok" && degradedDomains.length === 0;
+  const bannerColor = allOk ? GREEN : YELLOW;
+  const bannerBg = allOk ? "rgba(76,175,80,0.08)" : "rgba(255,179,0,0.08)";
+  const bannerBorder = allOk ? "rgba(76,175,80,0.25)" : "rgba(255,179,0,0.25)";
+
   return (
     <div style={{ padding: "1.5rem" }}>
-      <h2 style={{ color: BLUE }}>A.I.N.D.Y. Runtime Health</h2>
-      <p>Status: {health?.status || "unknown"}</p>
-      <p>Build: {health?.version || "unknown"}</p>
-      <p>
-        Degraded Domains:{" "}
-        {degradedDomains.length ? (
-          <span style={{ color: RED }}>{degradedDomains.join(", ")}</span>
-        ) : (
-          <span style={{ color: GREEN }}>none</span>
-        )}
+      <h2 style={{ color: BLUE, marginBottom: "0.25rem" }}>Runtime Health</h2>
+      <p style={{ color: DIM, fontSize: "0.8rem", marginBottom: "1rem" }}>
+        Build {health?.version || "unknown"}
       </p>
 
-      <SectionLabel>Platform</SectionLabel>
+      {/* Plain-English status banner */}
+      <div style={{
+        padding: "0.85rem 1rem",
+        border: `1px solid ${bannerBorder}`,
+        borderRadius: "0.75rem",
+        background: bannerBg,
+        marginBottom: "0.5rem",
+      }}>
+        <p style={{ margin: 0, fontWeight: 600, color: bannerColor, fontSize: "0.9rem" }}>
+          {allOk ? "All systems operational" : `Issues detected${degradedDomains.length ? `: ${degradedDomains.join(", ")}` : ""}`}
+        </p>
+        <p style={{ margin: "0.25rem 0 0", color: DIM, fontSize: "0.75rem" }}>
+          {allOk
+            ? "The runtime is healthy and all core services are reachable."
+            : "One or more components are degraded. Check the sections below for detail."}
+        </p>
+      </div>
+
+      <SectionLabel description="Database connectivity, extension registry, event bus, and scheduler availability.">
+        Core Services
+      </SectionLabel>
       <div style={{ display: "grid", gap: "0.75rem" }}>
         {platformChecks.map(([name, status]) => (
           <Card key={name} label={name} value={status} color={statusColor(status)} />
         ))}
       </div>
 
-      <SectionLabel>Sandbox Posture</SectionLabel>
+      <SectionLabel description="How safely third-party extensions are isolated from the host system. Hover any row for details.">
+        Extension Isolation
+      </SectionLabel>
       <div style={{ display: "grid", gap: "0.75rem" }}>
-        <Card label="runner type" value={current.runner_type} />
-        <Card label="assurance class" value={current.assurance_class} />
+        <Card label="runner_type" value={current.runner_type} />
+        <Card label="assurance_class" value={current.assurance_class} />
         <Card
-          label="assurance class satisfied"
+          label="assurance_class_satisfied"
           value={reqStatus.assurance_class_satisfied ? "yes" : "no"}
           color={boolColor(reqStatus.assurance_class_satisfied)}
         />
-        <Card label="trust status" value={current.runtime_trust_status} />
-        <Card label="certification tier" value={current.certification_tier} />
+        <Card label="runtime_trust_status" value={current.runtime_trust_status} />
+        <Card label="certification_tier" value={current.certification_tier} />
         <Card
-          label="certification satisfied"
+          label="certification_tier_satisfied"
           value={reqStatus.certification_tier_satisfied ? "yes" : "no"}
           color={boolColor(reqStatus.certification_tier_satisfied)}
         />
-        <Card label="current platform" value={platformSupport.current_platform} />
-        <Card label="platform equivalence" value={platformSupport.current_equivalence_status} />
+        <Card label="current_platform" value={platformSupport.current_platform} />
+        <Card label="platform_equivalence" value={platformSupport.current_equivalence_status} />
         {required.assurance_class && (
-          <Card label="required assurance class" value={required.assurance_class} color={DIM} />
+          <Card label="required_assurance_class" value={required.assurance_class} color={DIM} />
         )}
       </div>
 
-      <SectionLabel>Verification</SectionLabel>
+      <SectionLabel description="Methods used to confirm what code is running inside the extension sandbox.">
+        Sandbox Verification
+      </SectionLabel>
       <div style={{ display: "grid", gap: "0.75rem" }}>
-        <Card label="verification method" value={verification.verification_method} />
+        <Card label="verification_method" value={verification.verification_method} />
         <Card
-          label="kernel observable"
+          label="kernel_observable"
           value={verification.kernel_observable ? "yes" : "no"}
           color={boolColor(verification.kernel_observable)}
         />
-        <Card label="assurance ceiling" value={verification.assurance_ceiling} />
+        <Card label="assurance_ceiling" value={verification.assurance_ceiling} />
       </div>
 
-      <SectionLabel>Trusted Python</SectionLabel>
+      <SectionLabel description="Indicates whether operator-authorized Python modules are pre-loaded in the runtime.">
+        Trusted Modules
+      </SectionLabel>
       <div style={{ display: "grid", gap: "0.75rem" }}>
         <Card
-          label="trusted python present"
+          label="trusted_python_present"
           value={trustedPy.present ? "yes" : "no"}
           color={trustedPy.present ? YELLOW : GREEN}
         />
         {trustedPy.present && (
           <>
-            <Card label="total trusted modules" value={trustedPy.total_count} />
+            <Card label="total_trusted_modules" value={trustedPy.total_count} />
             <Card
-              label="owner classes"
+              label="owner_classes_present"
               value={(trustedPy.owner_classes_present || []).join(", ") || "none"}
             />
           </>

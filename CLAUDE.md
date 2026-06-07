@@ -535,6 +535,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **COMPOSE-HOST-\*** — container host binding issues. COMPOSE-HOST-1: closed 2026-05-27.
 - **EVENTBUS-REDIS-URL-\*** — Redis URL env var consolidation. EVENTBUS-REDIS-URL-CONSOLIDATION-1: closed 2026-06-06 (AINDY_REDIS_URL + AINDY_SKIP_MONGO_PING removed).
 - **PYPI-PUBLISH-\*** — PyPI publish transition. PYPI-PUBLISH-1: open.
+- **NODUS-UPGRADE-\*** — nodus-lang version pinning. NODUS-UPGRADE-1: pinned at 3.0.2; v4.0.0 deferred until post-PyPI publish; see NODUS_DEVELOPER_GUIDE.md §8 for upgrade notes.
 - **MONITORING-GRAFANA-\*** — Grafana monitoring profile gap. MONITORING-GRAFANA-1: closed 2026-06-05.
 - **COMPOSE-PROD-PORTS-\*** — database ports exposed in prod. COMPOSE-PROD-PORTS-1: closed 2026-06-05.
 - **PROMETHEUS-PIN-\*** — Prometheus image version pinning. PROMETHEUS-PIN-1: open.
@@ -548,13 +549,15 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **API-MODULE-DRIFT-\*** — Quarantined ROUTES groups left platform SPA API modules reading undefined → TypeError. API-MODULE-DRIFT-1: rippletrace.js ×16, analytics.js ×19, platform.js ×4; closed 2026-06-03 (Option B: all groups restored to shared table, graceful-404 behavior restored); `/trace` route gated on `FEATURE_FLAGS.RIPPLETRACE_VIEWER` 2026-06-06.
 - **AGENT-API-\*** — Platform SPA agent.js functions reference never-existed ROUTES.AGENT.* constants. AGENT-API-001: getAgents/recallFromAgent/getFederatedMemory; consumer AgentRegistry.jsx; closed 2026-06-03 — all three now use correct ROUTES.MEMORY.* constants; recover/replay endpoints added 2026-06-06.
 - **AGENT-RESLIMIT-\*** — Agent execution resource limit conflicts with real workloads. AGENT-RESLIMIT-001: field renamed to `wall_time_ms`; `MAX_CPU_TIME_MS` → `MAX_WALL_TIME_MS`; migration 0005; closed 2026-06-05.
-- **OPER-DEFER-\*** — Operator panel deferred-runtime routes (constant live, NavLink gated on FEATURE_FLAGS). OPER-DEFER-001: `/platform/flows/strategies` not yet served; OPER-DEFER-002: `/automation/logs` group (monolith today); both open.
+- **OPER-DEFER-\*** — Operator panel deferred-runtime routes (constant live, tab gated on FEATURE_FLAGS in FlowEngineConsole.jsx). OPER-DEFER-001: `/platform/flows/strategies` not yet served — UI tab hidden 2026-06-07; OPER-DEFER-002: `/automation/logs` group (monolith today) — UI tab hidden 2026-06-07; both open (backing routes deferred).
 - **OPER-EXEC-\*** — Execution mode operational gaps. OPER-EXEC-001: thread-mode no durability / distributed not wired as production default; closed 2026-06-06 (worker compose env + .env.example warning). OPER-EXEC-002: ContextVar not propagated to ThreadPoolExecutor threads; closed 2026-06-06 (`copy_context()` at both submit sites, 3 tests).
 - **SCHED-\*** — Scheduler status endpoint issues. SCHED-001/002/003: `/platform/observability/scheduler/status` returns 500 in platform-only profile (tasks domain absent); closed 2026-06-04 — direct impl replaces flow dependency; `FEATURE_FLAGS.OPERATOR_SCHEDULER_STATUS` flipped to `true`.
 - **ROUTE-REG-\*** — Router files that exist but are never registered; their endpoints return 404. ROUTE-REG-001: `watcher_router` and `db_verify_router` unregistered; closed 2026-06-03 — watcher added to ROOT_ROUTERS, db_verify added to PLATFORM_ROUTERS.
 - **ROUTE-EXTRACT-\*** — Route extraction from runtime to plugin layer. ROUTE-EXTRACT-001: `agent_router`, `memory_metrics_router`, `memory_trace_router` extracted to `aindy-apps-monolith` via `register_router()` at bootstrap time; closed 2026-06-06 (PR #37). Remaining candidates: `memory_router` (split required — Nodus execution endpoints stay), `coordination_router` (AgentRegistry model ownership gap).
 - **AUTH-V\*** — Auth system wiring gaps (2026-06-06 audit). AUTH-V1: closed 2026-06-06 (re-export shim). AUTH-V4: closed 2026-06-06 (`logoutUser()` in ui-kit). AUTH-V6: closed 2026-06-06 (`require_admin_principal` + `admin_invalidate_sessions` fix; see TIER3-V2V3). AUTH-V2/V3: `enforce_api_key_scope()` added to `auth_service.py`; wired to flows, memory routes, dispatch_syscall domain enforcement; closed 2026-06-07. V3 parallel auth system (`get_authenticated_principal` / `require_scope()` in `api_key_auth.py`) deferred.
 - **TIER3-\*** — Tier 3 structural gaps (2026-06-07). TIER3-8: memory queue drops silent at queue level; closed 2026-06-07 (`logger.warning` in `enqueue()` drop paths). TIER3-9: `db.flush()` committed pending handler ORM changes as side effect; closed 2026-06-07 (`db.flush([event])`). TIER3-V2V3: `enforce_api_key_scope` wired to routes; closed 2026-06-07. TIER3-10 (`async_job_service` coupling): open — architectural, no bounded fix this session.
+- **DEPLOY-TARGET-\*** — Cloud deployment targets. DEPLOY-TARGET-1: cloud deployment manifests (Railway/Render/Fly.io) not yet authored — open, trigger: first cloud deployment planned. DEPLOY-TARGET-2: multi-tenant SaaS readiness gate (TENANT-1/2/3/4 become load-bearing) — open, trigger: first multi-tenant operator onboards.
+- **BILLING-\*** — Monetization infrastructure gaps (2026-06-07 audit). BILLING-1: billing identity (`tenant_id` not decoupled from `user_id`); BILLING-2: metering model not chosen; BILLING-3: plan-tier enforcement path missing (`quota_group` unread); BILLING-4: no self-service acquisition funnel; BILLING-5: no usage reporting surface. All open, deferred until commercial launch. Source: `docs/runtime/MONETIZATION_AUDIT.md`.
 
 ---
 
@@ -583,6 +586,8 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Scheduler jobs | `AINDY/platform_layer/scheduler_service.py` |
 | Alembic migrations | `alembic/versions/` |
 | Idempotency contract | `docs/runtime/IDEMPOTENCY_CONTRACT.md` |
+| Nodus developer guide (scripts + builtins) | `docs/runtime/NODUS_DEVELOPER_GUIDE.md` |
+| Syscall API reference (all registered calls) | `docs/runtime/SYSCALL_REFERENCE.md` |
 | 90-day hardening checklist | `AINDY_RUNTIME_90_DAY_CHECKLIST.md` |
 | Runtime module map (tagged inventory) | `docs/runtime/RUNTIME_MODULE_MAP.md` |
 | Runtime execution invariants | `docs/runtime/EXECUTION_INVARIANTS.md` |
@@ -619,6 +624,8 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | macOS container sandbox policy | `docs/runtime/MACOS_CONTAINER_POLICY.md` |
 | WSL2 / macOS backend detection | `AINDY/platform_layer/sandbox_runner.py` — `_detect_wsl2()` |
 | Open questions tracker | `docs/runtime/OPEN_QUESTIONS.md` |
+| Cloud deployment targets + readiness | `docs/runtime/DEPLOYMENT_TARGETS.md` |
+| Monetization and billing architecture audit | `docs/runtime/MONETIZATION_AUDIT.md` |
 | Route ownership inventory | `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md` |
 | nginx plain HTTP config | `nginx/nginx.conf` |
 | nginx TLS config (Let's Encrypt) | `nginx/nginx.tls.conf` |
