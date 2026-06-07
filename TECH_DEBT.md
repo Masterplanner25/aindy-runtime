@@ -549,6 +549,154 @@ version; note that rolling back across a schema change requires a DB restore).
 
 ---
 
+## DEPLOY-TARGET-1 — Cloud deployment manifests not authored
+
+**Status:** Deferred — pre-cloud-launch
+
+The shortest path to a single-operator hosted deployment is translating
+`docker-compose.prod.yml` into a platform-specific deployment manifest. The compose
+file is effectively already the spec; the work is translation and cloud-Postgres
+integration testing, not architecture.
+
+Candidate platforms (in order of fit):
+- **Railway** — `railway.json` / `railway.toml`; native Postgres with pgvector plugin
+- **Render** — `render.yaml`; managed Postgres add-on; docker-compose import supported
+- **Fly.io** — `fly.toml`; more regional control; pgvector via Supabase or Fly Postgres
+- **Digital Ocean App Platform** — YAML spec; managed Postgres; no nginx needed (TLS built-in)
+
+Required env vars at deploy time: `DATABASE_URL`, `SECRET_KEY`, `OPENAI_API_KEY`,
+`AINDY_BOOTSTRAP_ADMIN_EMAIL`, optionally `AINDY_REDIS_URL`.
+
+Source: `docs/runtime/DEPLOYMENT_TARGETS.md`.
+
+**Reopen trigger:** When first cloud deployment is planned.
+
+---
+
+## DEPLOY-TARGET-2 — Multi-tenant SaaS readiness gate
+
+**Status:** Deferred — trigger when first multi-tenant customer onboards
+
+When the deployment target shifts from "hosted for a single operator" to "multiple
+paying operators sharing one runtime deployment," the following TENANT-* findings
+from `LOCAL_AND_CLOUD_AUDIT.md` become load-bearing and must be resolved in sequence:
+
+1. **TENANT-1** — `tenant_id == str(user_id)` by convention; must be rebased onto a
+   control-plane-issued `billing_account_id` before billing isolation is meaningful.
+2. **TENANT-2** — `quota_group` on `execution_units` has no enforcement path; per-tenant
+   concurrency limits and feature gates require this to be built.
+3. **TENANT-3** — event bus is a single shared Redis channel; WAIT/RESUME events for
+   tenant A must not broadcast to tenant B's processes.
+4. **TENANT-4** — OCI container resource limits are global env vars; must become
+   per-tenant to prevent noisy-neighbor problems.
+
+None of these are blocked by architectural debt — the hooks are seeded. This is
+deliberate work that begins only when the first multi-tenant customer is ready.
+
+Source: `docs/runtime/DEPLOYMENT_TARGETS.md`. Related: `BILLING-1` (billing identity).
+
+**Reopen trigger:** When first multi-tenant operator onboards.
+
+---
+
+## BILLING-1 — Billing identity: tenant_id not decoupled from user_id
+
+**Status:** Deferred — trigger when first multi-seat customer onboards
+
+`tenant_id` on `ExecutionUnit` is set by convention: `str(user_id)`. A commercial
+billing model requires a billing account identity that is independent of individual
+users — one paying account may contain multiple users (team seats). The `User`
+model has no `billing_account_id`, `plan_tier`, or external billing reference field.
+
+Resolution direction: introduce a `billing_account_id` field on `User` (or a
+`BillingAccount` model) issued by the control plane at registration. Rebase
+`tenant_id` onto this identifier. This unblocks BILLING-3 (plan enforcement) and
+DEPLOY-TARGET-2 (multi-tenant SaaS).
+
+Source: `docs/runtime/MONETIZATION_AUDIT.md` Area A, finding BILLING-1.
+
+**Reopen trigger:** When first multi-seat team plan or control-plane integration begins.
+
+---
+
+## BILLING-2 — Metering model not chosen
+
+**Status:** Deferred — decision required before billing infrastructure is built
+
+Three viable billing models exist (per-seat, per-agent-run, usage-based compute),
+each with different data sources and customer-facing complexity. The `AgentRun`
+table is the clearest natural unit; the recommendation in the monetization audit
+is per-agent-run with a seat-based floor for team plans. This decision must be
+made before any billing backend is integrated.
+
+Source: `docs/runtime/MONETIZATION_AUDIT.md` Area B, finding BILLING-2.
+
+**Reopen trigger:** Before billing infrastructure or Stripe integration begins.
+
+---
+
+## BILLING-3 — No plan-tier enforcement path
+
+**Status:** Deferred — trigger when first paid plan is defined
+
+Even when a billing model is chosen and a control plane issues plan tiers, the
+runtime has no enforcement mechanism. Every operator has identical access regardless
+of plan. The enforcement path requires:
+
+1. A `plan_tier` field on the user (populated from the control plane)
+2. A `require_plan(tier)` FastAPI dependency factory (analogous to `require_admin_principal`)
+3. A quota policy lookup that translates `quota_group` into concrete per-tenant limits
+
+The `quota_group` field on `execution_units` is the right enforcement hook (seeded
+but unread). `TENANT-2` in `TECH_DEBT.md` tracks the enforcement-path gap at the
+infrastructure level; BILLING-3 extends it into the commercial billing context.
+
+Source: `docs/runtime/MONETIZATION_AUDIT.md` Area C, finding BILLING-3.
+
+**Reopen trigger:** When the first paid plan tier is defined.
+
+---
+
+## BILLING-4 — No self-service acquisition funnel
+
+**Status:** Deferred — trigger before first paid customer onboards
+
+Current onboarding requires direct operator involvement (register → manual admin
+promotion). A commercial funnel requires: register → plan selection → Stripe payment
+→ control plane webhook → auto-promotion with plan tier set. Steps 1 and the final
+SPA redirect already work; steps 2-4 require a separate control plane service (not
+in this repo) that calls internal runtime admin APIs.
+
+The runtime's side of this contract: a `set-plan-tier` internal admin endpoint
+(analogous to `auth promote-admin`) callable by the control plane via internal API
+key. The commercial logic (Stripe, webhooks, pricing pages) lives outside this repo
+to preserve self-hostability.
+
+Source: `docs/runtime/MONETIZATION_AUDIT.md` Area D, finding BILLING-4.
+
+**Reopen trigger:** Before first paid customer onboards.
+
+---
+
+## BILLING-5 — No usage reporting surface
+
+**Status:** Deferred — trigger when first plan with usage limits ships
+
+Customers on any metered or capped plan need a usage view before they are surprised
+by an overage or renewal invoice. The data is available (`AgentRun` count,
+`ExecutionUnit.wall_time_ms` aggregate, `memory_nodes` count), but no
+`GET /platform/billing/usage` endpoint or billing-period concept exists.
+
+Minimum viable: a read-only admin endpoint returning current-period agent run count,
+compute wall time, and memory record count relative to plan limits. Requires a
+billing period start date on the billing account model (BILLING-1 dependency).
+
+Source: `docs/runtime/MONETIZATION_AUDIT.md` Area E, finding BILLING-5.
+
+**Reopen trigger:** When first metered plan with usage limits ships.
+
+---
+
 ## LINT-VERSION-GAP-1: eslint major version asymmetry across ui-kit and apps-monolith
 
 **Status:** Tracked, accepted. Soft commitment to align on next maintenance pass.
@@ -799,6 +947,31 @@ source.
 4. Close this entry.
 
 **Reopen trigger:** PyPI publish of `aindy-runtime` at any version.
+
+---
+
+## NODUS-UPGRADE-1 — nodus-lang pinned at 3.0.2; v4.0.0 available
+
+**Status:** Deferred — no production risk, low-priority upgrade.
+
+**Discovered:** 2026-06-07. nodus-lang 4.0.0 published 2026-06-04.
+
+**Context:** `pyproject.toml` pins `nodus-lang==3.0.2`. v4.0.0 introduces Phase 6
+AI-native primitives (execution identity propagation, namespaced memory ops, a Nodus-internal
+syscall registry). The upgrade is **low risk**: the three Nodus scripts in the runtime
+(`memory.nd`, `test-script.nodus`, `stored-script.nodus`) use none of the v4 breaking-change
+patterns. The `__memory_stdlib_*` private builtins injected by `nodus_worker.py` are a
+separate namespace from v4's `std:memory` module and will not collide.
+
+**v4 breaking changes that don't affect aindy's scripts (but matter for users writing scripts):**
+- `type(float)` returns `"float"` not `"number"` (check with `math.is_float(x)` going forward)
+- `==` no longer coerces across type families (`0 == false` is now `false`)
+- `index_of` / `last_index_of` return `nil` for not-found (was `-1`)
+- Float division by zero returns `inf`/`nan` instead of throwing
+
+**Unblock:** After PyPI publish (PYPI-PUBLISH-1), bump `pyproject.toml` pin, run
+`pytest tests/unit/ -v` to confirm no regressions, update `NODUS_DEVELOPER_GUIDE.md`
+type-reference table to reflect v4 type names.
 
 ---
 
@@ -1111,14 +1284,18 @@ new served constant and a one-line update in `rippletrace.js`.
 
 ## OPER-DEFER-001 — `/platform/flows/strategies` not served by runtime
 
-**Status:** Open — deferred until backend route lands.
+**Status:** UI gate wired (2026-06-07) — backend route still deferred.
 
 **Discovered:** 2026-06-03 during `_routes.js` audit (ROUTES reconcile pass against live OpenAPI).
 
 **Context:** `ROUTES.OPERATOR.FLOW_STRATEGIES` resolves to `/platform/flows/strategies`. No
 handler for this path exists in the runtime OpenAPI (verified 2026-06-03). The constant is
-syntactically live in `@aindy/ui-kit/src/api/_routes.js`; any NavLink referencing it must
-check `FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES` (default `false`) before rendering.
+syntactically live in `@aindy/ui-kit/src/api/_routes.js`.
+
+**UI gate (2026-06-07):** The "Strategies" tab in `FlowEngineConsole.jsx` is now filtered from
+the `TABS` array when `FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES` is `false`. The tab no longer
+renders, no API call fires, and no 404 is exposed to the user. The tab reappears automatically
+when the flag is flipped.
 
 The route likely belongs in `AINDY/routes/platform/flows_router.py` alongside the existing
 `/platform/flows/registry` handler. It would expose the set of registered flow strategies
@@ -1126,13 +1303,13 @@ The route likely belongs in `AINDY/routes/platform/flows_router.py` alongside th
 
 **What unblocks it:** A `GET /platform/flows/strategies` handler is registered and visible
 in the runtime OpenAPI. Flip `FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES` to `true` in
-`@aindy/ui-kit/src/api/_routes.js`.
+`platform/src/api/_routes.js`.
 
 ---
 
 ## OPER-DEFER-002 — `/automation/logs` group not served by runtime
 
-**Status:** Open — lives in monolith (aindy-apps); migration path TBD.
+**Status:** UI gate wired (2026-06-07) — backend routes still deferred (live in monolith).
 
 **Discovered:** 2026-06-03 during `_routes.js` audit (ROUTES reconcile pass against live OpenAPI).
 
@@ -1146,8 +1323,12 @@ in the runtime OpenAPI. Flip `FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES` to `true` 
 | `AUTOMATION_REPLAY` | `POST /automation/logs/{logId}/replay` |
 
 None resolve in the runtime OpenAPI. These routes currently live in the aindy-apps monolith.
-All three constants remain syntactically live in `ROUTES.OPERATOR`; NavLinks must check
-`FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` before rendering.
+All three constants remain syntactically live in `ROUTES.OPERATOR`.
+
+**UI gate (2026-06-07):** The "Automation" tab in `FlowEngineConsole.jsx` is now filtered from
+the `TABS` array when `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` is `false`. The tab no longer
+renders, no API call fires, and no misleading "No automation logs yet." empty state is shown.
+The tab reappears automatically when the flag is flipped.
 
 **What unblocks it:** Either:
 1. The automation logging subsystem is migrated to aindy-runtime (adds the three paths to the
@@ -1156,7 +1337,7 @@ All three constants remain syntactically live in `ROUTES.OPERATOR`; NavLinks mus
    SPA to the monolith host.
 
 When the backend paths land, flip `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` to `true` in
-`@aindy/ui-kit/src/api/_routes.js`.
+`platform/src/api/_routes.js`.
 
 ---
 

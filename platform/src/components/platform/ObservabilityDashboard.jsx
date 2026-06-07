@@ -193,7 +193,7 @@ export default function ObservabilityDashboard() {
     <PageShell
       eyebrow="System Telemetry"
       title="Observability Dashboard"
-      description="Unified operational state across request traffic, loop orchestration, agent activity, health checks, and durable system events."
+      description="A live view of system activity — request traffic, agent runs, error rates, and flow execution. Green means healthy; anything else is worth a closer look."
       actions={<ActionButton tone="ghost" onClick={loadDashboard}>Refresh Signals</ActionButton>}>
 
       <SurfaceGrid>
@@ -209,7 +209,7 @@ export default function ObservabilityDashboard() {
           <MetricCard
             label="Loop Events"
             value={formatCompactNumber(summary.loop_events || 0)}
-            hint="Derived from system event stream."
+            hint="Automated orchestration decisions made by the scheduler."
             tone="info" />
 
         </div>
@@ -217,7 +217,7 @@ export default function ObservabilityDashboard() {
           <MetricCard
             label="Agent Events"
             value={formatCompactNumber(summary.agent_events || 0)}
-            hint="Lifecycle events recorded for agent execution."
+            hint="Actions taken across all agent runs — approvals, executions, completions."
             tone="info" />
 
         </div>
@@ -301,7 +301,7 @@ export default function ObservabilityDashboard() {
             <div className="lg:col-span-5">
               <SurfacePanel
               title="Loop Activity Stream"
-              subtitle="Recent orchestration decisions emitted through SystemEvent.">
+              subtitle="Recent automated decisions — what the scheduler chose to do and why.">
 
                 {data?.loop_activity?.length ?
               <div className="space-y-3">
@@ -418,7 +418,7 @@ export default function ObservabilityDashboard() {
             <div className="lg:col-span-4">
               <SurfacePanel
               title="System Event Feed"
-              subtitle="Cross-domain event ledger used to correlate execution, loop, and memory activity.">
+              subtitle="A log of significant runtime events — use this to trace what happened and when.">
 
                 {data?.system_events?.recent?.length ?
               <div className="space-y-3">

@@ -10,6 +10,7 @@ import {
   getSchedulerStatus,
   getFlowStrategies } from "../../api/operator.js";
 import { useAuth } from "@aindy/ui-kit";
+import { FEATURE_FLAGS } from "../../api/_routes.js";
 import { AdminAccessRequired } from "../shared/AdminApiErrorBoundary";
 import { LoadingPanel } from "../shared/LoadingPanel";
 import { EmptyState } from "../shared/EmptyState";
@@ -1501,10 +1502,11 @@ function StrategiesPanel({ triggerRefresh }) {
 // ═══════════════════════════════════════════════════════════════════
 
 const TABS = [
-{ id: "runs", label: "Flow Runs" },
-{ id: "automation", label: "Automation" },
-{ id: "registry", label: "Registry" },
-{ id: "strategies", label: "Strategies" }];
+  { id: "runs",       label: "Flow Runs" },
+  ...(FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS  ? [{ id: "automation", label: "Automation" }]  : []),
+  { id: "registry",  label: "Registry" },
+  ...(FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES  ? [{ id: "strategies", label: "Strategies" }]  : []),
+];
 
 
 export default function FlowEngineConsole() {

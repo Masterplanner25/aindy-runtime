@@ -18,6 +18,7 @@ const ExecutionConsole = lazy(() => import("./components/platform/ExecutionConso
 const AgentApprovalInbox = lazy(() => import("./components/platform/AgentApprovalInbox"));
 const AgentRegistry = lazy(() => import("./components/platform/AgentRegistry"));
 const RippleTraceViewer = lazy(() => import("./components/platform/RippleTraceViewer"));
+const AdminUsersPanel = lazy(() => import("./components/platform/AdminUsersPanel"));
 
 function platformRoute(name: string, element: ReactNode) {
   return (
@@ -82,6 +83,7 @@ export default function PlatformApp() {
                         <Route path="/executions" element={platformRoute("Executions", <ExecutionConsole />)} />
                         <Route path="/approvals" element={platformRoute("Approvals", <AgentApprovalInbox />)} />
                         <Route path="/registry" element={platformRoute("Registry", <AgentRegistry />)} />
+                        <Route path="/users" element={platformRoute("Users", <AdminUsersPanel />)} />
                         {FEATURE_FLAGS.RIPPLETRACE_VIEWER && (
                           <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
                         )}
