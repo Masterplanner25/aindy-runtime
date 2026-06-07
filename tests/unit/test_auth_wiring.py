@@ -28,20 +28,6 @@ def test_auth_package_exports_scopes():
     assert "platform.admin" in Scopes.ALL
 
 
-def test_auth_package_exports_require_scope():
-    from AINDY.auth import require_scope
-    assert callable(require_scope)
-
-
-def test_auth_package_exports_auth_principal():
-    from AINDY.auth import AuthPrincipal
-    assert AuthPrincipal is not None
-
-
-def test_auth_package_exports_get_authenticated_principal():
-    from AINDY.auth import get_authenticated_principal
-    assert callable(get_authenticated_principal)
-
 
 def test_auth_init_and_api_key_auth_share_same_scopes():
     """Symbols from both import paths must be the same objects — no divergence."""

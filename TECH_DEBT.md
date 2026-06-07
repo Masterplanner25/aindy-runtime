@@ -1874,13 +1874,9 @@ ROOT_ROUTERS = [
 
 ## AUTH-V5 — SECRET_KEY module-level string exported from auth_service.py
 
-**Status:** Open
+**Status:** CLOSED (2026-06-07)
 
-**Problem:** `auth_service.py:94` exports `SECRET_KEY: str = settings.SECRET_KEY` as a module-level attribute alongside the `_key_ring` instance. The attribute is updated by `rotate_signing_key()` and `_reload_key_on_sighup()`, but any code that imports `SECRET_KEY` before a rotation holds a stale copy forever — the import binding is not updated, only the module attribute is. No external code currently imports it (grep confirms zero consumers outside `auth_service.py`), but the exported name is a trap: a future developer looking for the signing key string will find it and import it directly, bypassing the ring.
-
-**Resolution direction:** Remove the module-level export once all callers inside `auth_service.py` use `_key_ring.active_key` directly. The backward-compat comment (`# backward compat — use _get_signing_key() in new code`) is the right signal; the attribute just needs to actually be removed.
-
-**Risk:** Low — no external consumers today. Becomes high the moment any code imports it directly.
+**Fix:** Removed `SECRET_KEY: str = settings.SECRET_KEY` from line 94. Removed `global SECRET_KEY` + assignment in `rotate_signing_key()` and `_reload_key_on_sighup()`. JWT encode already used `_get_signing_key()`; decode already used `_key_ring.verify_keys()`. Zero external consumers confirmed by grep before deletion.
 
 ---
 
@@ -1897,7 +1893,7 @@ ROOT_ROUTERS = [
 - `platform_ops_router.py:dispatch_syscall`: inline domain-level scope enforcement for API key callers — maps syscall name prefix to required scope (`sys.v1.memory.*` → `memory.write`, `sys.v1.flow.*` → `flow.execute`, `sys.v1.agent.*` → `agent.run`, `sys.v1.webhook.*` → `webhook.manage`); `platform.admin` bypasses all.
 - 13 new unit tests in `tests/unit/test_tier3_structural.py`.
 
-**V3 architectural note:** The parallel auth system (`get_authenticated_principal` + `require_scope()` in `api_key_auth.py`) remains. `enforce_api_key_scope` uses `get_current_user` to avoid a second DB lookup. Full V3 resolution (collapsing the two auth paths) is deferred.
+**V3 — CLOSED 2026-06-07:** Removed the dead parallel auth path (`get_authenticated_principal`, `require_scope`, `AuthPrincipal`, header extractors) from `api_key_auth.py`. File now contains only `Scopes`. `__init__.py` re-exports `Scopes` only. Three dead export-check tests removed from `test_auth_wiring.py`.
 
 ---
 

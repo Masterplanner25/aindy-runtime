@@ -91,7 +91,6 @@ class KeyRing:
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT config
-SECRET_KEY: str = settings.SECRET_KEY  # backward compat — use _get_signing_key() in new code
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 _key_ring = KeyRing(active=settings.SECRET_KEY)
@@ -108,11 +107,9 @@ def _get_signing_key() -> str:
 
 
 def rotate_signing_key(new_key: str) -> bool:
-    global SECRET_KEY
     if new_key == _key_ring.active_key:
         return False
     _key_ring.rotate(new_key)
-    SECRET_KEY = new_key
     return True
 
 
@@ -476,11 +473,9 @@ def verify_api_key(
 def _reload_key_on_sighup(signum, frame) -> None:
     import logging as _log
 
-    global SECRET_KEY
     logger = _log.getLogger(__name__)
     changed = _key_ring.reload_from_env()
     if changed:
-        SECRET_KEY = _key_ring.active_key
         logger.warning(
             "[auth_service] SECRET_KEY rotated via SIGHUP. "
             "Previous key retained for %d-hour grace period.",
