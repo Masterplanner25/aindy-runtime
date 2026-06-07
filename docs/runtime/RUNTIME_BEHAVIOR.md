@@ -1,6 +1,6 @@
 ---
 title: "Runtime Behavior"
-last_verified: "2026-05-20"
+last_verified: "2026-06-07"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -172,8 +172,9 @@ This document describes the current runtime behavior of the FastAPI backend as i
   - `async_job.completed` or `async_job.failed` for queued worker outcome
   - `execution.completed` or `execution.failed` as the canonical execution ledger events
 - Async execution has two transport modes, selected by `EXECUTION_MODE`:
-  - `thread` (default) - `ExecutionDispatcher` submits to an in-process `ThreadPoolExecutor`; no external dependencies.
+  - `thread` (default for dev) - `ExecutionDispatcher` submits to an in-process `ThreadPoolExecutor`; no external dependencies. Hard cap: 100 concurrent jobs. `docker-compose.prod.yml` overrides this to `distributed` — thread mode is dev-only.
   - `distributed` - `ExecutionDispatcher` enqueues a `QueueJobPayload` to `core/distributed_queue.py`; one or more `worker/worker_loop.py` processes consume the queue. Trace context (`trace_id`, `eu_id`) is serialised into the payload and restored in the worker before execution, preserving the full syscall trace chain across the process boundary. Retry backoff, visibility timeout recovery, and a Dead Letter Queue are included; see `docs/deployment/DEPLOYMENT_MODEL.md`.
+- When the thread-mode queue is full (`QueueSaturatedError`), the autonomous trigger path (`submit_autonomous_async_job`) converts the submission to a 60-second deferred job instead of returning HTTP 503. Demand peaks are absorbed without surfacing errors to callers.
 - High-impact execution outcomes can now auto-create Memory Bridge records with causal metadata (`source_event_id`, `root_event_id`, `causal_depth`, `impact_score`, `memory_type`).
 - Embedding generation for newly captured memory is now asynchronous. Request paths persist the memory first with `embedding_status=pending`, enqueue background embedding work, and retrieval can fall back to non-embedding search while vectors are unavailable.
 - Agent execution now performs pre-run memory recall and injects categorized context (`similar_past_outcomes`, `relevant_failures`, `successful_patterns`) before deterministic execution begins.
@@ -197,6 +198,7 @@ This document describes the current runtime behavior of the FastAPI backend as i
 - Mongo-backed features are optional unless `MONGO_REQUIRED=true`. When Mongo is optional and unavailable, the runtime now stays up in an explicitly degraded state instead of failing silently.
 - Request metrics persistence is best-effort; failures are logged and swallowed.
 - The app is still a monolith: API, scheduler leadership, orchestration, and some execution logic share the same process.
+- Thread-mode queue cap (100 jobs) is a hard ceiling with no overflow; the autonomous submit path self-defers on saturation, but explicit-submit callers still receive `QueueSaturatedError`. Production deployments should use `EXECUTION_MODE=distributed` (enforced by `docker-compose.prod.yml`). See SYSMAX-1 in `TECH_DEBT.md`.
 - Manifest bootstrap modules and trusted in-process dynamic plugin nodes remain
   trusted code execution, not sandboxed extensions. Third-party plugin nodes
   now execute through a subprocess boundary instead of being imported into the
