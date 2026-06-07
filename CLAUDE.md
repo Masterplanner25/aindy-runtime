@@ -564,6 +564,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **EVENT-\*** — Event system integrity gaps. EVENT-1: emission error loop prevention is implicit — `_safe_emit_event` absorbs `SystemEventEmissionError` via broad `except`, not an explicit in-progress guard; safe today, latent risk if emission error surface is hardened.
 - **MEMORY-\*** — Memory system integrity gaps. MEMORY-1: `persist_memory_ingest_payload` partial-write — `append_node` failure leaves `MemoryNode` + `MemoryTrace` committed but unlinked; node is queryable but invisible in trace views (linked to fire-and-forget gap).
 - **OBS-\*** — Observability gaps. OBS-1: `_safe_require_eu`, `_safe_finalize_eu`, `_safe_emit_event` failures log at `DEBUG` — closed 2026-06-07 (all three promoted to `logger.warning` in `resources.py` and `pipeline.py`).
+- **REPLAY-\*** — Deterministic replay infrastructure. REPLAY-1: replay harness requires `Clock` injection into ~12 `datetime.now()` call sites across `ExecutionPipeline`, `EffectRecord`, `SystemEvent`; deferred until post-PyPI + OpenClaw spike.
 
 ---
 

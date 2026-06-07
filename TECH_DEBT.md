@@ -1880,6 +1880,24 @@ ROOT_ROUTERS = [
 
 ---
 
+## REPLAY-1 — Deterministic replay harness requires Clock injection refactor
+
+**Status:** Open — infrastructure required before implementation
+
+**Problem:** Fully deterministic replay (same input/state → identical outputs, events, and DB mutations) requires injecting a `Clock` abstraction into `ExecutionPipeline`, `EffectRecord`, `SystemEvent`, and any other component that calls `datetime.now()` or `datetime.utcnow()` directly. Currently ~12 call sites use wall clock with no injectable seam, so timestamps in EffectRecord, SystemEvent, and ExecutionUnit differ between runs — event/DB checksums can never match.
+
+**Resolution direction:**
+1. Add a `Clock` protocol with `now() -> datetime` to `AINDY/kernel/`
+2. Thread it through `ExecutionPipeline`, `SyscallDispatcher`, and the EffectRecord gate
+3. Provide `FixedClock(dt)` for tests, `SystemClock()` as the production default
+4. Once in place: snapshot inputs + fixed clock + RNG seed → deterministic re-execution; event hash and DB checksum assertions become trivial
+
+**Why not yet:** Scope is ~15–20 files, non-trivial but mechanical. Deferred until after PyPI publish and OpenClaw port spike stabilise the runtime surface.
+
+**Risk:** Low — no observable behaviour change in production. Tests that depend on real timestamps stay unaffected until they opt in to `FixedClock`.
+
+---
+
 ## TIER3-V2V3 — require_scope() / enforce_api_key_scope() wired to platform routes
 
 **Status:** CLOSED (2026-06-07)
