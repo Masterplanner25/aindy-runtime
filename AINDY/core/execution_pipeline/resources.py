@@ -50,7 +50,7 @@ def _safe_require_eu(self, ctx) -> str | None:
             required=True,
             error=exc,
         )
-        logger.debug("execution.eu_register_skipped", exc_info=True)
+        logger.warning("execution.eu_register_skipped", exc_info=True)
         return None
 
 
@@ -124,12 +124,15 @@ def _safe_rm_record_and_complete(self, ctx, duration_ms: float) -> None:
 
 
 def _safe_finalize_eu(self, ctx, status: str) -> None:
+    if ctx.metadata.get("eu_finalized"):
+        return
     eu_id = ctx.metadata.get("eu_id")
     if not eu_id:
         return
     db = ctx.metadata.get("db")
     if db is None:
         return
+    ctx.metadata["eu_finalized"] = True
     try:
         from AINDY.core.execution_unit_service import ExecutionUnitService
 
@@ -157,4 +160,4 @@ def _safe_finalize_eu(self, ctx, status: str) -> None:
             required=True,
             error=exc,
         )
-        logger.debug("execution.eu_finalize_skipped", exc_info=True)
+        logger.warning("execution.eu_finalize_skipped", exc_info=True)

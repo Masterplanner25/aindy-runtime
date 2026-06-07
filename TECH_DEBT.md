@@ -1955,42 +1955,9 @@ ROOT_ROUTERS = [
 
 ## EXEC-EU-1 — _safe_finalize_eu not called from the finally block in ExecutionPipeline.run()
 
-**Status:** Open — Known gap
+**Status:** CLOSED (2026-06-07)
 
-**Problem:** `AINDY/core/execution_pipeline/pipeline.py` calls `_safe_finalize_eu` in three places — the happy path (line 183), the `HTTPException` branch (line 248), and the broad `except Exception` branch (line 269) — but NOT in the `finally` block (line 281). The `finally` block only covers `_safe_rm_mark_completed` (ResourceManager counter) and context reset.
-
-If a genuinely novel exception escapes all three `except` branches (which the broad `except Exception` makes architecturally near-impossible but not provably impossible — e.g. a `BaseException` subclass like `KeyboardInterrupt` or `SystemExit` raised inside the handler), the EU row stays in `executing` status indefinitely with no recovery path.
-
-**Impact:** An EU stuck in `executing` holds a ResourceManager slot permanently and does not emit `execution.completed` or `execution.failed`. Under the right conditions (repeated crashes at exactly this point) the ResourceManager counter drifts from reality.
-
-**Resolution direction:** Move `_safe_finalize_eu(ctx, "failed")` into the `finally` block with a guard flag (e.g. `eu_finalized`) so it only fires if it wasn't already called on a normal path. Pattern:
-
-```python
-eu_finalized = False
-try:
-    ...
-    self._safe_finalize_eu(ctx, "completed")
-    eu_finalized = True
-    ...
-except HTTPException as exc:
-    ...
-    self._safe_finalize_eu(ctx, "failed")
-    eu_finalized = True
-    ...
-except Exception as exc:
-    ...
-    self._safe_finalize_eu(ctx, "failed")
-    eu_finalized = True
-    ...
-finally:
-    if not eu_finalized:
-        self._safe_finalize_eu(ctx, "failed")
-    if rm_started:
-        self._safe_rm_mark_completed(ctx)
-    ...
-```
-
-**Why not fixed immediately:** Requires careful testing — `_safe_finalize_eu` is idempotent in intent but the double-call behavior should be verified. Low-probability trigger path makes this low urgency.
+**Implementation:** `_safe_finalize_eu` (resources.py) now has an idempotency guard: `ctx.metadata["eu_finalized"]` is checked at entry and set to `True` before the DB write attempt — preventing double-finalization on normal paths. The `finally` block in `ExecutionPipeline.run()` (pipeline.py) now calls `self._safe_finalize_eu(ctx, "failed")` gated by `ctx.metadata.get("eu_status") != "waiting"`, which is a no-op on every normal path (guard fires) and closes the EU as `failed` on any `BaseException` escape path. Waiting EUs are excluded by the `eu_status` guard.
 
 ---
 
@@ -2037,20 +2004,11 @@ If step 3 fails, the exception is caught and logged as a `WARNING` (line 72) and
 
 ## OBS-1 — Pipeline _safe_* failures log at DEBUG, invisible in production
 
-**Status:** Open — Known observability gap
+**Status:** CLOSED (2026-06-07)
 
-**Problem:** Three pipeline failure paths emit at `logger.debug`, which is off in production:
+**Implementation:** Promoted all three failure-path logs from `logger.debug` to `logger.warning`:
+- `resources.py` — `_safe_require_eu` exception handler (was line 53)
+- `resources.py` — `_safe_finalize_eu` exception handler (was line 160, now shifted by EXEC-EU-1 guard)
+- `pipeline.py` — `_safe_emit_event` exception handler (was line 347)
 
-| Failure path | File | Line | Level |
-|---|---|---|---|
-| `_safe_require_eu` — EU creation fails | `execution_pipeline/resources.py` | 38, 53 | `DEBUG` |
-| `_safe_finalize_eu` — EU finalization fails | `execution_pipeline/resources.py` | 160 | `DEBUG` |
-| `_safe_emit_event` — event emission fails | `execution_pipeline/pipeline.py` | 347 | `DEBUG` |
-
-All three are recorded in `ctx.metadata["side_effects"]` as `status: "failed"`, but that dict is only visible by querying the DB for the ExecutionUnit's metadata — not in logs. A production operator whose EU creation is silently failing (e.g. due to DB schema drift) will see no log output, no alert, and no metric. The execution continues without an EU, without scope tracking, and without lifecycle events.
-
-**Contrast:** Quota check failures (`_safe_quota_check`) and ResourceManager failures (`_safe_rm_mark_started/completed`) were already upgraded to `WARNING`. The three above were not.
-
-**Resolution direction:** Promote `_safe_require_eu`, `_safe_finalize_eu`, and `_safe_emit_event` failures to `logger.warning`. These are non-fatal by design (the pipeline continues) but are degraded-mode conditions that operators need to see without attaching a debugger.
-
-**Risk:** Low probability of triggering, but when it does trigger the operator has no signal without reading the DB directly.
+Success-path debug logs (`[Pipeline] EU registered`, `[Pipeline] EU finalised`) remain at DEBUG — not failures.
