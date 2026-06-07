@@ -1950,3 +1950,44 @@ ROOT_ROUTERS = [
 **Problem:** `execute_with_pipeline_sync()` (`AINDY/core/execution_helper.py:69`) bridges synchronous routes into the async pipeline via `asyncio.run()`. `coordination_router.py` calls this on 9+ endpoints — each call creates and tears down a new event loop. No technical correctness issue in FastAPI's threadpool model, but it introduces non-trivial async machinery overhead on every coordination route invocation.
 
 **Why deferred:** Fixing this requires either making the coordination routes fully async (straightforward but high-churn across all endpoints) or providing a sync-native pipeline path that doesn't use `asyncio.run()`. The coordination domain is a candidate for extraction (see ROUTE-EXTRACT-001 remaining candidates), so the refactor may be moot if those routes move to the monolith.
+
+---
+
+## EXEC-EU-1 — _safe_finalize_eu not called from the finally block in ExecutionPipeline.run()
+
+**Status:** Open — Known gap
+
+**Problem:** `AINDY/core/execution_pipeline/pipeline.py` calls `_safe_finalize_eu` in three places — the happy path (line 183), the `HTTPException` branch (line 248), and the broad `except Exception` branch (line 269) — but NOT in the `finally` block (line 281). The `finally` block only covers `_safe_rm_mark_completed` (ResourceManager counter) and context reset.
+
+If a genuinely novel exception escapes all three `except` branches (which the broad `except Exception` makes architecturally near-impossible but not provably impossible — e.g. a `BaseException` subclass like `KeyboardInterrupt` or `SystemExit` raised inside the handler), the EU row stays in `executing` status indefinitely with no recovery path.
+
+**Impact:** An EU stuck in `executing` holds a ResourceManager slot permanently and does not emit `execution.completed` or `execution.failed`. Under the right conditions (repeated crashes at exactly this point) the ResourceManager counter drifts from reality.
+
+**Resolution direction:** Move `_safe_finalize_eu(ctx, "failed")` into the `finally` block with a guard flag (e.g. `eu_finalized`) so it only fires if it wasn't already called on a normal path. Pattern:
+
+```python
+eu_finalized = False
+try:
+    ...
+    self._safe_finalize_eu(ctx, "completed")
+    eu_finalized = True
+    ...
+except HTTPException as exc:
+    ...
+    self._safe_finalize_eu(ctx, "failed")
+    eu_finalized = True
+    ...
+except Exception as exc:
+    ...
+    self._safe_finalize_eu(ctx, "failed")
+    eu_finalized = True
+    ...
+finally:
+    if not eu_finalized:
+        self._safe_finalize_eu(ctx, "failed")
+    if rm_started:
+        self._safe_rm_mark_completed(ctx)
+    ...
+```
+
+**Why not fixed immediately:** Requires careful testing — `_safe_finalize_eu` is idempotent in intent but the double-call behavior should be verified. Low-probability trigger path makes this low urgency.
