@@ -48,6 +48,7 @@ def persist_memory_ingest_payload(payload: MemoryIngestPayload) -> IngestResult:
             description=payload.description,
             source=payload.origin_kind,
             extra=payload.extra,
+            commit=False,
         )
 
         node = node_dao.save(
@@ -57,26 +58,36 @@ def persist_memory_ingest_payload(payload: MemoryIngestPayload) -> IngestResult:
             user_id=payload.user_id,
             node_type="insight",
             extra=payload.extra,
+            commit=False,
         )
 
         trace_id = trace.get("id") if trace else None
         node_id = node.get("id") if node else None
 
         if trace_id and node_id:
-            try:
-                trace_dao.append_node(
-                    trace_id=trace_id,
-                    node_id=node_id,
-                    user_id=payload.user_id,
-                )
-            except Exception as exc:
-                logger.warning("[MemoryIngest] append failed for %s: %s", payload.path, exc)
+            trace_dao.append_node(
+                trace_id=trace_id,
+                node_id=node_id,
+                user_id=payload.user_id,
+                commit=False,
+            )
 
+        db.commit()
         return IngestResult(
             path=payload.path,
             trace_id=trace_id,
             node_id=node_id,
             status="ingested",
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning("[MemoryIngest] transaction rolled back for %s: %s", payload.path, exc)
+        return IngestResult(
+            path=payload.path,
+            trace_id=None,
+            node_id=None,
+            status="failed",
+            message=str(exc),
         )
     finally:
         db.close()

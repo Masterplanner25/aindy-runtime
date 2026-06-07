@@ -301,6 +301,13 @@ class ExecutionPipeline:
         parent_event_id: str | None = None,
         required: bool = False,
     ) -> str | None:
+        # Explicit re-entrance guard: if a previous emission already failed (broken DB
+        # session), skip rather than looping through the same dead path again. This makes
+        # the loop-prevention a first-class invariant instead of relying on the broad
+        # except-catch below being stable. See EVENT-1 in TECH_DEBT.md.
+        if ctx.metadata.get("_emission_failed"):
+            return None
+
         side_effect_name = f"system_event.{event_type}"
         db = ctx.metadata.get("db")
         if db is None:
@@ -339,6 +346,7 @@ class ExecutionPipeline:
             self._record_side_effect(ctx, side_effect_name, status="ok", required=required)
             return str(event_id)
         except Exception as exc:
+            ctx.metadata["_emission_failed"] = True
             self._record_side_effect(
                 ctx,
                 side_effect_name,
