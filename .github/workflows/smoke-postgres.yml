@@ -176,7 +176,7 @@ jobs:
           import urllib.request, json
           resp = urllib.request.urlopen("http://localhost:8000/health/deep")
           data = json.load(resp)
-          sr = data.get("syscall_registry") or {}
+          sr = (data.get("checks") or {}).get("syscall_registry") or {}
           count = sr.get("count", 0)
           minimum = sr.get("minimum_expected", 0)
           assert sr.get("status") == "ok", f"syscall_registry not ok: {sr}"

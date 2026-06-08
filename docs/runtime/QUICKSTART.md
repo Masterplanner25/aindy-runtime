@@ -131,8 +131,11 @@ A healthy `/health/deep` response includes:
 ```json
 {
   "status": "healthy",
-  "syscall_registry": { "status": "ok", "count": 17 },
-  "platform": { "database": "ok", "execution_engine": "ok" }
+  "checks": {
+    "database": { "status": "ok" },
+    "redis": { "status": "ok" },
+    "syscall_registry": { "status": "ok", "count": 17, "minimum_expected": 17 }
+  }
 }
 ```
 
