@@ -1,0 +1,240 @@
+name: Boot Smoke (PostgreSQL)
+
+# Validates that aindy-runtime boots cleanly against a real PostgreSQL + Redis
+# stack, reaches /health/deep green, and surfaces the expected API contract.
+# Measures time-to-first-answer (TTFA) from process start to each health tier
+# and uploads the result as a JSON artifact for baseline tracking.
+#
+# Uses `pip install -e .[test]` (editable install from the repo).
+# When PYPI-PUBLISH-1 is closed, update the install step to use the published
+# wheel: `pip install aindy-runtime==$(cat VERSION)`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-postgres:
+    name: Boot Smoke — Linux / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+        # Add "3.12" here once runtime is validated on 3.12
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aindy_smoke
+          POSTGRES_PASSWORD: aindy_smoke
+          POSTGRES_DB: aindy_smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      PYTHONPATH: .
+      ENV: test
+      TESTING: "true"
+      TEST_MODE: "true"
+      DATABASE_URL: "postgresql://aindy_smoke:aindy_smoke@localhost:5432/aindy_smoke"
+      REDIS_URL: "redis://localhost:6379"
+      SECRET_KEY: ci-smoke-postgres-secret-key
+      AINDY_API_KEY: ci-smoke-postgres-api-key
+      ALLOWED_ORIGINS: "http://localhost:8000"
+      AINDY_BOOT_MODE: runtime-only
+      AINDY_SKIP_MONGO_PING: "true"
+      SKIP_MONGO_PING: "true"
+      MONGO_URL: ""
+      OPENAI_API_KEY: sk-smoke-placeholder
+      DEEPSEEK_API_KEY: ds-smoke-placeholder
+      AINDY_ASYNC_HEAVY_EXECUTION: "false"
+      AINDY_ENABLE_BACKGROUND_TASKS: "false"
+      EXECUTION_MODE: thread
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install PostgreSQL client libs
+        run: sudo apt-get install -y --no-install-recommends libpq-dev
+
+      - name: Cache pip
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-smoke-pg-${{ matrix.python-version }}-${{ hashFiles('AINDY/requirements.txt', 'pyproject.toml') }}
+          restore-keys: ${{ runner.os }}-smoke-pg-${{ matrix.python-version }}-
+
+      - name: Install package (editable)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r AINDY/requirements.txt
+          python -m pip install -e ".[test]" --no-deps --no-build-isolation
+
+      - name: Enable pgvector extension
+        run: |
+          PGPASSWORD=aindy_smoke psql \
+            -h localhost -U aindy_smoke -d aindy_smoke \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Apply Alembic migrations
+        # Marks alembic_version_runtime at head. Domain tables don't exist yet —
+        # the server's Phase 5 startup bootstraps them via create_all().
+        # This mirrors the Docker Compose deploy path (alembic runs before server).
+        run: python -m alembic upgrade head
+
+      - name: Start server and record TTFA
+        run: |
+          START_MS=$(date +%s%3N)
+          echo "SERVER_START_MS=$START_MS" >> "$GITHUB_ENV"
+
+          python -m uvicorn AINDY.runtime_only:app \
+            --host 0.0.0.0 --port 8000 \
+            --log-level warning \
+            > /tmp/server.log 2>&1 &
+          echo $! > /tmp/server.pid
+          echo "Server PID: $(cat /tmp/server.pid)"
+
+          # Poll /health until the server is accepting connections (up to 30s)
+          for i in $(seq 1 60); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health 2>/dev/null || true)
+            if [ "$CODE" = "200" ]; then
+              BASIC_MS=$(date +%s%3N)
+              TTFA_BASIC=$((BASIC_MS - START_MS))
+              echo "TTFA_BASIC_MS=$TTFA_BASIC" >> "$GITHUB_ENV"
+              echo "/health ready after ${TTFA_BASIC}ms"
+              break
+            fi
+            sleep 0.5
+          done
+
+          if [ -z "$TTFA_BASIC" ]; then
+            echo "Server did not reach /health within 30s — dumping log:"
+            cat /tmp/server.log || true
+            exit 1
+          fi
+
+      - name: Assert /health/deep is healthy and record deep TTFA
+        run: |
+          # /health/deep may lag a few seconds while startup phases complete
+          for i in $(seq 1 60); do
+            RESP=$(curl -s http://localhost:8000/health/deep 2>/dev/null || true)
+            STATUS=$(echo "$RESP" | python -c \
+              "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || true)
+            if [ "$STATUS" = "healthy" ]; then
+              DEEP_MS=$(date +%s%3N)
+              TTFA_DEEP=$((DEEP_MS - SERVER_START_MS))
+              echo "TTFA_DEEP_MS=$TTFA_DEEP" >> "$GITHUB_ENV"
+              echo "/health/deep healthy after ${TTFA_DEEP}ms"
+              echo "$RESP" | python -m json.tool
+              break
+            fi
+            sleep 0.5
+          done
+
+          if [ -z "$TTFA_DEEP" ]; then
+            echo "/health/deep did not return healthy within 30s — response was:"
+            curl -s http://localhost:8000/health/deep | python -m json.tool || true
+            echo "--- server log ---"
+            cat /tmp/server.log || true
+            kill "$(cat /tmp/server.pid)" 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Assert /health/deep syscall registry is populated
+        run: |
+          python - <<'PY'
+          import urllib.request, json
+          resp = urllib.request.urlopen("http://localhost:8000/health/deep")
+          data = json.load(resp)
+          sr = data.get("syscall_registry") or {}
+          count = sr.get("count", 0)
+          minimum = sr.get("minimum_expected", 0)
+          assert sr.get("status") == "ok", f"syscall_registry not ok: {sr}"
+          assert count >= minimum, f"syscall count {count} < minimum {minimum}"
+          print(f"syscall_registry OK: count={count} minimum={minimum}")
+          PY
+
+      - name: Assert /api/version surface
+        run: |
+          python - <<'PY'
+          import urllib.request, json
+          resp = urllib.request.urlopen("http://localhost:8000/api/version")
+          data = json.load(resp)
+          rt = data["runtime"]
+          compat = data["compatibility"]
+          assert rt["boot_mode"] == "runtime-only", f"boot_mode={rt['boot_mode']}"
+          assert rt["boot_profile"] == "platform-only", f"boot_profile={rt['boot_profile']}"
+          assert rt["app_plugins_loaded"] is False
+          assert compat["runtime_package"]["name"] == "aindy-runtime"
+          print("version surface OK:", json.dumps(rt, indent=2))
+          PY
+
+      - name: Stop server
+        if: always()
+        run: kill "$(cat /tmp/server.pid)" 2>/dev/null || true
+
+      - name: Write TTFA artifact
+        if: always()
+        run: |
+          mkdir -p smoke-results
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          results = {
+              "runner_os": os.environ.get("RUNNER_OS", "Linux"),
+              "python_version": "${{ matrix.python-version }}",
+              "install_mode": "editable",
+              "database": "postgresql+pgvector/pg16",
+              "redis": "redis:7-alpine",
+              "ttfa_basic_health_ms": int(os.environ.get("TTFA_BASIC_MS", 0)),
+              "ttfa_deep_health_ms": int(os.environ.get("TTFA_DEEP_MS", 0)),
+              "workflow_run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+              "sha": os.environ.get("GITHUB_SHA", "local"),
+              "ref": os.environ.get("GITHUB_REF", "local"),
+          }
+          Path("smoke-results/ttfa.json").write_text(json.dumps(results, indent=2))
+          print(json.dumps(results, indent=2))
+          PY
+
+      - name: Upload TTFA artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: smoke-ttfa-py${{ matrix.python-version }}
+          path: smoke-results/ttfa.json
+          retention-days: 90
+
+      - name: Dump server log on failure
+        if: failure()
+        run: cat /tmp/server.log || true
