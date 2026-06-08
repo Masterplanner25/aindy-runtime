@@ -169,19 +169,6 @@ def _my_job() -> None:
 - `db.commit()` and `db.close()` inside `try` (before the except).
 - Use `logger.error` for fatal job failures; `logger.warning` for recoverable/non-fatal issues.
 
-**Registration in `_register_system_jobs`:**
-```python
-scheduler.add_job(
-    _my_job,
-    trigger=IntervalTrigger(hours=MY_JOB_INTERVAL_HOURS),
-    id="my_job",
-    name="Human-readable name",
-    replace_existing=True,
-    coalesce=True,
-    max_instances=1,
-)
-```
-
 **Unit test patching:**
 Jobs import `SessionLocal` inside the function body, so patch at the source:
 ```python
@@ -204,19 +191,7 @@ Patching `AINDY.platform_layer.scheduler_service.SessionLocal` will fail with `A
 ## Agent approve path — invariants and known gaps
 
 `approve_run()` (`AINDY/agents/agent_runtime/approvals.py`) guards the
-`pending_approval → approved` transition with an atomic SQLAlchemy CAS:
-
-```python
-rows = db.execute(
-    sqla_update(AgentRun)
-    .where(AgentRun.id == run_id, AgentRun.status == "pending_approval")
-    .values(status="approved", ...)
-    .execution_options(synchronize_session=False)
-).rowcount
-if rows == 0:
-    db.expire(run); db.refresh(run)
-    return compat._run_to_dict(run)  # already-approved or terminal — no re-execute
-```
+`pending_approval → approved` transition with an atomic SQLAlchemy CAS.
 
 **CAS fires only from `pending_approval`.** A process crash mid-execution leaves the run
 stranded in `approved` with no retry path — the watchdog/reaper in AGENT-APPROVE-001b must
@@ -441,13 +416,7 @@ This bit us during C3 Phase 0: all 17 escape tests were silently skipped on firs
 
 ## TECH_DEBT.md — IDEM-* numbering
 
-Entries are numbered sequentially. Do not reuse a number.
-
-- IDEM-1 through IDEM-6: open or closed idempotency audit findings.
-- **IDEM-7**: Syscall registry not-ready window visibility — closed 2026-06-04. Added `SYSCALL_REGISTRY_MIN_COUNT = 17` to `syscall_registry.py` and `_check_syscall_registry_status()` wired into `/health/deep`.
-- **IDEM-8**: APScheduler stub fix — closed 2026-05-23. Do not reassign this number.
-- **IDEM-9**: EffectRecord TTL cleanup — closed 2026-05-24.
-- Next available: **IDEM-10**.
+Entries are numbered sequentially. Do not reuse a number. IDEM-1 through IDEM-9 are recorded in TECH_DEBT.md. Next available: **IDEM-10**.
 
 When closing an entry, change `Status: Deferred — Low Priority` to `Status: CLOSED (YYYY-MM-DD)`
 and replace the description with what was implemented and any remaining gap.
@@ -523,49 +492,30 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 
 ## TECH_DEBT.md — prefix registry
 
+Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within a prefix.
+
 - **IDEM-\*** — idempotency audit findings. Next available: **IDEM-10**.
-- **CLI-1** — lazy settings getter / module-level import hazard (deferred post-1.0).
-- **CLI-SANDBOX-FORMAT-\*** — `sandbox` subcommand UX findings. CLI-SANDBOX-FORMAT-1: raw JSON wall, deferred to 1.0.1.
-- **C2, C3** — cross-platform sandbox tiers. C2: container-grade, closed 2026-05-24. C3: strong-sandbox cross-platform; Phase 0 (adversarial escape test suite — 17 tests in `tests/sandbox/`, marker `sandbox_escape`, artifact `tests/sandbox/sandbox_escape_results.json`) complete 2026-06-04; Phase 1 (`_detect_wsl2()`, Linux backend propagation to OCI controls, 21 new unit tests) complete 2026-06-06; Phase 2 (`docker_macos_backend` detection, static matrix update, policy doc `docs/runtime/MACOS_CONTAINER_POLICY.md`) complete 2026-06-06; Phase 3 (threat model `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` + `sandbox_escape_test_posture()` in `sandbox_runner.py`) complete 2026-06-05; Phase 4 (release gate Step 16 in `docs/runtime/RELEASE_CHECKLIST.md`) complete 2026-06-05. All phases complete — Phase 5 (macOS CI certification workflow `.github/workflows/macos-sandbox.yml`) complete 2026-06-06.
+- **CLI-1** — lazy settings getter / module-level import hazard. Open, deferred post-1.0.
+- **CLI-SANDBOX-FORMAT-1** — `sandbox` raw JSON output wall. Open, deferred to 1.0.1.
+- **C2, C3** — cross-platform sandbox tiers. All phases closed 2026-06-06.
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
-- **ALEMBIC-FRESH-DB-\*** — alembic migration blank-database safety. ALEMBIC-FRESH-DB-1: closed 2026-05-27.
-- **COMPOSE-PGVECTOR-\*** — pgvector extension requirement. COMPOSE-PGVECTOR-1: closed 2026-05-27.
-- **PACKAGING-DEP-\*** — pip --prefix bootstrap-package propagation gaps. PACKAGING-DEP-1: closed 2026-05-27.
-- **COMPOSE-HOST-\*** — container host binding issues. COMPOSE-HOST-1: closed 2026-05-27.
-- **EVENTBUS-REDIS-URL-\*** — Redis URL env var consolidation. EVENTBUS-REDIS-URL-CONSOLIDATION-1: closed 2026-06-06 (AINDY_REDIS_URL + AINDY_SKIP_MONGO_PING removed).
-- **PYPI-PUBLISH-\*** — PyPI publish transition. PYPI-PUBLISH-1: open.
-- **CI-SMOKE-\*** — Boot smoke CI workflow. CI-SMOKE-1: closed 2026-06-08 — `.github/workflows/smoke-postgres.yml` (pgvector/pg16 + Redis 7, TTFA artifact, editable install); upgrade to PyPI wheel when PYPI-PUBLISH-1 closes. Quickstart: `docs/runtime/QUICKSTART.md`.
-- **NODUS-UPGRADE-\*** — nodus-lang version pinning. NODUS-UPGRADE-1: pinned at 3.0.2; v4.0.0 deferred until post-PyPI publish; see NODUS_DEVELOPER_GUIDE.md §8 for upgrade notes.
-- **MONITORING-GRAFANA-\*** — Grafana monitoring profile gap. MONITORING-GRAFANA-1: closed 2026-06-05.
-- **COMPOSE-PROD-PORTS-\*** — database ports exposed in prod. COMPOSE-PROD-PORTS-1: closed 2026-06-05.
-- **PROMETHEUS-PIN-\*** — Prometheus image version pinning. PROMETHEUS-PIN-1: open.
-- **PLATFORM-UI-ENV-\*** — Vite `VITE_API_BASE_URL` bakes localhost into bundle. PLATFORM-UI-ENV-1: closed 2026-06-05 — relative-URL fallback + vite.config.ts proxy.
-- **PLATFORM-AUTH-ACQUISITION-\*** — Platform SPA first-party auth. PLATFORM-AUTH-ACQUISITION-1: closed 2026-05-28.
-- **PLATFORM-UI-KIT-\*** — ui-kit npm publish gap; local edits require manual rebuild chain. PLATFORM-UI-KIT-1: closed 2026-05-28.
-- **MCP-BEHAVIOR-\*** — MCP protocol integration facts. MCP-BEHAVIOR-1: `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
-- **AGENT-EVAL-\*** — Agent trigger-evaluator contract issues. AGENT-EVAL-001: swallowed evaluator exception + SUCCESS-on-defer envelope contract; closed 2026-06-03.
-- **AGENT-APPROVE-\*** — Agent approve endpoint contract issues. AGENT-APPROVE-001a: concurrent race guard (CAS fix); closed 2026-06-03. AGENT-APPROVE-001b: background execution dispatch (approve returns immediately, execute_run fires in daemon thread); closed 2026-06-04. Orphaned-`approved` watchdog: closed 2026-06-06 (`_recover_orphaned_approved_runs` scheduler job, 5-min sweep, `tests/unit/test_agent_approve_watchdog.py`).
-- **ROUTES-CONSUMER-SPLIT-\*** — Shared @aindy/ui-kit ROUTES table consumed identically by monolith and runtime; quarantine breaks monolith on next publish. ROUTES-CONSUMER-SPLIT-1: closed 2026-06-03 — Option B: shared table universal, policy consumer-local, annotations in _routes.js carry the audit map; runtime SPA gates at NavLink + route level via FEATURE_FLAGS. @aindy/ui-kit@1.0.5 verified safe to publish to npm.
-- **API-MODULE-DRIFT-\*** — Quarantined ROUTES groups left platform SPA API modules reading undefined → TypeError. API-MODULE-DRIFT-1: rippletrace.js ×16, analytics.js ×19, platform.js ×4; closed 2026-06-03 (Option B: all groups restored to shared table, graceful-404 behavior restored); `/trace` route gated on `FEATURE_FLAGS.RIPPLETRACE_VIEWER` 2026-06-06.
-- **AGENT-API-\*** — Platform SPA agent.js functions reference never-existed ROUTES.AGENT.* constants. AGENT-API-001: getAgents/recallFromAgent/getFederatedMemory; consumer AgentRegistry.jsx; closed 2026-06-03 — all three now use correct ROUTES.MEMORY.* constants; recover/replay endpoints added 2026-06-06.
-- **AGENT-RESLIMIT-\*** — Agent execution resource limit conflicts with real workloads. AGENT-RESLIMIT-001: field renamed to `wall_time_ms`; `MAX_CPU_TIME_MS` → `MAX_WALL_TIME_MS`; migration 0005; closed 2026-06-05.
-- **OPER-DEFER-\*** — Operator panel deferred-runtime routes (constant live, tab gated on FEATURE_FLAGS in FlowEngineConsole.jsx). OPER-DEFER-001: `/platform/flows/strategies` not yet served — UI tab hidden 2026-06-07; OPER-DEFER-002: `/automation/logs` group (monolith today) — UI tab hidden 2026-06-07; both open (backing routes deferred).
-- **OPER-EXEC-\*** — Execution mode operational gaps. OPER-EXEC-001: thread-mode no durability / distributed not wired as production default; closed 2026-06-06 (worker compose env + .env.example warning). OPER-EXEC-002: ContextVar not propagated to ThreadPoolExecutor threads; closed 2026-06-06 (`copy_context()` at both submit sites, 3 tests).
-- **SCHED-\*** — Scheduler status endpoint issues. SCHED-001/002/003: `/platform/observability/scheduler/status` returns 500 in platform-only profile (tasks domain absent); closed 2026-06-04 — direct impl replaces flow dependency; `FEATURE_FLAGS.OPERATOR_SCHEDULER_STATUS` flipped to `true`.
-- **ROUTE-REG-\*** — Router files that exist but are never registered; their endpoints return 404. ROUTE-REG-001: `watcher_router` and `db_verify_router` unregistered; closed 2026-06-03 — watcher added to ROOT_ROUTERS, db_verify added to PLATFORM_ROUTERS.
-- **ROUTE-EXTRACT-\*** — Route extraction from runtime to plugin layer. ROUTE-EXTRACT-001: `agent_router`, `memory_metrics_router`, `memory_trace_router` extracted to `aindy-apps-monolith` via `register_router()` at bootstrap time; closed 2026-06-06 (PR #37). Remaining candidates: `memory_router` (split required — Nodus execution endpoints stay), `coordination_router` (AgentRegistry model ownership gap).
-- **AUTH-V\*** — Auth system wiring gaps (2026-06-06 audit). AUTH-V1: closed 2026-06-06 (re-export shim). AUTH-V4: closed 2026-06-06 (`logoutUser()` in ui-kit). AUTH-V6: closed 2026-06-06 (`require_admin_principal` + `admin_invalidate_sessions` fix; see TIER3-V2V3). AUTH-V2/V3: `enforce_api_key_scope()` added to `auth_service.py`; wired to flows, memory routes, dispatch_syscall domain enforcement; closed 2026-06-07. AUTH-V3: dead parallel auth path (`get_authenticated_principal`, `require_scope`, `AuthPrincipal`) removed from `api_key_auth.py`; closed 2026-06-07. AUTH-V5: `SECRET_KEY` module-level export removed from `auth_service.py`; `global` assignments in `rotate_signing_key` and `_reload_key_on_sighup` also removed; closed 2026-06-07.
-- **TIER3-\*** — Tier 3 structural gaps (2026-06-07). TIER3-8: memory queue drops silent at queue level; closed 2026-06-07 (`logger.warning` in `enqueue()` drop paths). TIER3-9: `db.flush()` committed pending handler ORM changes as side effect; closed 2026-06-07 (`db.flush([event])`). TIER3-V2V3: `enforce_api_key_scope` wired to routes; closed 2026-06-07. TIER3-10 (`async_job_service` coupling): open — architectural, no bounded fix this session.
-- **DEPLOY-TARGET-\*** — Cloud deployment targets. DEPLOY-TARGET-1: cloud deployment manifests (Railway/Render/Fly.io) not yet authored — open, trigger: first cloud deployment planned. DEPLOY-TARGET-2: multi-tenant SaaS readiness gate (TENANT-1/2/3/4 become load-bearing) — open, trigger: first multi-tenant operator onboards.
-- **SYSMAX-\*** — System capacity and execution limit findings (2026-06-07 audit). SYSMAX-1: thread-mode 100-job hard cap still `.env.example` default; prod overlay now enforces distributed (partial mitigation). SYSMAX-2: autonomous scheduler queue back-pressure — closed 2026-06-07 (`QueueSaturatedError` → 60s defer in `submit_autonomous_async_job`). SYSMAX-3: memory bytes not enforced per EU (requires OS integration); deferred. SYSMAX-4: per-EU syscall (100) and wall-time (5min) caps advisory — tunable via env, document in Nodus guide.
-- **BILLING-\*** — Monetization infrastructure gaps (2026-06-07 audit). BILLING-1: billing identity (`tenant_id` not decoupled from `user_id`); BILLING-2: metering model not chosen; BILLING-3: plan-tier enforcement path missing (`quota_group` unread); BILLING-4: no self-service acquisition funnel; BILLING-5: no usage reporting surface. All open, deferred until commercial launch. Source: `docs/runtime/MONETIZATION_AUDIT.md`.
-- **LAYER-\*** — Layer boundary violations (2026-06-07 audit). All deferred. LAYER-1: `execution_dispatcher.py` opens `SessionLocal()` directly for event emission. LAYER-2: auth routes run through `execute_with_pipeline_sync` (ExecutionUnit overhead on login/register). LAYER-3: `exception_handlers.py` falls back to `decode_access_token` for user attribution (partially mitigated — `request.state.user_id` checked first). LAYER-4: `memory_ingest_service.py` opens `SessionLocal()` outside request context (intentional by design — deferred writes). LAYER-5: `execute_with_pipeline_sync` uses `asyncio.run()`; coordination_router calls it on 9+ endpoints.
-- **EXEC-EU-\*** — ExecutionUnit lifecycle gaps. EXEC-EU-1: `_safe_finalize_eu` not in `finally` block — closed 2026-06-07 (`ctx.metadata["eu_finalized"]` guard in `_safe_finalize_eu`; `finally` block calls `_safe_finalize_eu(ctx, "failed")` gated by `eu_status != "waiting"`).
-- **EVENT-\*** — Event system integrity gaps. EVENT-1: closed 2026-06-08 — `_emission_failed` flag on `ctx.metadata` makes loop prevention explicit; guard short-circuits `_safe_emit_event` on re-entrant calls after a failure.
-- **MEMORY-\*** — Memory system integrity gaps. MEMORY-1: closed 2026-06-08 — `persist_memory_ingest_payload` now uses single transaction (`commit=False` DAO params + single `db.commit()` at end); any failure rolls back the entire write atomically.
-- **OBS-\*** — Observability gaps. OBS-1: `_safe_require_eu`, `_safe_finalize_eu`, `_safe_emit_event` failures log at `DEBUG` — closed 2026-06-07 (all three promoted to `logger.warning` in `resources.py` and `pipeline.py`).
-- **REPLAY-\*** — Deterministic replay infrastructure. REPLAY-1: replay harness requires `Clock` injection into ~12 `datetime.now()` call sites across `ExecutionPipeline`, `EffectRecord`, `SystemEvent`; deferred until post-PyPI + OpenClaw spike.
+- **PYPI-PUBLISH-1** — PyPI publish transition. **Open.**
+- **NODUS-UPGRADE-1** — nodus-lang pinned at 3.0.2; v4.0.0 deferred until post-PyPI. See NODUS_DEVELOPER_GUIDE.md §8.
+- **PROMETHEUS-PIN-1** — Prometheus image version pinning. **Open.**
+- **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
+- **OPER-DEFER-001** — `/platform/flows/strategies` not yet served, UI tab hidden. **Open.**
+- **OPER-DEFER-002** — `/automation/logs` group in monolith, UI tab hidden. **Open.**
+- **ROUTE-EXTRACT-\*** — Route extraction to plugin layer. Remaining candidates: `memory_router` (split required), `coordination_router` (AgentRegistry ownership gap).
+- **DEPLOY-TARGET-1** — Cloud deployment manifests (Railway/Render/Fly.io) not yet authored. **Open**, trigger: first cloud deployment.
+- **DEPLOY-TARGET-2** — Multi-tenant SaaS readiness gate. **Open**, trigger: first multi-tenant operator.
+- **SYSMAX-1** — Thread-mode 100-job hard cap still `.env.example` default (partial mitigation: prod overlay enforces distributed). **Open.**
+- **SYSMAX-3** — Memory bytes not enforced per EU (requires OS integration). Deferred.
+- **SYSMAX-4** — Per-EU syscall (100) and wall-time (5 min) caps advisory; tunable via env. Document in Nodus guide.
+- **BILLING-\*** — BILLING-1 through BILLING-5: billing identity, metering, plan enforcement, acquisition funnel, usage reporting. All open, deferred until commercial launch. Source: `docs/runtime/MONETIZATION_AUDIT.md`.
+- **LAYER-\*** — Layer boundary violations (LAYER-1 through LAYER-5). All deferred. See TECH_DEBT.md.
+- **TIER3-10** — `async_job_service` coupling. Open — architectural, no bounded fix.
+- **REPLAY-1** — Deterministic replay; `Clock` injection into ~12 `datetime.now()` call sites. Deferred until post-PyPI + OpenClaw spike.
 
 ---
 
