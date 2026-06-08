@@ -535,6 +535,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 - **COMPOSE-HOST-\*** — container host binding issues. COMPOSE-HOST-1: closed 2026-05-27.
 - **EVENTBUS-REDIS-URL-\*** — Redis URL env var consolidation. EVENTBUS-REDIS-URL-CONSOLIDATION-1: closed 2026-06-06 (AINDY_REDIS_URL + AINDY_SKIP_MONGO_PING removed).
 - **PYPI-PUBLISH-\*** — PyPI publish transition. PYPI-PUBLISH-1: open.
+- **CI-SMOKE-\*** — Boot smoke CI workflow. CI-SMOKE-1: closed 2026-06-08 — `.github/workflows/smoke-postgres.yml` (pgvector/pg16 + Redis 7, TTFA artifact, editable install); upgrade to PyPI wheel when PYPI-PUBLISH-1 closes. Quickstart: `docs/runtime/QUICKSTART.md`.
 - **NODUS-UPGRADE-\*** — nodus-lang version pinning. NODUS-UPGRADE-1: pinned at 3.0.2; v4.0.0 deferred until post-PyPI publish; see NODUS_DEVELOPER_GUIDE.md §8 for upgrade notes.
 - **MONITORING-GRAFANA-\*** — Grafana monitoring profile gap. MONITORING-GRAFANA-1: closed 2026-06-05.
 - **COMPOSE-PROD-PORTS-\*** — database ports exposed in prod. COMPOSE-PROD-PORTS-1: closed 2026-06-05.

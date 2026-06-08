@@ -912,6 +912,30 @@ deployment to whatever embedding model is hardwired at that moment.
 
 ---
 
+## CI-SMOKE-1 — Boot smoke workflow uses editable install; switch to PyPI wheel post-publish
+
+**Status:** Open — upgrade path ready, blocked on PYPI-PUBLISH-1.
+
+**Implemented (2026-06-08):** `.github/workflows/smoke-postgres.yml` — boots the runtime against
+pgvector/pg16 + Redis 7, asserts `/health/deep` reaches `{"status":"healthy"}`, asserts
+`/api/version` boot surface, records TTFA (time-to-first-answer) for `/health` and `/health/deep`
+as a `smoke-ttfa-py3.11` JSON artifact retained for 90 days.
+
+**Current install step:**
+```yaml
+- run: pip install -e ".[test]" --no-deps --no-build-isolation
+```
+
+**Post-PyPI install step (when PYPI-PUBLISH-1 is closed):**
+```yaml
+- run: pip install "aindy-runtime[test]==$(cat AINDY/_version.py | grep __version__ | cut -d'"' -f2)"
+```
+Or pin to the release tag directly. Also remove the `--no-deps --no-build-isolation` flags.
+
+**Reopen trigger:** PYPI-PUBLISH-1 closed.
+
+---
+
 ## PYPI-PUBLISH-1 — Dockerfile uses local wheel build pending PyPI publish
 
 **Status:** Deferred — blocks on PyPI publish decision.
