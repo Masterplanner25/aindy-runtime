@@ -542,7 +542,7 @@ async def _build_deep_health_payload() -> dict:
         "syscall_registry": syscall_registry,
     }
     overall_status = "degraded" if any(
-        check.get("status") not in {"ok", "not_configured", "not_applicable"} for check in checks.values()
+        check.get("status") not in {"ok", "not_configured", "not_applicable", "disabled"} for check in checks.values()
     ) else "healthy"
     return {
         "status": overall_status,
