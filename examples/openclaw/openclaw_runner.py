@@ -43,7 +43,7 @@ def bootstrap_workspace_memory(
 ) -> list[str]:
     """Seed SOUL.md / IDENTITY.md / AGENTS.md as aindy memory nodes.
 
-    In vanilla OpenClaw these files are loaded from disk into the system prompt
+    In OpenClaw these files are loaded from disk into the system prompt
     on every agent boot. Infinite Weave persists them once as high-significance
     memory nodes so they are semantically retrievable across sessions and
     updatable without restarting the server.

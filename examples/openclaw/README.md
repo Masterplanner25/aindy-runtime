@@ -1,12 +1,17 @@
 # OpenClaw — Infinite Weave Port
 
-This example ports the core [OpenClaw](https://openclaw.ai) personal AI assistant
-pattern to **aindy-runtime**, showing what the Infinity Algorithm adds on top of
-vanilla OpenClaw's `pi-agent-core` embedded loop.
+This example shows how [OpenClaw](https://openclaw.ai)'s personal AI assistant
+pattern maps to **aindy-runtime**, and what the Infinity Algorithm's execution layer
+contributes alongside OpenClaw's `pi-agent-core` embedded loop.
+
+OpenClaw is a capable, model-agnostic personal assistant with a clean skill system,
+multi-channel delivery, and a well-designed workspace model. This isn't a replacement
+— it's an integration spike showing how aindy-runtime's syscall layer, pgvector
+memory, and scheduler slot in as a backend complement to OpenClaw's frontend strengths.
 
 ## The Delta
 
-| Vanilla OpenClaw | Infinite Weave (aindy-runtime) |
+| OpenClaw | Infinite Weave (aindy-runtime) |
 |---|---|
 | SOUL.md / IDENTITY.md injected from disk on every boot | Persisted as pgvector memory nodes; semantically retrievable, updatable without restart |
 | JSONL session transcripts (`~/.openclaw/workspace/memory/`) | Every turn stored as a pgvector node — cross-session, scored, causally linked |
