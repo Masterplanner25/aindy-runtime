@@ -1,6 +1,6 @@
 // openclaw_agent.nd — OpenClaw Infinite Weave port
 //
-// Demonstrates the aindy-runtime delta over vanilla OpenClaw:
+// Demonstrates how aindy-runtime complements OpenClaw:
 //   - Persona (SOUL.md / IDENTITY.md) pre-loaded as pgvector memory nodes
 //   - Cross-session recall replaces flat JSONL transcripts
 //   - Skills wired as aindy host functions (not Markdown files at boot)
@@ -19,7 +19,7 @@
 
 // 1. Load persona and past context from cross-session memory.
 //
-// In vanilla OpenClaw, SOUL.md is injected from disk into the system prompt on
+// In OpenClaw, SOUL.md is injected from disk into the system prompt on
 // every boot.  Here it lives as a pgvector memory node: durable, searchable,
 // updatable without restarting the server.
 let persona_result = recall_memory("identity soul persona assistant")
@@ -38,7 +38,7 @@ if (len(persona_nodes) > 0) {
 
 // 2. Route the message to the right skill.
 //
-// Vanilla OpenClaw does this by forwarding the full tool list to the LLM.
+// OpenClaw does this by forwarding the full tool list to the LLM.
 // This script shows the same dispatch surface wired through aindy's registered
 // host function layer rather than a Markdown skill directory.
 
@@ -91,7 +91,7 @@ if (wants_search) {
 
 // 3. Persist this turn (Infinite Weave delta).
 //
-// Vanilla OpenClaw writes JSONL session transcripts to disk.
+// OpenClaw writes JSONL session transcripts to disk.
 // Infinite Weave persists each turn as a pgvector node -- durable,
 // cross-session, semantically retrievable by future turns or other agents.
 let turn_content = "session:" + session_id + " User: " + message + " Assistant: " + reply
