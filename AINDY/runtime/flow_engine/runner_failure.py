@@ -2,7 +2,7 @@ from AINDY.runtime.flow_engine.serialization import (
     _format_execution_response,
     _serialize_flow_events,
 )
-from AINDY.runtime.flow_engine.shared import SystemEventTypes, datetime, logger, timezone
+from AINDY.runtime.flow_engine.shared import SystemEventTypes, datetime, logger, timezone, utcnow
 
 
 def fail_execution(
@@ -20,7 +20,7 @@ def fail_execution(
     run.wait_deadline = None
     run.error_message = error_message
     run.error_detail = None
-    run.completed_at = datetime.now(timezone.utc)
+    run.completed_at = utcnow()
     runner.db.commit()
     try:
         from AINDY.core.execution_unit_service import ExecutionUnitService

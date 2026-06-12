@@ -6,6 +6,8 @@ import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+
+from AINDY.kernel.clock import utcnow
 from typing import Any, Optional
 
 from AINDY.config import settings
@@ -101,7 +103,7 @@ def _persist_system_event(
         parent_event_id=normalized_parent_event_id,
         source=source,
         payload=_json_safe(payload or {}),
-        timestamp=datetime.now(timezone.utc),
+        timestamp=utcnow(),
     )
     db.add(event)
     db.flush([event])  # flush only this object — avoids committing pending handler changes as a side effect
@@ -181,7 +183,7 @@ def _has_recent_feedback_event(db, *, trace_id: str | None, event_type: str, win
         return False
     from AINDY.db.models.system_event import SystemEvent
 
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+    cutoff = utcnow() - timedelta(minutes=window_minutes)
     return (
         db.query(SystemEvent)
         .filter(
@@ -199,7 +201,7 @@ def _recent_failure_count(db, *, user_id, payload: dict[str, Any], source: str |
 
     workflow_type = str((payload or {}).get("workflow_type") or "")
     task_name = str((payload or {}).get("task_name") or "")
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    cutoff = utcnow() - timedelta(minutes=30)
     query = db.query(SystemEvent).filter(
         SystemEvent.type == SystemEventTypes.EXECUTION_FAILED,
         SystemEvent.timestamp >= cutoff,
@@ -296,7 +298,7 @@ def _detect_behavioral_feedback_signals(
 
             avg_latency = (
                 db.query(func.avg(RequestMetric.duration_ms))
-                .filter(RequestMetric.created_at >= datetime.now(timezone.utc) - timedelta(minutes=30))
+                .filter(RequestMetric.created_at >= utcnow() - timedelta(minutes=30))
                 .scalar()
             )
             if avg_latency:
@@ -354,7 +356,7 @@ def _detect_behavioral_feedback_signals(
 
     try:
 
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+        stale_cutoff = utcnow() - timedelta(minutes=15)
         stale_logs = (
             db.query(JobLog)
             .filter(
@@ -377,7 +379,7 @@ def _detect_behavioral_feedback_signals(
                 continue
             age_minutes = max(
                 1,
-                int((datetime.now(timezone.utc) - stale_log.created_at).total_seconds() // 60),
+                int((utcnow() - stale_log.created_at).total_seconds() // 60),
             )
             _emit_feedback_signal(
                 db=db,

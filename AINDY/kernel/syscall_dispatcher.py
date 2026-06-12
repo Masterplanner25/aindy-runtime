@@ -178,6 +178,7 @@ def _resolve_effect_record(db, action_id: str, action_type: str, payload: dict):
     from AINDY.db.models.effect_record import EffectRecord
     from sqlalchemy.exc import IntegrityError
     from datetime import datetime, timezone, timedelta
+    from AINDY.kernel.clock import utcnow
 
     record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
     if record is not None and record.status == "success":
@@ -212,7 +213,7 @@ def _resolve_effect_record(db, action_id: str, action_type: str, payload: dict):
                 # Concurrent call completed successfully first.
                 return True, record.result_payload
             stale_cutoff = (
-                datetime.now(timezone.utc)
+                utcnow()
                 - timedelta(seconds=STALE_PENDING_THRESHOLD_SECONDS)
             )
             if record.status == "pending" and record.created_at >= stale_cutoff:
@@ -232,19 +233,19 @@ def _resolve_effect_record(db, action_id: str, action_type: str, payload: dict):
             # future attempts (see IDEMPOTENCY_CONTRACT.md § Stale Pending Recovery).
             record.status = "pending"
             record.completed_at = None
-            record.created_at = datetime.now(timezone.utc)
+            record.created_at = utcnow()
             db.commit()
     return False, None
 
 
 def _complete_effect_record(db, action_id: str, status: str, result_payload):
     from AINDY.db.models.effect_record import EffectRecord
-    from datetime import datetime, timezone
+    from AINDY.kernel.clock import utcnow
     record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
     if record is not None:
         record.status = status
         record.result_payload = result_payload if isinstance(result_payload, dict) else None
-        record.completed_at = datetime.now(timezone.utc)
+        record.completed_at = utcnow()
         db.commit()
 
 
