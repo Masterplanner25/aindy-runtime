@@ -4,6 +4,47 @@
 
 ---
 
+## 1.2.0 — 2026-06-11
+
+### Added — REPLAY-1: Clock abstraction for deterministic replay
+
+- **`AINDY/kernel/clock.py`** (new): ContextVar-backed `utcnow()` + `frozen_at(t)` context
+  manager. Production code calls `utcnow()` instead of `datetime.now(timezone.utc)`; tests
+  freeze time with `frozen_at(fixed_dt)`. Override is async-safe and thread-safe — each
+  coroutine or thread has its own ContextVar slot.
+- 12 call sites updated across the execution-critical path: `SyscallDispatcher` EffectRecord
+  gate (3), `CircuitBreaker._now()`, `SchedulerEngine` time-wait tick, `ExecutionUnitService._now()`,
+  `SystemEventService` event timestamp + 5 cutoff queries, `flow_engine` runner completion,
+  runner failure, and `_default_wait_deadline`.
+- **`tests/unit/test_clock.py`** (new): 12 tests covering core clock behaviour, nested freeze,
+  thread isolation, and end-to-end verification of `CircuitBreaker`, `ExecutionUnitService`,
+  `_default_wait_deadline`, `_complete_effect_record`, and `emit_system_event`.
+
+### Changed — NODUS-UPGRADE-1: nodus-lang 3.0.2 → 4.0.3
+
+- **`pyproject.toml`** + **`AINDY/requirements.txt`**: Pin updated to `nodus-lang==4.0.3`.
+- **`AINDY/runtime/nodus_worker.py`**: `_runtime_emitted_events()` updated from deprecated
+  `runtime.last_vm` (removed in v4) to `runtime._get_active_vm()`.
+- **`docs/runtime/NODUS_DEVELOPER_GUIDE.md`** §8: Version table + v3→v4 breaking-change notes
+  added. Key changes: `last_vm` → `_get_active_vm()`; `allowed_paths` default now `[os.getcwd()]`
+  (was `None`).
+
+### Changed — CI smoke: install from PyPI wheel
+
+- **`.github/workflows/smoke-postgres.yml`**: Install step changed from `pip install -e .[test]`
+  to `pip install aindy-runtime==$AINDY_VERSION` — validates the published PyPI wheel on every
+  push rather than the local editable install. Cache key simplified to hash `pyproject.toml` only.
+
+### Added — OpenClaw Infinite Weave spike
+
+- **`examples/openclaw/`** (new): Demonstrates the aindy-runtime complement to OpenClaw's
+  `pi-agent-core` loop. `openclaw_agent.nd` — Nodus 4.0.3 agent script (persona recall, skill
+  routing, pgvector turn persistence). `openclaw_runner.py` — Python bootstrap, 4 host functions,
+  NodusRuntime wiring. `README.md` — 8-dimension delta table and standalone + live-stack run
+  instructions.
+
+---
+
 ## 1.1.0 — 2026-06-08
 
 ### Added — CI-SMOKE-1: PostgreSQL boot smoke workflow + Quickstart (2026-06-08)
