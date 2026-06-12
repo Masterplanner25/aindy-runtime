@@ -6,6 +6,8 @@ from enum import Enum
 from threading import Lock
 from typing import Any, Callable, Awaitable
 
+from AINDY.kernel.clock import utcnow
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,7 +38,7 @@ class CircuitBreaker:
         self._lock = Lock()
 
     def _now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return utcnow()
 
     def _transition_to(self, new_state: CircuitState, *, now: datetime) -> None:
         previous_state = self._state
