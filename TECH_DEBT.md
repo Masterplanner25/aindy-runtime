@@ -976,26 +976,12 @@ source.
 
 ## NODUS-UPGRADE-1 — nodus-lang pinned at 3.0.2; v4.0.0 available
 
-**Status:** Deferred — no production risk, low-priority upgrade.
+**Status:** CLOSED (2026-06-11)
 
-**Discovered:** 2026-06-07. nodus-lang 4.0.0 published 2026-06-04.
-
-**Context:** `pyproject.toml` pins `nodus-lang==3.0.2`. v4.0.0 introduces Phase 6
-AI-native primitives (execution identity propagation, namespaced memory ops, a Nodus-internal
-syscall registry). The upgrade is **low risk**: the three Nodus scripts in the runtime
-(`memory.nd`, `test-script.nodus`, `stored-script.nodus`) use none of the v4 breaking-change
-patterns. The `__memory_stdlib_*` private builtins injected by `nodus_worker.py` are a
-separate namespace from v4's `std:memory` module and will not collide.
-
-**v4 breaking changes that don't affect aindy's scripts (but matter for users writing scripts):**
-- `type(float)` returns `"float"` not `"number"` (check with `math.is_float(x)` going forward)
-- `==` no longer coerces across type families (`0 == false` is now `false`)
-- `index_of` / `last_index_of` return `nil` for not-found (was `-1`)
-- Float division by zero returns `inf`/`nan` instead of throwing
-
-**Unblock:** After PyPI publish (PYPI-PUBLISH-1), bump `pyproject.toml` pin, run
-`pytest tests/unit/ -v` to confirm no regressions, update `NODUS_DEVELOPER_GUIDE.md`
-type-reference table to reflect v4 type names.
+**Implemented:** Bumped `pyproject.toml` + `AINDY/requirements.txt` pin from `nodus-lang==3.0.2`
+to `nodus-lang==4.0.3` (latest). One embedding API fix required: `nodus_worker.py` accessed
+`runtime.last_vm` (removed in v4) — updated to `runtime._get_active_vm()`. No Nodus script
+changes needed. `NODUS_DEVELOPER_GUIDE.md` §6 heading and §8 upgrade notes updated to reflect v4.
 
 ---
 

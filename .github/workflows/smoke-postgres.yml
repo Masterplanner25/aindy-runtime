@@ -5,9 +5,8 @@ name: Boot Smoke (PostgreSQL)
 # Measures time-to-first-answer (TTFA) from process start to each health tier
 # and uploads the result as a JSON artifact for baseline tracking.
 #
-# Uses `pip install -e .[test]` (editable install from the repo).
-# When PYPI-PUBLISH-1 is closed, update the install step to use the published
-# wheel: `pip install aindy-runtime==$(cat VERSION)`.
+# Installs the published wheel from PyPI: `pip install aindy-runtime==<version>`
+# (version read from AINDY/_version.py in the checkout).
 
 on:
   push:
@@ -91,14 +90,14 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-smoke-pg-${{ matrix.python-version }}-${{ hashFiles('AINDY/requirements.txt', 'pyproject.toml') }}
+          key: ${{ runner.os }}-smoke-pg-${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: ${{ runner.os }}-smoke-pg-${{ matrix.python-version }}-
 
-      - name: Install package (editable)
+      - name: Install aindy-runtime from PyPI
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r AINDY/requirements.txt
-          python -m pip install -e ".[test]" --no-deps --no-build-isolation
+          AINDY_VERSION=$(python -c "exec(open('AINDY/_version.py').read()); print(__version__)")
+          python -m pip install "aindy-runtime==$AINDY_VERSION"
 
       - name: Enable pgvector extension
         run: |
@@ -214,7 +213,7 @@ jobs:
           results = {
               "runner_os": os.environ.get("RUNNER_OS", "Linux"),
               "python_version": "${{ matrix.python-version }}",
-              "install_mode": "editable",
+              "install_mode": "pypi",
               "database": "postgresql+pgvector/pg16",
               "redis": "redis:7-alpine",
               "ttfa_basic_health_ms": int(os.environ.get("TTFA_BASIC_MS", 0)),

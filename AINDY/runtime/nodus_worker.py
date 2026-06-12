@@ -180,7 +180,7 @@ def main() -> int:
 
     def _runtime_emitted_events() -> list[dict[str, Any]]:
         _AINDY_INTERNAL = ("vm_", "runtime.", "nodus.")
-        vm = getattr(runtime, "last_vm", None)
+        vm = runtime._get_active_vm()
         if vm is None:
             return []
         return [

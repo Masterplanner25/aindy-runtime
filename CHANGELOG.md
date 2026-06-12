@@ -2,6 +2,155 @@
 
 ## Unreleased
 
+---
+
+## 1.1.0 — 2026-06-08
+
+### Added — CI-SMOKE-1: PostgreSQL boot smoke workflow + Quickstart (2026-06-08)
+
+- **`.github/workflows/smoke-postgres.yml`** (new): Boots the runtime against
+  `pgvector/pgvector:pg16` + Redis 7, waits up to 30 s for `/health/deep` to reach
+  `{"status":"healthy"}`, asserts the `/api/version` boot surface, and records TTFA
+  (time-to-first-answer) for `/health` and `/health/deep` as a `smoke-ttfa-py3.11` JSON
+  artifact retained 90 days.
+- **`docs/runtime/QUICKSTART.md`** (new): Five-minute boot guide covering Docker Compose
+  quickstart and bare-metal install with the correct `/health/deep` response shape documented.
+- Install step uses `pip install -e ".[test]"` (editable); a comment marks the line for
+  switching to `pip install aindy-runtime` when PYPI-PUBLISH-1 closes.
+
+### Fixed — Boot smoke CI: health + registry assertion bugs (2026-06-08)
+
+- **`AINDY/routes/health_router.py`**: Scheduler check returns `{"status": "disabled"}` when
+  `AINDY_ENABLE_BACKGROUND_TASKS=false`. `"disabled"` was not in the non-degrading status set
+  (`{"ok", "not_configured", "not_applicable"}`), so `/health/deep` always reported `"degraded"`
+  in the smoke environment and the workflow timed out after 30 s. Added `"disabled"` to the set.
+- **`.github/workflows/smoke-postgres.yml`**: The `syscall_registry` assertion read
+  `data.get("syscall_registry")` from the top-level response; the key lives at
+  `data["checks"]["syscall_registry"]`. Fixed to `(data.get("checks") or {}).get("syscall_registry")`.
+  `docs/runtime/QUICKSTART.md` example JSON updated to match the real response shape.
+
+### Fixed — MEMORY-1 + EVENT-1: atomic ingest + explicit emission guard (2026-06-08)
+
+- **`AINDY/memory/memory_ingest_service.py`** (MEMORY-1): `persist_memory_ingest_payload` now
+  uses a single transaction (`commit=False` on all DAO calls, single `db.commit()` at end).
+  Any failure rolls back the entire write atomically — eliminates the partial-write orphan window.
+- **`AINDY/core/execution_pipeline/pipeline.py`** (EVENT-1): `_safe_emit_event` now sets an
+  `_emission_failed` flag on `ctx.metadata` on first failure and short-circuits on re-entrant
+  calls. The loop-prevention guard is now explicit rather than relying on exception swallowing.
+
+### Added — C3 Phase 5: macOS sandbox escape CI certification workflow (2026-06-06)
+
+- **`.github/workflows/macos-sandbox.yml`** (new): `workflow_dispatch` job targets `macos-14`
+  (Apple Silicon). Installs Colima as the Linux-backend Docker provider, runs
+  `pytest -m sandbox_escape -v` against the full 17-test escape suite, and uploads
+  `sandbox_escape_results.json` as a workflow artifact.
+
+### Fixed — Auth hardening: AUTH-V1, V4, V6 (2026-06-06)
+
+- **AUTH-V1** (`AINDY/routes/__init__.py`): Removed duplicate `health_router` re-export that
+  shadowed the module with an `APIRouter` object.
+- **AUTH-V4** (`@aindy/ui-kit` `src/api/auth.js`): `logoutUser()` added. The platform SPA can
+  now call logout without a manual `fetch()`.
+- **AUTH-V6**: `require_admin_principal` now correctly gates `/platform/admin/*` routes to
+  tokens carrying the `admin` scope; API keys without it receive 403.
+
+### Fixed — EVENTBUS-REDIS-URL-CONSOLIDATION-1: AINDY_REDIS_URL alias removed (2026-06-06)
+
+- **`AINDY/kernel/event_bus.py`**, **`AINDY/config.py`**, **`AINDY/.env.example`**:
+  `AINDY_REDIS_URL` alias fully removed — all components now read `REDIS_URL` exclusively.
+  `AINDY_SKIP_MONGO_PING` alias also removed; reads `SKIP_MONGO_PING` directly.
+
+### Fixed — EXEC-EU-1 + OBS-1: EU lifecycle safety + observability (2026-06-06)
+
+- **`AINDY/core/execution_pipeline/pipeline.py`** (EXEC-EU-1): `_safe_finalize_eu` moved into
+  a `finally` block; `ctx.metadata["eu_finalized"]` guard prevents double-finalization; `finally`
+  call gated by `eu_status != "waiting"` so suspending flows are not erroneously finalized.
+- **`AINDY/core/execution_pipeline/resources.py`** (OBS-1): `_safe_require_eu`,
+  `_safe_finalize_eu`, and `_safe_emit_event` failures promoted from `DEBUG` to `logger.warning`.
+
+### Fixed — OPER-EXEC-001/002: distributed mode default + ContextVar propagation (2026-06-06)
+
+- **OPER-EXEC-001**: Worker compose environment and `AINDY/.env.example` updated to enforce
+  distributed execution mode in production; thread-mode carries an explicit dev-only warning.
+- **OPER-EXEC-002**: `copy_context()` added at both `ThreadPoolExecutor.submit` call sites in
+  the execution pipeline so ContextVar values (trace_id, pipeline_active, etc.) propagate
+  correctly into worker threads. 3 regression tests added.
+
+### Fixed — ROUTE-EXTRACT-001: agent/memory routers extracted to aindy-apps-monolith (2026-06-06)
+
+- **`AINDY/routes/__init__.py`**: `agent_router`, `memory_metrics_router`, and
+  `memory_trace_router` removed from runtime router registration. Now registered by
+  `aindy-apps-monolith` via `register_router()` at bootstrap time (PR #37).
+
+### Fixed — Agent approve orphaned-run watchdog (2026-06-06)
+
+- **`AINDY/platform_layer/scheduler_service.py`**: `_recover_orphaned_approved_runs` scheduler
+  job added — 5-minute sweep that finds `AgentRun` rows stuck in `approved` state without an
+  `executing_since` timestamp for more than 2 minutes and re-dispatches them.
+- **`tests/unit/test_agent_approve_watchdog.py`** (new): 4 tests — no-op, orphan re-dispatch,
+  TTL threshold, exception isolation.
+
+### Fixed — Routes audit: ROUTES-CONSUMER-SPLIT-1, API-MODULE-DRIFT-1, AGENT-API-001 (2026-06-06)
+
+- **ROUTES-CONSUMER-SPLIT-1**: `@aindy/ui-kit` ROUTES table restored to universal shape.
+  Runtime SPA gates features via `FEATURE_FLAGS` at NavLink/route level.
+  `@aindy/ui-kit@1.0.5` verified safe to publish.
+- **API-MODULE-DRIFT-1**: `rippletrace.js` (×16), `analytics.js` (×19), `platform.js` (×4)
+  constants restored. `/trace` route gated on `FEATURE_FLAGS.RIPPLETRACE_VIEWER`.
+- **AGENT-API-001**: `getAgents`, `recallFromAgent`, `getFederatedMemory` corrected to use
+  `ROUTES.MEMORY.*` constants; recover/replay endpoints added.
+
+### Fixed — AUTH-V2/V3: API key scope enforcement wired (2026-06-07)
+
+- **`AINDY/services/auth_service.py`**: `enforce_api_key_scope(key, required_scope)` added.
+  Wired as a FastAPI dependency to flows routes, memory routes, and `dispatch_syscall`.
+  API keys without the required scope now return 403.
+
+### Fixed — AUTH-V3/V5: dead auth path + SECRET_KEY export removed (2026-06-07)
+
+- **AUTH-V3** (`AINDY/routes/api_key_auth.py`): `get_authenticated_principal`, `require_scope`,
+  and `AuthPrincipal` removed — dead parallel auth path that duplicated the real auth with
+  weaker guarantees.
+- **AUTH-V5** (`AINDY/services/auth_service.py`): `SECRET_KEY` module-level export removed.
+  `global` assignments in `rotate_signing_key` and `_reload_key_on_sighup` also removed.
+
+### Fixed — TIER3-8 + TIER3-9: memory drop logging + flush scope (2026-06-07)
+
+- **TIER3-8** (`AINDY/core/distributed_queue.py`): `enqueue()` drop paths now emit
+  `logger.warning` — dropped items are visible in production logs.
+- **TIER3-9** (`AINDY/core/execution_pipeline/pipeline.py`): `db.flush()` replaced with
+  `db.flush([event])` to scope the flush to the new event row only, preventing in-flight ORM
+  changes from the handler from being committed as a side effect.
+
+### Fixed — SYSMAX-2: autonomous scheduler queue back-pressure (2026-06-07)
+
+- **`AINDY/agents/autonomous_controller.py`**: `submit_autonomous_async_job` raises
+  `QueueSaturatedError` when the scheduler is full; `evaluate_trigger()` maps this to a 60 s
+  defer rather than swallowing it silently.
+
+### Fixed — AGENT-RESLIMIT-001: wall_time_ms rename + migration 0005 (2026-06-07)
+
+- **`AINDY/db/models/agent_run.py`** + **`alembic/versions/0005_wall_time_ms.py`**:
+  `cpu_time_ms` field renamed to `wall_time_ms`. `MAX_CPU_TIME_MS` → `MAX_WALL_TIME_MS`.
+  Name now accurately reflects that the limit measures monotonic wall-clock elapsed time.
+  Migration 0005 handles the column rename idempotently.
+
+### Added — Platform: admin user management, starter templates, dashboard UX (2026-06-07)
+
+- Admin user management panel in the platform SPA — list users, promote/demote admin,
+  search by email.
+- Starter flow and agent templates available on first login for new operators.
+- Dashboard UX improvements across `AgentConsole`, `FlowEngineConsole`, and
+  `ObservabilityDashboard`.
+- `docs/runtime/DEPLOYMENT_TARGETS.md` and `docs/runtime/MONETIZATION_AUDIT.md` added.
+
+### Added — Kernel hardening tests + REPLAY-1 debt filing (2026-06-07)
+
+- **`tests/unit/test_kernel_hardening.py`** (new, 3 tests): `SyscallDispatcher` contract
+  edge cases filed as REPLAY-1 prerequisites.
+- **`TECH_DEBT.md`**: REPLAY-1 filed — `Clock` injection required at ~12 `datetime.now()`
+  call sites before deterministic replay is possible; deferred post-PyPI + OpenClaw spike.
+
 ### Added — C3 Phase 2: macOS Docker Desktop Linux backend detection + policy (2026-06-06)
 
 - **`AINDY/platform_layer/sandbox_runner.py`**: Extended `_detect_wsl2()` to handle macOS.
@@ -108,6 +257,61 @@
   To run: `pytest -m sandbox_escape -v`
   Requires: Docker with Linux containers mode, internet access to pull `python:3.11-alpine`.
   Override image: `SANDBOX_ESCAPE_IMAGE=python:3.12-alpine pytest -m sandbox_escape -v`
+
+### Fixed — PACK-DEBT-5: FastAPI/starlette CVE PYSEC-2026-161 (2026-06-05)
+
+- Upgraded `fastapi` 0.121.0 → 0.135.0, `starlette` 0.49.1 → 1.0.1, and
+  `prometheus-fastapi-instrumentator` 7.1.0 → 8.0.0 (8.x requires starlette ≥ 1.0).
+  Resolves host-header injection CVE PYSEC-2026-161. `--ignore-vuln PYSEC-2026-161` removed
+  from `security-audit.yml`; accepted-findings entry removed from `SECURITY_POLICY.md`.
+
+### Added — CLI-SANDBOX-FORMAT-1: human-readable sandbox output (2026-06-05)
+
+- **`AINDY/runtime_only.py`**: `aindy-runtime sandbox` now renders a ~25-line human-readable
+  summary by default: platform, highest assurance tier, production-safe status, container
+  backend detection, active runner/certification, verification method, escape test posture,
+  trusted Python extension count, and degraded modes.
+- **`aindy-runtime sandbox --json`**: new flag restores the full machine-readable JSON output
+  (also includes `escape_test_posture` key alongside the original five fields). 9 tests pass
+  in `test_runtime_cli.py`.
+
+### Fixed — IDEM-6: advisory lock on blank-DB bootstrap (2026-06-05)
+
+- **`AINDY/db/schema_contract.py`**: `reconcile_runtime_schema()` acquires
+  `pg_advisory_lock(_BOOTSTRAP_ADVISORY_LOCK_KEY)` before the blank-DB `create_all` path.
+  A second instance that wins the wait finds the DB already bootstrapped and skips `create_all`.
+  Lock released in a `finally` block. SQLite paths unaffected. Lock key: `4149443900` (stable).
+  3 new unit tests in `test_runtime_schema_contract.py`.
+
+### Added — MONITORING-GRAFANA-1: Grafana monitoring profile (2026-06-05)
+
+- **`monitoring/grafana/`** (new): Prometheus datasource provisioning, dashboard file provider,
+  and `aindy-runtime.json` starter dashboard with 8 panels: health tier, active executions,
+  execution rate, DB pool pressure, AI circuit breaker state, async queue depth, duration
+  p50/p95/p99 timeseries, execution total by status.
+- **`docker-compose.yml`**: `grafana` service added under the `monitoring` profile
+  (`grafana/grafana:11.6.1`, port 3000, `grafana_data` volume, depends on Prometheus).
+- Usage: `docker compose --profile monitoring up -d` → Grafana at `http://localhost:3000`.
+
+### Added — COMPOSE-PROD-PORTS-1 + PROMETHEUS-PIN-1: Docker hardening (2026-06-05)
+
+- **`docker-compose.prod.yml`** (new): Compose v2 override using `!reset []` to clear host
+  port bindings on `postgres`, `redis`, and `mongo`. DB services remain reachable within
+  the compose network; only `api` (8000) and `worker` (8001) publish to the host.
+  Requires Docker Compose v2.24+.
+- **`docker-compose.yml`**: `prom/prometheus:latest` pinned to `prom/prometheus:v3.4.1`.
+
+### Added — Env-example tooling + LOCAL-1: upgrade path documented (2026-06-05)
+
+- **`scripts/check_env_example_coverage.py`** (new): AST-parses all `AINDY/**/*.py` for
+  `os.getenv()` / `os.environ.get()` calls and `Settings` field names; reports variables not
+  in `AINDY/.env.example`. Run `--strict` to exit 1 on gaps. Added as advisory CI step in
+  `runtime-ci.yml`.
+- Root `.env.example` forwarding stub deleted; `AINDY/.env.example` is the sole canonical
+  reference (docker-compose.yml's `env_file:` already pointed there).
+- **`README.md`**: `## Upgrading` section added — `pip install --upgrade`, version verification,
+  `AINDY_SCHEMA_RECONCILE=true` restart sequence for schema-bumping releases, Docker Compose
+  pull-and-up flow, rollback guidance.
 
 ### Fixed — AGENT-APPROVE-001b: async approve dispatch (2026-06-04)
 
@@ -258,6 +462,32 @@
 - **`tests/unit/test_resource_quota_defaults.py`**: New test pins the 300 000 ms
   default so it cannot silently drift.
 
+### Added — PLATFORM-AUTH-ACQUISITION-1: platform SPA login + admin bootstrap (2026-05-28)
+
+- **`platform/src/LoginPage.tsx`** (new): Login form calling `useAuth().login()`. On success,
+  stores token via `AuthContext` and navigates within the router tree.
+- **`platform/src/NotAdmin.tsx`** (new): Terminal "access denied" component with logout button.
+  Rendered (not navigated to) when authenticated but `is_admin=false` — prevents redirect loop.
+- **`platform/src/PlatformApp.tsx`**: Rewritten — `/login` lives outside `PlatformGuard`;
+  guard uses `<Navigate to="/login" replace />` (React Router, respects `basename="/platform"`);
+  `VITE_APP_BASE_URL` / `window.location.href` / `redirectToApp` dependency removed entirely.
+- **`AINDY_BOOTSTRAP_ADMIN_EMAIL`**: New env var. Grant-only, idempotent. Processed in
+  `startup.py` Phase 5.5 (after schema guard). Never revokes admin on var removal.
+- **`aindy-runtime auth promote-admin <email>`**: New CLI subcommand. Grant-only, no restart
+  needed. Exits 0 if already admin, exits 1 with guidance if user not found.
+- **`AINDY/routing.py` — `_SPAStaticFiles`**: Falls back to `index.html` only for paths that
+  do NOT start with `assets/`; `assets/` misses correctly return 404.
+
+### Added — PLATFORM-UI-KIT-1: Docker self-contained build (2026-05-28)
+
+- **`Dockerfile`**: `ui-builder` stage added — runs `npm ci` + `npm run build` from the
+  registry-pinned `@aindy/ui-kit`. `docker compose build --no-cache` from a clean clone is
+  now fully self-contained with no prior local UI build required.
+- **`.dockerignore`**: `AINDY/platform/dist/` and `platform/node_modules/` excluded to prevent
+  stale local state from leaking into the Docker build context.
+- `@aindy/ui-kit@1.0.1` published — `loginUser`, `registerUser`, and `bootIdentity` all call
+  `.then(unwrapEnvelope)`. Fixes the silent post-login redirect misfire in `PlatformHomeRedirect`.
+
 ### Fixed — Event bus now honors REDIS_URL (2026-05-27)
 
 - **`AINDY/kernel/event_bus.py`**: Event bus now honors `REDIS_URL` as a
@@ -274,6 +504,24 @@
   neither variable is set.
 - **`AINDY/config.py`**: `AINDY_REDIS_URL` added as a `Settings` field with
   a deprecation comment, making it discoverable via settings introspection.
+
+### Fixed — Docker compose infrastructure: blank-DB safety, pgvector, packaging, host binding (2026-05-27)
+
+- **ALEMBIC-FRESH-DB-1**: Migrations 0002–0004 wrapped in
+  `DO $$ BEGIN IF EXISTS (pg_catalog.pg_tables WHERE tablename=...) THEN ... END IF; END $$`
+  blocks. On a blank database the blocks skip and Phase 5 `_enforce_schema_guard` bootstraps
+  via `create_all`. On existing deployments the blocks run normally. `IF NOT EXISTS` on the
+  index name alone is not sufficient — `CREATE INDEX ... ON missing_table` still raises
+  `UndefinedTable` even with it.
+- **COMPOSE-PGVECTOR-1**: Switched from `postgres:16-alpine` to `pgvector/pgvector:pg16`.
+  Added `docker/init-pgvector.sql` (mounted to `/docker-entrypoint-initdb.d/`) running
+  `CREATE EXTENSION IF NOT EXISTS vector`. Required for `memory_nodes` `VECTOR(1536)` column.
+- **PACKAGING-DEP-1**: Added `"packaging>=24.0"` as an explicit dep in `pyproject.toml` and
+  forced it into the Docker `/install` prefix. The multi-stage build was not propagating it
+  from the builder stage, causing `import packaging` to fail at container startup.
+- **COMPOSE-HOST-1**: Added `AINDY_HOST: "0.0.0.0"` to the compose `api` service environment.
+  The runtime correctly defaults to `127.0.0.1` for bare installs; this override is required
+  inside Docker for the published port to be reachable from the host.
 
 ---
 

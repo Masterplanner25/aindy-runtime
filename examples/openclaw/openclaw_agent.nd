@@ -1,0 +1,113 @@
+// openclaw_agent.nd — OpenClaw Infinite Weave port
+//
+// Demonstrates the aindy-runtime delta over vanilla OpenClaw:
+//   - Persona (SOUL.md / IDENTITY.md) pre-loaded as pgvector memory nodes
+//   - Cross-session recall replaces flat JSONL transcripts
+//   - Skills wired as aindy host functions (not Markdown files at boot)
+//   - Conversation turns persisted for semantic retrieval in future sessions
+//
+// Globals injected by openclaw_runner.py:
+//   message     -- incoming user message
+//   user_id     -- authenticated user identifier
+//   session_id  -- conversation session key (stable per user)
+//
+// Host functions registered by the runner:
+//   recall_memory(query)        -- semantic search across all past turns + workspace files
+//   web_search(query)           -- brave-search skill equivalent
+//   schedule_reminder(payload)  -- aindy SchedulerEngine job; replaces OpenClaw cron tool
+//   remember_turn(payload)      -- persist a conversation turn to pgvector
+
+// 1. Load persona and past context from cross-session memory.
+//
+// In vanilla OpenClaw, SOUL.md is injected from disk into the system prompt on
+// every boot.  Here it lives as a pgvector memory node: durable, searchable,
+// updatable without restarting the server.
+let persona_result = recall_memory("identity soul persona assistant")
+let persona_nodes = persona_result["nodes"]
+if (persona_nodes == nil) { persona_nodes = [] }
+
+let history_result = recall_memory(message)
+let history_nodes = history_result["nodes"]
+if (history_nodes == nil) { history_nodes = [] }
+
+let persona_text = "You are a helpful personal AI assistant."
+if (len(persona_nodes) > 0) {
+    let raw_content = persona_nodes[0]["content"] or persona_text
+    persona_text = str(raw_content)
+}
+
+// 2. Route the message to the right skill.
+//
+// Vanilla OpenClaw does this by forwarding the full tool list to the LLM.
+// This script shows the same dispatch surface wired through aindy's registered
+// host function layer rather than a Markdown skill directory.
+
+let wants_search = false
+if (str_contains(message, "search"))  { wants_search = true }
+if (str_contains(message, "find"))    { wants_search = true }
+if (str_contains(message, "look up")) { wants_search = true }
+if (str_contains(message, "what is")) { wants_search = true }
+
+let wants_remind = false
+if (str_contains(message, "remind"))   { wants_remind = true }
+if (str_contains(message, "schedule")) { wants_remind = true }
+if (str_contains(message, "timer"))    { wants_remind = true }
+
+let reply = ""
+
+if (wants_search) {
+    // brave-search skill equivalent -- web_search host function
+    let search_result = web_search(message)
+    let results = search_result["results"]
+    if (results == nil) { results = [] }
+    reply = "Here is what I found:"
+    let si = 0
+    while (si < len(results)) {
+        reply = reply + "\n  - " + str(results[si])
+        si = si + 1
+    }
+} else if (wants_remind) {
+    // OpenClaw cron tool equivalent -- aindy SchedulerEngine via schedule_reminder
+    let sched = schedule_reminder({
+        "message": message,
+        "user_id": user_id,
+        "session_id": session_id,
+    })
+    if (sched["status"] == "scheduled") {
+        reply = "Done -- reminder scheduled."
+    } else {
+        let sched_err = sched["error"] or "unknown"
+        reply = "Could not schedule: " + str(sched_err)
+    }
+} else {
+    // Default: acknowledge with memory context.
+    let hist_count = len(history_nodes)
+    if (hist_count > 0) {
+        reply = "Based on " + str(hist_count) + " remembered context(s): " + message
+    } else {
+        reply = "I received your message: " + message
+    }
+}
+
+// 3. Persist this turn (Infinite Weave delta).
+//
+// Vanilla OpenClaw writes JSONL session transcripts to disk.
+// Infinite Weave persists each turn as a pgvector node -- durable,
+// cross-session, semantically retrievable by future turns or other agents.
+let turn_content = "session:" + session_id + " User: " + message + " Assistant: " + reply
+
+let persist_result = remember_turn({
+    "content": turn_content,
+    "session_id": session_id,
+    "user_id": user_id,
+    "tags": ["conversation", "openclaw"],
+    "node_type": "conversation",
+})
+
+// 4. Return.
+set_state("reply", reply)
+set_state("persona_loaded", len(persona_nodes) > 0)
+set_state("history_turns", len(history_nodes))
+set_state("turn_persisted", persist_result["status"] == "ok")
+
+print(reply)
