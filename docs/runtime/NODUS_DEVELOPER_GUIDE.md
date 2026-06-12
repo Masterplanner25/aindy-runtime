@@ -13,7 +13,7 @@ runtime-injected context, every available built-in function, WAIT/RESUME semanti
 handling, and practical examples.
 
 For the full Nodus language syntax, types, and stdlib reference see the `nodus-lang` package
-documentation. A.I.N.D.Y. pins **nodus-lang == 3.0.2**.
+documentation. A.I.N.D.Y. pins **nodus-lang == 4.0.3**.
 
 ---
 
@@ -229,7 +229,7 @@ normally.
 
 ---
 
-## 6. Type quick-reference (nodus-lang 3.0.2)
+## 6. Type quick-reference (nodus-lang 4.0.3)
 
 | Value | `type()` result |
 |-------|----------------|
@@ -323,8 +323,9 @@ set_state("approved_by", approval["approver_id"])
 
 ## 8. Nodus version and upgrade notes
 
-A.I.N.D.Y. pins **nodus-lang == 3.0.2**. Upgrade to v4.0.0 is deferred (see `TECH_DEBT.md`
-`PYPI-PUBLISH-1`). When upgrading, the notable v4 breaking changes are:
+A.I.N.D.Y. pins **nodus-lang == 4.0.3** (NODUS-UPGRADE-1 closed 2026-06-11).
+
+**Notable v4 breaking changes vs v3** (none affect A.I.N.D.Y. scripts):
 
 | Change | v3 behavior | v4 behavior |
 |--------|-------------|-------------|
@@ -333,5 +334,10 @@ A.I.N.D.Y. pins **nodus-lang == 3.0.2**. Upgrade to v4.0.0 is deferred (see `TEC
 | `index_of` not-found | returns `-1` | returns `nil` |
 | Float `/ 0` | throws | returns `inf`/`nan` |
 
-The existing A.I.N.D.Y. scripts (`memory.nd` and the example scripts) use none of these
-patterns, so the upgrade is low-risk. No script changes are expected to be needed.
+**Embedding API change (v3 → v4):** `NodusRuntime.last_vm` (public attribute) was replaced
+by `_get_active_vm()` (method). Use `_get_active_vm()` to access the post-execution VM.
+The `_last_vm` property still works but emits a `DeprecationWarning`.
+
+**`allowed_paths` default changed:** v4 defaults to `[os.getcwd()]` (CWD-jailed). v3
+defaulted to `None` (unrestricted). Pass `allowed_paths=None` explicitly to restore
+unrestricted access when needed.

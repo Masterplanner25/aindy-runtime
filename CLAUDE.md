@@ -501,7 +501,7 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
 - **PYPI-PUBLISH-1** — PyPI publish transition. **Open.**
-- **NODUS-UPGRADE-1** — nodus-lang pinned at 3.0.2; v4.0.0 deferred until post-PyPI. See NODUS_DEVELOPER_GUIDE.md §8.
+- **NODUS-UPGRADE-1** — CLOSED 2026-06-11: bumped to nodus-lang==4.0.3. See NODUS_DEVELOPER_GUIDE.md §8.
 - **PROMETHEUS-PIN-1** — Prometheus image version pinning. **Open.**
 - **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
 - **OPER-DEFER-001** — `/platform/flows/strategies` not yet served, UI tab hidden. **Open.**
