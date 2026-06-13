@@ -4,6 +4,26 @@
 
 ---
 
+## 1.3.1 — 2026-06-13
+
+### Fixed
+
+- **`sys.v1.job.submit` syscall crash** (`AINDY/kernel/syscall_registry.py`):
+  `_handle_job_submit` was passing `db=external_db` to `submit_async_job()`, which does
+  not accept a `db` keyword argument. The stale variable and bad kwarg are removed.
+  Surfaced during the first live-stack run via the OpenClaw schedule branch.
+
+- **OpenClaw runner — live-stack bootstrap incompatibilities** (`examples/openclaw/`):
+  Six issues found and fixed during the first end-to-end pass against a live Postgres stack:
+  - `ingest_memory_node` was called but never existed; replaced with `MemoryNodeDAO.save_at_path()`.
+  - `node_type` values `soul`/`identity`/`context` are not valid memory node types; all mapped to `insight`.
+  - `'demo-user'` string fails the `memory_nodes.user_id` FK constraint; `_ensure_live_user()` now creates or reuses a real DB user (`openclaw-demo@aindy.local`).
+  - `user_id=""` in `tool_recall_memory` returned zero results; `_current_user_id` module variable is now set at bootstrap time.
+  - `dispatch_syscall` inferred capability `memory.search` but `sys.v1.memory.search` requires `memory.read`; explicit `capability="memory.read"` added to the recall call.
+  - `node_type='conversation'` in `openclaw_agent.nd` is invalid; changed to `insight`.
+
+---
+
 ## 1.3.0 — 2026-06-12
 
 ### Added
