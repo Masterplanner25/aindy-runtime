@@ -41,6 +41,9 @@ _standalone_nodes: list[dict] = []
 # generating log noise from failed live-stack calls.
 _live_stack: bool = False
 
+# User id passed at bootstrap; used by tool functions that need to scope DB queries.
+_current_user_id: str = ""
+
 
 def _probe_db() -> bool:
     """Return True if the configured database is actually reachable."""
@@ -84,24 +87,26 @@ def bootstrap_workspace_memory(
 
     Returns a list of node types that were ingested.
     """
-    global _standalone_nodes, _live_stack
+    global _standalone_nodes, _live_stack, _current_user_id
 
     _live_stack = _probe_db()
     _live = _live_stack
+    _current_user_id = user_id
 
     if _live:
         from AINDY.db.database import SessionLocal
-        from AINDY.memory.memory_ingest_service import ingest_memory_node
+        from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
 
+    # node_type must be a valid MemoryNode type: decision|insight|outcome|relationship
     workspace_files = {
-        "soul":     ("SOUL.md",     ["soul", "identity", "persona", "assistant", "openclaw"]),
-        "identity": ("IDENTITY.md", ["identity", "persona", "openclaw"]),
-        "context":  ("AGENTS.md",   ["context", "workspace", "agents", "openclaw"]),
+        "soul":     ("SOUL.md",     ["soul", "identity", "persona", "assistant", "openclaw"], "insight"),
+        "identity": ("IDENTITY.md", ["identity", "persona", "openclaw"],                      "insight"),
+        "context":  ("AGENTS.md",   ["context", "workspace", "agents", "openclaw"],           "insight"),
     }
 
     ingested: list[str] = []
 
-    for node_type, (filename, tags) in workspace_files.items():
+    for workspace_key, (filename, tags, node_type) in workspace_files.items():
         path = pathlib.Path(workspace_dir) / filename
         if not path.exists():
             continue
@@ -109,19 +114,17 @@ def bootstrap_workspace_memory(
         if not content:
             continue
 
-        mas_path = f"/memory/{user_id}/openclaw/{node_type}/bootstrap"
+        mas_path = f"/memory/{user_id}/openclaw/{workspace_key}/bootstrap"
 
         if _live:
             db = SessionLocal()
             try:
-                ingest_memory_node(
-                    db=db,
-                    user_id=user_id,
+                MemoryNodeDAO(db).save_at_path(
+                    path=mas_path,
                     content=content,
+                    user_id=user_id,
                     tags=tags,
                     node_type=node_type,
-                    significance=0.9,
-                    path=mas_path,
                 )
                 db.commit()
             finally:
@@ -136,7 +139,7 @@ def bootstrap_workspace_memory(
             })
             print(f"[bootstrap] {filename} -> standalone cache ({len(content)} chars)")
 
-        ingested.append(node_type)
+        ingested.append(workspace_key)
 
     return ingested
 
@@ -166,7 +169,8 @@ def tool_recall_memory(query: Any) -> dict:
                     "sys.v1.memory.search",
                     {"query": query_str, "limit": 5},
                     db=db,
-                    user_id="",
+                    user_id=_current_user_id,
+                    capability="memory.read",
                 )
                 if result.get("status") == "success":
                     return result.get("data") or {"nodes": [], "count": 0}
@@ -252,7 +256,7 @@ def tool_remember_turn(payload: Any) -> dict:
                     {
                         "content": p.get("content", ""),
                         "tags": p.get("tags", ["conversation", "openclaw"]),
-                        "node_type": p.get("node_type", "conversation"),
+                        "node_type": p.get("node_type", "insight"),
                         "significance": 0.6,
                         "namespace": "openclaw",
                     },
@@ -270,6 +274,61 @@ def tool_remember_turn(payload: Any) -> dict:
 # ---------------------------------------------------------------------------
 # 3. Run the agent loop
 # ---------------------------------------------------------------------------
+
+def _is_valid_uuid(value: str) -> bool:
+    import uuid
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _coerce_user_uuid(user_id: str) -> str:
+    """Return user_id unchanged if it's a valid UUID, else derive a stable UUID v5 from it."""
+    import uuid
+    try:
+        uuid.UUID(user_id)
+        return user_id
+    except ValueError:
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id))
+
+
+_DEMO_EMAIL = "openclaw-demo@aindy.local"
+_DEMO_PASSWORD = "openclaw-demo-password-1"
+
+
+def _ensure_live_user() -> str | None:
+    """Register or look up the demo user; return their UUID string, or None on failure."""
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.models.user import User
+        from AINDY.services.auth_service import hash_password
+
+        db = SessionLocal()
+        try:
+            existing = db.query(User).filter(User.email == _DEMO_EMAIL).first()
+            if existing:
+                return str(existing.id)
+            import uuid as _uuid
+            user = User(
+                id=_uuid.uuid4(),
+                email=_DEMO_EMAIL,
+                hashed_password=hash_password(_DEMO_PASSWORD),
+                is_active=True,
+                is_admin=False,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            print(f"[bootstrap] demo user created: {user.id}")
+            return str(user.id)
+        finally:
+            db.close()
+    except Exception as exc:
+        print(f"[bootstrap] could not ensure live user: {exc}")
+        return None
+
 
 def run_openclaw_agent(
     message: str,
@@ -294,6 +353,12 @@ def run_openclaw_agent(
     """
     from nodus.runtime.embedding import NodusRuntime
 
+    if _probe_db() and not _is_valid_uuid(user_id):
+        live_uid = _ensure_live_user()
+        if live_uid:
+            user_id = live_uid
+    else:
+        user_id = _coerce_user_uuid(user_id)
     session_id = session_id or f"openclaw-{user_id}"
     workspace_dir = workspace_dir or os.getcwd()
 

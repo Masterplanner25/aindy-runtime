@@ -103,7 +103,7 @@ let persist_result = remember_turn({
     "session_id": session_id,
     "user_id": user_id,
     "tags": ["conversation", "openclaw"],
-    "node_type": "conversation",
+    "node_type": "insight",
 })
 
 // 4. Return.
