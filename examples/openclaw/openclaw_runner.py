@@ -162,6 +162,7 @@ def tool_schedule_reminder(payload: Any) -> dict:
             result = dispatch_syscall(
                 "sys.v1.job.submit",
                 {
+                    "task_name": "openclaw.reminder",
                     "job_type": "reminder",
                     "payload": {
                         "message": p.get("message", ""),
@@ -293,6 +294,6 @@ if __name__ == "__main__":
         print("[openclaw] agent error:")
         print(json.dumps(result.get("error") or result, indent=2))
 
-    state = (result.get("extras") or {}).get("globals", {})
+    state = result.get("agent_state") or {}
     print(f"\n[openclaw] persona_loaded={state.get('persona_loaded', '?')}  "
           f"history_turns={state.get('history_turns', '?')}")
