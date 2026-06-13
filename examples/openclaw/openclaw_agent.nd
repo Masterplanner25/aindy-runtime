@@ -32,7 +32,8 @@ if (history_nodes == nil) { history_nodes = [] }
 
 let persona_text = "You are a helpful personal AI assistant."
 if (len(persona_nodes) > 0) {
-    let raw_content = persona_nodes[0]["content"] or persona_text
+    let raw_content = persona_nodes[0]["content"]
+    if (raw_content == nil) { raw_content = persona_text }
     persona_text = str(raw_content)
 }
 
@@ -76,7 +77,8 @@ if (wants_search) {
     if (sched["status"] == "scheduled") {
         reply = "Done -- reminder scheduled."
     } else {
-        let sched_err = sched["error"] or "unknown"
+        let sched_err = sched["error"]
+        if (sched_err == nil) { sched_err = "unknown" }
         reply = "Could not schedule: " + str(sched_err)
     }
 } else {
