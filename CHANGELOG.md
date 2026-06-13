@@ -4,6 +4,61 @@
 
 ---
 
+## 1.3.0 — 2026-06-12
+
+### Added
+
+- **`aindy-runtime init`** — new CLI scaffold command. Writes four files to the target
+  directory from a single command, closing the operator onboarding gap found during the
+  1.2.0 live walkthrough:
+  - `AINDY/.env` — generated 64-char hex `SECRET_KEY` + correct `DATABASE_URL` pointing
+    at the compose `postgres` service name (not `localhost`)
+  - `Dockerfile` — `FROM python:3.11-slim`, `pip install aindy-runtime==<version>` from
+    PyPI, `CMD ["aindy-runtime", "serve"]`
+  - `docker-compose.yml` — postgres (pgvector:pg16) + api (build: .) + redis
+    (`--profile full`), with correct `AINDY/.env` volume mount and `env_file` wiring
+  - `docker/init-pgvector.sql` — `CREATE EXTENSION IF NOT EXISTS vector`
+  - Existing files are skipped unless `--force` is given (idempotent re-runs).
+  - `--dir PATH` targets a different directory (default: CWD).
+
+### Fixed
+
+- **Platform UI — Agent Registry crash on empty state** (`platform/src/components/platform/AgentRegistry.jsx`):
+  `useState` / `useCallback` / `useEffect` were called after a conditional
+  `if (!isAdmin) return` early return, violating React's Rules of Hooks. When auth state
+  loads asynchronously, `isAdmin` briefly differs between renders, causing React to throw
+  _"Rendered more hooks than during the previous render."_ The empty-state UI for zero
+  agents was already in the component — it never rendered because the crash happened first.
+  Fix: all hooks moved above the `isAdmin` guard; `loadAgents()` gated inside `useEffect`
+  with `if (isAdmin)`.
+
+- **Platform UI — crashed screen poisoned subsequent navigation** (`platform/src/PlatformApp.tsx`):
+  The outer `<ErrorBoundary>` wrapping all routes stayed in `hasError=true` after catching
+  a crash, blocking every in-app navigation until a full page reload. Fix: routes extracted
+  into `<PlatformRoutes>` which keys the boundary on `location.pathname` — resets
+  automatically on every navigation.
+
+- **OpenClaw example — `or` fallback syntax** (`examples/openclaw/openclaw_agent.nd`):
+  `x or "fallback"` is not valid Nodus 4.0.3 — `or` is treated as a variable name at
+  runtime. Fixed two occurrences with explicit nil-check pattern.
+
+- **OpenClaw runner — `sys.v1.job.submit` missing `task_name` field**
+  (`examples/openclaw/openclaw_runner.py`): Added `"task_name": "openclaw.reminder"` to
+  the schedule reminder dispatch payload.
+
+- **OpenClaw runner — state readback used wrong key** (`examples/openclaw/openclaw_runner.py`):
+  CLI printout read from `result["extras"]["globals"]` but `set_state` writes to the
+  runner-owned `agent_state` dict. Fixed to `result.get("agent_state")`.
+
+### Docs
+
+- **`docs/runtime/USER_WALKTHROUGH_LOG.md`** (new): live operator onboarding issue log
+  (Issues 1–9) from the first real pip-install walkthrough of 1.2.0 against a live stack.
+- **`docs/runtime/QUICKSTART.md`**, **`KERNEL_CAPABILITY_AUDIT.md`**,
+  **`INFINITY_LOOP_AUDIT.md`** added to the doc index.
+
+---
+
 ## 1.2.0 — 2026-06-11
 
 ### Added — REPLAY-1: Clock abstraction for deterministic replay
