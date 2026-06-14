@@ -21,6 +21,8 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from AINDY.kernel.clock import utcnow
+
 logger = logging.getLogger(__name__)
 
 _STATUS_TRANSITIONS: dict[str, set] = {
@@ -34,7 +36,7 @@ _STATUS_TRANSITIONS: dict[str, set] = {
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return utcnow()
 
 
 class ExecutionUnitService:

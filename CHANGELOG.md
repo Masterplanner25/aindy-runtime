@@ -4,6 +4,122 @@
 
 ---
 
+## 1.3.1 — 2026-06-13
+
+### Fixed
+
+- **`sys.v1.job.submit` syscall crash** (`AINDY/kernel/syscall_registry.py`):
+  `_handle_job_submit` was passing `db=external_db` to `submit_async_job()`, which does
+  not accept a `db` keyword argument. The stale variable and bad kwarg are removed.
+  Surfaced during the first live-stack run via the OpenClaw schedule branch.
+
+- **OpenClaw runner — live-stack bootstrap incompatibilities** (`examples/openclaw/`):
+  Six issues found and fixed during the first end-to-end pass against a live Postgres stack:
+  - `ingest_memory_node` was called but never existed; replaced with `MemoryNodeDAO.save_at_path()`.
+  - `node_type` values `soul`/`identity`/`context` are not valid memory node types; all mapped to `insight`.
+  - `'demo-user'` string fails the `memory_nodes.user_id` FK constraint; `_ensure_live_user()` now creates or reuses a real DB user (`openclaw-demo@aindy.local`).
+  - `user_id=""` in `tool_recall_memory` returned zero results; `_current_user_id` module variable is now set at bootstrap time.
+  - `dispatch_syscall` inferred capability `memory.search` but `sys.v1.memory.search` requires `memory.read`; explicit `capability="memory.read"` added to the recall call.
+  - `node_type='conversation'` in `openclaw_agent.nd` is invalid; changed to `insight`.
+
+---
+
+## 1.3.0 — 2026-06-12
+
+### Added
+
+- **`aindy-runtime init`** — new CLI scaffold command. Writes four files to the target
+  directory from a single command, closing the operator onboarding gap found during the
+  1.2.0 live walkthrough:
+  - `AINDY/.env` — generated 64-char hex `SECRET_KEY` + correct `DATABASE_URL` pointing
+    at the compose `postgres` service name (not `localhost`)
+  - `Dockerfile` — `FROM python:3.11-slim`, `pip install aindy-runtime==<version>` from
+    PyPI, `CMD ["aindy-runtime", "serve"]`
+  - `docker-compose.yml` — postgres (pgvector:pg16) + api (build: .) + redis
+    (`--profile full`), with correct `AINDY/.env` volume mount and `env_file` wiring
+  - `docker/init-pgvector.sql` — `CREATE EXTENSION IF NOT EXISTS vector`
+  - Existing files are skipped unless `--force` is given (idempotent re-runs).
+  - `--dir PATH` targets a different directory (default: CWD).
+
+### Fixed
+
+- **Platform UI — Agent Registry crash on empty state** (`platform/src/components/platform/AgentRegistry.jsx`):
+  `useState` / `useCallback` / `useEffect` were called after a conditional
+  `if (!isAdmin) return` early return, violating React's Rules of Hooks. When auth state
+  loads asynchronously, `isAdmin` briefly differs between renders, causing React to throw
+  _"Rendered more hooks than during the previous render."_ The empty-state UI for zero
+  agents was already in the component — it never rendered because the crash happened first.
+  Fix: all hooks moved above the `isAdmin` guard; `loadAgents()` gated inside `useEffect`
+  with `if (isAdmin)`.
+
+- **Platform UI — crashed screen poisoned subsequent navigation** (`platform/src/PlatformApp.tsx`):
+  The outer `<ErrorBoundary>` wrapping all routes stayed in `hasError=true` after catching
+  a crash, blocking every in-app navigation until a full page reload. Fix: routes extracted
+  into `<PlatformRoutes>` which keys the boundary on `location.pathname` — resets
+  automatically on every navigation.
+
+- **OpenClaw example — `or` fallback syntax** (`examples/openclaw/openclaw_agent.nd`):
+  `x or "fallback"` is not valid Nodus 4.0.3 — `or` is treated as a variable name at
+  runtime. Fixed two occurrences with explicit nil-check pattern.
+
+- **OpenClaw runner — `sys.v1.job.submit` missing `task_name` field**
+  (`examples/openclaw/openclaw_runner.py`): Added `"task_name": "openclaw.reminder"` to
+  the schedule reminder dispatch payload.
+
+- **OpenClaw runner — state readback used wrong key** (`examples/openclaw/openclaw_runner.py`):
+  CLI printout read from `result["extras"]["globals"]` but `set_state` writes to the
+  runner-owned `agent_state` dict. Fixed to `result.get("agent_state")`.
+
+### Docs
+
+- **`docs/runtime/USER_WALKTHROUGH_LOG.md`** (new): live operator onboarding issue log
+  (Issues 1–9) from the first real pip-install walkthrough of 1.2.0 against a live stack.
+- **`docs/runtime/QUICKSTART.md`**, **`KERNEL_CAPABILITY_AUDIT.md`**,
+  **`INFINITY_LOOP_AUDIT.md`** added to the doc index.
+
+---
+
+## 1.2.0 — 2026-06-11
+
+### Added — REPLAY-1: Clock abstraction for deterministic replay
+
+- **`AINDY/kernel/clock.py`** (new): ContextVar-backed `utcnow()` + `frozen_at(t)` context
+  manager. Production code calls `utcnow()` instead of `datetime.now(timezone.utc)`; tests
+  freeze time with `frozen_at(fixed_dt)`. Override is async-safe and thread-safe — each
+  coroutine or thread has its own ContextVar slot.
+- 12 call sites updated across the execution-critical path: `SyscallDispatcher` EffectRecord
+  gate (3), `CircuitBreaker._now()`, `SchedulerEngine` time-wait tick, `ExecutionUnitService._now()`,
+  `SystemEventService` event timestamp + 5 cutoff queries, `flow_engine` runner completion,
+  runner failure, and `_default_wait_deadline`.
+- **`tests/unit/test_clock.py`** (new): 12 tests covering core clock behaviour, nested freeze,
+  thread isolation, and end-to-end verification of `CircuitBreaker`, `ExecutionUnitService`,
+  `_default_wait_deadline`, `_complete_effect_record`, and `emit_system_event`.
+
+### Changed — NODUS-UPGRADE-1: nodus-lang 3.0.2 → 4.0.3
+
+- **`pyproject.toml`** + **`AINDY/requirements.txt`**: Pin updated to `nodus-lang==4.0.3`.
+- **`AINDY/runtime/nodus_worker.py`**: `_runtime_emitted_events()` updated from deprecated
+  `runtime.last_vm` (removed in v4) to `runtime._get_active_vm()`.
+- **`docs/runtime/NODUS_DEVELOPER_GUIDE.md`** §8: Version table + v3→v4 breaking-change notes
+  added. Key changes: `last_vm` → `_get_active_vm()`; `allowed_paths` default now `[os.getcwd()]`
+  (was `None`).
+
+### Changed — CI smoke: install from PyPI wheel
+
+- **`.github/workflows/smoke-postgres.yml`**: Install step changed from `pip install -e .[test]`
+  to `pip install aindy-runtime==$AINDY_VERSION` — validates the published PyPI wheel on every
+  push rather than the local editable install. Cache key simplified to hash `pyproject.toml` only.
+
+### Added — OpenClaw Infinite Weave spike
+
+- **`examples/openclaw/`** (new): Demonstrates the aindy-runtime complement to OpenClaw's
+  `pi-agent-core` loop. `openclaw_agent.nd` — Nodus 4.0.3 agent script (persona recall, skill
+  routing, pgvector turn persistence). `openclaw_runner.py` — Python bootstrap, 4 host functions,
+  NodusRuntime wiring. `README.md` — 8-dimension delta table and standalone + live-stack run
+  instructions.
+
+---
+
 ## 1.1.0 — 2026-06-08
 
 ### Added — CI-SMOKE-1: PostgreSQL boot smoke workflow + Quickstart (2026-06-08)

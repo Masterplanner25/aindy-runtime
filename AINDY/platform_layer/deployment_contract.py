@@ -1177,11 +1177,11 @@ def get_requested_boot_mode() -> str | None:
     value = os.getenv(BOOT_MODE_ENV_VAR, "").strip()
     if not value:
         return None
-    if value == RUNTIME_ONLY_BOOT_MODE:
+    if value in (RUNTIME_ONLY_BOOT_MODE, APP_PROFILE_BOOT_MODE):
         return value
     raise ValueError(
         f"Unsupported {BOOT_MODE_ENV_VAR} value {value!r}. "
-        f"Supported values: {RUNTIME_ONLY_BOOT_MODE!r}."
+        f"Supported values: {RUNTIME_ONLY_BOOT_MODE!r}, {APP_PROFILE_BOOT_MODE!r}."
     )
 
 
@@ -1190,4 +1190,6 @@ def resolve_profile_for_boot_mode(boot_mode: str | None) -> str | None:
         return None
     if boot_mode == RUNTIME_ONLY_BOOT_MODE:
         return RUNTIME_ONLY_BOOT_PROFILE
+    if boot_mode == APP_PROFILE_BOOT_MODE:
+        return None
     raise ValueError(f"Unsupported boot mode {boot_mode!r}")

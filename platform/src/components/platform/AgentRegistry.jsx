@@ -442,7 +442,7 @@ function FederatedSearchPanel({ agents }) {
 
 export default function AgentRegistry() {
   const { isAdmin } = useAuth();
-  if (!isAdmin) return <AdminAccessRequired />;
+  // All hooks must be called unconditionally before any early return.
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -462,8 +462,10 @@ export default function AgentRegistry() {
   }, []);
 
   useEffect(() => {
-    loadAgents();
-  }, [loadAgents]);
+    if (isAdmin) loadAgents();
+  }, [isAdmin, loadAgents]);
+
+  if (!isAdmin) return <AdminAccessRequired />;
 
   const containerStyle = {
     minHeight: "100vh",

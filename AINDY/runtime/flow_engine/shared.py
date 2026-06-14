@@ -4,6 +4,8 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
+from AINDY.kernel.clock import utcnow
+
 from sqlalchemy.orm import Session
 
 from AINDY.config import settings
@@ -34,4 +36,4 @@ def _default_wait_deadline(timeout_minutes: int | None = None) -> datetime:
         if timeout_minutes is not None
         else settings.FLOW_WAIT_TIMEOUT_MINUTES
     )
-    return datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    return utcnow() + timedelta(minutes=minutes)
