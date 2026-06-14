@@ -136,11 +136,10 @@ def coordination_graph(db, *, user_id: str | None = None, limit: int = 100) -> d
         db.query(SystemEvent)
         .filter(SystemEvent.agent_id.isnot(None))
         .order_by(SystemEvent.timestamp.desc())
-        .limit(limit)
     )
     if user_id:
         query = query.filter(SystemEvent.user_id == normalize_uuid(user_id))
-    rows = query.all()
+    rows = query.limit(limit).all()
     nodes = {}
     edges = []
     for row in rows:
