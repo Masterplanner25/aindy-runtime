@@ -12,6 +12,7 @@ from AINDY.runtime.flow_engine.shared import (
     logger,
     queue_memory_capture,
     timezone,
+    utcnow,
 )
 
 
@@ -71,7 +72,7 @@ def maybe_finalize_completion(
         run.state = _json_safe(state)
         run.waiting_for = None
         run.wait_deadline = None
-        run.completed_at = datetime.now(timezone.utc)
+        run.completed_at = utcnow()
         runner.db.commit()
         try:
             runner._emit_execution_completed(

@@ -1892,19 +1892,13 @@ ROOT_ROUTERS = [
 
 ## REPLAY-1 — Deterministic replay harness requires Clock injection refactor
 
-**Status:** Open — infrastructure required before implementation
+**Status:** CLOSED (2026-06-11)
 
-**Problem:** Fully deterministic replay (same input/state → identical outputs, events, and DB mutations) requires injecting a `Clock` abstraction into `ExecutionPipeline`, `EffectRecord`, `SystemEvent`, and any other component that calls `datetime.now()` or `datetime.utcnow()` directly. Currently ~12 call sites use wall clock with no injectable seam, so timestamps in EffectRecord, SystemEvent, and ExecutionUnit differ between runs — event/DB checksums can never match.
+Added `AINDY/kernel/clock.py`: ContextVar-backed `utcnow()` + `frozen_at(t)` context manager. No signature changes required — each call site imports `utcnow` directly and the ContextVar override is async-safe and thread-safe.
 
-**Resolution direction:**
-1. Add a `Clock` protocol with `now() -> datetime` to `AINDY/kernel/`
-2. Thread it through `ExecutionPipeline`, `SyscallDispatcher`, and the EffectRecord gate
-3. Provide `FixedClock(dt)` for tests, `SystemClock()` as the production default
-4. Once in place: snapshot inputs + fixed clock + RNG seed → deterministic re-execution; event hash and DB checksum assertions become trivial
+Sites updated (12): `kernel/syscall_dispatcher.py` (EffectRecord gate — 3 sites), `kernel/circuit_breaker.py` (`_now()` body), `kernel/scheduler/waits.py` (time-wait tick), `core/execution_unit_service.py` (`_now()` body), `core/system_event_service.py` (event timestamp + 5 cutoff queries), `runtime/flow_engine/runner_completion.py`, `runtime/flow_engine/runner_failure.py`, `runtime/flow_engine/shared.py` (`_default_wait_deadline`).
 
-**Why not yet:** Scope is ~15–20 files, non-trivial but mechanical. Deferred until after PyPI publish and OpenClaw port spike stabilise the runtime surface.
-
-**Risk:** Low — no observable behaviour change in production. Tests that depend on real timestamps stay unaffected until they opt in to `FixedClock`.
+12 tests in `tests/unit/test_clock.py` — all green. ORM model `default=lambda:` columns intentionally excluded (SQLAlchemy concerns, not business logic).
 
 ---
 

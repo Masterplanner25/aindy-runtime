@@ -144,9 +144,10 @@ class SchedulerWaitMixin:
 
     def tick_time_waits(self) -> int:
         from datetime import datetime, timezone
+        from AINDY.kernel.clock import utcnow
         import AINDY.kernel.scheduler_engine as compat
 
-        now = datetime.now(timezone.utc)
+        now = utcnow()
         to_fire: list[tuple[str, dict]] = []
         with self._lock:
             for run_id, entry in list(self._waiting.items()):
