@@ -1,5 +1,5 @@
 import { lazy, type ReactNode } from "react";
-import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
 import ErrorBoundary, { RouteErrorBoundary } from "./components/shared/ErrorBoundary";
 import { AuthProvider, useAuth } from "@aindy/ui-kit";
@@ -25,6 +25,36 @@ function platformRoute(name: string, element: ReactNode) {
     <RouteErrorBoundary name={name} layer="platform" domain={name}>
       {element}
     </RouteErrorBoundary>
+  );
+}
+
+/**
+ * Wraps the platform route tree in an ErrorBoundary that resets on every
+ * navigation. Without this, a crash on one screen leaves the outer boundary
+ * in error state, poisoning all subsequent in-app navigations until reload.
+ */
+function PlatformRoutes() {
+  const location = useLocation();
+  return (
+    <ErrorBoundary key={location.pathname} layer="platform">
+      <Routes>
+        <Route path="/" element={<PlatformHomeRedirect />} />
+        <Route element={<PlatformShell />}>
+          <Route path="/agent" element={platformRoute("Agent Console", <AgentConsole />)} />
+          <Route path="/flows" element={platformRoute("Flow Engine", <FlowEngineConsole />)} />
+          <Route path="/observability" element={platformRoute("Observability", <ObservabilityDashboard />)} />
+          <Route path="/health" element={platformRoute("Health", <HealthDashboard />)} />
+          <Route path="/executions" element={platformRoute("Executions", <ExecutionConsole />)} />
+          <Route path="/approvals" element={platformRoute("Approvals", <AgentApprovalInbox />)} />
+          <Route path="/registry" element={platformRoute("Registry", <AgentRegistry />)} />
+          <Route path="/users" element={platformRoute("Users", <AdminUsersPanel />)} />
+          {FEATURE_FLAGS.RIPPLETRACE_VIEWER && (
+            <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
+          )}
+        </Route>
+        <Route path="*" element={<Navigate to="/agent" replace />} />
+      </Routes>
+    </ErrorBoundary>
   );
 }
 
@@ -69,29 +99,7 @@ export default function PlatformApp() {
               path="/*"
               element={
                 <SystemProvider skipBoot>
-                  <ErrorBoundary layer="platform">
-                    <Routes>
-                      {/* Bare redirects render outside the shell (no chrome on a <Navigate>) */}
-                      <Route path="/" element={<PlatformHomeRedirect />} />
-
-                      {/* All real screens render inside the collapsible-sidebar shell */}
-                      <Route element={<PlatformShell />}>
-                        <Route path="/agent" element={platformRoute("Agent Console", <AgentConsole />)} />
-                        <Route path="/flows" element={platformRoute("Flow Engine", <FlowEngineConsole />)} />
-                        <Route path="/observability" element={platformRoute("Observability", <ObservabilityDashboard />)} />
-                        <Route path="/health" element={platformRoute("Health", <HealthDashboard />)} />
-                        <Route path="/executions" element={platformRoute("Executions", <ExecutionConsole />)} />
-                        <Route path="/approvals" element={platformRoute("Approvals", <AgentApprovalInbox />)} />
-                        <Route path="/registry" element={platformRoute("Registry", <AgentRegistry />)} />
-                        <Route path="/users" element={platformRoute("Users", <AdminUsersPanel />)} />
-                        {FEATURE_FLAGS.RIPPLETRACE_VIEWER && (
-                          <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
-                        )}
-                      </Route>
-
-                      <Route path="*" element={<Navigate to="/agent" replace />} />
-                    </Routes>
-                  </ErrorBoundary>
+                  <PlatformRoutes />
                 </SystemProvider>
               }
             />

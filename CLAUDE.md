@@ -515,7 +515,7 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **BILLING-\*** — BILLING-1 through BILLING-5: billing identity, metering, plan enforcement, acquisition funnel, usage reporting. All open, deferred until commercial launch. Source: `docs/runtime/MONETIZATION_AUDIT.md`.
 - **LAYER-\*** — Layer boundary violations (LAYER-1 through LAYER-5). All deferred. See TECH_DEBT.md.
 - **TIER3-10** — `async_job_service` coupling. Open — architectural, no bounded fix.
-- **REPLAY-1** — Deterministic replay; `Clock` injection into ~12 `datetime.now()` call sites. Deferred until post-PyPI + OpenClaw spike.
+- **REPLAY-1** — CLOSED 2026-06-11: `AINDY/kernel/clock.py` — ContextVar `utcnow()` + `frozen_at()`. 12 sites updated across kernel/core/flow engine. 12 tests in `test_clock.py`.
 
 ---
 
