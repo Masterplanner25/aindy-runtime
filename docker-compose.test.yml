@@ -9,6 +9,8 @@
       POSTGRES_DB: aindy_test
     tmpfs:
       - /var/lib/postgresql/data
+    volumes:
+      - ./docker/init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aindy_test -d aindy_test"]
       interval: 5s

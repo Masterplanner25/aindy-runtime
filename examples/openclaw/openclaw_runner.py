@@ -27,9 +27,43 @@ Standalone demo (no live aindy-runtime required):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import pathlib
 from typing import Any
+
+# In-memory node cache for standalone mode (no live aindy-runtime).
+# Populated by bootstrap_workspace_memory(); served by tool_recall_memory().
+_standalone_nodes: list[dict] = []
+
+# True only when aindy-runtime is installed AND its configured DB is reachable.
+# Set once by bootstrap_workspace_memory(); tool functions respect it to avoid
+# generating log noise from failed live-stack calls.
+_live_stack: bool = False
+
+# User id passed at bootstrap; used by tool functions that need to scope DB queries.
+_current_user_id: str = ""
+
+
+def _probe_db() -> bool:
+    """Return True if the configured database is actually reachable."""
+    try:
+        from AINDY.db.database import engine as _engine
+        import sqlalchemy
+        _log = logging.getLogger("AINDY")
+        _prev = _log.level
+        _log.setLevel(logging.CRITICAL)
+        try:
+            with _engine.connect() as _c:
+                _c.execute(sqlalchemy.text("SELECT 1"))
+            return True
+        except Exception:
+            return False
+        finally:
+            _log.setLevel(_prev)
+    except ImportError:
+        return False
+
 
 # ---------------------------------------------------------------------------
 # 1. Bootstrap — workspace files → memory nodes
@@ -43,29 +77,36 @@ def bootstrap_workspace_memory(
 ) -> list[str]:
     """Seed SOUL.md / IDENTITY.md / AGENTS.md as aindy memory nodes.
 
-    In vanilla OpenClaw these files are loaded from disk into the system prompt
+    In OpenClaw these files are loaded from disk into the system prompt
     on every agent boot. Infinite Weave persists them once as high-significance
     memory nodes so they are semantically retrievable across sessions and
     updatable without restarting the server.
 
+    In standalone mode (no live aindy-runtime), nodes are loaded into
+    _standalone_nodes so recall_memory can serve them without a live stack.
+
     Returns a list of node types that were ingested.
     """
-    try:
-        from AINDY.db.database import SessionLocal
-        from AINDY.memory.memory_ingest_service import ingest_memory_node
-        _live = True
-    except ImportError:
-        _live = False
+    global _standalone_nodes, _live_stack, _current_user_id
 
+    _live_stack = _probe_db()
+    _live = _live_stack
+    _current_user_id = user_id
+
+    if _live:
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
+
+    # node_type must be a valid MemoryNode type: decision|insight|outcome|relationship
     workspace_files = {
-        "soul":     ("SOUL.md",     ["soul", "identity", "persona", "openclaw"]),
-        "identity": ("IDENTITY.md", ["identity", "persona", "openclaw"]),
-        "context":  ("AGENTS.md",   ["context", "workspace", "openclaw"]),
+        "soul":     ("SOUL.md",     ["soul", "identity", "persona", "assistant", "openclaw"], "insight"),
+        "identity": ("IDENTITY.md", ["identity", "persona", "openclaw"],                      "insight"),
+        "context":  ("AGENTS.md",   ["context", "workspace", "agents", "openclaw"],           "insight"),
     }
 
     ingested: list[str] = []
 
-    for node_type, (filename, tags) in workspace_files.items():
+    for workspace_key, (filename, tags, node_type) in workspace_files.items():
         path = pathlib.Path(workspace_dir) / filename
         if not path.exists():
             continue
@@ -73,27 +114,32 @@ def bootstrap_workspace_memory(
         if not content:
             continue
 
-        mas_path = f"/memory/{user_id}/openclaw/{node_type}/bootstrap"
+        mas_path = f"/memory/{user_id}/openclaw/{workspace_key}/bootstrap"
 
         if _live:
             db = SessionLocal()
             try:
-                ingest_memory_node(
-                    db=db,
-                    user_id=user_id,
+                MemoryNodeDAO(db).save_at_path(
+                    path=mas_path,
                     content=content,
+                    user_id=user_id,
                     tags=tags,
                     node_type=node_type,
-                    significance=0.9,
-                    path=mas_path,
                 )
                 db.commit()
             finally:
                 db.close()
         else:
-            print(f"[bootstrap] stub — would ingest {filename} ({len(content)} chars) → {mas_path}")
+            _standalone_nodes.append({
+                "node_type": node_type,
+                "content": content,
+                "tags": tags,
+                "significance": 0.9,
+                "path": mas_path,
+            })
+            print(f"[bootstrap] {filename} -> standalone cache ({len(content)} chars)")
 
-        ingested.append(node_type)
+        ingested.append(workspace_key)
 
     return ingested
 
@@ -110,24 +156,32 @@ def tool_recall_memory(query: Any) -> dict:
 
     OpenClaw equivalent: the JSONL session-transcript search.
     Infinite Weave: sys.v1.memory.read with pgvector similarity.
+    Falls back to the in-memory node cache when the live stack is unavailable.
     """
     query_str = str(query) if not isinstance(query, dict) else str(query.get("query", ""))
-    try:
-        from AINDY.db.database import SessionLocal
-        from AINDY.kernel.syscall_dispatcher import dispatch_syscall
-        db = SessionLocal()
+    if _live_stack:
         try:
-            result = dispatch_syscall(
-                "sys.v1.memory.search",
-                {"query": query_str, "limit": 5},
-                db=db,
-                user_id="",
-            )
-            return result.get("data") or {"nodes": [], "count": 0}
-        finally:
-            db.close()
-    except Exception:
-        return {"nodes": [], "count": 0, "query": query_str}
+            from AINDY.db.database import SessionLocal
+            from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+            db = SessionLocal()
+            try:
+                result = dispatch_syscall(
+                    "sys.v1.memory.search",
+                    {"query": query_str, "limit": 5},
+                    db=db,
+                    user_id=_current_user_id,
+                    capability="memory.read",
+                )
+                if result.get("status") == "success":
+                    return result.get("data") or {"nodes": [], "count": 0}
+            finally:
+                db.close()
+        except Exception:
+            pass
+    # Standalone / live-stack-unreachable: search the workspace cache.
+    terms = set(query_str.lower().split())
+    matched = [n for n in _standalone_nodes if terms & set(n.get("tags", []))]
+    return {"nodes": matched, "count": len(matched), "query": query_str}
 
 
 def tool_web_search(query: Any) -> dict:
@@ -154,31 +208,34 @@ def tool_schedule_reminder(payload: Any) -> dict:
     Infinite Weave: sys.v1.job.submit with a delay, persisted in DB.
     """
     p = payload if isinstance(payload, dict) else {}
-    try:
-        from AINDY.db.database import SessionLocal
-        from AINDY.kernel.syscall_dispatcher import dispatch_syscall
-        db = SessionLocal()
+    if _live_stack:
         try:
-            result = dispatch_syscall(
-                "sys.v1.job.submit",
-                {
-                    "job_type": "reminder",
-                    "payload": {
-                        "message": p.get("message", ""),
-                        "user_id": p.get("user_id", ""),
+            from AINDY.db.database import SessionLocal
+            from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+            db = SessionLocal()
+            try:
+                result = dispatch_syscall(
+                    "sys.v1.job.submit",
+                    {
+                        "task_name": "openclaw.reminder",
+                        "job_type": "reminder",
+                        "payload": {
+                            "message": p.get("message", ""),
+                            "user_id": p.get("user_id", ""),
+                        },
+                        "delay_seconds": 3600,
                     },
-                    "delay_seconds": 3600,
-                },
-                db=db,
-                user_id=p.get("user_id", ""),
-            )
-            if result.get("status") == "success":
-                return {"status": "scheduled", "job_id": result["data"].get("job_id", "")}
-            return {"status": "error", "error": result.get("error", "dispatch failed")}
-        finally:
-            db.close()
-    except Exception as exc:
-        return {"status": "scheduled", "stub": True, "message": str(p.get("message", ""))}
+                    db=db,
+                    user_id=p.get("user_id", ""),
+                )
+                if result.get("status") == "success":
+                    return {"status": "scheduled", "job_id": result["data"].get("job_id", "")}
+                return {"status": "error", "error": result.get("error", "dispatch failed")}
+            finally:
+                db.close()
+        except Exception:
+            pass
+    return {"status": "scheduled", "stub": True, "message": str(p.get("message", ""))}
 
 
 def tool_remember_turn(payload: Any) -> dict:
@@ -188,33 +245,90 @@ def tool_remember_turn(payload: Any) -> dict:
     Infinite Weave: sys.v1.memory.write — durable, cross-session, semantically indexed.
     """
     p = payload if isinstance(payload, dict) else {"content": str(payload)}
-    try:
-        from AINDY.db.database import SessionLocal
-        from AINDY.kernel.syscall_dispatcher import dispatch_syscall
-        db = SessionLocal()
+    if _live_stack:
         try:
-            result = dispatch_syscall(
-                "sys.v1.memory.write",
-                {
-                    "content": p.get("content", ""),
-                    "tags": p.get("tags", ["conversation", "openclaw"]),
-                    "node_type": p.get("node_type", "conversation"),
-                    "significance": 0.6,
-                    "namespace": "openclaw",
-                },
-                db=db,
-                user_id=p.get("user_id", ""),
-            )
-            return {"status": "ok", "node_id": (result.get("data") or {}).get("node_id", "")}
-        finally:
-            db.close()
-    except Exception:
-        return {"status": "ok", "stub": True}
+            from AINDY.db.database import SessionLocal
+            from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+            db = SessionLocal()
+            try:
+                result = dispatch_syscall(
+                    "sys.v1.memory.write",
+                    {
+                        "content": p.get("content", ""),
+                        "tags": p.get("tags", ["conversation", "openclaw"]),
+                        "node_type": p.get("node_type", "insight"),
+                        "significance": 0.6,
+                        "namespace": "openclaw",
+                    },
+                    db=db,
+                    user_id=p.get("user_id", ""),
+                )
+                return {"status": "ok", "node_id": (result.get("data") or {}).get("node_id", "")}
+            finally:
+                db.close()
+        except Exception:
+            pass
+    return {"status": "ok", "stub": True}
 
 
 # ---------------------------------------------------------------------------
 # 3. Run the agent loop
 # ---------------------------------------------------------------------------
+
+def _is_valid_uuid(value: str) -> bool:
+    import uuid
+    try:
+        uuid.UUID(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _coerce_user_uuid(user_id: str) -> str:
+    """Return user_id unchanged if it's a valid UUID, else derive a stable UUID v5 from it."""
+    import uuid
+    try:
+        uuid.UUID(user_id)
+        return user_id
+    except ValueError:
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id))
+
+
+_DEMO_EMAIL = "openclaw-demo@aindy.local"
+_DEMO_PASSWORD = "openclaw-demo-password-1"
+
+
+def _ensure_live_user() -> str | None:
+    """Register or look up the demo user; return their UUID string, or None on failure."""
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.models.user import User
+        from AINDY.services.auth_service import hash_password
+
+        db = SessionLocal()
+        try:
+            existing = db.query(User).filter(User.email == _DEMO_EMAIL).first()
+            if existing:
+                return str(existing.id)
+            import uuid as _uuid
+            user = User(
+                id=_uuid.uuid4(),
+                email=_DEMO_EMAIL,
+                hashed_password=hash_password(_DEMO_PASSWORD),
+                is_active=True,
+                is_admin=False,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            print(f"[bootstrap] demo user created: {user.id}")
+            return str(user.id)
+        finally:
+            db.close()
+    except Exception as exc:
+        print(f"[bootstrap] could not ensure live user: {exc}")
+        return None
+
 
 def run_openclaw_agent(
     message: str,
@@ -239,6 +353,12 @@ def run_openclaw_agent(
     """
     from nodus.runtime.embedding import NodusRuntime
 
+    if _probe_db() and not _is_valid_uuid(user_id):
+        live_uid = _ensure_live_user()
+        if live_uid:
+            user_id = live_uid
+    else:
+        user_id = _coerce_user_uuid(user_id)
     session_id = session_id or f"openclaw-{user_id}"
     workspace_dir = workspace_dir or os.getcwd()
 
@@ -282,17 +402,30 @@ if __name__ == "__main__":
     import sys
 
     msg = " ".join(sys.argv[1:]).strip() or "Hello! Who are you?"
-    print(f"[openclaw] message: {msg!r}\n")
 
-    result = run_openclaw_agent(msg, bootstrap=True)
+    # Respect AINDY_OPENCLAW_WORKSPACE env var; fall back to the directory
+    # containing this script so the bundled SOUL.md / IDENTITY.md / AGENTS.md
+    # are found automatically when running standalone.
+    workspace = os.environ.get(
+        "AINDY_OPENCLAW_WORKSPACE",
+        str(pathlib.Path(__file__).parent),
+    )
+
+    print(f"[openclaw] workspace : {workspace}")
+    print(f"[openclaw] message   : {msg!r}\n")
+
+    result = run_openclaw_agent(msg, bootstrap=True, workspace_dir=workspace)
 
     if result.get("ok"):
-        print("[openclaw] agent stdout:")
+        print("\n[openclaw] reply:")
         print(result.get("stdout", "").strip())
     else:
-        print("[openclaw] agent error:")
+        print("\n[openclaw] error:")
         print(json.dumps(result.get("error") or result, indent=2))
 
-    state = (result.get("extras") or {}).get("globals", {})
-    print(f"\n[openclaw] persona_loaded={state.get('persona_loaded', '?')}  "
-          f"history_turns={state.get('history_turns', '?')}")
+    state = result.get("agent_state") or {}
+    print(
+        f"\n[openclaw] persona_loaded={state.get('persona_loaded', '?')}  "
+        f"history_turns={state.get('history_turns', '?')}  "
+        f"turn_persisted={state.get('turn_persisted', '?')}"
+    )

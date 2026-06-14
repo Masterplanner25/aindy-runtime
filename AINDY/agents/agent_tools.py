@@ -9,13 +9,6 @@ from AINDY.agents.tool_registry import (
     suggest_tools,
 )
 
-try:
-    from AINDY.platform_layer.registry import load_plugins
-
-    load_plugins()
-except Exception:
-    pass
-
 __all__ = [
     "TOOL_REGISTRY",
     "execute_tool",

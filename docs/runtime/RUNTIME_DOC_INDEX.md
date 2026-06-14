@@ -126,6 +126,8 @@ These docs explain how the current runtime docset is being tightened.
 
 Docs for developers integrating with or scripting against the runtime.
 
+- `KERNEL_CAPABILITY_AUDIT.md` — what the kernel enables: syscall map, confirmed capabilities, gaps, boundary risks, strategic interpretation
+- `INFINITY_LOOP_AUDIT.md` — Core Test verdict: which parts of Intent→Plan→Execute→Observe→Memory→Recall→Score→Improve close today, and the five gaps that remain
 - `NODUS_DEVELOPER_GUIDE.md` — writing Nodus scripts in A.I.N.D.Y.: injected globals, built-ins, WAIT/RESUME, error semantics
 - `SYSCALL_REFERENCE.md` — all registered syscalls with payloads and return shapes
 - `SYSCALL_SYSTEM.md` — dispatcher pipeline, ABI versioning, registration guide
@@ -143,6 +145,7 @@ These remain important, but should be read through the governing docs above.
 - `EXTENSION_TRUST_MODEL.md`
 - `SECURITY_POLICY.md`
 - `REPO_COMPATIBILITY_POLICY.md`
+- `USER_WALKTHROUGH_LOG.md` — live log of real-user onboard issues and gaps found during first pip-install walkthrough
 - `DEGRADED_RUNTIME_MODES.md`
 - `AGENT_RUNTIME.md`
 - `CI_OWNERSHIP.md`

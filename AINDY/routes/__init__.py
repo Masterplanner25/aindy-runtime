@@ -5,9 +5,9 @@ AINDY/routes owns root and platform routers. App-layer /apps/* surfaces
 are registered by plugin bootstraps (aindy-apps-monolith) via register_router().
 
 Extracted to plugin layer (no longer runtime-owned):
-  - agent_router       → apps.agent.routes.agent_router
-  - memory_metrics_router → apps.memory.routes.memory_metrics_router
-  - memory_trace_router   → apps.memory.routes.memory_trace_router
+  - agent_router       → plugin-layer agent module
+  - memory_metrics_router → plugin-layer memory module
+  - memory_trace_router   → plugin-layer memory module
 """
 import os
 
