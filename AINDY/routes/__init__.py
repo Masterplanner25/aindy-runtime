@@ -12,6 +12,7 @@ Extracted to plugin layer (no longer runtime-owned):
 import os
 
 from AINDY.routes.auth_router import router as auth_router
+from AINDY.routes.automation_router import router as automation_router
 from AINDY.routes.coordination_router import router as coordination_router
 from AINDY.routes.db_verify_router import router as db_verify_router
 from AINDY.routes.flow_router import router as flow_router
@@ -52,4 +53,4 @@ if os.getenv("AINDY_ENABLE_LEGACY_SURFACE", "false").lower() in {"1", "true", "y
     LEGACY_ROOT_ROUTERS.append(flow_router)
     LEGACY_ROOT_ROUTERS.append(observability_router)
 
-ROUTERS = ROOT_ROUTERS + [platform_router] + PLATFORM_ROUTERS + APP_ROUTERS + LEGACY_ROOT_ROUTERS
+ROUTERS = ROOT_ROUTERS + [platform_router] + PLATFORM_ROUTERS + APP_ROUTERS + LEGACY_ROOT_ROUTERS + [automation_router]

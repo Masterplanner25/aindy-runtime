@@ -510,7 +510,7 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **PROMETHEUS-PIN-1** — CLOSED 2026-06-05: pinned to prom/prometheus:v3.4.1 in docker-compose.yml.
 - **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
 - **OPER-DEFER-001** — CLOSED 2026-06-15: `GET /platform/flows/strategies` served; Strategies tab live.
-- **OPER-DEFER-002** — `/automation/logs` group in monolith, UI tab hidden. **Open.**
+- **OPER-DEFER-002** — CLOSED 2026-06-15: `GET|POST /automation/logs` served in `automation_router.py`; Automation tab live.
 - **ROUTE-EXTRACT-\*** — Route extraction to plugin layer. Remaining candidates: `memory_router` (split required), `coordination_router` (AgentRegistry ownership gap).
 - **DEPLOY-TARGET-1** — Cloud deployment manifests (Railway/Render/Fly.io) not yet authored. **Open**, trigger: first cloud deployment.
 - **DEPLOY-TARGET-2** — Multi-tenant SaaS readiness gate. **Open**, trigger: first multi-tenant operator.

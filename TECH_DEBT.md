@@ -1271,35 +1271,18 @@ the "Strategies" tab in `FlowEngineConsole` is now live.
 
 ## OPER-DEFER-002 — `/automation/logs` group not served by runtime
 
-**Status:** UI gate wired (2026-06-07) — backend routes still deferred (live in monolith).
+**Status:** CLOSED (2026-06-15)
 
-**Discovered:** 2026-06-03 during `_routes.js` audit (ROUTES reconcile pass against live OpenAPI).
+Three routes implemented in `AINDY/routes/automation_router.py` and registered directly in
+`AINDY/routing.py` (bypassing `require_execution_context`, auth via `require_admin_principal`):
+- `GET /automation/logs` — list with status/source/limit filters; response `{ logs, count }`
+- `GET /automation/logs/{log_id}` — detail; 404 on unknown id
+- `POST /automation/logs/{log_id}/replay` — calls `replay_task()`; 404/409 on failure
 
-**Context:** Three constants are deferred behind `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS`
-(default `false`):
-
-| Constant | Path |
-|---|---|
-| `AUTOMATION_LOGS` | `GET /automation/logs` |
-| `AUTOMATION_LOG` | `GET /automation/logs/{logId}` |
-| `AUTOMATION_REPLAY` | `POST /automation/logs/{logId}/replay` |
-
-None resolve in the runtime OpenAPI. These routes currently live in the aindy-apps monolith.
-All three constants remain syntactically live in `ROUTES.OPERATOR`.
-
-**UI gate (2026-06-07):** The "Automation" tab in `FlowEngineConsole.jsx` is now filtered from
-the `TABS` array when `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` is `false`. The tab no longer
-renders, no API call fires, and no misleading "No automation logs yet." empty state is shown.
-The tab reappears automatically when the flag is flipped.
-
-**What unblocks it:** Either:
-1. The automation logging subsystem is migrated to aindy-runtime (adds the three paths to the
-   runtime OpenAPI), or
-2. A monolith-proxy pattern is established that routes `/automation/logs` from the runtime
-   SPA to the monolith host.
-
-When the backend paths land, flip `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` to `true` in
-`platform/src/api/_routes.js`.
+`JobLog` model (`AINDY/db/models/job_log.py`) was already present in the runtime.
+`FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` flipped to `true` in `platform/src/api/_routes.js` —
+the "Automation" tab in `FlowEngineConsole` is now live.
+10 unit tests in `tests/unit/test_automation_logs_endpoint.py`.
 
 ---
 
