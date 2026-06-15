@@ -206,9 +206,20 @@ const RunOutcomeFeedback = ({ runId }) => {
 
 };
 
-const PlanPreview = ({ run, steps, loading, runtimeOnly = false }) => {
+const PlanPreview = ({ run, steps, loading, runtimeOnly = false, onApprove, onReject }) => {
   if (!run) return null;
   const planSteps = run.plan?.steps || [];
+  const isPending = run.status === "pending_approval";
+  const [acting, setActing] = useState(false);
+
+  const handleApprove = async () => {
+    setActing(true);
+    try { await onApprove(run.run_id); } finally { setActing(false); }
+  };
+  const handleReject = async () => {
+    setActing(true);
+    try { await onReject(run.run_id); } finally { setActing(false); }
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -225,6 +236,27 @@ const PlanPreview = ({ run, steps, loading, runtimeOnly = false }) => {
       <div className="bg-zinc-900/50 border border-zinc-800/60 rounded-lg p-3 mb-4">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Executive Summary</p>
           <p className="text-sm text-zinc-200">{run.executive_summary}</p>
+        </div>
+      }
+
+      {isPending &&
+      <div className="flex items-center gap-3 mb-5 p-4 rounded-xl border border-yellow-500/20 bg-yellow-500/5">
+          <div className="flex-1">
+            <p className="text-xs font-semibold text-yellow-300 mb-0.5">Awaiting your approval</p>
+            <p className="text-[10px] text-zinc-500">Review the plan above, then approve or reject.</p>
+          </div>
+          <button
+          onClick={handleApprove}
+          disabled={acting}
+          className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider rounded-lg bg-[#00ffaa] text-black hover:bg-[#00ffaa]/80 transition-colors disabled:opacity-50">
+            Approve
+          </button>
+          <button
+          onClick={handleReject}
+          disabled={acting}
+          className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider rounded-lg border border-zinc-700 text-zinc-400 hover:bg-zinc-800 transition-colors disabled:opacity-50">
+            Reject
+          </button>
         </div>
       }
 
@@ -614,6 +646,9 @@ export default function AgentConsole() {
       setGoal("");
       await loadRuns();
       setSelectedRun(run);
+      setSelectedSteps([]);
+      setRunEvents([]);
+      setActiveDetailTab("steps");
     } catch (e) {
       setError(e.message || "Failed to create agent run");
     } finally {
@@ -625,12 +660,10 @@ export default function AgentConsole() {
     try {
       const updated = await approveAgentRun(runId);
       await loadRuns();
-      if (selectedRun?.run_id === runId) {
-        setSelectedRun(updated);
-        if (updated.status === "completed" || updated.status === "failed") {
-          const steps = await getAgentRunSteps(runId);
-          setSelectedSteps(steps || []);
-        }
+      setSelectedRun(updated);
+      if (updated.status === "completed" || updated.status === "failed") {
+        const steps = await getAgentRunSteps(runId);
+        setSelectedSteps(steps || []);
       }
     } catch (e) {
       setError(e.message || "Failed to approve run");
@@ -837,7 +870,9 @@ export default function AgentConsole() {
               run={selectedRun}
               steps={selectedSteps}
               loading={stepsLoading}
-              runtimeOnly={runtimeOnly} />
+              runtimeOnly={runtimeOnly}
+              onApprove={handleApprove}
+              onReject={handleReject} />
                 </InlineErrorBoundary>
 
             }
