@@ -193,9 +193,14 @@ Patching `AINDY.platform_layer.scheduler_service.SessionLocal` will fail with `A
 `approve_run()` (`AINDY/agents/agent_runtime/approvals.py`) guards the
 `pending_approval → approved` transition with an atomic SQLAlchemy CAS.
 
-**CAS fires only from `pending_approval`.** A process crash mid-execution leaves the run
-stranded in `approved` with no retry path — the watchdog/reaper in AGENT-APPROVE-001b must
-recover orphaned `approved` states. Do not add a second CAS guard here; fix belongs in 001b.
+**CAS fires only from `pending_approval`.** `approve_run()` returns immediately after the CAS;
+`execute_run` is dispatched to a daemon background thread. A process crash between approval and
+the thread's first `db.commit()` (which sets status `executing`) leaves the run stranded in
+`approved`. The orphan watchdog (`_recover_orphaned_approved_runs` in `scheduler_service.py`,
+runs every 5 minutes) re-dispatches `execute_run` for any `approved` row older than
+`ORPHANED_APPROVED_THRESHOLD_MINUTES` (10 min). **AGENT-APPROVE-001b: CLOSED 2026-06-04.**
+Do not add a second CAS guard in `execute_run` — the status check on entry is the correct
+guard; the 10-minute threshold ensures the original thread is dead before re-dispatch fires.
 
 **The approve path bypasses `SyscallDispatcher` entirely.** No EffectRecord idempotency
 gate is available for approve. Do not assume syscall-level idempotency applies here.
@@ -500,11 +505,11 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **C2, C3** — cross-platform sandbox tiers. All phases closed 2026-06-06.
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
-- **PYPI-PUBLISH-1** — PyPI publish transition. **Open.**
+- **PYPI-PUBLISH-1** — CLOSED 2026-06-14: published at v1.3.1; Dockerfile updated to `pip install aindy-runtime==1.3.1`. Bump version string in Dockerfile builder stage on each release.
 - **NODUS-UPGRADE-1** — CLOSED 2026-06-11: bumped to nodus-lang==4.0.3. See NODUS_DEVELOPER_GUIDE.md §8.
-- **PROMETHEUS-PIN-1** — Prometheus image version pinning. **Open.**
+- **PROMETHEUS-PIN-1** — CLOSED 2026-06-05: pinned to prom/prometheus:v3.4.1 in docker-compose.yml.
 - **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
-- **OPER-DEFER-001** — `/platform/flows/strategies` not yet served, UI tab hidden. **Open.**
+- **OPER-DEFER-001** — CLOSED 2026-06-15: `GET /platform/flows/strategies` served; Strategies tab live.
 - **OPER-DEFER-002** — `/automation/logs` group in monolith, UI tab hidden. **Open.**
 - **ROUTE-EXTRACT-\*** — Route extraction to plugin layer. Remaining candidates: `memory_router` (split required), `coordination_router` (AgentRegistry ownership gap).
 - **DEPLOY-TARGET-1** — Cloud deployment manifests (Railway/Render/Fly.io) not yet authored. **Open**, trigger: first cloud deployment.

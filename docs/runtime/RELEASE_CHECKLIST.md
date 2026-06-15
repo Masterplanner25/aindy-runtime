@@ -1,6 +1,6 @@
 ---
 title: "Runtime Release Checklist"
-last_verified: "2026-06-05"
+last_verified: "2026-06-14"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -249,3 +249,4 @@ deployment that introduces TLS termination.
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
 - [ ] TECH_DEBT.md updated for any newly closed or opened entries
 - [ ] `sandbox_escape_test_posture()["posture"] == "all_pass"` for this release platform
+- [ ] Dockerfile builder stage version pin bumped to match new release (`pip install "aindy-runtime==X.Y.Z"` in Stage 1)
