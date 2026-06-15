@@ -905,6 +905,41 @@ def _bootstrap_admin_email() -> None:
         logger.warning("[bootstrap] Admin email bootstrap failed (non-fatal): %s", exc)
 
 
+def _bootstrap_system_agents() -> None:
+    """Seed built-in system agent definitions (idempotent upsert by memory_namespace)."""
+    import uuid as _uuid
+    _SYSTEM_AGENTS = [
+        {"name": "ARM",      "namespace": "arm",      "agent_type": "system", "description": "Adaptive Reasoning Module — core reasoning and planning agent."},
+        {"name": "Genesis",  "namespace": "genesis",  "agent_type": "system", "description": "Genesis — world-building and initialization agent."},
+        {"name": "Nodus",    "namespace": "nodus",    "agent_type": "system", "description": "Nodus — script execution and flow orchestration agent."},
+        {"name": "SYLVA",    "namespace": "sylva",    "agent_type": "system", "description": "SYLVA — synthesis and language variant agent."},
+        {"name": "Platform", "namespace": "platform", "agent_type": "system", "description": "Platform agent — runtime platform operations."},
+        {"name": "Runtime",  "namespace": "runtime",  "agent_type": "system", "description": "Runtime agent — core execution environment."},
+        {"name": "Memory",   "namespace": "memory",   "agent_type": "system", "description": "Memory agent — memory ingestion and retrieval."},
+    ]
+    try:
+        from AINDY.db.models.agent import Agent
+        db = SessionLocal()
+        try:
+            for spec in _SYSTEM_AGENTS:
+                row = db.query(Agent).filter(Agent.memory_namespace == spec["namespace"]).first()
+                if row is None:
+                    db.add(Agent(
+                        id=str(_uuid.uuid4()),
+                        name=spec["name"],
+                        memory_namespace=spec["namespace"],
+                        agent_type=spec["agent_type"],
+                        description=spec["description"],
+                        is_active=True,
+                    ))
+                    logger.info("[bootstrap] Seeded system agent %r (namespace=%r).", spec["name"], spec["namespace"])
+            db.commit()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("[bootstrap] System agent seed failed (non-fatal): %s", exc)
+
+
 def _bootstrap_dev_api_key() -> None:
     if settings.ENV == "dev":
         _ensure_dev_api_key()
@@ -1453,6 +1488,8 @@ async def lifespan(app: FastAPI):
     _enforce_schema_guard(SessionLocal)
     # Phase 5.5: promote AINDY_BOOTSTRAP_ADMIN_EMAIL user to admin (grant-only, idempotent).
     _bootstrap_admin_email()
+    # Phase 5.6: seed system agent definitions (idempotent upsert by namespace).
+    _bootstrap_system_agents()
     # Phase 6: bootstrap development API key state.
     _bootstrap_dev_api_key()
     # Phase 7: start background services and determine background role.

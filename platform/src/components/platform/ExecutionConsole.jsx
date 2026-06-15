@@ -167,8 +167,8 @@ export default function ExecutionConsole() {
                   </div>
                 ) : (
                   <EmptyState
-                    title="No apps registered"
-                    description="Apps appear here after calling publish_bootstrap_registration during bootstrap." />
+                    title="No apps connected"
+                    description="Apps appear here once registered. In your app's bootstrap module, call publish_bootstrap_registration('your-app-name') — see docs/runtime/APP_AGENT_REGISTRATION.md." />
                 )}
               </SurfacePanel>
             </div>
