@@ -108,6 +108,8 @@ def test_helper_indirection_route_is_allowed_by_runtime_wrapper_even_if_ast_audi
 
 
 def test_runtime_wrapper_blocks_successful_bypass_route():
+    # Route has execution_contract_required (via require_execution_context dep) but
+    # the handler never calls execute_with_pipeline — the guard must fire.
     router = APIRouter()
 
     @router.get("/bypass")
@@ -115,12 +117,33 @@ def test_runtime_wrapper_blocks_successful_bypass_route():
         return {"ok": True}
 
     app = FastAPI()
-    app.include_router(router)
+    app.include_router(router, dependencies=[Depends(require_execution_context)])
     enforce_registered_route_execution(app)
 
     with TestClient(app, raise_server_exceptions=True) as client:
         with pytest.raises(RouteExecutionViolation, match="/bypass"):
             client.get("/bypass")
+
+
+def test_runtime_wrapper_allows_route_without_execution_contract():
+    # Routes without require_execution_context (e.g. admin_router) must pass through
+    # without triggering RouteExecutionViolation — the guard only fires when the contract
+    # was explicitly required but the pipeline was skipped.
+    router = APIRouter()
+
+    @router.get("/admin-style")
+    def admin_style_route(request: Request):
+        return {"ok": True}
+
+    app = FastAPI()
+    app.include_router(router)
+    enforce_registered_route_execution(app)
+
+    with TestClient(app, raise_server_exceptions=True) as client:
+        response = client.get("/admin-style")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
 
 
 def test_non_exempt_route_without_request_fails_closed_at_registration():
