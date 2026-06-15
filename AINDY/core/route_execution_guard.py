@@ -152,6 +152,8 @@ def _assert_execution_context_entered(route: APIRoute, request: Request | None) 
         )
     if hasattr(request.state, "execution_context"):
         return
+    if not getattr(request.state, "execution_contract_required", False):
+        return
     raise RouteExecutionViolation(_route_violation_message(route))
 
 

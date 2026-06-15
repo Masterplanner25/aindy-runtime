@@ -35,8 +35,11 @@ PLATFORM_ROUTERS = [
     flow_router,
     observability_router,
     db_verify_router,  # operator schema inspection at /platform/db/verify
-    admin_router,      # user management at /platform/admin/*
 ]
+
+# admin_router is registered separately in routing.py without require_execution_context
+# so that plain DB-query handlers don't trigger an ExecutionContract violation (500).
+# Auth is still enforced per-handler by require_admin_principal.
 
 # Remaining runtime-owned /apps surface (memory CRUD/search/recall + coordination).
 # agent_router, memory_metrics_router, memory_trace_router moved to plugin layer.

@@ -371,6 +371,131 @@ def get_dead_letter_run(
     )
 
 
+# ------------------------------
+# SYSTEM STATE (connected apps + execution health)
+# ------------------------------
+@router.get("/system")
+@limiter.limit("60/minute")
+def get_system_state(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = str(current_user["sub"])
+
+    def handler(ctx):
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import func
+
+        from AINDY.db.models.agent_run import AgentRun
+        from AINDY.db.models.execution_unit import ExecutionUnit
+        from AINDY.db.models.flow_run import FlowRun
+        from AINDY.platform_layer.registry import (
+            get_all_health_checks,
+            get_bootstrap_registrations,
+            get_core_domains,
+            get_degraded_domains,
+            get_event_types,
+            get_loaded_extensions,
+            get_registered_apps,
+            get_scheduled_jobs,
+            iter_agent_tools,
+            iter_syscalls,
+        )
+
+        registered_apps = get_registered_apps()
+        registrations = get_bootstrap_registrations()
+        degraded = set(get_degraded_domains())
+        health_checks = get_all_health_checks()
+        core_domains = get_core_domains()
+
+        connected_apps = [
+            {
+                "name": app_name,
+                "owner_class": registrations.get(app_name, {}).get("owner_class"),
+                "trust_class": registrations.get(app_name, {}).get("trust_class"),
+                "execution_model": registrations.get(app_name, {}).get("execution_model"),
+                "dependencies": registrations.get(app_name, {}).get("dependencies", []),
+                "module_name": registrations.get(app_name, {}).get("module_name"),
+                "has_health_check": app_name in health_checks,
+            }
+            for app_name in registered_apps
+        ]
+
+        domain_health = [
+            {"domain": d, "status": "degraded" if d in degraded else "healthy"}
+            for d in sorted(core_domains)
+        ]
+
+        event_types = sorted(get_event_types())
+
+        flow_rows = (
+            db.query(FlowRun.status, func.count(FlowRun.id).label("cnt"))
+            .group_by(FlowRun.status)
+            .all()
+        )
+        flow_by_status = {r.status: r.cnt for r in flow_rows}
+
+        agent_rows = (
+            db.query(AgentRun.status, func.count(AgentRun.id).label("cnt"))
+            .group_by(AgentRun.status)
+            .all()
+        )
+        agent_by_status = {r.status: r.cnt for r in agent_rows}
+
+        window_start = datetime.now(timezone.utc) - timedelta(hours=24)
+        eu_rows = (
+            db.query(
+                ExecutionUnit.status,
+                func.count(ExecutionUnit.id).label("cnt"),
+                func.avg(ExecutionUnit.wall_time_ms).label("avg_ms"),
+            )
+            .filter(ExecutionUnit.created_at >= window_start)
+            .group_by(ExecutionUnit.status)
+            .all()
+        )
+        eu_total = sum(r.cnt for r in eu_rows)
+        eu_failed = sum(r.cnt for r in eu_rows if r.status == "failed")
+        eu_completed = sum(r.cnt for r in eu_rows if r.status == "completed")
+        avg_ms_vals = [r.avg_ms for r in eu_rows if r.avg_ms is not None]
+        eu_avg_ms = round(sum(avg_ms_vals) / len(avg_ms_vals)) if avg_ms_vals else 0
+
+        return {
+            "connected_apps": connected_apps,
+            "domain_health": domain_health,
+            "registry": {
+                "syscall_count": sum(1 for _ in iter_syscalls()),
+                "tool_count": sum(1 for _ in iter_agent_tools()),
+                "extension_count": len(get_loaded_extensions()),
+                "scheduled_job_count": len(get_scheduled_jobs()),
+                "event_type_count": len(event_types),
+                "event_types": event_types[:30],
+            },
+            "execution_summary": {
+                "flow_runs": {
+                    "total": sum(flow_by_status.values()),
+                    "by_status": flow_by_status,
+                },
+                "agent_runs": {
+                    "total": sum(agent_by_status.values()),
+                    "by_status": agent_by_status,
+                },
+                "execution_units_24h": {
+                    "total": eu_total,
+                    "completed": eu_completed,
+                    "failed": eu_failed,
+                    "avg_wall_time_ms": eu_avg_ms,
+                    "error_rate_pct": round(eu_failed / eu_total * 100, 1) if eu_total > 0 else 0.0,
+                },
+            },
+        }
+
+    return _execute_observability(
+        request, "observability_system_state", handler, db=db, user_id=user_id
+    )
+
+
 @router.post("/queue/dlq/drain")
 @limiter.limit("30/minute")
 def drain_queue_dlq(

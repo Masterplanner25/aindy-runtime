@@ -587,8 +587,18 @@ export default function AgentRegistry() {
           <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8, color: "#71717a" }}>
             No agents registered
           </div>
-          <div style={{ fontSize: 13 }}>
-            Agents register themselves when first used. Try running ARM or Genesis.
+          <div style={{ fontSize: 13, maxWidth: 420, margin: "0 auto", lineHeight: 1.6 }}>
+            Register a named agent via{" "}
+            <code style={{ background: "#18181b", borderRadius: 4, padding: "1px 6px", color: "#00ffaa", fontSize: 12 }}>
+              POST /platform/admin/agents/register
+            </code>
+            {" "}with a name, memory_namespace, and agent_type.
+            System agents (ARM, Genesis, Nodus, SYLVA) are seeded automatically on startup.
+            See{" "}
+            <code style={{ background: "#18181b", borderRadius: 4, padding: "1px 6px", color: "#71717a", fontSize: 12 }}>
+              docs/runtime/APP_AGENT_REGISTRATION.md
+            </code>
+            {" "}for the full registration model.
           </div>
         </div>
       }

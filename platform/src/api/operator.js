@@ -67,3 +67,7 @@ export function getObservabilityDashboard(windowHours = 24) {
   });
   return authRequest(`${ROUTES.OPERATOR.OBSERVABILITY_DASHBOARD}?${params.toString()}`, { method: "GET" }).then(unwrapEnvelope);
 }
+
+export function getSystemState() {
+  return authRequest("/platform/observability/system", { method: "GET" }).then(unwrapEnvelope);
+}
