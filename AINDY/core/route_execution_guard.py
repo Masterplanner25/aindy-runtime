@@ -7,7 +7,7 @@ import inspect
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator, Iterable
 
 from fastapi import Request
 from fastapi.routing import APIRoute
@@ -206,10 +206,41 @@ def _wrap_route_call(route: APIRoute, endpoint):
     return wrapped
 
 
+def _iter_api_routes(
+    routes: Iterable,
+) -> Generator[tuple[APIRoute, Any], None, None]:
+    """Yield (APIRoute, top_included_router) pairs from a route list.
+
+    Handles both FastAPI ≤ 0.135 (routes eagerly flattened into app.routes as
+    APIRoute objects) and FastAPI ≥ 0.137 (include_router stores a lazy
+    _IncludedRouter wrapper instead).  top_included_router is the first-level
+    _IncludedRouter found in app.routes; its _effective_candidates cache must be
+    invalidated after wrapping so the effective route context is rebuilt from
+    the new endpoint.
+    """
+    try:
+        from fastapi.routing import _IncludedRouter
+    except ImportError:
+        _IncludedRouter = None
+
+    def _walk(route_list, top_ir):
+        for route in route_list:
+            if isinstance(route, APIRoute):
+                yield route, top_ir
+            elif _IncludedRouter is not None and isinstance(route, _IncludedRouter):
+                yield from _walk(route.original_router.routes, top_ir or route)
+
+    yield from _walk(routes, None)
+
+
 def enforce_registered_route_execution(app) -> None:
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    # Track top-level _IncludedRouter objects (FastAPI ≥ 0.137) whose cached
+    # effective route contexts must be invalidated after wrapping, so the next
+    # request rebuilds them from the wrapped endpoint.  _IncludedRouter is not
+    # hashable, so we key by id() to de-duplicate.
+    included_routers_to_invalidate: dict[int, Any] = {}
+
+    for route, top_ir in _iter_api_routes(app.routes):
         if is_execution_exempt_path(route.path):
             continue
         if getattr(route, _ROUTE_WRAPPED_ATTR, False):
@@ -224,15 +255,19 @@ def enforce_registered_route_execution(app) -> None:
         setattr(wrapped_endpoint, _ROUTE_ENDPOINT_ATTR, original_endpoint)
         route.endpoint = wrapped_endpoint
         route.dependant.call = wrapped_endpoint
+        if top_ir is not None:
+            included_routers_to_invalidate[id(top_ir)] = top_ir
         setattr(route, _ROUTE_WRAPPED_ATTR, True)
+
+    for ir in included_routers_to_invalidate.values():
+        ir._effective_candidates = []
+        ir._effective_candidates_version = None
 
 
 def validate_registered_route_execution(app) -> None:
     violations: list[str] = []
 
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route, _ in _iter_api_routes(app.routes):
         if is_execution_exempt_path(route.path):
             continue
         if _route_uses_execution_pipeline(route):
