@@ -17,6 +17,7 @@ from AINDY.core.execution_guard import (
 from AINDY.core.execution_helper import execute_with_pipeline
 from AINDY.core.route_execution_guard import (
     RouteExecutionViolation,
+    _iter_api_routes,
     enforce_registered_route_execution,
     validate_registered_route_execution,
 )
@@ -57,7 +58,14 @@ def test_registered_runtime_routes_are_wrapped_for_execution_enforcement():
 
     register_routes(app)
 
-    managed_routes = [route for route in app.routes if getattr(route, "path", None) == "/api/version"]
+    # FastAPI ≥ 0.137 stores included-router routes inside _IncludedRouter wrappers
+    # rather than flattening them into app.routes. Use _iter_api_routes so the check
+    # works across both versions.
+    managed_routes = [
+        route
+        for route, _ in _iter_api_routes(app.routes)
+        if route.path == "/api/version"
+    ]
     assert managed_routes
     assert getattr(managed_routes[0], "_aindy_execution_wrapped", False) is True
 
