@@ -159,15 +159,30 @@ def _patch_minimal_lifespan(monkeypatch, main):
     monkeypatch.setattr(main, "emit_event", lambda *args, **kwargs: (_ for _ in ()).throw(_StopStartup()))
 
 
+def _collect_app_routes(app) -> set:
+    """Collect all served paths from a FastAPI app, handling FastAPI 0.137+ _IncludedRouter."""
+    try:
+        from fastapi.routing import _IncludedRouter
+    except ImportError:
+        _IncludedRouter = None
+
+    def _walk(route_list):
+        for route in route_list:
+            if isinstance(route, APIRoute):
+                yield route.path
+            if _IncludedRouter is not None and isinstance(route, _IncludedRouter):
+                prefix = getattr(route.include_context, "prefix", "") or ""
+                for sub_path in _walk(route.original_router.routes):
+                    yield prefix + sub_path
+
+    return set(_walk(app.routes))
+
+
 def test_create_app_succeeds_in_platform_only_mode(platform_only_runtime):
     _startup, main = _reload_platform_only_modules()
 
     app = main.create_app()
-    routes = {
-        route.path
-        for route in app.routes
-        if isinstance(route, APIRoute)
-    }
+    routes = _collect_app_routes(app)
     contract = runtime_only_deployment_contract()
 
     assert registry.get_active_plugin_profile() == "platform-only"

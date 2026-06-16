@@ -205,6 +205,33 @@ _REQUIRED_PLATFORM_PREFIXES = [
 ]
 
 
+def _collect_router_paths(router) -> set:
+    """Collect all served paths from a router, recursing into sub-routers.
+
+    Compatible with both FastAPI ≤ 0.135 (routes are eagerly flattened into
+    the parent's route list with full prefixes) and FastAPI ≥ 0.137 (sub-routers
+    are wrapped in lazy _IncludedRouter objects; the effective path is
+    include_context.prefix + original_route.path).
+    """
+    from fastapi.routing import APIRoute
+
+    try:
+        from fastapi.routing import _IncludedRouter
+    except ImportError:
+        _IncludedRouter = None
+
+    def _walk(route_list):
+        for route in route_list:
+            if isinstance(route, APIRoute):
+                yield route.path
+            if _IncludedRouter is not None and isinstance(route, _IncludedRouter):
+                prefix = getattr(route.include_context, "prefix", "") or ""
+                for sub_path in _walk(route.original_router.routes):
+                    yield prefix + sub_path
+
+    return set(_walk(router.routes))
+
+
 def test_served_platform_routes_match_expected_prefixes_ui():
     """All operator prefixes referenced in UI_CONTRACT.md must be served.
 
@@ -212,7 +239,8 @@ def test_served_platform_routes_match_expected_prefixes_ui():
     /db — they are registered with prefix="/platform" in routing.py, giving
     effective paths /platform/flows, /platform/observability, /platform/db.
 
-    The /platform/syscalls route lives directly on platform_router (prefix=/platform).
+    The /platform/syscalls route lives on platform_router (prefix=/platform),
+    included via platform_ops_router.
 
     The platform SPA operator panel depends on all of these being served.
     """
@@ -225,11 +253,8 @@ def test_served_platform_routes_match_expected_prefixes_ui():
         for router in PLATFORM_ROUTERS
     }
 
-    # Routes registered directly on platform_router (prefix=/platform already baked in).
-    platform_direct_paths = {
-        getattr(route, "path", "")
-        for route in platform_router.routes
-    }
+    # All paths served by platform_router (handles nested sub-routers in 0.137+).
+    platform_direct_paths = _collect_router_paths(platform_router)
 
     def _is_served(required: str) -> bool:
         # Matched by a PLATFORM_ROUTERS child with effective prefix
@@ -238,7 +263,7 @@ def test_served_platform_routes_match_expected_prefixes_ui():
             for ep in effective_prefixes
         ):
             return True
-        # Matched by a direct route on platform_router
+        # Matched by a route on platform_router (or its included sub-routers)
         return any(p == required or p.startswith(required) for p in platform_direct_paths)
 
     missing = [p for p in _REQUIRED_PLATFORM_PREFIXES if not _is_served(p)]
