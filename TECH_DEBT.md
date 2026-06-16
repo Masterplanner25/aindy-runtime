@@ -502,20 +502,15 @@ Trigger: when cloud onboarding begins.
 
 ## COMPAT-2 — No deprecation or forward-compatibility policy for extension ABI
 
-Status: Deferred — Low Priority
+**Status:** CLOSED (2026-06-15)
 
-Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area B, finding COMPAT-2.
-
-`ABI_VERSIONS = frozenset({"v1"})` and the `EXTENSION_ABI.md` policy states
-"experimental ABI markers do not imply long-term compatibility" but defines no
-forward-compatibility window or deprecation procedure. When the runtime introduces
-ABI v2, plugin authors need a documented support window before v1 is dropped.
-
-Resolution path: define a compatibility window in `EXTENSION_ABI.md` — e.g.,
-"a stable ABI version is supported for at least two minor runtime releases after
-a newer stable version ships."
-
-Trigger: before any ABI version other than v1 is introduced.
+**Resolution:** Added "Deprecation and Forward-Compatibility Policy" section to
+`docs/runtime/EXTENSION_ABI.md`. Stable ABI versions get a minimum two-minor-release
+support window after a newer stable version ships, with the deprecated version flagged
+in `GET /api/version` under `public_contract.extensions.abi.deprecated_versions`.
+Experimental ABI versions (`v1alpha*`) explicitly carry no support window and may be
+removed in any release. Policy triggers on first stable ABI promotion or experimental
+surface promotion to stable.
 
 ---
 
@@ -797,32 +792,14 @@ the script with a reason comment.
 
 ## STRIPE-SETTINGS-CLEANUP-1 — Stripe Settings fields with no readers
 
-**Status:** Deferred — Low Priority
+**Status:** CLOSED (2026-06-15)
 
 **Discovered:** 2026-05-27 during `.env.example` drift audit.
 
-**Context:** `AINDY/config.py` declares two `Settings` fields:
-
-```python
-STRIPE_SECRET_KEY: str | None = None
-STRIPE_WEBHOOK_SECRET: str | None = None
-```
-
-A codebase-wide grep for `STRIPE_` returned zero hits outside `config.py`. No
-route, service, or worker reads these values. They were excluded from
-`AINDY/.env.example` on that basis.
-
-**Two possible states — confirm before closing:**
-1. **Vestigial:** Payments were prototyped and the code was removed but the
-   Settings fields were not. → Remove both fields from `config.py`. File
-   PAYMENTS-ARCHITECTURE-1 as a future arc if payments are still planned.
-2. **Planned but unimplemented:** Payments are on the roadmap and someone added
-   the fields in anticipation. → Fields stay; add `STRIPE_SECRET_KEY` and
-   `STRIPE_WEBHOOK_SECRET` to `AINDY/.env.example` Group 12 (Observability)
-   or a new Group 13 (Payments) once the implementation arc begins.
-
-**Resolution:** Determine which state applies. If vestigial, remove in the same
-hygiene pass as PERMISSION-SECRET-CLEANUP-1.
+**Resolution:** State 2 confirmed — fields are intentional placeholders for the
+planned Stripe integration, not vestigial. `STRIPE_SECRET_KEY` and
+`STRIPE_WEBHOOK_SECRET` added to `AINDY/.env.example` Group 18 (Payments) with
+a forward-pointer to PAYMENTS-ARCHITECTURE-1. Fields remain in `config.py`.
 
 ---
 
@@ -1716,6 +1693,8 @@ ROOT_ROUTERS = [
 - `AINDY/.env.example` already carries a `WARNING: Do NOT use in production deployments where uptime matters` comment under `EXECUTION_MODE=thread` (OPER-EXEC-001, 2026-06-06).
 - The worker service in `docker-compose.yml` already sets `EXECUTION_MODE: distributed` (OPER-EXEC-001, 2026-06-06).
 
+**Additional mitigation (2026-06-15):** `startup.py:_log_async_job_capacity_advisory()` now emits `logger.error` when `ENV=production` and `EXECUTION_MODE=thread`, firing unconditionally regardless of `AINDY_JOB_WARN_CAPACITY`. The prod escalation returns early so the normal advisory path is skipped. This surfaces the misconfiguration prominently in production logs and monitoring.
+
 **Remaining gap:** `AINDY/.env.example` still ships `EXECUTION_MODE=thread` as the literal default value — a developer who copies `.env.example` directly to `.env` and doesn't run the prod overlay still gets thread mode. Changing the default to `distributed` breaks local dev without Redis. Resolution direction: separate dev and prod `.env` templates, or a first-run wizard that detects the deployment context. Deferred until DEPLOY-TARGET-1 is addressed.
 
 ---
@@ -1876,13 +1855,11 @@ Sites updated (12): `kernel/syscall_dispatcher.py` (EffectRecord gate — 3 site
 
 ## LAYER-3 — exception_handlers.py falls back to decode_access_token for user attribution
 
-**Status:** Deferred — Partially mitigated
+**Status:** CLOSED (2026-06-15)
 
-**Problem:** `AINDY/exception_handlers.py:_extract_user_id_from_request()` calls `decode_access_token` as a fallback when `request.state.user_id` is not set (line 158). This is a cross-layer dependency: the exception handler layer doing auth work for logging purposes.
+**Problem:** `AINDY/exception_handlers.py:_extract_user_id_from_request()` called `decode_access_token` as a fallback — full signature verification + key ring walk — for logging attribution only. Cross-layer dependency: exception handler doing auth work.
 
-**Partial mitigation (2026-06-07):** The function now checks `request.state.user_id` first (set by the pipeline for all authenticated requests that reached the handler). The `decode_access_token` fallback only fires for requests that failed before the pipeline set state — e.g. 401s on unauthenticated routes. This is the scenario where you most need user attribution for logs, so removing the fallback entirely would lose observability.
-
-**Why deferred:** The correct fix is a dedicated lightweight user-extraction utility that reads the JWT sub claim without the full verification path (similar to the rate-limiter's unverified decode pattern). Until that utility exists, the fallback is the least-bad option.
+**Resolution:** Replaced `decode_access_token` fallback with the same unverified sub-claim extraction pattern used by the rate-limiter (`jose.jwt.decode` with `verify_signature/aud/exp: False`). Attribution is for logging only — no access-control decision is made — so unverified decode is correct. The `request.state.user_id` fast path (set by the pipeline for all authenticated requests) remains the primary path; the unverified decode fires only for requests that failed before the pipeline set state (e.g. 401s on unauthenticated routes).
 
 ---
 
