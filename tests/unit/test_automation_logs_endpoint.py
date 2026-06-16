@@ -61,13 +61,13 @@ def _make_db(logs=None, by_id=None):
 def _call_list(db, status=None, source=None, limit=50):
     from AINDY.routes.automation_router import list_automation_logs
 
-    return list_automation_logs(status=status, source=source, limit=limit, db=db, _admin={})
+    return list_automation_logs(request=MagicMock(), status=status, source=source, limit=limit, db=db, _admin={})
 
 
 def _call_get(db, log_id):
     from AINDY.routes.automation_router import get_automation_log
 
-    return get_automation_log(log_id=log_id, db=db, _admin={})
+    return get_automation_log(request=MagicMock(), log_id=log_id, db=db, _admin={})
 
 
 def _call_replay(db, log_id, replay_return):
@@ -77,7 +77,7 @@ def _call_replay(db, log_id, replay_return):
         "AINDY.platform_layer.scheduler_service.replay_task",
         return_value=replay_return,
     ):
-        return replay_automation_log(log_id=log_id, db=db, _admin={})
+        return replay_automation_log(request=MagicMock(), log_id=log_id, db=db, _admin={})
 
 
 # ---------------------------------------------------------------------------

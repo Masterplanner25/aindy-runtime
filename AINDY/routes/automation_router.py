@@ -11,7 +11,7 @@ Endpoints:
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from AINDY.db.database import get_db
@@ -44,6 +44,7 @@ def _serialize_log(log: JobLog) -> dict:
 
 @router.get("/logs", response_model=None)
 def list_automation_logs(
+    request: Request,
     status: Optional[str] = Query(default=None),
     source: Optional[str] = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
@@ -61,6 +62,7 @@ def list_automation_logs(
 
 @router.get("/logs/{log_id}", response_model=None)
 def get_automation_log(
+    request: Request,
     log_id: str,
     db: Session = Depends(get_db),
     _admin: dict = Depends(require_admin_principal),
@@ -73,6 +75,7 @@ def get_automation_log(
 
 @router.post("/logs/{log_id}/replay", status_code=200, response_model=None)
 def replay_automation_log(
+    request: Request,
     log_id: str,
     db: Session = Depends(get_db),
     _admin: dict = Depends(require_admin_principal),
