@@ -30,7 +30,7 @@ pendulum==3.2.0
 psycopg2==2.9.12
 pgvector==0.4.2
 pydantic==2.13.4
-pydantic-settings==2.11.0
+pydantic-settings==2.14.1
 pydantic_core==2.46.4
 pymongo==4.16.0
 pyphen==0.17.2
