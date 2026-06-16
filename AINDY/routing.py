@@ -20,6 +20,7 @@ from AINDY.routes import (
     platform_router,
 )
 from AINDY.routes.platform.admin_router import router as admin_router
+from AINDY.routes.automation_router import router as automation_router
 
 _PLATFORM_UI_DIST = Path(__file__).parent / "platform" / "dist"
 
@@ -57,6 +58,9 @@ def register_routes(app) -> None:
     # Admin routes bypass the execution contract — they are plain DB-query handlers.
     # Auth is enforced per-handler via require_admin_principal.
     app.include_router(admin_router, prefix="/platform")
+    # Automation logs bypass execution contract — plain DB-query handlers.
+    # Auth is enforced per-handler via require_admin_principal.
+    app.include_router(automation_router)
 
     for route in APP_ROUTERS:
         app.include_router(route, prefix="/apps", dependencies=[Depends(require_execution_context)])

@@ -48,6 +48,67 @@ def _execute_flows(
     return data
 
 
+@router.get("/flows/strategies", response_model=None)
+@limiter.limit("60/minute")
+def get_flow_strategies(request: Request, current_user: dict = Depends(get_current_user), _s: None = Depends(enforce_api_key_scope(Scopes.FLOW_READ))):
+    def handler(ctx):
+        from AINDY.platform_layer.registry import get_all_flow_strategies
+        from AINDY.kernel.scheduler.common import PRIORITY_ORDER, MAX_PER_SCHEDULE_CYCLE
+        from AINDY.core.retry_policy import (
+            FLOW_NODE_DEFAULT, AGENT_LOW_MEDIUM, AGENT_HIGH_RISK,
+            ASYNC_JOB_DEFAULT, NODUS_SCHEDULED_DEFAULT,
+        )
+
+        registered = get_all_flow_strategies()
+        strategies = [
+            {
+                "id": flow_type,
+                "intent_type": flow_type,
+                "user_id": None,
+                "score": None,
+                "usage_count": 0,
+                "success_count": 0,
+                "flow": {
+                    "handler": getattr(h, "__qualname__", None) or getattr(h, "__name__", repr(h)),
+                    "type": flow_type,
+                },
+            }
+            for flow_type, h in sorted(registered.items())
+        ]
+
+        def _policy_dict(p):
+            return {
+                "max_attempts": p.max_attempts,
+                "backoff_ms": p.backoff_ms,
+                "exponential_backoff": p.exponential_backoff,
+                "execution_guarantee": p.execution_guarantee,
+            }
+
+        return {
+            "strategies": strategies,
+            "count": len(strategies),
+            "scheduling": {
+                "priority_tiers": list(PRIORITY_ORDER),
+                "max_per_cycle": MAX_PER_SCHEDULE_CYCLE,
+                "dispatch_model": "priority-first, round-robin per tenant",
+            },
+            "retry_policies": {
+                "flow_node": _policy_dict(FLOW_NODE_DEFAULT),
+                "agent_low_medium": _policy_dict(AGENT_LOW_MEDIUM),
+                "agent_high_risk": {**_policy_dict(AGENT_HIGH_RISK), "high_risk_immediate_fail": AGENT_HIGH_RISK.high_risk_immediate_fail},
+                "async_job": _policy_dict(ASYNC_JOB_DEFAULT),
+                "nodus_scheduled": _policy_dict(NODUS_SCHEDULED_DEFAULT),
+            },
+        }
+
+    return _execute_flows(
+        request,
+        "platform.flows.strategies",
+        handler,
+        user_id=str(current_user["sub"]),
+    )
+
+
 @router.post("/flows", status_code=201, response_model=None)
 @limiter.limit("30/minute")
 def create_flow(request: Request, body: FlowDefinition, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):

@@ -23,6 +23,10 @@ def _clean_env() -> dict[str, str]:
         for key in ("SystemRoot", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE"):
             if key in os.environ:
                 env[key] = os.environ[key]
+    # Point pydantic-settings away from the repo's AINDY/.env so the test
+    # exercises a truly env-less environment. os.devnull is readable (returns
+    # empty) on both Windows (nul) and Linux (/dev/null).
+    env["AINDY_ENV_FILE"] = os.devnull
     return env
 
 

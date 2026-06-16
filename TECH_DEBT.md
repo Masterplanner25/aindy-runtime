@@ -914,63 +914,26 @@ deployment to whatever embedding model is hardwired at that moment.
 
 ## CI-SMOKE-1 — Boot smoke workflow uses editable install; switch to PyPI wheel post-publish
 
-**Status:** Open — upgrade path ready, blocked on PYPI-PUBLISH-1.
+**Status:** CLOSED (2026-06-15)
 
-**Implemented (2026-06-08):** `.github/workflows/smoke-postgres.yml` — boots the runtime against
-pgvector/pg16 + Redis 7, asserts `/health/deep` reaches `{"status":"healthy"}`, asserts
-`/api/version` boot surface, records TTFA (time-to-first-answer) for `/health` and `/health/deep`
-as a `smoke-ttfa-py3.11` JSON artifact retained for 90 days.
-
-**Current install step:**
-```yaml
-- run: pip install -e ".[test]" --no-deps --no-build-isolation
-```
-
-**Post-PyPI install step (when PYPI-PUBLISH-1 is closed):**
-```yaml
-- run: pip install "aindy-runtime[test]==$(cat AINDY/_version.py | grep __version__ | cut -d'"' -f2)"
-```
-Or pin to the release tag directly. Also remove the `--no-deps --no-build-isolation` flags.
-
-**Reopen trigger:** PYPI-PUBLISH-1 closed.
+The workflow already installs from PyPI (`pip install "aindy-runtime==$AINDY_VERSION"`, reading
+the version from `AINDY/_version.py` in the checkout). `install_mode: "pypi"` is recorded in
+the TTFA artifact. The editable-install step was replaced when the workflow was authored
+(2026-06-08); PYPI-PUBLISH-1 was the remaining blocker and is now closed (2026-06-14).
 
 ---
 
 ## PYPI-PUBLISH-1 — Dockerfile uses local wheel build pending PyPI publish
 
-**Status:** Deferred — blocks on PyPI publish decision.
+**Status:** CLOSED (2026-06-14)
 
-**Discovered:** 2026-05-27 during Dockerfile authoring (`pip index versions
-aindy-runtime` returned no matching distribution).
-
-**Context:** `Dockerfile` Stage 1 builds a wheel from local source
-(`python -m build --wheel`) and installs it into a relocatable prefix.
-This works correctly for compose-port and local deployments but means
-every `docker build` rebuilds the wheel from scratch. The intent at 1.0.0
-is that operators `pip install aindy-runtime` from PyPI, not build from
-source.
-
-**Transition path (when aindy-runtime is published to PyPI):**
-1. In `Dockerfile` Stage 1, replace:
-   ```dockerfile
-   WORKDIR /src
-   COPY . /src
-   RUN pip install build \
-       && python -m build --wheel --outdir /dist /src \
-       && pip install --prefix=/install /dist/*.whl
-   ```
-   with:
-   ```dockerfile
-   RUN pip install --prefix=/install "aindy-runtime==1.0.0"
-   ```
-2. Remove the `build-essential` and `libpq-dev` apt packages from Stage 1
-   (no longer needed to compile wheels from source — PyPI ships pre-built
-   wheels for the target platform). Keep `libpq-dev` only if any transitive
-   dependency still requires it at build time.
-3. Stage 2 is unchanged.
-4. Close this entry.
-
-**Reopen trigger:** PyPI publish of `aindy-runtime` at any version.
+`aindy-runtime` published to PyPI at v1.3.1. Dockerfile updated: the
+ui-builder (SPA compile) and local `python -m build` stages removed;
+Stage 1 now runs `pip install --prefix=/install "aindy-runtime==1.3.1"`.
+`build-essential` and `libpq-dev` retained — psycopg2 still compiles from
+source. The published wheel includes the Platform SPA dist via package-data.
+To update the pinned version after a new release, bump the version string in
+the builder stage `pip install` line.
 
 ---
 
@@ -1294,60 +1257,32 @@ new served constant and a one-line update in `rippletrace.js`.
 
 ## OPER-DEFER-001 — `/platform/flows/strategies` not served by runtime
 
-**Status:** UI gate wired (2026-06-07) — backend route still deferred.
+**Status:** CLOSED (2026-06-15)
 
-**Discovered:** 2026-06-03 during `_routes.js` audit (ROUTES reconcile pass against live OpenAPI).
-
-**Context:** `ROUTES.OPERATOR.FLOW_STRATEGIES` resolves to `/platform/flows/strategies`. No
-handler for this path exists in the runtime OpenAPI (verified 2026-06-03). The constant is
-syntactically live in `@aindy/ui-kit/src/api/_routes.js`.
-
-**UI gate (2026-06-07):** The "Strategies" tab in `FlowEngineConsole.jsx` is now filtered from
-the `TABS` array when `FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES` is `false`. The tab no longer
-renders, no API call fires, and no 404 is exposed to the user. The tab reappears automatically
-when the flag is flipped.
-
-The route likely belongs in `AINDY/routes/platform/flows_router.py` alongside the existing
-`/platform/flows/registry` handler. It would expose the set of registered flow strategies
-(priority tier configuration, scheduling policies, etc.) for operator visibility.
-
-**What unblocks it:** A `GET /platform/flows/strategies` handler is registered and visible
-in the runtime OpenAPI. Flip `FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES` to `true` in
-`platform/src/api/_routes.js`.
+`GET /platform/flows/strategies` implemented in `AINDY/routes/platform/flows_router.py`.
+Returns registered flow strategies from the plugin registry plus scheduling metadata
+(priority tiers, max per cycle, dispatch model) and all retry policy definitions.
+`get_all_flow_strategies()` added to `AINDY/platform_layer/registry.py`.
+`FEATURE_FLAGS.OPERATOR_FLOW_STRATEGIES` flipped to `true` in `platform/src/api/_routes.js` —
+the "Strategies" tab in `FlowEngineConsole` is now live.
+6 unit tests in `tests/unit/test_flow_strategies_endpoint.py`.
 
 ---
 
 ## OPER-DEFER-002 — `/automation/logs` group not served by runtime
 
-**Status:** UI gate wired (2026-06-07) — backend routes still deferred (live in monolith).
+**Status:** CLOSED (2026-06-15)
 
-**Discovered:** 2026-06-03 during `_routes.js` audit (ROUTES reconcile pass against live OpenAPI).
+Three routes implemented in `AINDY/routes/automation_router.py` and registered directly in
+`AINDY/routing.py` (bypassing `require_execution_context`, auth via `require_admin_principal`):
+- `GET /automation/logs` — list with status/source/limit filters; response `{ logs, count }`
+- `GET /automation/logs/{log_id}` — detail; 404 on unknown id
+- `POST /automation/logs/{log_id}/replay` — calls `replay_task()`; 404/409 on failure
 
-**Context:** Three constants are deferred behind `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS`
-(default `false`):
-
-| Constant | Path |
-|---|---|
-| `AUTOMATION_LOGS` | `GET /automation/logs` |
-| `AUTOMATION_LOG` | `GET /automation/logs/{logId}` |
-| `AUTOMATION_REPLAY` | `POST /automation/logs/{logId}/replay` |
-
-None resolve in the runtime OpenAPI. These routes currently live in the aindy-apps monolith.
-All three constants remain syntactically live in `ROUTES.OPERATOR`.
-
-**UI gate (2026-06-07):** The "Automation" tab in `FlowEngineConsole.jsx` is now filtered from
-the `TABS` array when `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` is `false`. The tab no longer
-renders, no API call fires, and no misleading "No automation logs yet." empty state is shown.
-The tab reappears automatically when the flag is flipped.
-
-**What unblocks it:** Either:
-1. The automation logging subsystem is migrated to aindy-runtime (adds the three paths to the
-   runtime OpenAPI), or
-2. A monolith-proxy pattern is established that routes `/automation/logs` from the runtime
-   SPA to the monolith host.
-
-When the backend paths land, flip `FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` to `true` in
-`platform/src/api/_routes.js`.
+`JobLog` model (`AINDY/db/models/job_log.py`) was already present in the runtime.
+`FEATURE_FLAGS.OPERATOR_AUTOMATION_LOGS` flipped to `true` in `platform/src/api/_routes.js` —
+the "Automation" tab in `FlowEngineConsole` is now live.
+10 unit tests in `tests/unit/test_automation_logs_endpoint.py`.
 
 ---
 

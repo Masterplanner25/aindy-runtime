@@ -3,47 +3,17 @@
 # A.I.N.D.Y. Runtime — Container Image
 #
 # Multi-stage build:
-#   Stage 1 (ui-builder) — installs Node deps and compiles the Platform SPA.
-#                          Output: /build/AINDY/platform/dist/
-#                          (vite.config.ts outDir is ../AINDY/platform/dist
-#                          relative to platform/, so the path steps up a level)
-#   Stage 2 (builder)    — builds a wheel from local source and installs it
-#                          into a relocatable prefix. The SPA dist is copied in
-#                          BEFORE the wheel build so package_data picks it up.
-#                          Carries compilers and build headers that do NOT
+#   Stage 1 (builder)    — installs aindy-runtime from PyPI into a relocatable
+#                          prefix. Carries compilers and build headers (required
+#                          by psycopg2 which compiles from source) that do NOT
 #                          propagate to runtime.
-#   Stage 3 (runtime)    — copies only the installed package, runs as a
+#   Stage 2 (runtime)    — copies only the installed package, runs as a
 #                          non-root user, ships with libpq for psycopg and
 #                          curl for the HEALTHCHECK.
-#
-# Post-PyPI-publish transition:
-#   When aindy-runtime is published to PyPI, replace the wheel-build
-#   block in the builder stage with:
-#       RUN pip install --prefix=/install "aindy-runtime==1.0.0"
-#   and remove the WORKDIR /src + COPY . /src + `python -m build` lines.
-#   Everything else stays identical. See TECH_DEBT: PYPI-PUBLISH-1.
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Stage 1: ui-builder — compile the Platform SPA
-# ═══════════════════════════════════════════════════════════════════════════
-FROM node:20-alpine AS ui-builder
-
-WORKDIR /build
-
-# Layer dependency install before source copy so npm ci is a cache hit
-# on rebuilds that change only source files, not package.json.
-COPY platform/package.json platform/package-lock.json ./platform/
-WORKDIR /build/platform
-RUN npm ci
-
-# Copy full platform source (platform/node_modules excluded via .dockerignore).
-COPY platform/ ./
-RUN npm run build
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Stage 2: builder
+# Stage 1: builder
 # ═══════════════════════════════════════════════════════════════════════════
 FROM python:3.11-slim AS builder
 
@@ -51,43 +21,24 @@ ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Build-time deps: compilers and headers for any wheels that compile from
-# source (psycopg, cryptography). These do NOT propagate to the runtime
-# stage — only the installed Python package is copied forward.
+# Build-time deps: compilers and headers for psycopg2, which compiles from
+# source. These do NOT propagate to the runtime stage — only the installed
+# Python package is copied forward.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy source. .dockerignore controls what is actually included in the
-# build context; without it this COPY drags .git/, tempverify-*/, .venv/,
-# tests/, and other artifacts into the builder.
-WORKDIR /src
-COPY . /src
-
-# Copy the freshly built SPA into place BEFORE building the wheel.
-# pyproject.toml package-data glob ("AINDY" = [..., "platform/dist/**"]) is
-# resolved at wheel-build time — if the dist is absent when `python -m build`
-# runs, the wheel ships an empty AINDY/platform/dist/ regardless of what is
-# copied in afterward. .dockerignore excludes AINDY/platform/dist/ from the
-# build context so stale local builds never leak into the image.
-COPY --from=ui-builder /build/AINDY/platform/dist/ /src/AINDY/platform/dist/
-
-# Build the wheel from local source, then install it into a relocatable
-# prefix that we copy into the runtime stage.
-#
-# `packaging` is a declared dependency (required by limits → slowapi) but pip
-# treats it as a bootstrap package and skips it when resolving --prefix installs
-# because it is present in the system site-packages of the builder image.
-# Forcing it into /install ensures it propagates to the runtime stage.
-RUN pip install build \
-    && python -m build --wheel --outdir /dist /src \
-    && pip install --prefix=/install /dist/*.whl \
+# Install aindy-runtime from PyPI. The published wheel includes the Platform
+# SPA dist via package-data. `packaging` is a declared dependency but pip
+# treats it as a bootstrap package and skips it in --prefix installs; force
+# it in so it propagates to the runtime stage.
+RUN pip install --prefix=/install "aindy-runtime==1.3.1" \
     && pip install --prefix=/install --ignore-installed "packaging>=24.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Stage 3: runtime
+# Stage 2: runtime
 # ═══════════════════════════════════════════════════════════════════════════
 FROM python:3.11-slim AS runtime
 

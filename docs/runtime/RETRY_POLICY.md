@@ -211,8 +211,9 @@ When a caller wants backoff it should update the relevant policy constant in
 containing: `permission`, `unauthorized`, `forbidden`, `not found`, `404`, `401`,
 `403`, `invalid`, `blocked by policy`.
 
-Current execution loops do not call this function yet.  It is the central place
-to add the check when a caller wants to short-circuit retries on non-transient errors.
+Called in the RETRY branch of `flow_engine/runner_steps.py` `_handle_node_status()`
+and in the `_execute_agent_step()` retry loop in `nodus_adapter.py` to short-circuit
+attempts on non-transient errors.
 
 ---
 
