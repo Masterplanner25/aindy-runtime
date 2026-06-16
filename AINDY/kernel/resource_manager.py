@@ -680,6 +680,37 @@ class ResourceManager:
         with self._lock:
             self._active_counts[tid] = 0
 
+    def reset_all_concurrency_counters(self) -> int:
+        """Delete all tenant concurrency keys in Redis and clear local counts.
+
+        Called at API startup: any requests in-flight when the previous process
+        died never called mark_completed, so their Redis counters are stuck.
+        Resetting on startup brings all counters back to 0.
+
+        Returns the number of Redis keys deleted (0 if not in Redis mode).
+        """
+        with self._lock:
+            self._active_counts.clear()
+
+        redis_client = self._get_redis()
+        if redis_client is None:
+            return 0
+        deleted = 0
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = redis_client.scan(
+                    cursor=cursor, match="aindy:quota:concurrent:*", count=200
+                )
+                if keys:
+                    redis_client.delete(*keys)
+                    deleted += len(keys)
+                if int(cursor) == 0:
+                    break
+        except Exception as exc:
+            logger.warning("[ResourceManager] reset_all_concurrency_counters failed: %s", exc)
+        return deleted
+
     def mark_completed(self, tenant_id: str, eu_id: str | None = None) -> None:
         """Decrement active execution counter for *tenant_id*.
 

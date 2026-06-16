@@ -1001,6 +1001,23 @@ def _validate_queue_and_workers() -> None:
     _log_async_job_capacity_advisory()
 
 
+def _reset_concurrency_counters() -> None:
+    """Phase 4.5 — reset all tenant concurrency counters on startup.
+
+    When the API process is killed, any in-flight requests never called
+    mark_completed. Their Redis quota keys stay elevated and block all future
+    requests from those tenants with 429. Reset to 0 on every startup since
+    in-flight requests from a dead process are no longer in-flight.
+    """
+    try:
+        from AINDY.kernel.resource_manager import get_resource_manager
+        deleted = get_resource_manager().reset_all_concurrency_counters()
+        if deleted:
+            logger.info("[startup] Reset %d stale tenant concurrency counter(s).", deleted)
+    except Exception as exc:
+        logger.warning("[startup] Failed to reset concurrency counters (non-fatal): %s", exc)
+
+
 def _enforce_schema_guard(db_factory) -> None:
     enforce_schema = os.getenv("AINDY_ENFORCE_SCHEMA", "true").lower() in {"1", "true", "yes"}
     allow_reconcile = os.getenv("AINDY_SCHEMA_RECONCILE", "false").lower() in {
@@ -1484,6 +1501,8 @@ async def lifespan(app: FastAPI):
     _init_mongodb()
     # Phase 4: validate queue backend and worker capacity.
     _validate_queue_and_workers()
+    # Phase 4.5: reset tenant concurrency counters left over from previous process.
+    _reset_concurrency_counters()
     # Phase 5: bootstrap or validate the runtime-owned schema before DB writes.
     _enforce_schema_guard(SessionLocal)
     # Phase 5.5: promote AINDY_BOOTSTRAP_ADMIN_EMAIL user to admin (grant-only, idempotent).
