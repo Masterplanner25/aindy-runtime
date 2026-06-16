@@ -211,14 +211,17 @@ const PlanPreview = ({ run, steps, loading, runtimeOnly = false, onApprove, onRe
   const planSteps = run.plan?.steps || [];
   const isPending = run.status === "pending_approval";
   const [acting, setActing] = useState(false);
+  const [actionError, setActionError] = useState(null);
 
   const handleApprove = async () => {
     setActing(true);
-    try { await onApprove(run.run_id); } finally { setActing(false); }
+    setActionError(null);
+    try { await onApprove(run.run_id); } catch (e) { setActionError(e?.message || "Failed to approve."); } finally { setActing(false); }
   };
   const handleReject = async () => {
     setActing(true);
-    try { await onReject(run.run_id); } finally { setActing(false); }
+    setActionError(null);
+    try { await onReject(run.run_id); } catch (e) { setActionError(e?.message || "Failed to reject."); } finally { setActing(false); }
   };
 
   return (
@@ -240,23 +243,26 @@ const PlanPreview = ({ run, steps, loading, runtimeOnly = false, onApprove, onRe
       }
 
       {isPending &&
-      <div className="flex items-center gap-3 mb-5 p-4 rounded-xl border border-yellow-500/20 bg-yellow-500/5">
-          <div className="flex-1">
-            <p className="text-xs font-semibold text-yellow-300 mb-0.5">Awaiting your approval</p>
-            <p className="text-[10px] text-zinc-500">Review the plan above, then approve or reject.</p>
+      <div className="flex flex-col gap-2 mb-5 p-4 rounded-xl border border-yellow-500/20 bg-yellow-500/5">
+          <div className="flex items-center gap-3">
+            <div className="flex-1">
+              <p className="text-xs font-semibold text-yellow-300 mb-0.5">Awaiting your approval</p>
+              <p className="text-[10px] text-zinc-500">Review the plan above, then approve or reject.</p>
+            </div>
+            <button
+            onClick={handleApprove}
+            disabled={acting}
+            className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider rounded-lg bg-[#00ffaa] text-black hover:bg-[#00ffaa]/80 transition-colors disabled:opacity-50">
+              Approve
+            </button>
+            <button
+            onClick={handleReject}
+            disabled={acting}
+            className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider rounded-lg border border-zinc-700 text-zinc-400 hover:bg-zinc-800 transition-colors disabled:opacity-50">
+              Reject
+            </button>
           </div>
-          <button
-          onClick={handleApprove}
-          disabled={acting}
-          className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider rounded-lg bg-[#00ffaa] text-black hover:bg-[#00ffaa]/80 transition-colors disabled:opacity-50">
-            Approve
-          </button>
-          <button
-          onClick={handleReject}
-          disabled={acting}
-          className="px-4 py-2 text-[11px] font-bold uppercase tracking-wider rounded-lg border border-zinc-700 text-zinc-400 hover:bg-zinc-800 transition-colors disabled:opacity-50">
-            Reject
-          </button>
+          {actionError && <p className="text-xs text-red-400">{actionError}</p>}
         </div>
       }
 
@@ -564,10 +570,13 @@ export default function AgentConsole() {
     setRunsLoading(true);
     try {
       const data = await getAgentRuns();
-      setRuns(data || []);
+      const runs = data || [];
+      setRuns(runs);
+      return runs;
     } catch (e) {
       console.error("Failed to load runs", e);
       showToast(e?.message || "Failed to load agent runs.");
+      return [];
     } finally {
       setRunsLoading(false);
     }
@@ -642,10 +651,12 @@ export default function AgentConsole() {
     setSubmitting(true);
     setError(null);
     try {
-      const run = await createAgentRun({ goal: goal.trim() });
+      await createAgentRun({ goal: goal.trim() });
       setGoal("");
-      await loadRuns();
-      setSelectedRun(run);
+      // Use the list-format run (has run_id, goal, lowercase status) not the create response shape
+      const freshRuns = await loadRuns();
+      const created = freshRuns[0] || null;
+      setSelectedRun(created);
       setSelectedSteps([]);
       setRunEvents([]);
       setActiveDetailTab("steps");
