@@ -561,9 +561,20 @@ def _log_async_job_capacity_advisory() -> None:
     """Log startup guidance for async job capacity in thread mode."""
     if settings.is_testing:
         return
-    if not settings.AINDY_JOB_WARN_CAPACITY:
-        return
     if settings.EXECUTION_MODE != "thread":
+        return
+
+    if settings.is_prod:
+        logger.error(
+            "[startup] EXECUTION_MODE=thread in ENV=production. Thread mode has no job "
+            "durability — in-flight and queued jobs are permanently lost on restart "
+            "(hard cap: %d queued). Set EXECUTION_MODE=distributed and run "
+            "--profile full for production deployments.",
+            settings.AINDY_ASYNC_QUEUE_MAXSIZE,
+        )
+        return
+
+    if not settings.AINDY_JOB_WARN_CAPACITY:
         return
 
     _pool_size = settings.AINDY_ASYNC_JOB_WORKERS

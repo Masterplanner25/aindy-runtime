@@ -5,6 +5,7 @@ from fastapi import HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from jose import jwt as _jose_jwt
 from sqlalchemy.exc import OperationalError as SAOperationalError
 from sqlalchemy.exc import TimeoutError as SATimeoutError
 from slowapi import _rate_limit_exceeded_handler
@@ -155,12 +156,15 @@ def _extract_user_id_from_request(request: Request):
     if not token:
         return None
     try:
-        from AINDY.services.auth_service import decode_access_token
-
-        payload = decode_access_token(token)
-        if not payload or "sub" not in payload:
+        payload = _jose_jwt.decode(
+            token,
+            key="",
+            options={"verify_signature": False, "verify_aud": False, "verify_exp": False},
+        )
+        sub = str(payload.get("sub") or "").strip()
+        if not sub:
             return None
-        return uuid.UUID(str(payload["sub"]))
+        return uuid.UUID(sub)
     except Exception:
         return None
 
