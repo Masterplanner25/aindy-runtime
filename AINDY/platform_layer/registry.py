@@ -874,6 +874,11 @@ def get_flow_strategy(flow_type: str) -> Handler | None:
     return _flow_strategies.get(flow_type) or _flow_strategies.get("default")
 
 
+def get_all_flow_strategies() -> dict[str, Handler]:
+    load_plugins()
+    return dict(_flow_strategies)
+
+
 def register_capability_definition(name: str, metadata: dict[str, Any]) -> dict[str, Any]:
     _require_in_process_extension_capability(INPROC_CAP_REGISTER_CAPABILITY_DEFINITION)
     validate_capability_definition(name, metadata)
