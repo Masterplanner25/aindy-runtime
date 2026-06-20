@@ -4,6 +4,63 @@
 
 ---
 
+## 1.4.0 — 2026-06-20
+
+### Added
+
+- **Automation logs routes** (`AINDY/routes/automation_router.py`): `GET /automation/logs` and
+  `POST /automation/logs` served; closes OPER-DEFER-002. Automation tab live in Platform UI.
+
+- **Flow strategies route** (`AINDY/routes/platform_router.py`): `GET /platform/flows/strategies`
+  served; closes OPER-DEFER-001. Strategies tab live in Platform UI.
+
+- **Agent registration API and startup seed** (`AINDY/routes/agent_router.py`, `AINDY/startup.py`):
+  Agent Registry screen now populates on first boot; empty-state placeholder shown when no agents
+  registered.
+
+- **System Observability view** (Platform UI): Execution console with connected apps, domain health,
+  execution pipeline stats, and registry counts.
+
+- **Inline approve/reject in agent plan detail panel** (Platform UI): Approve or reject a pending
+  agent run directly from the detail panel without navigating to a separate screen.
+
+### Fixed
+
+- **starlette 1.0.1 → 1.3.1**: Resolves 4 CVEs (CVE-2026-48817, CVE-2026-48818, CVE-2026-54282,
+  CVE-2026-54283).
+
+- **pydantic-settings 2.11.0 → 2.14.2**: Resolves GHSA-4xgf-cpjx-pc3j (symlink traversal in
+  `NestedSecretsSettingsSource`; not exercised by this codebase).
+
+- **nodus-lang 4.0.3 → 4.0.5**: Picks up `identity.session_id()` child-VM propagation fix (4.0.4)
+  and retry trace bleed suppression (4.0.4). No code changes required.
+
+- **FastAPI 0.137 `_IncludedRouter` compatibility** (`AINDY/core/route_execution_guard.py`):
+  `include_router()` now wraps sub-routers lazily; guard updated to walk `_iter_api_routes()` and
+  handle `_IncludedRouter` in route enumeration and tests.
+
+- **`register_syscall()` docstring** (`AINDY/kernel/syscall_registry.py`): Corrected misleading
+  "overwrites" claim — same-handler re-registration is a no-op; different-handler raises
+  `ValueError` by design.
+
+- **Agent console 429 and detail panel shape mismatch** (Platform UI): Retry backoff on approve;
+  response shape aligned with list endpoint.
+
+- **`require_execution_context` bypass for admin routes**: Admin router exempted from execution
+  contract to fix Users tab 500.
+
+### Dependencies bumped
+
+- fastapi 0.135.0 → 0.137.1
+- idna 3.15 → 3.18
+- click 8.3.0 → 8.4.1
+- tqdm 4.67.1 → 4.68.2
+- redis 5.0.4 → 8.0.0
+- joblib 1.5.2 → 1.5.3
+- pendulum 3.1.0 → 3.2.0
+
+---
+
 ## 1.3.1 — 2026-06-13
 
 ### Fixed
