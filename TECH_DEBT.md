@@ -916,12 +916,16 @@ the builder stage `pip install` line.
 
 ## NODUS-UPGRADE-1 — nodus-lang pinned at 3.0.2; v4.0.0 available
 
-**Status:** CLOSED (2026-06-11)
+**Status:** CLOSED (2026-06-11); pin last updated 2026-06-19 (4.0.3 → 4.0.5)
 
 **Implemented:** Bumped `pyproject.toml` + `AINDY/requirements.txt` pin from `nodus-lang==3.0.2`
 to `nodus-lang==4.0.3` (latest). One embedding API fix required: `nodus_worker.py` accessed
 `runtime.last_vm` (removed in v4) — updated to `runtime._get_active_vm()`. No Nodus script
 changes needed. `NODUS_DEVELOPER_GUIDE.md` §6 heading and §8 upgrade notes updated to reflect v4.
+
+**2026-06-19:** Bumped to `nodus-lang==4.0.5`. No code changes required — 4.0.4 fixed
+`identity.session_id()` propagation to child VMs and retry trace bleed; 4.0.5 is stability
+graduations and companion tooling only. All 504 unit tests green.
 
 ---
 

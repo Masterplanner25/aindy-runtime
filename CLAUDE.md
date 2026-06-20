@@ -506,7 +506,7 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
 - **PYPI-PUBLISH-1** — CLOSED 2026-06-14: published at v1.3.1; Dockerfile updated to `pip install aindy-runtime==1.3.1`. Bump version string in Dockerfile builder stage on each release.
-- **NODUS-UPGRADE-1** — CLOSED 2026-06-11: bumped to nodus-lang==4.0.3. See NODUS_DEVELOPER_GUIDE.md §8.
+- **NODUS-UPGRADE-1** — CLOSED 2026-06-11: bumped to nodus-lang==4.0.3; updated to 4.0.5 on 2026-06-19 (no code changes required). See NODUS_DEVELOPER_GUIDE.md §8.
 - **PROMETHEUS-PIN-1** — CLOSED 2026-06-05: pinned to prom/prometheus:v3.4.1 in docker-compose.yml.
 - **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
 - **OPER-DEFER-001** — CLOSED 2026-06-15: `GET /platform/flows/strategies` served; Strategies tab live.

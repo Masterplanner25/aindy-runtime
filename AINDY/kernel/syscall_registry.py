@@ -1256,7 +1256,9 @@ def register_syscall(
 ) -> None:
     """Register a syscall at runtime.
 
-    Idempotent — registering the same name twice overwrites the entry.
+    Safe to call multiple times with the same handler (no-op re-registration).
+    Raises ValueError if called with a different handler for an already-registered
+    name — each syscall has exactly one registration point by design.
     Not thread-safe for concurrent writes (startup-only use case).
 
     Args:
@@ -1272,7 +1274,8 @@ def register_syscall(
         replacement:      Full name of the replacement syscall.
 
     Raises:
-        ValueError: If name does not start with ``"sys."``.
+        ValueError: If name does not start with ``"sys."`` or is already registered
+            with a different handler.
     """
     if not name.startswith("sys."):
         raise ValueError(
