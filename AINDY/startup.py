@@ -1094,62 +1094,112 @@ def _enforce_schema_guard(db_factory) -> None:
         )
 
 
+def _start_scheduler_and_jobs() -> None:
+    """Start APScheduler and register the API leader's maintenance jobs.
+
+    Idempotent: ``scheduler_service.start()`` guards double-start and every
+    ``add_job`` uses ``replace_existing=True``. Safe to invoke as the elector's
+    ``on_acquire`` callback on a leadership transition.
+    """
+    scheduler_service.start()
+    _sched = scheduler_service.get_scheduler()
+    if not getattr(_sched, "running", False):
+        raise RuntimeError(
+            "APScheduler failed to start. Check apscheduler installation."
+        )
+    _update_db_pool_metrics()
+    _sched.add_job(
+        _update_db_pool_metrics,
+        trigger="interval",
+        seconds=30,
+        id="db_pool_metrics_tick",
+        name="DB pool metrics tick",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    watchdog_scan = __import__(
+        "AINDY.agents.stuck_run_" "watchdog",
+        fromlist=["watchdog_scan"],
+    ).watchdog_scan
+    _sched.add_job(
+        watchdog_scan,
+        trigger="interval",
+        minutes=settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
+        id="stuck_run_watchdog",
+        name="Stuck-run watchdog",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    logger.info(
+        "[startup] Stuck-run watchdog registered: interval=%dm threshold=%dm",
+        settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
+        settings.STUCK_RUN_THRESHOLD_MINUTES,
+    )
+
+
+def _stand_down_scheduler() -> None:
+    """Stop APScheduler when this process loses background leadership."""
+    try:
+        scheduler_service.stop()
+    except Exception as exc:
+        logger.error("[startup] scheduler stand-down failed: %s", exc)
+
+
 def _start_background_services(db_factory) -> bool:
     enable_background = background_tasks_enabled()
     deployment_profile, _deployment_profile_source = resolve_api_deployment_profile()
+    leadership_mode = background_leadership_mode_for_profile(deployment_profile)
     publish_api_runtime_state(
         background_enabled=enable_background,
-        background_leadership_mode=background_leadership_mode_for_profile(
-            deployment_profile
-        ),
+        background_leadership_mode=leadership_mode,
     )
 
     startup_results = emit_event(
         "system.startup",
         {"enable": enable_background, "log": logger, "source": "main"},
     )
-    is_leader = enable_background and all(result is not False for result in startup_results)
-    scheduler_role = "disabled"
-    if is_leader:
-        scheduler_service.start()
-        _sched = scheduler_service.get_scheduler()
-        if not getattr(_sched, "running", False):
-            raise RuntimeError(
-                "APScheduler failed to start. Check apscheduler installation."
+    startup_ok = enable_background and all(
+        result is not False for result in startup_results
+    )
+
+    if leadership_mode == "lease-elected":
+        # Distributed profiles: exactly one process runs the scheduler, decided
+        # by an atomic DB lease rather than a local boolean (LEASE-1).
+        from AINDY.platform_layer.leadership import (
+            background_owner_id,
+            get_background_elector,
+        )
+
+        elector = get_background_elector(
+            db_factory=db_factory,
+            owner_id=background_owner_id(),
+            on_acquire=_start_scheduler_and_jobs,
+            on_lose=_stand_down_scheduler,
+            enabled=startup_ok,
+        )
+        is_leader = elector.elect_once()
+        elector.start()
+        if is_leader:
+            logger.info(
+                "[startup] background lease acquired owner_id=%s", elector.owner_id
             )
-        _update_db_pool_metrics()
-        _sched.add_job(
-            _update_db_pool_metrics,
-            trigger="interval",
-            seconds=30,
-            id="db_pool_metrics_tick",
-            name="DB pool metrics tick",
-            replace_existing=True,
-            coalesce=True,
-            max_instances=1,
-        )
-        watchdog_scan = __import__(
-            "AINDY.agents.stuck_run_" "watchdog",
-            fromlist=["watchdog_scan"],
-        ).watchdog_scan
-        _sched.add_job(
-            watchdog_scan,
-            trigger="interval",
-            minutes=settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
-            id="stuck_run_watchdog",
-            name="Stuck-run watchdog",
-            replace_existing=True,
-            coalesce=True,
-            max_instances=1,
-        )
-        logger.info(
-            "[startup] Stuck-run watchdog registered: interval=%dm threshold=%dm",
-            settings.AINDY_WATCHDOG_INTERVAL_MINUTES,
-            settings.STUCK_RUN_THRESHOLD_MINUTES,
-        )
-        scheduler_role = "leader"
-    elif enable_background:
-        scheduler_role = "follower"
+        elif startup_ok:
+            logger.info(
+                "[startup] background lease held elsewhere; running as follower "
+                "owner_id=%s",
+                elector.owner_id,
+            )
+    else:
+        # single-instance / in-process: the local boolean is the correct guard.
+        is_leader = startup_ok
+        if is_leader:
+            _start_scheduler_and_jobs()
+
+    scheduler_role = (
+        "leader" if is_leader else ("follower" if enable_background else "disabled")
+    )
     publish_api_runtime_state(scheduler_role=scheduler_role)
 
     if not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
@@ -1548,6 +1598,14 @@ async def lifespan(app: FastAPI):
     shutdown_deadline = time.monotonic() + float(settings.AINDY_SHUTDOWN_TIMEOUT_SECONDS)
     publish_api_runtime_state(startup_complete=False, event_bus_ready=False)
     emit_event("system.shutdown", {"log": logger, "source": "main"})
+    try:
+        from AINDY.platform_layer.leadership import stop_background_elector
+
+        # Release the lease before stopping the scheduler so a standby takes over
+        # promptly rather than waiting out the full TTL.
+        stop_background_elector()
+    except Exception as exc:
+        logger.warning("Background elector shutdown failed (non-fatal): %s", exc)
     try:
         from AINDY.platform_layer.async_job_service import stop_async_job_service
 

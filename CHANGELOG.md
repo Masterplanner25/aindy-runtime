@@ -4,6 +4,23 @@
 
 ---
 
+## 1.4.1 — 2026-06-24
+
+### Fixed
+
+- **Background leadership is now enforced (LEASE-1).** The `distributed-api`,
+  `distributed-worker`, and `hostile-third-party` profiles advertise
+  `background_leadership_mode: "lease-elected"` but the runtime self-elected
+  locally — every replica ran its own scheduler. Leadership is now decided by an
+  atomic lease on `background_task_leases` (`AINDY/platform_layer/leadership.py`)
+  with a `BackgroundLeadershipElector` that renews on a heartbeat, fails over to a
+  standby within one TTL of leader death, and stands a demoted leader down to
+  prevent split-brain. `single-instance` keeps its local-boolean `in-process`
+  guard. New tunables: `AINDY_BACKGROUND_LEASE_TTL_SECONDS` (default 60),
+  `AINDY_BACKGROUND_LEASE_HEARTBEAT_SECONDS` (default 20). The
+  `task_is_background_leader` / `task_background_lease_name` observability symbols
+  are now registered and reflect real lease state.
+
 ## 1.4.0 — 2026-06-20
 
 ### Added
