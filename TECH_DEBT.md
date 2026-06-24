@@ -1928,3 +1928,75 @@ Sites updated (12): `kernel/syscall_dispatcher.py` (EffectRecord gate — 3 site
 - `pipeline.py` — `_safe_emit_event` exception handler (was line 347)
 
 Success-path debug logs (`[Pipeline] EU registered`, `[Pipeline] EU finalised`) remain at DEBUG — not failures.
+
+---
+
+## LEASE-1 — `lease-elected` background leadership was advertised but not enforced
+
+**Status:** CLOSED (2026-06-24)
+
+**Source:** Audit finding — *"advertising a guarantee the code doesn't implement."*
+
+**The gap (what the audit found):** The deployment contract advertises
+`background_leadership_mode: "lease-elected"` for the `distributed-api`,
+`distributed-worker`, and `hostile-third-party` profiles, and
+`DEPLOYMENT_PROFILES.md` stated *"Lease-elected means exactly one participating
+runtime process becomes leader at a time."* The code did not implement it.
+Leadership was decided locally in `_start_background_services` (and the worker
+entrypoints) by:
+
+```python
+is_leader = enable_background and all(result is not False for result in startup_results)
+```
+
+— a per-process boolean with no cross-instance coordination. Every API/worker
+replica whose local `system.startup` hooks succeeded self-elected, so N replicas
+ran N schedulers (duplicate stuck-run watchdog, EffectRecord TTL cleanup,
+orphaned-approved recovery, db-pool metrics). The `background_task_leases` table
+existed in the ORM model and was *read* by two observability endpoints (which
+therefore always saw `None`) but the runtime never wrote/acquired any row. (The second half of the same
+audit — "silent durable→in-memory queue degradation on Redis loss" — was checked
+and **refuted**: that path fails fast in prod/distributed/`AINDY_REQUIRE_REDIS`
+and otherwise degrades loudly with a metric + warning + `system.queue.backend_degraded`
+event + `UNSAFE_DEGRADED` runtime condition. No code change needed there.)
+
+**Implemented:**
+- `AINDY/platform_layer/leadership.py` — atomic lease claim/renew/takeover/release
+  on `background_task_leases` (`SELECT … FOR UPDATE` serialises contenders on
+  PostgreSQL; `UNIQUE(name)` resolves the fresh-insert race), plus a
+  `BackgroundLeadershipElector` daemon thread that runs on every lease-electing
+  process: the leader renews each tick; a follower takes over once the leader's
+  lease lapses (TTL 60s, heartbeat 20s); a leader that loses the lease stands
+  down via `on_lose` to prevent split-brain.
+- `AINDY/startup.py` `_start_background_services` — for `lease-elected` profiles,
+  `is_leader` is now gated on winning the lease; scheduler start/stop are wired
+  to the elector's acquire/lose callbacks. The `in-process` (single-instance)
+  profile keeps the local-boolean guard — that profile never promised cross-process
+  exclusion. Lease is released on shutdown so a standby takes over promptly rather
+  than waiting the full TTL.
+- `AINDY/worker/__init__.py` and `AINDY/worker/__main__.py` — both worker
+  entrypoints route leadership through the same elector.
+- Tests: `tests/unit/test_background_leadership.py` (10) — claim/renew/takeover/
+  release semantics + elector acquire/lose/disabled/exception transitions.
+
+**Layering — runtime lease vs tasks-domain symbols (deliberate non-goal):** the
+runtime claims its own lease row named `background_runner`. This is *distinct*
+from the apps-monolith `tasks` domain, which owns the `task_is_background_leader`
+/ `task_background_lease_name` registry symbols and a separate lease row named
+`task_background_runner` (`apps/tasks/bootstrap.py`). The two coexist as different
+rows in the same table. The runtime deliberately does **not** register those
+symbols (doing so would collide with the tasks domain and corrupt its
+observability), so the `/platform/observability` scheduler-status `is_leader`
+field stays app-domain-owned. Surfacing the runtime's own lease state in
+observability/health is a separate future enhancement (`leadership.background_leader_status()`
+is the ready accessor), not part of this fix.
+
+**Clock assumption (documented, not a gap):** lease expiry is evaluated against
+each process's kernel clock (`utcnow`), not the DB clock. The 60s TTL vs 20s
+heartbeat margin tolerates the skew expected between co-deployed instances. If a
+future deployment spans hosts with unbounded skew, switch the expiry comparison
+to a DB-side `now()` predicate.
+
+**No schema-contract bump:** `background_task_leases` was already in the ORM
+metadata (created by `create_all` / the Phase 5 schema guard); no model file
+changed, so `SCHEMA_CONTRACT_VERSION` is untouched.

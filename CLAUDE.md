@@ -505,7 +505,7 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **C2, C3** — cross-platform sandbox tiers. All phases closed 2026-06-06.
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
-- **PYPI-PUBLISH-1** — CLOSED 2026-06-14: published at v1.3.1; latest release v1.4.0 (2026-06-20). Dockerfile updated to `pip install aindy-runtime==1.4.0`. Bump version string in Dockerfile builder stage on each release.
+- **PYPI-PUBLISH-1** — CLOSED 2026-06-14: published at v1.3.1; latest release v1.4.1 (2026-06-24). Dockerfile updated to `pip install aindy-runtime==1.4.1`. Bump version string in Dockerfile builder stage on each release.
 - **NODUS-UPGRADE-1** — CLOSED 2026-06-11: bumped to nodus-lang==4.0.3; updated to 4.0.5 on 2026-06-19 (no code changes required). See NODUS_DEVELOPER_GUIDE.md §8.
 - **PROMETHEUS-PIN-1** — CLOSED 2026-06-05: pinned to prom/prometheus:v3.4.1 in docker-compose.yml.
 - **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
@@ -521,6 +521,7 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **LAYER-\*** — Layer boundary violations (LAYER-1 through LAYER-5). All deferred. See TECH_DEBT.md.
 - **TIER3-10** — `async_job_service` coupling. Open — architectural, no bounded fix.
 - **REPLAY-1** — CLOSED 2026-06-11: `AINDY/kernel/clock.py` — ContextVar `utcnow()` + `frozen_at()`. 12 sites updated across kernel/core/flow engine. 12 tests in `test_clock.py`.
+- **LEASE-1** — CLOSED 2026-06-24: `lease-elected` background leadership is now enforced via an atomic `background_task_leases` lease + `BackgroundLeadershipElector` (`AINDY/platform_layer/leadership.py`). Distributed profiles elect exactly one scheduler with failover; single-instance keeps the local-boolean guard. Was advertised-but-unimplemented (every replica self-elected).
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Deployment Profiles
-last_verified: "2026-05-20"
+last_verified: "2026-06-24"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -77,6 +77,16 @@ Background scheduler semantics differ by profile:
 
 Lease-elected means exactly one participating runtime process becomes leader at a
 time through the runtime lease table. Follower processes remain API- or queue-only.
+
+This is enforced (LEASE-1, `AINDY/platform_layer/leadership.py`): a leader is the
+process that atomically holds the row in `background_task_leases`. Each lease-electing
+process runs a `BackgroundLeadershipElector` that claims/renews the lease on a
+heartbeat (`AINDY_BACKGROUND_LEASE_HEARTBEAT_SECONDS`, default 20s) within a TTL
+(`AINDY_BACKGROUND_LEASE_TTL_SECONDS`, default 60s). On leader death the lease
+lapses and a follower takes over within at most one TTL; a leader that loses the
+lease stands its scheduler down to avoid split-brain. The lease is released on
+graceful shutdown so a standby is promoted immediately. The `single-instance`
+profile is `in-process`: a single local process, no lease.
 
 ## Runtime State And Health
 

@@ -1,6 +1,6 @@
 ---
 title: "Runtime Behavior"
-last_verified: "2026-06-07"
+last_verified: "2026-06-24"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -21,7 +21,7 @@ This document describes the current runtime behavior of the FastAPI backend as i
   6. Bootstrap the runtime-owned schema on a blank database, enforce the
      runtime schema contract when `AINDY_ENFORCE_SCHEMA=true`, and allow
      additive-safe reconciliation only when `AINDY_SCHEMA_RECONCILE=true`.
-  7. Acquire background-task leadership through the startup event path and start APScheduler only on the leader.
+  7. Acquire background-task leadership and start APScheduler only on the leader. For `lease-elected` profiles the leader is the holder of the atomic `background_task_leases` lease (LEASE-1); for `in-process` (`single-instance`) it is the local process.
   8. Register syscall handlers, canonical flow nodes, and flows.
   9. Restore dynamic platform registrations from the DB and surface incomplete restore as an explicit unsafe degraded state.
   10. Start the event-bus subscriber and record whether WAIT/RESUME propagation is cross-instance or local-only.
@@ -32,12 +32,12 @@ This document describes the current runtime behavior of the FastAPI backend as i
 
 ## 2. Background Task Lifecycle
 - Background execution is no longer driven by daemon threads in `main.py`.
-- Background leadership is determined through the startup event path plus the DB lease used by the scheduler/background task services.
+- Background leadership is determined by deployment profile.
 - The leadership mode depends on deployment profile:
-  - `single-instance` -> `in-process`
+  - `single-instance` -> `in-process` (local process; no lease)
   - `distributed-api` -> `lease-elected`
   - `distributed-worker` -> `lease-elected`
-- Leader election is backed by the `background_task_leases` database table.
+- For `lease-elected` profiles, leader election is enforced by an atomic claim on the `background_task_leases` table (`AINDY/platform_layer/leadership.py`, LEASE-1). Each electing process runs a `BackgroundLeadershipElector` that renews the lease on a heartbeat within a TTL; a follower takes over within one TTL of a leader's death, and a leader that loses the lease stands its scheduler down to prevent split-brain. The lease is released on graceful shutdown.
 - Only the lease leader starts APScheduler jobs; a missing APScheduler dependency means background jobs are disabled but the API remains responsive for tests or constrained environments.
 - Lease timestamps are normalized to timezone-aware UTC in Python before comparison or persistence.
 - Scheduler lifecycle:
