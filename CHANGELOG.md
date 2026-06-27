@@ -4,6 +4,28 @@
 
 ---
 
+## 1.4.3 — 2026-06-27
+
+### Fixed
+
+- **Agent planner is no longer broken on Linux/Docker deployments (PLANNER-SUBPROC-1).**
+  First-party-app run-tool providers and planner-context providers were routed
+  through an isolated subprocess (`registry._maybe_wrap_runtime_callback`). Those
+  handlers read live in-process registration state (the agent `TOOL_REGISTRY`, the
+  planner context) populated during app bootstrap, which a bare subprocess cannot
+  reconstruct: its cwd is the read-only site-packages dir, so `load_plugins()`
+  finds no app manifest and returns zero tools. The planner then failed with
+  `Runtime-local planner backend requires at least one registered tool`, so
+  `POST /apps/agent/run` returned 500 on Linux. It was masked in local dev because
+  Windows resolves the manifest. These two registry-state-dependent surfaces now
+  run **in-process** (`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES` in
+  `AINDY/platform_layer/registry.py`); self-contained surfaces (startup hooks,
+  capability providers, trigger evaluators) keep subprocess isolation. The same
+  class of bug also affected app-provided trigger evaluators (silent defer);
+  those remain isolated and are tracked for a follow-up if they grow in-process
+  state dependencies. Verified against a Linux container reproduction
+  (`python:3.11-slim`, non-editable site-packages install) before/after.
+
 ## 1.4.2 — 2026-06-27
 
 ### Fixed

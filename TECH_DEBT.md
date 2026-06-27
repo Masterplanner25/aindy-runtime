@@ -1973,6 +1973,37 @@ but that is deferred and out of scope here.
 
 ---
 
+## PLANNER-SUBPROC-1 — Agent planner broken on Linux/Docker (run-tool provider isolated into a stateless subprocess)
+
+**Status:** CLOSED (2026-06-27)
+
+**Problem:** `POST /apps/agent/run` → `generate_plan` → `get_tools_for_run` resolves the
+registered run-tool provider, which `registry._maybe_wrap_runtime_callback` routed through
+an isolated subprocess (`runtime_callback_worker.py`). First-party-app providers (and the
+planner-context provider) read **live in-process registration state** — the agent
+`TOOL_REGISTRY` and planner context populated during app bootstrap. A bare subprocess can't
+reconstruct that: its `cwd` is the read-only site-packages dir (`runtime_callback_host.py:62`),
+so the provider's `load_plugins()` finds no app manifest and returns zero tools → planner
+raises `requires at least one registered tool` → **500**. Masked in local dev because Windows
+resolves the manifest; only surfaced on Linux (CI + a `python:3.11-slim` non-editable repro).
+Same class of bug also affects app-provided trigger evaluators (the documented silent-defer in
+`_maybe_wrap_runtime_callback`).
+
+**Fix applied:** Registry-state-dependent surfaces now run **in-process**. Added
+`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES = {"run_tool_provider", "planner_context"}` in
+`AINDY/platform_layer/registry.py`; `_runtime_callback_spec` returns `None` (in-process) for
+those. Self-contained surfaces (startup hooks, capability providers, trigger evaluators) keep
+subprocess isolation. Context is still sanitized at the registry boundary
+(`get_planner_context` / `get_tools_for_run`), so no extra state crosses any boundary. Updated
+`tests/unit/test_extension_ownership.py` (planner_context now in-process, not recorded as an
+isolated invocation; startup_hook stays isolated). Shipped in 1.4.3.
+
+**Remaining gap:** app-provided **trigger evaluators** still run isolated; if a deployment
+relies on app-state-dependent trigger evaluators they will silently defer on Linux. Add
+`trigger_evaluator` to the in-process set when that becomes a real workload.
+
+---
+
 ## OBS-1 — Pipeline _safe_* failures log at DEBUG, invisible in production
 
 **Status:** CLOSED (2026-06-07)

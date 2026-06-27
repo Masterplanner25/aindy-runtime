@@ -451,9 +451,13 @@ try/except; new additions need the same treatment or a verified-safe import.
 ## `_maybe_wrap_runtime_callback` — subprocess isolation hazard
 
 `registry.py:_maybe_wrap_runtime_callback()` routes registered callbacks (trigger
-evaluators, planner context providers, run tool providers, agent completion hooks,
-capability definition providers, startup hooks) through a subprocess via
-`runtime_callback_worker.py`. The subprocess is spawned with:
+evaluators, agent completion hooks, capability definition providers, startup hooks)
+through a subprocess via `runtime_callback_worker.py`. **Exception (PLANNER-SUBPROC-1,
+1.4.3): `run_tool_provider` and `planner_context` run in-process** — they read live
+in-process registration state (`TOOL_REGISTRY`, planner context) that a bare subprocess
+can't reconstruct (its cwd is read-only site-packages, so `load_plugins()` finds no app
+manifest and returns zero tools → planner 500 on Linux). They are listed in
+`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`. The subprocess is spawned with:
 
 ```python
 cwd=str(Path(__file__).resolve().parents[2])
@@ -525,6 +529,7 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **REPLAY-1** — CLOSED 2026-06-11: `AINDY/kernel/clock.py` — ContextVar `utcnow()` + `frozen_at()`. 12 sites updated across kernel/core/flow engine. 12 tests in `test_clock.py`.
 - **MEM-NODETYPE-1** — CLOSED 2026-06-27: `memory.write` defaulted `node_type="execution"`, which `VALID_NODE_TYPES` rejects → every default write raised `ValueError`, blocking the `runtime_local` execute loop. Fixed in two passes — PR #98 (syscall handler + `nodus_builtins.py`), then execute-to-completion verification on Postgres exposed 6 more sites in the **deferred** path the flow engine actually runs (`nodus_worker.py`, `nodus_runtime_adapter.py`, `nodus/runtime/memory_bridge.py` `remember`, extension ABI) where the rejected save was **silently swallowed**. All 8 → `"insight"`; tree-wide sweep clean. `memory_persistence.py` untouched so no schema-contract bump. Distinct from ECOGAP-1 (kernel replay log). Tests: `test_mem_nodetype_default.py` (unit) + `test_planner_loop_execute_to_completion.py` (integration, real PG).
 - **LEASE-1** — CLOSED 2026-06-24: `lease-elected` background leadership is now enforced via an atomic `background_task_leases` lease + `BackgroundLeadershipElector` (`AINDY/platform_layer/leadership.py`). Distributed profiles elect exactly one scheduler with failover; single-instance keeps the local-boolean guard. Was advertised-but-unimplemented (every replica self-elected).
+- **PLANNER-SUBPROC-1** — CLOSED 2026-06-27 (1.4.3): the agent planner 500'd on Linux/Docker because first-party run-tool / planner-context providers were routed through `_maybe_wrap_runtime_callback`'s isolated subprocess, which (cwd=site-packages) couldn't `load_plugins()` → zero tools. These two registry-state-dependent surfaces now run in-process via `_STATEFUL_IN_PROCESS_CALLBACK_SURFACES` in `registry.py`; self-contained surfaces stay isolated. Masked on Windows (manifest resolves there). Remaining gap: app trigger evaluators still isolated. Verified with a `python:3.11-slim` non-editable repro. Tests: `test_extension_ownership.py`.
 
 ---
 
