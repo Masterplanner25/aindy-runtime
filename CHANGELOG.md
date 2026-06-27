@@ -4,6 +4,28 @@
 
 ---
 
+## 1.4.2 — 2026-06-27
+
+### Fixed
+
+- **Memory writes no longer default to a rejected `node_type` (MEM-NODETYPE-1).**
+  Every `memory.write` path defaulted `node_type="execution"`, but
+  `VALID_NODE_TYPES` (`{decision, outcome, insight, relationship}`) omits it, so the
+  `before_insert`/`before_update` validator raised `ValueError` on every default
+  write — blocking the execute half of the `runtime_local` planner loop (which
+  almost always plans a memory write first). In the script paths the rejected save
+  was swallowed (`logger.warning` + `continue` / `return None`), so the script
+  reported completion while the node silently vanished. All eight write-path
+  defaults now use `"insight"` (the scorer's fallback, so a defaulted write ranks
+  identically to an untyped one): the syscall handler (`syscall_registry.py`),
+  `NodusMemoryBuiltins.write`, `DeferredMemoryBuiltins.write` + `_remember_factory`
+  (`nodus_worker.py`), `_apply_deferred_memory_writes` (`nodus_runtime_adapter.py`),
+  `AINDYMemoryBridge.remember` (`nodus/runtime/memory_bridge.py`), and the extension
+  memory ABI (`extension_runtime_api.py`, `extension_worker.py`). A tree-wide sweep
+  confirms no `"execution"` node_type default remains. Verified execute-to-completion
+  against real PostgreSQL (`tests/integration/test_planner_loop_execute_to_completion.py`).
+  `memory_persistence.py` is untouched, so the schema contract version is unchanged.
+
 ## 1.4.1 — 2026-06-24
 
 ### Fixed
