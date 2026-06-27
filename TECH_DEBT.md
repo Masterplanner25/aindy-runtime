@@ -1938,12 +1938,29 @@ to a valid type — `memory_ingest_service.py` → "insight", `nodus_memory_brid
 scorer (`memory_scoring_service.py`) also falls back to "insight" when type is unspecified,
 so "execution" nodes silently floored at the 0.8 default weight.
 
-**Fix applied:** Changed both defaults to "insight" (matches the scorer fallback, so a
-defaulted write ranks identically to an untyped one):
+**Fix applied (two passes):** Changed every write-path default to "insight" (matches the
+scorer fallback, so a defaulted write ranks identically to an untyped one).
+
+Pass 1 (PR #98) — the two sites in the original report:
 - `AINDY/kernel/syscall_registry.py` — `_handle_memory_write` default + docstring.
 - `AINDY/runtime/nodus_builtins.py` — `NodusMemoryBuiltins.write` signature + docstring.
-- 3 regression tests in `tests/unit/test_mem_nodetype_default.py` (validator rejects
-  "execution"/accepts "insight"; both write-path defaults land in `VALID_NODE_TYPES`).
+- 3 regression tests in `tests/unit/test_mem_nodetype_default.py`.
+
+Pass 2 — **execute-to-completion verification on the Postgres stack revealed PR #98 was
+incomplete**: the *deferred* path the flow engine actually runs still defaulted to
+"execution", as did the extension ABI. In the script paths the rejected save is swallowed
+(`logger.warning` + `continue` / `return None`), so the script reported completion while the
+node silently vanished. Six more sites, all → "insight":
+- `AINDY/runtime/nodus_worker.py` — `DeferredMemoryBuiltins.write` + `_remember_factory`.
+- `AINDY/runtime/nodus_runtime_adapter.py` — `_apply_deferred_memory_writes` dao.save.
+- `AINDY/nodus/runtime/memory_bridge.py` — `AINDYMemoryBridge.remember` (the VM's `remember`
+  builtin; persists in-subprocess on its own session).
+- `AINDY/platform_layer/extension_runtime_api.py` + `extension_worker.py` — extension memory ABI.
+- `tests/integration/test_planner_loop_execute_to_completion.py` — 4 integration tests driving
+  each real write path (dispatcher syscall, adapter deferred persist, `remember` builtin, full
+  subprocess VM run) with a default node_type against real PostgreSQL, asserting the node
+  persists as "insight". All green. A clean tree-wide sweep confirms no `"execution"` node_type
+  default remains.
 
 No `VALID_NODE_TYPES` change → `memory_persistence.py` untouched → schema contract protocol
 not triggered.
