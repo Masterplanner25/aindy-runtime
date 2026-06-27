@@ -507,6 +507,8 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
 - **PYPI-PUBLISH-1** — CLOSED 2026-06-14: published at v1.3.1; latest release v1.4.1 (2026-06-24). Dockerfile updated to `pip install aindy-runtime==1.4.1`. Bump version string in Dockerfile builder stage on each release.
 - **NODUS-UPGRADE-1** — CLOSED 2026-06-11: bumped to nodus-lang==4.0.3; updated to 4.0.5 on 2026-06-19 (no code changes required). See NODUS_DEVELOPER_GUIDE.md §8.
+- **NODUS-SYS-SURFACE-1** — Open: idiomatic `import "std:sys"` routes to nodus's 4-syscall in-process stub (`syscall` builtin → `nodus.services.syscall_runtime`), NOT the AINDY dispatcher. Only the bare `sys(...)` builtin (`nodus_worker.py:167`) reaches `dispatch_syscall`. Name-disjoint (`syscall` vs `sys`), no guard. See TECH_DEBT.md.
+- **ECOGAP-\*** — Ecosystem capability gaps from the 12-project re-audit (corrected lens), `ECOGAP-1..6`. Roadmap gaps, not classic debt (except ECOGAP-6 + narrow 5a). Source: `docs/runtime/ECOSYSTEM_CAPABILITY_GAPS.md`. Note: ECOGAP-2 (sandbox) is owned by **C2 (closed)/C3 (open)** — the audit overstated it; container-grade is certified + escape-tested. ECOGAP-3 extends MEMORY-EMBEDDING-PROVIDER-1. Don't double-track.
 - **PROMETHEUS-PIN-1** — CLOSED 2026-06-05: pinned to prom/prometheus:v3.4.1 in docker-compose.yml.
 - **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
 - **OPER-DEFER-001** — CLOSED 2026-06-15: `GET /platform/flows/strategies` served; Strategies tab live.

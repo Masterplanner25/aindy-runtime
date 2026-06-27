@@ -2000,3 +2000,158 @@ to a DB-side `now()` predicate.
 **No schema-contract bump:** `background_task_leases` was already in the ORM
 metadata (created by `create_all` / the Phase 5 schema guard); no model file
 changed, so `SCHEMA_CONTRACT_VERSION` is untouched.
+
+---
+
+## NODUS-SYS-SURFACE-1 — Idiomatic `std:sys` bypasses the AINDY SyscallDispatcher
+
+**Status:** Open — deferred (latent footgun, no current incident)
+
+A `.nd` script has **two name-disjoint ways to issue a syscall**, and only one of
+them reaches AINDY. They look interchangeable but route to entirely different
+backends:
+
+**Surface A — nodus-lang native `std:sys` (the idiomatic path):**
+```
+import "std:sys"
+sys.call("sys.v1.memory.put", { ... })
+```
+resolves to `site-packages/nodus/stdlib/sys.nd`, whose `call()` invokes the native
+VM builtin `syscall(name, payload)` (`nodus/vm/vm.py:262`, `builtin_syscall` at
+`vm.py:1389`) → `nodus.services.syscall_runtime.call_syscall`. That runtime has its
+**own hardcoded registry of exactly four syscalls** — `sys.v1.memory.{get,put,delete}`
+and `sys.v1.memory.recall_from` — backed by `nodus.services.memory_runtime`, an
+**in-process, ephemeral key/value store**. It never touches AINDY's
+`SyscallDispatcher`, capability enforcement, quota, idempotency, kernel, or Postgres.
+
+**Surface B — the AINDY-injected `sys` builtin (the path AINDY actually wires):**
+```
+sys("sys.v1.memory.put", { ... })        # bare builtin, NOT the std:sys module
+```
+`AINDY/runtime/nodus_worker.py:167` registers a host function literally named `sys`
+(`register_function("sys", _sys_dispatch, arity=2)`) whose body
+(`nodus_worker.py:136-162`) calls `AINDY.kernel.syscall_dispatcher.dispatch_syscall`
+→ the real dispatcher → kernel + Postgres, scoped to `user_id`.
+
+**The gap:** the builtins are named differently (`syscall` vs `sys`), so there is no
+shadowing in either direction — but also **no guard**. aindy-runtime's worker does
+**not** register `syscall` or `syscall_list`, so it cannot override Surface A. A
+developer who writes the conventional `import "std:sys"; sys.call(...)` silently gets
+nodus's four-syscall in-process stub with throwaway memory instead of AINDY's
+capability-enforced, durable dispatcher — no error, no warning, wrong backend.
+
+This reconciles two prior audit claims that appeared to conflict: "Nodus `std:sys`
+routes to local in-process handlers, not AINDY syscalls" (true of **Surface A**) and
+"Nodus `sys()` reaches the AINDY SyscallDispatcher" (true of **Surface B**). Both are
+correct; they describe different builtins. The integration is real and live, but it
+does **not** work by intercepting the idiomatic stdlib entry point.
+
+**Options (not yet chosen):**
+- **Guard/alias** — register a `syscall` (and `syscall_list`) host builtin in
+  `nodus_worker.py` that forwards to `_sys_dispatch`, so `std:sys` also lands on
+  AINDY. Risk: must match the native envelope shape and arity exactly, and verify it
+  overrides the VM builtin rather than colliding.
+- **Fail-loud** — register `syscall` to raise a clear "use the `sys()` builtin under
+  AINDY" error, so the wrong path is caught at runtime instead of silently stubbed.
+- **Doc-only** — document in `NODUS_DEVELOPER_GUIDE.md` that under aindy-runtime,
+  scripts must call the bare `sys(...)` builtin and must not `import "std:sys"`.
+
+Key files: `AINDY/runtime/nodus_worker.py` (`_sys_dispatch`, `register_function`),
+`site-packages/nodus/stdlib/sys.nd`, `nodus/vm/vm.py:262` (`builtin_syscall`),
+`nodus/services/syscall_runtime.py`, `nodus/services/memory_runtime.py`.
+
+**Reopen/resolve trigger:** before any `.nd` script or agent objective is authored
+that relies on `import "std:sys"`, or before exposing Nodus authoring to external
+users.
+
+---
+
+## ECOGAP-* — Ecosystem capability gaps (corrected lens)
+
+Derived from the 12-project ecosystem re-audit, re-judged against source-verified
+aindy-runtime/Nodus facts. These are **capability/roadmap gaps**, not classic debt
+(a shortcut in existing code) — except `ECOGAP-6` (and the narrow `ECOGAP-5a`), which
+are debt-shaped. Full analysis: `docs/runtime/ECOSYSTEM_CAPABILITY_GAPS.md`. Several
+map onto existing entries (noted per item); do not double-track.
+
+### ECOGAP-1 — Event-sourced durable execution / transparent crash continuation
+
+**Status:** Deferred — roadmap (P0 among these gaps)
+
+aindy-runtime marks non-waiting `running` flows FAILED on restart; there is no replay log.
+WAIT/RESUME + `flow_run_rehydration` + ResumeWatchdog already cover *suspended* flows — the
+gap is specifically mid-run, non-waiting work. Field bar: Temporal (event-sourced replay);
+LangGraph (pending-writes-then-checkpoint, partial); ADK/OpenHands/Open Interpreter ship
+event logs. Absorb targets: ADK append-event fold, LangGraph `versions_seen` vector clock,
+Temporal at-least-once idempotent-start. **Do not import weaker JSON-snapshot models.**
+
+**Reopen trigger:** when crash-continuation of in-flight non-waiting flows is scheduled.
+
+### ECOGAP-2 — Hostile-safe sandboxing (strong-VM tier on non-Linux) — SEE C2/C3
+
+**Status:** Owned by existing entries — **C2 (CLOSED 2026-05-24)** and **C3 (open, Phases 1–4)**.
+
+The ecosystem audit flagged sandboxing as a leading P0 gap; that **overstates** the real state.
+Container-grade isolation is closed, certified cross-platform (Linux/Windows/macOS reach
+`container-grade-sandbox`), and adversarially escape-tested (17 tests, real Docker, all PASS;
+`tests/sandbox/`, `SANDBOX_ESCAPE_AUDIT.md`). Auto-selection is environment-aware:
+distributed/production profiles default to `containerized_oci` (the certified tier); only dev
+falls back to `insecure_dev_subprocess`. The genuine residual — `strong_sandbox_vm`
+(dedicated-VM, hostile-third-party tier) being Linux-only — is **already tracked as C3**. No new
+debt. Reconcile the external v2 aggregate + OpenHands/OI/SWE per-project audits against C2/C3.
+
+### ECOGAP-3 — Provider breadth + embedding SPOF — extends MEMORY-EMBEDDING-PROVIDER-1
+
+**Status:** Deferred — roadmap (P1)
+
+Only OpenAI + DeepSeek concretely in tree; OpenAI hard-required for embeddings. The embedding
+half is **MEMORY-EMBEDDING-PROVIDER-1**; this entry adds LLM-client breadth (Azure/Anthropic/
+Gemini/Bedrock/local) behind `CircuitBreakerLLMClient`. Absorb: CrewAI native multi-SDK +
+cross-loop cache-breakpoint, Devika 7-backend registry, litellm reach (Aider/SWE/ADK). Most
+broadly cited concrete weakness (9/12 projects). Mechanically straightforward behind the
+existing client seam.
+
+**Reopen trigger:** when a non-OpenAI provider or local-model path is scheduled.
+
+### ECOGAP-4 — MCP/A2A: gated-egress boundary (runtime) + wire adapters (plugin)
+
+**Status:** Deferred — roadmap (P1 for the runtime half)
+
+Two altitudes, split deliberately. **G4a (runtime):** a capability-gated egress boundary +
+secret-broker so executed/sandboxed code never holds keys (OpenHands' control-plane pattern) —
+trusted/enforced at the syscall boundary, a real runtime concern. **G4b (plugin):** the concrete
+MCP/A2A wire clients (JSON-RPC envelopes, handshake, SSE framing) are hosted adapters registered
+via the plugin ABI — *not* kernel primitives (the kernel owns the socket + the gate, not the
+protocol client). `nodus-mcp`/`nodus-a2a` graduate from out-of-tree to registered plugins.
+
+**Reopen trigger:** when first external MCP/A2A interop is scheduled, or when a sandbox needs
+mediated egress without holding credentials.
+
+### ECOGAP-5 — Durable timer (5a) + workflow-as-data (5b)
+
+**Status:** 5a — Deferred, P3 (debt-shaped, narrow). 5b — Deferred, P2 (Nodus/language layer).
+
+**5a (runtime, narrow):** user schedules are already durable-as-data (`NodusScheduledJob`) and
+rehydrated into APScheduler on boot via `restore_nodus_scheduled_jobs()`, so the in-memory
+jobstore is rebuilt from DB each start. Residual = misfire/missed-window handling for fires due
+*during* downtime, plus one unifying durable timer/FireTime primitive. **Not** "schedules lost."
+
+**5b (Nodus):** `FLOW_REGISTRY` is in-process Python — business structure compiled into runtime
+code. The fix is a loadable graph artifact (Nodus `.nodus/graphs/<id>.json`) the runtime
+interprets — an **anti-creep** mechanism that lifts business logic *out* of the kernel, on the
+language layer, not a runtime gap. Absorb: ADK frontier/JoinNode scheduling, MS typed-message
+actor graph, LangGraph reducer-cell/serde discipline.
+
+**Reopen trigger:** 5a — when misfire-on-downtime is reported. 5b — when data-defined flow
+execution (beyond code-defined `FLOW_REGISTRY`) is scheduled.
+
+### ECOGAP-6 — Execution-path test coverage
+
+**Status:** Deferred — **debt** (P2)
+
+`AINDY/worker/` and the Surface-B Nodus execution path are at low/zero coverage; the integration
+tier is mocked-only in CI. This is genuine hygiene debt (a shortcut in existing code), not a
+capability gap. Coverage claims for the durable-execution and Nodus-dispatch paths are therefore
+under-tested. Pairs with `ECOGAP-1` (the replay path most needs real coverage).
+
+**Reopen trigger:** before relying on `worker/` or Surface-B behavior in a release claim.
