@@ -347,17 +347,23 @@ def bootstrap():
     startup = registry.run_startup_hooks({"user_id": "user-1", "db": object()})
     invocations = registry.get_runtime_callback_invocations()
 
+    # planner_context is a registry-state-dependent surface (PLANNER-SUBPROC-1):
+    # it now runs IN-PROCESS so it can read live registration state. The context
+    # is still sanitized at the registry boundary (get_planner_context), so the
+    # non-serializable db handle is dropped exactly as before; the only change is
+    # that it is no longer recorded as an isolated runtime callback.
     assert planner == {
         "planner_backend": "runtime_local",
         "origin": "first-party",
         "db_present": False,
     }
+    assert "planner_context:first-party" not in invocations
+
+    # startup_hook is self-contained and keeps subprocess isolation: the db handle
+    # does not cross the process boundary, and it is recorded as isolated.
     assert startup == [{"origin": "startup", "db_present": False}]
-    assert invocations["planner_context:first-party"]["owner_class"] == OWNER_FIRST_PARTY_APP
     assert invocations["startup_hook:startup_hook"]["owner_class"] == OWNER_FIRST_PARTY_APP
-    assert invocations["planner_context:first-party"]["execution_mode"] == "isolated-runtime-callback"
     assert invocations["startup_hook:startup_hook"]["execution_mode"] == "isolated-runtime-callback"
-    assert invocations["planner_context:first-party"]["worker_pid"] != os.getpid()
     assert invocations["startup_hook:startup_hook"]["worker_pid"] != os.getpid()
 
 
