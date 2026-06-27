@@ -212,7 +212,7 @@ class NodusMemoryBuiltins:
         self,
         content: str,
         tags: "list[str] | str | None" = None,
-        node_type: str = "execution",
+        node_type: str = "insight",
         significance: float = 0.5,
     ) -> "dict[str, Any]":
         """
@@ -228,7 +228,7 @@ class NodusMemoryBuiltins:
         tags : str | list[str] | None
             Tags for later retrieval.  A single string is wrapped in a list.
         node_type : str
-            Semantic category (default ``"execution"``).
+            Semantic category (default ``"insight"``).
         significance : float
             Importance score 0.0–1.0, clamped (default 0.5).
 

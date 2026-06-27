@@ -523,6 +523,7 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **LAYER-\*** — Layer boundary violations (LAYER-1 through LAYER-5). All deferred. See TECH_DEBT.md.
 - **TIER3-10** — `async_job_service` coupling. Open — architectural, no bounded fix.
 - **REPLAY-1** — CLOSED 2026-06-11: `AINDY/kernel/clock.py` — ContextVar `utcnow()` + `frozen_at()`. 12 sites updated across kernel/core/flow engine. 12 tests in `test_clock.py`.
+- **MEM-NODETYPE-1** — CLOSED 2026-06-27: `memory.write` defaulted `node_type="execution"`, which `VALID_NODE_TYPES` rejects → every default write raised `ValueError`, blocking the `runtime_local` execute loop. Changed the two outlier defaults (`syscall_registry.py` handler, `nodus_builtins.py` builtin) to `"insight"`; `memory_persistence.py` untouched so no schema-contract bump. Distinct from ECOGAP-1 (kernel replay log). Tests: `test_mem_nodetype_default.py`.
 - **LEASE-1** — CLOSED 2026-06-24: `lease-elected` background leadership is now enforced via an atomic `background_task_leases` lease + `BackgroundLeadershipElector` (`AINDY/platform_layer/leadership.py`). Distributed profiles elect exactly one scheduler with failover; single-instance keeps the local-boolean guard. Was advertised-but-unimplemented (every replica self-elected).
 
 ---
