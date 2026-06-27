@@ -118,7 +118,7 @@ def memory_write(
     *,
     content: str,
     tags: list[str] | None = None,
-    node_type: str = "execution",
+    node_type: str = "insight",
 ) -> dict[str, Any]:
     require_capability(CAP_MEMORY_WRITE)
     result = _invoke_runtime_api(
