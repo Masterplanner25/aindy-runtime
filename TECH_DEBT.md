@@ -1918,6 +1918,44 @@ Sites updated (12): `kernel/syscall_dispatcher.py` (EffectRecord gate — 3 site
 
 ---
 
+## MEM-NODETYPE-1 — Memory write defaults to a node_type the validator rejects
+
+**Status:** CLOSED (2026-06-27)
+
+**Problem:** Two `memory.write` paths defaulted `node_type="execution"`, but
+`VALID_NODE_TYPES` in `AINDY/memory/memory_persistence.py` (`{decision, outcome, insight,
+relationship}`) omits "execution". The `before_insert`/`before_update` validator
+(`validate_node_type`) therefore raised `ValueError` on every default write — and since
+`memory_type` falls back to `node_type` (line 122), it failed `VALID_MEMORY_TYPES` too.
+This blocked the execute half of the `runtime_local` planner loop, which almost always
+plans a memory tool first. Surfaced during live-stack verification from the monolith
+(`LIVE_VERIFICATION_SCOPE.md`). The syscall docstring even documented `default "execution"`,
+so the runtime advertised a default its own model rejected.
+
+**Why it was an outlier, not a missing type:** every *other* write path already defaulted
+to a valid type — `memory_ingest_service.py` → "insight", `nodus_memory_bridge.py` →
+"outcome". Only the syscall handler and the Nodus builtin defaulted to "execution". The
+scorer (`memory_scoring_service.py`) also falls back to "insight" when type is unspecified,
+so "execution" nodes silently floored at the 0.8 default weight.
+
+**Fix applied:** Changed both defaults to "insight" (matches the scorer fallback, so a
+defaulted write ranks identically to an untyped one):
+- `AINDY/kernel/syscall_registry.py` — `_handle_memory_write` default + docstring.
+- `AINDY/runtime/nodus_builtins.py` — `NodusMemoryBuiltins.write` signature + docstring.
+- 3 regression tests in `tests/unit/test_mem_nodetype_default.py` (validator rejects
+  "execution"/accepts "insight"; both write-path defaults land in `VALID_NODE_TYPES`).
+
+No `VALID_NODE_TYPES` change → `memory_persistence.py` untouched → schema contract protocol
+not triggered.
+
+**Distinct from `ECOGAP-1` (event-sourced durable execution / replay):** that is a
+kernel/flow-engine durability gap (append-only event log for crash continuation), a
+different subsystem from the memory-node taxonomy. An episodic "execution"/"action" memory
+type could be introduced later *if* ECOGAP-1 mirrors execution events into the memory graph —
+but that is deferred and out of scope here.
+
+---
+
 ## OBS-1 — Pipeline _safe_* failures log at DEBUG, invisible in production
 
 **Status:** CLOSED (2026-06-07)
