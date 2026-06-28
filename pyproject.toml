@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
   "annotated-doc==0.0.4",
   "annotated-types==0.7.0",
-  "anyio==4.13.0",
+  "anyio==4.14.1",
   "apscheduler==3.11.2",
   "bcrypt==4.0.1",
   "certifi==2026.6.17",
