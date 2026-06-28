@@ -229,11 +229,16 @@ def test_platform_only_registers_runtime_agent_defaults(platform_only_runtime):
     assert evaluator({"trigger_type": "user", "trigger": {"importance": 0.9}, "context": {}})["decision"] == "execute"
     assert set(contract["baseline_agent_capabilities"]["capabilities"]) <= set(capabilities)
     callback_invocations = registry.get_runtime_callback_invocations()
-    assert callback_invocations["planner_context:default"]["execution_mode"] == "isolated-runtime-callback"
-    assert callback_invocations["run_tool_provider:default"]["execution_mode"] == "isolated-runtime-callback"
+    # planner_context and run_tool_provider run IN-PROCESS (PLANNER-SUBPROC-1) — they
+    # read live registration state — so they are not recorded as isolated invocations.
+    # The functional assertions above (non-empty system_prompt, baseline tool set)
+    # already prove they resolve correctly in-process. trigger evaluators and
+    # capability providers are self-contained and keep subprocess isolation.
+    assert "planner_context:default" not in callback_invocations
+    assert "run_tool_provider:default" not in callback_invocations
     assert callback_invocations["trigger_evaluator:default"]["execution_mode"] == "isolated-runtime-callback"
     assert callback_invocations["capability_definition_provider:runtime_capability_bundle"]["execution_mode"] == "isolated-runtime-callback"
-    assert callback_invocations["planner_context:default"]["worker_pid"] != os.getpid()
+    assert callback_invocations["trigger_evaluator:default"]["worker_pid"] != os.getpid()
 
 
 def test_platform_only_runtime_startup_hooks_can_execute_through_runtime_callback_boundary(platform_only_runtime):

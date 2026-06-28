@@ -353,6 +353,20 @@ def _callback_source_path(handler: Handler) -> str | None:
     return module_origin or None
 
 
+# Surfaces whose handlers read live in-process registration state (the agent
+# tool registry, the planner context) populated during app bootstrap. An
+# isolated subprocess starts from a bare interpreter and would have to re-run the
+# full app bootstrap to reconstruct that state — prohibitively slow and unreliable
+# across cwd/manifest resolution (the subprocess cwd is the read-only site-packages
+# dir, so load_plugins() finds no app manifest and returns zero tools). These
+# surfaces therefore run in-process. Self-contained surfaces (startup hooks,
+# capability providers, trigger evaluators) keep subprocess isolation. See
+# PLANNER-SUBPROC-1.
+_STATEFUL_IN_PROCESS_CALLBACK_SURFACES: frozenset[str] = frozenset(
+    {"run_tool_provider", "planner_context"}
+)
+
+
 def _runtime_callback_spec(
     *,
     surface: str,
@@ -360,6 +374,8 @@ def _runtime_callback_spec(
     handler: Handler,
     expects_argument: bool,
 ) -> dict[str, Any] | None:
+    if surface in _STATEFUL_IN_PROCESS_CALLBACK_SURFACES:
+        return None
     module_name = str(getattr(handler, "__module__", "") or "").strip()
     function_name = str(getattr(handler, "__name__", "") or "").strip()
     owner_class = _callback_owner_class(handler)

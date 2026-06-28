@@ -60,7 +60,7 @@ class DeferredMemoryBuiltins:
         self,
         content: str,
         tags: Any = None,
-        node_type: str = "execution",
+        node_type: str = "insight",
         significance: float = 0.5,
     ) -> dict[str, Any]:
         tags_list = [tags] if isinstance(tags, str) else list(tags or [])
@@ -93,7 +93,7 @@ def _remember_factory(memory: DeferredMemoryBuiltins) -> Any:
     def _remember(*args: Any) -> dict[str, Any]:
         content = str(args[0]) if args else ""
         tags = args[1] if len(args) > 1 else None
-        node_type = str(args[2]) if len(args) > 2 else "execution"
+        node_type = str(args[2]) if len(args) > 2 else "insight"
         significance = float(args[3]) if len(args) > 3 else 0.5
         result = memory.write(content, tags, node_type, significance)
         memory._writes[-1]["kind"] = "remember"
