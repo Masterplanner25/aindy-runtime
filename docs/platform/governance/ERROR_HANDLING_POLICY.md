@@ -54,7 +54,7 @@ This document distinguishes current behavior from required policy rules. It does
   - `call_genesis_llm()`: Expects JSON from `response.choices[0].message.content` and uses `json.loads`. On JSON parsing failure, returns a fixed fallback dict: `{"reply": "I need a bit more clarity. Can you elaborate?", "state_update": {}, "synthesis_ready": False}`. No retry logic. No explicit timeout.
   - `call_genesis_synthesis_llm()`: Uses `response_format={"type": "json_object"}`. On JSON parse failure, returns a minimal valid structure. No retry logic. No explicit timeout.
   - ✅ **`validate_draft_integrity()` (added 2026-03-17 Genesis Block 4):** Implements 3-attempt retry loop with `for attempt in range(retry_limit)`. On all-retry failure, returns a structured fail-safe dict with `audit_passed=False` and a `confidence_concern` finding. Uses `response_format={"type": "json_object"}`.
-- `deepseek_arm_service.py` _(path unverified after split; app-owned ARM domain, aindy-apps-monolith)_:
+- ARM DeepSeek service _(app-owned, aindy-apps-monolith)_ — the pre-split `deepseek_arm_service.py` was refactored into the `apps/arm/services/deepseek/` package (analyzer: `deepseek_code_analyzer.py`), wired via `apps/arm/bootstrap.py` and `apps/arm/syscalls.py`:
   - Calls DeepSeek analyzer functions without wrapping exceptions.
   - Exceptions are handled at the route level in `apps/arm/routes/arm_router.py` _(app-owned)_, which returns HTTP 500.
   - No retry logic. No explicit timeout.
