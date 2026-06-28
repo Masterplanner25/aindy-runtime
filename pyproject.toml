@@ -33,7 +33,7 @@ dependencies = [
   "colorama==0.4.6",
   "distro==1.9.0",
   "dnspython==2.8.0",
-  "fastapi==0.137.1",
+  "fastapi==0.138.1",
   "fastapi-cache2==0.2.2",
   "greenlet==3.5.1",
   "h11==0.16.0",
