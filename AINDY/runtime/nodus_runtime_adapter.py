@@ -281,7 +281,7 @@ def _apply_deferred_memory_writes(
                     content=content,
                     tags=list(write.get("tags") or []),
                     user_id=context.user_id,
-                    node_type=str(write.get("node_type") or "execution"),
+                    node_type=str(write.get("node_type") or "insight"),
                     source="nodus_script",
                     extra={"significance": float(write.get("significance") or 0.5)},
                 )

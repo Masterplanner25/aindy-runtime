@@ -1918,6 +1918,92 @@ Sites updated (12): `kernel/syscall_dispatcher.py` (EffectRecord gate — 3 site
 
 ---
 
+## MEM-NODETYPE-1 — Memory write defaults to a node_type the validator rejects
+
+**Status:** CLOSED (2026-06-27)
+
+**Problem:** Two `memory.write` paths defaulted `node_type="execution"`, but
+`VALID_NODE_TYPES` in `AINDY/memory/memory_persistence.py` (`{decision, outcome, insight,
+relationship}`) omits "execution". The `before_insert`/`before_update` validator
+(`validate_node_type`) therefore raised `ValueError` on every default write — and since
+`memory_type` falls back to `node_type` (line 122), it failed `VALID_MEMORY_TYPES` too.
+This blocked the execute half of the `runtime_local` planner loop, which almost always
+plans a memory tool first. Surfaced during live-stack verification from the monolith
+(`LIVE_VERIFICATION_SCOPE.md`). The syscall docstring even documented `default "execution"`,
+so the runtime advertised a default its own model rejected.
+
+**Why it was an outlier, not a missing type:** every *other* write path already defaulted
+to a valid type — `memory_ingest_service.py` → "insight", `nodus_memory_bridge.py` →
+"outcome". Only the syscall handler and the Nodus builtin defaulted to "execution". The
+scorer (`memory_scoring_service.py`) also falls back to "insight" when type is unspecified,
+so "execution" nodes silently floored at the 0.8 default weight.
+
+**Fix applied (two passes):** Changed every write-path default to "insight" (matches the
+scorer fallback, so a defaulted write ranks identically to an untyped one).
+
+Pass 1 (PR #98) — the two sites in the original report:
+- `AINDY/kernel/syscall_registry.py` — `_handle_memory_write` default + docstring.
+- `AINDY/runtime/nodus_builtins.py` — `NodusMemoryBuiltins.write` signature + docstring.
+- 3 regression tests in `tests/unit/test_mem_nodetype_default.py`.
+
+Pass 2 — **execute-to-completion verification on the Postgres stack revealed PR #98 was
+incomplete**: the *deferred* path the flow engine actually runs still defaulted to
+"execution", as did the extension ABI. In the script paths the rejected save is swallowed
+(`logger.warning` + `continue` / `return None`), so the script reported completion while the
+node silently vanished. Six more sites, all → "insight":
+- `AINDY/runtime/nodus_worker.py` — `DeferredMemoryBuiltins.write` + `_remember_factory`.
+- `AINDY/runtime/nodus_runtime_adapter.py` — `_apply_deferred_memory_writes` dao.save.
+- `AINDY/nodus/runtime/memory_bridge.py` — `AINDYMemoryBridge.remember` (the VM's `remember`
+  builtin; persists in-subprocess on its own session).
+- `AINDY/platform_layer/extension_runtime_api.py` + `extension_worker.py` — extension memory ABI.
+- `tests/integration/test_planner_loop_execute_to_completion.py` — 4 integration tests driving
+  each real write path (dispatcher syscall, adapter deferred persist, `remember` builtin, full
+  subprocess VM run) with a default node_type against real PostgreSQL, asserting the node
+  persists as "insight". All green. A clean tree-wide sweep confirms no `"execution"` node_type
+  default remains.
+
+No `VALID_NODE_TYPES` change → `memory_persistence.py` untouched → schema contract protocol
+not triggered.
+
+**Distinct from `ECOGAP-1` (event-sourced durable execution / replay):** that is a
+kernel/flow-engine durability gap (append-only event log for crash continuation), a
+different subsystem from the memory-node taxonomy. An episodic "execution"/"action" memory
+type could be introduced later *if* ECOGAP-1 mirrors execution events into the memory graph —
+but that is deferred and out of scope here.
+
+---
+
+## PLANNER-SUBPROC-1 — Agent planner broken on Linux/Docker (run-tool provider isolated into a stateless subprocess)
+
+**Status:** CLOSED (2026-06-27)
+
+**Problem:** `POST /apps/agent/run` → `generate_plan` → `get_tools_for_run` resolves the
+registered run-tool provider, which `registry._maybe_wrap_runtime_callback` routed through
+an isolated subprocess (`runtime_callback_worker.py`). First-party-app providers (and the
+planner-context provider) read **live in-process registration state** — the agent
+`TOOL_REGISTRY` and planner context populated during app bootstrap. A bare subprocess can't
+reconstruct that: its `cwd` is the read-only site-packages dir (`runtime_callback_host.py:62`),
+so the provider's `load_plugins()` finds no app manifest and returns zero tools → planner
+raises `requires at least one registered tool` → **500**. Masked in local dev because Windows
+resolves the manifest; only surfaced on Linux (CI + a `python:3.11-slim` non-editable repro).
+Same class of bug also affects app-provided trigger evaluators (the documented silent-defer in
+`_maybe_wrap_runtime_callback`).
+
+**Fix applied:** Registry-state-dependent surfaces now run **in-process**. Added
+`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES = {"run_tool_provider", "planner_context"}` in
+`AINDY/platform_layer/registry.py`; `_runtime_callback_spec` returns `None` (in-process) for
+those. Self-contained surfaces (startup hooks, capability providers, trigger evaluators) keep
+subprocess isolation. Context is still sanitized at the registry boundary
+(`get_planner_context` / `get_tools_for_run`), so no extra state crosses any boundary. Updated
+`tests/unit/test_extension_ownership.py` (planner_context now in-process, not recorded as an
+isolated invocation; startup_hook stays isolated). Shipped in 1.4.3.
+
+**Remaining gap:** app-provided **trigger evaluators** still run isolated; if a deployment
+relies on app-state-dependent trigger evaluators they will silently defer on Linux. Add
+`trigger_evaluator` to the in-process set when that becomes a real workload.
+
+---
+
 ## OBS-1 — Pipeline _safe_* failures log at DEBUG, invisible in production
 
 **Status:** CLOSED (2026-06-07)
@@ -2155,3 +2241,79 @@ capability gap. Coverage claims for the durable-execution and Nodus-dispatch pat
 under-tested. Pairs with `ECOGAP-1` (the replay path most needs real coverage).
 
 **Reopen trigger:** before relying on `worker/` or Surface-B behavior in a release claim.
+
+---
+
+## DOCS-BUCKET-A-1 — Runtime docset relocation (Bucket A) residuals
+
+**Status:** Open — Low Priority (relocation landed 2026-06-27)
+
+The Bucket A migration relocated runtime-owned docs that were left behind in the
+pre-split monolith archive (`C:\dev\masterplan-infiniteweave-monday-node-2025-0411\docs`)
+into this repo, mirroring the archive's category dirs:
+
+- `docs/architecture/MODEL_OWNERSHIP_POLICY.md`
+- `docs/platform/governance/{AGENT_WORKING_RULES,ERROR_HANDLING_POLICY,CHANGELOG}.md`
+- `docs/tutorials/{index,01-memory-driven-workflow,02-event-driven-automation,03-scheduled-execution}.md`
+
+File-path tokens were verified against `AINDY/**` and `aindy-apps-monolith/apps/**`
+and rewritten to canonical post-split locations (runtime-moved paths repointed
+within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes).
+`RUNTIME_DOC_INDEX.md` gained a "Sibling Docsets" section.
+
+**Residuals / deferred work:**
+
+1. **`DATA_MODEL_MAP.md` deferred (the Tier-2 item).** The archive's
+   `architecture/DATA_MODEL_MAP.md` (~902 lines) documents the **combined**
+   pre-split schema — runtime tables (agent, memory_*, user, request_metric,
+   background_task_lease, …) interleaved with app-domain tables (`freelance`,
+   `masterplan`, `task`, `social`, `author`, `leadgen`, `arm`, …, now app-owned
+   in `aindy-apps-monolith`). Landing it as-is would be mixed-ownership content
+   masquerading as a runtime doc. It needs editorial surgery: collapse the
+   app-table sections to a pointer to `aindy-apps-monolith` and keep only the
+   runtime tables + cross-DB boundaries. **Not done in this pass** to avoid a
+   bad-state doc. Until then it is *referenced as deferred* from
+   `AGENT_WORKING_RULES.md` and `RUNTIME_DOC_INDEX.md`.
+
+2. **`ERROR_HANDLING_POLICY.md` is a combined-monolith audit.** Its "Current
+   Implementation" sections are ~90% app-owned routers/services (genesis, arm,
+   social, dashboard, rippletrace, network_bridge, search/seo, tasks). Paths were
+   repointed to `apps/...` with a scope banner, but the doc is a candidate for a
+   later runtime-only / app-only editorial split. The **Policy Rules** sections
+   are repo-agnostic and remain valid.
+
+3. **Unverified path tokens** (annotated `_(path unverified after split)_` in the
+   docs): `deepseek_arm_service.py` — not found in either repo (app-owned ARM
+   domain, exact location unconfirmed).
+
+4. **Pre-split governance docs.** `INVARIANTS.md` has been **split and authored**:
+   the runtime-owned half is now `docs/platform/governance/INVARIANTS.md` (this
+   repo; PostgreSQL/UTC/memory-graph/auth/startup invariants, enforcement sites
+   re-verified against the current tree), companion to the app-owned half in
+   `aindy-apps-monolith`. References that previously annotated it as "not migrated"
+   were repointed. `SYSTEM_SPEC.md` and `GOVERNANCE_INDEX.md` remain absent in both
+   split repos; references retained as historical pointers. Not part of Bucket A.
+
+5. **CHANGELOG relocated verbatim.** The pre-split monolith `CHANGELOG.md` is an
+   audit trail; its hundreds of historical path references were intentionally
+   **not** rewritten (rewriting would falsify the record). A scope banner marks it
+   as pre-split history; current runtime history lives in
+   `docs/runtime/DOCSET_CHANGELOG.md`.
+
+6. **Tutorial surface drift** (validated against the live runtime, annotated with
+   **Runtime note** callouts, examples left intact so worked outputs stay
+   coherent): `sys.v1.event.wait` is not a registered syscall — WAIT/RESUME is the
+   Nodus `event.wait()` builtin; `sys.v1.flow.run` field is `initial_state` not
+   `input`; trace endpoint param is `{trace_id}`; delete-schedule param is
+   `{job_id}`; `extra` is SDK-only (not in the v1 `memory.write` schema). The
+   `AINDY.sdk.aindy_sdk` client and the `docs/sdk/` docset are not in this repo
+   (published separately as **aindy-sdk**).
+
+7. **`RUNTIME_DOCSET_BOUNDARY.md` relative links** to `../architecture/`,
+   `../platform/`, `../apps/` now have the parent dirs present, but several
+   *specific* targets it lists (`BOOT_PROFILES.md`, `ARCHITECTURE_MAP.md`,
+   `PLUGIN_REGISTRY_PATTERN.md`, `platform/interfaces/API_CONTRACTS.md`,
+   `apps/*`) are **not** Bucket A docs and remain unresolved by design.
+
+**Close trigger:** when `DATA_MODEL_MAP.md` surgery lands (residual 1) and the
+`ERROR_HANDLING_POLICY.md` runtime/app split (residual 2) is decided.

@@ -4,6 +4,50 @@
 
 ---
 
+## 1.4.3 — 2026-06-27
+
+### Fixed
+
+- **Agent planner is no longer broken on Linux/Docker deployments (PLANNER-SUBPROC-1).**
+  First-party-app run-tool providers and planner-context providers were routed
+  through an isolated subprocess (`registry._maybe_wrap_runtime_callback`). Those
+  handlers read live in-process registration state (the agent `TOOL_REGISTRY`, the
+  planner context) populated during app bootstrap, which a bare subprocess cannot
+  reconstruct: its cwd is the read-only site-packages dir, so `load_plugins()`
+  finds no app manifest and returns zero tools. The planner then failed with
+  `Runtime-local planner backend requires at least one registered tool`, so
+  `POST /apps/agent/run` returned 500 on Linux. It was masked in local dev because
+  Windows resolves the manifest. These two registry-state-dependent surfaces now
+  run **in-process** (`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES` in
+  `AINDY/platform_layer/registry.py`); self-contained surfaces (startup hooks,
+  capability providers, trigger evaluators) keep subprocess isolation. The same
+  class of bug also affected app-provided trigger evaluators (silent defer);
+  those remain isolated and are tracked for a follow-up if they grow in-process
+  state dependencies. Verified against a Linux container reproduction
+  (`python:3.11-slim`, non-editable site-packages install) before/after.
+
+## 1.4.2 — 2026-06-27
+
+### Fixed
+
+- **Memory writes no longer default to a rejected `node_type` (MEM-NODETYPE-1).**
+  Every `memory.write` path defaulted `node_type="execution"`, but
+  `VALID_NODE_TYPES` (`{decision, outcome, insight, relationship}`) omits it, so the
+  `before_insert`/`before_update` validator raised `ValueError` on every default
+  write — blocking the execute half of the `runtime_local` planner loop (which
+  almost always plans a memory write first). In the script paths the rejected save
+  was swallowed (`logger.warning` + `continue` / `return None`), so the script
+  reported completion while the node silently vanished. All eight write-path
+  defaults now use `"insight"` (the scorer's fallback, so a defaulted write ranks
+  identically to an untyped one): the syscall handler (`syscall_registry.py`),
+  `NodusMemoryBuiltins.write`, `DeferredMemoryBuiltins.write` + `_remember_factory`
+  (`nodus_worker.py`), `_apply_deferred_memory_writes` (`nodus_runtime_adapter.py`),
+  `AINDYMemoryBridge.remember` (`nodus/runtime/memory_bridge.py`), and the extension
+  memory ABI (`extension_runtime_api.py`, `extension_worker.py`). A tree-wide sweep
+  confirms no `"execution"` node_type default remains. Verified execute-to-completion
+  against real PostgreSQL (`tests/integration/test_planner_loop_execute_to_completion.py`).
+  `memory_persistence.py` is untouched, so the schema contract version is unchanged.
+
 ## 1.4.1 — 2026-06-24
 
 ### Fixed
