@@ -2302,9 +2302,14 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
    later runtime-only / app-only editorial split. The **Policy Rules** sections
    are repo-agnostic and remain valid.
 
-3. **Unverified path tokens** (annotated `_(path unverified after split)_` in the
-   docs): `deepseek_arm_service.py` — not found in either repo (app-owned ARM
-   domain, exact location unconfirmed).
+3. **Unverified path tokens — RESOLVED 2026-06-28.** The lone dangling token,
+   `deepseek_arm_service.py`, was an **app-owned** ARM concern (not a runtime
+   concern). The pre-split file was refactored into the
+   `apps/arm/services/deepseek/` package in `aindy-apps-monolith` (analyzer:
+   `deepseek_code_analyzer.py`; config/file/security siblings), wired via
+   `apps/arm/bootstrap.py` + `apps/arm/syscalls.py`. `ERROR_HANDLING_POLICY.md`
+   §2 repointed to that package; the "path unverified" annotation is removed. No
+   remaining unverified tokens in the migrated docs.
 
 4. **Pre-split governance docs.** `INVARIANTS.md` has been **split and authored**:
    the runtime-owned half is now `docs/platform/governance/INVARIANTS.md` (this
