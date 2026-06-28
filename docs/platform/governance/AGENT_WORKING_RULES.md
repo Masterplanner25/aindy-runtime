@@ -13,8 +13,10 @@ This document defines enforceable collaboration boundaries for AI agents operati
 > pre-split monolith archive. File paths have been updated for the
 > runtime/apps split: paths under `AINDY/...` are runtime-owned in this repo;
 > paths under `apps/...` and `client/...` are app-owned and now live in the
-> **aindy-apps-monolith** repo. Several governance docs referenced below
-> (`INVARIANTS.md`, `SYSTEM_SPEC.md`, `GOVERNANCE_INDEX.md`,
+> **aindy-apps-monolith** repo. `INVARIANTS.md` is now split — the runtime half
+> is [`docs/platform/governance/INVARIANTS.md`](./INVARIANTS.md) in this repo
+> and the app-domain half lives in aindy-apps-monolith. A few other governance
+> docs referenced below (`SYSTEM_SPEC.md`, `GOVERNANCE_INDEX.md`,
 > `DATA_MODEL_MAP.md`) were not part of this migration pass and are not yet
 > present in either split repo; references to them are retained as historical
 > pointers. The rules themselves are repo-agnostic and remain normative.
@@ -46,7 +48,7 @@ This document defines enforceable collaboration boundaries for AI agents operati
 - A plan-first proposal has been approved for larger changes.
 
 ### Refactoring Must Preserve
-- All invariants in `docs/governance/INVARIANTS.md` _(pre-split governance doc; not migrated to either split repo)_.
+- All invariants in `docs/platform/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
 - Public API contracts (FastAPI routes and request/response shapes).
 - Migration compatibility for existing database state.
 
@@ -90,7 +92,7 @@ The following are high-sensitivity areas and require explanation of impact and e
 ## 7. Documentation Discipline
 - Any architectural change must update:
 - `docs/architecture/SYSTEM_SPEC.md` (if structural) _(pre-split governance doc; not migrated)_.
-- `docs/governance/INVARIANTS.md` (if enforcement changes) _(pre-split governance doc; not migrated)_.
+- `docs/platform/governance/INVARIANTS.md` (if enforcement changes) _(runtime half; app-domain invariants in aindy-apps-monolith)_.
 - `docs/architecture/DATA_MODEL_MAP.md` (if schema changes) _(deferred — see TECH_DEBT.md)_.
 - Documentation must reflect actual implementation, not intended behavior.
 - Update the `Last updated` date in `docs/GOVERNANCE_INDEX.md` whenever any file under `docs/` changes _(pre-split governance doc; not migrated)_.
@@ -105,7 +107,7 @@ For any of the following, a proposal must be written and approved before impleme
 
 The proposal must include:
 - A structured change plan.
-- Impact analysis on invariants in `docs/governance/INVARIANTS.md` _(pre-split governance doc; not migrated)_.
+- Impact analysis on invariants in `docs/platform/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
 - Migration and API contract implications.
 
 ## 9. Non-Goals

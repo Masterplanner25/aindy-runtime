@@ -2286,9 +2286,13 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
    docs): `deepseek_arm_service.py` — not found in either repo (app-owned ARM
    domain, exact location unconfirmed).
 
-4. **Pre-split governance docs not migrated** (referenced but absent in both split
-   repos): `INVARIANTS.md`, `SYSTEM_SPEC.md`, `GOVERNANCE_INDEX.md`. References
-   retained as historical pointers with inline annotations. Not part of Bucket A.
+4. **Pre-split governance docs.** `INVARIANTS.md` has been **split and authored**:
+   the runtime-owned half is now `docs/platform/governance/INVARIANTS.md` (this
+   repo; PostgreSQL/UTC/memory-graph/auth/startup invariants, enforcement sites
+   re-verified against the current tree), companion to the app-owned half in
+   `aindy-apps-monolith`. References that previously annotated it as "not migrated"
+   were repointed. `SYSTEM_SPEC.md` and `GOVERNANCE_INDEX.md` remain absent in both
+   split repos; references retained as historical pointers. Not part of Bucket A.
 
 5. **CHANGELOG relocated verbatim.** The pre-split monolith `CHANGELOG.md` is an
    audit trail; its hundreds of historical path references were intentionally

@@ -99,7 +99,7 @@ This document defines the Memory Bridge API contract and its security boundary b
 ### Policy Requirements
 - No mutation endpoints without JWT validation.
 - Any change to permission model requires:
-- Update to `docs/governance/INVARIANTS.md` _(pre-split governance doc; not migrated to either split repo)_.
+- Update to `docs/platform/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
 - Human approval.
 - Errors must conform to `docs/platform/governance/ERROR_HANDLING_POLICY.md`.
 
@@ -126,7 +126,7 @@ This document defines the Memory Bridge API contract and its security boundary b
 ## 6. Policy Requirements
 - No mutation endpoints without JWT validation.
 - Any change to permission model requires:
-- Update to `docs/governance/INVARIANTS.md` _(pre-split governance doc; not migrated to either split repo)_.
+- Update to `docs/platform/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
 - Human approval.
 - Response errors must follow `docs/platform/governance/ERROR_HANDLING_POLICY.md`.
 

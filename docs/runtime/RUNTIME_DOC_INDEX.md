@@ -145,6 +145,7 @@ with file-path references updated for the runtime/apps split.
 - `../architecture/DATA_MODEL_MAP.md` — _deferred: mixed-ownership surgery pending (see TECH_DEBT.md `DOCS-BUCKET-A-1`); not yet relocated_
 
 ### Platform Governance (`docs/platform/governance/`)
+- [`../platform/governance/INVARIANTS.md`](../platform/governance/INVARIANTS.md) — runtime-owned invariants (PostgreSQL/UTC/memory-graph/auth/startup); app-domain half lives in aindy-apps-monolith
 - [`../platform/governance/AGENT_WORKING_RULES.md`](../platform/governance/AGENT_WORKING_RULES.md) — enforceable collaboration boundaries for AI agents
 - [`../platform/governance/ERROR_HANDLING_POLICY.md`](../platform/governance/ERROR_HANDLING_POLICY.md) — HTTP/model/DB error classification rules (combined-monolith audit)
 - [`../platform/governance/CHANGELOG.md`](../platform/governance/CHANGELOG.md) — historical changelog of the pre-split monolith (audit trail; paths not rewritten)
