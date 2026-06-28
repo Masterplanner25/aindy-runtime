@@ -91,12 +91,31 @@ def main() -> None:
     load_plugins()
 
     if _wait_for_background_schema():
-        is_leader = lifecycle_services.start_background_tasks(enable=True, log=logger)
-        if is_leader:
-            scheduler_service.start()
-            logger.info("Worker started as scheduler leader")
+        enabled = lifecycle_services.start_background_tasks(enable=True, log=logger)
+        from AINDY.platform_layer.leadership import (
+            background_owner_id,
+            get_background_elector,
+        )
+
+        # distributed-worker is a lease-elected profile: only the lease holder
+        # runs the scheduler, with automatic failover on leader death (LEASE-1).
+        elector = get_background_elector(
+            db_factory=SessionLocal,
+            owner_id=background_owner_id(),
+            on_acquire=scheduler_service.start,
+            on_lose=scheduler_service.stop,
+            enabled=bool(enabled),
+        )
+        if elector.elect_once():
+            logger.info(
+                "Worker started as scheduler leader (owner_id=%s)", elector.owner_id
+            )
         else:
-            logger.info("Worker started without scheduler leadership")
+            logger.info(
+                "Worker started without scheduler leadership (owner_id=%s)",
+                elector.owner_id,
+            )
+        elector.start()
     else:
         logger.warning("Worker started before schema was ready; scheduler disabled for this process")
 
@@ -104,6 +123,9 @@ def main() -> None:
         while _RUNNING:
             time.sleep(1)
     finally:
+        from AINDY.platform_layer.leadership import stop_background_elector
+
+        stop_background_elector()
         scheduler_service.stop()
         lifecycle_services.stop_background_tasks(log=logger)
 

@@ -43,7 +43,6 @@ def main() -> None:
         deployment_profile=deployment_profile["name"],
         deployment_profile_source=deployment_profile["source"],
     )
-    scheduler_started = False
     lifecycle_started = False
 
     try:
@@ -52,18 +51,40 @@ def main() -> None:
         schema_ready = _wait_for_background_schema()
         publish_worker_runtime_state(schema_ready=schema_ready)
         if schema_ready:
-            lifecycle_started = lifecycle_services.start_background_tasks(
-                enable=True,
-                log=logger,
+            lifecycle_started = bool(
+                lifecycle_services.start_background_tasks(
+                    enable=True,
+                    log=logger,
+                )
             )
-            if lifecycle_started:
-                scheduler_service.start()
-                scheduler_started = True
+            from AINDY.db.database import SessionLocal
+            from AINDY.platform_layer.leadership import (
+                background_owner_id,
+                get_background_elector,
+            )
+
+            # distributed-worker is lease-elected: exactly one worker runs the
+            # scheduler, decided by an atomic DB lease with failover (LEASE-1).
+            elector = get_background_elector(
+                db_factory=SessionLocal,
+                owner_id=background_owner_id(),
+                on_acquire=scheduler_service.start,
+                on_lose=scheduler_service.stop,
+                enabled=lifecycle_started,
+            )
+            if elector.elect_once():
                 publish_worker_runtime_state(scheduler_role="leader")
-                logger.info("Worker started scheduler lifecycle")
+                logger.info(
+                    "Worker started scheduler lifecycle as lease leader (owner_id=%s)",
+                    elector.owner_id,
+                )
             else:
                 publish_worker_runtime_state(scheduler_role="follower")
-                logger.info("Worker started without scheduler leadership")
+                logger.info(
+                    "Worker started without scheduler leadership (owner_id=%s)",
+                    elector.owner_id,
+                )
+            elector.start()
         else:
             raise RuntimeError(
                 "Worker startup blocked: required runtime-owned schema is not ready. "
@@ -75,8 +96,15 @@ def main() -> None:
         run_worker_loop(concurrency=concurrency)
     finally:
         publish_worker_runtime_state(startup_complete=False)
-        if scheduler_started:
-            scheduler_service.stop()
+        try:
+            from AINDY.platform_layer.leadership import stop_background_elector
+
+            stop_background_elector()
+        except Exception:
+            pass
+        # Always attempt scheduler stop: a follower may have been promoted to
+        # leader (and started the scheduler) after startup via failover.
+        scheduler_service.stop()
         if lifecycle_started:
             lifecycle_services.stop_background_tasks(log=logger)
 

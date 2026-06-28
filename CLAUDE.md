@@ -451,9 +451,13 @@ try/except; new additions need the same treatment or a verified-safe import.
 ## `_maybe_wrap_runtime_callback` — subprocess isolation hazard
 
 `registry.py:_maybe_wrap_runtime_callback()` routes registered callbacks (trigger
-evaluators, planner context providers, run tool providers, agent completion hooks,
-capability definition providers, startup hooks) through a subprocess via
-`runtime_callback_worker.py`. The subprocess is spawned with:
+evaluators, agent completion hooks, capability definition providers, startup hooks)
+through a subprocess via `runtime_callback_worker.py`. **Exception (PLANNER-SUBPROC-1,
+1.4.3): `run_tool_provider` and `planner_context` run in-process** — they read live
+in-process registration state (`TOOL_REGISTRY`, planner context) that a bare subprocess
+can't reconstruct (its cwd is read-only site-packages, so `load_plugins()` finds no app
+manifest and returns zero tools → planner 500 on Linux). They are listed in
+`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`. The subprocess is spawned with:
 
 ```python
 cwd=str(Path(__file__).resolve().parents[2])
@@ -505,8 +509,10 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **C2, C3** — cross-platform sandbox tiers. All phases closed 2026-06-06.
 - **PACK-DEBT-\*** — packaging and dependency findings.
 - **DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — architectural gaps.
-- **PYPI-PUBLISH-1** — CLOSED 2026-06-14: published at v1.3.1; latest release v1.4.0 (2026-06-20). Dockerfile updated to `pip install aindy-runtime==1.4.0`. Bump version string in Dockerfile builder stage on each release.
+- **PYPI-PUBLISH-1** — CLOSED 2026-06-14: published at v1.3.1; latest release v1.4.1 (2026-06-24). v1.4.2 prepared 2026-06-27 (MEM-NODETYPE-1 fix) — `_version.py` + Dockerfile pin bumped to `1.4.2`; publishes when the `v1.4.2` tag is pushed (triggers `publish.yml` → TestPyPI → PyPI behind the `production` manual-approval gate). Bump version string in Dockerfile builder stage on each release.
 - **NODUS-UPGRADE-1** — CLOSED 2026-06-11: bumped to nodus-lang==4.0.3; updated to 4.0.5 on 2026-06-19 (no code changes required). See NODUS_DEVELOPER_GUIDE.md §8.
+- **NODUS-SYS-SURFACE-1** — Open: idiomatic `import "std:sys"` routes to nodus's 4-syscall in-process stub (`syscall` builtin → `nodus.services.syscall_runtime`), NOT the AINDY dispatcher. Only the bare `sys(...)` builtin (`nodus_worker.py:167`) reaches `dispatch_syscall`. Name-disjoint (`syscall` vs `sys`), no guard. See TECH_DEBT.md.
+- **ECOGAP-\*** — Ecosystem capability gaps from the 12-project re-audit (corrected lens), `ECOGAP-1..6`. Roadmap gaps, not classic debt (except ECOGAP-6 + narrow 5a). Source: `docs/runtime/ECOSYSTEM_CAPABILITY_GAPS.md`. Note: ECOGAP-2 (sandbox) is owned by **C2 (closed)/C3 (open)** — the audit overstated it; container-grade is certified + escape-tested. ECOGAP-3 extends MEMORY-EMBEDDING-PROVIDER-1. Don't double-track.
 - **PROMETHEUS-PIN-1** — CLOSED 2026-06-05: pinned to prom/prometheus:v3.4.1 in docker-compose.yml.
 - **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
 - **OPER-DEFER-001** — CLOSED 2026-06-15: `GET /platform/flows/strategies` served; Strategies tab live.
@@ -521,6 +527,9 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **LAYER-\*** — Layer boundary violations (LAYER-1 through LAYER-5). All deferred. See TECH_DEBT.md.
 - **TIER3-10** — `async_job_service` coupling. Open — architectural, no bounded fix.
 - **REPLAY-1** — CLOSED 2026-06-11: `AINDY/kernel/clock.py` — ContextVar `utcnow()` + `frozen_at()`. 12 sites updated across kernel/core/flow engine. 12 tests in `test_clock.py`.
+- **MEM-NODETYPE-1** — CLOSED 2026-06-27: `memory.write` defaulted `node_type="execution"`, which `VALID_NODE_TYPES` rejects → every default write raised `ValueError`, blocking the `runtime_local` execute loop. Fixed in two passes — PR #98 (syscall handler + `nodus_builtins.py`), then execute-to-completion verification on Postgres exposed 6 more sites in the **deferred** path the flow engine actually runs (`nodus_worker.py`, `nodus_runtime_adapter.py`, `nodus/runtime/memory_bridge.py` `remember`, extension ABI) where the rejected save was **silently swallowed**. All 8 → `"insight"`; tree-wide sweep clean. `memory_persistence.py` untouched so no schema-contract bump. Distinct from ECOGAP-1 (kernel replay log). Tests: `test_mem_nodetype_default.py` (unit) + `test_planner_loop_execute_to_completion.py` (integration, real PG).
+- **LEASE-1** — CLOSED 2026-06-24: `lease-elected` background leadership is now enforced via an atomic `background_task_leases` lease + `BackgroundLeadershipElector` (`AINDY/platform_layer/leadership.py`). Distributed profiles elect exactly one scheduler with failover; single-instance keeps the local-boolean guard. Was advertised-but-unimplemented (every replica self-elected).
+- **PLANNER-SUBPROC-1** — CLOSED 2026-06-27 (1.4.3): the agent planner 500'd on Linux/Docker because first-party run-tool / planner-context providers were routed through `_maybe_wrap_runtime_callback`'s isolated subprocess, which (cwd=site-packages) couldn't `load_plugins()` → zero tools. These two registry-state-dependent surfaces now run in-process via `_STATEFUL_IN_PROCESS_CALLBACK_SURFACES` in `registry.py`; self-contained surfaces stay isolated. Masked on Windows (manifest resolves there). Remaining gap: app trigger evaluators still isolated. Verified with a `python:3.11-slim` non-editable repro. Tests: `test_extension_ownership.py`.
 
 ---
 

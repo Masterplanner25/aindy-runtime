@@ -102,7 +102,13 @@ def test_runtime_build_artifacts_include_runtime_owned_assets(tmp_path):
     assert "AINDY/system_manifest.json" in wheel_names
     assert "AINDY/nodus/stdlib/.nodus/deps.json" in wheel_names
     assert "aindy-runtime = AINDY.runtime_only:main" in entry_points
-    assert "Home-page: https://github.com/Masterplanner25/aindy-runtime" in metadata
+    # setuptools >=78 (Metadata-Version 2.4) drops the legacy ``Home-page:`` field
+    # in favour of ``Project-URL: Homepage, …``. Accept either so the assertion
+    # holds across setuptools versions; the intent is "the homepage URL is present".
+    assert (
+        "Home-page: https://github.com/Masterplanner25/aindy-runtime" in metadata
+        or "Project-URL: Homepage, https://github.com/Masterplanner25/aindy-runtime" in metadata
+    )
     assert "Project-URL: Documentation, https://github.com/Masterplanner25/aindy-runtime/tree/main/docs/runtime" in metadata
 
     with tarfile.open(sdist_path, "r:gz") as sdist:

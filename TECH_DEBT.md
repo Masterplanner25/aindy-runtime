@@ -1918,6 +1918,92 @@ Sites updated (12): `kernel/syscall_dispatcher.py` (EffectRecord gate — 3 site
 
 ---
 
+## MEM-NODETYPE-1 — Memory write defaults to a node_type the validator rejects
+
+**Status:** CLOSED (2026-06-27)
+
+**Problem:** Two `memory.write` paths defaulted `node_type="execution"`, but
+`VALID_NODE_TYPES` in `AINDY/memory/memory_persistence.py` (`{decision, outcome, insight,
+relationship}`) omits "execution". The `before_insert`/`before_update` validator
+(`validate_node_type`) therefore raised `ValueError` on every default write — and since
+`memory_type` falls back to `node_type` (line 122), it failed `VALID_MEMORY_TYPES` too.
+This blocked the execute half of the `runtime_local` planner loop, which almost always
+plans a memory tool first. Surfaced during live-stack verification from the monolith
+(`LIVE_VERIFICATION_SCOPE.md`). The syscall docstring even documented `default "execution"`,
+so the runtime advertised a default its own model rejected.
+
+**Why it was an outlier, not a missing type:** every *other* write path already defaulted
+to a valid type — `memory_ingest_service.py` → "insight", `nodus_memory_bridge.py` →
+"outcome". Only the syscall handler and the Nodus builtin defaulted to "execution". The
+scorer (`memory_scoring_service.py`) also falls back to "insight" when type is unspecified,
+so "execution" nodes silently floored at the 0.8 default weight.
+
+**Fix applied (two passes):** Changed every write-path default to "insight" (matches the
+scorer fallback, so a defaulted write ranks identically to an untyped one).
+
+Pass 1 (PR #98) — the two sites in the original report:
+- `AINDY/kernel/syscall_registry.py` — `_handle_memory_write` default + docstring.
+- `AINDY/runtime/nodus_builtins.py` — `NodusMemoryBuiltins.write` signature + docstring.
+- 3 regression tests in `tests/unit/test_mem_nodetype_default.py`.
+
+Pass 2 — **execute-to-completion verification on the Postgres stack revealed PR #98 was
+incomplete**: the *deferred* path the flow engine actually runs still defaulted to
+"execution", as did the extension ABI. In the script paths the rejected save is swallowed
+(`logger.warning` + `continue` / `return None`), so the script reported completion while the
+node silently vanished. Six more sites, all → "insight":
+- `AINDY/runtime/nodus_worker.py` — `DeferredMemoryBuiltins.write` + `_remember_factory`.
+- `AINDY/runtime/nodus_runtime_adapter.py` — `_apply_deferred_memory_writes` dao.save.
+- `AINDY/nodus/runtime/memory_bridge.py` — `AINDYMemoryBridge.remember` (the VM's `remember`
+  builtin; persists in-subprocess on its own session).
+- `AINDY/platform_layer/extension_runtime_api.py` + `extension_worker.py` — extension memory ABI.
+- `tests/integration/test_planner_loop_execute_to_completion.py` — 4 integration tests driving
+  each real write path (dispatcher syscall, adapter deferred persist, `remember` builtin, full
+  subprocess VM run) with a default node_type against real PostgreSQL, asserting the node
+  persists as "insight". All green. A clean tree-wide sweep confirms no `"execution"` node_type
+  default remains.
+
+No `VALID_NODE_TYPES` change → `memory_persistence.py` untouched → schema contract protocol
+not triggered.
+
+**Distinct from `ECOGAP-1` (event-sourced durable execution / replay):** that is a
+kernel/flow-engine durability gap (append-only event log for crash continuation), a
+different subsystem from the memory-node taxonomy. An episodic "execution"/"action" memory
+type could be introduced later *if* ECOGAP-1 mirrors execution events into the memory graph —
+but that is deferred and out of scope here.
+
+---
+
+## PLANNER-SUBPROC-1 — Agent planner broken on Linux/Docker (run-tool provider isolated into a stateless subprocess)
+
+**Status:** CLOSED (2026-06-27)
+
+**Problem:** `POST /apps/agent/run` → `generate_plan` → `get_tools_for_run` resolves the
+registered run-tool provider, which `registry._maybe_wrap_runtime_callback` routed through
+an isolated subprocess (`runtime_callback_worker.py`). First-party-app providers (and the
+planner-context provider) read **live in-process registration state** — the agent
+`TOOL_REGISTRY` and planner context populated during app bootstrap. A bare subprocess can't
+reconstruct that: its `cwd` is the read-only site-packages dir (`runtime_callback_host.py:62`),
+so the provider's `load_plugins()` finds no app manifest and returns zero tools → planner
+raises `requires at least one registered tool` → **500**. Masked in local dev because Windows
+resolves the manifest; only surfaced on Linux (CI + a `python:3.11-slim` non-editable repro).
+Same class of bug also affects app-provided trigger evaluators (the documented silent-defer in
+`_maybe_wrap_runtime_callback`).
+
+**Fix applied:** Registry-state-dependent surfaces now run **in-process**. Added
+`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES = {"run_tool_provider", "planner_context"}` in
+`AINDY/platform_layer/registry.py`; `_runtime_callback_spec` returns `None` (in-process) for
+those. Self-contained surfaces (startup hooks, capability providers, trigger evaluators) keep
+subprocess isolation. Context is still sanitized at the registry boundary
+(`get_planner_context` / `get_tools_for_run`), so no extra state crosses any boundary. Updated
+`tests/unit/test_extension_ownership.py` (planner_context now in-process, not recorded as an
+isolated invocation; startup_hook stays isolated). Shipped in 1.4.3.
+
+**Remaining gap:** app-provided **trigger evaluators** still run isolated; if a deployment
+relies on app-state-dependent trigger evaluators they will silently defer on Linux. Add
+`trigger_evaluator` to the in-process set when that becomes a real workload.
+
+---
+
 ## OBS-1 — Pipeline _safe_* failures log at DEBUG, invisible in production
 
 **Status:** CLOSED (2026-06-07)
@@ -1928,3 +2014,306 @@ Sites updated (12): `kernel/syscall_dispatcher.py` (EffectRecord gate — 3 site
 - `pipeline.py` — `_safe_emit_event` exception handler (was line 347)
 
 Success-path debug logs (`[Pipeline] EU registered`, `[Pipeline] EU finalised`) remain at DEBUG — not failures.
+
+---
+
+## LEASE-1 — `lease-elected` background leadership was advertised but not enforced
+
+**Status:** CLOSED (2026-06-24)
+
+**Source:** Audit finding — *"advertising a guarantee the code doesn't implement."*
+
+**The gap (what the audit found):** The deployment contract advertises
+`background_leadership_mode: "lease-elected"` for the `distributed-api`,
+`distributed-worker`, and `hostile-third-party` profiles, and
+`DEPLOYMENT_PROFILES.md` stated *"Lease-elected means exactly one participating
+runtime process becomes leader at a time."* The code did not implement it.
+Leadership was decided locally in `_start_background_services` (and the worker
+entrypoints) by:
+
+```python
+is_leader = enable_background and all(result is not False for result in startup_results)
+```
+
+— a per-process boolean with no cross-instance coordination. Every API/worker
+replica whose local `system.startup` hooks succeeded self-elected, so N replicas
+ran N schedulers (duplicate stuck-run watchdog, EffectRecord TTL cleanup,
+orphaned-approved recovery, db-pool metrics). The `background_task_leases` table
+existed in the ORM model and was *read* by two observability endpoints (which
+therefore always saw `None`) but the runtime never wrote/acquired any row. (The second half of the same
+audit — "silent durable→in-memory queue degradation on Redis loss" — was checked
+and **refuted**: that path fails fast in prod/distributed/`AINDY_REQUIRE_REDIS`
+and otherwise degrades loudly with a metric + warning + `system.queue.backend_degraded`
+event + `UNSAFE_DEGRADED` runtime condition. No code change needed there.)
+
+**Implemented:**
+- `AINDY/platform_layer/leadership.py` — atomic lease claim/renew/takeover/release
+  on `background_task_leases` (`SELECT … FOR UPDATE` serialises contenders on
+  PostgreSQL; `UNIQUE(name)` resolves the fresh-insert race), plus a
+  `BackgroundLeadershipElector` daemon thread that runs on every lease-electing
+  process: the leader renews each tick; a follower takes over once the leader's
+  lease lapses (TTL 60s, heartbeat 20s); a leader that loses the lease stands
+  down via `on_lose` to prevent split-brain.
+- `AINDY/startup.py` `_start_background_services` — for `lease-elected` profiles,
+  `is_leader` is now gated on winning the lease; scheduler start/stop are wired
+  to the elector's acquire/lose callbacks. The `in-process` (single-instance)
+  profile keeps the local-boolean guard — that profile never promised cross-process
+  exclusion. Lease is released on shutdown so a standby takes over promptly rather
+  than waiting the full TTL.
+- `AINDY/worker/__init__.py` and `AINDY/worker/__main__.py` — both worker
+  entrypoints route leadership through the same elector.
+- Tests: `tests/unit/test_background_leadership.py` (10) — claim/renew/takeover/
+  release semantics + elector acquire/lose/disabled/exception transitions.
+
+**Layering — runtime lease vs tasks-domain symbols (deliberate non-goal):** the
+runtime claims its own lease row named `background_runner`. This is *distinct*
+from the apps-monolith `tasks` domain, which owns the `task_is_background_leader`
+/ `task_background_lease_name` registry symbols and a separate lease row named
+`task_background_runner` (`apps/tasks/bootstrap.py`). The two coexist as different
+rows in the same table. The runtime deliberately does **not** register those
+symbols (doing so would collide with the tasks domain and corrupt its
+observability), so the `/platform/observability` scheduler-status `is_leader`
+field stays app-domain-owned. Surfacing the runtime's own lease state in
+observability/health is a separate future enhancement (`leadership.background_leader_status()`
+is the ready accessor), not part of this fix.
+
+**Clock assumption (documented, not a gap):** lease expiry is evaluated against
+each process's kernel clock (`utcnow`), not the DB clock. The 60s TTL vs 20s
+heartbeat margin tolerates the skew expected between co-deployed instances. If a
+future deployment spans hosts with unbounded skew, switch the expiry comparison
+to a DB-side `now()` predicate.
+
+**No schema-contract bump:** `background_task_leases` was already in the ORM
+metadata (created by `create_all` / the Phase 5 schema guard); no model file
+changed, so `SCHEMA_CONTRACT_VERSION` is untouched.
+
+---
+
+## NODUS-SYS-SURFACE-1 — Idiomatic `std:sys` bypasses the AINDY SyscallDispatcher
+
+**Status:** Open — deferred (latent footgun, no current incident)
+
+A `.nd` script has **two name-disjoint ways to issue a syscall**, and only one of
+them reaches AINDY. They look interchangeable but route to entirely different
+backends:
+
+**Surface A — nodus-lang native `std:sys` (the idiomatic path):**
+```
+import "std:sys"
+sys.call("sys.v1.memory.put", { ... })
+```
+resolves to `site-packages/nodus/stdlib/sys.nd`, whose `call()` invokes the native
+VM builtin `syscall(name, payload)` (`nodus/vm/vm.py:262`, `builtin_syscall` at
+`vm.py:1389`) → `nodus.services.syscall_runtime.call_syscall`. That runtime has its
+**own hardcoded registry of exactly four syscalls** — `sys.v1.memory.{get,put,delete}`
+and `sys.v1.memory.recall_from` — backed by `nodus.services.memory_runtime`, an
+**in-process, ephemeral key/value store**. It never touches AINDY's
+`SyscallDispatcher`, capability enforcement, quota, idempotency, kernel, or Postgres.
+
+**Surface B — the AINDY-injected `sys` builtin (the path AINDY actually wires):**
+```
+sys("sys.v1.memory.put", { ... })        # bare builtin, NOT the std:sys module
+```
+`AINDY/runtime/nodus_worker.py:167` registers a host function literally named `sys`
+(`register_function("sys", _sys_dispatch, arity=2)`) whose body
+(`nodus_worker.py:136-162`) calls `AINDY.kernel.syscall_dispatcher.dispatch_syscall`
+→ the real dispatcher → kernel + Postgres, scoped to `user_id`.
+
+**The gap:** the builtins are named differently (`syscall` vs `sys`), so there is no
+shadowing in either direction — but also **no guard**. aindy-runtime's worker does
+**not** register `syscall` or `syscall_list`, so it cannot override Surface A. A
+developer who writes the conventional `import "std:sys"; sys.call(...)` silently gets
+nodus's four-syscall in-process stub with throwaway memory instead of AINDY's
+capability-enforced, durable dispatcher — no error, no warning, wrong backend.
+
+This reconciles two prior audit claims that appeared to conflict: "Nodus `std:sys`
+routes to local in-process handlers, not AINDY syscalls" (true of **Surface A**) and
+"Nodus `sys()` reaches the AINDY SyscallDispatcher" (true of **Surface B**). Both are
+correct; they describe different builtins. The integration is real and live, but it
+does **not** work by intercepting the idiomatic stdlib entry point.
+
+**Options (not yet chosen):**
+- **Guard/alias** — register a `syscall` (and `syscall_list`) host builtin in
+  `nodus_worker.py` that forwards to `_sys_dispatch`, so `std:sys` also lands on
+  AINDY. Risk: must match the native envelope shape and arity exactly, and verify it
+  overrides the VM builtin rather than colliding.
+- **Fail-loud** — register `syscall` to raise a clear "use the `sys()` builtin under
+  AINDY" error, so the wrong path is caught at runtime instead of silently stubbed.
+- **Doc-only** — document in `NODUS_DEVELOPER_GUIDE.md` that under aindy-runtime,
+  scripts must call the bare `sys(...)` builtin and must not `import "std:sys"`.
+
+Key files: `AINDY/runtime/nodus_worker.py` (`_sys_dispatch`, `register_function`),
+`site-packages/nodus/stdlib/sys.nd`, `nodus/vm/vm.py:262` (`builtin_syscall`),
+`nodus/services/syscall_runtime.py`, `nodus/services/memory_runtime.py`.
+
+**Reopen/resolve trigger:** before any `.nd` script or agent objective is authored
+that relies on `import "std:sys"`, or before exposing Nodus authoring to external
+users.
+
+---
+
+## ECOGAP-* — Ecosystem capability gaps (corrected lens)
+
+Derived from the 12-project ecosystem re-audit, re-judged against source-verified
+aindy-runtime/Nodus facts. These are **capability/roadmap gaps**, not classic debt
+(a shortcut in existing code) — except `ECOGAP-6` (and the narrow `ECOGAP-5a`), which
+are debt-shaped. Full analysis: `docs/runtime/ECOSYSTEM_CAPABILITY_GAPS.md`. Several
+map onto existing entries (noted per item); do not double-track.
+
+### ECOGAP-1 — Event-sourced durable execution / transparent crash continuation
+
+**Status:** Deferred — roadmap (P0 among these gaps)
+
+aindy-runtime marks non-waiting `running` flows FAILED on restart; there is no replay log.
+WAIT/RESUME + `flow_run_rehydration` + ResumeWatchdog already cover *suspended* flows — the
+gap is specifically mid-run, non-waiting work. Field bar: Temporal (event-sourced replay);
+LangGraph (pending-writes-then-checkpoint, partial); ADK/OpenHands/Open Interpreter ship
+event logs. Absorb targets: ADK append-event fold, LangGraph `versions_seen` vector clock,
+Temporal at-least-once idempotent-start. **Do not import weaker JSON-snapshot models.**
+
+**Reopen trigger:** when crash-continuation of in-flight non-waiting flows is scheduled.
+
+### ECOGAP-2 — Hostile-safe sandboxing (strong-VM tier on non-Linux) — SEE C2/C3
+
+**Status:** Owned by existing entries — **C2 (CLOSED 2026-05-24)** and **C3 (open, Phases 1–4)**.
+
+The ecosystem audit flagged sandboxing as a leading P0 gap; that **overstates** the real state.
+Container-grade isolation is closed, certified cross-platform (Linux/Windows/macOS reach
+`container-grade-sandbox`), and adversarially escape-tested (17 tests, real Docker, all PASS;
+`tests/sandbox/`, `SANDBOX_ESCAPE_AUDIT.md`). Auto-selection is environment-aware:
+distributed/production profiles default to `containerized_oci` (the certified tier); only dev
+falls back to `insecure_dev_subprocess`. The genuine residual — `strong_sandbox_vm`
+(dedicated-VM, hostile-third-party tier) being Linux-only — is **already tracked as C3**. No new
+debt. Reconcile the external v2 aggregate + OpenHands/OI/SWE per-project audits against C2/C3.
+
+### ECOGAP-3 — Provider breadth + embedding SPOF — extends MEMORY-EMBEDDING-PROVIDER-1
+
+**Status:** Deferred — roadmap (P1)
+
+Only OpenAI + DeepSeek concretely in tree; OpenAI hard-required for embeddings. The embedding
+half is **MEMORY-EMBEDDING-PROVIDER-1**; this entry adds LLM-client breadth (Azure/Anthropic/
+Gemini/Bedrock/local) behind `CircuitBreakerLLMClient`. Absorb: CrewAI native multi-SDK +
+cross-loop cache-breakpoint, Devika 7-backend registry, litellm reach (Aider/SWE/ADK). Most
+broadly cited concrete weakness (9/12 projects). Mechanically straightforward behind the
+existing client seam.
+
+**Reopen trigger:** when a non-OpenAI provider or local-model path is scheduled.
+
+### ECOGAP-4 — MCP/A2A: gated-egress boundary (runtime) + wire adapters (plugin)
+
+**Status:** Deferred — roadmap (P1 for the runtime half)
+
+Two altitudes, split deliberately. **G4a (runtime):** a capability-gated egress boundary +
+secret-broker so executed/sandboxed code never holds keys (OpenHands' control-plane pattern) —
+trusted/enforced at the syscall boundary, a real runtime concern. **G4b (plugin):** the concrete
+MCP/A2A wire clients (JSON-RPC envelopes, handshake, SSE framing) are hosted adapters registered
+via the plugin ABI — *not* kernel primitives (the kernel owns the socket + the gate, not the
+protocol client). `nodus-mcp`/`nodus-a2a` graduate from out-of-tree to registered plugins.
+
+**Reopen trigger:** when first external MCP/A2A interop is scheduled, or when a sandbox needs
+mediated egress without holding credentials.
+
+### ECOGAP-5 — Durable timer (5a) + workflow-as-data (5b)
+
+**Status:** 5a — Deferred, P3 (debt-shaped, narrow). 5b — Deferred, P2 (Nodus/language layer).
+
+**5a (runtime, narrow):** user schedules are already durable-as-data (`NodusScheduledJob`) and
+rehydrated into APScheduler on boot via `restore_nodus_scheduled_jobs()`, so the in-memory
+jobstore is rebuilt from DB each start. Residual = misfire/missed-window handling for fires due
+*during* downtime, plus one unifying durable timer/FireTime primitive. **Not** "schedules lost."
+
+**5b (Nodus):** `FLOW_REGISTRY` is in-process Python — business structure compiled into runtime
+code. The fix is a loadable graph artifact (Nodus `.nodus/graphs/<id>.json`) the runtime
+interprets — an **anti-creep** mechanism that lifts business logic *out* of the kernel, on the
+language layer, not a runtime gap. Absorb: ADK frontier/JoinNode scheduling, MS typed-message
+actor graph, LangGraph reducer-cell/serde discipline.
+
+**Reopen trigger:** 5a — when misfire-on-downtime is reported. 5b — when data-defined flow
+execution (beyond code-defined `FLOW_REGISTRY`) is scheduled.
+
+### ECOGAP-6 — Execution-path test coverage
+
+**Status:** Deferred — **debt** (P2)
+
+`AINDY/worker/` and the Surface-B Nodus execution path are at low/zero coverage; the integration
+tier is mocked-only in CI. This is genuine hygiene debt (a shortcut in existing code), not a
+capability gap. Coverage claims for the durable-execution and Nodus-dispatch paths are therefore
+under-tested. Pairs with `ECOGAP-1` (the replay path most needs real coverage).
+
+**Reopen trigger:** before relying on `worker/` or Surface-B behavior in a release claim.
+
+---
+
+## DOCS-BUCKET-A-1 — Runtime docset relocation (Bucket A) residuals
+
+**Status:** Open — Low Priority (relocation landed 2026-06-27)
+
+The Bucket A migration relocated runtime-owned docs that were left behind in the
+pre-split monolith archive (`C:\dev\masterplan-infiniteweave-monday-node-2025-0411\docs`)
+into this repo, mirroring the archive's category dirs:
+
+- `docs/architecture/MODEL_OWNERSHIP_POLICY.md`
+- `docs/platform/governance/{AGENT_WORKING_RULES,ERROR_HANDLING_POLICY,CHANGELOG}.md`
+- `docs/tutorials/{index,01-memory-driven-workflow,02-event-driven-automation,03-scheduled-execution}.md`
+
+File-path tokens were verified against `AINDY/**` and `aindy-apps-monolith/apps/**`
+and rewritten to canonical post-split locations (runtime-moved paths repointed
+within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes).
+`RUNTIME_DOC_INDEX.md` gained a "Sibling Docsets" section.
+
+**Residuals / deferred work:**
+
+1. **`DATA_MODEL_MAP.md` deferred (the Tier-2 item).** The archive's
+   `architecture/DATA_MODEL_MAP.md` (~902 lines) documents the **combined**
+   pre-split schema — runtime tables (agent, memory_*, user, request_metric,
+   background_task_lease, …) interleaved with app-domain tables (`freelance`,
+   `masterplan`, `task`, `social`, `author`, `leadgen`, `arm`, …, now app-owned
+   in `aindy-apps-monolith`). Landing it as-is would be mixed-ownership content
+   masquerading as a runtime doc. It needs editorial surgery: collapse the
+   app-table sections to a pointer to `aindy-apps-monolith` and keep only the
+   runtime tables + cross-DB boundaries. **Not done in this pass** to avoid a
+   bad-state doc. Until then it is *referenced as deferred* from
+   `AGENT_WORKING_RULES.md` and `RUNTIME_DOC_INDEX.md`.
+
+2. **`ERROR_HANDLING_POLICY.md` is a combined-monolith audit.** Its "Current
+   Implementation" sections are ~90% app-owned routers/services (genesis, arm,
+   social, dashboard, rippletrace, network_bridge, search/seo, tasks). Paths were
+   repointed to `apps/...` with a scope banner, but the doc is a candidate for a
+   later runtime-only / app-only editorial split. The **Policy Rules** sections
+   are repo-agnostic and remain valid.
+
+3. **Unverified path tokens** (annotated `_(path unverified after split)_` in the
+   docs): `deepseek_arm_service.py` — not found in either repo (app-owned ARM
+   domain, exact location unconfirmed).
+
+4. **Pre-split governance docs.** `INVARIANTS.md` has been **split and authored**:
+   the runtime-owned half is now `docs/platform/governance/INVARIANTS.md` (this
+   repo; PostgreSQL/UTC/memory-graph/auth/startup invariants, enforcement sites
+   re-verified against the current tree), companion to the app-owned half in
+   `aindy-apps-monolith`. References that previously annotated it as "not migrated"
+   were repointed. `SYSTEM_SPEC.md` and `GOVERNANCE_INDEX.md` remain absent in both
+   split repos; references retained as historical pointers. Not part of Bucket A.
+
+5. **CHANGELOG relocated verbatim.** The pre-split monolith `CHANGELOG.md` is an
+   audit trail; its hundreds of historical path references were intentionally
+   **not** rewritten (rewriting would falsify the record). A scope banner marks it
+   as pre-split history; current runtime history lives in
+   `docs/runtime/DOCSET_CHANGELOG.md`.
+
+6. **Tutorial surface drift** (validated against the live runtime, annotated with
+   **Runtime note** callouts, examples left intact so worked outputs stay
+   coherent): `sys.v1.event.wait` is not a registered syscall — WAIT/RESUME is the
+   Nodus `event.wait()` builtin; `sys.v1.flow.run` field is `initial_state` not
+   `input`; trace endpoint param is `{trace_id}`; delete-schedule param is
+   `{job_id}`; `extra` is SDK-only (not in the v1 `memory.write` schema). The
+   `AINDY.sdk.aindy_sdk` client and the `docs/sdk/` docset are not in this repo
+   (published separately as **aindy-sdk**).
+
+7. **`RUNTIME_DOCSET_BOUNDARY.md` relative links** to `../architecture/`,
+   `../platform/`, `../apps/` now have the parent dirs present, but several
+   *specific* targets it lists (`BOOT_PROFILES.md`, `ARCHITECTURE_MAP.md`,
+   `PLUGIN_REGISTRY_PATTERN.md`, `platform/interfaces/API_CONTRACTS.md`,
+   `apps/*`) are **not** Bucket A docs and remain unresolved by design.
+
+**Close trigger:** when `DATA_MODEL_MAP.md` surgery lands (residual 1) and the
+`ERROR_HANDLING_POLICY.md` runtime/app split (residual 2) is decided.
