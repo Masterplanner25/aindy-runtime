@@ -142,7 +142,7 @@ with file-path references updated for the runtime/apps split.
 
 ### Architecture (`docs/architecture/`)
 - [`../architecture/MODEL_OWNERSHIP_POLICY.md`](../architecture/MODEL_OWNERSHIP_POLICY.md) — when a SQLAlchemy model is runtime-owned vs app-owned
-- `../architecture/DATA_MODEL_MAP.md` — _deferred: mixed-ownership surgery pending (see TECH_DEBT.md `DOCS-BUCKET-A-1`); not yet relocated_
+- [`../architecture/DATA_MODEL_MAP.md`](../architecture/DATA_MODEL_MAP.md) — runtime-owned PostgreSQL/Memory-Bridge data model; app-domain tables collapsed to a pointer (aindy-apps-monolith)
 
 ### Platform Governance (`docs/platform/governance/`)
 - [`../platform/governance/INVARIANTS.md`](../platform/governance/INVARIANTS.md) — runtime-owned invariants (PostgreSQL/UTC/memory-graph/auth/startup); app-domain half lives in aindy-apps-monolith
