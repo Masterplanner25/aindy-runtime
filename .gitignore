@@ -20,3 +20,9 @@ logs/
 test_c2_verification/
 .claude/settings.local.json
 clean/
+
+# Personal working/handoff notes (not part of the repo)
+Session Handoff Summary.md
+
+# Nodus stdlib compiled bytecode cache (regenerated on demand)
+.nodus/cache/
