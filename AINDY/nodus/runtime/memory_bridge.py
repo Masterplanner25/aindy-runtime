@@ -110,7 +110,7 @@ class AINDYMemoryBridge:
                 content=content,
                 tags=list(tags or []),
                 user_id=self._user_id,
-                node_type=node_type or "execution",
+                node_type=node_type or "insight",
                 source="nodus_script",
                 extra={},
             )

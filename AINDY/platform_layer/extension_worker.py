@@ -275,7 +275,7 @@ def _runtime_api_bridge(operation: str, payload: dict[str, Any] | None = None) -
                 {
                     "content": str(request.get("content") or ""),
                     "tags": list(request.get("tags") or []),
-                    "node_type": str(request.get("node_type") or "execution"),
+                    "node_type": str(request.get("node_type") or "insight"),
                     "source": _extension_source_label(),
                 },
                 user_id=tenant_user_id,

@@ -368,7 +368,7 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
     Payload keys:
         content      (str)        — required; node text
         tags         (list[str])  — optional; classification tags
-        node_type    (str)        — default "execution"
+        node_type    (str)        — default "insight"
         significance (float)      — relevance weight 0.0-1.0, default 0.5
         path         (str)        — optional MAS path; auto-generated if omitted
         namespace    (str)        — optional namespace segment
@@ -382,7 +382,7 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
         raise ValueError("sys.v1.memory.write requires non-empty 'content'")
 
     tags: list = payload.get("tags") or []
-    node_type: str = payload.get("node_type", "execution")
+    node_type: str = payload.get("node_type", "insight")
     source: str = payload.get("source", "syscall")
 
     full_path, namespace, addr_type = path_from_write_payload(
