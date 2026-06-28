@@ -15,9 +15,10 @@ This document defines enforceable collaboration boundaries for AI agents operati
 > paths under `apps/...` and `client/...` are app-owned and now live in the
 > **aindy-apps-monolith** repo. `INVARIANTS.md` is now split — the runtime half
 > is [`docs/platform/governance/INVARIANTS.md`](./INVARIANTS.md) in this repo
-> and the app-domain half lives in aindy-apps-monolith. A few other governance
-> docs referenced below (`SYSTEM_SPEC.md`, `GOVERNANCE_INDEX.md`,
-> `DATA_MODEL_MAP.md`) were not part of this migration pass and are not yet
+> and the app-domain half lives in aindy-apps-monolith. `DATA_MODEL_MAP.md` is
+> now relocated (runtime-scoped, Tier-2 surgery — `docs/architecture/DATA_MODEL_MAP.md`).
+> A couple of other governance docs referenced below (`SYSTEM_SPEC.md`,
+> `GOVERNANCE_INDEX.md`) were not part of this migration pass and are not yet
 > present in either split repo; references to them are retained as historical
 > pointers. The rules themselves are repo-agnostic and remain normative.
 
@@ -75,7 +76,7 @@ The following are high-sensitivity areas and require explanation of impact and e
 - Schema changes must include:
 - ORM model update.
 - New Alembic revision.
-- Documentation update in `docs/architecture/DATA_MODEL_MAP.md` _(deferred from this migration pass — see TECH_DEBT.md)_.
+- Documentation update in `docs/architecture/DATA_MODEL_MAP.md` _(runtime-scoped; app-domain tables tracked in aindy-apps-monolith)_.
 - Never remove constraints without explicit approval.
 
 ## 5. Concurrency and Session Rules
@@ -93,7 +94,7 @@ The following are high-sensitivity areas and require explanation of impact and e
 - Any architectural change must update:
 - `docs/architecture/SYSTEM_SPEC.md` (if structural) _(pre-split governance doc; not migrated)_.
 - `docs/platform/governance/INVARIANTS.md` (if enforcement changes) _(runtime half; app-domain invariants in aindy-apps-monolith)_.
-- `docs/architecture/DATA_MODEL_MAP.md` (if schema changes) _(deferred — see TECH_DEBT.md)_.
+- `docs/architecture/DATA_MODEL_MAP.md` (if schema changes) _(runtime-scoped; app-domain tables tracked in aindy-apps-monolith)_.
 - Documentation must reflect actual implementation, not intended behavior.
 - Update the `Last updated` date in `docs/GOVERNANCE_INDEX.md` whenever any file under `docs/` changes _(pre-split governance doc; not migrated)_.
 

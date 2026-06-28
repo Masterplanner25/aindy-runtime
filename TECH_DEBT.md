@@ -2263,17 +2263,37 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
 
 **Residuals / deferred work:**
 
-1. **`DATA_MODEL_MAP.md` deferred (the Tier-2 item).** The archive's
-   `architecture/DATA_MODEL_MAP.md` (~902 lines) documents the **combined**
-   pre-split schema — runtime tables (agent, memory_*, user, request_metric,
-   background_task_lease, …) interleaved with app-domain tables (`freelance`,
-   `masterplan`, `task`, `social`, `author`, `leadgen`, `arm`, …, now app-owned
-   in `aindy-apps-monolith`). Landing it as-is would be mixed-ownership content
-   masquerading as a runtime doc. It needs editorial surgery: collapse the
-   app-table sections to a pointer to `aindy-apps-monolith` and keep only the
-   runtime tables + cross-DB boundaries. **Not done in this pass** to avoid a
-   bad-state doc. Until then it is *referenced as deferred* from
-   `AGENT_WORKING_RULES.md` and `RUNTIME_DOC_INDEX.md`.
+1. **`DATA_MODEL_MAP.md` Tier-2 surgery — DONE 2026-06-28.** Landed at
+   `docs/architecture/DATA_MODEL_MAP.md`, runtime-scoped ("surgery only,
+   faithful"). The archive's ~902-line **combined** pre-split schema was
+   collapsed: app-domain tables (`freelance`, `masterplan`, `task`, `social`,
+   `author`, `leadgen`, `research`, `arm`, `rippletrace`, analytics/`metrics_*`,
+   `network_bridge`) reduced to a single ownership-pointer table → `aindy-apps-monolith`
+   (canonical list: `DB_OWNERSHIP_CONTRACT.md`). The runtime tables it documented
+   (agent, background_task_lease, memory_metrics, memory_trace, memory_trace_node,
+   request_metric, system_health_log, user, user_identity + Memory Bridge
+   `memory_nodes`/`memory_links`/`memory_node_history`) were **re-verified
+   against current source** — corrected several stale/copy-paste claims
+   (`Agent.owner_user_id` is a UUID FK not a plain String; bogus `user_id->users.id`
+   FK lines on `background_task_leases`/`system_health_logs`/`users` removed;
+   `RequestMetric.trace_id`, `User.is_admin`/`token_version`/`api_keys` added;
+   `memory_nodes` brought up to date — `visibility`, `source_event_id`/`root_event_id`,
+   `causal_depth`, `impact_score`, `memory_type`+`VALID_MEMORY_TYPES`,
+   `embedding_pending`/`embedding_status`). Paths repointed
+   (`memory_persistence.py` → `AINDY/memory/`; `memory_ingest_service.py` → `AINDY/memory/`).
+   §3 Alembic rewritten to the runtime's own tree (`alembic_version_runtime`,
+   `0001`–`0005`) with the combined-monolith history pointed to the app repo; §4
+   MongoDB collapsed to app-owned. A **Coverage** note enumerates the ~18
+   runtime models not individually detailed (kept faithful to the archive's
+   table set rather than expanding to the full current model set — deliberate
+   scope choice). Deferral references in `AGENT_WORKING_RULES.md` and
+   `RUNTIME_DOC_INDEX.md` updated to live links. **Residual:** the doc is
+   accurate-but-not-exhaustive — the ~18 Coverage-listed runtime models
+   (`effect_record`, `execution_unit`, `flow_run`, `event_edge`, `agent_run`,
+   `capability`, `dynamic_*`, `system_event`, `system_state_snapshot`,
+   `waiting_flow_run`, `webhook_subscription`, `api_key`, …) are pointered to
+   `DB_OWNERSHIP_CONTRACT.md` + source, not field-mapped here. Expand only if a
+   full current data-model reference is needed.
 
 2. **`ERROR_HANDLING_POLICY.md` is a combined-monolith audit.** Its "Current
    Implementation" sections are ~90% app-owned routers/services (genesis, arm,
