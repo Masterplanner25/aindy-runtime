@@ -1,6 +1,6 @@
 ---
 title: "Memory Bridge Contract"
-last_verified: "2026-04-19"
+last_verified: "2026-06-27"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -9,11 +9,19 @@ owner: "platform-team"
 
 This document defines the Memory Bridge API contract and its security boundary based strictly on current implementation.
 
+> **Post-split note (2026-06-27):** Path references updated for the
+> runtime/apps split. The legacy Memory Bridge `/bridge/*` API (sections 1–7)
+> is **app-owned** and now lives in the **aindy-apps-monolith** repo
+> (`apps/bridge/routes/bridge_router.py`); it no longer registers any route in
+> this runtime. The `/memory/*` router (sections 8+) is runtime-owned
+> (`AINDY/routes/memory_router.py`), as are the persistence and DAO layers
+> (`AINDY/memory/memory_persistence.py`, `AINDY/db/dao/memory_node_dao.py`).
+
 ## 1. Overview
 
 ### Current Behavior
-- Canonical architecture reference: `docs/architecture/MEMORY_BRIDGE.md`.
-- Memory Bridge is implemented in `AINDY/routes/bridge_router.py` with persistence in `AINDY/services/memory_persistence.py`.
+- Canonical architecture reference: `docs/runtime/MEMORY_BRIDGE.md`.
+- The legacy Memory Bridge `/bridge/*` API is implemented in `apps/bridge/routes/bridge_router.py` _(app-owned, aindy-apps-monolith)_; its persistence layer is runtime-owned in `AINDY/memory/memory_persistence.py`.
 - Database tables involved:
 - `memory_nodes`
 - `memory_links`
@@ -28,7 +36,7 @@ This document defines the Memory Bridge API contract and its security boundary b
 ## 2. Endpoints
 
 ### `POST /bridge/nodes`
-- Request body: `NodeCreateRequest` (inline Pydantic model in `AINDY/routes/bridge_router.py`)
+- Request body: `NodeCreateRequest` (inline Pydantic model in `apps/bridge/routes/bridge_router.py`)
 - Required fields:
 - `content: str`
 - Optional fields:
@@ -52,7 +60,7 @@ This document defines the Memory Bridge API contract and its security boundary b
 - Error conditions: not explicitly defined.
 
 ### `POST /bridge/link`
-- Request body: `LinkCreateRequest` (inline Pydantic model in `AINDY/routes/bridge_router.py`)
+- Request body: `LinkCreateRequest` (inline Pydantic model in `apps/bridge/routes/bridge_router.py`)
 - Required fields:
 - `source_id: str`
 - `target_id: str`
@@ -62,7 +70,7 @@ This document defines the Memory Bridge API contract and its security boundary b
 - HMAC requirement: deprecated; JWT is the write guard.
 - Response: `LinkResponse` with `id`, `source_node_id`, `target_node_id`, `link_type`, `strength`, `created_at`.
 - Error conditions:
-- Duplicate link or missing nodes can raise `ValueError` in `AINDY/services/memory_persistence.py` but are not explicitly translated into HTTP errors.
+- Duplicate link or missing nodes can raise `ValueError` in `AINDY/memory/memory_persistence.py` but are not explicitly translated into HTTP errors.
 
 ### `POST /bridge/user_event`
 - Request body: `UserEvent` (inline Pydantic model)
@@ -76,10 +84,10 @@ This document defines the Memory Bridge API contract and its security boundary b
 ### Endpoint Model Map (Reference)
 | Endpoint | Request Model | Response Model |
 |---|---|---|
-| `POST /bridge/nodes` | `NodeCreateRequest` (`AINDY/routes/bridge_router.py`); `permission` optional and ignored | `NodeResponse` (`AINDY/routes/bridge_router.py`) |
-| `GET /bridge/nodes` | None | `NodeSearchResponse` (`AINDY/routes/bridge_router.py`) |
-| `POST /bridge/link` | `LinkCreateRequest` (`AINDY/routes/bridge_router.py`); `permission` optional and ignored | `LinkResponse` (`AINDY/routes/bridge_router.py`) |
-| `POST /bridge/user_event` | `UserEvent` (`AINDY/routes/bridge_router.py`) | Inline dict response |
+| `POST /bridge/nodes` | `NodeCreateRequest` (`apps/bridge/routes/bridge_router.py`); `permission` optional and ignored | `NodeResponse` (`apps/bridge/routes/bridge_router.py`) |
+| `GET /bridge/nodes` | None | `NodeSearchResponse` (`apps/bridge/routes/bridge_router.py`) |
+| `POST /bridge/link` | `LinkCreateRequest` (`apps/bridge/routes/bridge_router.py`); `permission` optional and ignored | `LinkResponse` (`apps/bridge/routes/bridge_router.py`) |
+| `POST /bridge/user_event` | `UserEvent` (`apps/bridge/routes/bridge_router.py`) | Inline dict response |
 
 ## 3. Permission Model
 
@@ -91,9 +99,9 @@ This document defines the Memory Bridge API contract and its security boundary b
 ### Policy Requirements
 - No mutation endpoints without JWT validation.
 - Any change to permission model requires:
-- Update to `docs/governance/INVARIANTS.md`.
+- Update to `docs/governance/INVARIANTS.md` _(pre-split governance doc; not migrated to either split repo)_.
 - Human approval.
-- Errors must conform to `docs/governance/ERROR_HANDLING_POLICY.md`.
+- Errors must conform to `docs/platform/governance/ERROR_HANDLING_POLICY.md`.
 
 ## 4. Data Integrity Rules
 
@@ -113,18 +121,18 @@ This document defines the Memory Bridge API contract and its security boundary b
 - DB failure during node or link creation: `MemoryNodeDAO` rolls back and re-raises; route does not explicitly convert to HTTP error.
 
 ### Policy Requirements
-- All mutation failures must return JSON error responses per `docs/governance/ERROR_HANDLING_POLICY.md`.
+- All mutation failures must return JSON error responses per `docs/platform/governance/ERROR_HANDLING_POLICY.md`.
 
 ## 6. Policy Requirements
 - No mutation endpoints without JWT validation.
 - Any change to permission model requires:
-- Update to `docs/governance/INVARIANTS.md`.
+- Update to `docs/governance/INVARIANTS.md` _(pre-split governance doc; not migrated to either split repo)_.
 - Human approval.
-- Response errors must follow `docs/governance/ERROR_HANDLING_POLICY.md`.
+- Response errors must follow `docs/platform/governance/ERROR_HANDLING_POLICY.md`.
 
 ## 7. Known Risks
 - Secret rotation is not documented in code.
-- No rate limiting in `AINDY/routes/bridge_router.py`.
+- No rate limiting in `apps/bridge/routes/bridge_router.py`.
 - TTL validation is the only replay defense; short TTLs reduce risk but are not enforced by policy in code.
 - File-system trace desynchronization risk: `AINDY/memoryevents/` and `AINDY/memorytraces/` are not automatically updated by API writes.
 
