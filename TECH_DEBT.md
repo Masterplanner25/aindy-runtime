@@ -2241,3 +2241,75 @@ capability gap. Coverage claims for the durable-execution and Nodus-dispatch pat
 under-tested. Pairs with `ECOGAP-1` (the replay path most needs real coverage).
 
 **Reopen trigger:** before relying on `worker/` or Surface-B behavior in a release claim.
+
+---
+
+## DOCS-BUCKET-A-1 — Runtime docset relocation (Bucket A) residuals
+
+**Status:** Open — Low Priority (relocation landed 2026-06-27)
+
+The Bucket A migration relocated runtime-owned docs that were left behind in the
+pre-split monolith archive (`C:\dev\masterplan-infiniteweave-monday-node-2025-0411\docs`)
+into this repo, mirroring the archive's category dirs:
+
+- `docs/architecture/MODEL_OWNERSHIP_POLICY.md`
+- `docs/platform/governance/{AGENT_WORKING_RULES,ERROR_HANDLING_POLICY,CHANGELOG}.md`
+- `docs/tutorials/{index,01-memory-driven-workflow,02-event-driven-automation,03-scheduled-execution}.md`
+
+File-path tokens were verified against `AINDY/**` and `aindy-apps-monolith/apps/**`
+and rewritten to canonical post-split locations (runtime-moved paths repointed
+within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes).
+`RUNTIME_DOC_INDEX.md` gained a "Sibling Docsets" section.
+
+**Residuals / deferred work:**
+
+1. **`DATA_MODEL_MAP.md` deferred (the Tier-2 item).** The archive's
+   `architecture/DATA_MODEL_MAP.md` (~902 lines) documents the **combined**
+   pre-split schema — runtime tables (agent, memory_*, user, request_metric,
+   background_task_lease, …) interleaved with app-domain tables (`freelance`,
+   `masterplan`, `task`, `social`, `author`, `leadgen`, `arm`, …, now app-owned
+   in `aindy-apps-monolith`). Landing it as-is would be mixed-ownership content
+   masquerading as a runtime doc. It needs editorial surgery: collapse the
+   app-table sections to a pointer to `aindy-apps-monolith` and keep only the
+   runtime tables + cross-DB boundaries. **Not done in this pass** to avoid a
+   bad-state doc. Until then it is *referenced as deferred* from
+   `AGENT_WORKING_RULES.md` and `RUNTIME_DOC_INDEX.md`.
+
+2. **`ERROR_HANDLING_POLICY.md` is a combined-monolith audit.** Its "Current
+   Implementation" sections are ~90% app-owned routers/services (genesis, arm,
+   social, dashboard, rippletrace, network_bridge, search/seo, tasks). Paths were
+   repointed to `apps/...` with a scope banner, but the doc is a candidate for a
+   later runtime-only / app-only editorial split. The **Policy Rules** sections
+   are repo-agnostic and remain valid.
+
+3. **Unverified path tokens** (annotated `_(path unverified after split)_` in the
+   docs): `deepseek_arm_service.py` — not found in either repo (app-owned ARM
+   domain, exact location unconfirmed).
+
+4. **Pre-split governance docs not migrated** (referenced but absent in both split
+   repos): `INVARIANTS.md`, `SYSTEM_SPEC.md`, `GOVERNANCE_INDEX.md`. References
+   retained as historical pointers with inline annotations. Not part of Bucket A.
+
+5. **CHANGELOG relocated verbatim.** The pre-split monolith `CHANGELOG.md` is an
+   audit trail; its hundreds of historical path references were intentionally
+   **not** rewritten (rewriting would falsify the record). A scope banner marks it
+   as pre-split history; current runtime history lives in
+   `docs/runtime/DOCSET_CHANGELOG.md`.
+
+6. **Tutorial surface drift** (validated against the live runtime, annotated with
+   **Runtime note** callouts, examples left intact so worked outputs stay
+   coherent): `sys.v1.event.wait` is not a registered syscall — WAIT/RESUME is the
+   Nodus `event.wait()` builtin; `sys.v1.flow.run` field is `initial_state` not
+   `input`; trace endpoint param is `{trace_id}`; delete-schedule param is
+   `{job_id}`; `extra` is SDK-only (not in the v1 `memory.write` schema). The
+   `AINDY.sdk.aindy_sdk` client and the `docs/sdk/` docset are not in this repo
+   (published separately as **aindy-sdk**).
+
+7. **`RUNTIME_DOCSET_BOUNDARY.md` relative links** to `../architecture/`,
+   `../platform/`, `../apps/` now have the parent dirs present, but several
+   *specific* targets it lists (`BOOT_PROFILES.md`, `ARCHITECTURE_MAP.md`,
+   `PLUGIN_REGISTRY_PATTERN.md`, `platform/interfaces/API_CONTRACTS.md`,
+   `apps/*`) are **not** Bucket A docs and remain unresolved by design.
+
+**Close trigger:** when `DATA_MODEL_MAP.md` surgery lands (residual 1) and the
+`ERROR_HANDLING_POLICY.md` runtime/app split (residual 2) is decided.

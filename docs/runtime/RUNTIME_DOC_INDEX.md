@@ -134,6 +134,29 @@ Docs for developers integrating with or scripting against the runtime.
 
 ---
 
+## Sibling Docsets (relocated 2026-06-27, Bucket A)
+
+These docs live outside `docs/runtime/` but travel with the runtime repo. They
+were relocated from the pre-split monolith archive in the Bucket A migration,
+with file-path references updated for the runtime/apps split.
+
+### Architecture (`docs/architecture/`)
+- [`../architecture/MODEL_OWNERSHIP_POLICY.md`](../architecture/MODEL_OWNERSHIP_POLICY.md) — when a SQLAlchemy model is runtime-owned vs app-owned
+- `../architecture/DATA_MODEL_MAP.md` — _deferred: mixed-ownership surgery pending (see TECH_DEBT.md `DOCS-BUCKET-A-1`); not yet relocated_
+
+### Platform Governance (`docs/platform/governance/`)
+- [`../platform/governance/AGENT_WORKING_RULES.md`](../platform/governance/AGENT_WORKING_RULES.md) — enforceable collaboration boundaries for AI agents
+- [`../platform/governance/ERROR_HANDLING_POLICY.md`](../platform/governance/ERROR_HANDLING_POLICY.md) — HTTP/model/DB error classification rules (combined-monolith audit)
+- [`../platform/governance/CHANGELOG.md`](../platform/governance/CHANGELOG.md) — historical changelog of the pre-split monolith (audit trail; paths not rewritten)
+
+### Tutorials (`docs/tutorials/`)
+- [`../tutorials/index.md`](../tutorials/index.md) — three end-to-end runtime tutorials
+- [`../tutorials/01-memory-driven-workflow.md`](../tutorials/01-memory-driven-workflow.md) — memory → execution → insight loop
+- [`../tutorials/02-event-driven-automation.md`](../tutorials/02-event-driven-automation.md) — WAIT/RESUME via the Nodus `event.wait` builtin
+- [`../tutorials/03-scheduled-execution.md`](../tutorials/03-scheduled-execution.md) — cron-scheduled Nodus execution
+
+---
+
 ## Older Technical Docs Still In Use
 
 These remain important, but should be read through the governing docs above.
