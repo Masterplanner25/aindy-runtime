@@ -6,19 +6,22 @@ at boot, without editing runtime — mirroring ``register_dynamic_flow`` but sto
 the ``.nd`` SOURCE (the durable, versioned artifact) rather than a closure-bearing
 flow dict. See ``docs/runtime/NODUS_WORKFLOW_CONTRACT.md``.
 
-Two kinds (both Phase 1):
+Two kinds:
 
-* ``flow-graph`` — a ``flow.step()`` routing script. Compiled via
-  ``compile_nodus_flow`` into a multi-node flow over registered nodes and
-  registered into ``FLOW_REGISTRY`` under the workflow name.
-* ``script`` — one arbitrary ``.nodus`` program. Executed as a single
-  ``nodus.execute`` node by reusing the shared ``nodus_execute`` flow with the
-  workflow's source injected at run time.
+* ``flow-graph`` — a native Nodus ``workflow {}`` / ``goal {}`` program (steps
+  with logic, ``after`` dependencies, native orchestration: parallelism, shared
+  state, retries, checkpoints). Validated and its step DAG extracted at
+  registration via ``compile_nodus_flow`` (parse only, no execution); executed
+  natively by appending ``run_workflow(<name>)`` (or ``run_goal``) and running
+  through the shared ``nodus_execute`` flow.
+* ``script`` — one arbitrary ``.nodus`` program. Executed via the shared
+  ``nodus_execute`` flow with the workflow's source injected at run time.
 
 Both kinds are tracked in the authoritative in-memory ``_NODUS_WORKFLOWS`` map and
-run uniformly through ``run_nodus_workflow``. Source rows persist to the
-``nodus_workflows`` table so registrations survive a restart; on boot,
-``rehydrate_nodus_workflows`` recompiles each active row.
+run uniformly through ``run_nodus_workflow`` (the canonical PersistentFlowRunner →
+FlowRun + SystemEvent path). Source rows persist to the ``nodus_workflows`` table
+so registrations survive a restart; on boot, ``rehydrate_nodus_workflows``
+re-validates each active row.
 """
 from __future__ import annotations
 
@@ -65,27 +68,29 @@ def _content_hash(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
-def _compile_and_register_flow(name: str, source: str, kind: str) -> None:
-    """Compile the source and, for flow-graph workflows, register it in FLOW_REGISTRY.
+def _compile_and_register_flow(name: str, source: str, kind: str) -> dict[str, Any] | None:
+    """Validate the source and prepare it for run-by-name.
 
-    Script workflows do not get a distinct FLOW_REGISTRY entry — they reuse the
-    shared ``nodus_execute`` flow with their source injected at run time.
+    Both kinds execute via the shared ``nodus_execute`` flow, so this ensures
+    that flow is registered. For flow-graph workflows it also parses the native
+    ``workflow``/``goal`` block (no execution) and returns the extracted step DAG
+    so the registry can store it as metadata; for script workflows it returns
+    None.
     """
+    from AINDY.runtime.nodus_execution_service import (
+        ensure_nodus_script_flow_registered,
+    )
+
+    ensure_nodus_script_flow_registered()
+
     if kind == KIND_FLOW_GRAPH:
-        from AINDY.runtime.flow_engine import register_flow
         from AINDY.runtime.nodus_flow_compiler import compile_nodus_flow
 
-        flow_dict = compile_nodus_flow(source, name)
-        register_flow(name, flow_dict)
-    elif kind == KIND_SCRIPT:
-        # Ensure the canonical nodus_execute flow is available for run-by-name.
-        from AINDY.runtime.nodus_execution_service import (
-            ensure_nodus_script_flow_registered,
-        )
-
-        ensure_nodus_script_flow_registered()
-    else:  # defensive — validate_nodus_workflow already rejects this
-        raise ValueError(f"unsupported nodus workflow kind {kind!r}")
+        return compile_nodus_flow(source)  # parse + validate; no execution
+    if kind == KIND_SCRIPT:
+        return None
+    # defensive — validate_nodus_workflow already rejects this
+    raise ValueError(f"unsupported nodus workflow kind {kind!r}")
 
 
 def register_nodus_workflow(
@@ -138,9 +143,9 @@ def register_nodus_workflow(
                 f"nodus workflow {name!r} already exists; set overwrite=true to replace"
             )
 
-        # Compile + register the executable form before recording metadata so a
-        # compile failure leaves the registry unchanged.
-        _compile_and_register_flow(name, source, kind)
+        # Validate (parse the workflow / extract its DAG) before recording
+        # metadata so a parse failure leaves the registry unchanged.
+        graph = _compile_and_register_flow(name, source, kind)
 
         meta: dict[str, Any] = {
             "name": name,
@@ -158,6 +163,10 @@ def register_nodus_workflow(
             "owner_class": owner_class,
             "trust_class": "source-nodus-workflow",
             "provenance": resolved_provenance,
+            # flow-graph: the extracted native-workflow step DAG (None for script)
+            "graph": graph,
+            "workflow_name": graph["workflow_name"] if graph else None,
+            "execution_kind": graph["execution_kind"] if graph else None,
         }
         _NODUS_WORKFLOWS[name] = meta
 
@@ -255,19 +264,15 @@ def get_nodus_workflow(name: str) -> dict[str, Any] | None:
 
 
 def delete_nodus_workflow(name: str, *, db: Session | None = None) -> bool:
-    """Remove a workflow from the registry (and FLOW_REGISTRY for flow-graph).
+    """Remove a workflow from the registry.
 
     If *db* is provided, soft-deletes the row (is_active=False). Returns True if
     removed, False if the name was not registered.
     """
-    from AINDY.runtime.flow_engine import FLOW_REGISTRY
-
     with _registry_lock:
         meta = _NODUS_WORKFLOWS.pop(name, None)
         if meta is None:
             return False
-        if meta.get("kind") == KIND_FLOW_GRAPH:
-            FLOW_REGISTRY.pop(name, None)
 
     if db is not None:
         try:
@@ -341,48 +346,48 @@ def run_nodus_workflow(
 ) -> dict[str, Any]:
     """Run a registered Nodus workflow by name.
 
-    ``flow-graph`` workflows run their compiled FLOW_REGISTRY flow; ``script``
-    workflows run their stored source through the shared ``nodus_execute`` flow.
-    Both reuse the canonical PersistentFlowRunner → FlowRun + SystemEvent path.
+    Both kinds run through the shared ``nodus_execute`` flow (canonical
+    PersistentFlowRunner → FlowRun + SystemEvent path):
+
+    * ``script`` — the stored source runs as-is.
+    * ``flow-graph`` — the stored ``workflow {}`` / ``goal {}`` source is run with
+      a ``run_workflow(<name>)`` (or ``run_goal``) invocation appended, so the
+      native workflow executes its steps in dependency order.
     """
+    from AINDY.runtime.nodus_execution_service import run_nodus_script_via_flow
+
     meta = get_nodus_workflow(name)
     if meta is None:
         raise LookupError(f"nodus workflow {name!r} is not registered")
 
-    kind = meta["kind"]
-    if kind == KIND_SCRIPT:
-        from AINDY.runtime.nodus_execution_service import run_nodus_script_via_flow
+    script = meta["source"]
+    if meta["kind"] == KIND_FLOW_GRAPH:
+        script = _with_workflow_invocation(meta)
 
-        return run_nodus_script_via_flow(
-            script=meta["source"],
-            input_payload=input_payload or {},
-            error_policy=error_policy,
-            db=db,
-            user_id=user_id,
-            workflow_type=f"nodus_workflow:{name}",
-            trace_id=trace_id,
-        )
-
-    # flow-graph
-    from AINDY.runtime.flow_engine import FLOW_REGISTRY, PersistentFlowRunner
-    from AINDY.utils.uuid_utils import normalize_uuid
-
-    flow = FLOW_REGISTRY.get(name)
-    if flow is None:
-        # Lost from the in-memory registry (e.g. process recycled without
-        # rehydration) — recompile from the retained source.
-        _compile_and_register_flow(name, meta["source"], kind)
-        flow = FLOW_REGISTRY[name]
-
-    runner = PersistentFlowRunner(
-        flow=flow,
+    return run_nodus_script_via_flow(
+        script=script,
+        input_payload=input_payload or {},
+        error_policy=error_policy,
         db=db,
-        user_id=normalize_uuid(user_id) if user_id else None,
+        user_id=user_id,
         workflow_type=f"nodus_workflow:{name}",
+        trace_id=trace_id,
     )
-    state = dict(initial_state or {})
-    if input_payload is not None:
-        state.setdefault("input_payload", input_payload)
-    if trace_id is not None:
-        state["trace_id"] = trace_id
-    return runner.start(initial_state=state, flow_name=name)
+
+
+def _with_workflow_invocation(meta: dict[str, Any]) -> str:
+    """Append the native run call (run_workflow/run_goal) to a flow-graph source.
+
+    The flow-graph source is a bare ``workflow {}`` / ``goal {}`` definition;
+    appending the invocation makes running the source execute the steps.
+    """
+    graph = meta.get("graph") or {}
+    workflow_name = meta.get("workflow_name") or graph.get("workflow_name")
+    if not workflow_name:
+        # Fall back to re-parsing if metadata is incomplete.
+        from AINDY.runtime.nodus_flow_compiler import compile_nodus_flow
+
+        graph = compile_nodus_flow(meta["source"])
+        workflow_name = graph["workflow_name"]
+    runner_fn = "run_goal" if graph.get("execution_kind") == "goal" else "run_workflow"
+    return f"{meta['source']}\n{runner_fn}({workflow_name})\n"

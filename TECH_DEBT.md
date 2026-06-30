@@ -2385,15 +2385,21 @@ bumped to `2026-06-29`, Alembic `0006`), boot rehydration in `startup.py`,
 `run_nodus_workflow` by name, both kinds. Mirrors `register_dynamic_flow`
 (owner-class + provenance gating). 14 unit tests.
 
-> **RTR-1a (discovered, follow-up): `compile_nodus_flow` `flow.step` DSL collides
-> with nodus-lang 4.0.5's reserved `step` keyword.** `flow.step(...)` no longer
-> parses (`Expected identifier, got 'STEP'`), so the **`flow-graph`** kind cannot
-> compile real scripts under the current pinned VM — a **pre-existing** latent bug
-> (the compiler was untested; the 4.0.5 bump under NODUS-UPGRADE-1 missed it). The
-> `script` kind is fully working. The registration surface is agnostic to the DSL,
-> so flow-graph works unchanged once the compiler DSL is reconciled with
-> nodus-lang 4.x (likely align with nodus-lang's own native `step` construct
-> rather than a host-object method). Tracked here; not in Phase-1 scope.
+> **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
+> collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't
+> support host-object method calls at all), so the `flow-graph` kind couldn't
+> compile real scripts. **Resolution:** adopt nodus-lang's **native
+> `workflow {}` / `goal {}` construct** (4.x ships a first-class `orchestration/`
+> workflow feature). `compile_nodus_flow` (`AINDY/runtime/nodus_flow_compiler.py`)
+> now parses that construct and extracts the step dependency DAG (no execution);
+> `flow-graph` workflows execute natively by appending `run_workflow(<name>)` /
+> `run_goal` and running through the shared `nodus_execute` flow. The retired
+> `flow.step()` node-wiring intent is already covered by `register_dynamic_flow`,
+> so nothing is lost. The dead `nodus.flow.compile` node + `POST /platform/nodus/flow`
+> route were repointed to the new model; the `nodus.flow.compile→run` chain is
+> deprecated. Both kinds now fully working. Tests: `test_nodus_flow_compiler.py`
+> (incl. end-to-end VM execution in dependency order) + updated
+> `test_nodus_workflow_registry.py`.
 
 - **Evidence (current state):** `AINDY/runtime/nodus_adapter.py` —
   `NodusAgentAdapter.execute_with_flow` is a compat shim

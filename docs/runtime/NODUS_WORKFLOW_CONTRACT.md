@@ -7,12 +7,13 @@ owner: "platform-team"
 ---
 # Nodus Workflow Registration Contract (RTR-1)
 
-> **Status: design + contract (RTR-1, Phase 1 scope).** This document is the
-> reviewed design for `register_nodus_workflow` — the registration surface that
-> lets apps register and select Nodus workflows **by name, at boot, without
-> editing runtime**. It is the keystone of `TECH_DEBT.md` RTR-1. Implementation
-> follows in a separate PR against this contract. Claims about current code were
-> verified against the live tree on 2026-06-29; cited as `file:symbol`.
+> **Status: implemented (RTR-1 Phase 1 + RTR-1a).** The `register_nodus_workflow`
+> registration surface — register/select Nodus workflows **by name, at boot,
+> without editing runtime** — is built. Phase 1 landed the surface, the
+> `nodus_workflows` table, boot rehydration, and run-by-name; RTR-1a replaced the
+> dead `flow.step()` DSL with nodus-lang's native `workflow {}` construct (see §5).
+> §§4–9 below carry the original design plus **as-built deltas** noted inline
+> where implementation refined the design.
 
 ---
 
@@ -127,24 +128,42 @@ dispatches (`registry.py:1654-1688`):
 `register_nodus_workflow(..., db=None)` at boot (DB persistence for declarative
 entries is the manifest itself — they re-register every boot from the `.nd` file).
 
-## 5. Workflow kinds (both supported in Phase 1)
+## 5. Workflow kinds (as built — RTR-1a)
 
 | `kind` | Source shape | Compilation | Use |
 |---|---|---|---|
-| `flow-graph` | A `flow.step("node", when="key")` routing script | `compile_nodus_flow()` → multi-node flow dict over **pre-registered** `NODE_REGISTRY` nodes (conditions = in-memory closures) | Conditional, multi-node orchestration that wires existing nodes |
-| `script` | One arbitrary `.nodus` program | Wrapped as a single-node flow whose one node is `nodus.execute` running the source in the VM | Self-contained Nodus logic; the on-ramp for arbitrary app workflows |
+| `flow-graph` | A native Nodus `workflow { step X after Y {…} }` / `goal {}` block | `compile_nodus_flow()` parses the workflow AST (no execution) and extracts its step dependency DAG `{workflow_name, execution_kind, steps, start, edges, end}` for validation + observability | Multi-step orchestration with logic, deps, parallelism, shared state, retries, checkpoints — all native to nodus-lang 4.x |
+| `script` | One arbitrary `.nodus` program | None — run as-is | Self-contained Nodus logic; on-ramp for arbitrary app workflows |
 
 Both register identically through one surface and run via the canonical
-`PersistentFlowRunner` path; only the compile step differs. `flow-graph` requires
-its referenced nodes to exist in `NODE_REGISTRY` at execution time.
+`nodus_execute` flow (PersistentFlowRunner → FlowRun + SystemEvent). `script`
+runs its source as-is; `flow-graph` runs its `workflow{}`/`goal{}` source with a
+`run_workflow(<name>)` / `run_goal(<name>)` invocation appended, so nodus executes
+the steps in dependency order. The extracted DAG is stored as workflow metadata.
 
-> **Implementation note (RTR-1a).** Phase 1 ships both kinds, but `compile_nodus_flow`'s
-> `flow.step(...)` DSL collides with nodus-lang 4.0.5's reserved `step` keyword
-> (`flow.step` no longer parses) — a pre-existing, previously-untested bug. The
-> **`script`** kind is the fully-working path today; **`flow-graph`** compilation
-> is blocked until the DSL is reconciled with nodus-lang 4.x (tracked as RTR-1a in
-> `TECH_DEBT.md`). The registration surface is agnostic to the DSL, so flow-graph
-> works unchanged once the compiler is fixed — no surface change needed.
+> **RTR-1a — RESOLVED.** The original design routed `flow-graph` through a
+> `flow.step()` host-object DSL that collided with nodus-lang 4.0.5's reserved
+> `step` keyword (and host-object method calls are unsupported in 4.x). RTR-1a
+> adopts nodus-lang's **native `workflow {}` / `goal {}` construct** instead:
+> `compile_nodus_flow` now parses that construct and extracts the step DAG;
+> execution is delegated to nodus's own workflow runner (inside AINDY's
+> `nodus_execute`/FlowRun envelope). The retired `flow.step()` node-wiring intent
+> is already covered by `register_dynamic_flow` (data-only DAGs of registered
+> nodes), so nothing is lost. Both kinds are fully working.
+
+### As-built deltas from the original §4 design
+
+Two refinements landed during implementation (kept here for accuracy):
+
+- **Gating mirrors `register_dynamic_flow`** (owner-class validation +
+  `derive_structured_extension_provenance`), **not** an
+  `INPROC_CAP_REGISTER_NODUS_WORKFLOW` in-process capability. The in-process caps
+  gate the imperative `registry.register_*` bootstrap surfaces; source/data
+  registration (like `register_dynamic_flow`) uses owner-class gating, which also
+  works on the boot-rehydration and HTTP paths where no bootstrap context exists.
+- **`flow-graph` does not register a `FLOW_REGISTRY` flow dict.** Native workflows
+  self-orchestrate; both kinds execute through the shared `nodus_execute` flow.
+  The extracted DAG is metadata only (`_NODUS_WORKFLOWS[name]["graph"]`).
 
 ## 6. Storage and versioning — `nodus_workflows` table
 
@@ -177,8 +196,9 @@ bootstrap is automatic from ORM metadata.
 
 A new startup step (next to the `dynamic_flow` load and
 `core/flow_run_rehydration.rehydrate_waiting_flow_runs`): load active
-`nodus_workflows` rows and **recompile each into `FLOW_REGISTRY`**. Deterministic,
-source-driven, closures rebuilt — no serialized-closure problem. Runtime-only boot
+`nodus_workflows` rows and **re-register each** (re-parse/validate source, restore
+the in-memory `_NODUS_WORKFLOWS` entry). Deterministic and source-driven.
+Runtime-only boot
 finds zero rows → no-op; app-profile boot rehydrates app-owned workflows. Failures
 are logged per-workflow and never abort boot (mirrors the dynamic-flow loader).
 
