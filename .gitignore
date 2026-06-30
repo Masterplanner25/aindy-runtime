@@ -26,3 +26,6 @@ Session Handoff Summary.md
 
 # Nodus stdlib compiled bytecode cache (regenerated on demand)
 .nodus/cache/
+
+# Nodus workflow runtime state (graphs/checkpoints) written when workflows run
+/.nodus/

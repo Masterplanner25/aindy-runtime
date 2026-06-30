@@ -4,23 +4,21 @@ db/models/nodus_workflow.py - Persisted Nodus workflow registrations (RTR-1).
 Stores the ``.nd`` SOURCE of every workflow registered via
 ``register_nodus_workflow`` (imperative bootstrap call or the ``nodus-workflow``
 declarative manifest kind). On server startup the platform loader reads all
-active rows and recompiles each one into ``FLOW_REGISTRY`` so the runtime
-survives restarts.
+active rows and re-validates each one so the runtime survives restarts.
 
-Why source, not the compiled flow dict
---------------------------------------
-``compile_nodus_flow`` produces flow dicts whose conditional edges are in-memory
-Python closures that are not serialisable. The durable, versioned artifact is the
-``.nd`` source; the compiled flow is ephemeral and is deterministically
-reconstructed from source on registration and on every boot. See
-``docs/runtime/NODUS_WORKFLOW_CONTRACT.md``.
+Why source, not a compiled artifact
+-----------------------------------
+The durable, versioned artifact is the ``.nd`` source. It is deterministically
+re-parsed/validated on registration and on every boot — nothing closure-bearing
+or non-serialisable is persisted. See ``docs/runtime/NODUS_WORKFLOW_CONTRACT.md``.
 
-kind:
-    "flow-graph" — a ``flow.step()`` routing script compiled via
-                   ``compile_nodus_flow`` into a multi-node flow over registered
-                   nodes.
-    "script"     — a single arbitrary ``.nodus`` program run as one
-                   ``nodus.execute`` node.
+kind (RTR-1a):
+    "flow-graph" — a native Nodus ``workflow {}`` / ``goal {}`` program (steps
+                   with logic, ``after`` dependencies, native orchestration).
+                   Validated + its step DAG extracted via ``compile_nodus_flow``;
+                   executed natively (``run_workflow``/``run_goal``).
+    "script"     — a single arbitrary ``.nodus`` program run via the shared
+                   ``nodus_execute`` flow.
 
 Deletion is soft - is_active=False - so the audit trail is preserved.
 """

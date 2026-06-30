@@ -833,42 +833,51 @@ def nodus_handle_error(state: dict, context: dict) -> dict:
 #
 # These nodes compile and run Nodus flow scripts.
 #
-# Node: nodus.flow.compile
-#   State inputs:  nodus_flow_script, nodus_flow_name
-#   State outputs: nodus_compiled_flow, nodus_flow_name, nodus_flow_compile_error
+# Node: nodus.flow.compile  (RTR-1a)
+#   Parses a native Nodus workflow {} / goal {} source into its step DAG.
+#   State inputs:  nodus_flow_script
+#   State outputs: nodus_compiled_flow (DAG structure), nodus_flow_name,
+#                  nodus_flow_compile_error
 #
 # Node: nodus.flow.run
+#   Generic PersistentFlowRunner runner for a {start, edges, end} flow dict of
+#   REGISTERED nodes (e.g. a register_dynamic_flow definition).
 #   State inputs:  nodus_compiled_flow, nodus_flow_name, nodus_flow_input
 #   State outputs: nodus_flow_result, nodus_flow_run_id, nodus_flow_status,
 #                  nodus_flow_run_error
 #
-# Convenience flow graph:
-#   NODUS_COMPILE_AND_RUN_FLOW — chains compile → run in a single PersistentFlowRunner
+# DEPRECATED chain: NODUS_COMPILE_AND_RUN_FLOW chained compile → run for the
+# pre-4.x flow.step() DSL. Native workflows self-orchestrate (deps, parallelism,
+# state) and are NOT run via PersistentFlowRunner-over-registered-nodes — register
+# them with register_nodus_workflow and run via run_nodus_workflow (RTR-1).
 
 
 @register_node("nodus.flow.compile")
 def nodus_flow_compile_node(state: dict, context: dict) -> dict:
     """
-    Compile a Nodus flow script into a PersistentFlowRunner flow dict.
+    Parse a native Nodus ``workflow {}`` / ``goal {}`` source and return its step
+    dependency DAG (no execution).
+
+    RTR-1a: the pre-4.x ``flow.step()`` DSL is gone; this node now parses the
+    native workflow construct. To *run* a workflow, register it with
+    ``register_nodus_workflow`` and call ``run_nodus_workflow`` (the RTR-1
+    surface) rather than chaining into ``nodus.flow.run``.
 
     State inputs
     ------------
     nodus_flow_script : str
-        Nodus source code that calls ``flow.step()`` to declare nodes.
-    nodus_flow_name : str
-        Logical name for the flow (defaults to "nodus_flow").
+        Nodus source containing a ``workflow {}`` or ``goal {}`` block.
 
     State outputs
     -------------
     nodus_compiled_flow : dict
-        Compiled flow dict — can be passed directly to nodus.flow.run.
+        The extracted DAG: ``{workflow_name, execution_kind, steps, start, edges, end}``.
     nodus_flow_name : str
-        Echo of the flow name (normalised).
+        The parsed workflow/goal name.
     """
     from AINDY.runtime.nodus_flow_compiler import compile_nodus_flow
 
     script: Optional[str] = state.get("nodus_flow_script")
-    flow_name: str = str(state.get("nodus_flow_name") or "nodus_flow")
 
     if not script:
         return {
@@ -878,9 +887,9 @@ def nodus_flow_compile_node(state: dict, context: dict) -> dict:
         }
 
     try:
-        compiled_flow = compile_nodus_flow(script, flow_name)
+        compiled_flow = compile_nodus_flow(script)
     except (ValueError, RuntimeError) as exc:
-        logger.warning("[nodus.flow.compile] Compile error for %r: %s", flow_name, exc)
+        logger.warning("[nodus.flow.compile] Parse error: %s", exc)
         return {
             "status": "FAILURE",
             "error": str(exc),
@@ -888,9 +897,10 @@ def nodus_flow_compile_node(state: dict, context: dict) -> dict:
         }
 
     logger.info(
-        "[nodus.flow.compile] Compiled %r — nodes=%s start=%r end=%r",
-        flow_name,
-        list(compiled_flow["edges"].keys()),
+        "[nodus.flow.compile] Parsed %s %r — steps=%s start=%s end=%s",
+        compiled_flow["execution_kind"],
+        compiled_flow["workflow_name"],
+        compiled_flow["steps"],
         compiled_flow["start"],
         compiled_flow["end"],
     )
@@ -898,7 +908,7 @@ def nodus_flow_compile_node(state: dict, context: dict) -> dict:
         "status": "SUCCESS",
         "output_patch": {
             "nodus_compiled_flow": compiled_flow,
-            "nodus_flow_name": flow_name,
+            "nodus_flow_name": compiled_flow["workflow_name"],
         },
     }
 

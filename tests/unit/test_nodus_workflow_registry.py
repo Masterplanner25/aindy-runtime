@@ -103,39 +103,59 @@ def test_list_hides_source_but_get_includes_it():
 
 
 # --------------------------------------------------------------------------- #
-# flow-graph kind (compiler monkeypatched)
+# flow-graph kind — native nodus workflow (RTR-1a)
 # --------------------------------------------------------------------------- #
 
-def test_flow_graph_registers_compiled_flow(monkeypatch):
-    from AINDY.runtime import nodus_flow_compiler
+_WF_SOURCE = '''workflow build {
+  step fetch {
+    let n = 1
+  }
+  step compile after fetch {
+    let m = 2
+  }
+  step publish after compile, fetch {
+    let p = 3
+  }
+}'''
 
-    fake_flow = {"start": "a", "edges": {"a": ["b"], "b": []}, "end": ["b"]}
-    monkeypatch.setattr(
-        nodus_flow_compiler, "compile_nodus_flow", lambda source, name: dict(fake_flow)
-    )
 
-    meta = nwr.register_nodus_workflow(
-        "graph_wf", "flow.node(\"a\")", kind="flow-graph",
-        owner_class=OWNER_FIRST_PARTY_APP, allow_legacy_missing_provenance=True,
-    )
-    from AINDY.runtime.flow_engine import FLOW_REGISTRY
+def _register_graph(name="build_wf", source=_WF_SOURCE, **kw):
+    kw.setdefault("owner_class", OWNER_FIRST_PARTY_APP)
+    kw.setdefault("allow_legacy_missing_provenance", True)
+    return nwr.register_nodus_workflow(name, source, kind="flow-graph", **kw)
 
+
+def test_flow_graph_extracts_and_stores_dag():
+    meta = _register_graph()
     assert meta["kind"] == "flow-graph"
-    assert FLOW_REGISTRY["graph_wf"]["start"] == "a"
+    assert meta["workflow_name"] == "build"
+    assert meta["execution_kind"] == "workflow"
+    graph = meta["graph"]
+    assert graph["steps"] == ["fetch", "compile", "publish"]
+    assert graph["start"] == ["fetch"]
+    assert graph["end"] == ["publish"]
+    assert graph["edges"]["fetch"] == ["compile", "publish"]
 
 
-def test_failed_compile_leaves_registry_unchanged(monkeypatch):
-    from AINDY.runtime import nodus_flow_compiler
+def test_flow_graph_goal_kind():
+    meta = _register_graph(
+        name="win_goal", source="goal win {\n  step a {\n    let x = 1\n  }\n}"
+    )
+    assert meta["execution_kind"] == "goal"
+    assert meta["workflow_name"] == "win"
 
-    def _boom(source, name):
-        raise ValueError("compile failed")
 
-    monkeypatch.setattr(nodus_flow_compiler, "compile_nodus_flow", _boom)
-    with pytest.raises(ValueError, match="compile failed"):
-        nwr.register_nodus_workflow(
-            "broken", "flow.node(\"a\")", kind="flow-graph",
-            owner_class=OWNER_FIRST_PARTY_APP, allow_legacy_missing_provenance=True,
-        )
+def test_flow_graph_without_workflow_block_rejected():
+    with pytest.raises(ValueError, match="must contain a `workflow"):
+        _register_graph(name="bad", source="let x = 1")
+    assert nwr.get_nodus_workflow("bad") is None
+
+
+def test_failed_parse_leaves_registry_unchanged():
+    # Two workflow blocks → ambiguous → ValueError, registry untouched.
+    src = "workflow a {\n  step s1 {\n    let x=1\n  }\n}\nworkflow b {\n  step s2 {\n    let y=2\n  }\n}"
+    with pytest.raises(ValueError, match="multiple workflow"):
+        _register_graph(name="broken", source=src)
     assert nwr.get_nodus_workflow("broken") is None
 
 
@@ -204,3 +224,35 @@ def test_run_script_workflow_dispatches_to_script_runner(monkeypatch):
     assert captured["script"] == "let x = 5"
     assert captured["input_payload"] == {"k": 1}
     assert captured["workflow_type"] == "nodus_workflow:run_me"
+
+
+def test_run_flow_graph_appends_native_invocation(monkeypatch):
+    _register_graph(name="run_graph")
+    captured = {}
+
+    def _fake_run(**kwargs):
+        captured.update(kwargs)
+        return {"status": "completed"}
+
+    monkeypatch.setattr(
+        "AINDY.runtime.nodus_execution_service.run_nodus_script_via_flow", _fake_run
+    )
+    nwr.run_nodus_workflow("run_graph", db="DB", user_id="u1")
+    # The native workflow source is run with run_workflow(<name>) appended so the
+    # steps actually execute.
+    assert captured["script"].rstrip().endswith("run_workflow(build)")
+    assert "workflow build {" in captured["script"]
+    assert captured["workflow_type"] == "nodus_workflow:run_graph"
+
+
+def test_run_goal_appends_run_goal_invocation(monkeypatch):
+    _register_graph(
+        name="run_goal_wf", source="goal win {\n  step a {\n    let x = 1\n  }\n}"
+    )
+    captured = {}
+    monkeypatch.setattr(
+        "AINDY.runtime.nodus_execution_service.run_nodus_script_via_flow",
+        lambda **kw: captured.update(kw) or {"status": "completed"},
+    )
+    nwr.run_nodus_workflow("run_goal_wf", db="DB", user_id="u1")
+    assert captured["script"].rstrip().endswith("run_goal(win)")
