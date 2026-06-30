@@ -134,9 +134,17 @@ entries is the manifest itself — they re-register every boot from the `.nd` fi
 | `flow-graph` | A `flow.step("node", when="key")` routing script | `compile_nodus_flow()` → multi-node flow dict over **pre-registered** `NODE_REGISTRY` nodes (conditions = in-memory closures) | Conditional, multi-node orchestration that wires existing nodes |
 | `script` | One arbitrary `.nodus` program | Wrapped as a single-node flow whose one node is `nodus.execute` running the source in the VM | Self-contained Nodus logic; the on-ramp for arbitrary app workflows |
 
-Both compile to a `PersistentFlowRunner` flow dict and register identically; only
-the compile step differs. `flow-graph` requires its referenced nodes to exist in
-`NODE_REGISTRY` at execution time (validated at compile, re-checked at run).
+Both register identically through one surface and run via the canonical
+`PersistentFlowRunner` path; only the compile step differs. `flow-graph` requires
+its referenced nodes to exist in `NODE_REGISTRY` at execution time.
+
+> **Implementation note (RTR-1a).** Phase 1 ships both kinds, but `compile_nodus_flow`'s
+> `flow.step(...)` DSL collides with nodus-lang 4.0.5's reserved `step` keyword
+> (`flow.step` no longer parses) — a pre-existing, previously-untested bug. The
+> **`script`** kind is the fully-working path today; **`flow-graph`** compilation
+> is blocked until the DSL is reconciled with nodus-lang 4.x (tracked as RTR-1a in
+> `TECH_DEBT.md`). The registration surface is agnostic to the DSL, so flow-graph
+> works unchanged once the compiler is fixed — no surface change needed.
 
 ## 6. Storage and versioning — `nodus_workflows` table
 

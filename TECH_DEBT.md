@@ -2378,6 +2378,23 @@ run-by-name (both `flow-graph` and `script` kinds); Phase 2 = agent-plan→`.nd`
 + VM-backed agent adapter; Phase 3 = bytecode cache + `NodusTraceEvent`
 wire-or-drop. Implementation pending against that contract.
 
+**Phase 1 landed (2026-06-29):** `register_nodus_workflow` surface
+(`AINDY/runtime/nodus_workflow_registry.py`) — imperative + declarative
+(`nodus-workflow` manifest kind), `nodus_workflows` source table (schema-contract
+bumped to `2026-06-29`, Alembic `0006`), boot rehydration in `startup.py`,
+`run_nodus_workflow` by name, both kinds. Mirrors `register_dynamic_flow`
+(owner-class + provenance gating). 14 unit tests.
+
+> **RTR-1a (discovered, follow-up): `compile_nodus_flow` `flow.step` DSL collides
+> with nodus-lang 4.0.5's reserved `step` keyword.** `flow.step(...)` no longer
+> parses (`Expected identifier, got 'STEP'`), so the **`flow-graph`** kind cannot
+> compile real scripts under the current pinned VM — a **pre-existing** latent bug
+> (the compiler was untested; the 4.0.5 bump under NODUS-UPGRADE-1 missed it). The
+> `script` kind is fully working. The registration surface is agnostic to the DSL,
+> so flow-graph works unchanged once the compiler DSL is reconciled with
+> nodus-lang 4.x (likely align with nodus-lang's own native `step` construct
+> rather than a host-object method). Tracked here; not in Phase-1 scope.
+
 - **Evidence (current state):** `AINDY/runtime/nodus_adapter.py` —
   `NodusAgentAdapter.execute_with_flow` is a compat shim
   (`__aindy_compat_wrapper__ = True`) delegating to
