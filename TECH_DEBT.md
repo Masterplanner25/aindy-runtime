@@ -2385,6 +2385,25 @@ bumped to `2026-06-29`, Alembic `0006`), boot rehydration in `startup.py`,
 `run_nodus_workflow` by name, both kinds. Mirrors `register_dynamic_flow`
 (owner-class + provenance gating). 14 unit tests.
 
+**Phase 2a landed (2026-06-30) — tool-calling seam.** Discovered the foundational
+gap: AINDY tools were **not reachable from inside a Nodus workflow** at all. The
+native `action tool "x"` construct lowers to nodus's built-in `__action_tool` →
+its own 4-tool stub registry with **zero** capability enforcement, and those VM
+builtins **cannot be overridden** (`register_function` raises). Fix: a new
+`call_tool(name, args)` host function (`AINDY/runtime/nodus_worker.py` →
+`run_agent_tool`) bridges the VM to `tool_registry.execute_tool` with full
+capability-token enforcement — **fail-closed** (no token → refused before the
+tool). `run_id` + `execution_token` thread through `NodusExecutionContext` →
+worker payload (`nodus_runtime_adapter.py`). Now any Nodus workflow/script (RTR-1
+flow-graph/script *and* the future agent path) can call AINDY tools with
+enforcement. 7 unit tests (in-process — helper enforcement + payload threading;
+no subprocess dependency). Docs: `NODUS_DEVELOPER_GUIDE.md` (`call_tool`).
+**Remaining Phase 2:** 2b — agent-plan → `.nd` compiler (map `plan["steps"]` to a
+`workflow {}` calling `call_tool`); 2c — VM-backed agent adapter reproducing the 8
+`AGENT_FLOW` behaviors (AgentStep recording, status/counters, retry, result
+reconstruction, events, WAIT), to be built opt-in alongside `AGENT_FLOW` before
+any retirement.
+
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't
 > support host-object method calls at all), so the `flow-graph` kind couldn't

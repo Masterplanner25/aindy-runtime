@@ -28,6 +28,12 @@ class NodusExecutionContext:
     allowed_operations: Optional[list[str]] = None
     event_sink: Optional[Callable[[str, dict], None]] = None
     max_execution_ms: Optional[int] = None
+    # RTR-1 Phase 2a — agent tool-calling seam. When a scoped capability token is
+    # present, Nodus scripts may call AINDY tools via the call_tool() host
+    # function; execute_tool enforces the token. Absent a token, tool calls are
+    # refused (fail-closed).
+    run_id: str = ""
+    execution_token: Optional[dict[str, Any]] = None
 
 
 @dataclass
@@ -114,6 +120,8 @@ class NodusRuntimeAdapter:
                     "execution_unit_id": str(context.execution_unit_id or ""),
                     "trace_id": trace_id or str(context.execution_unit_id or ""),
                     "filename": filename,
+                    "run_id": str(context.run_id or context.execution_unit_id or ""),
+                    "execution_token": context.execution_token,
                 },
             }
         )
