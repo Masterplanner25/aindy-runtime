@@ -34,6 +34,7 @@ import AINDY.db.models.memory_trace  # noqa: F401
 import AINDY.db.models.memory_trace_node  # noqa: F401
 import AINDY.db.models.nodus_scheduled_job  # noqa: F401
 import AINDY.db.models.nodus_trace_event  # noqa: F401
+import AINDY.db.models.nodus_workflow  # noqa: F401
 import AINDY.db.models.request_metric  # noqa: F401
 import AINDY.db.models.system_event  # noqa: F401
 import AINDY.db.models.system_health_log  # noqa: F401
