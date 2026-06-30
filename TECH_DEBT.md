@@ -2371,6 +2371,13 @@ in-tree).
 
 The single biggest item; blocks the most. "via_nodus" is currently a misnomer.
 
+**Design (2026-06-29):** the `register_nodus_workflow` registration surface
+(item (a) below) is specified in `docs/runtime/NODUS_WORKFLOW_CONTRACT.md` —
+Phase 1 = registration surface + `nodus_workflows` table + boot rehydration +
+run-by-name (both `flow-graph` and `script` kinds); Phase 2 = agent-plan→`.nd`
++ VM-backed agent adapter; Phase 3 = bytecode cache + `NodusTraceEvent`
+wire-or-drop. Implementation pending against that contract.
+
 - **Evidence (current state):** `AINDY/runtime/nodus_adapter.py` —
   `NodusAgentAdapter.execute_with_flow` is a compat shim
   (`__aindy_compat_wrapper__ = True`) delegating to
