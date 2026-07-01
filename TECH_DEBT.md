@@ -2398,11 +2398,21 @@ worker payload (`nodus_runtime_adapter.py`). Now any Nodus workflow/script (RTR-
 flow-graph/script *and* the future agent path) can call AINDY tools with
 enforcement. 7 unit tests (in-process — helper enforcement + payload threading;
 no subprocess dependency). Docs: `NODUS_DEVELOPER_GUIDE.md` (`call_tool`).
-**Remaining Phase 2:** 2b — agent-plan → `.nd` compiler (map `plan["steps"]` to a
-`workflow {}` calling `call_tool`); 2c — VM-backed agent adapter reproducing the 8
-`AGENT_FLOW` behaviors (AgentStep recording, status/counters, retry, result
-reconstruction, events, WAIT), to be built opt-in alongside `AGENT_FLOW` before
-any retirement.
+**Phase 2b landed (2026-06-30) — agent-plan → `.nd` compiler.**
+`compile_agent_plan(plan)` (`AINDY/runtime/agent_plan_compiler.py`) turns a flat
+agent plan into a native Nodus `workflow {}` — one `step step_N after step_{N-1}`
+per plan step — each calling `call_tool(get_state("__step_N_tool"),
+get_state("__step_N_args"))` (the Phase 2a seam). Tool names + args pass via run
+**state**, never embedded as source, so no planner/LLM-derived value becomes code
+(**injection-safe**). Returns `{source, workflow_name, state_inputs, steps}`; the
+`steps` metadata (index, tool, risk_level, description, `result_key`) is the
+contract for 2c to map each `__step_N_result` from output state back to an
+`AgentStep` row. Standalone module — **not** wired into `execute_run` yet (that's
+2c). 11 unit tests incl. injection-safety + end-to-end VM execution in order.
+**Remaining Phase 2:** 2c — VM-backed agent adapter that runs the compiled
+workflow and reproduces the 8 `AGENT_FLOW` behaviors (AgentStep recording,
+status/counters, retry, result reconstruction, events, WAIT), built **opt-in
+alongside** `AGENT_FLOW` before any retirement.
 
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't
