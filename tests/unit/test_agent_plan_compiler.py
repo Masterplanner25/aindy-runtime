@@ -10,7 +10,7 @@ from AINDY.runtime.nodus_flow_compiler import compile_nodus_flow
 def test_single_step_plan():
     c = compile_agent_plan({"steps": [{"tool": "search", "args": {"q": "x"}}]})
     assert c["workflow_name"] == WORKFLOW_NAME
-    assert c["state_inputs"] == {"__step_0_tool": "search", "__step_0_args": {"q": "x"}}
+    assert c["input_payload"] == {"__step_0_tool": "search", "__step_0_args": {"q": "x"}}
     assert c["steps"][0]["result_key"] == "__step_0_result"
     # The generated source parses as a native workflow with one step.
     graph = compile_nodus_flow(c["source"])
@@ -40,12 +40,12 @@ def test_multi_step_sequential_deps():
     assert c["steps"][0]["risk_level"] == "low"
     assert c["steps"][1]["risk_level"] == "high"
     assert c["steps"][2]["risk_level"] == "high"  # default
-    assert c["state_inputs"]["__step_1_args"] == {"k": 1}
+    assert c["input_payload"]["__step_1_args"] == {"k": 1}
 
 
 def test_args_default_to_empty_dict():
     c = compile_agent_plan({"steps": [{"tool": "t"}]})
-    assert c["state_inputs"]["__step_0_args"] == {}
+    assert c["input_payload"]["__step_0_args"] == {}
 
 
 def test_injection_safe_tool_and_args_never_in_source():
@@ -57,9 +57,9 @@ def test_injection_safe_tool_and_args_never_in_source():
     assert evil_tool not in c["source"]
     assert evil_arg not in c["source"]
     assert "run_workflow(evil)" not in c["source"]
-    # They are carried as data in state_inputs instead.
-    assert c["state_inputs"]["__step_0_tool"] == evil_tool
-    assert c["state_inputs"]["__step_0_args"] == {"payload": evil_arg}
+    # They are carried as data in input_payload instead.
+    assert c["input_payload"]["__step_0_tool"] == evil_tool
+    assert c["input_payload"]["__step_0_args"] == {"payload": evil_arg}
     # And the source still parses cleanly.
     compile_nodus_flow(c["source"])
 
@@ -94,7 +94,7 @@ def test_compiled_workflow_executes_and_captures_results():
     c = compile_agent_plan(plan)
 
     order = []
-    store = dict(c["state_inputs"])
+    results = {}
 
     def call_tool(name, args):
         order.append((name, dict(args) if isinstance(args, dict) else args))
@@ -102,15 +102,19 @@ def test_compiled_workflow_executes_and_captures_results():
 
     rt = NodusRuntime()
     rt.register_function("call_tool", call_tool, arity=2)
-    rt.register_function("set_state", lambda k, v: store.__setitem__(k, v), arity=2)
-    rt.register_function("get_state", store.get, arity=1)
+    rt.register_function("set_state", lambda k, v: results.__setitem__(k, v), arity=2)
 
     runnable = c["source"] + f"\nrun_workflow({c['workflow_name']})"
-    result = rt.run_source(runnable, filename="<agent>", initial_globals={}, host_globals={})
+    # Tool names + args are delivered via the input_payload global (the channel the
+    # nodus.execute node forwards into the script).
+    result = rt.run_source(
+        runnable, filename="<agent>",
+        initial_globals={"input_payload": dict(c["input_payload"])}, host_globals={},
+    )
 
     assert result.get("ok") is True, result.get("error")
     # Tools called in plan order with the right args.
     assert order == [("search", {"q": "weather"}), ("summarize", {"text": "hi"})]
     # Each step's result captured under its result_key.
     for step in c["steps"]:
-        assert store[step["result_key"]] == {"success": True, "result": {"ran": step["tool"]}, "error": None}
+        assert results[step["result_key"]] == {"success": True, "result": {"ran": step["tool"]}, "error": None}

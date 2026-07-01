@@ -2409,10 +2409,30 @@ get_state("__step_N_args"))` (the Phase 2a seam). Tool names + args pass via run
 contract for 2c to map each `__step_N_result` from output state back to an
 `AgentStep` row. Standalone module — **not** wired into `execute_run` yet (that's
 2c). 11 unit tests incl. injection-safety + end-to-end VM execution in order.
-**Remaining Phase 2:** 2c — VM-backed agent adapter that runs the compiled
-workflow and reproduces the 8 `AGENT_FLOW` behaviors (AgentStep recording,
-status/counters, retry, result reconstruction, events, WAIT), built **opt-in
-alongside** `AGENT_FLOW` before any retirement.
+(NB: 2c renamed the compiler's `state_inputs` → `input_payload` — args ride the
+`nodus.execute` node's `input_payload` channel, which is forwarded to the script;
+the `state` namespace is isolated.)
+
+**Phase 2c landed (2026-06-30) — opt-in VM-backed agent path (Core MVP).**
+`execute_agent_run_via_workflow` (`nodus_execution_service.py`) compiles the plan
+(`compile_agent_plan`) and runs it via the canonical flow-backed Nodus path
+(`run_nodus_script_via_flow`), so each step's tool call goes through the
+capability-enforced `call_tool` seam. `execution_token` + `agent_run_id` thread
+via `extra_initial_state` → flow state → the `nodus.execute` node → the execution
+**context** (never the script namespace); `execute_nodus_runtime` gained
+`execution_token`/`run_id` params. `AgentStep` rows, status/counters, result, and
+capability/completion events are reconstructed from the workflow's output state
+(`reconstruct_agent_step_results`). Selected via
+`AINDY_AGENT_EXECUTION_BACKEND=nodus_vm`; **`AGENT_FLOW` stays the default**. 8
+unit tests (reconstruction, selector routing, e2e run with mocked flow+capability
++ real sqlite AgentRun). **Documented differences vs AGENT_FLOW (follow-ups):**
+per-step **retry** policy not reproduced (each tool runs once); **no
+halt-on-first-failure** (the native workflow runs every step even if a prior
+tool fails — subsequent steps may run on bad input); mid-plan **WAIT** not
+supported. These are why it's opt-in and non-default. **Remaining Phase 2:** 2d —
+retry + halt-on-failure (compiler emits throw-on-tool-failure + native step
+`retries` options); 2e — mid-plan WAIT; parity validation on real Postgres before
+any `AGENT_FLOW` retirement.
 
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't

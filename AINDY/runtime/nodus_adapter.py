@@ -662,6 +662,16 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         required=False,
     )
 
+    # ── Agent tool-calling seam (RTR-1 Phase 2c) ──────────────────────────────
+    # When an agent capability token is present in flow state, thread it (and the
+    # agent run id) into the execution context so the call_tool() host function
+    # can enforce it per tool. The token goes to the context only — never into the
+    # script's namespace.
+    _execution_token = state.get("execution_token")
+    if not isinstance(_execution_token, dict):
+        _execution_token = None
+    _agent_run_id = str(state.get("agent_run_id") or run_id or "")
+
     # ── Execute via NodusRuntimeAdapter ──────────────────────────────────────
     nodus_result = execute_nodus_runtime(
         db=db,
@@ -672,6 +682,8 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         memory_context=context.get("memory_context") or {},
         input_payload=state.get("nodus_input_payload") or {},
         state=nodus_initial_state,
+        execution_token=_execution_token,
+        run_id=_agent_run_id,
         event_sink=_build_event_sink(
             db=db,
             user_id=user_id,
