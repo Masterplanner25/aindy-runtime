@@ -89,6 +89,70 @@ class DeferredMemoryBuiltins:
         return result
 
 
+def run_agent_tool(
+    tool_name: str,
+    args: Any,
+    *,
+    user_id: str,
+    run_id: str,
+    execution_token: Optional[dict],
+    session_factory: Any = None,
+) -> dict[str, Any]:
+    """Execute an AINDY agent tool from inside a Nodus run (RTR-1 Phase 2a seam).
+
+    This is the capability-enforced bridge from the Nodus VM to
+    ``AINDY.agents.tool_registry.execute_tool``. It is registered as the
+    ``call_tool(name, args)`` host function so a workflow step can run
+    ``let r = call_tool("send_email", {to: "x"})``.
+
+    Fail-closed: a scoped capability token is **required**; without one the call
+    is refused (it never reaches the tool). With a token, ``execute_tool``
+    enforces ``check_tool_capability`` (token validity/expiry/hash, granted
+    tools, required capabilities ⊆ allowed). Returns the same
+    ``{"success", "result", "error"}`` contract as ``execute_tool`` (with the
+    result made JSON-safe so the Nodus script receives clean values).
+
+    Note: the native ``action tool "x"`` workflow construct is NOT this seam — it
+    lowers to nodus's built-in ``__action_tool`` (its own 4-tool stub, no
+    capability enforcement) and cannot be overridden. Generated AINDY workflows
+    must call ``call_tool(...)``.
+    """
+    if not execution_token:
+        return {
+            "success": False,
+            "result": None,
+            "error": "tool execution requires a capability token",
+        }
+    tool_args = dict(args) if isinstance(args, dict) else {}
+
+    if session_factory is None:
+        from AINDY.db.database import SessionLocal as session_factory
+
+    from AINDY.agents.tool_registry import execute_tool
+
+    db = session_factory()
+    try:
+        result = execute_tool(
+            tool_name=str(tool_name),
+            args=tool_args,
+            user_id=user_id,
+            db=db,
+            run_id=run_id,
+            execution_token=execution_token,
+        )
+    except Exception as exc:
+        return {"success": False, "result": None, "error": str(exc)}
+    finally:
+        with contextlib.suppress(Exception):
+            db.close()
+
+    return {
+        "success": bool(result.get("success")),
+        "result": _json_safe(result.get("result")),
+        "error": result.get("error"),
+    }
+
+
 def _remember_factory(memory: DeferredMemoryBuiltins) -> Any:
     def _remember(*args: Any) -> dict[str, Any]:
         content = str(args[0]) if args else ""
@@ -119,6 +183,11 @@ def main() -> int:
     execution_unit_id = str(ctx.get("execution_unit_id") or "")
     filename = str(ctx.get("filename") or f"<nodus:eu:{execution_unit_id}>")
     trace_id = str(ctx.get("trace_id") or execution_unit_id or "")
+    # RTR-1 Phase 2a — tool-calling seam context.
+    tool_run_id = str(ctx.get("run_id") or execution_unit_id or "")
+    tool_execution_token = ctx.get("execution_token")
+    if not isinstance(tool_execution_token, dict):
+        tool_execution_token = None
 
     from nodus.runtime.embedding import NodusRuntime
     from AINDY.nodus.runtime.memory_bridge import AINDYMemoryBridge
@@ -162,9 +231,19 @@ def main() -> int:
             }
 
     runtime = NodusRuntime(project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None)
+    def _call_tool(tool_name: Any, args: Any) -> Any:
+        return run_agent_tool(
+            tool_name,
+            args,
+            user_id=user_id,
+            run_id=tool_run_id,
+            execution_token=tool_execution_token,
+        )
+
     runtime.register_function("set_state", _set_state, arity=2)
     runtime.register_function("get_state", _get_state, arity=1)
     runtime.register_function("sys", _sys_dispatch, arity=2)
+    runtime.register_function("call_tool", _call_tool, arity=2)
     runtime.register_function("recall", bridge.recall, arity=3)
     runtime.register_function("remember", bridge.remember, arity=3)
     runtime.register_function("suggest", bridge.get_suggestions, arity=3)
