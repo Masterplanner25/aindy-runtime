@@ -16,24 +16,26 @@ An agent ``plan`` is a flat, ordered list of single-tool steps:
 steps run in order and invoke AINDY tools through the RTR-1 Phase 2a
 ``call_tool`` seam (capability-enforced). The compiled source is a **pure
 structural skeleton** keyed only by step index — tool names and args are passed
-via run **state** (``get_state``), never embedded as source. That makes the
-compilation injection-safe: no planner-derived value (which may originate from an
-LLM) is ever turned into code.
+via the run's ``input_payload`` (the channel the ``nodus.execute`` node forwards
+into the script), never embedded as source. That makes the compilation
+injection-safe: no planner-derived value (which may originate from an LLM) is
+ever turned into code.
 
 Generated shape (for a 2-step plan):
 
     workflow agent_plan {
       step step_0 {
-        set_state("__step_0_result", call_tool(get_state("__step_0_tool"), get_state("__step_0_args")))
+        set_state("__step_0_result", call_tool(input_payload["__step_0_tool"], input_payload["__step_0_args"]))
       }
       step step_1 after step_0 {
-        set_state("__step_1_result", call_tool(get_state("__step_1_tool"), get_state("__step_1_args")))
+        set_state("__step_1_result", call_tool(input_payload["__step_1_tool"], input_payload["__step_1_args"]))
       }
     }
 
-The returned ``state_inputs`` seed the run state; the returned ``steps`` metadata
-lets the VM-backed adapter (Phase 2c) map each ``__step_N_result`` from the
-workflow's output state back to an ``AgentStep`` row.
+The returned ``input_payload`` seeds the run's input payload; each step writes its
+``call_tool`` result to ``__step_N_result`` via ``set_state`` (so it returns in
+the worker's output state). The returned ``steps`` metadata lets the VM-backed
+adapter (Phase 2c) map each ``__step_N_result`` back to an ``AgentStep`` row.
 """
 from __future__ import annotations
 
@@ -61,7 +63,7 @@ def compile_agent_plan(plan: dict[str, Any]) -> dict[str, Any]:
         {
           "source": str,              # runnable native workflow source
           "workflow_name": "agent_plan",
-          "state_inputs": {           # seed into run state before execution
+          "input_payload": {          # seed as the run's input_payload
               "__step_0_tool": "<tool>", "__step_0_args": {...}, ...
           },
           "steps": [                  # per-step metadata for AgentStep mapping
@@ -78,7 +80,7 @@ def compile_agent_plan(plan: dict[str, Any]) -> dict[str, Any]:
     if not steps:
         raise ValueError("agent plan has no steps to compile")
 
-    state_inputs: dict[str, Any] = {}
+    input_payload: dict[str, Any] = {}
     step_meta: list[dict[str, Any]] = []
     step_sources: list[str] = []
 
@@ -98,8 +100,8 @@ def compile_agent_plan(plan: dict[str, Any]) -> dict[str, Any]:
         tool_key = _step_tool_key(index)
         args_key = _step_args_key(index)
 
-        state_inputs[tool_key] = tool
-        state_inputs[args_key] = args
+        input_payload[tool_key] = tool
+        input_payload[args_key] = args
 
         step_meta.append(
             {
@@ -115,7 +117,7 @@ def compile_agent_plan(plan: dict[str, Any]) -> dict[str, Any]:
         after = f" after step_{index - 1}" if index > 0 else ""
         step_sources.append(
             f"  step step_{index}{after} {{\n"
-            f'    set_state("{result_key}", call_tool(get_state("{tool_key}"), get_state("{args_key}")))\n'
+            f'    set_state("{result_key}", call_tool(input_payload["{tool_key}"], input_payload["{args_key}"]))\n'
             f"  }}"
         )
 
@@ -130,6 +132,6 @@ def compile_agent_plan(plan: dict[str, Any]) -> dict[str, Any]:
     return {
         "source": source,
         "workflow_name": WORKFLOW_NAME,
-        "state_inputs": state_inputs,
+        "input_payload": input_payload,
         "steps": step_meta,
     }
