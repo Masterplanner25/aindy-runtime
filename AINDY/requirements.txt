@@ -58,7 +58,7 @@ ecdsa==0.19.2
 passlib==1.7.4
 bcrypt==4.0.1
 slowapi==0.1.9
-pytest-cov==7.0.0
+pytest-cov==7.1.0
 ruff==0.15.17
 apscheduler==3.11.3
 tenacity==9.1.4
