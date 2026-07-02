@@ -44,7 +44,7 @@ def test_runtime_package_metadata_declares_console_entrypoints():
         "platform/dist/**",
     ]
     assert pyproject["project"]["optional-dependencies"]["release"] == [
-        "build==1.3.0",
+        "build==1.5.0",
         "twine==6.2.0",
     ]
     assert callable(runtime_only_entrypoint_main)
