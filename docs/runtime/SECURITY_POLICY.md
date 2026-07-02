@@ -1,6 +1,6 @@
 ---
 title: "Security Policy"
-last_verified: "2026-06-05"
+last_verified: "2026-07-02"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -87,6 +87,13 @@ Accepted findings must be documented here under **Accepted Findings**.
 - **Accepted:** 2026-05-25
 - **Rationale:** Not reachable. nltk is a transitive dependency of textstat; the runtime never uses nltk's JSON tag serialization system.
 - **Reopen trigger:** A fix release from the nltk maintainers, or any direct nltk JSON tag usage added to the codebase.
+
+### PYSEC-2026-597 (CVE-2026-12243) — nltk url2pathname() percent-encoded path traversal
+- **Package:** nltk (transitive dep of textstat)
+- **Fix version:** None released
+- **Accepted:** 2026-07-02
+- **Rationale:** Not reachable. Incomplete-fix follow-up to PYSEC-2026-97: `_UNSAFE_NO_PROTOCOL_RE` in `nltk/data.py` rejects literal `../` but not percent-encoded `..%2f`, which `url2pathname()` decodes after the check. Exploitation requires an attacker-controlled resource name passed to `nltk.data.load()`/`nltk.data.find()`. nltk is a transitive dependency of textstat; the runtime never imports nltk directly and never calls those loaders, so no attacker-controlled path reaches `url2pathname()`.
+- **Reopen trigger:** A fix release from the nltk maintainers, or any direct call to `nltk.data.load()`/`find()` added to the codebase.
 
 ## Reporting a Vulnerability
 

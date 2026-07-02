@@ -39,10 +39,15 @@ jobs:
           #   nltk is a transitive dep of textstat; nltk.util.filestring() is never called.
           # GHSA-rf74-v2fm-23pw: nltk JSONTaggedDecoder recursion DoS â€” no fix released. Accepted
           #   2026-05-25; nltk JSON tag decoder is never called by this codebase.
+          # PYSEC-2026-597 (CVE-2026-12243): nltk url2pathname() percent-encoded path traversal â€”
+          #   no fix released. Accepted 2026-07-02; incomplete-fix follow-up to PYSEC-2026-97.
+          #   Not reachable: nltk is a transitive dep of textstat; this codebase never calls
+          #   nltk.data.load()/find(), so no attacker-controlled resource name reaches url2pathname().
           pip-audit \
             --ignore-vuln CVE-2024-23342 \
             --ignore-vuln PYSEC-2026-97 \
             --ignore-vuln GHSA-rf74-v2fm-23pw \
+            --ignore-vuln PYSEC-2026-597 \
             --format json --output audit-results.json; AUDIT_EXIT=$?
           if [ "$AUDIT_EXIT" -eq 0 ]; then
             echo "pip-audit: no vulnerabilities found"
