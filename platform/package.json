@@ -11,7 +11,7 @@
   "dependencies": {
     "@aindy/ui-kit": "^1.0.5",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react-dom": "^19.2.7",
     "react-router-dom": "^6.30.0",
     "recharts": "^2.15.0"
   },
