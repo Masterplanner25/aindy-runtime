@@ -1643,6 +1643,7 @@ def _load_manifest_declarative_extensions(
     from AINDY.platform_layer.event_service import subscribe_webhook
     from AINDY.platform_layer.node_registry import register_external_node
     from AINDY.runtime.flow_registry import register_dynamic_flow
+    from AINDY.runtime.nodus_workflow_registry import register_nodus_workflow
 
     loaded: list[str] = []
     for extension_entry in extension_entries:
@@ -1681,6 +1682,30 @@ def _load_manifest_declarative_extensions(
                 edges={str(src): list(targets) for src, targets in dict(extension_entry.get("edges") or {}).items()},
                 start=str(extension_entry["start"]),
                 end=list(extension_entry["end"]),
+                owner_class=owner_class,
+                provenance=dict(extension_entry["provenance"]) if isinstance(extension_entry.get("provenance"), dict) else None,
+                overwrite=bool(extension_entry.get("overwrite", False)),
+                db=None,
+            )
+        elif kind == "nodus-workflow":
+            # Source is inline ("source") or a file relative to the manifest dir
+            # ("source_path"). Declarative entries re-register every boot from the
+            # manifest artifact, so db=None (no DB persistence for this path).
+            workflow_source = extension_entry.get("source")
+            if workflow_source is None and extension_entry.get("source_path"):
+                source_file = (path.parent / str(extension_entry["source_path"])).resolve()
+                workflow_source = source_file.read_text(encoding="utf-8")
+            if not isinstance(workflow_source, str) or not workflow_source.strip():
+                raise ValueError(
+                    f"nodus-workflow {extension_entry.get('name')!r} requires a non-empty "
+                    "'source' or readable 'source_path'"
+                )
+            meta = register_nodus_workflow(
+                str(extension_entry["name"]),
+                workflow_source,
+                kind=str(extension_entry.get("kind_hint", "flow-graph")),
+                version=str(extension_entry["version"]) if extension_entry.get("version") else None,
+                capabilities=list(extension_entry.get("capabilities") or []),
                 owner_class=owner_class,
                 provenance=dict(extension_entry["provenance"]) if isinstance(extension_entry.get("provenance"), dict) else None,
                 overwrite=bool(extension_entry.get("overwrite", False)),

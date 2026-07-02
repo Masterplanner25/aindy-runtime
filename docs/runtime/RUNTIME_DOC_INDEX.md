@@ -62,6 +62,7 @@ Start with:
 - `NODUS_DEVELOPER_GUIDE.md`
 - `SYSCALL_REFERENCE.md`
 - `SYSCALL_SYSTEM.md` (architecture detail)
+- `NODUS_WORKFLOW_CONTRACT.md` (RTR-1 — `register_nodus_workflow` design + contract)
 
 ### Release / QA Reviewers
 Start with:
