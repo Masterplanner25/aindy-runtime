@@ -18,3 +18,21 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+
+  # npm — Platform SPA build/runtime deps (vite, react-router, babel, …).
+  # Lockfile lives in platform/; security alerts here have no auto-PR path
+  # without this entry.
+  - package-ecosystem: "npm"
+    directory: "/platform"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+
+  # Cargo — optional Rust native memory scorer (pyo3, …).
+  - package-ecosystem: "cargo"
+    directory: "/AINDY/memory/native/memory_bridge_rs"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
