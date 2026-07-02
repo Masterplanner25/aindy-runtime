@@ -220,6 +220,37 @@ def validate_flow_registration(name: str, handler: Any) -> None:
     _validate_noarg_callable("Flow registration", name, handler)
 
 
+_NODUS_WORKFLOW_NAME_CHARS = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+)
+_NODUS_WORKFLOW_KINDS = {"flow-graph", "script"}
+
+
+def validate_nodus_workflow(name: str, source: Any, kind: Any) -> None:
+    """Validate a Nodus workflow registration (RTR-1).
+
+    Charset/length rule matches register_dynamic_flow; kind must be one of the
+    supported workflow kinds; source must be a non-empty string.
+    """
+    registration_name = name if isinstance(name, str) and name.strip() else "<unnamed>"
+    _validate_non_empty_string("name", name, "Nodus workflow registration", registration_name)
+    if len(name.strip()) > 128:
+        _fail("Nodus workflow registration", registration_name, "name must be 128 characters or fewer.")
+    if any(ch not in _NODUS_WORKFLOW_NAME_CHARS for ch in name):
+        _fail(
+            "Nodus workflow registration",
+            registration_name,
+            "name may contain only letters, numbers, '.', '_' and '-'.",
+        )
+    if kind not in _NODUS_WORKFLOW_KINDS:
+        _fail(
+            "Nodus workflow registration",
+            registration_name,
+            f"kind must be one of {sorted(_NODUS_WORKFLOW_KINDS)}. Got: {kind!r}",
+        )
+    _validate_non_empty_string("source", source, "Nodus workflow registration", registration_name)
+
+
 def validate_flow_result_registration(
     flow_name: str,
     *,
