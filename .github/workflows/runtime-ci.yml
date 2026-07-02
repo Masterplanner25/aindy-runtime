@@ -113,7 +113,7 @@ jobs:
           python-version: "3.11"
 
       - name: Cache pip
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-runtime-pip-${{ hashFiles('AINDY/requirements.txt', 'pyproject.toml') }}
@@ -257,7 +257,7 @@ jobs:
           python-version: "3.11"
 
       - name: Cache pip
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-integration-pip-${{ hashFiles('AINDY/requirements.txt', 'pyproject.toml') }}
@@ -435,7 +435,7 @@ jobs:
           path: dist/
 
       - name: Cache pip
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-smoke-pip-${{ hashFiles('pyproject.toml') }}
