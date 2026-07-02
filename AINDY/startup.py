@@ -1488,6 +1488,27 @@ def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
         finally:
             _flow_rehydrate_db.close()
 
+    # Nodus workflow rehydration: recompile every active nodus_workflows row
+    # (RTR-1) into FLOW_REGISTRY / the in-memory workflow registry so registered
+    # workflows survive a restart. Must run after register_all_flows() so the
+    # node registry is populated. Runtime-only boot finds zero rows (no-op).
+    if not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
+        from AINDY.runtime.nodus_workflow_registry import rehydrate_nodus_workflows
+        _nodus_wf_db = db_factory()
+        try:
+            _n_workflows = rehydrate_nodus_workflows(_nodus_wf_db)
+            if _n_workflows:
+                logger.info(
+                    "[startup] Nodus workflow rehydration registered %d workflow(s)",
+                    _n_workflows,
+                )
+        except Exception as _nodus_wf_exc:
+            logger.error(
+                "[startup] Nodus workflow rehydration failed: %s", _nodus_wf_exc
+            )
+        finally:
+            _nodus_wf_db.close()
+
     if not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
         try:
             from AINDY.kernel.scheduler_engine import get_scheduler_engine
