@@ -35,7 +35,7 @@ dependencies = [
   "dnspython==2.8.0",
   "fastapi==0.138.1",
   "fastapi-cache2==0.2.2",
-  "greenlet==3.5.1",
+  "greenlet==3.5.3",
   "h11==0.16.0",
   "httpcore==1.0.9",
   "httpx==0.28.1",
