@@ -417,6 +417,211 @@ def execute_agent_flow_orchestration(
         return {"status": "FAILED", "error": str(exc)}
 
 
+def reconstruct_agent_step_results(
+    steps_meta: list[dict[str, Any]],
+    output_state: dict[str, Any],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Map a compiled plan's per-step ``__step_N_result`` outputs to step results.
+
+    Returns ``(step_results, any_failed)`` where each entry is the AGENT_FLOW-shape
+    ``{step_index, tool, status, result, error}``. A step whose result_key is
+    absent from ``output_state`` did not run and is skipped (RTR-1 Phase 2c: the
+    VM workflow runs all steps, so absence generally means the flow failed before
+    reaching it).
+    """
+    step_results: list[dict[str, Any]] = []
+    any_failed = False
+    for meta in steps_meta:
+        tool_result = output_state.get(meta["result_key"])
+        if tool_result is None:
+            continue
+        if not isinstance(tool_result, dict):
+            tool_result = {"success": False, "result": None, "error": str(tool_result)}
+        ok = bool(tool_result.get("success"))
+        if not ok:
+            any_failed = True
+        step_results.append(
+            {
+                "step_index": meta["index"],
+                "tool": meta["tool"],
+                "status": "success" if ok else "failed",
+                "result": tool_result.get("result"),
+                "error": tool_result.get("error"),
+            }
+        )
+    return step_results, any_failed
+
+
+def execute_agent_run_via_workflow(
+    *,
+    run_id: str,
+    plan: dict[str, Any],
+    user_id: str,
+    db: Session,
+    correlation_id: str | None = None,
+    execution_token: dict[str, Any] | None = None,
+    capability_token: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """RTR-1 Phase 2c — OPT-IN VM-backed agent execution.
+
+    Compiles the agent plan into a native Nodus workflow (``compile_agent_plan``)
+    and runs it through the canonical flow-backed Nodus path
+    (``run_nodus_script_via_flow``), so each step's tool call goes through the
+    capability-enforced ``call_tool`` seam. ``AgentStep`` rows, status/counters,
+    result, and completion events are reconstructed from the workflow's output
+    state.
+
+    Core-MVP parity (Phase 2c). Reproduced: tool calls (capability-enforced),
+    AgentStep recording, status/counters, result reconstruction, capability +
+    completion events. **Not yet reproduced vs AGENT_FLOW** (documented
+    follow-ups): per-step retry policy, halt-on-first-failure (the VM workflow
+    runs every step regardless of a tool's logical failure), and mid-plan WAIT.
+
+    Selected via ``AINDY_AGENT_EXECUTION_BACKEND=nodus_vm``; ``AGENT_FLOW`` remains
+    the default until this path is proven at parity.
+    """
+    from datetime import datetime, timezone
+
+    from AINDY.agents.capability_service import check_execution_capability
+    from AINDY.core.execution_signal_helper import queue_system_event, record_agent_event
+    from AINDY.db.models import AgentRun, AgentStep
+    from AINDY.runtime.agent_plan_compiler import compile_agent_plan
+    from AINDY.runtime.nodus_adapter import _db_run_id
+
+    def _fail_run(message: str) -> None:
+        run = db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
+        if run and run.status == "executing":
+            run.status = "failed"
+            run.completed_at = datetime.now(timezone.utc)
+            run.error_message = message
+            run.result = {"steps": []}
+            db.commit()
+
+    try:
+        scoped_token = execution_token or capability_token
+
+        # ── Flow-level capability gate (mirrors execute_agent_flow_orchestration) ─
+        flow_capability_check = {"ok": False, "error": "missing scoped capability token"}
+        if scoped_token is not None:
+            flow_capability_check = check_execution_capability(
+                token=scoped_token,
+                run_id=run_id,
+                user_id=user_id,
+                capability_name="execute_flow",
+            )
+        if not flow_capability_check["ok"]:
+            _fail_run(flow_capability_check["error"])
+            queue_system_event(
+                db=db, event_type="capability.denied", user_id=user_id,
+                trace_id=correlation_id, source="agent",
+                payload={"run_id": str(run_id), "capability": "execute_flow", "error": flow_capability_check["error"]},
+                required=True,
+            )
+            record_agent_event(
+                run_id=run_id, user_id=user_id, event_type="CAPABILITY_DENIED", db=db,
+                correlation_id=correlation_id,
+                payload={"capability": "execute_flow", "error": flow_capability_check["error"]},
+                required=True,
+            )
+            return {"status": "FAILED", "error": flow_capability_check["error"]}
+        queue_system_event(
+            db=db, event_type="capability.allowed", user_id=user_id,
+            trace_id=correlation_id, source="agent",
+            payload={"run_id": str(run_id), "capability": "execute_flow"}, required=True,
+        )
+
+        # ── Compile the plan → native Nodus workflow ──────────────────────────────
+        try:
+            compiled = compile_agent_plan(plan)
+        except ValueError as exc:
+            _fail_run(str(exc))
+            return {"status": "FAILED", "error": str(exc)}
+
+        script = compiled["source"] + f"\nrun_workflow({compiled['workflow_name']})\n"
+
+        # ── Run via the canonical flow-backed Nodus path ──────────────────────────
+        # execution_token + agent_run_id ride in extra_initial_state so the
+        # nodus.execute node threads them to the call_tool seam (context only).
+        flow_result = run_nodus_script_via_flow(
+            script=script,
+            input_payload=compiled["input_payload"],
+            error_policy="halt",
+            db=db,
+            user_id=user_id,
+            workflow_type="agent_execution",
+            trace_id=correlation_id,
+            extra_initial_state={
+                "execution_token": scoped_token,
+                "agent_run_id": str(run_id),
+            },
+        )
+
+        # ── Reconstruct AgentStep rows + status from the workflow output ──────────
+        output_state = format_nodus_flow_result(flow_result).get("output_state") or {}
+        step_results, any_failed = reconstruct_agent_step_results(compiled["steps"], output_state)
+        ran_by_index = {r["step_index"] for r in step_results}
+
+        now = datetime.now(timezone.utc)
+        for meta in compiled["steps"]:
+            if meta["index"] not in ran_by_index:
+                continue
+            entry = next(r for r in step_results if r["step_index"] == meta["index"])
+            db.add(
+                AgentStep(
+                    run_id=_db_run_id(run_id),
+                    step_index=meta["index"],
+                    tool_name=meta["tool"],
+                    tool_args=meta["args"],
+                    risk_level=meta["risk_level"],
+                    description=meta["description"],
+                    status=entry["status"],
+                    result=entry["result"],
+                    error_message=entry["error"],
+                    executed_at=now,
+                    correlation_id=correlation_id,
+                )
+            )
+            record_agent_event(
+                run_id=run_id, user_id=user_id,
+                event_type="AGENT_STEP_COMPLETED" if entry["status"] == "success" else "AGENT_STEP_FAILED",
+                db=db, correlation_id=correlation_id,
+                payload={"step_index": meta["index"], "tool": meta["tool"], "status": entry["status"]},
+                required=False,
+            )
+
+        ran = len(step_results)
+        flow_ok = flow_result.get("status") == "SUCCESS"
+        completed_ok = flow_ok and not any_failed and ran == len(compiled["steps"])
+
+        run = db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
+        if run:
+            flow_run_id = flow_result.get("run_id")
+            if flow_run_id:
+                run.flow_run_id = str(flow_run_id)
+            run.steps_completed = ran
+            run.current_step = ran
+            run.result = {"steps": step_results}
+            run.completed_at = now
+            if completed_ok:
+                run.status = "completed"
+            else:
+                run.status = "failed"
+                run.error_message = flow_result.get("error") or "one or more agent steps failed"
+        db.commit()
+
+        record_agent_event(
+            run_id=run_id, user_id=user_id,
+            event_type="COMPLETED" if completed_ok else "FAILED",
+            db=db, correlation_id=correlation_id,
+            payload={"steps_completed": ran, "steps_total": len(compiled["steps"])},
+            required=False,
+        )
+        return flow_result
+    except Exception as exc:
+        logger.warning("[NodusExecutionService] execute_agent_run_via_workflow failed: %s", exc)
+        return {"status": "FAILED", "error": str(exc)}
+
+
 def execute_agent_run_via_nodus(
     *,
     run_id: str,
@@ -438,7 +643,25 @@ def execute_agent_run_via_nodus(
     the flow wrapper (flow_engine._FLOW_RETRY_POLICY) and the per-step adapter
     (_step_policy in nodus_adapter._execute_agent_step). This function executes
     exactly once per invocation; the flow engine controls whether it is retried.
+
+    Backend selection (RTR-1 Phase 2c): when
+    ``AINDY_AGENT_EXECUTION_BACKEND=nodus_vm`` the run is compiled to a native
+    Nodus workflow and executed through the VM (``execute_agent_run_via_workflow``).
+    The default (``agent_flow``) uses the static AGENT_FLOW Python DAG below.
     """
+    import os
+
+    if os.getenv("AINDY_AGENT_EXECUTION_BACKEND", "agent_flow").strip().lower() == "nodus_vm":
+        return execute_agent_run_via_workflow(
+            run_id=run_id,
+            plan=plan,
+            user_id=user_id,
+            db=db,
+            correlation_id=correlation_id,
+            execution_token=execution_token,
+            capability_token=capability_token,
+        )
+
     from AINDY.runtime.nodus_adapter import NodusAgentAdapter
 
     adapter_entrypoint = NodusAgentAdapter.execute_with_flow
@@ -477,6 +700,8 @@ def execute_nodus_runtime(
     allowed_operations: Optional[list[str]] = None,
     event_sink=None,
     max_execution_ms: Optional[int] = None,
+    execution_token: dict[str, Any] | None = None,
+    run_id: str | None = None,
     adapter_cls=None,
     context_cls=None,
 ):
@@ -508,6 +733,8 @@ def execute_nodus_runtime(
         allowed_operations=allowed_operations,
         event_sink=event_sink,
         max_execution_ms=max_execution_ms,
+        run_id=str(run_id or execution_unit_id or ""),
+        execution_token=execution_token,
     )
     adapter = adapter_cls(db=db)
     if script is not None:

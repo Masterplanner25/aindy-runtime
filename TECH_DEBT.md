@@ -2342,3 +2342,286 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
 
 **Close trigger:** when `DATA_MODEL_MAP.md` surgery lands (residual 1) and the
 `ERROR_HANDLING_POLICY.md` runtime/app split (residual 2) is decided.
+
+---
+
+## RTR-* — Runtime Roadmap (Nodus-first execution & runtime primitives)
+
+**Status:** Open — roadmap (not classic debt). Priorities per item below.
+
+**Provenance.** Consolidated from the five app-side evolution docs (AGENTICS,
+Reasoning, RippleTrace, …) where work was flagged "runtime-gated" or
+"runtime-owned" while the app layer was built. Every claim below was
+**validated against the live source tree on 2026-06-29** by three code-mapping
+passes (Nodus substrate; worker model + agent execution; multi-agent / autonomy
+/ memory / causality). File:symbol evidence is cited inline.
+
+**Ownership lens.** The runtime is "kernel primitives + registration surfaces;
+apps extend without editing runtime" (see `DB_OWNERSHIP_CONTRACT.md`,
+`MODEL_OWNERSHIP_POLICY.md`). Discriminator used throughout: **runtime owns the
+mechanism / primitive / registration surface; the app owns the policy /
+semantics** (which events are significant, which triggers fire, ranking weights,
+the content-domain causal graph). Every item below passes that test as
+runtime-owned (or runtime-half of a split). Validation confirmed several items
+are **"finish/promote what exists," not "build from scratch"** — flagged per
+item as **[BUILD]** (mostly greenfield) vs **[HARDEN]** (substantial prior work
+in-tree).
+
+### RTR-1 — Nodus as primary execution substrate — **[BUILD], highest, cross-cutting**
+
+The single biggest item; blocks the most. "via_nodus" is currently a misnomer.
+
+**Design (2026-06-29):** the `register_nodus_workflow` registration surface
+(item (a) below) is specified in `docs/runtime/NODUS_WORKFLOW_CONTRACT.md` —
+Phase 1 = registration surface + `nodus_workflows` table + boot rehydration +
+run-by-name (both `flow-graph` and `script` kinds); Phase 2 = agent-plan→`.nd`
++ VM-backed agent adapter; Phase 3 = bytecode cache + `NodusTraceEvent`
+wire-or-drop. Implementation pending against that contract.
+
+**Phase 1 landed (2026-06-29):** `register_nodus_workflow` surface
+(`AINDY/runtime/nodus_workflow_registry.py`) — imperative + declarative
+(`nodus-workflow` manifest kind), `nodus_workflows` source table (schema-contract
+bumped to `2026-06-29`, Alembic `0006`), boot rehydration in `startup.py`,
+`run_nodus_workflow` by name, both kinds. Mirrors `register_dynamic_flow`
+(owner-class + provenance gating). 14 unit tests.
+
+**Phase 2a landed (2026-06-30) — tool-calling seam.** Discovered the foundational
+gap: AINDY tools were **not reachable from inside a Nodus workflow** at all. The
+native `action tool "x"` construct lowers to nodus's built-in `__action_tool` →
+its own 4-tool stub registry with **zero** capability enforcement, and those VM
+builtins **cannot be overridden** (`register_function` raises). Fix: a new
+`call_tool(name, args)` host function (`AINDY/runtime/nodus_worker.py` →
+`run_agent_tool`) bridges the VM to `tool_registry.execute_tool` with full
+capability-token enforcement — **fail-closed** (no token → refused before the
+tool). `run_id` + `execution_token` thread through `NodusExecutionContext` →
+worker payload (`nodus_runtime_adapter.py`). Now any Nodus workflow/script (RTR-1
+flow-graph/script *and* the future agent path) can call AINDY tools with
+enforcement. 7 unit tests (in-process — helper enforcement + payload threading;
+no subprocess dependency). Docs: `NODUS_DEVELOPER_GUIDE.md` (`call_tool`).
+**Phase 2b landed (2026-06-30) — agent-plan → `.nd` compiler.**
+`compile_agent_plan(plan)` (`AINDY/runtime/agent_plan_compiler.py`) turns a flat
+agent plan into a native Nodus `workflow {}` — one `step step_N after step_{N-1}`
+per plan step — each calling `call_tool(get_state("__step_N_tool"),
+get_state("__step_N_args"))` (the Phase 2a seam). Tool names + args pass via run
+**state**, never embedded as source, so no planner/LLM-derived value becomes code
+(**injection-safe**). Returns `{source, workflow_name, state_inputs, steps}`; the
+`steps` metadata (index, tool, risk_level, description, `result_key`) is the
+contract for 2c to map each `__step_N_result` from output state back to an
+`AgentStep` row. Standalone module — **not** wired into `execute_run` yet (that's
+2c). 11 unit tests incl. injection-safety + end-to-end VM execution in order.
+(NB: 2c renamed the compiler's `state_inputs` → `input_payload` — args ride the
+`nodus.execute` node's `input_payload` channel, which is forwarded to the script;
+the `state` namespace is isolated.)
+
+**Phase 2c landed (2026-06-30) — opt-in VM-backed agent path (Core MVP).**
+`execute_agent_run_via_workflow` (`nodus_execution_service.py`) compiles the plan
+(`compile_agent_plan`) and runs it via the canonical flow-backed Nodus path
+(`run_nodus_script_via_flow`), so each step's tool call goes through the
+capability-enforced `call_tool` seam. `execution_token` + `agent_run_id` thread
+via `extra_initial_state` → flow state → the `nodus.execute` node → the execution
+**context** (never the script namespace); `execute_nodus_runtime` gained
+`execution_token`/`run_id` params. `AgentStep` rows, status/counters, result, and
+capability/completion events are reconstructed from the workflow's output state
+(`reconstruct_agent_step_results`). Selected via
+`AINDY_AGENT_EXECUTION_BACKEND=nodus_vm`; **`AGENT_FLOW` stays the default**. 8
+unit tests (reconstruction, selector routing, e2e run with mocked flow+capability
++ real sqlite AgentRun). **Documented differences vs AGENT_FLOW (follow-ups):**
+per-step **retry** policy not reproduced (each tool runs once); **no
+halt-on-first-failure** (the native workflow runs every step even if a prior
+tool fails — subsequent steps may run on bad input); mid-plan **WAIT** not
+supported. These are why it's opt-in and non-default. **Remaining Phase 2:** 2d —
+retry + halt-on-failure (compiler emits throw-on-tool-failure + native step
+`retries` options); 2e — mid-plan WAIT; parity validation on real Postgres before
+any `AGENT_FLOW` retirement.
+
+> **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
+> collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't
+> support host-object method calls at all), so the `flow-graph` kind couldn't
+> compile real scripts. **Resolution:** adopt nodus-lang's **native
+> `workflow {}` / `goal {}` construct** (4.x ships a first-class `orchestration/`
+> workflow feature). `compile_nodus_flow` (`AINDY/runtime/nodus_flow_compiler.py`)
+> now parses that construct and extracts the step dependency DAG (no execution);
+> `flow-graph` workflows execute natively by appending `run_workflow(<name>)` /
+> `run_goal` and running through the shared `nodus_execute` flow. The retired
+> `flow.step()` node-wiring intent is already covered by `register_dynamic_flow`,
+> so nothing is lost. The dead `nodus.flow.compile` node + `POST /platform/nodus/flow`
+> route were repointed to the new model; the `nodus.flow.compile→run` chain is
+> deprecated. Both kinds now fully working. Tests: `test_nodus_flow_compiler.py`
+> (incl. end-to-end VM execution in dependency order) + updated
+> `test_nodus_workflow_registry.py`.
+
+- **Evidence (current state):** `AINDY/runtime/nodus_adapter.py` —
+  `NodusAgentAdapter.execute_with_flow` is a compat shim
+  (`__aindy_compat_wrapper__ = True`) delegating to
+  `execute_agent_flow_orchestration`; the agent path runs a **static Python
+  `AGENT_FLOW` DAG** on `PersistentFlowRunner` — **no Nodus VM**. A real
+  VM-backed path exists only as the opt-in `@register_node("nodus.execute")`
+  node → `nodus_runtime_adapter.NodusRuntimeAdapter._execute()`, which runs
+  `nodus_worker.py` as a **subprocess** into the pip `nodus-lang` package. Agent
+  plans (`execute_agent_run_via_nodus`, `nodus_execution_service.py`) interpret
+  `plan["steps"]` directly in `agent_execute_step`; **no `.nd` is generated,
+  templated, or precompiled.**
+- **No registration surface:** searches for `register_nodus_workflow` /
+  `.nd` discovery return nothing. What exists: `FLOW_REGISTRY` (in-memory dict,
+  `flow_engine/registry.py`), data-only `register_dynamic_flow`
+  (`flow_registry.py:133` — wires pre-registered nodes, **no conditions over
+  HTTP**), and name-keyed `.nodus` script upload (`nodus_script_store.py`,
+  `POST /platform/nodus`). `nodus_flow_compiler.compile_nodus_flow` can turn a
+  Nodus *flow-script* into a flow dict but is **not fed by agent plans** and its
+  conditions are in-memory only.
+- **The gap (runtime work):** (a) a real `register_nodus_workflow` / `.nd`
+  registry + discovery surface so apps register/select workflows without runtime
+  edits — this is the missing hook that forced the "runtime-gated" verdicts;
+  (b) replace/wrap the agent shim with a VM-backed adapter + an agent-plan → `.nd`
+  mapping (generated/templated/precompiled); (c) `.nd` asset storage + versioning
+  in-repo and a managed compile/bytecode cache (today: trivial `memory.nd`, **no
+  versioning**; `.nbc` is the nodus-lang VM's own path+mtime cache, library-written
+  and **stale/cross-machine** — see note below); (d) wire or drop the dead trace
+  path: `NodusTraceEvent` (`db/models/nodus_trace_event.py`) + reader
+  `nodus_trace_service.query_nodus_trace` + `GET /platform/nodus/trace/{trace_id}`
+  exist, but the writer `_flush_nodus_traces()` (`nodus_runtime_adapter.py`) has
+  **no call sites** — no rows are ever written.
+- **What already works:** live Nodus VM runs are **not** a side path — they go
+  through `PersistentFlowRunner` → create a `FlowRun`, link `AgentRun.flow_run_id`,
+  and emit `SystemEvent`s (`source="nodus"`) on the canonical bus.
+
+### RTR-2 — Durable worker model — **[HARDEN], high**
+
+- **Evidence:** `core/distributed_queue.py` — `RedisQueueBackend` is real,
+  production-grade (atomic `LPUSH`/`BRPOP`, `aindy:jobs:inflight` visibility-timeout
+  hash, delayed ZSET + Lua promotion, DLQ, circuit breaker, capacity Lua,
+  `requeue_stale_jobs`). `worker/worker_loop.py` is a real separate-process
+  consumer with a DB-side atomic claim (`_try_claim_job`) preventing
+  double-execution. `platform_layer/leadership.py` `BackgroundLeadershipElector`
+  (lease in `background_task_leases`) is enforced (LEASE-1, closed). `JobLog` +
+  `ExecutionUnit` rows persist job intent **before** submission.
+- **Current state:** durable path **exists and is well-built**, but is **opt-in**
+  behind `EXECUTION_MODE=distributed` + `REDIS_URL`. Default is in-process
+  `ThreadPoolExecutor` (`async_job_service._distributed_execution_enabled()` →
+  `"thread"`). Prod guards already raise without Redis (`settings.is_prod`).
+- **The gap:** flip distributed to the prod default (partial mitigation already
+  via prod overlay — see **SYSMAX-1**); add per-tenant queue isolation (today is
+  count-based admission via `AINDY_ASYNC_MAX_CONCURRENT_*`, **not** isolated
+  lanes); close the thread-mode in-flight loss (record survives, execution does
+  not). **Related:** SYSMAX-1, TIER3-10 (`async_job_service` coupling), LEASE-1.
+
+### RTR-3 — Agent execution integrity — **[HARDEN/BUILD split], high**
+
+- **Evidence:** two records with a one-directional, **nullable, post-hoc** link.
+  `AgentRun` (`db/models/agent_run.py`) `flow_run_id` is
+  `ForeignKey(..., ondelete="SET NULL"), nullable=True`; `execute_run`
+  (`agents/agent_runtime/execution.py`) → `execute_agent_run_via_nodus`
+  (`nodus_execution_service.py:368`) creates the `FlowRun` first and
+  **back-patches** `agent_run.flow_run_id` after. Reconciliation is convention-
+  based and guarded on the literal string `status == "executing"` (both forward
+  and in `stuck_run_service._recover_agent_run`, which drives from the FlowRun
+  side). **`FlowRun` is the de-facto authority; `AgentRun` is a mirrored projection.**
+- **Current state:** lifecycle hardening is **substantially done** — multiple
+  DB-driven recovery scanners (`stuck_run_service.scan_and_recover_stuck_runs`,
+  `core/flow_run_rehydration.rehydrate_waiting_flow_runs` with atomic-claim
+  `UPDATE flow_runs SET status='executing' WHERE id=? AND status='waiting'`,
+  `core/resume_watchdog`, scheduler orphaned-approved recovery). Queued/waiting/
+  failed states are fully inspectable and resumable without process memory.
+- **The gap:** one authoritative execution-record path — unify the
+  `AgentRun` ↔ `FlowRun` state machines (single authority / shared enum;
+  non-nullable, non-post-hoc link) so divergence is impossible (today an AgentRun
+  in any state other than `"executing"` silently no-ops recovery). Exact-position
+  resume of mid-node `running` work is out of scope (today: fail + reconstruct
+  from `AgentStep`, or replay fresh via `replayed_from_run_id`); thread-mode
+  in-flight overlaps RTR-2.
+
+### RTR-4 — Multi-agent delegation core — **[HARDEN], medium**
+
+- **Evidence:** **working core, not scaffolding.** `db/models/agent_registry.py`
+  `AgentRegistry` is a persisted table; `agents/agent_coordinator.py` has real
+  `register_or_update_agent`, `_rank_candidate_agents` (weighted
+  `coordination_score`), and `dispatch_delegated_run` (creates child `AgentRun`
+  with `parent_run_id` / `spawned_by_agent_id`, sets parent `status="delegated"`).
+  `agents/runtime_guardrails.enforce_delegation_guardrails` enforces max depth
+  (3), max children (8), cycle detection. `capability_service.mint_token` mints a
+  **fresh scoped, hash-sealed, TTL-bounded token per child run**.
+  `agents/agent_message_bus.py` is a SystemEvent-backed bus
+  (`operation_request`/`operation_result`/`memory_share`) with
+  `acknowledge_message`.
+- **The gap:** (a) inter-agent **approval handshake** — today it's
+  acknowledgement-only, no accept/reject/negotiate contract; (b) **independent
+  per-delegate capability narrowing** — the child token currently inherits the
+  parent's plan/agent_type rather than re-deriving a tighter scope; (c)
+  **delegation-token-scoped private memory** — boundaries today are namespace +
+  `is_shared` flags + MAS path isolation, not bound to the delegation token.
+
+### RTR-5 — Autonomous closed loop — **[BUILD], medium (split)**
+
+- **Ownership:** runtime owns the missing execution-window primitive; the
+  decision **policy** is app-owned and already tested.
+- **Evidence:** `agents/autonomous_controller.py` is **evaluate-and-gate only** —
+  `evaluate_trigger` returns `{execute|defer|ignore}` via an app-registered
+  evaluator (`get_trigger_evaluator`); there is **no planning and no execution
+  call** in the controller. `async_job_service` does the gating/scheduling
+  (`defer_async_job` / `submit_async_job` + saturation→60s defer;
+  `process_deferred_jobs` re-evaluates). `AutonomyDecision` is an app-layer model
+  (absent in standalone runtime).
+- **The gap:** a bounded, **runtime-driven trigger → plan → execute window** with
+  policy enforcement and loop-scheduling primitives in the controller. Today apps
+  raise triggers and the runtime only evaluates/defers/queues — there is no
+  controlled runtime-driven execution window.
+
+### RTR-6 — Reasoning at the memory layer — **[BUILD], medium**
+
+- **Evidence:** recall/capture are real (`runtime/memory/orchestrator.py`
+  `MemoryOrchestrator.get_context` recall pipeline; `memory/memory_capture_engine.py`
+  `evaluate_and_capture` significance-scored capture). But memory-derived signals
+  are emitted as **ordinary `SystemEvent`s** (`MEMORY_WRITE`, `AUTONOMY_DECISION`)
+  carrying `impact_score` / `memory_type` in the payload, plus columns on
+  `MemoryNode`. There is **no `ReasoningEvent` model and no `reasoning.*` event
+  type** (grep of `core/system_event_types.py` is empty for reasoning).
+- **The gap:** standardize memory-derived signals as **first-class reasoning
+  inputs** in `runtime/memory/orchestrator.py` + `memory_capture_engine.py`;
+  optionally add a dedicated reasoning event model and richer emission from
+  `agent_runtime` / `nodus_adapter` if `SystemEvent` payload conventions get too
+  loose.
+
+### RTR-7 — Execution-causality as unified intelligence layer ("RippleTrace") — **[HARDEN], medium/low (split)**
+
+- **Naming note:** "RippleTrace" does **not** appear in the runtime by design —
+  as primitives were discovered, the content-domain ripple concept crystallized
+  into the runtime's `SystemEvent` + `EventEdge` causal graph. The name dissolving
+  into the primitive is expected, not a gap.
+- **Evidence (runtime half already canonical):** `db/models/event_edge.py`
+  `EventEdge` (`source_event_id` / `target_event_id` / `target_memory_node_id`,
+  `relationship_type`, CHECK exactly-one-target). `platform_layer/event_trace_service.py`
+  provides real graph algebra: `link_events`, `link_event_to_memory`,
+  `build_trace_graph`, `get_downstream_effects` / `get_upstream_relationships`,
+  `detect_root_event` / `detect_terminal_events`, `calculate_depth` (BFS),
+  `calculate_impact_score`. `MemoryNode.causal_depth` / `root_event_id` /
+  `source_event_id` are **first-class persisted columns**, populated by
+  `MemoryCaptureEngine._build_causal_context`; the execution-event graph and the
+  memory graph are unified via `link_event_to_memory("stored_as_memory")`.
+- **The gap:** the **app-side** legacy content-domain causal graph is still
+  heuristic; promoting/migrating it onto the canonical execution-event layer is
+  app-owned. Heavy causal computation depends on the RTR-2 worker model. The
+  runtime half is largely complete.
+
+### RTR-8 — PyPI publication — **CLOSED / stale (do not re-track)**
+
+This backlog item is already done: **PYPI-PUBLISH-1 closed 2026-06-14**; the
+runtime is published to PyPI and `AINDY/_version.py` is `1.4.3`. The only live
+sub-question — whether `aindy-apps-monolith` pins the published package vs.
+installing from source — is **apps-side config**, not a runtime gap.
+
+---
+
+**Side finding (cleanup opportunity, not roadmap):** the two **tracked** `.nbc`
+files under `AINDY/nodus/stdlib/.nodus/cache/` are **stale cross-machine caches**
+— they embed the absolute path `C:\dev\masterplan-infiniteweave-...`, so the
+nodus-lang VM treats them as misses and regenerates. They are build droppings
+committed by accident, **not** load-bearing precompiled assets, and are safe to
+remove from the repo (the dir is now gitignored). Tracked-file removal is a
+separate decision.
+
+**Close/advance triggers:** RTR-1 — when a `register_nodus_workflow` surface is
+scheduled (keystone for the "apps finish phases without editing runtime"
+pattern). RTR-2 — when distributed execution is made the prod default or
+per-tenant lanes are required. RTR-3 — when AgentRun↔FlowRun divergence is
+observed in production. RTR-5 — when runtime-driven autonomous execution windows
+are scheduled. RTR-4/6/7 — when their named gaps block an app phase.

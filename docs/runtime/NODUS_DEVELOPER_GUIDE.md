@@ -96,6 +96,33 @@ Memory writes are **deferred** — they are collected during script execution an
 the database after the script finishes successfully. A script that fails mid-execution will
 not persist partial writes.
 
+### Agent tools — `call_tool` (RTR-1 Phase 2a)
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `call_tool` | `call_tool(tool_name, args)` | Execute a registered AINDY agent tool with capability-token enforcement. Returns `{success, result, error}`. |
+
+```nd
+let r = call_tool("send_email", { to: "x@example.com", subject: "hi" })
+if r["success"] {
+    print(r["result"])
+} else {
+    print(r["error"])
+}
+```
+
+`call_tool` is the capability-enforced bridge from the Nodus VM to AINDY's tool
+registry (`execute_tool`). It is **fail-closed**: the run must carry a scoped
+capability token (e.g. an agent run's `capability_token`), or the call is refused
+before reaching the tool. With a token, the same `check_tool_capability` checks
+apply as for the Python agent path (token validity/expiry/hash, `granted_tools`,
+required capabilities ⊆ allowed).
+
+> **Do not use `action tool "x"`** to reach AINDY tools. The native nodus-lang
+> `action tool` / `tool_call` construct lowers to nodus's own built-in stub
+> registry (4 self-tools, **no capability enforcement**) and **cannot be
+> overridden**. Always call `call_tool(...)` for AINDY tools.
+
 ### 3.3 Memory stdlib
 
 For more structured memory operations, import the bundled memory stdlib:
