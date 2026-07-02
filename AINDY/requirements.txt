@@ -60,7 +60,7 @@ bcrypt==4.0.1
 slowapi==0.1.9
 pytest-cov==7.0.0
 ruff==0.15.17
-apscheduler==3.11.2
+apscheduler==3.11.3
 tenacity==9.1.4
 tzlocal==5.3.1
 python-json-logger==4.1.0
