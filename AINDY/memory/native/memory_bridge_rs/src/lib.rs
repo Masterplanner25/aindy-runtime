@@ -1,12 +1,12 @@
 mod cpp_bridge;
 
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyAny, PyDict};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::Utc;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Serialize, Deserialize)]
 pub struct MemoryNode {
     #[pyo3(get)]
@@ -41,7 +41,7 @@ impl MemoryNode {
         self.children.push(child);
     }
 
-    fn to_dict(&self, py: Python) -> PyObject {
+    fn to_dict<'py>(&self, py: Python<'py>) -> Bound<'py, PyAny> {
         let dict = PyDict::new(py);
 
         dict.set_item("id", &self.id).unwrap();
@@ -51,7 +51,7 @@ impl MemoryNode {
         dict.set_item("tags", &self.tags).unwrap();
 
         // 🔥 Convert children recursively
-        let py_children: Vec<PyObject> = self
+        let py_children: Vec<Bound<'py, PyAny>> = self
             .children
             .iter()
             .map(|child| child.to_dict(py))
@@ -59,7 +59,7 @@ impl MemoryNode {
 
         dict.set_item("children", py_children).unwrap();
 
-        dict.into()
+        dict.into_any()
     }
 }
 
@@ -79,19 +79,19 @@ impl MemoryTrace {
         self.root_nodes.push(node);
     }
 
-    fn export(&self, py: Python) -> Vec<PyObject> {
+    fn export<'py>(&self, py: Python<'py>) -> Vec<Bound<'py, PyAny>> {
         self.root_nodes
             .iter()
             .map(|node| node.to_dict(py))
             .collect()
     }
 
-    fn find_by_tag(&self, py: Python, tag: String) -> Vec<PyObject> {
-        fn recursive_find(
+    fn find_by_tag<'py>(&self, py: Python<'py>, tag: String) -> Vec<Bound<'py, PyAny>> {
+        fn recursive_find<'py>(
             node: &MemoryNode,
             tag: &str,
-            py: Python,
-            acc: &mut Vec<PyObject>,
+            py: Python<'py>,
+            acc: &mut Vec<Bound<'py, PyAny>>,
         ) {
             if node.tags.contains(&tag.to_string()) {
                 acc.push(node.to_dict(py));
@@ -211,7 +211,7 @@ fn normalize_usage(value: f64) -> f64 {
 }
 
 #[pymodule]
-fn memory_bridge_rs(_py: Python, m: &PyModule) -> PyResult<()> {
+fn memory_bridge_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MemoryNode>()?;
     m.add_class::<MemoryTrace>()?;
     m.add_function(wrap_pyfunction!(semantic_similarity, m)?)?;
