@@ -2587,6 +2587,22 @@ making `nodus_vm` the default / retiring `AGENT_FLOW`: **app-tool** execution un
 cross-repo unknown); multi-instance resume for agent runs; and subprocess-per-segment
 perf. The VM path stays opt-in/non-default until then.
 
+**#152 — CLOSED 2026-07-04: resumed segment ran outside an execution context.**
+Live-Postgres execute-to-completion validation in the monolith surfaced that the
+scheduler-driven resume callback (`_build_agent_resume_callback._resume`) ran the resumed
+segment with **no `ExecutionPipeline` wrapper** — the initial run inherits its context from
+the request pipeline, but the resume fires from the scheduler (event notify / resume
+watchdog / cross-restart rehydration). With `is_pipeline_active()` False for the whole
+segment, the flow runner's `execution.started` (and other `execution.*` events) tripped the
+ExecutionContract guard under the default `ENFORCE_EXECUTION_CONTRACT=True`, stranding the
+run at `executing`. Delivery (a running scheduler) does **not** fix it — the callback runs
+inline regardless. **Fix:** `_resume` now activates the async-execution context (the same
+signal the flow runner uses for background execution) around `_execute_agent_segment_chain`,
+so the guard accepts the resumed chain's execution events exactly as the pipeline accepts the
+initial run's. Regression: `test_resume_callback_runs_within_async_execution_context` (the
+prior resume tests mocked event emission, so the guard was never exercised). The monolith §5
+CI job proves full execute-to-completion once the runtime bump ships.
+
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't
 > support host-object method calls at all), so the `flow-graph` kind couldn't

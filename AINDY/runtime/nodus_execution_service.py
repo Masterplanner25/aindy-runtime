@@ -559,6 +559,10 @@ def _build_agent_resume_callback(
     def _resume() -> None:
         from AINDY.db.database import SessionLocal
         from AINDY.db.models import AgentRun
+        from AINDY.platform_layer.async_execution_context import (
+            activate_async_execution_context,
+            deactivate_async_execution_context,
+        )
         from AINDY.runtime.nodus_adapter import _db_run_id
 
         _db = SessionLocal()
@@ -599,17 +603,32 @@ def _build_agent_resume_callback(
                 logger.warning(
                     "[NodusExecutionService] capability token refresh skipped for %s: %s", run_id, exc
                 )
-            _execute_agent_segment_chain(
-                run_id=run_id,
-                segments=segments,
-                segment_index=next_segment_index,
-                accumulated=accumulated,
-                user_id=user_id,
-                db=_db,
-                correlation_id=correlation_id,
-                scoped_token=effective_token,
-                total_tool_steps=total_tool_steps,
-            )
+            # The resume callback fires from the scheduler (event notify, resume
+            # watchdog, or cross-restart rehydration) with NO ExecutionPipeline
+            # wrapper, so is_pipeline_active() is False for the entire resumed
+            # segment. The initial run gets its execution context implicitly from
+            # the request pipeline; a resumed segment must establish the equivalent
+            # itself. Activate the async-execution context — the same signal the
+            # flow runner uses for background execution — so every execution.* event
+            # emitted anywhere in the resumed chain (the flow runner's
+            # execution.started, EU status syncs, etc.) satisfies the
+            # ExecutionContract guard instead of raising under
+            # ENFORCE_EXECUTION_CONTRACT and stranding the run at 'executing' (#152).
+            _async_token = activate_async_execution_context()
+            try:
+                _execute_agent_segment_chain(
+                    run_id=run_id,
+                    segments=segments,
+                    segment_index=next_segment_index,
+                    accumulated=accumulated,
+                    user_id=user_id,
+                    db=_db,
+                    correlation_id=correlation_id,
+                    scoped_token=effective_token,
+                    total_tool_steps=total_tool_steps,
+                )
+            finally:
+                deactivate_async_execution_context(_async_token)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("[NodusExecutionService] agent segment resume failed for %s: %s", run_id, exc)
             with contextlib.suppress(Exception):

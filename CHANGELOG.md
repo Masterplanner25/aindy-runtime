@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- **RTR-1 `nodus_vm` mid-plan resume ran outside an execution context (#152).** The
+  scheduler-driven resume callback (event notify, resume watchdog, or cross-restart
+  rehydration) ran the resumed segment with no `ExecutionPipeline` wrapper, so
+  `is_pipeline_active()` was `False` for the whole segment and the flow runner's
+  `execution.started` (and other `execution.*` events) tripped the ExecutionContract
+  guard under `ENFORCE_EXECUTION_CONTRACT=True`, stranding the run at `executing`. The
+  resume callback now activates the async-execution context — the same signal the flow
+  runner uses for background execution — around the resumed chain, mirroring the context
+  the initial run inherits from the request pipeline. Surfaced by live-Postgres
+  execute-to-completion validation in `aindy-apps-monolith`.
+
 ---
 
 ## 1.5.0 — 2026-07-04
