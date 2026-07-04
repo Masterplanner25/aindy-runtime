@@ -419,6 +419,76 @@ def mint_token(
         return None
 
 
+def token_is_expired(token: Optional[dict]) -> bool:
+    """True when *token* is missing/malformed or past its ``expires_at``.
+
+    A non-dict token, or one without a parseable ``expires_at``, is treated as
+    expired (fail-closed).
+    """
+    if not isinstance(token, dict):
+        return True
+    raw = token.get("expires_at")
+    if not raw:
+        return True
+    try:
+        expires_at = datetime.fromisoformat(str(raw))
+    except (ValueError, TypeError):
+        return True
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= _now_utc()
+
+
+def refresh_token(token: Optional[dict]) -> Optional[dict]:
+    """Return a copy of *token* on a fresh clock, reusing its existing grants.
+
+    For an already-approved run whose capability token lapsed past the TTL (e.g.
+    it was parked on a mid-plan WAIT step across a long wait / restart), this mints
+    a new ``execution_token`` + ``issued_at``/``expires_at`` + ``token_hash`` while
+    **reusing** the token's ``granted_tools`` / ``allowed_capabilities`` /
+    ``approval_mode`` verbatim — no plan re-derivation, no policy re-evaluation, no
+    escalation. The refreshed token is self-verifying and passes ``validate_token``.
+
+    Returns None if *token* is not a usable dict (no run_id/user_id).
+    """
+    if not isinstance(token, dict) or not token.get("run_id") or not token.get("user_id"):
+        return None
+    run_id = str(token["run_id"])
+    user_id = str(token["user_id"])
+    agent_type = token.get("agent_type") or DEFAULT_AGENT_TYPE
+    approval_mode = token.get("approval_mode") or "manual"
+    granted_tools = list(token.get("granted_tools") or [])
+    allowed_capabilities = list(token.get("allowed_capabilities") or [])
+
+    execution_token = str(uuid.uuid4())
+    issued_at = _now_utc()
+    expires_at = issued_at + timedelta(hours=TOKEN_TTL_HOURS)
+    issued_at_s = issued_at.isoformat()
+    expires_at_s = expires_at.isoformat()
+
+    return {
+        "run_id": run_id,
+        "user_id": user_id,
+        "agent_type": agent_type,
+        "execution_token": execution_token,
+        "issued_at": issued_at_s,
+        "expires_at": expires_at_s,
+        "granted_tools": granted_tools,
+        "allowed_capabilities": allowed_capabilities,
+        "approval_mode": approval_mode,
+        "token_hash": _token_hash(
+            run_id=run_id,
+            user_id=user_id,
+            execution_token=execution_token,
+            issued_at=issued_at_s,
+            expires_at=expires_at_s,
+            approval_mode=approval_mode,
+            granted_tools=granted_tools,
+            allowed_capabilities=allowed_capabilities,
+        ),
+    }
+
+
 def validate_token(token: Optional[dict], run_id: str, user_id: str) -> dict:
     """
     Validate token structure, scope, expiry, and integrity hash.

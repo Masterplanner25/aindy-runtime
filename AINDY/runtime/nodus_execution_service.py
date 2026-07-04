@@ -570,6 +570,30 @@ def _build_agent_resume_callback(
                     run_id,
                 )
                 return
+            # Refresh an expired capability token before running the segment. A run
+            # parked on a WAIT across a long wait / restart may have a token past its
+            # TTL; refresh_token reuses the same grants on a fresh clock (no policy
+            # re-eval), so tools execute instead of failing. Persisted for later resumes.
+            effective_token = scoped_token
+            try:
+                from AINDY.agents.capability_service import refresh_token, token_is_expired
+
+                if token_is_expired(effective_token):
+                    refreshed = refresh_token(effective_token)
+                    if refreshed is not None:
+                        effective_token = refreshed
+                        run = _db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
+                        if run is not None:
+                            run.capability_token = refreshed
+                            run.execution_token = refreshed.get("execution_token")
+                            _db.commit()
+                        logger.info(
+                            "[NodusExecutionService] refreshed expired capability token for %s", run_id
+                        )
+            except Exception as exc:  # non-fatal: fall back to the original token
+                logger.warning(
+                    "[NodusExecutionService] capability token refresh skipped for %s: %s", run_id, exc
+                )
             _execute_agent_segment_chain(
                 run_id=run_id,
                 segments=segments,
@@ -578,7 +602,7 @@ def _build_agent_resume_callback(
                 user_id=user_id,
                 db=_db,
                 correlation_id=correlation_id,
-                scoped_token=scoped_token,
+                scoped_token=effective_token,
                 total_tool_steps=total_tool_steps,
             )
         except Exception as exc:  # pragma: no cover - defensive

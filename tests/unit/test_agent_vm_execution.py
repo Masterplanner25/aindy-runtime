@@ -503,3 +503,50 @@ def test_rehydrate_skips_run_without_wait_state(session, monkeypatch, _mock_side
     n = rehydrate_waiting_agent_runs(session)
     assert n == 0
     assert captured == []
+
+
+def test_rehydrate_refreshes_expired_capability_token(session, monkeypatch, _mock_side_effects):
+    """A run resumed after its token lapsed past the TTL gets a refreshed token."""
+    from datetime import timedelta
+
+    from AINDY.agents.capability_service import _now_utc, _token_hash, token_is_expired
+    from AINDY.core.agent_run_rehydration import rehydrate_waiting_agent_runs
+
+    run = _make_waiting_run(session)
+    # Replace the token with a well-formed but EXPIRED one (identity present so
+    # refresh_token can rebuild it).
+    issued = _now_utc()
+    issued_s = issued.isoformat()
+    expires_s = (issued + timedelta(hours=-1)).isoformat()
+    run.capability_token = {
+        "run_id": str(run.id), "user_id": str(run.user_id), "agent_type": "default",
+        "execution_token": "stale", "issued_at": issued_s, "expires_at": expires_s,
+        "granted_tools": ["send"], "allowed_capabilities": ["send_email"],
+        "approval_mode": "manual",
+        "token_hash": _token_hash(
+            run_id=str(run.id), user_id=str(run.user_id), execution_token="stale",
+            issued_at=issued_s, expires_at=expires_s, approval_mode="manual",
+            granted_tools=["send"], allowed_capabilities=["send_email"],
+        ),
+    }
+    session.commit()
+    assert token_is_expired(run.capability_token) is True
+
+    monkeypatch.setattr(svc, "run_nodus_script_via_flow", _segment_aware_flow)
+    monkeypatch.setattr("AINDY.db.database.SessionLocal", sessionmaker(bind=session.get_bind()))
+    captured = []
+    monkeypatch.setattr(
+        "AINDY.kernel.scheduler_engine.get_scheduler_engine",
+        lambda: _fake_scheduler(captured),
+    )
+
+    rehydrate_waiting_agent_runs(session)
+    captured[0]["resume_callback"]()
+
+    session.refresh(run)
+    assert run.status == "completed"
+    # The expired token was refreshed with the SAME grants on a fresh clock.
+    assert token_is_expired(run.capability_token) is False
+    assert run.capability_token["granted_tools"] == ["send"]
+    assert run.capability_token["execution_token"] != "stale"
+    assert run.execution_token == run.capability_token["execution_token"]
