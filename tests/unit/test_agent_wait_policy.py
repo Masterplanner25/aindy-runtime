@@ -164,3 +164,42 @@ def test_resume_wrong_owner_not_found(session, monkeypatch):
     with pytest.raises(HTTPException) as ei:
         runtime_api.resume_agent_run_runtime(db=session, user_id=str(uuid.uuid4()), run_id=str(run.id))
     assert ei.value.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Real-PG parity fixes — regression guards for bugs the mocked path hid
+# --------------------------------------------------------------------------- #
+
+def test_grantable_tools_skips_wait_steps():
+    """A WAIT step (no tool) must not make a plan un-grantable — else no
+    wait-containing plan could be approved (mint_token would return None)."""
+    from AINDY.agents.capability_service import get_grantable_tools
+    from AINDY.platform_layer import runtime_agent_defaults
+
+    runtime_agent_defaults.register()  # registers memory.recall / memory.write
+    plan = {"steps": [
+        {"tool": "memory.recall", "risk_level": "low"},
+        {"wait_for": "approval.received"},
+        {"tool": "memory.write", "risk_level": "low"},
+    ]}
+    granted = get_grantable_tools(plan, user_id="u", db=None, approval_mode="manual")
+    assert granted == ["memory.recall", "memory.write"]  # wait step skipped, not fatal
+
+
+def test_grantable_tools_rejects_unknown_named_tool():
+    from AINDY.agents.capability_service import get_grantable_tools
+
+    plan = {"steps": [{"tool": "does.not.exist", "risk_level": "low"}]}
+    assert get_grantable_tools(plan, user_id="u", db=None, approval_mode="manual") == []
+
+
+def test_nodus_agent_workflow_type_passes_engine_boundary():
+    """The nodus_vm agent path must use a 'nodus'-labelled workflow_type, or
+    run_nodus_script_via_flow's engine-boundary guard rejects it as a Python DAG."""
+    from AINDY.runtime import enforce_engine_boundary
+
+    # The label the nodus_vm path now uses — must be accepted for nodus.run.
+    enforce_engine_boundary(entrypoint="nodus.run", workflow_type="nodus_agent_execution")
+    # The old label is still (correctly) rejected — the guard is intact.
+    with pytest.raises(ValueError):
+        enforce_engine_boundary(entrypoint="nodus.run", workflow_type="agent_execution")

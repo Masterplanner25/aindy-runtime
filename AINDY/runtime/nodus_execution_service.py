@@ -485,7 +485,12 @@ def _run_agent_segment_flow(
         error_policy="halt",
         db=db,
         user_id=user_id,
-        workflow_type="agent_execution",
+        # Must be a "nodus"-labelled workflow_type: run_nodus_script_via_flow calls
+        # enforce_engine_boundary(entrypoint="nodus.run"), which rejects a label
+        # without "nodus" as a Python-DAG flow. The nodus_vm agent path IS nodus-
+        # backed (it compiles the plan to a native workflow), so it is labelled
+        # accordingly. (AGENT_FLOW keeps "agent_execution" — it uses flow.run.)
+        workflow_type="nodus_agent_execution",
         trace_id=correlation_id,
         extra_initial_state={
             "execution_token": scoped_token,

@@ -29,6 +29,20 @@ import pytest
 pytestmark = [pytest.mark.integration]
 
 
+@pytest.fixture(autouse=True)
+def _restore_request_context():
+    """Driving execution directly (outside the ASGI pipeline) sets the request/
+    trace ContextVar without the middleware's reset, which would leak into later
+    tests (e.g. test_request_context). Restore it around each test."""
+    from AINDY.main import _request_id_ctx
+
+    before = _request_id_ctx.get()
+    try:
+        yield
+    finally:
+        _request_id_ctx.set(before)
+
+
 # --------------------------------------------------------------------------- #
 # Helpers — all use committed sessions (cross-connection visibility)
 # --------------------------------------------------------------------------- #
