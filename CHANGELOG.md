@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+---
+
+## 1.5.0 — 2026-07-04
+
 ### Added
 
 - **RTR-1: opt-in VM-backed agent execution (`nodus_vm` backend).** Set
