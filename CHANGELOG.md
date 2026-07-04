@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+### Added
+
+- **RTR-1: opt-in VM-backed agent execution (`nodus_vm` backend).** Set
+  `AINDY_AGENT_EXECUTION_BACKEND=nodus_vm` to run agent plans by compiling them into
+  native Nodus `workflow {}` constructs executed through the VM — tools called via a
+  capability-enforced `call_tool` seam — instead of the static `AGENT_FLOW` Python
+  DAG. The path reproduces AGENT_FLOW's execution model (per-step **retry** with
+  risk-based attempt budgets and a non-transient short-circuit; **halt-on-first-failure**)
+  and adds **durable mid-plan WAIT/RESUME**: a plan may carry
+  `{"wait_for": "<event.type>"}` steps that park the run (new `AgentRun.status="waiting"`)
+  until the event is published. Waiting runs are **durable** — they survive a process
+  restart (re-registered at startup by `rehydrate_waiting_agent_runs`) and capability-token
+  TTL expiry (refreshed on resume). Release a waiting run via `resume_agent_run_runtime`
+  → `publish_event`. **Opt-in and non-default** — `AGENT_FLOW` remains the default until
+  broader soak completes. Validated end-to-end on PostgreSQL: backend parity, retry/halt,
+  wait→resume, real scheduler-driven resume, and cross-restart rehydration.
+  (Phases 2a–2e + parity/soak; `docs/runtime/NODUS_WORKFLOW_CONTRACT.md`, `TECH_DEBT.md` RTR-1.)
+- **`AINDY_AGENT_WAIT_BEFORE_HIGH_RISK`** setting (default `false`) — on the `nodus_vm`
+  backend, inserts a human-approval WAIT step (`agent.approval.granted`) before the first
+  high-risk step so the run pauses for approval before a risky action.
+- **`runtime.selftest`** diagnostic tool — verifies the agent tool-execution path end to
+  end; capability-wired and executable but excluded from the planner catalog.
+- `register_nodus_workflow` surface + `nodus_workflows` source table with boot rehydration
+  and run-by-name (RTR-1 Phase 1).
+
+### Changed
+
+- Schema contract version `2026-07-04`: new nullable `agent_runs.wait_state` JSONB column
+  (Alembic revision `0007`) carrying the durable WAIT descriptor.
+- `execute_tool` now ensures the runtime agent defaults on load, so runtime-native tools
+  (`memory.read` / `memory.write`) resolve in **every** process that executes a tool —
+  including the `nodus_worker` subprocess (previously "Tool not found" there).
+- **Dependency updates:** `openai` 2.44.0, `uvicorn` 0.49.0, `fastapi` 0.138.1,
+  `sqlalchemy` 2.0.51, native memory scorer migrated to `pyo3` 0.29 (Bound API), platform
+  `typescript` 6, `vite` 6.4.3 + `react-router-dom` 6.30.4 (security, minimal), plus
+  numerous minor/patch bumps; added npm/cargo Dependabot coverage and a documented
+  `nltk` pip-audit exemption.
+
+### Docs
+
+- Evidence-backed Runtime Roadmap (`RTR-*`) backlog and RTR-1 design/contract docs.
+- `DATA_MODEL_MAP.md` relocated as a runtime-scoped doc; Bucket-A runtime docs authored/
+  corrected (`INVARIANTS`, `MEMORY_BRIDGE_CONTRACT`).
+
 ---
 
 ## 1.4.3 — 2026-06-27
