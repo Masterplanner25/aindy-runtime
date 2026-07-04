@@ -375,3 +375,131 @@ def test_vm_no_wait_plan_still_completes_in_one_segment(session, monkeypatch, _m
     assert run.status == "completed"
     assert run.steps_completed == 2
     assert _capture_agent_wait == {}  # no wait registered
+
+
+def test_wait_persists_durable_wait_state(session, monkeypatch, _mock_side_effects, _capture_agent_wait):
+    """Parking on a wait writes a durable wait_state descriptor for rehydration."""
+    run = _make_run(session)
+    plan = {"steps": [
+        {"tool": "search", "args": {}, "risk_level": "low"},
+        {"wait_for": "approval.received", "correlation_key": "ck-1"},
+        {"tool": "send", "args": {}, "risk_level": "low"},
+    ]}
+    monkeypatch.setattr(svc, "run_nodus_script_via_flow", _segment_aware_flow)
+    svc.execute_agent_run_via_workflow(
+        run_id=str(run.id), plan=plan, user_id=str(run.user_id), db=session,
+        execution_token={"token_hash": "h"},
+    )
+    session.refresh(run)
+    assert run.status == "waiting"
+    assert run.wait_state == {
+        "event_type": "approval.received",
+        "correlation_key": "ck-1",
+        "resume_segment_index": 1,
+    }
+    # Resume clears the descriptor.
+    _capture_agent_wait["resume_callback"]()
+    session.refresh(run)
+    assert run.status == "completed"
+    assert run.wait_state is None
+
+
+# --------------------------------------------------------------------------- #
+# RTR-1 Phase 2e — cross-restart rehydration of waiting agent runs
+# --------------------------------------------------------------------------- #
+
+def _make_waiting_run(session, *, resume_segment_index=1, event_type="approval.received"):
+    """A run already parked mid-plan: segment 0 (step 0) done, waiting before step 1."""
+    from AINDY.db.models import AgentRun, AgentStep
+
+    plan = {"steps": [
+        {"tool": "search", "args": {}, "risk_level": "low"},
+        {"wait_for": event_type},
+        {"tool": "send", "args": {}, "risk_level": "low"},
+    ]}
+    run = AgentRun(
+        id=uuid.uuid4(), user_id=uuid.uuid4(), goal="g",
+        status="waiting", steps_total=2, steps_completed=1, current_step=1,
+        plan=plan,
+        result={"steps": [
+            {"step_index": 0, "tool": "search", "status": "success", "result": {"i": 0}, "error": None},
+        ]},
+        wait_state={"event_type": event_type, "correlation_key": None,
+                    "resume_segment_index": resume_segment_index},
+        capability_token={"token_hash": "h", "granted_tools": ["send"]},
+    )
+    session.add(run)
+    session.add(AgentStep(run_id=run.id, step_index=0, tool_name="search", status="success", result={"i": 0}))
+    session.commit()
+    return run
+
+
+def _fake_scheduler(captured, *, already_registered=False):
+    class _FakeScheduler:
+        def waiting_for(self, rid):
+            return "approval.received" if already_registered else None
+
+        def register_wait(self, **kw):
+            captured.append(kw)
+    return _FakeScheduler()
+
+
+def test_rehydrate_waiting_agent_run_resumes_after_restart(session, monkeypatch, _mock_side_effects):
+    from AINDY.core.agent_run_rehydration import rehydrate_waiting_agent_runs
+    from AINDY.db.models import AgentStep
+
+    run = _make_waiting_run(session)
+    monkeypatch.setattr(svc, "run_nodus_script_via_flow", _segment_aware_flow)
+    monkeypatch.setattr("AINDY.db.database.SessionLocal", sessionmaker(bind=session.get_bind()))
+
+    captured = []
+    # Fresh scheduler with nothing registered — models a process restart.
+    monkeypatch.setattr(
+        "AINDY.kernel.scheduler_engine.get_scheduler_engine",
+        lambda: _fake_scheduler(captured),
+    )
+
+    n = rehydrate_waiting_agent_runs(session)
+    assert n == 1
+    assert captured[0]["wait_for_event"] == "approval.received"
+    assert captured[0]["eu_type"] == "agent"
+    assert callable(captured[0]["resume_callback"])
+
+    # Event fires post-restart → resume runs segment 1 and completes.
+    captured[0]["resume_callback"]()
+    session.refresh(run)
+    assert run.status == "completed"
+    assert run.steps_completed == 2
+    assert run.wait_state is None
+    rows = session.query(AgentStep).order_by(AgentStep.step_index).all()
+    assert [r.step_index for r in rows] == [0, 1]  # step 0 NOT re-run; step 1 added
+
+
+def test_rehydrate_skips_already_registered(session, monkeypatch, _mock_side_effects):
+    from AINDY.core.agent_run_rehydration import rehydrate_waiting_agent_runs
+
+    _make_waiting_run(session)
+    captured = []
+    monkeypatch.setattr(
+        "AINDY.kernel.scheduler_engine.get_scheduler_engine",
+        lambda: _fake_scheduler(captured, already_registered=True),
+    )
+    n = rehydrate_waiting_agent_runs(session)
+    assert n == 0  # a live registration already survived — do not double-register
+    assert captured == []
+
+
+def test_rehydrate_skips_run_without_wait_state(session, monkeypatch, _mock_side_effects):
+    from AINDY.core.agent_run_rehydration import rehydrate_waiting_agent_runs
+
+    run = _make_waiting_run(session)
+    run.wait_state = None  # corrupt/missing descriptor
+    session.commit()
+    captured = []
+    monkeypatch.setattr(
+        "AINDY.kernel.scheduler_engine.get_scheduler_engine",
+        lambda: _fake_scheduler(captured),
+    )
+    n = rehydrate_waiting_agent_runs(session)
+    assert n == 0
+    assert captured == []

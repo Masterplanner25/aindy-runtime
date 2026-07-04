@@ -43,6 +43,7 @@ class RuntimeConditionCode(str, Enum):
     DYNAMIC_REGISTRY_RESTORE_FAILED = "dynamic_registry_restore_failed"
     WAIT_EUS_REHYDRATION_FAILED = "wait_eus_rehydration_failed"
     FLOW_RUN_REHYDRATION_FAILED = "flow_run_rehydration_failed"
+    AGENT_RUN_REHYDRATION_FAILED = "agent_run_rehydration_failed"
 
 
 class ReadinessBlockerCode(str, Enum):

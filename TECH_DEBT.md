@@ -2462,19 +2462,39 @@ mechanisms: plain-nodus `event.wait()` raises inside a native `workflow {}` step
 → caught by the task graph as a step *failure*, not a wait; and a native workflow
 wait returns a normal dict → invisible to the worker/flow engine.
 
-**Live-process durability only** (as scoped): the wait rides the scheduler's
-in-memory `_waiting`/`notify_event` path; `_persist_wait_backup` now skips the
+Initial increment was **live-process durability**: the wait rides the scheduler's
+in-memory `_waiting`/`notify_event` path; `_persist_wait_backup` skips the
 `WaitingFlowRun` FK-backup for `eu_type != "flow"` (agent waits). New AgentRun
 status `"waiting"` (added to `ACTIVE_AGENT_RUN_STATUSES`); the EU is mirrored to
-completed/failed on resume-terminal via `_sync_agent_eu_status`. Validated
-in-process: wait→resume cycle (no re-run of prior steps), resume-failure, double-
-fire idempotency, no-wait regression, + segmentation unit tests.
-**Follow-ups:** (a) cross-restart rehydration of waiting agent runs (mirror
-`flow_run_rehydration` + a durable backup) — the deferred half of durability;
-(b) teach the planner (`planning.py`) to emit WAIT steps + wire an approval route
-to `publish_event` (the executor already resumes on any matching event today);
-(c) real-Postgres parity validation before any `AGENT_FLOW` retirement. The VM
-path stays opt-in/non-default until then.
+completed/failed on resume-terminal via `_sync_agent_eu_status`.
+
+**Cross-restart durability landed (2026-07-04).** A waiting agent run now survives
+a process restart. New durable `AgentRun.wait_state` JSONB column (schema bump
+`2026-07-04`, Alembic `0007`) holds `{event_type, correlation_key,
+resume_segment_index}`, set on park and cleared on resume/terminal. Everything
+else needed to rebuild the resume is already durable: `plan` → segments,
+`result["steps"]` → accumulated results, `capability_token` → the self-verifying
+scoped token (reloaded; re-mint only needed past its 23h TTL). `rehydrate_waiting_agent_runs`
+(`AINDY/core/agent_run_rehydration.py`) mirrors `rehydrate_waiting_flow_runs` —
+queries `status="waiting"` runs and re-registers each scheduler wait from durable
+state; hooked into `startup.py` Phase 14 between FlowRun and Nodus rehydration
+(before `mark_rehydration_complete`/`drain_buffered_events`, so boot-buffered
+events reach the fresh callbacks), guarded by `RuntimeConditionCode.AGENT_RUN_REHYDRATION_FAILED`.
+The live-register and rehydration paths share one resume builder
+(`_build_agent_resume_callback`) whose closure does an **atomic** `waiting →
+executing` claim (`UPDATE … WHERE status='waiting'`), so a duplicate event-fire,
+watchdog re-trigger, second rehydration, or multiple instances can't resume twice.
+Validated in-process: wait→resume cycle (no re-run of prior steps), resume-failure,
+double-fire idempotency, no-wait regression, durable `wait_state` persist/clear,
+and restart-rehydration (fresh scheduler → re-register → event → resume →
+complete, step 0 not re-run) + skip-guards.
+
+**Remaining follow-ups:** (a) teach the planner (`planning.py`) to emit WAIT steps
++ wire an approval route to `publish_event` (the executor already resumes on any
+matching event today); (b) re-mint the capability token on rehydration when the
+reloaded one is past its 23h TTL (currently an expired token fails the resumed
+segment cleanly); (c) real-Postgres parity validation before any `AGENT_FLOW`
+retirement. The VM path stays opt-in/non-default until then.
 
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't

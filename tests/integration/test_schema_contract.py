@@ -169,7 +169,7 @@ def test_alembic_version_runtime_table_exists(test_engine):
 
 
 def test_alembic_version_runtime_at_head(test_engine):
-    """alembic_version_runtime must be stamped at 0006 (current head)."""
+    """alembic_version_runtime must be stamped at 0007 (current head)."""
     from sqlalchemy import text
 
     with test_engine.connect() as conn:
@@ -178,8 +178,8 @@ def test_alembic_version_runtime_at_head(test_engine):
         ).fetchone()
 
     assert row is not None, "alembic_version_runtime has no rows — DB not stamped"
-    assert row[0] == "0006", (
-        f"Expected version '0006', got {row[0]!r}"
+    assert row[0] == "0007", (
+        f"Expected version '0007', got {row[0]!r}"
     )
 
 

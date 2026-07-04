@@ -530,6 +530,105 @@ def _run_agent_segment_flow(
     return step_results, segment_failed, flow_result
 
 
+def _build_agent_resume_callback(
+    *,
+    run_id: str,
+    segments: list[dict[str, Any]],
+    next_segment_index: int,
+    accumulated: list[dict[str, Any]],
+    user_id: str,
+    correlation_id: str | None,
+    scoped_token: dict[str, Any] | None,
+    total_tool_steps: int,
+):
+    """Build the 0-arg resume closure shared by live-registration and rehydration.
+
+    On fire it opens its own ``SessionLocal`` and does an **atomic claim** —
+    ``UPDATE agent_runs SET status='executing', wait_state=NULL WHERE id=? AND
+    status='waiting'`` — so exactly one caller proceeds even across a duplicate
+    event-fire, the resume watchdog, a second rehydration, or multiple instances.
+    The claim winner runs ``_execute_agent_segment_chain`` for the next segment,
+    carrying the accumulated step results forward (completed segments never re-run).
+    The closure captures only plain values, never a live DB session.
+    """
+    def _resume() -> None:
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.models import AgentRun
+        from AINDY.runtime.nodus_adapter import _db_run_id
+
+        _db = SessionLocal()
+        try:
+            claimed = (
+                _db.query(AgentRun)
+                .filter(AgentRun.id == _db_run_id(run_id), AgentRun.status == "waiting")
+                .update({"status": "executing", "wait_state": None}, synchronize_session=False)
+            )
+            _db.commit()
+            if not claimed:
+                logger.info(
+                    "[NodusExecutionService] agent resume skipped for %s (not in waiting / already claimed)",
+                    run_id,
+                )
+                return
+            _execute_agent_segment_chain(
+                run_id=run_id,
+                segments=segments,
+                segment_index=next_segment_index,
+                accumulated=accumulated,
+                user_id=user_id,
+                db=_db,
+                correlation_id=correlation_id,
+                scoped_token=scoped_token,
+                total_tool_steps=total_tool_steps,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("[NodusExecutionService] agent segment resume failed for %s: %s", run_id, exc)
+            with contextlib.suppress(Exception):
+                _db.rollback()
+        finally:
+            with contextlib.suppress(Exception):
+                _db.close()
+
+    return _resume
+
+
+def _register_agent_wait(
+    *,
+    run_id: str,
+    event_type: str,
+    correlation_key: str | None,
+    user_id: str,
+    correlation_id: str | None,
+    resume_callback,
+) -> None:
+    """Register an agent segment wait with the scheduler (shared by both paths).
+
+    The scheduler's in-memory ``_waiting`` + ``notify_event`` path drives the
+    callback; the ``WaitingFlowRun`` DB backup is skipped for ``eu_type="agent"``
+    (it FKs to ``flow_runs``). Cross-restart durability comes from the AgentRun
+    row itself (``status="waiting"`` + ``wait_state``), rehydrated at startup by
+    ``rehydrate_waiting_agent_runs``.
+    """
+    corr = correlation_key or correlation_id
+    try:
+        from AINDY.core.wait_condition import WaitCondition
+        from AINDY.kernel.scheduler_engine import get_scheduler_engine
+
+        get_scheduler_engine().register_wait(
+            run_id=str(run_id),
+            wait_for_event=event_type,
+            tenant_id=str(user_id or ""),
+            eu_id=str(run_id),
+            resume_callback=resume_callback,
+            correlation_id=corr,
+            trace_id=str(correlation_id or run_id),
+            eu_type="agent",
+            wait_condition=WaitCondition.for_event(event_type, correlation_id=corr),
+        )
+    except Exception as exc:
+        logger.warning("[NodusExecutionService] agent wait registration failed for %s: %s", run_id, exc)
+
+
 def _register_agent_segment_wait(
     *,
     run_id: str,
@@ -542,76 +641,25 @@ def _register_agent_segment_wait(
     scoped_token: dict[str, Any] | None,
     total_tool_steps: int,
 ) -> None:
-    """Register a live-process wait that resumes at the NEXT segment on its event.
-
-    RTR-1 Phase 2e (live-process durability). The resume callback opens a fresh
-    DB session and runs ``_execute_agent_segment_chain`` for ``segment_index+1``,
-    carrying the accumulated step results forward — completed segments are never
-    re-run (their ``AgentStep`` rows are durable), so tool calls never fire twice.
-
-    The scheduler's in-memory ``_waiting`` + ``notify_event`` path drives the
-    callback; the ``WaitingFlowRun`` DB backup is intentionally skipped for
-    ``eu_type="agent"`` (it FKs to ``flow_runs``). Cross-restart rehydration of a
-    waiting agent run is the documented follow-up.
-    """
-    event_type = wait["event_type"]
-    corr = wait.get("correlation_key") or correlation_id
-
-    def _resume() -> None:
-        from AINDY.db.database import SessionLocal
-        from AINDY.db.models import AgentRun
-        from AINDY.runtime.nodus_adapter import _db_run_id
-
-        _db = SessionLocal()
-        try:
-            # Idempotency gate: claim the run out of `waiting` before doing any work,
-            # so a duplicate event-fire (or watchdog re-trigger) can't run the next
-            # segment twice. Best-effort check-and-set — the durable atomic CAS is
-            # the cross-restart-rehydration follow-up.
-            run = _db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
-            if run is None or run.status != "waiting":
-                logger.info(
-                    "[NodusExecutionService] agent resume skipped for %s (status=%s)",
-                    run_id, getattr(run, "status", None),
-                )
-                return
-            run.status = "executing"
-            _db.commit()
-            _execute_agent_segment_chain(
-                run_id=run_id,
-                segments=segments,
-                segment_index=segment_index + 1,
-                accumulated=accumulated,
-                user_id=user_id,
-                db=_db,
-                correlation_id=correlation_id,
-                scoped_token=scoped_token,
-                total_tool_steps=total_tool_steps,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("[NodusExecutionService] agent segment resume failed for %s: %s", run_id, exc)
-        finally:
-            with contextlib.suppress(Exception):
-                _db.close()
-
-    try:
-        from AINDY.core.wait_condition import WaitCondition
-        from AINDY.kernel.scheduler_engine import get_scheduler_engine
-
-        wait_trace = str(correlation_id or run_id)
-        get_scheduler_engine().register_wait(
-            run_id=str(run_id),
-            wait_for_event=event_type,
-            tenant_id=str(user_id or ""),
-            eu_id=str(run_id),
-            resume_callback=_resume,
-            correlation_id=corr,
-            trace_id=wait_trace,
-            eu_type="agent",
-            wait_condition=WaitCondition.for_event(event_type, correlation_id=corr),
-        )
-    except Exception as exc:
-        logger.warning("[NodusExecutionService] agent wait registration failed for %s: %s", run_id, exc)
+    """Register a live-process wait that resumes at the NEXT segment on its event."""
+    callback = _build_agent_resume_callback(
+        run_id=run_id,
+        segments=segments,
+        next_segment_index=segment_index + 1,
+        accumulated=accumulated,
+        user_id=user_id,
+        correlation_id=correlation_id,
+        scoped_token=scoped_token,
+        total_tool_steps=total_tool_steps,
+    )
+    _register_agent_wait(
+        run_id=run_id,
+        event_type=wait["event_type"],
+        correlation_key=wait.get("correlation_key"),
+        user_id=user_id,
+        correlation_id=correlation_id,
+        resume_callback=callback,
+    )
 
 
 def _sync_agent_eu_status(db: Session, run_id: str, status: str) -> None:
@@ -696,6 +744,7 @@ def _execute_agent_segment_chain(
                 run.result = {"steps": accumulated}
                 run.completed_at = now
                 run.status = "failed"
+                run.wait_state = None
                 first_failed = next((r for r in seg_results if r["status"] == "failed"), None)
                 if first_failed is not None and first_failed.get("error"):
                     run.error_message = (
@@ -723,6 +772,12 @@ def _execute_agent_segment_chain(
                 run.current_step = ran
                 run.result = {"steps": accumulated}
                 run.status = "waiting"
+                # Durable wait descriptor for cross-restart rehydration (Phase 2e).
+                run.wait_state = {
+                    "event_type": seg["wait"]["event_type"],
+                    "correlation_key": seg["wait"].get("correlation_key"),
+                    "resume_segment_index": segment_index + 1,
+                }
             db.commit()
             _register_agent_segment_wait(
                 run_id=run_id, wait=seg["wait"], segments=segments,
@@ -751,6 +806,7 @@ def _execute_agent_segment_chain(
             run.result = {"steps": accumulated}
             run.completed_at = now
             run.status = "completed" if completed_ok else "failed"
+            run.wait_state = None
             if not completed_ok:
                 run.error_message = "one or more agent steps did not run"
         db.commit()
