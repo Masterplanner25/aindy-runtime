@@ -361,6 +361,47 @@ def test_vm_resume_is_idempotent_on_double_fire(session, monkeypatch, _mock_side
     assert [r.step_index for r in rows] == [0, 1]  # step 1 recorded exactly once
 
 
+def test_resume_callback_runs_within_async_execution_context(session, monkeypatch, _capture_agent_wait):
+    """#152: a scheduler-driven resume runs with NO ExecutionPipeline wrapper.
+
+    The resumed segment must still establish an execution context, or every
+    execution.* event it emits (the flow runner's execution.started, EU status
+    syncs) trips the ExecutionContract guard under ENFORCE_EXECUTION_CONTRACT and
+    strands the run at 'executing'. The fix activates the async-execution context —
+    the same signal the flow runner uses — around the resumed chain. This asserts
+    the chain observes an active context and that it is torn down afterward.
+    """
+    from AINDY.platform_layer.async_execution_context import is_async_execution_active
+
+    run = _make_run(session)
+    run.status = "waiting"
+    session.commit()
+
+    seen = {}
+
+    def _probe(**kw):
+        seen["async_active"] = is_async_execution_active()
+        return {"status": "SUCCESS"}
+
+    monkeypatch.setattr(svc, "_execute_agent_segment_chain", _probe)
+    assert is_async_execution_active() is False  # not active outside the callback
+
+    callback = svc._build_agent_resume_callback(
+        run_id=str(run.id),
+        segments=[{"tool_steps": [], "wait": None, "base_index": 0}],
+        next_segment_index=0,
+        accumulated=[],
+        user_id=str(run.user_id),
+        correlation_id="run_x",
+        scoped_token={"token_hash": "h"},
+        total_tool_steps=0,
+    )
+    callback()
+
+    assert seen.get("async_active") is True          # the fix: context active during resume
+    assert is_async_execution_active() is False       # and reset after (no leak)
+
+
 def test_vm_no_wait_plan_still_completes_in_one_segment(session, monkeypatch, _mock_side_effects, _capture_agent_wait):
     """Regression: a plan with no wait steps runs as a single segment, no wait registered."""
     run = _make_run(session)
