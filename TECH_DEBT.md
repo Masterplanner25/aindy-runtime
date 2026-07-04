@@ -2519,13 +2519,32 @@ refresh can't rebuild the token it falls back to the original (fails cleanly as
 before). Tests: `test_capability_token_refresh.py` (expiry/refresh/validate) +
 resume-refreshes-expired-token e2e in `test_agent_vm_execution.py`.
 
+**Real-Postgres parity validation landed (2026-07-04) — and uncovered + fixed a
+blocker.** Validating `nodus_vm` ↔ AGENT_FLOW parity on real PG surfaced that the
+`nodus_vm` call_tool seam **could not execute runtime-native tools in its
+subprocess**: `execute_tool` → `_ensure_tools_loaded` → `load_plugins()` registers
+nothing for runtime tools (the runtime manifest carries no plugins), and
+`memory.read`/`memory.write` are only registered by `_ensure_runtime_agent_defaults`,
+which fires in the parent at startup but **never in the nodus_worker subprocess** —
+so every runtime-tool call returned "Tool not found". **Fix:** `_ensure_tools_loaded`
+now also calls `_ensure_runtime_agent_defaults`, so runtime-native tools resolve in
+every process that executes a tool (parent and subprocess); idempotent, app
+deployments unaffected. Validation: `tests/integration/test_agent_vm_parity.py`
+(marker `integration`, real PG + real subprocess) — success parity (both backends
+complete a `memory.recall` plan with identical AgentRun/AgentStep outcomes),
+failure parity (invalid token denied identically at the flow gate), and a
+`nodus_vm`-only durable **WAIT→RESUME** cycle on Postgres (segment 0 executes,
+run parks with `wait_state`, fired resume runs segment 1, step 0 not re-run).
+Windows blocks the subprocess, so this suite is authoritative on Linux CI.
+
 **Remaining follow-ups:** (a) **wire the LIVE resume route in the monolith**
 (`aindy-apps-monolith` `apps/agent/routes/agent_router.py`) calling
 `resume_agent_run_runtime` — the runtime `agent_router.py` is deprecated/unregistered,
-so the app-owned route is the real surface; this must land AFTER the runtime
-package is bumped/reinstalled in the monolith so the import resolves; (b)
-real-Postgres parity validation before any `AGENT_FLOW` retirement. The VM path
-stays opt-in/non-default until then.
+so the app-owned route is the real surface; must land AFTER the runtime package is
+bumped/reinstalled in the monolith so the import resolves. (b) With the above
+blocker fixed and parity validated, the remaining gate for making `nodus_vm` the
+default / retiring `AGENT_FLOW` is broader real-workload soak (more tools, larger
+plans, multi-instance resume). The VM path stays opt-in/non-default until then.
 
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't

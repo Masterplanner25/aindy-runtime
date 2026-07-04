@@ -21,9 +21,19 @@ def _ensure_tools_loaded() -> None:
         return
     _LOADING_PLUGINS = True
     try:
-        from AINDY.platform_layer.registry import load_plugins
+        from AINDY.platform_layer.registry import (
+            _ensure_runtime_agent_defaults,
+            load_plugins,
+        )
 
         load_plugins()
+        # Runtime-native tools (memory.read / memory.write) are registered by the
+        # runtime agent defaults, NOT by load_plugins — the runtime manifest carries
+        # no plugin modules. Ensure them here so tools resolve in EVERY process that
+        # executes a tool, including the nodus_worker subprocess whose only tool-load
+        # entry point is this function. Without it the nodus_vm call_tool seam returns
+        # "Tool not found" for runtime tools (RTR-1 parity blocker). Idempotent.
+        _ensure_runtime_agent_defaults()
     except Exception as exc:
         logger.debug("agent tool plugin load skipped: %s", exc)
     finally:
