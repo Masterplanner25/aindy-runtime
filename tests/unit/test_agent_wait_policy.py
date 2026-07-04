@@ -203,3 +203,35 @@ def test_nodus_agent_workflow_type_passes_engine_boundary():
     # The old label is still (correctly) rejected — the guard is intact.
     with pytest.raises(ValueError):
         enforce_engine_boundary(entrypoint="nodus.run", workflow_type="agent_execution")
+
+
+# --------------------------------------------------------------------------- #
+# runtime.selftest — the diagnostic tool that drives real-PG retry/halt tests
+# --------------------------------------------------------------------------- #
+
+def test_runtime_selftest_success_echoes():
+    from AINDY.platform_layer.runtime_agent_defaults import runtime_selftest
+
+    out = runtime_selftest({"outcome": "success", "x": 1}, "u", None)
+    assert out["ok"] is True
+    assert out["echo"]["x"] == 1
+
+
+def test_runtime_selftest_failure_raises_with_attempt_count():
+    from AINDY.platform_layer.runtime_agent_defaults import runtime_selftest
+
+    key = uuid.uuid4().hex
+    with pytest.raises(RuntimeError, match=r"boom \(attempt 1\)"):
+        runtime_selftest({"outcome": "fail", "error": "boom", "attempt_key": key}, "u", None)
+    with pytest.raises(RuntimeError, match=r"boom \(attempt 2\)"):
+        runtime_selftest({"outcome": "fail", "error": "boom", "attempt_key": key}, "u", None)
+
+
+def test_runtime_selftest_registered_but_excluded_from_planner_catalog():
+    from AINDY.agents.tool_registry import TOOL_REGISTRY
+    from AINDY.platform_layer import runtime_agent_defaults as rad
+
+    rad.register()
+    assert "runtime.selftest" in TOOL_REGISTRY  # executable + capability-wired
+    catalog = [t["name"] for t in rad.get_tools_for_run({})]
+    assert "runtime.selftest" not in catalog  # but not offered to the planner

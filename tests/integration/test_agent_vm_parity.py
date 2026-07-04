@@ -273,3 +273,93 @@ def test_nodus_vm_wait_resume_cycle_on_postgres(monkeypatch):
         (0, "memory.recall", "success"),  # NOT re-run
         (1, "memory.recall", "success"),
     ]
+
+
+# --------------------------------------------------------------------------- #
+# Real tool FAILURE — retry + halt end-to-end on real PG (via runtime.selftest)
+# --------------------------------------------------------------------------- #
+
+def _step_error(run_id, step_index):
+    from AINDY.db.database import SessionLocal
+    from AINDY.db.models import AgentStep
+
+    s = SessionLocal()
+    try:
+        row = (
+            s.query(AgentStep)
+            .filter(AgentStep.run_id == uuid.UUID(run_id), AgentStep.step_index == step_index)
+            .first()
+        )
+        return None if row is None else (row.error_message or "")
+    finally:
+        s.close()
+
+
+def test_tool_failure_parity(monkeypatch):
+    """A real tool failure (raised in the handler) fails the run identically on
+    both backends — the failed-step shape the mocked tests could not exercise."""
+    plan = {"steps": [
+        {"tool": "runtime.selftest", "args": {"outcome": "fail", "error": "boom"}, "risk_level": "high", "description": "fail"},
+    ]}
+    results = {}
+    for backend in ("agent_flow", "nodus_vm"):
+        run_id, token = _create_executing_run(_committed_user(), plan)
+        _execute(backend, run_id=run_id, plan=plan, token=token, user_id=token["user_id"], monkeypatch=monkeypatch)
+        results[backend] = (_read_run(run_id), _read_steps(run_id), _step_error(run_id, 0))
+
+    for backend, (run, steps, err) in results.items():
+        assert run["status"] == "failed", (backend, run)
+        assert steps == [(0, "runtime.selftest", "failed")], (backend, steps)
+        assert "boom" in (err or ""), (backend, err)
+
+
+def test_halt_on_first_failure_parity(monkeypatch):
+    """A failed step halts the plan on both backends — the downstream step never runs."""
+    plan = {"steps": [
+        {"tool": "runtime.selftest", "args": {"outcome": "fail", "error": "boom"}, "risk_level": "high", "description": "fail"},
+        {"tool": "memory.recall", "args": {"query": "should-not-run"}, "risk_level": "low", "description": "downstream"},
+    ]}
+    for backend in ("agent_flow", "nodus_vm"):
+        run_id, token = _create_executing_run(_committed_user(), plan)
+        _execute(backend, run_id=run_id, plan=plan, token=token, user_id=token["user_id"], monkeypatch=monkeypatch)
+        run, steps = _read_run(run_id), _read_steps(run_id)
+        assert run["status"] == "failed", (backend, run)
+        # Only the failing step ran; the downstream memory.recall was halted.
+        assert steps == [(0, "runtime.selftest", "failed")], (backend, steps)
+
+
+def _selftest_fail_plan(error, risk):
+    return {"steps": [
+        {"tool": "runtime.selftest",
+         "args": {"outcome": "fail", "error": error, "attempt_key": uuid.uuid4().hex},
+         "risk_level": risk, "description": "fail probe"},
+    ]}
+
+
+def test_nodus_vm_retryable_failure_retries_on_postgres(monkeypatch):
+    """A transient (retryable) failure on a low-risk step is retried to exhaustion
+    (3 attempts) inside the real subprocess — proven by the attempt count carried in
+    the recorded error."""
+    plan = _selftest_fail_plan("transient timeout", "low")
+    run_id, token = _create_executing_run(_committed_user(), plan)
+    _execute("nodus_vm", run_id=run_id, plan=plan, token=token, user_id=token["user_id"], monkeypatch=monkeypatch)
+    assert _read_run(run_id)["status"] == "failed"
+    assert "attempt 3" in (_step_error(run_id, 0) or ""), _step_error(run_id, 0)
+
+
+def test_nodus_vm_nonretryable_failure_short_circuits_on_postgres(monkeypatch):
+    """A non-transient error ('permission') is NOT retried, even on a low-risk step."""
+    plan = _selftest_fail_plan("permission denied", "low")
+    run_id, token = _create_executing_run(_committed_user(), plan)
+    _execute("nodus_vm", run_id=run_id, plan=plan, token=token, user_id=token["user_id"], monkeypatch=monkeypatch)
+    assert _read_run(run_id)["status"] == "failed"
+    assert "attempt 1" in (_step_error(run_id, 0) or ""), _step_error(run_id, 0)
+
+
+def test_nodus_vm_high_risk_single_attempt_on_postgres(monkeypatch):
+    """A high-risk step is never retried (max_attempts=1), even on a retryable error."""
+    plan = _selftest_fail_plan("transient timeout", "high")
+    run_id, token = _create_executing_run(_committed_user(), plan)
+    _execute("nodus_vm", run_id=run_id, plan=plan, token=token, user_id=token["user_id"], monkeypatch=monkeypatch)
+    assert _read_run(run_id)["status"] == "failed"
+    assert "attempt 1" in (_step_error(run_id, 0) or ""), _step_error(run_id, 0)
