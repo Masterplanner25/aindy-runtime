@@ -46,6 +46,12 @@ class AgentRun(Base):
     execution_token = Column(String(128), nullable=True)
     capability_token = Column(JSONB, nullable=True)
 
+    # RTR-1 Phase 2e (cross-restart durability): durable descriptor of a mid-plan
+    # WAIT. Set when status="waiting"; holds {"event_type", "correlation_key",
+    # "resume_segment_index"} so a waiting agent run can be rehydrated and resumed
+    # after a restart. Cleared on resume/terminal.
+    wait_state = Column(JSONB, nullable=True)
+
     parent_run_id = Column(
         UUID(as_uuid=True),
         ForeignKey("agent_runs.id", ondelete="SET NULL"),

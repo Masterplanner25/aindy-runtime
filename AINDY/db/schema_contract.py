@@ -20,7 +20,7 @@ import AINDY.memory.memory_persistence  # noqa: F401
 
 _RUNTIME_MODEL_PREFIXES = ("AINDY.db.models.",)
 _RUNTIME_MODEL_MODULES = {"AINDY.memory.memory_persistence"}
-SCHEMA_CONTRACT_VERSION = "2026-06-30"
+SCHEMA_CONTRACT_VERSION = "2026-07-04"
 SCHEMA_INSPECT_MODULE = "python -m AINDY.db.schema_ops inspect --format json"
 
 SCHEMA_STATE_BLANK_DATABASE = "blank_database"

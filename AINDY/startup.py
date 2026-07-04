@@ -1488,6 +1488,37 @@ def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
         finally:
             _flow_rehydrate_db.close()
 
+    # AgentRun rehydration (RTR-1 Phase 2e): re-register scheduler waits for agent
+    # runs parked mid-plan (status="waiting") from their durable wait_state, so a
+    # waiting agent run resumes its next segment after a restart. Must run before
+    # mark_rehydration_complete()/drain_buffered_events() below so events that
+    # arrived during boot reach the freshly-registered agent callbacks.
+    if not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
+        from AINDY.core.agent_run_rehydration import rehydrate_waiting_agent_runs
+        _agent_rehydrate_db = db_factory()
+        try:
+            _n_agent_rehydrated = rehydrate_waiting_agent_runs(_agent_rehydrate_db)
+            if _n_agent_rehydrated:
+                logger.info(
+                    "[startup] AgentRun rehydration registered %d run(s)", _n_agent_rehydrated
+                )
+            clear_api_runtime_condition(RuntimeConditionCode.AGENT_RUN_REHYDRATION_FAILED)
+        except Exception as _agent_rehydrate_exc:
+            _handle_runtime_degradation(
+                code=RuntimeConditionCode.AGENT_RUN_REHYDRATION_FAILED,
+                component="rehydration",
+                classification=_UNSAFE_DEGRADED,
+                detail=str(_agent_rehydrate_exc),
+                production_message=(
+                    "AgentRun rehydration failed. Waiting agent runs may not resume safely."
+                ),
+            )
+            emit_recovery_failure(
+                "agent_runs", _agent_rehydrate_exc, _agent_rehydrate_db, logger=logger
+            )
+        finally:
+            _agent_rehydrate_db.close()
+
     # Nodus workflow rehydration: recompile every active nodus_workflows row
     # (RTR-1) into FLOW_REGISTRY / the in-memory workflow registry so registered
     # workflows survive a restart. Must run after register_all_flows() so the
