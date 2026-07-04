@@ -48,6 +48,8 @@ def build_planner_context(context: dict[str, Any]) -> dict[str, str]:
 
 
 def get_tools_for_run(_context: dict[str, Any]) -> list[dict[str, Any]]:
+    # Diagnostic tools are executable + capability-wired but are NOT offered to the
+    # planner's tool catalog (they exist to verify the execution path, not to plan).
     return [
         {
             "name": name,
@@ -59,7 +61,7 @@ def get_tools_for_run(_context: dict[str, Any]) -> list[dict[str, Any]]:
             "egress_scope": metadata.get("egress_scope"),
         }
         for name, metadata in TOOL_REGISTRY.items()
-        if isinstance(metadata, dict)
+        if isinstance(metadata, dict) and metadata.get("category") != "diagnostic"
     ]
 
 
@@ -105,6 +107,42 @@ def memory_write(args: dict[str, Any], user_id: str, db) -> dict[str, Any]:
     }
 
 
+_SELFTEST_ATTEMPTS: dict[str, int] = {}
+
+
+def runtime_selftest(args: dict[str, Any], user_id: str, db) -> dict[str, Any]:
+    """Diagnostic tool: verify the agent tool-execution path end-to-end.
+
+    Echoes a caller-requested outcome so an operator (or an integration test) can
+    confirm the runtime handles success, failure, retry, and halt correctly through
+    the real call_tool seam — including inside the nodus_worker subprocess. It has
+    no external effect.
+
+    Args:
+      outcome: "success" (default) or "fail".
+      error:   error message to raise when outcome="fail" (its substrings drive the
+               is_retryable_error classification, e.g. "permission" → non-retryable).
+      attempt_key: when set, count invocations under this key (per process, so per
+               subprocess = per segment) and append " (attempt N)" to the raised
+               error — lets a caller observe how many times the retry loop re-ran.
+
+    Returns the echoed args on success; raises RuntimeError on requested failure
+    (execute_tool converts the raise into {success: False, error: str}).
+    """
+    args = dict(args or {})
+    attempt_key = str(args.get("attempt_key") or "")
+    attempt = None
+    if attempt_key:
+        _SELFTEST_ATTEMPTS[attempt_key] = _SELFTEST_ATTEMPTS.get(attempt_key, 0) + 1
+        attempt = _SELFTEST_ATTEMPTS[attempt_key]
+
+    if str(args.get("outcome", "success")).lower() == "fail":
+        base = str(args.get("error") or "selftest requested failure")
+        raise RuntimeError(f"{base} (attempt {attempt})" if attempt is not None else base)
+
+    return {"ok": True, "attempt": attempt, "echo": {k: v for k, v in args.items() if k != "attempt_key"}}
+
+
 def runtime_capability_bundle() -> dict[str, Any]:
     return {
         "definitions": {
@@ -120,10 +158,15 @@ def runtime_capability_bundle() -> dict[str, Any]:
                 "description": "Create or update durable memory.",
                 "risk_level": "low",
             },
+            "runtime_selftest": {
+                "description": "Exercise the agent tool-execution path (diagnostic).",
+                "risk_level": "low",
+            },
         },
         "tool_capabilities": {
             "memory.recall": ["read_memory"],
             "memory.write": ["write_memory"],
+            "runtime.selftest": ["runtime_selftest"],
         },
         "agent_capabilities": {
             "default": ["execute_flow"],
@@ -197,6 +240,16 @@ def register() -> None:
             category="memory",
             egress_scope="internal",
         )(memory_write)
+    if "runtime.selftest" not in TOOL_REGISTRY:
+        register_tool(
+            "runtime.selftest",
+            risk="low",
+            description="Diagnostic: exercise the agent tool-execution path",
+            capability="tool:runtime.selftest",
+            required_capability="runtime_selftest",
+            category="diagnostic",
+            egress_scope="internal",
+        )(runtime_selftest)
 
     if "default" not in registry._agent_planner_contexts:
         registry.register_planner_context_provider("default", build_planner_context)

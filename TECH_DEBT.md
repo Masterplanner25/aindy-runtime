@@ -2551,14 +2551,30 @@ Postgres (segment 0 executes, run parks with `wait_state`, fired resume runs seg
 1, step 0 not re-run). Windows blocks the subprocess, so this suite is authoritative
 on Linux CI. Regression guards for #1 and #3 added to the unit suite.
 
+**Soak — real-PG retry/halt validation (2026-07-04).** The parity suite's failure
+case was only capability-denial at the flow gate; a real mid-plan TOOL failure had
+never run through the subprocess. Added a runtime **diagnostic tool**
+`runtime.selftest` (`runtime_agent_defaults.py`) — executable + capability-wired
+(`runtime_selftest` cap) but excluded from the planner catalog (`category="diagnostic"`)
+— that echoes a caller-requested outcome and, on failure, raises an error carrying an
+`(attempt N)` counter (module-level per process = per subprocess/segment). New
+integration tests (`test_agent_vm_parity.py`) drive, on real PG through the real
+subprocess: tool-failure parity (both backends → run failed, failed AgentStep),
+halt-on-first-failure parity (downstream step never runs), and nodus_vm retry
+behavior — retryable → 3 attempts, non-retryable ("permission") → 1 attempt,
+high-risk → 1 attempt (all read from the recorded step error). Unit guards for the
+tool + its catalog exclusion added.
+
 **Remaining follow-ups:** (a) **wire the LIVE resume route in the monolith**
 (`aindy-apps-monolith` `apps/agent/routes/agent_router.py`) calling
 `resume_agent_run_runtime` — the runtime `agent_router.py` is deprecated/unregistered,
 so the app-owned route is the real surface; must land AFTER the runtime package is
-bumped/reinstalled in the monolith so the import resolves. (b) With the above
-blocker fixed and parity validated, the remaining gate for making `nodus_vm` the
-default / retiring `AGENT_FLOW` is broader real-workload soak (more tools, larger
-plans, multi-instance resume). The VM path stays opt-in/non-default until then.
+bumped/reinstalled in the monolith so the import resolves. (b) Remaining soak before
+making `nodus_vm` the default / retiring `AGENT_FLOW`: real scheduler-driven resume +
+rehydration-across-restart on PG (the wait/resume test still patches the scheduler to
+fire the callback); **app-tool** execution under `nodus_vm` in the monolith (validated
+here only with runtime-native tools); multi-instance resume; and subprocess-per-segment
+perf. The VM path stays opt-in/non-default until then.
 
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't
