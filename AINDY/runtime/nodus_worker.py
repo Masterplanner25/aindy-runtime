@@ -240,10 +240,25 @@ def main() -> int:
             execution_token=tool_execution_token,
         )
 
+    def _is_retryable_error(error: Any) -> bool:
+        """Host function for RTR-1 Phase 2d compiled agent workflows.
+
+        Lets a compiled step's retry loop short-circuit on non-transient tool
+        errors, mirroring AGENT_FLOW's ``is_retryable_error`` gate. Kept fail-open
+        (retryable) if the classifier is unavailable, so retry budget still applies.
+        """
+        try:
+            from AINDY.core.retry_policy import is_retryable_error
+
+            return bool(is_retryable_error(None if error is None else str(error)))
+        except Exception:
+            return True
+
     runtime.register_function("set_state", _set_state, arity=2)
     runtime.register_function("get_state", _get_state, arity=1)
     runtime.register_function("sys", _sys_dispatch, arity=2)
     runtime.register_function("call_tool", _call_tool, arity=2)
+    runtime.register_function("is_retryable_error", _is_retryable_error, arity=1)
     runtime.register_function("recall", bridge.recall, arity=3)
     runtime.register_function("remember", bridge.remember, arity=3)
     runtime.register_function("suggest", bridge.get_suggestions, arity=3)

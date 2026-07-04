@@ -40,6 +40,7 @@ AGENT_EVENT_TYPES = {
     "CAPABILITY_DENIED",
     "RECOVERED",
     "REPLAY_CREATED",
+    "WAITING",  # RTR-1 Phase 2e — agent run parked on a mid-plan WAIT step
 }
 
 

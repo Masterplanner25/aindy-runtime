@@ -17,6 +17,12 @@ class SchedulerPersistenceMixin:
         if not entry:
             return
 
+        # WaitingFlowRun.run_id FKs to flow_runs; only flow waits get a DB backup.
+        # Non-flow waits (e.g. eu_type="agent", RTR-1 Phase 2e segment waits) live
+        # in the in-memory registry + Redis only — a backup row would violate the FK.
+        if entry.get("eu_type", "flow") != "flow":
+            return
+
         db = None
         try:
             db = _get_session_factory()()
