@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+---
+
+## 1.5.1 — 2026-07-04
+
 ### Fixed
 
 - **RTR-1 `nodus_vm` mid-plan resume ran outside an execution context (#152).** The
