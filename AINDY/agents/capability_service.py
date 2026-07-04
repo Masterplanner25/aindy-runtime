@@ -325,8 +325,10 @@ def get_grantable_tools(
         plan_tools = []
         for step in steps:
             tool_name = step.get("tool")
-            if not isinstance(tool_name, str) or tool_name not in TOOL_REGISTRY:
-                return []
+            if not isinstance(tool_name, str):
+                continue  # WAIT / non-tool control step — nothing to grant
+            if tool_name not in TOOL_REGISTRY:
+                return []  # a named tool that isn't registered → not grantable
             plan_tools.append(tool_name)
 
         unique_tools = sorted(set(plan_tools))
