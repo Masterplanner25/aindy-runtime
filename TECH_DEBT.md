@@ -2565,15 +2565,26 @@ behavior — retryable → 3 attempts, non-retryable ("permission") → 1 attemp
 high-risk → 1 attempt (all read from the recorded step error). Unit guards for the
 tool + its catalog exclusion added.
 
+**Soak — real scheduler resume + rehydration-across-restart on PG (2026-07-04).**
+The wait/resume test patched the scheduler to fire the callback; two integration
+tests now drive the **unpatched** production path on real PG (the env has no
+scheduler loop, so the queued resume is drained explicitly via
+`dequeue_next().run_callback()`, as `test_multi_instance_resume` does): (1)
+`resume_agent_run_runtime` → `publish_event` → real `notify_event` correlation match
+→ the agent resume callback → segment resumes and completes; (2) a parked run whose
+in-memory registration is wiped (restart) is re-registered by
+`rehydrate_waiting_agent_runs` from the durable `AgentRun` row, then a published event
+resumes it. Both confirm the correlation resolves consistently
+(`wait_state.correlation_key or run.correlation_id`).
+
 **Remaining follow-ups:** (a) **wire the LIVE resume route in the monolith**
 (`aindy-apps-monolith` `apps/agent/routes/agent_router.py`) calling
 `resume_agent_run_runtime` — the runtime `agent_router.py` is deprecated/unregistered,
 so the app-owned route is the real surface; must land AFTER the runtime package is
 bumped/reinstalled in the monolith so the import resolves. (b) Remaining soak before
-making `nodus_vm` the default / retiring `AGENT_FLOW`: real scheduler-driven resume +
-rehydration-across-restart on PG (the wait/resume test still patches the scheduler to
-fire the callback); **app-tool** execution under `nodus_vm` in the monolith (validated
-here only with runtime-native tools); multi-instance resume; and subprocess-per-segment
+making `nodus_vm` the default / retiring `AGENT_FLOW`: **app-tool** execution under
+`nodus_vm` in the monolith (validated here only with runtime-native tools — the #1
+cross-repo unknown); multi-instance resume for agent runs; and subprocess-per-segment
 perf. The VM path stays opt-in/non-default until then.
 
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
