@@ -77,11 +77,14 @@ def _committed_user():
         s.close()
 
 
-def _create_executing_run(user_id, plan):
+def _create_executing_run(user_id, plan, *, correlation_id=None):
     """Create a committed AgentRun in status='executing' with a minted token.
 
     Mirrors the real approve+execute setup (approvals.py / execution.py) so both
-    backends see a normal approved run. Returns (run_id_str, token_dict).
+    backends see a normal approved run. When ``correlation_id`` is set it is stored
+    on the run (execution.py passes ``run.correlation_id`` to the executor, and the
+    resume route resolves the same value — so wait registration and resume match).
+    Returns (run_id_str, token_dict).
     """
     from AINDY.agents.capability_service import mint_token
     from AINDY.db.database import SessionLocal
@@ -94,7 +97,7 @@ def _create_executing_run(user_id, plan):
         run = AgentRun(
             id=uuid.uuid4(), user_id=user_id, agent_type="default",
             goal="parity probe", plan=plan, status="pending_approval",
-            steps_total=len(tool_steps),
+            steps_total=len(tool_steps), correlation_id=correlation_id,
         )
         s.add(run)
         s.commit()
@@ -111,7 +114,7 @@ def _create_executing_run(user_id, plan):
         s.close()
 
 
-def _execute(backend, *, run_id, plan, token, user_id, monkeypatch):
+def _execute(backend, *, run_id, plan, token, user_id, monkeypatch, correlation_id=None):
     from AINDY.db.database import SessionLocal
     from AINDY.runtime.nodus_execution_service import execute_agent_run_via_nodus
 
@@ -120,7 +123,8 @@ def _execute(backend, *, run_id, plan, token, user_id, monkeypatch):
     try:
         return execute_agent_run_via_nodus(
             run_id=run_id, plan=plan, user_id=str(user_id), db=s,
-            correlation_id=run_id, execution_token=token,
+            correlation_id=correlation_id if correlation_id is not None else run_id,
+            execution_token=token,
         )
     finally:
         s.close()
@@ -363,3 +367,99 @@ def test_nodus_vm_high_risk_single_attempt_on_postgres(monkeypatch):
     _execute("nodus_vm", run_id=run_id, plan=plan, token=token, user_id=token["user_id"], monkeypatch=monkeypatch)
     assert _read_run(run_id)["status"] == "failed"
     assert "attempt 1" in (_step_error(run_id, 0) or ""), _step_error(run_id, 0)
+
+
+# --------------------------------------------------------------------------- #
+# Real scheduler-driven resume + rehydration-across-restart on Postgres
+# (the wait/resume test above patches the scheduler; these drive it for real)
+# --------------------------------------------------------------------------- #
+
+def _run_next_scheduler_callback(expected_run_id):
+    """Execute the next queued resume callback. The integration env runs no
+    background scheduler loop, so we drain the queue explicitly (production runs
+    this via a scheduler worker). Asserts the queued item is ours."""
+    from AINDY.kernel.scheduler_engine import get_scheduler_engine
+
+    item = get_scheduler_engine().dequeue_next()
+    assert item is not None, "no resume callback was enqueued by the event"
+    assert str(item.run_id) == str(expected_run_id), (item.run_id, expected_run_id)
+    item.run_callback()
+
+
+def test_nodus_vm_real_scheduler_resume_on_postgres(monkeypatch):
+    """Production resume trigger, unpatched: resume_agent_run_runtime -> publish_event
+    -> the real scheduler matches the registered wait -> the agent resume callback
+    runs segment 1 on real PG."""
+    from AINDY.agents.runtime_api import resume_agent_run_runtime
+    from AINDY.db.database import SessionLocal
+    from AINDY.kernel.scheduler_engine import get_scheduler_engine
+
+    eng = get_scheduler_engine()
+    eng.mark_rehydration_complete()  # process events synchronously, don't buffer
+    corr = uuid.uuid4().hex
+    user_id = _committed_user()
+    run_id, token = _create_executing_run(user_id, _WAIT_PLAN, correlation_id=corr)
+
+    # Park via the REAL scheduler (no patch) — register_wait runs for real.
+    res = _execute("nodus_vm", run_id=run_id, plan=_WAIT_PLAN, token=token,
+                   user_id=user_id, monkeypatch=monkeypatch, correlation_id=corr)
+    assert res.get("status") == "WAITING", res
+    assert _read_run(run_id)["status"] == "waiting"
+    assert eng.waiting_for(run_id) is not None  # a real wait was registered
+
+    # Fire the approval action -> publish_event -> the scheduler enqueues the resume.
+    s = SessionLocal()
+    try:
+        out = resume_agent_run_runtime(db=s, user_id=str(user_id), run_id=run_id)
+    finally:
+        s.close()
+    assert out["resumed_event"] == "parity.approval"
+    assert out["waiters_notified"] >= 1  # the scheduler matched our wait
+
+    _run_next_scheduler_callback(run_id)
+
+    resumed = _read_run(run_id)
+    assert resumed["status"] == "completed", resumed
+    assert _read_steps(run_id) == [(0, "memory.recall", "success"), (1, "memory.recall", "success")]
+
+
+def test_nodus_vm_rehydration_across_restart_on_postgres(monkeypatch):
+    """A parked run survives losing its in-memory scheduler registration (restart):
+    startup rehydration re-registers it from the durable AgentRun row, and a
+    published event then resumes it — all on real PG."""
+    from AINDY.core.agent_run_rehydration import rehydrate_waiting_agent_runs
+    from AINDY.db.database import SessionLocal
+    from AINDY.kernel.event_bus import publish_event
+    from AINDY.kernel.scheduler_engine import get_scheduler_engine
+
+    eng = get_scheduler_engine()
+    eng.mark_rehydration_complete()
+    corr = uuid.uuid4().hex
+    user_id = _committed_user()
+    run_id, token = _create_executing_run(user_id, _WAIT_PLAN, correlation_id=corr)
+
+    _execute("nodus_vm", run_id=run_id, plan=_WAIT_PLAN, token=token,
+             user_id=user_id, monkeypatch=monkeypatch, correlation_id=corr)
+    assert _read_run(run_id)["status"] == "waiting"
+
+    # Simulate a restart: the in-memory wait registration is lost.
+    with eng._lock:
+        eng._waiting.pop(run_id, None)
+    assert eng.waiting_for(run_id) is None
+
+    # Startup rehydration re-registers the wait from durable state.
+    s = SessionLocal()
+    try:
+        n = rehydrate_waiting_agent_runs(s)
+    finally:
+        s.close()
+    assert n >= 1
+    assert eng.waiting_for(run_id) is not None  # re-registered from the DB
+
+    # A published event now resumes it through the real scheduler.
+    assert publish_event("parity.approval", correlation_id=corr) >= 1
+    _run_next_scheduler_callback(run_id)
+
+    resumed = _read_run(run_id)
+    assert resumed["status"] == "completed", resumed
+    assert _read_steps(run_id) == [(0, "memory.recall", "success"), (1, "memory.recall", "success")]
