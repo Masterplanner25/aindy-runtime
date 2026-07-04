@@ -41,13 +41,83 @@ Return ONLY valid JSON with exactly this structure:
   "overall_risk": "low|medium|high"
 }
 
+A step may instead be a WAIT step that pauses the run mid-plan until an external
+event (e.g. a human approval) arrives, then continues:
+    { "wait_for": "<event.type>", "description": "why the run pauses here" }
+A WAIT step has no "tool" and no "risk_level". Use one only to gate a later step
+on an external signal (e.g. wait for "agent.approval.granted" before a risky send).
+
 Rules:
 - Use only tools listed above
 - Keep plans concise (3-7 steps maximum)
 - Be specific in args using the request context
-- overall_risk must match the highest step risk_level
+- overall_risk must match the highest tool step risk_level (WAIT steps have no risk)
 - Return ONLY the JSON object, no markdown, no extra text
 """
+
+# Canonical event a policy-inserted approval WAIT step waits for. A resume route
+# publishes this (scoped to the run's correlation) to continue the run.
+AGENT_APPROVAL_EVENT = "agent.approval.granted"
+
+
+def _agent_execution_backend() -> str:
+    """The active agent execution backend (matches nodus_execution_service)."""
+    import os
+
+    return os.getenv("AINDY_AGENT_EXECUTION_BACKEND", "agent_flow").strip().lower()
+
+
+def apply_wait_policy(plan: dict, *, backend: str | None = None) -> dict:
+    """Post-process a generated plan's WAIT steps for the active execution backend.
+
+    Mid-plan WAIT steps only execute on the ``nodus_vm`` backend (RTR-1 Phase 2e);
+    the default AGENT_FLOW path has no wait concept and would try to run a WAIT
+    step as a tool-less tool and fail. So:
+
+    * On any non-``nodus_vm`` backend, **strip** every WAIT step (safety — whether
+      it came from the LLM or a policy) so AGENT_FLOW only ever sees tool steps.
+    * On ``nodus_vm`` with ``AINDY_AGENT_WAIT_BEFORE_HIGH_RISK`` enabled, **insert**
+      a human-approval WAIT (``AGENT_APPROVAL_EVENT``) before the first high-risk
+      step, so the run does its safe prep, then pauses for approval before the
+      risky action. The inserted step carries no ``correlation_key`` — the executor
+      scopes the wait to the run's own correlation id.
+
+    Mutates and returns ``plan``.
+    """
+    from AINDY.runtime.agent_plan_compiler import _is_wait_step
+
+    steps = list(plan.get("steps") or [])
+    backend = (backend or _agent_execution_backend())
+
+    if backend != "nodus_vm":
+        filtered = [s for s in steps if not _is_wait_step(s)]
+        if len(filtered) != len(steps):
+            logger.info(
+                "[AgentPlanner] stripped %d WAIT step(s) — backend %r cannot execute them",
+                len(steps) - len(filtered), backend,
+            )
+        plan["steps"] = filtered
+        return plan
+
+    if getattr(settings, "AINDY_AGENT_WAIT_BEFORE_HIGH_RISK", False):
+        new_steps: list = []
+        inserted = False
+        for step in steps:
+            if (
+                not inserted
+                and not _is_wait_step(step)
+                and str((step or {}).get("risk_level", "")).lower() == "high"
+            ):
+                new_steps.append({
+                    "wait_for": AGENT_APPROVAL_EVENT,
+                    "description": "Await human approval before the high-risk step",
+                })
+                inserted = True
+            new_steps.append(step)
+        if inserted:
+            logger.info("[AgentPlanner] inserted approval WAIT before first high-risk step")
+        plan["steps"] = new_steps
+    return plan
 
 
 def _requires_approval(overall_risk: str, user_id: str, db: Session) -> bool:
@@ -218,11 +288,23 @@ def generate_plan(
             logger.warning("[AgentRuntime] Plan missing required fields: %s", plan)
             return None
 
-        step_risks = [step.get("risk_level", "high") for step in plan["steps"]]
+        from AINDY.runtime.agent_plan_compiler import _is_wait_step
+
+        # WAIT steps carry no risk_level — exclude them from risk aggregation so a
+        # pause point never inflates overall_risk to "high".
+        step_risks = [
+            step.get("risk_level", "high")
+            for step in plan["steps"]
+            if not _is_wait_step(step)
+        ]
         risk_order = {"low": 0, "medium": 1, "high": 2}
         max_risk = max(step_risks, key=lambda risk: risk_order.get(risk, 2), default="high")
         if risk_order.get(plan["overall_risk"], 0) < risk_order.get(max_risk, 0):
             plan["overall_risk"] = max_risk
+
+        # Reconcile WAIT steps with the execution backend (strip on AGENT_FLOW;
+        # optionally insert an approval gate on nodus_vm).
+        plan = apply_wait_policy(plan)
         return plan
     except Exception as exc:
         compat = get_runtime_compat_module()

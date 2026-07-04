@@ -2489,12 +2489,30 @@ double-fire idempotency, no-wait regression, durable `wait_state` persist/clear,
 and restart-rehydration (fresh scheduler → re-register → event → resume →
 complete, step 0 not re-run) + skip-guards.
 
-**Remaining follow-ups:** (a) teach the planner (`planning.py`) to emit WAIT steps
-+ wire an approval route to `publish_event` (the executor already resumes on any
-matching event today); (b) re-mint the capability token on rehydration when the
-reloaded one is past its 23h TTL (currently an expired token fails the resumed
-segment cleanly); (c) real-Postgres parity validation before any `AGENT_FLOW`
-retirement. The VM path stays opt-in/non-default until then.
+**Planner WAIT steps + resume/approval landed (2026-07-04).** `planning.py`
+documents the WAIT-step schema (`{"wait_for": "<event.type>"}`), excludes WAIT
+steps from `overall_risk` aggregation, and `apply_wait_policy` reconciles them to
+the execution backend: **stripped** on `agent_flow` (which can't execute a wait —
+safety), and on `nodus_vm` with the new opt-in `AINDY_AGENT_WAIT_BEFORE_HIGH_RISK`
+setting, a human-approval WAIT (`AGENT_APPROVAL_EVENT = "agent.approval.granted"`)
+is **inserted before the first high-risk step**. The resume/approval action is
+`resume_agent_run_runtime` (`AINDY/agents/runtime_api.py`): it reads the run's
+`wait_state`, resolves the correlation the same way the register/rehydrate paths
+do (`wait_state.correlation_key or run.correlation_id` — a latent trace_id-fallback
+mismatch in the rehydrator was fixed to match), and calls `publish_event` to fire
+the resume. A reference route `POST /agent/runs/{id}/resume` was added to the
+(deprecated) runtime `agent_router.py`. Tests: policy strip/insert/disabled +
+resume publish/correlation/404/409 (`test_agent_wait_policy.py`).
+
+**Remaining follow-ups:** (a) **wire the LIVE resume route in the monolith**
+(`aindy-apps-monolith` `apps/agent/routes/agent_router.py`) calling
+`resume_agent_run_runtime` — the runtime `agent_router.py` is deprecated/unregistered,
+so the app-owned route is the real surface; this must land AFTER the runtime
+package is bumped/reinstalled in the monolith so the import resolves; (b) re-mint
+the capability token on rehydration when the reloaded one is past its 23h TTL
+(currently an expired token fails the resumed segment cleanly); (c) real-Postgres
+parity validation before any `AGENT_FLOW` retirement. The VM path stays
+opt-in/non-default until then.
 
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't

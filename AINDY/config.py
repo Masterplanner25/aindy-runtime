@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     AINDY_AGENT_PLANNER_BACKEND: str = "runtime_local"
     AINDY_AGENT_PLANNER_MODEL: str = "gpt-4o"
     AINDY_AGENT_PLANNER_TEMPERATURE: float = 0.3
+    # RTR-1 Phase 2e: when true (and AINDY_AGENT_EXECUTION_BACKEND=nodus_vm), the
+    # planner inserts a human-approval WAIT step before the first high-risk step,
+    # so the run pauses mid-plan for approval before doing something risky. Default
+    # off — no behavior change. Ignored on the AGENT_FLOW backend (which has no wait).
+    AINDY_AGENT_WAIT_BEFORE_HIGH_RISK: bool = False
     AINDY_EVENT_HANDLER_TIMEOUT_SECONDS: float = 5.0
     AINDY_PLUGIN_SANDBOX_RUNNER: str = "auto"
     AINDY_PLUGIN_CONTAINER_RUNTIME: str = "docker"
