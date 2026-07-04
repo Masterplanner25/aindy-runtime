@@ -10,7 +10,7 @@ from AINDY.db.models.job_log import JobLog
 from AINDY.utils.uuid_utils import normalize_uuid
 
 
-ACTIVE_AGENT_RUN_STATUSES = ("pending_approval", "approved", "executing", "delegated")
+ACTIVE_AGENT_RUN_STATUSES = ("pending_approval", "approved", "executing", "delegated", "waiting")
 ACTIVE_JOB_STATUSES = ("pending", "running", "deferred")
 
 

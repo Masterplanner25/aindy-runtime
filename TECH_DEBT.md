@@ -2425,14 +2425,56 @@ capability/completion events are reconstructed from the workflow's output state
 (`reconstruct_agent_step_results`). Selected via
 `AINDY_AGENT_EXECUTION_BACKEND=nodus_vm`; **`AGENT_FLOW` stays the default**. 8
 unit tests (reconstruction, selector routing, e2e run with mocked flow+capability
-+ real sqlite AgentRun). **Documented differences vs AGENT_FLOW (follow-ups):**
-per-step **retry** policy not reproduced (each tool runs once); **no
-halt-on-first-failure** (the native workflow runs every step even if a prior
-tool fails — subsequent steps may run on bad input); mid-plan **WAIT** not
-supported. These are why it's opt-in and non-default. **Remaining Phase 2:** 2d —
-retry + halt-on-failure (compiler emits throw-on-tool-failure + native step
-`retries` options); 2e — mid-plan WAIT; parity validation on real Postgres before
-any `AGENT_FLOW` retirement.
++ real sqlite AgentRun).
+
+**Phase 2d landed (2026-07-03) — per-step retry + halt-on-first-failure.**
+`compile_agent_plan` now emits, per step: a tool call, an in-step **retry loop**
+(`max_attempts` resolved at compile time from `risk_level` via
+`resolve_retry_policy` — low/med 3, high 1), a non-transient short-circuit
+(`is_retryable_error` host function, new in `nodus_worker.py`), and a
+**`throw`-on-final-failure**. The throw is what gives halt: a native `workflow {}`
+step that raises fails its task, and the task graph never schedules the dependent
+`after` steps — so no step runs on a predecessor's bad output (parity with
+AGENT_FLOW's `FAILURE`-halts-the-flow). The failing step still records its result
+via `set_state` before throwing, so reconstruction sees it; a trailing absent
+`__step_N_result` now means *halted*, not *dropped*. **Design note:** the native
+step `retries` option is deliberately NOT used — in nodus's runner it is a
+*durable* retry (`status: retry_scheduled`, needs a resume call) that would strand
+the single-shot VM path; the in-step loop keeps retry synchronous. Validated
+in-process (VM semantics identical to the subprocess path, which the Windows dev
+box blocks — WinError 4551): 12 new/updated unit tests covering attempt budgets,
+halt, retry-to-exhaustion, retry-recovery, and non-retryable short-circuit.
+**Phase 2e landed (2026-07-03) — mid-plan WAIT/RESUME (segment-split, live-process).**
+Mid-plan wait is **net-new** — the default AGENT_FLOW path has no wait at all
+(steps only return SUCCESS/FAILURE; no `waiting` AgentRun status). Chosen design:
+**segment-split**, not single-workflow-suspend. A plan may now carry WAIT steps
+(`{"wait_for": "<event.type>", "correlation_key"?: str}`); `split_agent_plan`
+cuts the plan into segments at those boundaries (`compile_agent_segment` keeps
+global `step_N`/`__step_N_result` indices contiguous across segments). The
+executor runs one segment per invocation: on success with a trailing wait it
+parks the run at `status="waiting"` and registers a scheduler wait whose resume
+callback runs the *next* segment when the event fires. **Completed segments are
+never re-run** — their `AgentStep` rows are durable, so tool calls never fire
+twice (this is why segment-split was chosen over the flow engine's
+re-execute-from-top resume, which would replay prior tool calls). Resume is
+idempotent via a `waiting → executing` check-and-set. Why not the two obvious
+mechanisms: plain-nodus `event.wait()` raises inside a native `workflow {}` step
+→ caught by the task graph as a step *failure*, not a wait; and a native workflow
+wait returns a normal dict → invisible to the worker/flow engine.
+
+**Live-process durability only** (as scoped): the wait rides the scheduler's
+in-memory `_waiting`/`notify_event` path; `_persist_wait_backup` now skips the
+`WaitingFlowRun` FK-backup for `eu_type != "flow"` (agent waits). New AgentRun
+status `"waiting"` (added to `ACTIVE_AGENT_RUN_STATUSES`); the EU is mirrored to
+completed/failed on resume-terminal via `_sync_agent_eu_status`. Validated
+in-process: wait→resume cycle (no re-run of prior steps), resume-failure, double-
+fire idempotency, no-wait regression, + segmentation unit tests.
+**Follow-ups:** (a) cross-restart rehydration of waiting agent runs (mirror
+`flow_run_rehydration` + a durable backup) — the deferred half of durability;
+(b) teach the planner (`planning.py`) to emit WAIT steps + wire an approval route
+to `publish_event` (the executor already resumes on any matching event today);
+(c) real-Postgres parity validation before any `AGENT_FLOW` retirement. The VM
+path stays opt-in/non-default until then.
 
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't

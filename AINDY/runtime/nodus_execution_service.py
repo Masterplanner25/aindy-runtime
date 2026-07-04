@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import logging
@@ -425,9 +426,9 @@ def reconstruct_agent_step_results(
 
     Returns ``(step_results, any_failed)`` where each entry is the AGENT_FLOW-shape
     ``{step_index, tool, status, result, error}``. A step whose result_key is
-    absent from ``output_state`` did not run and is skipped (RTR-1 Phase 2c: the
-    VM workflow runs all steps, so absence generally means the flow failed before
-    reaching it).
+    absent from ``output_state`` did not run and is skipped — since RTR-1 Phase 2d
+    a failed step ``throw``s and halts the workflow, so a trailing absent step was
+    halted by an earlier failure (halt-on-first-failure), not silently dropped.
     """
     step_results: list[dict[str, Any]] = []
     any_failed = False
@@ -452,6 +453,321 @@ def reconstruct_agent_step_results(
     return step_results, any_failed
 
 
+def _run_agent_segment_flow(
+    *,
+    run_id: str,
+    compiled: dict[str, Any],
+    user_id: str,
+    db: Session,
+    correlation_id: str | None,
+    scoped_token: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], bool, dict[str, Any]]:
+    """Run ONE compiled segment through the flow-backed Nodus path.
+
+    Persists an ``AgentStep`` row + step event for each step that ran and returns
+    ``(segment_step_results, segment_failed, flow_result)``. ``segment_failed`` is
+    True when the flow errored, any step failed, or a step was halted (fewer
+    results than the segment declared). Does not touch ``AgentRun`` status — the
+    caller owns run-level transitions across the whole segment chain.
+    """
+    from datetime import datetime, timezone
+
+    from AINDY.core.execution_signal_helper import record_agent_event
+    from AINDY.db.models import AgentStep
+    from AINDY.runtime.nodus_adapter import _db_run_id
+
+    script = compiled["source"] + f"\nrun_workflow({compiled['workflow_name']})\n"
+    # execution_token + agent_run_id ride in extra_initial_state so the
+    # nodus.execute node threads them to the call_tool seam (context only).
+    flow_result = run_nodus_script_via_flow(
+        script=script,
+        input_payload=compiled["input_payload"],
+        error_policy="halt",
+        db=db,
+        user_id=user_id,
+        workflow_type="agent_execution",
+        trace_id=correlation_id,
+        extra_initial_state={
+            "execution_token": scoped_token,
+            "agent_run_id": str(run_id),
+        },
+    )
+
+    output_state = format_nodus_flow_result(flow_result).get("output_state") or {}
+    step_results, any_failed = reconstruct_agent_step_results(compiled["steps"], output_state)
+    ran_by_index = {r["step_index"] for r in step_results}
+
+    now = datetime.now(timezone.utc)
+    for meta in compiled["steps"]:
+        if meta["index"] not in ran_by_index:
+            continue
+        entry = next(r for r in step_results if r["step_index"] == meta["index"])
+        db.add(
+            AgentStep(
+                run_id=_db_run_id(run_id),
+                step_index=meta["index"],
+                tool_name=meta["tool"],
+                tool_args=meta["args"],
+                risk_level=meta["risk_level"],
+                description=meta["description"],
+                status=entry["status"],
+                result=entry["result"],
+                error_message=entry["error"],
+                executed_at=now,
+                correlation_id=correlation_id,
+            )
+        )
+        record_agent_event(
+            run_id=run_id, user_id=user_id,
+            event_type="AGENT_STEP_COMPLETED" if entry["status"] == "success" else "AGENT_STEP_FAILED",
+            db=db, correlation_id=correlation_id,
+            payload={"step_index": meta["index"], "tool": meta["tool"], "status": entry["status"]},
+            required=False,
+        )
+
+    flow_ok = flow_result.get("status") == "SUCCESS"
+    segment_failed = any_failed or (not flow_ok) or (len(step_results) != len(compiled["steps"]))
+    return step_results, segment_failed, flow_result
+
+
+def _register_agent_segment_wait(
+    *,
+    run_id: str,
+    wait: dict[str, Any],
+    segments: list[dict[str, Any]],
+    segment_index: int,
+    accumulated: list[dict[str, Any]],
+    user_id: str,
+    correlation_id: str | None,
+    scoped_token: dict[str, Any] | None,
+    total_tool_steps: int,
+) -> None:
+    """Register a live-process wait that resumes at the NEXT segment on its event.
+
+    RTR-1 Phase 2e (live-process durability). The resume callback opens a fresh
+    DB session and runs ``_execute_agent_segment_chain`` for ``segment_index+1``,
+    carrying the accumulated step results forward — completed segments are never
+    re-run (their ``AgentStep`` rows are durable), so tool calls never fire twice.
+
+    The scheduler's in-memory ``_waiting`` + ``notify_event`` path drives the
+    callback; the ``WaitingFlowRun`` DB backup is intentionally skipped for
+    ``eu_type="agent"`` (it FKs to ``flow_runs``). Cross-restart rehydration of a
+    waiting agent run is the documented follow-up.
+    """
+    event_type = wait["event_type"]
+    corr = wait.get("correlation_key") or correlation_id
+
+    def _resume() -> None:
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.models import AgentRun
+        from AINDY.runtime.nodus_adapter import _db_run_id
+
+        _db = SessionLocal()
+        try:
+            # Idempotency gate: claim the run out of `waiting` before doing any work,
+            # so a duplicate event-fire (or watchdog re-trigger) can't run the next
+            # segment twice. Best-effort check-and-set — the durable atomic CAS is
+            # the cross-restart-rehydration follow-up.
+            run = _db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
+            if run is None or run.status != "waiting":
+                logger.info(
+                    "[NodusExecutionService] agent resume skipped for %s (status=%s)",
+                    run_id, getattr(run, "status", None),
+                )
+                return
+            run.status = "executing"
+            _db.commit()
+            _execute_agent_segment_chain(
+                run_id=run_id,
+                segments=segments,
+                segment_index=segment_index + 1,
+                accumulated=accumulated,
+                user_id=user_id,
+                db=_db,
+                correlation_id=correlation_id,
+                scoped_token=scoped_token,
+                total_tool_steps=total_tool_steps,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("[NodusExecutionService] agent segment resume failed for %s: %s", run_id, exc)
+        finally:
+            with contextlib.suppress(Exception):
+                _db.close()
+
+    try:
+        from AINDY.core.wait_condition import WaitCondition
+        from AINDY.kernel.scheduler_engine import get_scheduler_engine
+
+        wait_trace = str(correlation_id or run_id)
+        get_scheduler_engine().register_wait(
+            run_id=str(run_id),
+            wait_for_event=event_type,
+            tenant_id=str(user_id or ""),
+            eu_id=str(run_id),
+            resume_callback=_resume,
+            correlation_id=corr,
+            trace_id=wait_trace,
+            eu_type="agent",
+            wait_condition=WaitCondition.for_event(event_type, correlation_id=corr),
+        )
+    except Exception as exc:
+        logger.warning("[NodusExecutionService] agent wait registration failed for %s: %s", run_id, exc)
+
+
+def _sync_agent_eu_status(db: Session, run_id: str, status: str) -> None:
+    """Best-effort mirror of a terminal AgentRun status onto its ExecutionUnit.
+
+    The synchronous entry path (agent_runtime.execution) updates the EU after the
+    call returns, but a run that reaches a terminal state via the Phase 2e resume
+    callback has no such caller — so the chain syncs the EU itself. Non-fatal.
+    """
+    try:
+        from AINDY.core.execution_unit_service import ExecutionUnitService
+
+        eu = ExecutionUnitService(db).get_by_source("agent_run", str(run_id))
+        if eu:
+            ExecutionUnitService(db).update_status(eu.id, status)
+    except Exception:
+        logger.debug("[NodusExecutionService] agent EU status sync skipped", exc_info=True)
+
+
+def _execute_agent_segment_chain(
+    *,
+    run_id: str,
+    segments: list[dict[str, Any]],
+    segment_index: int,
+    accumulated: list[dict[str, Any]],
+    user_id: str,
+    db: Session,
+    correlation_id: str | None,
+    scoped_token: dict[str, Any] | None,
+    total_tool_steps: int,
+) -> dict[str, Any]:
+    """Run one plan segment, then complete / fail / suspend the AgentRun.
+
+    Runs exactly one segment per call. On success with a trailing wait, it parks
+    the run (``status="waiting"``) and registers a resume for the next segment.
+    On success of the terminal segment it completes the run. On any step/flow
+    failure it fails the run. ``accumulated`` carries prior segments' step results
+    so the run's ``result`` and counters reflect the whole plan, not just this
+    segment.
+    """
+    from datetime import datetime, timezone
+
+    from AINDY.core.execution_signal_helper import record_agent_event
+    from AINDY.db.models import AgentRun
+    from AINDY.runtime.agent_plan_compiler import compile_agent_segment
+    from AINDY.runtime.nodus_adapter import _db_run_id
+
+    try:
+        seg = segments[segment_index]
+        seg_results: list[dict[str, Any]] = []
+        segment_failed = False
+        flow_result: dict[str, Any] = {"status": "SUCCESS"}
+
+        if seg["tool_steps"]:
+            compiled = compile_agent_segment(
+                seg["tool_steps"],
+                base_index=seg["base_index"],
+                workflow_name=f"agent_plan_seg{segment_index}",
+            )
+            seg_results, segment_failed, flow_result = _run_agent_segment_flow(
+                run_id=run_id,
+                compiled=compiled,
+                user_id=user_id,
+                db=db,
+                correlation_id=correlation_id,
+                scoped_token=scoped_token,
+            )
+
+        accumulated = accumulated + seg_results
+        ran = len(accumulated)
+        now = datetime.now(timezone.utc)
+        run = db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
+        flow_run_id = flow_result.get("run_id")
+
+        # ── Failure: fail the whole run, stop the chain ───────────────────────────
+        if segment_failed:
+            if run:
+                if flow_run_id:
+                    run.flow_run_id = str(flow_run_id)
+                run.steps_completed = ran
+                run.current_step = ran
+                run.result = {"steps": accumulated}
+                run.completed_at = now
+                run.status = "failed"
+                first_failed = next((r for r in seg_results if r["status"] == "failed"), None)
+                if first_failed is not None and first_failed.get("error"):
+                    run.error_message = (
+                        f"step {first_failed['step_index']} "
+                        f"({first_failed['tool']}) failed: {first_failed['error']}"
+                    )
+                else:
+                    run.error_message = flow_result.get("error") or "one or more agent steps failed"
+            db.commit()
+            _sync_agent_eu_status(db, run_id, "failed")
+            record_agent_event(
+                run_id=run_id, user_id=user_id, event_type="FAILED", db=db,
+                correlation_id=correlation_id,
+                payload={"steps_completed": ran, "steps_total": total_tool_steps},
+                required=False,
+            )
+            return flow_result
+
+        # ── Success + trailing wait: park the run, register the resume ────────────
+        if seg["wait"] is not None:
+            if run:
+                if flow_run_id:
+                    run.flow_run_id = str(flow_run_id)
+                run.steps_completed = ran
+                run.current_step = ran
+                run.result = {"steps": accumulated}
+                run.status = "waiting"
+            db.commit()
+            _register_agent_segment_wait(
+                run_id=run_id, wait=seg["wait"], segments=segments,
+                segment_index=segment_index, accumulated=accumulated,
+                user_id=user_id, correlation_id=correlation_id,
+                scoped_token=scoped_token, total_tool_steps=total_tool_steps,
+            )
+            record_agent_event(
+                run_id=run_id, user_id=user_id, event_type="WAITING", db=db,
+                correlation_id=correlation_id,
+                payload={
+                    "wait_for": seg["wait"]["event_type"],
+                    "steps_completed": ran, "steps_total": total_tool_steps,
+                },
+                required=False,
+            )
+            return {"status": "WAITING", "wait_for": seg["wait"]["event_type"], "run_id": str(run_id)}
+
+        # ── Success + terminal segment: complete the run ──────────────────────────
+        completed_ok = ran == total_tool_steps
+        if run:
+            if flow_run_id:
+                run.flow_run_id = str(flow_run_id)
+            run.steps_completed = ran
+            run.current_step = ran
+            run.result = {"steps": accumulated}
+            run.completed_at = now
+            run.status = "completed" if completed_ok else "failed"
+            if not completed_ok:
+                run.error_message = "one or more agent steps did not run"
+        db.commit()
+        _sync_agent_eu_status(db, run_id, "completed" if completed_ok else "failed")
+        record_agent_event(
+            run_id=run_id, user_id=user_id,
+            event_type="COMPLETED" if completed_ok else "FAILED", db=db,
+            correlation_id=correlation_id,
+            payload={"steps_completed": ran, "steps_total": total_tool_steps},
+            required=False,
+        )
+        return flow_result
+    except Exception as exc:
+        logger.warning("[NodusExecutionService] agent segment chain failed for %s: %s", run_id, exc)
+        return {"status": "FAILED", "error": str(exc)}
+
+
 def execute_agent_run_via_workflow(
     *,
     run_id: str,
@@ -462,30 +778,36 @@ def execute_agent_run_via_workflow(
     execution_token: dict[str, Any] | None = None,
     capability_token: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """RTR-1 Phase 2c — OPT-IN VM-backed agent execution.
+    """RTR-1 Phase 2c–2e — OPT-IN VM-backed agent execution.
 
-    Compiles the agent plan into a native Nodus workflow (``compile_agent_plan``)
-    and runs it through the canonical flow-backed Nodus path
-    (``run_nodus_script_via_flow``), so each step's tool call goes through the
-    capability-enforced ``call_tool`` seam. ``AgentStep`` rows, status/counters,
-    result, and completion events are reconstructed from the workflow's output
-    state.
+    Splits the plan into segments at WAIT boundaries (``split_agent_plan``) and
+    runs each segment as a native Nodus workflow through the canonical
+    flow-backed path (``run_nodus_script_via_flow``), so each step's tool call
+    goes through the capability-enforced ``call_tool`` seam. ``AgentStep`` rows,
+    status/counters, result, and completion events are reconstructed from each
+    segment's output state.
 
-    Core-MVP parity (Phase 2c). Reproduced: tool calls (capability-enforced),
-    AgentStep recording, status/counters, result reconstruction, capability +
-    completion events. **Not yet reproduced vs AGENT_FLOW** (documented
-    follow-ups): per-step retry policy, halt-on-first-failure (the VM workflow
-    runs every step regardless of a tool's logical failure), and mid-plan WAIT.
+    Reproduced vs AGENT_FLOW: tool calls (capability-enforced), AgentStep
+    recording, status/counters, result reconstruction, capability + completion
+    events, per-step **retry** (risk-based ``max_attempts`` with non-transient
+    short-circuit, Phase 2d), **halt-on-first-failure** (a failed step ``throw``s,
+    Phase 2d), and **mid-plan WAIT/RESUME** (Phase 2e): a plan WAIT step
+    (``{"wait_for": "<event.type>"}``) parks the run at ``status="waiting"`` and
+    registers a live-process resume that runs the next segment when the event
+    fires — completed segments are never re-run, so tool calls never fire twice.
 
-    Selected via ``AINDY_AGENT_EXECUTION_BACKEND=nodus_vm``; ``AGENT_FLOW`` remains
-    the default until this path is proven at parity.
+    Live-process durability: the wait rides the scheduler's in-memory
+    ``_waiting``/``notify_event`` path; cross-restart rehydration of a waiting
+    agent run is the documented follow-up. Selected via
+    ``AINDY_AGENT_EXECUTION_BACKEND=nodus_vm``; ``AGENT_FLOW`` remains the default
+    until this path is proven at parity on real Postgres.
     """
     from datetime import datetime, timezone
 
     from AINDY.agents.capability_service import check_execution_capability
     from AINDY.core.execution_signal_helper import queue_system_event, record_agent_event
-    from AINDY.db.models import AgentRun, AgentStep
-    from AINDY.runtime.agent_plan_compiler import compile_agent_plan
+    from AINDY.db.models import AgentRun
+    from AINDY.runtime.agent_plan_compiler import split_agent_plan
     from AINDY.runtime.nodus_adapter import _db_run_id
 
     def _fail_run(message: str) -> None:
@@ -530,93 +852,25 @@ def execute_agent_run_via_workflow(
             payload={"run_id": str(run_id), "capability": "execute_flow"}, required=True,
         )
 
-        # ── Compile the plan → native Nodus workflow ──────────────────────────────
+        # ── Split the plan at WAIT boundaries, run the first segment ───────────────
         try:
-            compiled = compile_agent_plan(plan)
+            segments = split_agent_plan(plan)
         except ValueError as exc:
             _fail_run(str(exc))
             return {"status": "FAILED", "error": str(exc)}
 
-        script = compiled["source"] + f"\nrun_workflow({compiled['workflow_name']})\n"
-
-        # ── Run via the canonical flow-backed Nodus path ──────────────────────────
-        # execution_token + agent_run_id ride in extra_initial_state so the
-        # nodus.execute node threads them to the call_tool seam (context only).
-        flow_result = run_nodus_script_via_flow(
-            script=script,
-            input_payload=compiled["input_payload"],
-            error_policy="halt",
-            db=db,
+        total_tool_steps = sum(len(s["tool_steps"]) for s in segments)
+        return _execute_agent_segment_chain(
+            run_id=run_id,
+            segments=segments,
+            segment_index=0,
+            accumulated=[],
             user_id=user_id,
-            workflow_type="agent_execution",
-            trace_id=correlation_id,
-            extra_initial_state={
-                "execution_token": scoped_token,
-                "agent_run_id": str(run_id),
-            },
+            db=db,
+            correlation_id=correlation_id,
+            scoped_token=scoped_token,
+            total_tool_steps=total_tool_steps,
         )
-
-        # ── Reconstruct AgentStep rows + status from the workflow output ──────────
-        output_state = format_nodus_flow_result(flow_result).get("output_state") or {}
-        step_results, any_failed = reconstruct_agent_step_results(compiled["steps"], output_state)
-        ran_by_index = {r["step_index"] for r in step_results}
-
-        now = datetime.now(timezone.utc)
-        for meta in compiled["steps"]:
-            if meta["index"] not in ran_by_index:
-                continue
-            entry = next(r for r in step_results if r["step_index"] == meta["index"])
-            db.add(
-                AgentStep(
-                    run_id=_db_run_id(run_id),
-                    step_index=meta["index"],
-                    tool_name=meta["tool"],
-                    tool_args=meta["args"],
-                    risk_level=meta["risk_level"],
-                    description=meta["description"],
-                    status=entry["status"],
-                    result=entry["result"],
-                    error_message=entry["error"],
-                    executed_at=now,
-                    correlation_id=correlation_id,
-                )
-            )
-            record_agent_event(
-                run_id=run_id, user_id=user_id,
-                event_type="AGENT_STEP_COMPLETED" if entry["status"] == "success" else "AGENT_STEP_FAILED",
-                db=db, correlation_id=correlation_id,
-                payload={"step_index": meta["index"], "tool": meta["tool"], "status": entry["status"]},
-                required=False,
-            )
-
-        ran = len(step_results)
-        flow_ok = flow_result.get("status") == "SUCCESS"
-        completed_ok = flow_ok and not any_failed and ran == len(compiled["steps"])
-
-        run = db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
-        if run:
-            flow_run_id = flow_result.get("run_id")
-            if flow_run_id:
-                run.flow_run_id = str(flow_run_id)
-            run.steps_completed = ran
-            run.current_step = ran
-            run.result = {"steps": step_results}
-            run.completed_at = now
-            if completed_ok:
-                run.status = "completed"
-            else:
-                run.status = "failed"
-                run.error_message = flow_result.get("error") or "one or more agent steps failed"
-        db.commit()
-
-        record_agent_event(
-            run_id=run_id, user_id=user_id,
-            event_type="COMPLETED" if completed_ok else "FAILED",
-            db=db, correlation_id=correlation_id,
-            payload={"steps_completed": ran, "steps_total": len(compiled["steps"])},
-            required=False,
-        )
-        return flow_result
     except Exception as exc:
         logger.warning("[NodusExecutionService] execute_agent_run_via_workflow failed: %s", exc)
         return {"status": "FAILED", "error": str(exc)}
