@@ -2504,15 +2504,28 @@ the resume. A reference route `POST /agent/runs/{id}/resume` was added to the
 (deprecated) runtime `agent_router.py`. Tests: policy strip/insert/disabled +
 resume publish/correlation/404/409 (`test_agent_wait_policy.py`).
 
+**Capability token refresh on resume landed (2026-07-04).** A run parked on a WAIT
+across a long wait / restart could have a `capability_token` past its 24h TTL by
+the time the event fires — its tools would then fail validation. The resume
+callback (`_build_agent_resume_callback`) now, after the atomic claim, checks
+`capability_service.token_is_expired` and, if lapsed, calls
+`capability_service.refresh_token`: it rebuilds the token on a fresh clock (new
+`execution_token`/`issued_at`/`expires_at`/`token_hash`) while **reusing** the
+token's existing `granted_tools`/`allowed_capabilities`/`approval_mode` verbatim —
+no plan re-derivation, no policy re-evaluation, no escalation — and persists it to
+`AgentRun.capability_token`/`execution_token`. Applies to both the rehydration and
+long-lived live-wait cases (it runs in the shared resume closure). Non-fatal: if
+refresh can't rebuild the token it falls back to the original (fails cleanly as
+before). Tests: `test_capability_token_refresh.py` (expiry/refresh/validate) +
+resume-refreshes-expired-token e2e in `test_agent_vm_execution.py`.
+
 **Remaining follow-ups:** (a) **wire the LIVE resume route in the monolith**
 (`aindy-apps-monolith` `apps/agent/routes/agent_router.py`) calling
 `resume_agent_run_runtime` — the runtime `agent_router.py` is deprecated/unregistered,
 so the app-owned route is the real surface; this must land AFTER the runtime
-package is bumped/reinstalled in the monolith so the import resolves; (b) re-mint
-the capability token on rehydration when the reloaded one is past its 23h TTL
-(currently an expired token fails the resumed segment cleanly); (c) real-Postgres
-parity validation before any `AGENT_FLOW` retirement. The VM path stays
-opt-in/non-default until then.
+package is bumped/reinstalled in the monolith so the import resolves; (b)
+real-Postgres parity validation before any `AGENT_FLOW` retirement. The VM path
+stays opt-in/non-default until then.
 
 > **RTR-1a — CLOSED 2026-06-29.** The pre-4.x `flow.step()` host-object DSL
 > collided with nodus-lang 4.0.5's reserved `step` keyword (and 4.x doesn't
