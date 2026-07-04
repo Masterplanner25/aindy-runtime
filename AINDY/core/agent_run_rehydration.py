@@ -87,7 +87,10 @@ def rehydrate_waiting_agent_runs(
 
             total_tool_steps = sum(len(s["tool_steps"]) for s in segments)
             accumulated = list((run.result or {}).get("steps") or [])
-            correlation_id = run.correlation_id or run.trace_id
+            # Use run.correlation_id as the base (not trace_id) so the re-registered
+            # wait's effective correlation matches the live-path registration and the
+            # resume route: effective = wait_state.correlation_key or run.correlation_id.
+            correlation_id = run.correlation_id
 
             callback = _build_agent_resume_callback(
                 run_id=run_id,

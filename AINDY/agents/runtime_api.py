@@ -206,6 +206,49 @@ def reject_agent_run_runtime(*, db, user_id, run_id: str):
     return to_execution_response(run, db)
 
 
+def resume_agent_run_runtime(*, db, user_id, run_id: str):
+    """Resume a run parked on a mid-plan WAIT step (RTR-1 Phase 2e).
+
+    Publishes the event the run is waiting on — scoped to the run's correlation —
+    so the scheduler fires the resume callback and the next plan segment runs. This
+    is the "approval" action a human (or an external system) takes to release a
+    waiting agent run. The run must belong to ``user_id`` and be ``status="waiting"``.
+
+    Correlation must match the wait's registration exactly (live-path, rehydration,
+    and this route all resolve ``wait_state.correlation_key or run.correlation_id``).
+    """
+    from AINDY.kernel.event_bus import publish_event
+
+    run = (
+        db.query(AgentRun)
+        .filter(
+            AgentRun.id == normalize_uuid(run_id),
+            AgentRun.user_id == normalize_uuid(user_id),
+        )
+        .first()
+    )
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status != "waiting":
+        raise HTTPException(
+            status_code=409, detail=f"Run is not waiting (status={run.status})"
+        )
+    wait_state = run.wait_state or {}
+    event_type = wait_state.get("event_type")
+    if not event_type:
+        raise HTTPException(status_code=409, detail="Run has no wait event to resume")
+
+    correlation = wait_state.get("correlation_key") or run.correlation_id
+    waiters_notified = publish_event(event_type, correlation_id=correlation)
+    return {
+        "run_id": str(run.id),
+        "status": run.status,
+        "resumed_event": event_type,
+        "correlation_id": correlation,
+        "waiters_notified": waiters_notified,
+    }
+
+
 def recover_agent_run_runtime(*, db, user_id, run_id: str, force: bool = False):
     result = recover_stuck_agent_run(run_id=run_id, user_id=user_id, db=db, force=force)
     if result["ok"]:

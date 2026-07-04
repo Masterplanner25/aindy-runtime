@@ -28,6 +28,7 @@ from AINDY.agents.runtime_api import (
     recover_agent_run_runtime,
     reject_agent_run_runtime,
     replay_agent_run_runtime,
+    resume_agent_run_runtime,
     update_agent_trust_runtime,
 )
 from AINDY.core.execution_helper import execute_with_pipeline_sync
@@ -208,6 +209,31 @@ def reject_agent_run(
         request,
         "agent.run.reject",
         lambda _ctx: reject_agent_run_runtime(db=db, user_id=user_id, run_id=run_id),
+        db=db,
+        user_id=str(user_id),
+        input_payload={"run_id": run_id},
+    )
+
+
+@router.post("/runs/{run_id}/resume")
+@limiter.limit("10/minute")
+def resume_agent_run(
+    request: Request,
+    run_id: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Release a run parked on a mid-plan WAIT step by publishing its wait event.
+
+    RTR-1 Phase 2e — the human-approval action for a waiting agent run. The live
+    surface is app-owned (aindy-apps-monolith); this reference mirror calls the
+    same runtime service (`resume_agent_run_runtime`).
+    """
+    user_id = _current_user_id(current_user)
+    return _execute_agent(
+        request,
+        "agent.run.resume",
+        lambda _ctx: resume_agent_run_runtime(db=db, user_id=user_id, run_id=run_id),
         db=db,
         user_id=str(user_id),
         input_payload={"run_id": run_id},
