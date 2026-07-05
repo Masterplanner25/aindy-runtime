@@ -1,12 +1,26 @@
 ---
 title: "Infinity Loop Audit"
 api_version: "1.0"
-last_verified: "2026-06-07"
+last_verified: "2026-07-05"
 status: current
 owner: "platform-team"
 ---
 
 # Infinity Loop Audit
+
+> **Cross-repo pairing (2026-07-05).** This audit is the **runtime** end of a
+> cross-repo pair. It covers Infinity loop closure at the **execution altitude**
+> (`Intent→Plan→Execute→Observe→Memory→Recall→Score→Improve`) and enumerates the five
+> structural runtime gaps below. The **app** end is the Infinity docset in
+> `aindy-apps-monolith`: `docs/apps/INFINITY_ALGORITHM.md` and its siblings
+> (`_CANONICAL`, `_FORMALIZATION`, `_SUPPORT_SYSTEM`). The Infinity scoring engine,
+> orchestrator, and adjustment loop are **app-owned**
+> (`apps/analytics/services/{scoring,orchestration}/`); this repo owns the execution
+> substrate and the loop-closure primitives the app phases depend on. The two docsets
+> are complementary, not duplicative. Gap 4 (a runtime-owned Next-Action engine) in
+> particular gates the app-side Infinity Phase 2 ("force major execution through the
+> orchestrator" / pre-dispatch control). Runtime-side tracking: `TECH_DEBT.md` →
+> **INFINITY-RUNTIME-1** (accepts the app-side handoff `INFINITY-RUNTIME-HANDOFF-1`).
 
 **Question:** Can every execution automatically complete the loop?
 
