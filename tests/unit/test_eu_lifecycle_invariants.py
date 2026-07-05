@@ -193,3 +193,47 @@ async def test_pipeline_skips_finalize_on_waiting_path():
     # finalize must not have been called — EU stays open for resume
     assert not ctx.metadata.get("eu_finalized")
     assert pipe.finalize_calls == []
+
+
+# ---------------------------------------------------------------------------
+# 4. ExecutionContract self-consistency: the pipeline marks itself active
+#    BEFORE emitting its own execution.started (#152).
+# ---------------------------------------------------------------------------
+
+class _OrderTrackingPipeline(_PipelineSpy):
+    """Records the order of pipeline_active vs the execution.started emit."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls: list[str] = []
+        self.pipeline_active_at_started_emit: bool | None = None
+
+    def _safe_set_pipeline_active(self):
+        self.calls.append("set_pipeline_active")
+        self._active = True
+        return "pipeline-token"
+
+    def _safe_emit_event(self, ctx, *, event_type, **kw):
+        if event_type == "execution.started":
+            self.calls.append("emit:execution.started")
+            # The pipeline's own active flag must already be set when its first
+            # execution.* event is emitted, or the ExecutionContract guard rejects
+            # it (and on PostgreSQL the failed INSERT aborts the transaction, #152).
+            self.pipeline_active_at_started_emit = getattr(self, "_active", False)
+        return f"evt-{event_type}"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_active_set_before_own_execution_started():
+    """#152 reopened: a pipeline with no ambient pipeline/async context (e.g. an
+    app tool run from a scheduler-driven agent resume) must not depend on an outer
+    context to emit its own execution.started. It marks itself active first."""
+    pipe = _OrderTrackingPipeline()
+    ctx = _ctx()
+
+    await pipe.run(ctx, lambda c: {"ok": True})
+
+    assert pipe.pipeline_active_at_started_emit is True
+    assert pipe.calls.index("set_pipeline_active") < pipe.calls.index(
+        "emit:execution.started"
+    )

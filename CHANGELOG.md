@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed
+
+- **RTR-1 `nodus_vm` resume still tripped the ExecutionContract guard — real fix (#152, reopened).**
+  The 1.5.1 change activated the async-execution context around the resume callback, which
+  covers the flow runner's own `execution.started`. But when a resumed segment runs a nested
+  `ExecutionPipeline` (e.g. an app tool invoked via the `call_tool` seam), the pipeline emitted
+  its **own** `execution.started` *before* marking itself active (`is_pipeline_active()` was set
+  one line too late), so with no ambient pipeline/async context the ExecutionContract guard
+  raised. `_safe_emit_event` swallowed the error, but on PostgreSQL the failed `INSERT` had
+  already aborted the transaction, cascading into `InFailedSqlTransaction` on every later query
+  (masked on SQLite, which does not poison the session the same way). `ExecutionPipeline.run()`
+  now calls `_safe_set_pipeline_active()` **before** emitting its own `execution.started`, making
+  every pipeline self-consistent — its first event passes the guard independent of ambient state.
+  Regression: `test_pipeline_active_set_before_own_execution_started`.
+
 ---
 
 ## 1.5.1 — 2026-07-04
