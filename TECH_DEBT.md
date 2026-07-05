@@ -166,7 +166,113 @@ configured secondary; covered by a test that opens the primary breaker and asser
 secondary is used.
 
 **Suggested sequence:** AGENT-HARDEN-1 → 2 → 5 (three small, high-value PRs closing the
-scariest safety/security/resilience blanks), then the 3 → 4/4b arc (undo + simulation).
+scariest safety/security/resilience blanks), then the 3 → 6 → 4/4b arc (undo + verify +
+simulation), with 7–10 folded in opportunistically.
+
+---
+
+**AGENT-HARDEN-6..10 (added 2026-07-05)** came from grading the runtime against a second,
+more architectural v1 blueprint (the "Plan → Dry-Run → Approve → Execute → Verify" plan).
+The blueprint's 8-layer diagram maps ~1:1 onto the `AINDY/` layer model (validation of the
+architecture); these five are the specific components that plan names which 1–5 did not.
+The highest-leverage one is **-6 (the Verifier)** — it is the missing letter in the core
+loop and the natural trigger for the -3 undo work.
+
+### AGENT-HARDEN-6 — Verifier stage (post-condition check + verify→rollback)
+
+**Status:** Open — **High** (completes the core execution loop). *The blueprint's stated v1
+core is "single agent + internal verifier"; the verifier does not exist.*
+
+The loop today is Plan → risk-gate → Approve → Execute → **(nothing)**. There is no
+post-execution stage that checks post-conditions and gates/rolls back. Grep for
+`verify`/`postcondition`/`verifier` as an execution stage returns nothing in either repo. The
+only adjacent thing is the **app-side** Infinity loop's expected-vs-actual
+`prediction_accuracy` (`LoopAdjustment`) — advisory scoring, not a runtime gate.
+
+**Fix (rides existing primitives):** add a `verify` stage after
+`_execute_agent_segment_chain` (`runtime/nodus_execution_service.py`) that evaluates
+declared post-conditions (a rules-based checker is enough for v1; a small verifier model is
+the upgrade path), emits an `AgentEvent` `VERIFIED`/`VERIFY_FAILED`, and on failure invokes
+the **AGENT-HARDEN-3 compensators** to roll back. Post-conditions can ride the plan schema
+(per-step `expects`) the planner already produces.
+
+**Effort:** ~1–2 PRs. **Pairs with:** AGENT-HARDEN-3 (undo is the rollback mechanism),
+AGENT-HARDEN-4 (simulation previews the same post-conditions). **Close trigger:** a run whose
+post-conditions fail is marked `verify_failed` and its reversible effects are rolled back.
+
+### AGENT-HARDEN-7 — Contract / record-playback integration tests
+
+**Status:** Open — **Medium** (testing coverage).
+
+The blueprint's "three rings" wants **contract tests for each integration** (VCR-style
+record/playback fixtures). Today there are unit tests with `unittest.mock` and real-PG
+integration tests, but **no recorded-cassette contract tests** — `respx` is already a test
+dependency (`pyproject.toml`) yet used in **0** test files. External-boundary behavior (LLM
+providers, embedding API, any HTTP tool) is only mock-asserted, not contract-frozen against a
+recorded real response.
+
+**Fix:** adopt `respx` (already installed) for HTTP-boundary contract tests — record a real
+response once, replay it deterministically; assert the adapter's request shape + response
+handling. Start with the LLM/embedding clients (`platform_layer/llm_client.py`,
+`memory/embedding_service.py`). **Effort:** ~1–2 PRs. **Close trigger:** each external
+integration has a recorded contract test that fails when the adapter's wire contract drifts.
+
+### AGENT-HARDEN-8 — Declarative per-capability policy (rate limits + allowlists)
+
+**Status:** Open — **Medium** (capability granularity).
+
+The blueprint's CAP descriptor carries `limits.rate` (e.g. `30/minute`) and
+`recipients.allowlist` / domain allowlists **per capability**. Today enforcement is coarser:
+per-verb capability checks (`syscall_dispatcher.py`) + per-EU/tenant quotas
+(`kernel/resource_manager.py`) + a per-user tool auto-grant allowlist
+(`capability_service.py`) + a coarse `egress_scope` label (`internal`/`external`) on tool
+contracts. There is **no per-capability rate limit, recipient allowlist, or domain egress
+allowlist**.
+
+**Fix:** extend the capability descriptor + enforcement so a capability can declare a rate
+limit (enforced via the existing Redis counters in `resource_manager`), a recipient/target
+allowlist, and a **domain egress allowlist** (upgrading `egress_scope` from a label to an
+enforced list, complementing the existing SSRF `validate_outbound_extension_url` blocklist).
+**Effort:** ~2 PRs. **Relates to:** AGENT-HARDEN-2 (token integrity). **Close trigger:** a
+capability can be granted with a declarative rate/recipient/domain bound that the dispatcher
+enforces.
+
+### AGENT-HARDEN-9 — Secrets broker (just-in-time retrieval)
+
+**Status:** Open — **Medium** (secret handling).
+
+The blueprint wants secrets pulled **just-in-time** from an OS keychain / Vault, never sitting
+in a database. Today secrets are env vars + the `SECRET_KEY`/`KeyRing`; the plugin sandbox
+declares `secret_injection: "none"` (deny-by-default — good, but that is a posture, not a
+broker). There is **no secrets-broker abstraction** that mints short-lived secret handles to a
+capability at call time.
+
+**Fix:** add a `SecretBroker` interface with pluggable backends (env for dev; OS
+keychain / HashiCorp Vault for prod) that resolves a `SecretRef` to a value **at tool-invoke
+time**, scoped to the capability token, never persisted. **Effort:** ~2 PRs. **Relates to:**
+AGENT-HARDEN-2, -8. **Close trigger:** a tool obtains a secret via a scoped JIT broker call
+rather than a process env var.
+
+### AGENT-HARDEN-10 — Signed plugin bundles + SBOM
+
+**Status:** Open — **Low–Medium** (supply chain).
+
+The blueprint wants signed plugin bundles (sigstore/cosign) + SBOM. Today
+`platform_layer/extension_provenance.py` hardcodes `"signing": {"status": "unsupported"}`;
+integrity is SHA-256 byte-comparison, not a cryptographic signature — no keys, no trust
+registry, no SBOM.
+
+**Fix:** add optional cosign-style bundle signing + a trust registry the plugin host verifies
+before load, and emit an SBOM for the plugin bundle. Gate strong-sandbox/production plugin
+load on a valid signature. **Effort:** ~2–3 PRs. **Relates to:** the plugin host attestation
+in `plugin_host.py`. **Close trigger:** a plugin bundle can be signed and the host refuses an
+unsigned/untrusted bundle in production profile.
+
+**Not tracked (still out of scope):** Slack/Teams chat approval surface (UI convenience — the
+web `AgentApprovalInbox` + CLI/HTTP already cover approvals; add if a chat-ops need arises);
+blue/green + canary skill deploys (infra/release-process, not a runtime primitive);
+multi-agent principal roles and Intent DSL (frontier, deferred with RTR-4). MCP remains
+`ECOGAP-4`.
 
 ## CLI-1 — Lazy settings getter deferred (post-1.0)
 
