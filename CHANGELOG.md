@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+---
+
+## 1.5.3 — 2026-07-05
+
 ### Fixed
 
 - **Idempotency gate cast a run-scoped `execution_unit_id` to UUID and poisoned the transaction (#157).**
