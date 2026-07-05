@@ -1,5 +1,51 @@
 # Technical Debt
 
+## INFINITY-RUNTIME-1 — Runtime Infinity loop-closure gaps (accepts app handoff INFINITY-RUNTIME-HANDOFF-1)
+
+**Status:** Open — tracked (accepted 2026-07-05). Runtime-owned counterpart to the
+app-side handoff `aindy-apps-monolith/TECH_DEBT.md` → **INFINITY-RUNTIME-HANDOFF-1**.
+
+**Context:** The Infinity scoring/orchestrator/loop is app-owned
+(`aindy-apps-monolith/apps/analytics/services/{scoring,orchestration}/`). This repo owns
+the execution substrate and the loop-closure primitives the app-side "force execution
+through Infinity" phases depend on. The runtime-side audit is
+`docs/runtime/INFINITY_LOOP_AUDIT.md`; it now cross-links the app docset (was
+one-directional — the app docs pointed here, this repo did not point back; fixed
+2026-07-05).
+
+**The five structural loop-closure gaps** (from `INFINITY_LOOP_AUDIT.md` §"The five
+structural gaps") — described in that audit but previously untracked in this repo's debt
+register:
+
+1. **Gap 1 — Recall → Planning link broken.** Memory is recalled into execution context
+   but not into the planning prompt; the planner context provider must query and inject
+   memory into the system prompt.
+2. **Gap 2 — Event ledger missing three entries.** `RecallUsed`, `ScoreComputed`,
+   `NextActionChosen` are not emitted as `SystemEventTypes`; the learning loop improves but
+   cannot explain itself.
+3. **Gap 3 — No execution-level score record.** `MemoryLearningEngine` scores memory nodes,
+   not the execution as a whole; no single `{run_id, score, dimensions}` record is written
+   after each run (`ANALYTICS_SCORE_UPDATED` exists but is not consistently emitted).
+4. **Gap 4 — No Next-Action engine primitive.** Post-run "what should happen next" is
+   decided by the flow graph or app-registered completion hooks, not a runtime-owned
+   decision. `_run_completion_hooks()` is the right attachment point but needs a contract
+   return type the runtime acts on. **This gap gates the app-side Infinity Phase 2**
+   (pre-dispatch control).
+5. **Gap 5 — Async jobs outside the loop.** Jobs via `sys.v1.job.submit` do not
+   automatically produce memory, trigger recall, or get scored; job completion should emit a
+   memory write + score event like the agent path.
+
+**Runtime-gated support inputs** (app handoff item 3; `INFINITY_ALGORITHM_SUPPORT_SYSTEM.md`
+Steps 3 & 4): observability aggregates (`AINDY/routes/observability_router.py`) and
+agent/async execution metrics (`AINDY/agents/agent_event_service.py`,
+`AINDY/platform_layer/async_job_service.py`) have no app-facing aggregate syscall/job. The
+app lever is a `dependency_adapter` fetch once the runtime exposes the aggregate — i.e. a
+runtime feature request, not an app edit.
+
+**Close/advance trigger:** any of the five gaps closed, or an aggregate observability/
+execution syscall exposed. Notify the app-side `INFINITY-RUNTIME-HANDOFF-1` reopen trigger
+on each advance.
+
 ## CLI-1 — Lazy settings getter deferred (post-1.0)
 
 Status: Deferred — Low Priority
