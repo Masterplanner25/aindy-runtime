@@ -46,6 +46,128 @@ runtime feature request, not an app edit.
 execution syscall exposed. Notify the app-side `INFINITY-RUNTIME-HANDOFF-1` reopen trigger
 on each advance.
 
+## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
+
+**Source (2026-07-05):** a skeptical self-assessment of the runtime + apps against an
+external "Real Agent Framework" spec. The systems backbone (capability-gated syscall
+kernel, durable WAIT/RESUME + rehydration, EffectRecord idempotency, tiered sandbox,
+pgvector memory, KeyRing rotation, cross-repo contract freeze) graded strong; the gaps
+below are the safety/security/resilience surfaces that separate "a runtime that runs
+agents" from "a runtime you'd let an agent run **unattended** in production." Each rides
+primitives that already exist — these are wiring/layering tasks, not from-scratch builds.
+All five are **runtime-owned** (none is app-layer). Ordered by value ÷ effort.
+
+**Not tracked here (already scoped elsewhere):** MCP is `ECOGAP-4` — G4a (capability-gated
+egress + secret-broker, the runtime-owned trusted half, P1) and G4b (concrete MCP/A2A wire
+adapters, plugin-layer, P2). The `call_tool` seam is the boundary G4a would formalize.
+Negotiation schemas / typed planner-executor-verifier-supervisor roles are frontier
+multi-agent work (RTR-4 delegation core exists; formal protocol deferred until a product
+need, not a checkbox).
+
+### AGENT-HARDEN-1 — Emergency stop / cooperative cancel for in-flight agent runs
+
+**Status:** Open — **High** (safety). No operator kill switch exists.
+
+Today active statuses are `pending_approval, approved, executing, delegated, waiting`
+(`AINDY/agents/agent_event_service.py`); there is **no user-drivable `cancelled`/`stopped`
+terminal state**. `stuck_run_service.py` only detects *already-stranded* runs (staleness
+threshold, or manual `recover_stuck_agent_run?force=true`) — it cannot interrupt a healthy
+in-flight run. The circuit breaker (`kernel/circuit_breaker.py`) halts LLM providers, not
+agent flows.
+
+**Fix (rides existing primitives):** add `cancelled` to `AgentRunStatus`
+(`kernel/condition_codes.py`); add `sys.v1.agent.cancel` syscall + `agent.cancel` capability;
+add a cooperative cancel-check in `_execute_agent_segment_chain`
+(`runtime/nodus_execution_service.py`) at **segment boundaries** — the same checkpoints
+WAIT already uses — so a cancel lands between steps without corrupting mid-tool state. Emit
+`AgentEvent` `CANCELLED`. Then add `"cancelled"` to `_STABLE_AGENT_RUN_STATUSES` in
+`tests/unit/test_cross_repo_compatibility.py` so it becomes contract (the freeze asserts a
+subset, so adding it now is backwards-compatible).
+
+**Effort:** ~1 PR. **Close trigger:** a running agent can be cancelled to a terminal
+`cancelled` state via syscall; regression test proves mid-plan cancel halts before the next
+tool call.
+
+### AGENT-HARDEN-2 — Cryptographic capability-token integrity (replace unkeyed SHA-256)
+
+**Status:** Open — **High** (security). The one real forge hole.
+
+`AINDY/agents/capability_service.py` `_token_hash` is an **unkeyed SHA-256** over the token's
+own non-secret fields (run_id, user_id, token, timestamps, tools, caps). It is tamper-evident
+only against accidental corruption — anyone who can recompute SHA-256 over the (public) fields
+can forge a matching `token_hash`. The `execution_token` itself is an opaque `uuid4`. There is
+no cryptographic agent identity anywhere (`auth_service.py` user JWT is symmetric HS256).
+
+**Fix:** replace the unkeyed hash with **HMAC-SHA256 keyed on the existing `KeyRing` secret**
+(`services/auth_service.py` already rotates it via `rotate_signing_key` / SIGHUP
+`reload_from_env`), verifying against active + previous key within the grace window (mirror
+`KeyRing`'s multi-key verify). Optional stronger tier: Ed25519 asymmetric mint/verify for a
+true signed agent identity. Mint/verify call sites are unchanged — only the primitive inside
+them swaps.
+
+**Effort:** ~1 PR (HMAC path). **Close trigger:** capability-token integrity is a keyed MAC
+(or signature); a token with mutated fields fails verification; rotation grace-window covered
+by test.
+
+### AGENT-HARDEN-3 — Reversible actions / compensating-undo log
+
+**Status:** Open — **Medium**. Replay ≠ undo; tx-rollback ≠ effect reversal.
+
+There is no undo/compensating mechanism. `agent_runtime/replay.py` `replay_run()` *creates a
+new run* (re-does); the many `db.rollback()` sites are transaction rollbacks, not action-level
+reversal. But the ledger to build undo on already exists: `EffectRecord`
+(`db/models/effect_record.py`) records every `EXACTLY_ONCE` effect via the idempotency gate.
+
+**Fix:** add an optional per-syscall `compensate` hook on `SyscallEntry`; add an append-only
+`effect_reversals` log; "undo run N" walks its `EffectRecord`s in reverse invoking each
+compensator. Declare per-syscall whether an effect is reversible (irreversible ones — e.g. an
+outbound email already sent — are marked and reported, not silently skipped).
+
+**Effort:** ~1–2 PRs. **Close trigger:** a completed run's reversible effects can be undone via
+compensators with an audit log; irreversible effects are explicitly surfaced.
+
+### AGENT-HARDEN-4 — Effect-simulation / true dry-run (shadow `call_tool` seam)
+
+**Status:** Open — **Medium**. Currently PARTIAL: plan-preview exists, effect-preview does not.
+
+Plan-preview is real — a plan is generated, risk-scored, and persisted as `pending_approval`,
+shown in the apps `AgentApprovalInbox` with per-step + overall risk before any tool runs
+(`agent_runtime/creation.py`, `planning.py`); `memory_ingest_service.py` has a genuine
+`dry_run`. What is missing is **effect simulation**: previewing what each tool would *output /
+change*, not just its name + args.
+
+**Fix:** add a `mode="simulate"` to the plan/execute path that routes the capability-enforced
+`call_tool` seam (`runtime/nodus_worker.py` `_call_tool`, `runtime/agent_plan_compiler.py`) to
+a **shadow implementation** returning model-predicted outputs and recording "would-write"
+intents instead of executing. Render the simulated effects in the same approval inbox.
+
+**Effort:** ~2–3 PRs. **Relates to:** this shadow seam is the foundation for
+**AGENT-HARDEN-4b (environment virtualization)** — running the plan inside the existing
+`--network none` sandbox with *fake* tool implementations injected at `call_tool` = a
+rehearsal harness against a simulated world. Do 4 and 4b as one arc. **Close trigger:** an
+agent run can be simulated to produce a predicted-effect report with zero real side-effects.
+
+### AGENT-HARDEN-5 — LLM provider fallback chain
+
+**Status:** Open — **Low–Medium** (resilience).
+
+Multi-provider support exists (`platform_layer/llm_client.py` `get_llm_client` →
+openai/deepseek, wrapped in `CircuitBreakerLLMClient`) with same-provider `tenacity` retry,
+but **no cross-provider fallback**: `get_llm_client` resolves exactly one provider and the
+breaker re-raises `LLMCircuitOpenError`/`LLMCallError` without trying a second. Planner
+backends (`planner_backends.py`) are single-named and raise on failure.
+
+**Fix:** wrap provider resolution in a config-driven fallback chain — on
+`LLMCircuitOpenError`/`LLMCallError`, try the next configured provider before raising. Same for
+planner-backend selection (optional).
+
+**Effort:** ~1 PR. **Close trigger:** a primary-provider outage transparently fails over to a
+configured secondary; covered by a test that opens the primary breaker and asserts the
+secondary is used.
+
+**Suggested sequence:** AGENT-HARDEN-1 → 2 → 5 (three small, high-value PRs closing the
+scariest safety/security/resilience blanks), then the 3 → 4/4b arc (undo + simulation).
+
 ## CLI-1 — Lazy settings getter deferred (post-1.0)
 
 Status: Deferred — Low Priority
