@@ -106,6 +106,20 @@ class ExecutionPipeline:
                 pass
 
         try:
+            # Mark the pipeline active BEFORE emitting its own execution.started.
+            # The ExecutionContract guard (system_event_service) rejects any
+            # execution.* event emitted while is_pipeline_active() is False and no
+            # async-execution context is set. A pipeline must satisfy that guard for
+            # its OWN first event — otherwise it depends on an ambient outer context
+            # that a nested/background invocation may not have (e.g. an app tool run
+            # from a scheduler-driven agent resume: no request pipeline, and the
+            # async context may not have propagated across the call boundary). When
+            # the guard raised here it was swallowed by _safe_emit_event, but on
+            # PostgreSQL the failed INSERT had already aborted the run's transaction,
+            # cascading into InFailedSqlTransaction on every later query (#152).
+            # Setting pipeline_active first makes the pipeline self-consistent so its
+            # execution.started always passes the guard, independent of ambient state.
+            pipeline_token = self._safe_set_pipeline_active()
             started_event_id = self._safe_emit_event(
                 ctx,
                 event_type="execution.started",
@@ -113,7 +127,6 @@ class ExecutionPipeline:
                 required=required_side_effects,
             )
             parent_token = self._safe_set_parent_event(started_event_id)
-            pipeline_token = self._safe_set_pipeline_active()
             execution_ctx_token = self._safe_set_current_execution_context(ctx)
             self._safe_require_eu(ctx)
             if not self._safe_check_quota(ctx, started_event_id):
