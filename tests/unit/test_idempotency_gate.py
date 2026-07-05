@@ -34,6 +34,12 @@ def _make_integrity_error():
 
 _SYSCALL_NAME = "sys.v1.test.gate_test"
 
+# The idempotency gate keys ExecutionUnit lookups on a UUID primary-key column,
+# so a realistic execution_unit_id for the EXACTLY_ONCE path is a bare UUID. A
+# non-UUID id (e.g. 'run_<uuid>' / a trace id) can never match that column on a
+# real database and now short-circuits to AT_LEAST_ONCE without a query (#157).
+_VALID_EU_UUID = "11111111-1111-1111-1111-111111111111"
+
 
 class _OkRm:
     def check_quota(self, execution_unit_id):
@@ -43,7 +49,7 @@ class _OkRm:
         return None
 
 
-def _ctx(*, eu_id: str = "eu-gate-1", capabilities=None):
+def _ctx(*, eu_id: str = _VALID_EU_UUID, capabilities=None):
     return syscall_registry.SyscallContext(
         execution_unit_id=eu_id,
         user_id="user-1",
@@ -265,6 +271,68 @@ def test_gate_absent_execution_unit_skips_gate(monkeypatch):
     assert session_opens == [], "no DB session should be opened when eu_id is absent"
 
 
+def test_gate_skips_lookup_for_run_scoped_non_uuid_eu_id(monkeypatch):
+    """#157: a run-scoped execution_unit_id ('run_<uuid>') must NOT reach the
+    ExecutionUnit UUID lookup. On PostgreSQL that binds a non-UUID to a UUID
+    column, raising InvalidTextRepresentation and aborting the transaction, which
+    then cascades into InFailedSqlTransaction on the handler's INSERT. The gate
+    must short-circuit to AT_LEAST_ONCE without opening a session or querying."""
+    handler_calls = []
+    _register_handler(lambda p, c: handler_calls.append(1) or {"ok": True})
+
+    dispatcher = syscall_dispatcher.SyscallDispatcher()
+    dispatcher._emit_syscall_event = lambda *a, **kw: None
+
+    monkeypatch.setattr(syscall_dispatcher, "_get_rm", lambda: _OkRm())
+
+    session_opens = []
+
+    def fake_session_local():
+        session_opens.append(1)
+        return MagicMock()
+
+    run_scoped_id = "run_897ef792-4918-44fa-856a-ebdbbd548859"
+
+    with patch("AINDY.db.database.SessionLocal", fake_session_local):
+        result = dispatcher.dispatch(_SYSCALL_NAME, {}, _ctx(eu_id=run_scoped_id))
+
+    _unregister()
+
+    assert handler_calls == [1], "handler must still run for a run-scoped EU id"
+    assert result["status"] == "success"
+    assert session_opens == [], (
+        "no DB session should be opened for a non-UUID execution_unit_id — the "
+        "UUID lookup would poison the transaction (#157)"
+    )
+
+
+def test_gate_opens_lookup_for_valid_uuid_eu_id(monkeypatch):
+    """Complement to #157: a bare-UUID execution_unit_id still drives the gate."""
+    _register_handler(lambda p, c: {"ok": True})
+
+    dispatcher = syscall_dispatcher.SyscallDispatcher()
+    dispatcher._emit_syscall_event = lambda *a, **kw: None
+
+    monkeypatch.setattr(syscall_dispatcher, "_get_rm", lambda: _OkRm())
+
+    eu = _make_eu("AT_LEAST_ONCE")
+    session_opens = []
+
+    def fake_session_local():
+        session_opens.append(1)
+        db = MagicMock()
+        db.query.return_value.filter.return_value.first.return_value = eu
+        return db
+
+    with patch("AINDY.db.database.SessionLocal", fake_session_local):
+        result = dispatcher.dispatch(_SYSCALL_NAME, {}, _ctx(eu_id=_VALID_EU_UUID))
+
+    _unregister()
+
+    assert result["status"] == "success"
+    assert session_opens == [1], "a valid UUID execution_unit_id must open the gate lookup"
+
+
 def test_compute_action_id_used_for_gate_key(monkeypatch):
     """The action_id passed to _resolve_effect_record equals compute_action_id output."""
     _register_handler(lambda p, c: {"ok": True})
@@ -273,7 +341,7 @@ def test_compute_action_id_used_for_gate_key(monkeypatch):
     dispatcher._emit_syscall_event = lambda *a, **kw: None
 
     eu = _make_eu("EXACTLY_ONCE")
-    eu_id = "eu-determinism-test"
+    eu_id = _VALID_EU_UUID
     test_payload = {"key": "value", "num": 42}
 
     monkeypatch.setattr(syscall_dispatcher, "_get_rm", lambda: _OkRm())

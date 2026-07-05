@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Idempotency gate cast a run-scoped `execution_unit_id` to UUID and poisoned the transaction (#157).**
+  The syscall dispatcher's idempotency gate looked up `ExecutionUnit.id` (a UUID column) using the
+  raw `execution_unit_id`. On the `nodus_vm` resume path that id is run-scoped (`run_<uuid>`, also
+  carried as the agent trace/correlation id), so PostgreSQL rejected the cast with
+  `InvalidTextRepresentation`. The error was caught and logged as "lookup skipped", but the psycopg2
+  transaction was already aborted — the subsequent `INSERT INTO flow_runs` then failed with
+  `InFailedSqlTransaction`, the segment chain aborted, and the run never reached a terminal state
+  (exposed once #152 unmasked it in 1.5.2; the poisoned session also cascaded into downstream 401s).
+  The gate now (1) only issues the ExecutionUnit lookup when `execution_unit_id` parses as a bare
+  UUID — a non-UUID id can never match the UUID primary key, so it short-circuits to `AT_LEAST_ONCE`
+  without querying — and (2) runs the lookup inside a `SAVEPOINT` with an explicit rollback so any
+  failure is contained and never leaves an aborted transaction on the pooled connection. This aligns
+  the gate with the `_coerce_uuid`-guarded lookups already used throughout `execution_unit_service`.
+  Regressions: `test_gate_skips_lookup_for_run_scoped_non_uuid_eu_id`,
+  `test_gate_opens_lookup_for_valid_uuid_eu_id`.
+
 ---
 
 ## 1.5.2 — 2026-07-05
