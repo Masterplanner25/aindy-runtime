@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+---
+
+## 1.5.2 — 2026-07-05
+
 ### Fixed
 
 - **RTR-1 `nodus_vm` resume still tripped the ExecutionContract guard — real fix (#152, reopened).**
