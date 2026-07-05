@@ -115,6 +115,24 @@ __all__ = [
 _TRACE_ID_CTX: ContextVar[str] = ContextVar("syscall_trace_id", default="")
 _EU_ID_CTX: ContextVar[str] = ContextVar("syscall_eu_id", default="")
 
+
+def _is_uuid(value: Any) -> bool:
+    """True when ``value`` is a bare UUID (str or uuid.UUID).
+
+    The idempotency gate keys ExecutionUnit lookups on a UUID primary-key column;
+    run-scoped ids like ``run_<uuid>`` (trace/correlation ids) must not be bound to
+    it or PostgreSQL rejects the cast and aborts the transaction (#157).
+    """
+    if isinstance(value, _uuid.UUID):
+        return True
+    if not isinstance(value, str):
+        return False
+    try:
+        _uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
 # Lazy import of ResourceManager to avoid circular imports at module load.
 # The resource manager is only consulted inside dispatch(), so it's safe.
 def _get_rm():
@@ -486,14 +504,27 @@ class SyscallDispatcher:
         # Step 2f — idempotency gate (EXACTLY_ONCE syscalls only)
         _gate_db = None
         _gate_action_id = None
-        if _orig_eu_id:
+        _guarantee = "AT_LEAST_ONCE"
+        # ExecutionUnit.id is a UUID column. A run-scoped execution_unit_id such as
+        # 'run_<uuid>' (also carried as the agent correlation/trace id in the
+        # nodus_vm resume path) is NOT a bare UUID, so binding it to that column
+        # makes PostgreSQL reject the cast (InvalidTextRepresentation) — and since
+        # it can never match a UUID primary key anyway, the lookup is pointless.
+        # Only attempt the EU lookup when the id parses as a UUID; otherwise default
+        # to AT_LEAST_ONCE without issuing a query that would abort the transaction
+        # and cascade into InFailedSqlTransaction on the handler's INSERT (#157).
+        if _orig_eu_id and _is_uuid(context.execution_unit_id):
             try:
                 from AINDY.db.database import SessionLocal
                 from AINDY.db.models.execution_unit import ExecutionUnit
                 _gate_db = SessionLocal()
-                _eu_row = _gate_db.query(ExecutionUnit).filter(
-                    ExecutionUnit.id == str(context.execution_unit_id)
-                ).first()
+                # Defense-in-depth: run the lookup inside a SAVEPOINT so any query
+                # failure is rolled back locally and can never leave a poisoned
+                # (aborted) transaction on the pooled connection (#157).
+                with _gate_db.begin_nested():
+                    _eu_row = _gate_db.query(ExecutionUnit).filter(
+                        ExecutionUnit.id == str(context.execution_unit_id)
+                    ).first()
                 _guarantee = (
                     (_eu_row.extra or {}).get("retry_policy", {}).get(
                         "execution_guarantee", "AT_LEAST_ONCE"
@@ -502,6 +533,12 @@ class SyscallDispatcher:
                 )
             except Exception as _gate_exc:
                 if _gate_db is not None:
+                    try:
+                        # Roll back before returning the connection to the pool so a
+                        # failed lookup never hands back an aborted transaction.
+                        _gate_db.rollback()
+                    except Exception:
+                        pass
                     try:
                         _gate_db.close()
                     except Exception:
@@ -513,33 +550,33 @@ class SyscallDispatcher:
                     name, _gate_exc,
                 )
 
-            if _guarantee == "EXACTLY_ONCE" and _gate_db is not None:
-                from AINDY.core.execution_gate import compute_action_id
-                _gate_action_id = compute_action_id(
-                    action_type=name,
-                    input_payload=dict(payload or {}),
-                    scope=str(context.execution_unit_id),
-                )
-                _already_done, _cached = _resolve_effect_record(
-                    _gate_db, _gate_action_id, name, payload
-                )
-                if _already_done:
-                    _gate_db.close()
-                    _gate_db = None
-                    return {
-                        "status": "success",
-                        "data": _cached or {},
-                        "trace_id": context.trace_id,
-                        "execution_unit_id": context.execution_unit_id,
-                        "syscall": name,
-                        "version": parsed_version,
-                        "duration_ms": int((time.monotonic() - t_start) * 1000),
-                        "error": None,
-                        "warning": None,
-                    }
-            elif _gate_db is not None:
+        if _guarantee == "EXACTLY_ONCE" and _gate_db is not None:
+            from AINDY.core.execution_gate import compute_action_id
+            _gate_action_id = compute_action_id(
+                action_type=name,
+                input_payload=dict(payload or {}),
+                scope=str(context.execution_unit_id),
+            )
+            _already_done, _cached = _resolve_effect_record(
+                _gate_db, _gate_action_id, name, payload
+            )
+            if _already_done:
                 _gate_db.close()
                 _gate_db = None
+                return {
+                    "status": "success",
+                    "data": _cached or {},
+                    "trace_id": context.trace_id,
+                    "execution_unit_id": context.execution_unit_id,
+                    "syscall": name,
+                    "version": parsed_version,
+                    "duration_ms": int((time.monotonic() - t_start) * 1000),
+                    "error": None,
+                    "warning": None,
+                }
+        elif _gate_db is not None:
+            _gate_db.close()
+            _gate_db = None
 
         # Step 3 â€" execute handler
         try:
