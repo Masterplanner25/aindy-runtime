@@ -518,6 +518,7 @@ Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within
 - **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True` instead of `pytest.raises`.
 - **OPER-DEFER-001** — CLOSED 2026-06-15: `GET /platform/flows/strategies` served; Strategies tab live.
 - **OPER-DEFER-002** — CLOSED 2026-06-15: `GET|POST /automation/logs` served in `automation_router.py`; Automation tab live.
+- **INFINITY-RUNTIME-1** — Open (accepted 2026-07-05): runtime-side counterpart to the app-side handoff `aindy-apps-monolith/TECH_DEBT.md` → `INFINITY-RUNTIME-HANDOFF-1`. Tracks the five Infinity loop-closure gaps from `docs/runtime/INFINITY_LOOP_AUDIT.md` (recall→planning link, missing `RecallUsed`/`ScoreComputed`/`NextActionChosen` events, no execution-level score record, no Next-Action engine primitive, async jobs outside the loop) + runtime-gated support-input aggregate syscalls. Gap 4 gates app-side Infinity Phase 2. Infinity scoring/orchestrator/loop is app-owned.
 - **ROUTE-EXTRACT-\*** — Route extraction to plugin layer. Remaining candidates: `memory_router` (split required), `coordination_router` (AgentRegistry ownership gap).
 - **DEPLOY-TARGET-1** — Cloud deployment manifests (Railway/Render/Fly.io) not yet authored. **Open**, trigger: first cloud deployment.
 - **DEPLOY-TARGET-2** — Multi-tenant SaaS readiness gate. **Open**, trigger: first multi-tenant operator.
