@@ -39,6 +39,10 @@ _STABLE_SYSCALLS = [
     "sys.v1.nodus.execute",
     "sys.v1.job.submit",
     "sys.v1.flow.execute_intent",
+    # agent.execute is registered stable and documented in the apps
+    # API_REFERENCE.md Syscall Reference; it drives the approve→execute path.
+    # Rename/remove = MAJOR bump like the SDK-called entries above.
+    "sys.v1.agent.execute",
 ]
 
 
@@ -272,6 +276,150 @@ def test_served_platform_routes_match_expected_prefixes_ui():
         f"Expected platform prefixes not served: {missing}. "
         "The platform SPA operator panel depends on these routes being registered. "
         "See docs/runtime/UI_CONTRACT.md §Operator Endpoint Availability."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Exact documented runtime-owned routes — API_REFERENCE contract
+# ---------------------------------------------------------------------------
+#
+# Exact (method, path) freeze for every runtime-owned surface documented in the
+# apps repo `docs/api/API_REFERENCE.md`. The prefix test above guards the four
+# operator prefixes the SPA panel needs; this list is stricter — it pins each
+# individual path + verb so a rename/removal of any documented runtime route
+# (not just the prefix) fails CI. App-owned `/apps/*` routes are intentionally
+# excluded: they live in aindy-apps-monolith and are that repo's contract.
+#
+# Adding a runtime route is fine (this asserts a subset is served, not equality).
+# Renaming or dropping one listed here is a breaking change to a documented
+# surface and requires a coordinated apps-repo doc update + version policy.
+
+_DOCUMENTED_RUNTIME_ROUTES = [
+    # Flow Engine + Platform flows
+    ("GET", "/platform/flows"),
+    ("POST", "/platform/flows"),
+    ("GET", "/platform/flows/registry"),
+    ("GET", "/platform/flows/runs"),
+    ("GET", "/platform/flows/runs/{run_id}"),
+    ("GET", "/platform/flows/runs/{run_id}/history"),
+    ("POST", "/platform/flows/runs/{run_id}/resume"),
+    ("GET", "/platform/flows/{name}"),
+    ("DELETE", "/platform/flows/{name}"),
+    ("POST", "/platform/flows/{name}/run"),
+    # Keys
+    ("GET", "/platform/keys"),
+    ("POST", "/platform/keys"),
+    ("GET", "/platform/keys/{key_id}"),
+    ("DELETE", "/platform/keys/{key_id}"),
+    # Platform memory (MAS)
+    ("GET", "/platform/memory"),
+    ("GET", "/platform/memory/trace"),
+    ("GET", "/platform/memory/tree"),
+    # Nodes (extension registry)
+    ("GET", "/platform/nodes"),
+    ("POST", "/platform/nodes/register"),
+    ("GET", "/platform/nodes/{name}"),
+    ("DELETE", "/platform/nodes/{name}"),
+    # Nodus
+    ("POST", "/platform/nodus/flow"),
+    ("POST", "/platform/nodus/run"),
+    ("GET", "/platform/nodus/schedule"),
+    ("POST", "/platform/nodus/schedule"),
+    ("DELETE", "/platform/nodus/schedule/{job_id}"),
+    ("GET", "/platform/nodus/scripts"),
+    ("GET", "/platform/nodus/trace/{trace_id}"),
+    ("POST", "/platform/nodus/upload"),
+    # Syscall surface
+    ("POST", "/platform/syscall"),
+    ("GET", "/platform/syscalls"),
+    # Tenant usage
+    ("GET", "/platform/tenants/{tenant_id}/usage"),
+    # Webhooks
+    ("GET", "/platform/webhooks"),
+    ("POST", "/platform/webhooks"),
+    ("GET", "/platform/webhooks/{subscription_id}"),
+    ("DELETE", "/platform/webhooks/{subscription_id}"),
+    # Observability
+    ("GET", "/platform/observability/dashboard"),
+    ("GET", "/platform/observability/execution_graph/{trace_id}"),
+    ("GET", "/platform/observability/llm/status"),
+    ("POST", "/platform/observability/queue/dlq/drain"),
+    ("GET", "/platform/observability/queue/metrics"),
+    ("GET", "/platform/observability/requests"),
+    ("GET", "/platform/observability/scheduler/status"),
+    # Health + readiness
+    ("GET", "/health"),
+    ("GET", "/health/"),
+    ("GET", "/health/deep"),
+    ("GET", "/health/detail"),
+    ("GET", "/health/details"),
+    ("GET", "/ready"),
+    # Auth
+    ("POST", "/auth/login"),
+    ("POST", "/auth/register"),
+]
+
+
+def _collect_served_methods(router, base: str = "") -> dict:
+    """Map effective path -> set of HTTP methods, recursing into sub-routers.
+
+    Method-aware sibling of `_collect_router_paths`. Compatible with both
+    FastAPI ≤ 0.135 (eager flatten) and ≥ 0.137 (lazy `_IncludedRouter`).
+    """
+    from fastapi.routing import APIRoute
+
+    try:
+        from fastapi.routing import _IncludedRouter
+    except ImportError:
+        _IncludedRouter = None
+
+    out: dict = {}
+    for route in router.routes:
+        if isinstance(route, APIRoute):
+            methods = {m.upper() for m in (route.methods or set())}
+            out.setdefault(base + route.path, set()).update(methods)
+        if _IncludedRouter is not None and isinstance(route, _IncludedRouter):
+            prefix = getattr(route.include_context, "prefix", "") or ""
+            for path, methods in _collect_served_methods(
+                route.original_router, base + prefix
+            ).items():
+                out.setdefault(path, set()).update(methods)
+    return out
+
+
+def test_documented_runtime_routes_served_exact_path():
+    """Every runtime-owned route in the apps API_REFERENCE.md must be served.
+
+    Exact (method, path) freeze — stricter than the prefix test above. Guards
+    against a rename/removal of any individual documented runtime route, not
+    just the operator prefix. See docs/runtime/PUBLIC_API_CONTRACT.md and the
+    apps-repo docs/api/API_REFERENCE.md (runtime-owned surfaces only).
+    """
+    from AINDY.routes import PLATFORM_ROUTERS, ROOT_ROUTERS, platform_router
+
+    # platform_router carries /platform on its own routes + included sub-routers.
+    served = _collect_served_methods(platform_router)
+    # PLATFORM_ROUTERS children are mounted under /platform in routing.py.
+    for child in PLATFORM_ROUTERS:
+        for path, methods in _collect_served_methods(child, "/platform").items():
+            served.setdefault(path, set()).update(methods)
+    # ROOT_ROUTERS carry their own prefixes (/health, /auth, ...) already.
+    for child in ROOT_ROUTERS:
+        for path, methods in _collect_served_methods(child).items():
+            served.setdefault(path, set()).update(methods)
+
+    missing = [
+        f"{method} {path}"
+        for method, path in _DOCUMENTED_RUNTIME_ROUTES
+        if path not in served or method not in served[path]
+    ]
+
+    assert missing == [], (
+        f"Documented runtime-owned route(s) no longer served: {missing}. "
+        "These paths are published in aindy-apps-monolith docs/api/API_REFERENCE.md "
+        "and consumed cross-repo. Renaming/removing one is a breaking change — "
+        "update the apps API_REFERENCE.md and follow the version policy. "
+        "See docs/runtime/PUBLIC_API_CONTRACT.md and CROSS_REPO_COMPATIBILITY.md."
     )
 
 
