@@ -106,6 +106,22 @@ def _get_signing_key() -> str:
     return _key_ring.active_key
 
 
+def signing_key() -> str:
+    """Active signing secret (mint side). Rotated via ``rotate_signing_key`` / SIGHUP.
+
+    Shared by JWT signing and the agent capability-token HMAC (AGENT-HARDEN-2) so
+    both ride the same rotation machinery.
+    """
+    return _key_ring.active_key
+
+
+def verification_keys() -> list[str]:
+    """Secrets to try when verifying a MAC/JWT: active first, then previous within
+    the rotation grace window. Mirrors the JWT verify path.
+    """
+    return _key_ring.verify_keys()
+
+
 def rotate_signing_key(new_key: str) -> bool:
     if new_key == _key_ring.active_key:
         return False
