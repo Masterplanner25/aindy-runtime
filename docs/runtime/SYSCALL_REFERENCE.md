@@ -1,7 +1,7 @@
 ---
 title: "Syscall Reference"
 api_version: "1.0"
-last_verified: "2026-06-07"
+last_verified: "2026-07-05"
 status: current
 owner: "platform-team"
 ---
@@ -346,6 +346,28 @@ Find or create the initial signup `AgentRun` sentinel for a user.
 
 ---
 
+## Domain: `execution`
+
+### `sys.v1.execution.get`
+
+Return status and resource metrics for a single execution unit. Read-only and
+tenant-scoped — only resolves `ExecutionUnit` rows owned by the caller. Backs the
+SDK's `client.execution.get()`.
+
+**Capability:** `execution.read`
+
+**Stability:** stable
+
+**Payload:**
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `execution_id` | string | yes | ExecutionUnit id, source run id (agent_run / flow_run), or flow_run_id returned by a prior `flow.run` / `nodus.execute` / agent call. |
+
+**Returns:** `{execution_id, type, status, syscall_count, wall_time_ms, memory_bytes, priority, quota_group, source_type, source_id, created_at, completed_at}`
+
+---
+
 ## Scope requirements
 
 When calling syscalls via the API (not from within a Nodus script), the API key must carry
@@ -358,5 +380,7 @@ the appropriate scope. The domain → scope mapping:
 | `sys.v1.agent.*` | `agent:run` |
 | `sys.v1.webhook.*` | `webhook:manage` |
 
-`sys.v1.event.*`, `sys.v1.nodus.*`, and `sys.v1.job.*` are enforced at the capability level
-in the calling context's `SyscallContext.capabilities`.
+`sys.v1.event.*`, `sys.v1.nodus.*`, `sys.v1.job.*`, and `sys.v1.execution.*` are enforced
+at the capability level in the calling context's `SyscallContext.capabilities`. A platform
+API key must additionally carry the `execution.read` scope for the dispatch route to grant
+`execution.read`; JWT callers receive it in the default capability set.

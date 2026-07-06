@@ -157,6 +157,7 @@ DEFAULT_NODUS_CAPABILITIES: list[str] = [
     "memory.write",
     "memory.search",
     "event.emit",
+    "execution.read",
 ]
 
 
@@ -943,6 +944,77 @@ def _handle_agent_ensure_initial_run(payload: dict, context: SyscallContext) -> 
         raise
 
 
+def _handle_execution_get(payload: dict, context: SyscallContext) -> dict:
+    """sys.v1.execution.get — status and resource metrics for an execution unit.
+
+    Read-only introspection of a single ExecutionUnit owned by the calling
+    tenant. Resolves the caller-supplied ``execution_id`` against the EU primary
+    key, its soft ``source_id`` link (agent_run / flow_run id), or ``flow_run_id``
+    — whichever a prior flow.run / nodus.execute / agent call returned.
+
+    Payload keys:
+        execution_id (str) — required; ExecutionUnit id, source run id, or flow_run_id.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy import or_
+
+    from AINDY.db.models import ExecutionUnit
+
+    execution_id = str(payload.get("execution_id", "")).strip()
+    if not execution_id:
+        raise ValueError("sys.v1.execution.get requires 'execution_id'")
+
+    normalized_user_id = _resolve_tenant_user_id(context, {})
+    if normalized_user_id is None:
+        raise ValueError(
+            "sys.v1.execution.get requires an authenticated tenant context"
+        )
+
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        clauses = [
+            ExecutionUnit.source_id == execution_id,
+            ExecutionUnit.flow_run_id == execution_id,
+        ]
+        # ``id`` is a UUID column — only compare when the value is a valid UUID,
+        # otherwise Postgres raises on the cast.
+        try:
+            clauses.insert(0, ExecutionUnit.id == _uuid.UUID(execution_id))
+        except (ValueError, AttributeError, TypeError):
+            pass
+
+        row = (
+            db.query(ExecutionUnit)
+            .filter(ExecutionUnit.user_id == normalized_user_id)
+            .filter(or_(*clauses))
+            .order_by(ExecutionUnit.created_at.desc())
+            .first()
+        )
+        if row is None:
+            raise ValueError(
+                f"sys.v1.execution.get: no execution unit found for "
+                f"execution_id {execution_id!r}"
+            )
+        return {
+            "execution_id": str(row.id),
+            "type": row.type,
+            "status": row.status,
+            "syscall_count": int(row.syscall_count or 0),
+            "wall_time_ms": int(row.wall_time_ms or 0),
+            "memory_bytes": int(row.memory_bytes or 0),
+            "priority": row.priority,
+            "quota_group": row.quota_group,
+            "source_type": row.source_type,
+            "source_id": row.source_id,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        }
+    finally:
+        if owns_session:
+            db.close()
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 SYSCALL_REGISTRY: VersionedSyscallRegistry = VersionedSyscallRegistry()
@@ -1240,6 +1312,23 @@ SYSCALL_REGISTRY["sys.v1.agent.ensure_initial_run"] = SyscallEntry(
     },
     stable=False,
 )
+SYSCALL_REGISTRY["sys.v1.execution.get"] = SyscallEntry(
+    handler=_handle_execution_get,
+    capability="execution.read",
+    description="Return status and resource metrics for an execution unit.",
+    input_schema={
+        "required": ["execution_id"],
+        "properties": {"execution_id": {"type": "string"}},
+    },
+    output_schema={
+        "required": ["status"],
+        "properties": {
+            "status": {"type": "string"},
+            "syscall_count": {"type": "int"},
+            "wall_time_ms": {"type": "int"},
+        },
+    },
+)
 
 
 def register_syscall(
@@ -1309,6 +1398,6 @@ def get_registered_syscalls() -> list[str]:
 # Minimum number of syscalls expected after a complete boot (all static built-ins).
 # Any count below this floor means Phase 8 did not finish, or a registration was lost.
 # Add 1 per new static entry added to this file.  Do not lower this value.
-SYSCALL_REGISTRY_MIN_COUNT: int = 17
+SYSCALL_REGISTRY_MIN_COUNT: int = 18
 
 

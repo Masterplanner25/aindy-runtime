@@ -3068,3 +3068,40 @@ pattern). RTR-2 — when distributed execution is made the prod default or
 per-tenant lanes are required. RTR-3 — when AgentRun↔FlowRun divergence is
 observed in production. RTR-5 — when runtime-driven autonomous execution windows
 are scheduled. RTR-4/6/7 — when their named gaps block an app phase.
+
+---
+
+## SDK-SYSCALL-GRANT-1 — `/platform/syscall` under-grants capabilities to SDK callers
+
+**Status:** Open (2026-07-05)
+
+**Problem:** `dispatch_syscall` (`AINDY/routes/platform/platform_ops_router.py`)
+grants a caller only the capabilities present in `DEFAULT_NODUS_CAPABILITIES`
+(`memory.read`, `memory.write`, `memory.search`, `event.emit`, `execution.read`).
+JWT callers receive that full set; platform-API-key callers receive the
+intersection of the set with their key scopes (`[s for s in api_key_scopes if s
+in DEFAULT_NODUS_CAPABILITIES]`). Consequences for the SDK's syscall-dispatch
+surface (`aindy-sdk` → `POST /platform/syscall`):
+
+- **`client.flow.run`** dispatches `sys.v1.flow.run` (capability `flow.run`),
+  which is in **no** grant path — denied for **every** caller (JWT and API key).
+- **`client.events.emit`** dispatches `sys.v1.event.emit` (capability
+  `event.emit`) — works for JWT callers, denied for API-key callers because
+  `event.emit` is not a member of `Scopes.ALL`, so it never survives the
+  intersection.
+- **`client.execution.get`** (`execution.read`, added 2026-07-05) works for JWT
+  out of the box; API keys need the new `execution.read` scope. See
+  `SYSCALL_REFERENCE.md` / `SDK_CONTRACT.md`.
+
+`client.memory.*` is unaffected (`memory.read`/`memory.write` are in both the
+default set and `Scopes.ALL`). `client.nodus.*` is unaffected — it uses the
+dedicated `/platform/nodus/*` routes, not syscall dispatch.
+
+**Fix (deferred):** reconcile the capability↔scope bridge so the documented SDK
+surface is grantable — e.g. map each stable syscall's required capability to a
+grantable scope, or derive the caller's capability set from `entry.capability`
+of the requested syscall gated on the key's scope, rather than a fixed default
+list. Security-sensitive (widens what tokens can dispatch); do not fold into an
+unrelated change. Related: **TIER3-V2V3** (closed) added the domain-level scope
+*gate*; this entry is about the capability *grant*. Source: SDK cross-check
+2026-07-05 while closing the `sys.v1.execution.get` gap.
