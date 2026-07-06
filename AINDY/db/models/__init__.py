@@ -30,6 +30,7 @@ from .dynamic_node import DynamicNode
 from .waiting_flow_run import WaitingFlowRun
 from .webhook_subscription import WebhookSubscription
 from .effect_record import EffectRecord
+from .effect_reversal import EffectReversal
 
 
 __all__ = [
@@ -59,6 +60,7 @@ __all__ = [
     "ExecutionUnit",
     "EventEdge",
     "EffectRecord",
+    "EffectReversal",
     "JobLog",
     "NodusScheduledJob",
     "NodusTraceEvent",
