@@ -33,6 +33,7 @@ def build_nodus_execution_summary(nodus_result) -> dict[str, Any]:
         "output_state": getattr(nodus_result, "output_state", {}) or {},
         "events_emitted": len(getattr(nodus_result, "emitted_events", []) or []),
         "memory_writes": len(getattr(nodus_result, "memory_writes", []) or []),
+        "simulated_effects": list(getattr(nodus_result, "simulated_effects", []) or []),
         "error": getattr(nodus_result, "error", None),
     }
 

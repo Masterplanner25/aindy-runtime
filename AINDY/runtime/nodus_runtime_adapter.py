@@ -34,6 +34,11 @@ class NodusExecutionContext:
     # refused (fail-closed).
     run_id: str = ""
     execution_token: Optional[dict[str, Any]] = None
+    # AGENT-HARDEN-4 — effect simulation. When True, the call_tool seam routes to
+    # the shadow executor (simulate_agent_tool): tools are NOT executed, a predicted
+    # result is returned so the plan keeps flowing, and each call records a
+    # "would-write" intent collected into NodusExecutionResult.simulated_effects.
+    simulate: bool = False
 
 
 @dataclass
@@ -44,6 +49,9 @@ class NodusExecutionResult:
     status: Literal["success", "failure", "waiting"]
     error: Optional[str] = None
     raw_result: Optional[dict[str, Any]] = None
+    # AGENT-HARDEN-4 — predicted "would-write" intents from a simulate-mode run
+    # (empty for a normal run).
+    simulated_effects: list[dict[str, Any]] = field(default_factory=list)
 
 
 class NodusRuntimeAdapter:
@@ -122,6 +130,7 @@ class NodusRuntimeAdapter:
                     "filename": filename,
                     "run_id": str(context.run_id or context.execution_unit_id or ""),
                     "execution_token": context.execution_token,
+                    "simulate": bool(context.simulate),
                 },
             }
         )
@@ -184,6 +193,7 @@ class NodusRuntimeAdapter:
         output_state = dict(result.get("output_state") or {})
         emitted_events = list(result.get("emitted_events") or [])
         memory_writes = list(result.get("memory_writes") or [])
+        simulated_effects = list(result.get("simulated_effects") or [])
         worker_status = str(result.get("status") or "failure")
         worker_error = result.get("error")
 
@@ -198,6 +208,7 @@ class NodusRuntimeAdapter:
                 status="waiting",
                 error=worker_error,
                 raw_result=result,
+                simulated_effects=simulated_effects,
             )
 
         _apply_deferred_memory_writes(self._db, memory_writes, context)
@@ -217,6 +228,7 @@ class NodusRuntimeAdapter:
             status=status,
             error=error,
             raw_result=result,
+            simulated_effects=simulated_effects,
         )
 
 
