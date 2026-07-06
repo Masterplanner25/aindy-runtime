@@ -144,8 +144,8 @@ surfacing, compensator-failure isolation, success-only, tenant scope). Docs: `SY
 
 ### AGENT-HARDEN-4 — Effect-simulation / true dry-run (shadow `call_tool` seam)
 
-**Status:** IN PROGRESS — **Medium**. PR1 (the shadow seam) landed; `mode="simulate"`
-end-to-end wiring + inbox rendering (PR2) and -4b sandbox rehearsal (PR3) remain.
+**Status:** CLOSED (2026-07-05) for **-4** (close trigger met via PR1+PR2). **-4b**
+(sandbox rehearsal, PR3) is the remaining follow-up — tracked below.
 
 Plan-preview is real — a plan is generated, risk-scored, and persisted as `pending_approval`,
 shown in the apps `AgentApprovalInbox` with per-step + overall risk before any tool runs
@@ -167,14 +167,25 @@ prediction is deterministic; a predictor model is the documented upgrade path (s
 ok/denied/error, adapter flag threading + effect parsing); verified end-to-end through the real
 subprocess (a `call_tool` shadowed with `executed:false`, no side effect).
 
-**Remaining:** **PR2** — a `mode="simulate"` on the agent execute path
-(`execute_run`/`execute_agent_run_via_workflow`) that runs the whole plan shadowed and persists
-the predicted-effect report on the `AgentRun` for the apps `AgentApprovalInbox`. **PR3 =
-AGENT-HARDEN-4b (environment virtualization)** — running the plan inside the existing
-`--network none` sandbox with *fake* tool implementations injected at `call_tool` = a rehearsal
-harness against a simulated world. **Relates to:** the predicted-effect report is the same
-surface AGENT-HARDEN-6's post-condition checker consumes. **Close trigger:** an agent run can be
-simulated to produce a predicted-effect report with zero real side-effects (PR2 completes this).
+**PR2 (done) — `mode="simulate"` end-to-end + report persisted.** A `simulate` flag threads
+the flow node (`nodus_adapter.py` `nodus.execute` reads `state["simulate"]`) →
+`execute_nodus_runtime(simulate=…)` → `NodusExecutionContext.simulate` → subprocess. New
+`simulate_agent_run` (`nodus_execution_service.py`) splits the plan and runs every tool segment
+shadowed (WAIT boundaries ignored — the whole plan is previewed), collects `simulated_effects`
+via `_extract_simulated_effects`, and persists `{simulated, steps, simulated_effects,
+steps_total, effects_total}` under `run.result["simulation"]` **without changing run status**.
+Exposed as `sys.v1.agent.simulate` (capability `agent.simulate`, tenant-scoped); reuses the run's
+`capability_token` or mints a preview token so the report reflects real grants.
+`SYSCALL_REGISTRY_MIN_COUNT` 20→21. No schema change (`run.result` is existing JSONB). Verified
+end-to-end through the real subprocess (`execute_nodus_runtime(simulate=True)` → `call_tool`
+shadowed, `executed:false`, no side effect). Tests: `test_agent_simulate.py` (report+persistence,
+no status change, flag threading, token reuse/mint, tenant scope). Docs: `SYSCALL_REFERENCE.md`.
+**Close trigger met.**
+
+**Remaining — AGENT-HARDEN-4b (environment virtualization, PR3):** run the plan inside the
+existing `--network none` sandbox with *fake* tool implementations injected at `call_tool` = a
+rehearsal harness against a simulated world (vs PR2's predicted-effect report). **Relates to:**
+the predicted-effect report is the same surface AGENT-HARDEN-6's post-condition checker consumes.
 
 ### AGENT-HARDEN-5 — LLM provider fallback chain
 

@@ -336,6 +336,31 @@ append-only `effect_reversals` audit log. Undo ≠ replay: `replay` re-does a ru
 
 ---
 
+### `sys.v1.agent.simulate`
+
+Predicted-effect dry-run of an `AgentRun` (effect simulation, AGENT-HARDEN-4). Runs
+the run's plan with the `call_tool` seam **shadowed** — every tool call returns a
+predicted result and records a "would-write" intent instead of executing, so there
+are **zero real side effects**. The report is persisted under
+`run.result["simulation"]` for the apps `AgentApprovalInbox` and the run's status is
+left unchanged (this is a preview, not an execution). A capability token is used so
+the preview reflects real grants — the run's own token if present, otherwise a
+freshly minted preview token for the plan.
+
+**Capability:** `agent.simulate`
+
+**Stability:** stable
+
+**Payload:**
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `run_id` | string | yes | `AgentRun` id to simulate. |
+
+**Returns:** `{simulated: true, steps: [...], simulated_effects: [{tool, args, risk_level, capability_ok, predicted_result, executed: false}…], steps_total, effects_total}`
+
+---
+
 ### `sys.v1.agent.count_runs`
 
 Count `AgentRun` rows for a user.

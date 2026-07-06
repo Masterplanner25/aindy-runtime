@@ -1160,6 +1160,92 @@ def _handle_agent_undo(payload: dict, context: SyscallContext) -> dict:
                 )
 
 
+def _handle_agent_simulate(payload: dict, context: SyscallContext) -> dict:
+    """sys.v1.agent.simulate — predicted-effect dry-run of an AgentRun (AGENT-HARDEN-4).
+
+    Runs the run's plan in simulate mode: every tool call is shadowed (no real
+    execution), producing a predicted result + a ``would_write`` intent. The report
+    is persisted under ``run.result["simulation"]`` for the approval inbox WITHOUT
+    changing the run's status — this is a preview, not an execution.
+
+    A capability token is used so the preview reflects real grants: the run's own
+    ``capability_token`` if present, otherwise a freshly minted preview token for
+    the plan (so a pending-approval run can still be simulated).
+
+    Payload keys:
+        run_id (str) — required; AgentRun id to simulate.
+
+    Context metadata keys (internal use):
+        _db — caller-provided SQLAlchemy Session.
+    """
+    import uuid as _uuid
+
+    from AINDY.db.models import AgentRun
+
+    run_id = str(payload.get("run_id", "")).strip()
+    if not run_id:
+        raise ValueError("sys.v1.agent.simulate requires 'run_id'")
+
+    normalized_user_id = _resolve_tenant_user_id(context, {})
+    if normalized_user_id is None:
+        raise ValueError("sys.v1.agent.simulate requires an authenticated tenant context")
+
+    try:
+        run_uuid = _uuid.UUID(run_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError(f"sys.v1.agent.simulate: invalid run_id {run_id!r}")
+
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        run = (
+            db.query(AgentRun)
+            .filter(AgentRun.id == run_uuid, AgentRun.user_id == normalized_user_id)
+            .first()
+        )
+        if run is None:
+            raise ValueError(f"sys.v1.agent.simulate: no agent run {run_id!r}")
+
+        plan = run.plan or {}
+        token = run.capability_token if isinstance(run.capability_token, dict) else None
+        if token is None:
+            # Mint a preview token so the simulation reflects the grants the run
+            # would receive on approval (best-effort — None → tools show as gated).
+            try:
+                from AINDY.agents.capability_service import mint_token
+
+                token = mint_token(
+                    run_id=run_id,
+                    user_id=str(normalized_user_id),
+                    plan=plan,
+                    db=db,
+                    approval_mode="manual",
+                )
+            except Exception as exc:
+                logger.debug(
+                    "[syscall_registry] agent.simulate preview-token mint skipped: %s", exc
+                )
+                token = None
+
+        from AINDY.runtime.nodus_execution_service import simulate_agent_run
+
+        return simulate_agent_run(
+            run_id=run_id,
+            plan=plan,
+            user_id=str(normalized_user_id),
+            db=db,
+            execution_token=token,
+            correlation_id=run.correlation_id,
+        )
+    finally:
+        if owns_session:
+            try:
+                db.close()
+            except Exception:
+                logger.debug(
+                    "[syscall_registry] agent.simulate session close failed", exc_info=True
+                )
+
+
 def _handle_execution_get(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.execution.get — status and resource metrics for an execution unit.
 
@@ -1567,6 +1653,23 @@ SYSCALL_REGISTRY["sys.v1.agent.undo"] = SyscallEntry(
         },
     },
 )
+SYSCALL_REGISTRY["sys.v1.agent.simulate"] = SyscallEntry(
+    handler=_handle_agent_simulate,
+    capability="agent.simulate",
+    description="Predicted-effect dry-run of an AgentRun (tools shadowed, zero side effects); persists the report for the approval inbox.",
+    input_schema={
+        "required": ["run_id"],
+        "properties": {"run_id": {"type": "string"}},
+    },
+    output_schema={
+        "required": ["simulated"],
+        "properties": {
+            "simulated": {"type": "bool"},
+            "steps": {"type": "list"},
+            "simulated_effects": {"type": "list"},
+        },
+    },
+)
 SYSCALL_REGISTRY["sys.v1.execution.get"] = SyscallEntry(
     handler=_handle_execution_get,
     capability="execution.read",
@@ -1655,6 +1758,6 @@ def get_registered_syscalls() -> list[str]:
 # Minimum number of syscalls expected after a complete boot (all static built-ins).
 # Any count below this floor means Phase 8 did not finish, or a registration was lost.
 # Add 1 per new static entry added to this file.  Do not lower this value.
-SYSCALL_REGISTRY_MIN_COUNT: int = 20
+SYSCALL_REGISTRY_MIN_COUNT: int = 21
 
 
