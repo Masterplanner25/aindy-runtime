@@ -188,6 +188,10 @@ def main() -> int:
     tool_execution_token = ctx.get("execution_token")
     if not isinstance(tool_execution_token, dict):
         tool_execution_token = None
+    # AGENT-HARDEN-4 — effect simulation. When set, call_tool is shadowed: no real
+    # tool runs, and each call records a predicted "would-write" intent here.
+    simulate_mode = bool(ctx.get("simulate"))
+    simulated_effects: list[dict[str, Any]] = []
 
     from nodus.runtime.embedding import NodusRuntime
     from AINDY.nodus.runtime.memory_bridge import AINDYMemoryBridge
@@ -232,6 +236,18 @@ def main() -> int:
 
     runtime = NodusRuntime(project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None)
     def _call_tool(tool_name: Any, args: Any) -> Any:
+        if simulate_mode:
+            from AINDY.runtime.tool_simulation import simulate_agent_tool
+
+            shadow = simulate_agent_tool(
+                tool_name,
+                args,
+                user_id=user_id,
+                run_id=tool_run_id,
+                execution_token=tool_execution_token,
+            )
+            simulated_effects.append(_json_safe(shadow["would_write"]))
+            return shadow["call_result"]
         return run_agent_tool(
             tool_name,
             args,
@@ -324,6 +340,7 @@ def main() -> int:
                     "output_state": _json_safe(state),
                     "emitted_events": _json_safe(emitted_events),
                     "memory_writes": _json_safe(memory_deferral._writes),
+                    "simulated_effects": simulated_effects,
                     "error": None,
                     "stdout_log": stdout_buffer.getvalue(),
                     "wait_for": wait_for,
@@ -334,6 +351,7 @@ def main() -> int:
                     "output_state": _json_safe(state),
                     "emitted_events": _json_safe(emitted_events),
                     "memory_writes": _json_safe(memory_deferral._writes),
+                    "simulated_effects": simulated_effects,
                     "error": error,
                     "stdout_log": stdout_buffer.getvalue(),
                 }
@@ -344,6 +362,7 @@ def main() -> int:
                 "output_state": _json_safe(state),
                 "emitted_events": _json_safe(_runtime_emitted_events()),
                 "memory_writes": _json_safe(memory_deferral._writes),
+                "simulated_effects": simulated_effects,
                 "error": None,
                 "stdout_log": stdout_buffer.getvalue(),
                 "wait_for": exc.event_type,
@@ -354,6 +373,7 @@ def main() -> int:
                 "output_state": _json_safe(state),
                 "emitted_events": _json_safe(_runtime_emitted_events()),
                 "memory_writes": _json_safe(memory_deferral._writes),
+                "simulated_effects": simulated_effects,
                 "error": str(exc),
                 "stdout_log": stdout_buffer.getvalue(),
             }

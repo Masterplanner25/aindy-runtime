@@ -144,7 +144,8 @@ surfacing, compensator-failure isolation, success-only, tenant scope). Docs: `SY
 
 ### AGENT-HARDEN-4 — Effect-simulation / true dry-run (shadow `call_tool` seam)
 
-**Status:** Open — **Medium**. Currently PARTIAL: plan-preview exists, effect-preview does not.
+**Status:** IN PROGRESS — **Medium**. PR1 (the shadow seam) landed; `mode="simulate"`
+end-to-end wiring + inbox rendering (PR2) and -4b sandbox rehearsal (PR3) remain.
 
 Plan-preview is real — a plan is generated, risk-scored, and persisted as `pending_approval`,
 shown in the apps `AgentApprovalInbox` with per-step + overall risk before any tool runs
@@ -152,16 +153,28 @@ shown in the apps `AgentApprovalInbox` with per-step + overall risk before any t
 `dry_run`. What is missing is **effect simulation**: previewing what each tool would *output /
 change*, not just its name + args.
 
-**Fix:** add a `mode="simulate"` to the plan/execute path that routes the capability-enforced
-`call_tool` seam (`runtime/nodus_worker.py` `_call_tool`, `runtime/agent_plan_compiler.py`) to
-a **shadow implementation** returning model-predicted outputs and recording "would-write"
-intents instead of executing. Render the simulated effects in the same approval inbox.
+**PR1 (done) — the shadow `call_tool` seam.** `runtime/tool_simulation.py`
+`simulate_agent_tool` mirrors `run_agent_tool`'s fail-closed capability contract but **never
+executes the tool**: it runs the read-only `check_tool_capability` gate, returns a predicted
+`{success, result, error}` (success=True when permitted so the plan keeps flowing; success=False
++ error when capability-denied), and emits a structured `would_write` intent
+(`{tool, args, risk_level, capability_ok, capability_error, predicted_result, executed:False}`).
+A `simulate` flag threads `NodusExecutionContext → subprocess payload → nodus_worker._call_tool`;
+in simulate mode the worker collects intents into `simulated_effects`, returned via the worker
+result → `NodusExecutionResult.simulated_effects` → `build_nodus_execution_summary`. v1
+prediction is deterministic; a predictor model is the documented upgrade path (same seam). Tests:
+`test_tool_simulation.py` (zero-execution proof via `execute_tool` guard, capability
+ok/denied/error, adapter flag threading + effect parsing); verified end-to-end through the real
+subprocess (a `call_tool` shadowed with `executed:false`, no side effect).
 
-**Effort:** ~2–3 PRs. **Relates to:** this shadow seam is the foundation for
-**AGENT-HARDEN-4b (environment virtualization)** — running the plan inside the existing
-`--network none` sandbox with *fake* tool implementations injected at `call_tool` = a
-rehearsal harness against a simulated world. Do 4 and 4b as one arc. **Close trigger:** an
-agent run can be simulated to produce a predicted-effect report with zero real side-effects.
+**Remaining:** **PR2** — a `mode="simulate"` on the agent execute path
+(`execute_run`/`execute_agent_run_via_workflow`) that runs the whole plan shadowed and persists
+the predicted-effect report on the `AgentRun` for the apps `AgentApprovalInbox`. **PR3 =
+AGENT-HARDEN-4b (environment virtualization)** — running the plan inside the existing
+`--network none` sandbox with *fake* tool implementations injected at `call_tool` = a rehearsal
+harness against a simulated world. **Relates to:** the predicted-effect report is the same
+surface AGENT-HARDEN-6's post-condition checker consumes. **Close trigger:** an agent run can be
+simulated to produce a predicted-effect report with zero real side-effects (PR2 completes this).
 
 ### AGENT-HARDEN-5 — LLM provider fallback chain
 
