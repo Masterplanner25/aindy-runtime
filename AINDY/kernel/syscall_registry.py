@@ -944,6 +944,154 @@ def _handle_agent_ensure_initial_run(payload: dict, context: SyscallContext) -> 
         raise
 
 
+#: AgentRun statuses from which a cooperative cancel may fire (all non-terminal).
+_CANCELLABLE_AGENT_RUN_STATUSES: tuple[str, ...] = (
+    "pending_approval",
+    "approved",
+    "executing",
+    "waiting",
+    "delegated",
+)
+
+
+def _handle_agent_cancel(payload: dict, context: SyscallContext) -> dict:
+    """sys.v1.agent.cancel — cooperatively cancel a non-terminal AgentRun (AGENT-HARDEN-1).
+
+    Flips the run to the terminal ``cancelled`` state via an atomic compare-and-set
+    from any active status (``pending_approval`` / ``approved`` / ``executing`` /
+    ``waiting`` / ``delegated``). The transition is committed here so it is durable
+    and visible across threads: a run mid-execution on the VM-backed segment chain
+    observes the flip at the next **segment boundary** and halts before the next
+    tool call (mid-tool state is never corrupted), and a parked (``waiting``) run
+    never resumes because the scheduler resume claim requires ``status='waiting'``.
+
+    Terminal runs (``completed`` / ``failed`` / ``cancelled``) are an idempotent
+    no-op — the existing terminal status is returned untouched.
+
+    Payload keys:
+        run_id (str) — required; AgentRun id to cancel.
+        reason (str) — optional; recorded in error_message and the CANCELLED event.
+
+    Context metadata keys (internal use):
+        _db — caller-provided SQLAlchemy Session.
+    """
+    import uuid as _uuid
+
+    from AINDY.db.models import AgentRun
+
+    run_id = str(payload.get("run_id", "")).strip()
+    if not run_id:
+        raise ValueError("sys.v1.agent.cancel requires 'run_id'")
+
+    normalized_user_id = _resolve_tenant_user_id(context, {})
+    if normalized_user_id is None:
+        raise ValueError(
+            "sys.v1.agent.cancel requires an authenticated tenant context"
+        )
+
+    try:
+        run_uuid = _uuid.UUID(run_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError(f"sys.v1.agent.cancel: invalid run_id {run_id!r}")
+
+    reason = str(payload.get("reason") or "").strip()
+
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        run = (
+            db.query(AgentRun)
+            .filter(AgentRun.id == run_uuid, AgentRun.user_id == normalized_user_id)
+            .first()
+        )
+        if run is None:
+            raise ValueError(f"sys.v1.agent.cancel: no agent run {run_id!r}")
+
+        previous_status = run.status
+        if previous_status not in _CANCELLABLE_AGENT_RUN_STATUSES:
+            # Already terminal — never overwrite a completed/failed/cancelled run.
+            return {"cancelled": False, "status": previous_status, "run_id": run_id}
+
+        # Atomic CAS: exactly one caller wins even across a concurrent terminal
+        # transition by the execution thread. synchronize_session=False mirrors the
+        # resume-claim pattern in nodus_execution_service.
+        claimed = (
+            db.query(AgentRun)
+            .filter(
+                AgentRun.id == run_uuid,
+                AgentRun.status.in_(_CANCELLABLE_AGENT_RUN_STATUSES),
+            )
+            .update(
+                {
+                    "status": "cancelled",
+                    "wait_state": None,
+                    "completed_at": datetime.now(timezone.utc),
+                    "error_message": f"cancelled: {reason}" if reason else "cancelled",
+                },
+                synchronize_session=False,
+            )
+        )
+        # Commit is load-bearing: the running execution thread reads this row in a
+        # separate session and must observe the cancel at its next boundary check.
+        db.commit()
+
+        if not claimed:
+            # Lost the race to a concurrent terminal transition; report the winner.
+            fresh = db.query(AgentRun.status).filter(AgentRun.id == run_uuid).first()
+            return {
+                "cancelled": False,
+                "status": fresh[0] if fresh else None,
+                "run_id": run_id,
+            }
+
+        # Terminal lifecycle event — best-effort (required=False): a cancel must
+        # never be blocked by an event-store hiccup.
+        try:
+            from AINDY.core.execution_signal_helper import record_agent_event
+
+            record_agent_event(
+                run_id=run_id,
+                user_id=str(normalized_user_id),
+                event_type="CANCELLED",
+                db=db,
+                correlation_id=None,
+                payload={
+                    "previous_status": previous_status,
+                    "reason": reason or None,
+                },
+                required=False,
+            )
+        except Exception:
+            logger.debug(
+                "[syscall_registry] CANCELLED event emit skipped for %s",
+                run_id,
+                exc_info=True,
+            )
+
+        return {
+            "cancelled": True,
+            "previous_status": previous_status,
+            "status": "cancelled",
+            "run_id": run_id,
+        }
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            logger.debug(
+                "[syscall_registry] agent.cancel rollback failed", exc_info=True
+            )
+        raise
+    finally:
+        if owns_session:
+            try:
+                db.close()
+            except Exception:
+                logger.debug(
+                    "[syscall_registry] agent.cancel session close failed",
+                    exc_info=True,
+                )
+
+
 def _handle_execution_get(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.execution.get — status and resource metrics for an execution unit.
 
@@ -1312,6 +1460,27 @@ SYSCALL_REGISTRY["sys.v1.agent.ensure_initial_run"] = SyscallEntry(
     },
     stable=False,
 )
+SYSCALL_REGISTRY["sys.v1.agent.cancel"] = SyscallEntry(
+    handler=_handle_agent_cancel,
+    capability="agent.cancel",
+    description="Cooperatively cancel a non-terminal AgentRun to a terminal 'cancelled' state.",
+    input_schema={
+        "required": ["run_id"],
+        "properties": {
+            "run_id": {"type": "string"},
+            "reason": {"type": "string"},
+        },
+    },
+    output_schema={
+        "required": ["cancelled", "status"],
+        "properties": {
+            "cancelled": {"type": "bool"},
+            "status": {"type": "string"},
+            "previous_status": {"type": "string"},
+            "run_id": {"type": "string"},
+        },
+    },
+)
 SYSCALL_REGISTRY["sys.v1.execution.get"] = SyscallEntry(
     handler=_handle_execution_get,
     capability="execution.read",
@@ -1398,6 +1567,6 @@ def get_registered_syscalls() -> list[str]:
 # Minimum number of syscalls expected after a complete boot (all static built-ins).
 # Any count below this floor means Phase 8 did not finish, or a registration was lost.
 # Add 1 per new static entry added to this file.  Do not lower this value.
-SYSCALL_REGISTRY_MIN_COUNT: int = 18
+SYSCALL_REGISTRY_MIN_COUNT: int = 19
 
 

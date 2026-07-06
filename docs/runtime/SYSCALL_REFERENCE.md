@@ -286,6 +286,32 @@ Execute an approved `AgentRun` via the deterministic runtime.
 
 ---
 
+### `sys.v1.agent.cancel`
+
+Cooperatively cancel a non-terminal `AgentRun` to the terminal `cancelled` state
+(operator kill switch, AGENT-HARDEN-1). Flips the run via an atomic compare-and-set
+from any active status (`pending_approval` / `approved` / `executing` / `waiting` /
+`delegated`); the change is committed so a run mid-execution on the VM-backed
+segment chain observes it at the next **segment boundary** and halts before the
+next tool call, and a parked (`waiting`) run never resumes. Runs already terminal
+(`completed` / `failed` / `cancelled`) are an idempotent no-op.
+
+**Capability:** `agent.cancel`
+
+**Stability:** stable
+
+**Payload:**
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `run_id` | string | yes | `AgentRun` id to cancel. |
+| `reason` | string | no | Recorded in `error_message` and the `CANCELLED` event. |
+
+**Returns:** `{cancelled: true|false, status, previous_status, run_id}` — `cancelled`
+is `false` (with the current `status`) when the run was already terminal.
+
+---
+
 ### `sys.v1.agent.count_runs`
 
 Count `AgentRun` rows for a user.
