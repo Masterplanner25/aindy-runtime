@@ -200,25 +200,31 @@ loop and the natural trigger for the -3 undo work.
 
 ### AGENT-HARDEN-6 — Verifier stage (post-condition check + verify→rollback)
 
-**Status:** Open — **High** (completes the core execution loop). *The blueprint's stated v1
-core is "single agent + internal verifier"; the verifier does not exist.*
+**Status:** CLOSED (2026-07-05). The core loop now closes on Verify.
 
-The loop today is Plan → risk-gate → Approve → Execute → **(nothing)**. There is no
-post-execution stage that checks post-conditions and gates/rolls back. Grep for
-`verify`/`postcondition`/`verifier` as an execution stage returns nothing in either repo. The
-only adjacent thing is the **app-side** Infinity loop's expected-vs-actual
-`prediction_accuracy` (`LoopAdjustment`) — advisory scoring, not a runtime gate.
+`core/verifier.py` is a rules-based post-condition checker: `extract_post_conditions(plan)`
+maps **tool-step ordinal** → per-step `expects` (skipping WAIT steps, matching
+`AgentStep.step_index`); `verify_post_conditions(post_conditions, step_results)` evaluates each
+condition and returns `{ok, checked, failures}`. Condition forms: `{"status": "success"}` or
+`{"field": "<dot.path>", "op": "<op>", "value": …}` over the step's `result` (ops: exists /
+not_exists / eq / ne / contains / not_contains / gt / gte / lt / lte / truthy / falsy; unknown
+op / type-incompatible / missing field or step **fail closed**).
 
-**Fix (rides existing primitives):** add a `verify` stage after
-`_execute_agent_segment_chain` (`runtime/nodus_execution_service.py`) that evaluates
-declared post-conditions (a rules-based checker is enough for v1; a small verifier model is
-the upgrade path), emits an `AgentEvent` `VERIFIED`/`VERIFY_FAILED`, and on failure invokes
-the **AGENT-HARDEN-3 compensators** to roll back. Post-conditions can ride the plan schema
-(per-step `expects`) the planner already produces.
+Wired into the terminal-success block of `_execute_agent_segment_chain`
+(`runtime/nodus_execution_service.py`): on a fully-run plan it verifies before marking
+complete. Pass → `completed` + an `AgentEvent` `VERIFIED` (only when `checked > 0`). Fail →
+terminal `AgentRunStatus.VERIFY_FAILED` (frozen in `_STABLE_AGENT_RUN_STATUSES`), `result` keeps
+the `{steps, verify}` verdict, an `AgentEvent` `VERIFY_FAILED` is emitted, and the
+**AGENT-HARDEN-3** compensators (`undo_run_effects`) roll back the run's reversible effects
+(best-effort; irreversible ones are surfaced by undo). Runs on both the initial and the resumed
+completion path (both read the persisted `run.plan`). No new model → no schema bump.
 
-**Effort:** ~1–2 PRs. **Pairs with:** AGENT-HARDEN-3 (undo is the rollback mechanism),
-AGENT-HARDEN-4 (simulation previews the same post-conditions). **Close trigger:** a run whose
-post-conditions fail is marked `verify_failed` and its reversible effects are rolled back.
+**No behavior change until authors opt in:** plans with no `expects` verify vacuously
+(`checked == 0`), so existing runs complete exactly as before. Upgrade path: swap the rules
+checker for a small verifier model. **Depends on AGENT-HARDEN-3 (#168)** for the rollback half —
+shipped as a stacked PR. Tests: `test_verifier.py` (extract/ops/fail-closed) +
+`test_agent_vm_execution.py::test_vm_run_verify_*` (pass→completed+VERIFIED,
+fail→verify_failed+undo, no-expects→vacuous).
 
 ### AGENT-HARDEN-7 — Contract / record-playback integration tests
 
