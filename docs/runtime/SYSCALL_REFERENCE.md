@@ -312,6 +312,30 @@ is `false` (with the current `status`) when the run was already terminal.
 
 ---
 
+### `sys.v1.agent.undo`
+
+Reverse a completed `AgentRun`'s reversible effects (compensating undo, AGENT-HARDEN-3).
+Walks the run's successful `EffectRecord`s newest-first and invokes each owning
+syscall's registered `compensate` hook. Effects whose syscall declares no
+compensator are reported as **irreversible** (surfaced, never silently skipped);
+compensator failures are reported as **failed**. Every attempt is written to the
+append-only `effect_reversals` audit log. Undo ≠ replay: `replay` re-does a run,
+`undo` reverses one.
+
+**Capability:** `agent.undo`
+
+**Stability:** stable
+
+**Payload:**
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `run_id` | string | yes | `AgentRun` id whose effects to reverse. |
+
+**Returns:** `{run_id, reversed: [action_type…], irreversible: [action_type…], failed: [{action_type, error}…]}`
+
+---
+
 ### `sys.v1.agent.count_runs`
 
 Count `AgentRun` rows for a user.

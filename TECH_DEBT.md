@@ -119,20 +119,28 @@ legacy-hash rejection, tamper detection, rotation grace, KeyRing-down fallback);
 
 ### AGENT-HARDEN-3 — Reversible actions / compensating-undo log
 
-**Status:** Open — **Medium**. Replay ≠ undo; tx-rollback ≠ effect reversal.
+**Status:** CLOSED (2026-07-05). Compensating-undo engine + audit log shipped.
 
-There is no undo/compensating mechanism. `agent_runtime/replay.py` `replay_run()` *creates a
-new run* (re-does); the many `db.rollback()` sites are transaction rollbacks, not action-level
-reversal. But the ledger to build undo on already exists: `EffectRecord`
-(`db/models/effect_record.py`) records every `EXACTLY_ONCE` effect via the idempotency gate.
+`SyscallEntry` gains an optional `compensate` hook (+ `reversible` property);
+`register_syscall(..., compensate=...)` passes it through. New append-only
+`effect_reversals` table (`db/models/effect_reversal.py`) is the audit log. The engine
+`core/effect_compensation.py` `undo_run_effects(run_id, db, context)` resolves the run's
+`ExecutionUnit`, walks its **successful** `EffectRecord`s newest-first, and for each invokes
+the owning syscall's compensator — recording one `effect_reversals` row per effect as
+`reversed` / `irreversible` (no compensator declared → surfaced, not skipped) / `failed`
+(compensator raised; other effects still processed). Exposed as `sys.v1.agent.undo`
+(capability `agent.undo`, tenant-scoped). `SYSCALL_REGISTRY_MIN_COUNT` 19→20. The compensator
+receives the effect's recorded outcome (`result_payload`/`external_receipt`/ids) — the original
+input is not retained by design, so compensators key off the result.
 
-**Fix:** add an optional per-syscall `compensate` hook on `SyscallEntry`; add an append-only
-`effect_reversals` log; "undo run N" walks its `EffectRecord`s in reverse invoking each
-compensator. Declare per-syscall whether an effect is reversible (irreversible ones — e.g. an
-outbound email already sent — are marked and reported, not silently skipped).
-
-**Effort:** ~1–2 PRs. **Close trigger:** a completed run's reversible effects can be undone via
-compensators with an audit log; irreversible effects are explicitly surfaced.
+**Schema:** new model → `SCHEMA_CONTRACT_VERSION` 2026-07-04→2026-07-05, baseline regenerated,
+two assertions in `test_runtime_schema_contract.py` bumped; migration `0008_effect_reversals.py`
+(guarded per ALEMBIC-FRESH-DB-1: CREATE skipped on blank DB where FK parents are absent →
+create_all bootstraps it). No built-in syscall ships a compensator yet, so all existing effects
+report **irreversible** (honest + surfaced); attaching a real compensator (e.g. `memory.write`
+→ delete) is incremental. **This is the rollback mechanism AGENT-HARDEN-6 (Verifier) invokes on
+post-condition failure.** Tests: `test_effect_compensation.py` (reverse-order, irreversible
+surfacing, compensator-failure isolation, success-only, tenant scope). Docs: `SYSCALL_REFERENCE.md`.
 
 ### AGENT-HARDEN-4 — Effect-simulation / true dry-run (shadow `call_tool` seam)
 

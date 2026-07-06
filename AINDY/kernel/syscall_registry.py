@@ -175,6 +175,7 @@ class SyscallEntry:
         "handler", "capability", "description",
         "input_schema", "output_schema",
         "stable", "deprecated", "deprecated_since", "replacement",
+        "compensate",
     )
 
     def __init__(
@@ -188,6 +189,7 @@ class SyscallEntry:
         deprecated: bool = False,
         deprecated_since: str | None = None,
         replacement: str | None = None,
+        compensate: Callable[[dict, "SyscallContext"], dict | None] | None = None,
     ) -> None:
         self.handler = handler
         self.capability = capability
@@ -198,6 +200,16 @@ class SyscallEntry:
         self.deprecated = deprecated
         self.deprecated_since = deprecated_since
         self.replacement = replacement
+        # AGENT-HARDEN-3: optional compensating-undo hook. When set, a completed
+        # effect of this syscall is *reversible* — undo_run_effects invokes it with
+        # (effect: dict, context) to roll the effect back. None → the effect is
+        # irreversible and is surfaced (never silently skipped) during undo.
+        self.compensate = compensate
+
+    @property
+    def reversible(self) -> bool:
+        """True when this syscall declares a compensating-undo hook (AGENT-HARDEN-3)."""
+        return self.compensate is not None
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
@@ -1092,6 +1104,62 @@ def _handle_agent_cancel(payload: dict, context: SyscallContext) -> dict:
                 )
 
 
+def _handle_agent_undo(payload: dict, context: SyscallContext) -> dict:
+    """sys.v1.agent.undo — reverse a completed AgentRun's reversible effects (AGENT-HARDEN-3).
+
+    Walks the run's successful ``EffectRecord``s newest-first and invokes each
+    owning syscall's registered ``compensate`` hook. Effects whose syscall declares
+    no compensator are reported as ``irreversible`` (surfaced, never silently
+    skipped); compensator failures are reported as ``failed``. Every attempt is
+    written to the append-only ``effect_reversals`` audit log.
+
+    Payload keys:
+        run_id (str) — required; AgentRun id whose effects to reverse.
+
+    Context metadata keys (internal use):
+        _db — caller-provided SQLAlchemy Session.
+    """
+    import uuid as _uuid
+
+    from AINDY.db.models import AgentRun
+
+    run_id = str(payload.get("run_id", "")).strip()
+    if not run_id:
+        raise ValueError("sys.v1.agent.undo requires 'run_id'")
+
+    normalized_user_id = _resolve_tenant_user_id(context, {})
+    if normalized_user_id is None:
+        raise ValueError("sys.v1.agent.undo requires an authenticated tenant context")
+
+    try:
+        run_uuid = _uuid.UUID(run_id)
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError(f"sys.v1.agent.undo: invalid run_id {run_id!r}")
+
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        # Tenant scope: the run must belong to the caller before we touch its effects.
+        run = (
+            db.query(AgentRun)
+            .filter(AgentRun.id == run_uuid, AgentRun.user_id == normalized_user_id)
+            .first()
+        )
+        if run is None:
+            raise ValueError(f"sys.v1.agent.undo: no agent run {run_id!r}")
+
+        from AINDY.core.effect_compensation import undo_run_effects
+
+        return undo_run_effects(run_id, db=db, context=context, source_type="agent_run")
+    finally:
+        if owns_session:
+            try:
+                db.close()
+            except Exception:
+                logger.debug(
+                    "[syscall_registry] agent.undo session close failed", exc_info=True
+                )
+
+
 def _handle_execution_get(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.execution.get — status and resource metrics for an execution unit.
 
@@ -1481,6 +1549,24 @@ SYSCALL_REGISTRY["sys.v1.agent.cancel"] = SyscallEntry(
         },
     },
 )
+SYSCALL_REGISTRY["sys.v1.agent.undo"] = SyscallEntry(
+    handler=_handle_agent_undo,
+    capability="agent.undo",
+    description="Reverse a completed AgentRun's reversible effects via registered compensators; surface irreversible ones.",
+    input_schema={
+        "required": ["run_id"],
+        "properties": {"run_id": {"type": "string"}},
+    },
+    output_schema={
+        "required": ["reversed", "irreversible", "failed"],
+        "properties": {
+            "reversed": {"type": "list"},
+            "irreversible": {"type": "list"},
+            "failed": {"type": "list"},
+            "run_id": {"type": "string"},
+        },
+    },
+)
 SYSCALL_REGISTRY["sys.v1.execution.get"] = SyscallEntry(
     handler=_handle_execution_get,
     capability="execution.read",
@@ -1511,6 +1597,7 @@ def register_syscall(
     deprecated: bool = False,
     deprecated_since: str | None = None,
     replacement: str | None = None,
+    compensate: Callable[[dict, SyscallContext], dict | None] | None = None,
 ) -> None:
     """Register a syscall at runtime.
 
@@ -1549,6 +1636,7 @@ def register_syscall(
         deprecated=deprecated,
         deprecated_since=deprecated_since,
         replacement=replacement,
+        compensate=compensate,
     )
     logger.debug(
         "[syscall_registry] registered '%s' (capability=%s, deprecated=%s)",
@@ -1567,6 +1655,6 @@ def get_registered_syscalls() -> list[str]:
 # Minimum number of syscalls expected after a complete boot (all static built-ins).
 # Any count below this floor means Phase 8 did not finish, or a registration was lost.
 # Add 1 per new static entry added to this file.  Do not lower this value.
-SYSCALL_REGISTRY_MIN_COUNT: int = 19
+SYSCALL_REGISTRY_MIN_COUNT: int = 20
 
 
