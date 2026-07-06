@@ -35,6 +35,28 @@ def _tool_risk(tool_name: str) -> Optional[str]:
     return None
 
 
+def _virtual_response(virtual_tools: Any, tool: str) -> Optional[dict[str, Any]]:
+    """Return a fake tool implementation's canned response, if one is registered.
+
+    ``virtual_tools`` maps ``tool_name -> {"result": <any>, "success"?: bool,
+    "error"?: str}`` — the "simulated world" a rehearsal runs against (AGENT-HARDEN-4b).
+    Returns a normalized ``{success, result, error}`` or None when the tool has no
+    fake implementation (the caller then falls back to the deterministic placeholder).
+    """
+    if not isinstance(virtual_tools, dict):
+        return None
+    spec = virtual_tools.get(tool)
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        return {"success": True, "result": spec, "error": None}
+    return {
+        "success": bool(spec.get("success", True)),
+        "result": spec.get("result"),
+        "error": spec.get("error"),
+    }
+
+
 def simulate_agent_tool(
     tool_name: str,
     args: Any,
@@ -43,6 +65,7 @@ def simulate_agent_tool(
     run_id: str,
     execution_token: Optional[dict],
     session_factory: Any = None,
+    virtual_tools: Optional[dict] = None,
 ) -> dict[str, Any]:
     """Predict a tool's effect with ZERO execution.
 
@@ -58,6 +81,11 @@ def simulate_agent_tool(
     ``call_result.success`` is True on a capability-permitted simulated call so the
     surrounding plan keeps flowing (downstream steps also simulate); a
     capability-denied call returns success=False, mirroring real enforcement.
+
+    AGENT-HARDEN-4b — ``virtual_tools`` supplies **fake tool implementations** (a
+    simulated world): when the tool has a registered fake response, the shadow
+    returns *that* (so downstream steps see realistic data), else a deterministic
+    placeholder. Either way no real tool runs and no network egress occurs.
     """
     tool_args = dict(args) if isinstance(args, dict) else {}
     tool = str(tool_name)
@@ -95,11 +123,25 @@ def simulate_agent_tool(
         with contextlib.suppress(Exception):
             db.close()
 
-    predicted_result = {
-        "simulated": True,
-        "tool": tool,
-        "note": "predicted effect — no real side effect executed",
-    }
+    # A fake tool impl (the simulated world) takes precedence over the placeholder.
+    virtual = _virtual_response(virtual_tools, tool) if capability_ok else None
+    if virtual is not None:
+        predicted_result = virtual["result"]
+        effect_source = "virtual"
+        call_result = {
+            "success": virtual["success"],
+            "result": virtual["result"],
+            "error": virtual["error"],
+        }
+    else:
+        predicted_result = {
+            "simulated": True,
+            "tool": tool,
+            "note": "predicted effect — no real side effect executed",
+        }
+        effect_source = "placeholder"
+        call_result = {"success": True, "result": predicted_result, "error": None}
+
     would_write = {
         "tool": tool,
         "args": tool_args,
@@ -107,6 +149,7 @@ def simulate_agent_tool(
         "capability_ok": capability_ok,
         "capability_error": capability_error,
         "predicted_result": predicted_result if capability_ok else None,
+        "source": effect_source if capability_ok else None,
         "executed": False,  # invariant: simulation never runs the real tool
     }
 
@@ -116,7 +159,4 @@ def simulate_agent_tool(
             "would_write": would_write,
         }
 
-    return {
-        "call_result": {"success": True, "result": predicted_result, "error": None},
-        "would_write": would_write,
-    }
+    return {"call_result": call_result, "would_write": would_write}

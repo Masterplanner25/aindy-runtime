@@ -144,8 +144,8 @@ surfacing, compensator-failure isolation, success-only, tenant scope). Docs: `SY
 
 ### AGENT-HARDEN-4 — Effect-simulation / true dry-run (shadow `call_tool` seam)
 
-**Status:** CLOSED (2026-07-05) for **-4** (close trigger met via PR1+PR2). **-4b**
-(sandbox rehearsal, PR3) is the remaining follow-up — tracked below.
+**Status:** CLOSED (2026-07-05) — **-4** (PR1+PR2) and **-4b** (PR3, virtual tool
+environment) both landed.
 
 Plan-preview is real — a plan is generated, risk-scored, and persisted as `pending_approval`,
 shown in the apps `AgentApprovalInbox` with per-step + overall risk before any tool runs
@@ -182,10 +182,22 @@ shadowed, `executed:false`, no side effect). Tests: `test_agent_simulate.py` (re
 no status change, flag threading, token reuse/mint, tenant scope). Docs: `SYSCALL_REFERENCE.md`.
 **Close trigger met.**
 
-**Remaining — AGENT-HARDEN-4b (environment virtualization, PR3):** run the plan inside the
-existing `--network none` sandbox with *fake* tool implementations injected at `call_tool` = a
-rehearsal harness against a simulated world (vs PR2's predicted-effect report). **Relates to:**
-the predicted-effect report is the same surface AGENT-HARDEN-6's post-condition checker consumes.
+**PR3 (done) — AGENT-HARDEN-4b (virtual tool environment).** The shadow seam now accepts
+`virtual_tools` = **fake tool implementations** (`{tool_name: {"result", "success"?, "error"?}}`)
+so a rehearsal runs against a *simulated world*: a tool with a fake impl returns its scripted
+output (downstream steps see realistic data; each effect is tagged `source:"virtual"`), others
+get the deterministic placeholder (`source:"placeholder"`). Threads `virtual_tools`
+`NodusExecutionContext → subprocess → nodus_worker._call_tool → simulate_agent_tool`, and up the
+agent path via `simulate_agent_run(virtual_tools=…)` / `sys.v1.agent.simulate` payload
+`virtual_tools`. Capability is still enforced first (a denied tool ignores its fake impl).
+**Network isolation:** simulation executes **zero real tools** (invariant `executed:False`), so
+no tool network egress is possible by construction; container-grade `--network none` remains the
+existing guarantee on the Docker-sandboxed **extension** execution path (C2/C3) — running the
+agent nodus_worker itself inside that container is a separate, larger integration, not required
+for the zero-side-effect rehearsal. Tests: `test_tool_simulation.py` (virtual result/failure,
+placeholder fallback, capability-gated) + `test_agent_simulate.py` (virtual_tools threading +
+handler passthrough); verified through the real subprocess. **Relates to:** the predicted-effect
+report is the same surface AGENT-HARDEN-6's post-condition checker consumes.
 
 ### AGENT-HARDEN-5 — LLM provider fallback chain
 

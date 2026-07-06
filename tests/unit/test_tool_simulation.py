@@ -88,6 +88,68 @@ def test_capability_check_error_fails_closed(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# AGENT-HARDEN-4b — fake tool implementations (the simulated world)
+# --------------------------------------------------------------------------- #
+
+def test_virtual_tool_returns_scripted_result(monkeypatch):
+    monkeypatch.setattr(
+        "AINDY.agents.capability_service.check_tool_capability", lambda **kw: {"ok": True}
+    )
+    out = simulate_agent_tool(
+        "fetch_user", {"id": 7}, user_id="u", run_id="r",
+        execution_token={"token_hash": "h"}, session_factory=_sf,
+        virtual_tools={"fetch_user": {"result": {"name": "Ada"}}},
+    )
+    # The plan sees the fake world's data (so downstream steps get realistic input).
+    assert out["call_result"]["success"] is True
+    assert out["call_result"]["result"] == {"name": "Ada"}
+    assert out["would_write"]["source"] == "virtual"
+    assert out["would_write"]["executed"] is False  # still zero real execution
+
+
+def test_virtual_tool_can_script_failure(monkeypatch):
+    monkeypatch.setattr(
+        "AINDY.agents.capability_service.check_tool_capability", lambda **kw: {"ok": True}
+    )
+    out = simulate_agent_tool(
+        "charge_card", {}, user_id="u", run_id="r",
+        execution_token={"token_hash": "h"}, session_factory=_sf,
+        virtual_tools={"charge_card": {"success": False, "error": "insufficient funds"}},
+    )
+    assert out["call_result"]["success"] is False
+    assert out["call_result"]["error"] == "insufficient funds"
+    assert out["would_write"]["source"] == "virtual"
+
+
+def test_no_virtual_impl_falls_back_to_placeholder(monkeypatch):
+    monkeypatch.setattr(
+        "AINDY.agents.capability_service.check_tool_capability", lambda **kw: {"ok": True}
+    )
+    out = simulate_agent_tool(
+        "other_tool", {}, user_id="u", run_id="r",
+        execution_token={"token_hash": "h"}, session_factory=_sf,
+        virtual_tools={"fetch_user": {"result": {}}},  # different tool
+    )
+    assert out["would_write"]["source"] == "placeholder"
+    assert out["call_result"]["result"]["simulated"] is True
+
+
+def test_virtual_ignored_when_capability_denied(monkeypatch):
+    monkeypatch.setattr(
+        "AINDY.agents.capability_service.check_tool_capability",
+        lambda **kw: {"ok": False, "error": "not granted"},
+    )
+    out = simulate_agent_tool(
+        "fetch_user", {}, user_id="u", run_id="r",
+        execution_token={"token_hash": "h"}, session_factory=_sf,
+        virtual_tools={"fetch_user": {"result": {"name": "Ada"}}},
+    )
+    assert out["call_result"]["success"] is False
+    assert out["would_write"]["predicted_result"] is None
+    assert out["would_write"]["source"] is None
+
+
+# --------------------------------------------------------------------------- #
 # Adapter threading — simulate flag out, simulated_effects back
 # --------------------------------------------------------------------------- #
 
