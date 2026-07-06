@@ -878,8 +878,64 @@ def _execute_agent_segment_chain(
             )
             return {"status": "WAITING", "wait_for": seg["wait"]["event_type"], "run_id": str(run_id)}
 
-        # ── Success + terminal segment: complete the run ──────────────────────────
+        # ── Success + terminal segment: verify, then complete the run ─────────────
         completed_ok = ran == total_tool_steps
+
+        # Verifier stage (AGENT-HARDEN-6): on a fully-run plan, check declared
+        # per-step post-conditions (`expects`) before marking the run complete.
+        # Plans with no `expects` verify vacuously (checked == 0) — no behavior
+        # change. Failure marks the run 'verify_failed' and rolls back reversible
+        # effects via the AGENT-HARDEN-3 compensators.
+        verdict = None
+        if completed_ok:
+            from AINDY.core.verifier import extract_post_conditions, verify_post_conditions
+
+            verdict = verify_post_conditions(
+                extract_post_conditions(getattr(run, "plan", None) if run else None),
+                accumulated,
+            )
+
+        if completed_ok and verdict is not None and not verdict["ok"]:
+            if run:
+                if flow_run_id:
+                    run.flow_run_id = str(flow_run_id)
+                run.steps_completed = ran
+                run.current_step = ran
+                run.result = {"steps": accumulated, "verify": verdict}
+                run.completed_at = now
+                run.status = "verify_failed"
+                run.wait_state = None
+                run.error_message = (
+                    f"post-condition verification failed: "
+                    f"{len(verdict['failures'])} check(s) did not hold"
+                )
+            db.commit()
+            _sync_agent_eu_status(db, run_id, "verify_failed")
+            # Roll back reversible effects (best-effort — the run stays verify_failed
+            # even if undo hits a snag; irreversible effects are surfaced by undo).
+            undo_summary: dict[str, Any] = {}
+            try:
+                from AINDY.core.effect_compensation import undo_run_effects
+
+                undo_summary = undo_run_effects(str(run_id), db=db, context=None)
+            except Exception as exc:
+                logger.warning(
+                    "[NodusExecutionService] undo after verify_failed for %s failed: %s",
+                    run_id, exc,
+                )
+            record_agent_event(
+                run_id=run_id, user_id=user_id, event_type="VERIFY_FAILED", db=db,
+                correlation_id=correlation_id,
+                payload={
+                    "failures": verdict["failures"],
+                    "checked": verdict["checked"],
+                    "reversed": undo_summary.get("reversed", []),
+                    "irreversible": undo_summary.get("irreversible", []),
+                },
+                required=False,
+            )
+            return {"status": "VERIFY_FAILED", "run_id": str(run_id), "verify": verdict}
+
         if run:
             if flow_run_id:
                 run.flow_run_id = str(flow_run_id)
@@ -900,6 +956,14 @@ def _execute_agent_segment_chain(
             payload={"steps_completed": ran, "steps_total": total_tool_steps},
             required=False,
         )
+        # Emit VERIFIED only when post-conditions were actually checked and held.
+        if completed_ok and verdict is not None and verdict["checked"] > 0:
+            record_agent_event(
+                run_id=run_id, user_id=user_id, event_type="VERIFIED", db=db,
+                correlation_id=correlation_id,
+                payload={"checked": verdict["checked"]},
+                required=False,
+            )
         return flow_result
     except Exception as exc:
         logger.warning("[NodusExecutionService] agent segment chain failed for %s: %s", run_id, exc)

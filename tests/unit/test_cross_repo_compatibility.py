@@ -472,6 +472,7 @@ _STABLE_AGENT_RUN_STATUSES = [
     "completed",
     "failed",
     "cancelled",  # AGENT-HARDEN-1 — operator-driven terminal cancel state
+    "verify_failed",  # AGENT-HARDEN-6 — post-condition verification failed (terminal)
 ]
 
 

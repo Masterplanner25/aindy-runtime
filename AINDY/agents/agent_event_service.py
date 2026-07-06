@@ -42,6 +42,8 @@ AGENT_EVENT_TYPES = {
     "REPLAY_CREATED",
     "WAITING",  # RTR-1 Phase 2e — agent run parked on a mid-plan WAIT step
     "CANCELLED",  # AGENT-HARDEN-1 — operator-driven cooperative cancel (terminal)
+    "VERIFIED",  # AGENT-HARDEN-6 — post-conditions checked and held
+    "VERIFY_FAILED",  # AGENT-HARDEN-6 — post-conditions did not hold (terminal)
 }
 
 

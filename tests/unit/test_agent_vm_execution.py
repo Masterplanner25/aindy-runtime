@@ -520,6 +520,89 @@ def test_vm_cancel_during_wait_prevents_next_segment(
 
 
 # --------------------------------------------------------------------------- #
+# AGENT-HARDEN-6 — Verifier stage (post-condition check + verify→rollback)
+# --------------------------------------------------------------------------- #
+
+def _events_capture(monkeypatch):
+    events = []
+    monkeypatch.setattr(
+        "AINDY.core.execution_signal_helper.record_agent_event",
+        lambda **kw: events.append(kw.get("event_type")),
+    )
+    return events
+
+
+def test_vm_run_verify_pass_completes(session, monkeypatch, _mock_side_effects):
+    run = _make_run(session)
+    plan = {"steps": [
+        {"tool": "search", "args": {}, "risk_level": "low",
+         "expects": {"field": "i", "op": "eq", "value": 0}},
+    ]}
+    run.plan = plan
+    session.commit()
+    events = _events_capture(monkeypatch)
+    monkeypatch.setattr(svc, "run_nodus_script_via_flow", _segment_aware_flow)
+
+    result = svc.execute_agent_run_via_workflow(
+        run_id=str(run.id), plan=plan, user_id=str(run.user_id), db=session,
+        execution_token={"token_hash": "h", "granted_tools": ["search"]},
+    )
+    assert result["status"] == "SUCCESS"
+    session.refresh(run)
+    assert run.status == "completed"
+    assert "VERIFIED" in events and "VERIFY_FAILED" not in events
+
+
+def test_vm_run_verify_fail_marks_verify_failed_and_undoes(session, monkeypatch, _mock_side_effects):
+    run = _make_run(session)
+    plan = {"steps": [
+        {"tool": "search", "args": {}, "risk_level": "low",
+         "expects": {"field": "i", "op": "eq", "value": 99}},  # 0 != 99 → fails
+    ]}
+    run.plan = plan
+    session.commit()
+    events = _events_capture(monkeypatch)
+    monkeypatch.setattr(svc, "run_nodus_script_via_flow", _segment_aware_flow)
+
+    undo_calls = []
+    import AINDY.core.effect_compensation as ec
+    monkeypatch.setattr(
+        ec, "undo_run_effects",
+        lambda run_id, **kw: undo_calls.append(run_id) or {"reversed": [], "irreversible": [], "failed": []},
+    )
+
+    result = svc.execute_agent_run_via_workflow(
+        run_id=str(run.id), plan=plan, user_id=str(run.user_id), db=session,
+        execution_token={"token_hash": "h", "granted_tools": ["search"]},
+    )
+    assert result["status"] == "VERIFY_FAILED"
+    session.refresh(run)
+    assert run.status == "verify_failed"
+    assert run.result["verify"]["failures"]  # the failing condition is recorded
+    assert run.error_message and "verification failed" in run.error_message
+    assert undo_calls == [str(run.id)]  # rollback invoked for this run
+    assert "VERIFY_FAILED" in events
+
+
+def test_vm_run_no_expects_verifies_vacuously(session, monkeypatch, _mock_side_effects):
+    """A plan with no post-conditions completes normally and emits no verify event."""
+    run = _make_run(session)
+    plan = {"steps": [{"tool": "a", "args": {}}, {"tool": "b", "args": {}}]}
+    run.plan = plan
+    session.commit()
+    events = _events_capture(monkeypatch)
+    monkeypatch.setattr(svc, "run_nodus_script_via_flow", _segment_aware_flow)
+
+    svc.execute_agent_run_via_workflow(
+        run_id=str(run.id), plan=plan, user_id=str(run.user_id), db=session,
+        execution_token={"token_hash": "h"},
+    )
+    session.refresh(run)
+    assert run.status == "completed"
+    assert "VERIFIED" not in events and "VERIFY_FAILED" not in events  # checked == 0
+
+
+# --------------------------------------------------------------------------- #
 # RTR-1 Phase 2e — cross-restart rehydration of waiting agent runs
 # --------------------------------------------------------------------------- #
 

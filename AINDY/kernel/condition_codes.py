@@ -95,13 +95,17 @@ class AgentRunStatus(str, Enum):
     Lifecycle states for an AgentRun entity.
 
     Stable surface — returned in agent execution API responses.
-    Terminal states: COMPLETED, FAILED, CANCELLED.
+    Terminal states: COMPLETED, FAILED, CANCELLED, VERIFY_FAILED.
     Intermediate: DELEGATED (sub-agent dispatched; not yet terminal).
 
     CANCELLED (AGENT-HARDEN-1): operator-driven terminal state set by
     ``sys.v1.agent.cancel``. A non-terminal run is flipped to CANCELLED via an
     atomic CAS; the VM-backed segment chain observes it at the next segment
     boundary and halts before the next tool call.
+
+    VERIFY_FAILED (AGENT-HARDEN-6): a run whose plan ran to completion but whose
+    declared post-conditions did not hold. The Verifier stage marks it terminal
+    and rolls back its reversible effects (AGENT-HARDEN-3 compensators).
     """
 
     PENDING_APPROVAL = "pending_approval"
@@ -111,6 +115,7 @@ class AgentRunStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    VERIFY_FAILED = "verify_failed"
 
 
 class DependencyStatus(str, Enum):
