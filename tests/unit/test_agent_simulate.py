@@ -143,6 +143,28 @@ def test_simulate_threads_simulate_flag(session, monkeypatch):
     assert captured["extra_initial_state"]["simulate"] is True
 
 
+def test_simulate_threads_virtual_tools(session, monkeypatch):
+    """AGENT-HARDEN-4b: fake tool impls flow through to the flow call."""
+    user_id = uuid.uuid4()
+    plan = {"steps": [{"tool": "fetch_user", "args": {}}]}
+    run = _make_run(session, user_id=user_id, plan=plan)
+
+    captured = {}
+
+    def _capture(**kw):
+        captured.update(kw)
+        return _fake_flow_result([], {"__step_0_result": {"success": True, "result": {}, "error": None}})
+
+    monkeypatch.setattr(svc, "run_nodus_script_via_flow", _capture)
+    simulate_agent_run(
+        run_id=str(run.id), plan=plan, user_id=str(user_id), db=session,
+        virtual_tools={"fetch_user": {"result": {"name": "Ada"}}},
+    )
+    eis = captured["extra_initial_state"]
+    assert eis["simulate"] is True
+    assert eis["virtual_tools"] == {"fetch_user": {"result": {"name": "Ada"}}}
+
+
 def test_simulate_invalid_plan_returns_error(session, monkeypatch):
     user_id = uuid.uuid4()
     # A WAIT step with a non-string wait_for makes split_agent_plan raise ValueError.
@@ -187,9 +209,12 @@ def test_handler_delegates_and_reuses_token(session, monkeypatch):
         lambda **kw: pytest.fail("should reuse existing token"),
     )
 
-    result = _handle_agent_simulate({"run_id": str(run.id)}, _ctx(user_id, session))
+    result = _handle_agent_simulate(
+        {"run_id": str(run.id), "virtual_tools": {"a": {"result": 1}}}, _ctx(user_id, session)
+    )
     assert result["simulated"] is True
     assert seen["execution_token"] == {"token_hash": "h", "granted_tools": ["a"]}
+    assert seen["virtual_tools"] == {"a": {"result": 1}}  # -4b passthrough
 
 
 def test_handler_mints_preview_token_when_absent(session, monkeypatch):

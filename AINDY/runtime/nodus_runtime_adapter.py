@@ -39,6 +39,9 @@ class NodusExecutionContext:
     # result is returned so the plan keeps flowing, and each call records a
     # "would-write" intent collected into NodusExecutionResult.simulated_effects.
     simulate: bool = False
+    # AGENT-HARDEN-4b — fake tool implementations (the simulated world) consulted by
+    # the shadow seam during simulate: tool_name -> {"result", "success"?, "error"?}.
+    virtual_tools: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -131,6 +134,7 @@ class NodusRuntimeAdapter:
                     "run_id": str(context.run_id or context.execution_unit_id or ""),
                     "execution_token": context.execution_token,
                     "simulate": bool(context.simulate),
+                    "virtual_tools": context.virtual_tools or {},
                 },
             }
         )

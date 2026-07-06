@@ -356,8 +356,9 @@ freshly minted preview token for the plan.
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
 | `run_id` | string | yes | `AgentRun` id to simulate. |
+| `virtual_tools` | dict | no | AGENT-HARDEN-4b — fake tool implementations (the simulated world): `{tool_name: {"result": <any>, "success"?: bool, "error"?: str}}`. A tool with a fake impl returns that scripted output (so downstream steps see realistic data); others get a deterministic placeholder. Still zero real execution. |
 
-**Returns:** `{simulated: true, steps: [...], simulated_effects: [{tool, args, risk_level, capability_ok, predicted_result, executed: false}…], steps_total, effects_total}`
+**Returns:** `{simulated: true, steps: [...], simulated_effects: [{tool, args, risk_level, capability_ok, predicted_result, source: "virtual"|"placeholder", executed: false}…], steps_total, effects_total}`
 
 ---
 

@@ -1226,6 +1226,11 @@ def _handle_agent_simulate(payload: dict, context: SyscallContext) -> dict:
                 )
                 token = None
 
+        # AGENT-HARDEN-4b — optional fake tool implementations (the simulated world).
+        virtual_tools = payload.get("virtual_tools")
+        if not isinstance(virtual_tools, dict):
+            virtual_tools = None
+
         from AINDY.runtime.nodus_execution_service import simulate_agent_run
 
         return simulate_agent_run(
@@ -1235,6 +1240,7 @@ def _handle_agent_simulate(payload: dict, context: SyscallContext) -> dict:
             db=db,
             execution_token=token,
             correlation_id=run.correlation_id,
+            virtual_tools=virtual_tools,
         )
     finally:
         if owns_session:
@@ -1659,7 +1665,10 @@ SYSCALL_REGISTRY["sys.v1.agent.simulate"] = SyscallEntry(
     description="Predicted-effect dry-run of an AgentRun (tools shadowed, zero side effects); persists the report for the approval inbox.",
     input_schema={
         "required": ["run_id"],
-        "properties": {"run_id": {"type": "string"}},
+        "properties": {
+            "run_id": {"type": "string"},
+            "virtual_tools": {"type": "dict"},
+        },
     },
     output_schema={
         "required": ["simulated"],

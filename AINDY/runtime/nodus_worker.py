@@ -192,6 +192,10 @@ def main() -> int:
     # tool runs, and each call records a predicted "would-write" intent here.
     simulate_mode = bool(ctx.get("simulate"))
     simulated_effects: list[dict[str, Any]] = []
+    # AGENT-HARDEN-4b — fake tool implementations (the simulated world).
+    virtual_tools = ctx.get("virtual_tools")
+    if not isinstance(virtual_tools, dict):
+        virtual_tools = {}
 
     from nodus.runtime.embedding import NodusRuntime
     from AINDY.nodus.runtime.memory_bridge import AINDYMemoryBridge
@@ -245,6 +249,7 @@ def main() -> int:
                 user_id=user_id,
                 run_id=tool_run_id,
                 execution_token=tool_execution_token,
+                virtual_tools=virtual_tools,
             )
             simulated_effects.append(_json_safe(shadow["would_write"]))
             return shadow["call_result"]

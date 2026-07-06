@@ -1107,6 +1107,7 @@ def simulate_agent_run(
     db: Session,
     execution_token: dict[str, Any] | None = None,
     correlation_id: str | None = None,
+    virtual_tools: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """AGENT-HARDEN-4 (PR2) — run a plan in simulate mode; predicted-effect report.
 
@@ -1117,6 +1118,10 @@ def simulate_agent_run(
     simulated_effects, ...}`` is persisted under ``run.result["simulation"]`` for the
     apps ``AgentApprovalInbox`` **without changing the run's status** — this is a
     preview, not an execution. Returns the report.
+
+    ``virtual_tools`` (AGENT-HARDEN-4b) supplies fake tool implementations (the
+    simulated world) — ``{tool_name: {"result", "success"?, "error"?}}`` — so the
+    rehearsal runs against realistic scripted outputs instead of static placeholders.
     """
     from AINDY.db.models import AgentRun
     from AINDY.runtime.agent_plan_compiler import compile_agent_segment, split_agent_plan
@@ -1149,6 +1154,7 @@ def simulate_agent_run(
                     "execution_token": execution_token,
                     "agent_run_id": str(run_id),
                     "simulate": True,
+                    "virtual_tools": virtual_tools or {},
                 },
             )
         except Exception as exc:
@@ -1262,6 +1268,7 @@ def execute_nodus_runtime(
     adapter_cls=None,
     context_cls=None,
     simulate: bool = False,
+    virtual_tools: dict[str, Any] | None = None,
 ):
     """
     Canonical Nodus runtime entrypoint used by both route helpers and flow nodes.
@@ -1298,6 +1305,7 @@ def execute_nodus_runtime(
         run_id=str(run_id or execution_unit_id or ""),
         execution_token=execution_token,
         simulate=bool(simulate),
+        virtual_tools=virtual_tools or {},
     )
     adapter = adapter_cls(db=db)
     if script is not None:
