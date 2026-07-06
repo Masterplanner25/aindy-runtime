@@ -8,6 +8,7 @@ class Scopes:
     MEMORY_READ     = "memory.read"
     MEMORY_WRITE    = "memory.write"
     AGENT_RUN       = "agent.run"
+    EXECUTION_READ  = "execution.read"
     WEBHOOK_MANAGE  = "webhook.manage"
     PLATFORM_ADMIN  = "platform.admin"
 
@@ -17,6 +18,7 @@ class Scopes:
         MEMORY_READ,
         MEMORY_WRITE,
         AGENT_RUN,
+        EXECUTION_READ,
         WEBHOOK_MANAGE,
         PLATFORM_ADMIN,
     ]
