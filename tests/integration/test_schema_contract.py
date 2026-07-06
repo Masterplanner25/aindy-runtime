@@ -169,8 +169,22 @@ def test_alembic_version_runtime_table_exists(test_engine):
 
 
 def test_alembic_version_runtime_at_head(test_engine):
-    """alembic_version_runtime must be stamped at 0007 (current head)."""
+    """alembic_version_runtime must be stamped at the current Alembic head.
+
+    The head is read dynamically from the migration script directory rather than
+    hardcoded, so adding a migration does not require editing this assertion — the
+    invariant is "the DB is stamped at head", not "head is a specific revision".
+    """
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
     from sqlalchemy import text
+
+    repo_root = Path(__file__).resolve().parents[2]
+    cfg = Config(str(repo_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(repo_root / "alembic"))
+    expected_head = ScriptDirectory.from_config(cfg).get_current_head()
 
     with test_engine.connect() as conn:
         row = conn.execute(
@@ -178,8 +192,8 @@ def test_alembic_version_runtime_at_head(test_engine):
         ).fetchone()
 
     assert row is not None, "alembic_version_runtime has no rows — DB not stamped"
-    assert row[0] == "0007", (
-        f"Expected version '0007', got {row[0]!r}"
+    assert row[0] == expected_head, (
+        f"Expected head {expected_head!r}, got {row[0]!r}"
     )
 
 
