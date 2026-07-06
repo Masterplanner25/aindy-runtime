@@ -94,24 +94,28 @@ close trigger). Docs: `SYSCALL_REFERENCE.md`.
 
 ### AGENT-HARDEN-2 — Cryptographic capability-token integrity (replace unkeyed SHA-256)
 
-**Status:** Open — **High** (security). The one real forge hole.
+**Status:** CLOSED (2026-07-05). The forge hole is closed.
 
-`AINDY/agents/capability_service.py` `_token_hash` is an **unkeyed SHA-256** over the token's
-own non-secret fields (run_id, user_id, token, timestamps, tools, caps). It is tamper-evident
-only against accidental corruption — anyone who can recompute SHA-256 over the (public) fields
-can forge a matching `token_hash`. The `execution_token` itself is an opaque `uuid4`. There is
-no cryptographic agent identity anywhere (`auth_service.py` user JWT is symmetric HS256).
+`capability_service.py` `_token_hash` is now **HMAC-SHA256 keyed on the auth `KeyRing`
+secret** (via new `auth_service.signing_key()` / `verification_keys()` accessors), replacing
+the unkeyed SHA-256 that anyone able to recompute a hash over the public fields could forge.
+Minting uses the active key; `validate_token` verifies against active + previous key within the
+rotation grace window (`hmac.compare_digest`, constant-time), mirroring the JWT multi-key
+verify. `_token_hash` keeps its signature (mint/refresh call sites unchanged); a new
+`_token_hash_matches` drives verify. Token dict shape is unchanged (`token_hash` is still a hex
+string), so no cross-repo/SDK contract impact. Falls back to the process `SECRET_KEY` if the
+KeyRing can't be imported (keeps mint/verify symmetric in embedded contexts).
 
-**Fix:** replace the unkeyed hash with **HMAC-SHA256 keyed on the existing `KeyRing` secret**
-(`services/auth_service.py` already rotates it via `rotate_signing_key` / SIGHUP
-`reload_from_env`), verifying against active + previous key within the grace window (mirror
-`KeyRing`'s multi-key verify). Optional stronger tier: Ed25519 asymmetric mint/verify for a
-true signed agent identity. Mint/verify call sites are unchanged — only the primitive inside
-them swaps.
+**Migration caveat:** tokens minted under the old unkeyed scheme fail HMAC verification after
+deploy — in-flight `approved`/`waiting` runs carrying a pre-deploy token (TTL 24h) must be
+drained or re-approved across the upgrade. Deliberate: accepting the legacy hash during a grace
+window would leave the forge hole open, defeating the fix.
 
-**Effort:** ~1 PR (HMAC path). **Close trigger:** capability-token integrity is a keyed MAC
-(or signature); a token with mutated fields fails verification; rotation grace-window covered
-by test.
+**Remaining (optional) upgrade:** symmetric HMAC proves integrity, not *identity* — any holder
+of the runtime secret can mint. Ed25519 asymmetric mint/verify for a true signed agent identity
+is deferred (no consumer needs it yet). Tests: `test_capability_token_integrity.py` (keyed MAC,
+legacy-hash rejection, tamper detection, rotation grace, KeyRing-down fallback);
+`test_capability_token_refresh.py` still green (real-KeyRing round trip). Docs: `SECURITY_MATRIX.md`.
 
 ### AGENT-HARDEN-3 — Reversible actions / compensating-undo log
 

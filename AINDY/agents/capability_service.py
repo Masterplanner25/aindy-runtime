@@ -10,7 +10,9 @@ Responsibilities:
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -136,7 +138,7 @@ def get_plan_required_capabilities(plan: Optional[dict], agent_type: str = DEFAU
     return sorted(capabilities)
 
 
-def _token_hash(
+def _token_payload(
     run_id: str,
     user_id: str,
     execution_token: str,
@@ -146,7 +148,8 @@ def _token_hash(
     granted_tools: list[str],
     allowed_capabilities: list[str],
 ) -> str:
-    payload = "|".join(
+    """Canonical, order-stable serialization of a token's non-secret claims."""
+    return "|".join(
         [
             str(run_id),
             str(user_id),
@@ -158,7 +161,96 @@ def _token_hash(
             ",".join(sorted(allowed_capabilities)),
         ]
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _signing_keys(*, for_verify: bool) -> list[str]:
+    """HMAC key material for the capability token, sourced from the auth ``KeyRing``.
+
+    Minting uses the active key only; verification tries active + previous within
+    the rotation grace window (mirrors JWT verify), so a token minted just before a
+    ``rotate_signing_key`` / SIGHUP rotation still verifies during the grace period.
+    Falls back to the process ``SECRET_KEY`` if the KeyRing cannot be imported
+    (keeps mint/verify symmetric in minimal/embedded contexts).
+    """
+    try:
+        from AINDY.services import auth_service
+
+        keys = (
+            list(auth_service.verification_keys())
+            if for_verify
+            else [auth_service.signing_key()]
+        )
+        keys = [k for k in keys if k]
+        if keys:
+            return keys
+    except Exception as exc:  # pragma: no cover - KeyRing import is load-bearing in prod
+        logger.warning("[CapabilityService] KeyRing unavailable for token MAC: %s", exc)
+
+    secret = os.getenv("SECRET_KEY", "")
+    return [secret] if secret else [""]
+
+
+def _token_hash(
+    run_id: str,
+    user_id: str,
+    execution_token: str,
+    issued_at: str,
+    expires_at: str,
+    approval_mode: str,
+    granted_tools: list[str],
+    allowed_capabilities: list[str],
+) -> str:
+    """Mint-side integrity MAC: HMAC-SHA256 over the token claims, keyed on the
+    active signing secret (AGENT-HARDEN-2). Replaces the former unkeyed SHA-256,
+    which anyone able to recompute a hash over the public fields could forge.
+    """
+    payload = _token_payload(
+        run_id=run_id,
+        user_id=user_id,
+        execution_token=execution_token,
+        issued_at=issued_at,
+        expires_at=expires_at,
+        approval_mode=approval_mode,
+        granted_tools=granted_tools,
+        allowed_capabilities=allowed_capabilities,
+    )
+    key = _signing_keys(for_verify=False)[0]
+    return hmac.new(key.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _token_hash_matches(
+    candidate: str,
+    *,
+    run_id: str,
+    user_id: str,
+    execution_token: str,
+    issued_at: str,
+    expires_at: str,
+    approval_mode: str,
+    granted_tools: list[str],
+    allowed_capabilities: list[str],
+) -> bool:
+    """Verify-side integrity check: constant-time compare *candidate* against the
+    HMAC computed under each active/previous signing key (rotation grace window).
+    """
+    payload = _token_payload(
+        run_id=run_id,
+        user_id=user_id,
+        execution_token=execution_token,
+        issued_at=issued_at,
+        expires_at=expires_at,
+        approval_mode=approval_mode,
+        granted_tools=granted_tools,
+        allowed_capabilities=allowed_capabilities,
+    )
+    candidate_s = str(candidate)
+    for key in _signing_keys(for_verify=True):
+        expected = hmac.new(
+            key.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        if hmac.compare_digest(expected, candidate_s):
+            return True
+    return False
 
 
 def _get_trust(user_id: str, db) -> Optional[Any]:
@@ -536,7 +628,8 @@ def validate_token(token: Optional[dict], run_id: str, user_id: str) -> dict:
         if expires_at_dt <= _now_utc():
             return {"ok": False, "error": "capability token expired", "granted_tools": [], "allowed_capabilities": []}
 
-        expected_hash = _token_hash(
+        if not _token_hash_matches(
+            token_hash,
             run_id=str(run_id),
             user_id=str(user_id),
             execution_token=execution_token,
@@ -545,8 +638,7 @@ def validate_token(token: Optional[dict], run_id: str, user_id: str) -> dict:
             approval_mode=approval_mode,
             granted_tools=granted_tools,
             allowed_capabilities=allowed_capabilities,
-        )
-        if expected_hash != token_hash:
+        ):
             return {"ok": False, "error": "capability token hash mismatch", "granted_tools": [], "allowed_capabilities": []}
 
         return {

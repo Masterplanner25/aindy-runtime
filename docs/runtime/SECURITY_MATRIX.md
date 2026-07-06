@@ -1,6 +1,6 @@
 ---
 title: "Runtime Security Matrix"
-last_verified: "2026-06-03"
+last_verified: "2026-07-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -52,6 +52,27 @@ after registration. The trust model relies on operator control of the deployment
 **Gap:** No test verifies that a registered Tier 1 callable is NOT additionally
 capability-confined at execution time. This is a design invariant, not a testable
 enforcement path.
+
+### Agent capability-token integrity (AGENT-HARDEN-2)
+
+A per-run **capability token** scopes an approved agent run to its granted tools
+and capabilities (`AINDY/agents/capability_service.py`). Its `token_hash` is an
+**HMAC-SHA256** over the token's claims, keyed on the auth `KeyRing` secret
+(`AINDY/services/auth_service.py`) — the same secret and rotation machinery that
+signs JWTs. Verification tries the active key then the previous key within the
+rotation grace window, and uses a constant-time compare.
+
+- **What holds:** tampering any MAC-bound claim (execution_token, expiry,
+  approval_mode, granted tools/capabilities) invalidates the token; forging a
+  matching hash requires the signing secret.
+- **What does NOT hold:** this is symmetric integrity, not agent identity — any
+  holder of the runtime secret can mint. An asymmetric (Ed25519) signed-identity
+  tier is a documented future upgrade.
+- **Migration:** tokens minted before this change used an unkeyed SHA-256 and will
+  fail verification after deploy — drain or re-approve any in-flight agent runs
+  across the upgrade (token TTL is 24h).
+- **Test coverage:** `tests/unit/test_capability_token_integrity.py` (keyed MAC,
+  legacy-hash rejection, tamper detection, rotation grace window).
 
 ---
 
