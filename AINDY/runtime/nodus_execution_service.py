@@ -1079,6 +1079,106 @@ def execute_agent_run_via_workflow(
         return {"status": "FAILED", "error": str(exc)}
 
 
+def _extract_simulated_effects(flow_result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pull the predicted ``simulated_effects`` out of a flow-backed nodus result.
+
+    They ride ``nodus_execute_result`` (the execution summary) in the flow state,
+    with a fallback to the ``data`` envelope. Empty for a non-simulate run.
+    """
+    if not isinstance(flow_result, dict):
+        return []
+    for bucket_key in ("state", "data"):
+        bucket = flow_result.get(bucket_key)
+        if not isinstance(bucket, dict):
+            continue
+        summary = bucket.get("nodus_execute_result")
+        if isinstance(summary, dict) and summary.get("simulated_effects"):
+            return list(summary["simulated_effects"])
+        if bucket.get("simulated_effects"):
+            return list(bucket["simulated_effects"])
+    return []
+
+
+def simulate_agent_run(
+    *,
+    run_id: str,
+    plan: dict[str, Any],
+    user_id: str,
+    db: Session,
+    execution_token: dict[str, Any] | None = None,
+    correlation_id: str | None = None,
+) -> dict[str, Any]:
+    """AGENT-HARDEN-4 (PR2) — run a plan in simulate mode; predicted-effect report.
+
+    Splits the plan and runs every tool segment through the flow-backed nodus path
+    with ``simulate=True`` (WAIT boundaries are ignored — the whole plan is
+    previewed). No tool executes: each ``call_tool`` is shadowed, producing a
+    predicted result + a ``would_write`` intent. The report ``{simulated, steps,
+    simulated_effects, ...}`` is persisted under ``run.result["simulation"]`` for the
+    apps ``AgentApprovalInbox`` **without changing the run's status** — this is a
+    preview, not an execution. Returns the report.
+    """
+    from AINDY.db.models import AgentRun
+    from AINDY.runtime.agent_plan_compiler import compile_agent_segment, split_agent_plan
+    from AINDY.runtime.nodus_adapter import _db_run_id
+
+    try:
+        segments = split_agent_plan(plan)
+    except ValueError as exc:
+        return {"simulated": True, "error": str(exc), "steps": [], "simulated_effects": []}
+
+    all_steps: list[dict[str, Any]] = []
+    all_effects: list[dict[str, Any]] = []
+    for index, seg in enumerate(segments):
+        if not seg["tool_steps"]:
+            continue
+        compiled = compile_agent_segment(
+            seg["tool_steps"], base_index=seg["base_index"], workflow_name=f"agent_sim_seg{index}"
+        )
+        script = compiled["source"] + f"\nrun_workflow({compiled['workflow_name']})\n"
+        try:
+            flow_result = run_nodus_script_via_flow(
+                script=script,
+                input_payload=compiled["input_payload"],
+                error_policy="halt",
+                db=db,
+                user_id=user_id,
+                workflow_type="nodus_agent_execution",
+                trace_id=correlation_id,
+                extra_initial_state={
+                    "execution_token": execution_token,
+                    "agent_run_id": str(run_id),
+                    "simulate": True,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "[NodusExecutionService] simulate segment %d failed for %s: %s", index, run_id, exc
+            )
+            continue
+        all_effects.extend(_extract_simulated_effects(flow_result))
+        output_state = format_nodus_flow_result(flow_result).get("output_state") or {}
+        step_results, _ = reconstruct_agent_step_results(compiled["steps"], output_state)
+        all_steps.extend(step_results)
+
+    report = {
+        "simulated": True,
+        "steps": all_steps,
+        "simulated_effects": all_effects,
+        "steps_total": len(all_steps),
+        "effects_total": len(all_effects),
+    }
+
+    # Persist for the approval inbox — never touch run status (this is a preview).
+    run = db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
+    if run is not None:
+        merged = dict(run.result or {})
+        merged["simulation"] = report
+        run.result = merged
+        db.commit()
+    return report
+
+
 def execute_agent_run_via_nodus(
     *,
     run_id: str,
@@ -1161,6 +1261,7 @@ def execute_nodus_runtime(
     run_id: str | None = None,
     adapter_cls=None,
     context_cls=None,
+    simulate: bool = False,
 ):
     """
     Canonical Nodus runtime entrypoint used by both route helpers and flow nodes.
@@ -1168,6 +1269,10 @@ def execute_nodus_runtime(
     Legacy call sites may still shape the response differently, but actual VM
     execution should converge through this helper so adapter wiring, context
     injection, and file/script dispatch live in one place.
+
+    simulate (AGENT-HARDEN-4): when True, the call_tool seam is shadowed — tools
+    are not executed; each call records a predicted "would-write" intent returned
+    in ``NodusExecutionResult.simulated_effects``.
     """
     if not script and not file_path:
         raise ValueError("Provide either script or file_path")
@@ -1192,6 +1297,7 @@ def execute_nodus_runtime(
         max_execution_ms=max_execution_ms,
         run_id=str(run_id or execution_unit_id or ""),
         execution_token=execution_token,
+        simulate=bool(simulate),
     )
     adapter = adapter_cls(db=db)
     if script is not None:

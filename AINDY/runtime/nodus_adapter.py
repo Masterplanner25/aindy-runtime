@@ -671,6 +671,9 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
     if not isinstance(_execution_token, dict):
         _execution_token = None
     _agent_run_id = str(state.get("agent_run_id") or run_id or "")
+    # AGENT-HARDEN-4 — simulate mode rides the flow state (set by simulate_agent_run
+    # via extra_initial_state); shadows the call_tool seam for this run.
+    _simulate = bool(state.get("simulate"))
 
     # ── Execute via NodusRuntimeAdapter ──────────────────────────────────────
     nodus_result = execute_nodus_runtime(
@@ -684,6 +687,7 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         state=nodus_initial_state,
         execution_token=_execution_token,
         run_id=_agent_run_id,
+        simulate=_simulate,
         event_sink=_build_event_sink(
             db=db,
             user_id=user_id,
