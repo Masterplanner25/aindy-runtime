@@ -66,27 +66,31 @@ need, not a checkbox).
 
 ### AGENT-HARDEN-1 — Emergency stop / cooperative cancel for in-flight agent runs
 
-**Status:** Open — **High** (safety). No operator kill switch exists.
+**Status:** CLOSED (2026-07-05). Operator kill switch shipped.
 
-Today active statuses are `pending_approval, approved, executing, delegated, waiting`
-(`AINDY/agents/agent_event_service.py`); there is **no user-drivable `cancelled`/`stopped`
-terminal state**. `stuck_run_service.py` only detects *already-stranded* runs (staleness
-threshold, or manual `recover_stuck_agent_run?force=true`) — it cannot interrupt a healthy
-in-flight run. The circuit breaker (`kernel/circuit_breaker.py`) halts LLM providers, not
-agent flows.
+`sys.v1.agent.cancel` (capability `agent.cancel`, `kernel/syscall_registry.py`
+`_handle_agent_cancel`) flips a non-terminal `AgentRun` to the new terminal
+`cancelled` state (`AgentRunStatus.CANCELLED`, `kernel/condition_codes.py`) via an
+atomic CAS from `{pending_approval, approved, executing, waiting, delegated}`,
+commits it, clears `wait_state`, and emits an `AgentEvent`/SystemEvent `CANCELLED`
+(added to `AGENT_EVENT_TYPES`). Already-terminal runs are an idempotent no-op;
+cross-tenant cancels are denied. The VM-backed segment chain
+(`runtime/nodus_execution_service.py` `_execute_agent_segment_chain`) checks for
+the cancel at **two segment boundaries** — before a segment runs (halt before the
+next tool) and after it returns (a cancel that landed mid-segment is honored, not
+clobbered by the completed/failed/waiting write). A cancel on a parked (`waiting`)
+run is enforced by the existing resume claim (`WHERE status='waiting'`), so no
+later event revives it. `"cancelled"` is now frozen in `_STABLE_AGENT_RUN_STATUSES`
+(cross-repo contract). `SYSCALL_REGISTRY_MIN_COUNT` 18→19.
 
-**Fix (rides existing primitives):** add `cancelled` to `AgentRunStatus`
-(`kernel/condition_codes.py`); add `sys.v1.agent.cancel` syscall + `agent.cancel` capability;
-add a cooperative cancel-check in `_execute_agent_segment_chain`
-(`runtime/nodus_execution_service.py`) at **segment boundaries** — the same checkpoints
-WAIT already uses — so a cancel lands between steps without corrupting mid-tool state. Emit
-`AgentEvent` `CANCELLED`. Then add `"cancelled"` to `_STABLE_AGENT_RUN_STATUSES` in
-`tests/unit/test_cross_repo_compatibility.py` so it becomes contract (the freeze asserts a
-subset, so adding it now is backwards-compatible).
-
-**Effort:** ~1 PR. **Close trigger:** a running agent can be cancelled to a terminal
-`cancelled` state via syscall; regression test proves mid-plan cancel halts before the next
-tool call.
+**Remaining gap:** cooperative cancel is wired into the opt-in **nodus_vm** backend
+(`AINDY_AGENT_EXECUTION_BACKEND=nodus_vm`). The cancel syscall still transitions the
+terminal state for the default AGENT_FLOW DAG backend (and blocks a parked run's
+resume), but mid-flight interruption of the AGENT_FLOW Python DAG at node
+granularity is not wired — deferred until that backend is retired in favor of the
+VM path (RTR-1). Tests: `test_syscall_agent_cancel.py` (handler) +
+`test_agent_vm_execution.py::test_vm_cancel_*` (boundary halt + resume-prevention
+close trigger). Docs: `SYSCALL_REFERENCE.md`.
 
 ### AGENT-HARDEN-2 — Cryptographic capability-token integrity (replace unkeyed SHA-256)
 

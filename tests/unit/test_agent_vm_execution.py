@@ -446,6 +446,80 @@ def test_wait_persists_durable_wait_state(session, monkeypatch, _mock_side_effec
 
 
 # --------------------------------------------------------------------------- #
+# AGENT-HARDEN-1 — cooperative cancel at segment boundaries
+# --------------------------------------------------------------------------- #
+
+def test_vm_cancel_before_segment_halts(session, monkeypatch, _mock_side_effects):
+    """A run flipped to 'cancelled' halts at the segment boundary before any tool runs."""
+    run = _make_run(session)
+    run.status = "cancelled"
+    session.commit()
+    monkeypatch.setattr(
+        svc, "run_nodus_script_via_flow",
+        lambda **kw: pytest.fail("segment tools must not run after cancel"),
+    )
+    result = svc.execute_agent_run_via_workflow(
+        run_id=str(run.id),
+        plan={"steps": [{"tool": "send", "args": {}, "risk_level": "low"}]},
+        user_id=str(run.user_id), db=session,
+        execution_token={"token_hash": "h", "granted_tools": ["send"]},
+    )
+    assert result["status"] == "CANCELLED"
+
+    from AINDY.db.models import AgentStep
+    assert session.query(AgentStep).count() == 0  # nothing executed
+    session.refresh(run)
+    assert run.status == "cancelled"  # not revived to completed/failed
+
+
+def test_vm_cancel_during_wait_prevents_next_segment(
+    session, monkeypatch, _mock_side_effects, _capture_agent_wait
+):
+    """Close trigger: cancelling a parked run stops the next segment.
+
+    Segment 0 runs and the run parks on a WAIT; the operator cancels via
+    sys.v1.agent.cancel; when the event fires, the resume claim
+    (``WHERE status='waiting'``) must fail so segment 1's 'send' tool never runs.
+    """
+    from AINDY.kernel.syscall_registry import SyscallContext, _handle_agent_cancel
+
+    run = _make_run(session)
+    plan = {"steps": [
+        {"tool": "search", "args": {}, "risk_level": "low", "description": "s0"},
+        {"wait_for": "approval.received"},
+        {"tool": "send", "args": {}, "risk_level": "high", "description": "s2"},
+    ]}
+    monkeypatch.setattr(svc, "run_nodus_script_via_flow", _segment_aware_flow)
+
+    svc.execute_agent_run_via_workflow(
+        run_id=str(run.id), plan=plan, user_id=str(run.user_id), db=session,
+        execution_token={"token_hash": "h", "granted_tools": ["search", "send"]},
+    )
+    session.refresh(run)
+    assert run.status == "waiting"
+
+    # Operator cancels the parked run.
+    ctx = SyscallContext(
+        execution_unit_id="eu", user_id=str(run.user_id),
+        capabilities=["agent.cancel"], trace_id="t", metadata={"_db": session},
+    )
+    out = _handle_agent_cancel({"run_id": str(run.id)}, ctx)
+    assert out["cancelled"] is True
+    session.refresh(run)
+    assert run.status == "cancelled"
+
+    # The event fires anyway — the resume must no-op (run no longer 'waiting').
+    _capture_agent_wait["resume_callback"]()
+
+    session.refresh(run)
+    assert run.status == "cancelled"  # resume did not revive the run
+
+    from AINDY.db.models import AgentStep
+    rows = session.query(AgentStep).order_by(AgentStep.step_index).all()
+    assert [r.step_index for r in rows] == [0]  # 'send' (step 2) never executed
+
+
+# --------------------------------------------------------------------------- #
 # RTR-1 Phase 2e — cross-restart rehydration of waiting agent runs
 # --------------------------------------------------------------------------- #
 

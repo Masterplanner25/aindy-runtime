@@ -756,6 +756,25 @@ def _execute_agent_segment_chain(
     from AINDY.runtime.nodus_adapter import _db_run_id
 
     try:
+        # ── Cooperative cancel checkpoint (segment boundary) ──────────────────────
+        # AGENT-HARDEN-1: sys.v1.agent.cancel flips a non-terminal run to
+        # 'cancelled' via an atomic CAS committed in a separate session. Observe it
+        # here — before this segment's tools run — so a cancel halts the chain
+        # between steps without corrupting mid-tool state. The cancel syscall owns
+        # the terminal transition + CANCELLED event; the chain only bails.
+        _cancel_check = (
+            db.query(AgentRun.status)
+            .filter(AgentRun.id == _db_run_id(run_id))
+            .first()
+        )
+        if _cancel_check is not None and _cancel_check[0] == "cancelled":
+            logger.info(
+                "[NodusExecutionService] agent run %s cancelled before segment %d — halting",
+                run_id,
+                segment_index,
+            )
+            return {"status": "CANCELLED", "run_id": str(run_id)}
+
         seg = segments[segment_index]
         seg_results: list[dict[str, Any]] = []
         segment_failed = False
@@ -781,6 +800,21 @@ def _execute_agent_segment_chain(
         now = datetime.now(timezone.utc)
         run = db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
         flow_run_id = flow_result.get("run_id")
+
+        # ── Cooperative cancel checkpoint (post-segment) ──────────────────────────
+        # AGENT-HARDEN-1: a cancel that won the CAS while this segment's tools ran
+        # is authoritative — honor the terminal 'cancelled' state and do NOT clobber
+        # it with completed/failed/waiting. The segment's committed AgentStep rows
+        # stand; the chain simply stops (no resume is registered, so no next segment
+        # runs). Step-event commits inside the segment expire the session, so this
+        # re-read reflects the cancel.
+        if run is not None and run.status == "cancelled":
+            logger.info(
+                "[NodusExecutionService] agent run %s cancelled during segment %d — halting",
+                run_id,
+                segment_index,
+            )
+            return {"status": "CANCELLED", "run_id": str(run_id)}
 
         # ── Failure: fail the whole run, stop the chain ───────────────────────────
         if segment_failed:

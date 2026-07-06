@@ -471,6 +471,7 @@ _STABLE_AGENT_RUN_STATUSES = [
     "delegated",
     "completed",
     "failed",
+    "cancelled",  # AGENT-HARDEN-1 — operator-driven terminal cancel state
 ]
 
 
