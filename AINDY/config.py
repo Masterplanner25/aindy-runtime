@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     PERMISSION_SECRET: str = ""  # Deprecated — HMAC removed; kept for backward compat
     OPENAI_API_KEY: str = ""
     DEEPSEEK_API_KEY: str | None = None
+    # AGENT-HARDEN-5: cross-provider LLM fallback. LLM_PROVIDER is the primary;
+    # get_llm_client_chain() fails over to each provider named in
+    # LLM_FALLBACK_PROVIDERS (comma-separated, in order) on a breaker-open / call
+    # failure. Empty LLM_FALLBACK_PROVIDERS = single-provider behavior (unchanged).
+    LLM_PROVIDER: str = "openai"
+    LLM_FALLBACK_PROVIDERS: str = ""
     OPENAI_CHAT_TIMEOUT_SECONDS: float = 30.0
     OPENAI_EMBEDDING_TIMEOUT_SECONDS: float = 15.0
     OPENAI_MAX_RETRIES: int = 3

@@ -157,21 +157,25 @@ agent run can be simulated to produce a predicted-effect report with zero real s
 
 ### AGENT-HARDEN-5 — LLM provider fallback chain
 
-**Status:** Open — **Low–Medium** (resilience).
+**Status:** CLOSED (2026-07-05). Cross-provider failover available via config.
 
-Multi-provider support exists (`platform_layer/llm_client.py` `get_llm_client` →
-openai/deepseek, wrapped in `CircuitBreakerLLMClient`) with same-provider `tenacity` retry,
-but **no cross-provider fallback**: `get_llm_client` resolves exactly one provider and the
-breaker re-raises `LLMCircuitOpenError`/`LLMCallError` without trying a second. Planner
-backends (`planner_backends.py`) are single-named and raise on failure.
+`platform_layer/llm_client.py` gains `FallbackLLMClient` (tries an ordered chain of
+already-breaker-wrapped provider clients; on `LLMCallError` — which subsumes
+`LLMCircuitOpenError`, so an open primary breaker fails over rather than surfacing — it advances
+to the next provider; a success short-circuits; if all fail the last error propagates) plus
+`resolve_provider_chain()` / `get_llm_client_chain()`. The chain is config-driven via new
+`settings.LLM_PROVIDER` (primary) + `LLM_FALLBACK_PROVIDERS` (comma-separated secondaries);
+unknown providers are dropped, order preserved, de-duped. A single-provider chain returns the
+provider client directly (unchanged behavior); providers that fail to construct are skipped so a
+broken secondary never blocks a healthy primary. `get_llm_client(provider)` is unchanged.
 
-**Fix:** wrap provider resolution in a config-driven fallback chain — on
-`LLMCircuitOpenError`/`LLMCallError`, try the next configured provider before raising. Same for
-planner-backend selection (optional).
-
-**Effort:** ~1 PR. **Close trigger:** a primary-provider outage transparently fails over to a
-configured secondary; covered by a test that opens the primary breaker and asserts the
-secondary is used.
+**Adoption follow-up (not blocking close):** the fallback is available as a factory but call
+sites still resolve a single provider — agent planning/`shared.py` and `embedding_service.py`
+call `get_openai_client()` directly, and `planner_backends.py` backends are single-named. Wiring
+those to `get_llm_client_chain()` is a separate, opt-in change (the spec scoped planner fallback
+as optional); deferred to avoid destabilizing the planner path. Tests:
+`test_llm_provider_fallback.py` (failover on error, open-primary-breaker → secondary used [close
+trigger], chain resolution, factory wiring). Docs: `.env.example`.
 
 **Suggested sequence:** AGENT-HARDEN-1 → 2 → 5 (three small, high-value PRs closing the
 scariest safety/security/resilience blanks), then the 3 → 6 → 4/4b arc (undo + verify +
