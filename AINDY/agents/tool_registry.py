@@ -144,6 +144,44 @@ def execute_tool(
                 },
                 required=True,
             )
+
+            # AGENT-HARDEN-8 — declarative per-capability policy (recipient / domain
+            # egress allowlists). Vacuous unless a policy is registered for one of the
+            # tool's required capabilities, so no behavior change until opted in.
+            from AINDY.agents.capability_policy import (
+                enforce_capability_policy,
+                has_capability_policies,
+            )
+
+            if has_capability_policies():
+                from AINDY.agents.capability_service import _get_capabilities_for_tool
+
+                policy_result = enforce_capability_policy(
+                    _get_capabilities_for_tool(tool_name), args
+                )
+                if not policy_result["allowed"]:
+                    queue_system_event(
+                        db=db,
+                        event_type="capability.policy_denied",
+                        user_id=user_id,
+                        trace_id=str(run_id),
+                        payload={
+                            "run_id": str(run_id),
+                            "tool_name": tool_name,
+                            "violations": policy_result["violations"],
+                        },
+                        required=True,
+                    )
+                    first = policy_result["violations"][0]
+                    return {
+                        "success": False,
+                        "result": None,
+                        "error": (
+                            f"capability policy violation: {first['kind']} "
+                            f"{first['value']!r} not allowed by capability "
+                            f"'{first['capability']}'"
+                        ),
+                    }
         except Exception as exc:
             logger.warning("[AgentTool] %s capability check failed: %s", tool_name, exc)
             return {

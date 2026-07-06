@@ -281,7 +281,8 @@ integration has a recorded contract test that fails when the adapter's wire cont
 
 ### AGENT-HARDEN-8 — Declarative per-capability policy (rate limits + allowlists)
 
-**Status:** Open — **Medium** (capability granularity).
+**Status:** IN PROGRESS — **Medium**. PR1 (recipient + domain allowlists) landed; PR2
+(rate limits via Redis) remains.
 
 The blueprint's CAP descriptor carries `limits.rate` (e.g. `30/minute`) and
 `recipients.allowlist` / domain allowlists **per capability**. Today enforcement is coarser:
@@ -291,13 +292,24 @@ per-verb capability checks (`syscall_dispatcher.py`) + per-EU/tenant quotas
 contracts. There is **no per-capability rate limit, recipient allowlist, or domain egress
 allowlist**.
 
-**Fix:** extend the capability descriptor + enforcement so a capability can declare a rate
-limit (enforced via the existing Redis counters in `resource_manager`), a recipient/target
-allowlist, and a **domain egress allowlist** (upgrading `egress_scope` from a label to an
-enforced list, complementing the existing SSRF `validate_outbound_extension_url` blocklist).
-**Effort:** ~2 PRs. **Relates to:** AGENT-HARDEN-2 (token integrity). **Close trigger:** a
-capability can be granted with a declarative rate/recipient/domain bound that the dispatcher
-enforces.
+**PR1 (done 2026-07-06) — recipient + domain-egress allowlists.** `agents/capability_policy.py`
+adds a `CapabilityPolicy(recipients, domains, rate)` descriptor + a process-wide registry
+(`register_capability_policy` / `get_capability_policy`) and `enforce_capability_policy(caps,
+args)` → `{allowed, violations}`. Recipient (email) and domain (URL host) targets are extracted
+generically from the call args (no per-tool arg schema needed); a recipient/domain outside a
+policy-bound capability's allowlist is denied. Allowlist matching: recipients by exact address or
+`@domain`; domains by exact or subdomain suffix. Enforced in `agents/tool_registry.py`
+`execute_tool` **after** the capability check, **before** the tool runs — emitting a
+`capability.policy_denied` system event on violation. **Vacuous until a policy is registered**
+(`has_capability_policies()` gate → zero behavior change / no overhead when unused). This
+upgrades the coarse `egress_scope` label toward an enforced list and complements the SSRF
+`validate_outbound_extension_url` blocklist. Tests: `test_capability_policy.py` (extraction,
+allow/deny incl `@domain`/subdomain, vacuous, `execute_tool` integration). **Close trigger met**
+for recipient/domain bounds.
+
+**PR2 (remaining) — per-capability rate limits.** Enforce `CapabilityPolicy.rate` (`"N/period"`)
+via the existing Redis counters in `kernel/resource_manager.py`, per capability × tenant/run.
+**Relates to:** AGENT-HARDEN-2 (token integrity). ~1 PR.
 
 ### AGENT-HARDEN-9 — Secrets broker (just-in-time retrieval)
 
