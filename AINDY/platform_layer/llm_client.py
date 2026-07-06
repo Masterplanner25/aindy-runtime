@@ -91,8 +91,82 @@ class CircuitBreakerLLMClient:
         return self._client.is_available()
 
 
+_SUPPORTED_PROVIDERS: tuple[str, ...] = ("openai", "deepseek")
+
+
+class FallbackLLMClient:
+    """LLMClient that tries an ordered chain of providers, failing over on error.
+
+    Each entry is an already-wrapped provider client (typically a
+    ``CircuitBreakerLLMClient``). On ``LLMCallError`` — which subsumes
+    ``LLMCircuitOpenError``, so an open primary breaker fails over rather than
+    surfacing — the next provider is tried; if every provider fails, the last
+    error propagates. A successful provider short-circuits the chain.
+
+    Satisfies the ``LLMClient`` protocol, so it is a drop-in wherever a single
+    provider client is used today.
+    """
+
+    def __init__(self, clients: list[LLMClient], *, providers: list[str] | None = None) -> None:
+        if not clients:
+            raise ValueError("FallbackLLMClient requires at least one client")
+        for client in clients:
+            if not isinstance(client, LLMClient):
+                raise TypeError(f"chain entry must satisfy LLMClient protocol, got {type(client)!r}")
+        self._clients = list(clients)
+        self._providers = list(providers) if providers else [f"provider_{i}" for i in range(len(clients))]
+
+    @property
+    def providers(self) -> list[str]:
+        return list(self._providers)
+
+    def _try_chain(self, op, *args, **kwargs):
+        last_exc: LLMCallError | None = None
+        for provider, client in zip(self._providers, self._clients):
+            try:
+                return op(client, *args, **kwargs)
+            except LLMCallError as exc:
+                last_exc = exc
+                logging.warning(
+                    "[LLM-fallback] provider '%s' failed (%s); trying next in chain",
+                    provider,
+                    type(exc).__name__,
+                )
+                continue
+        # Chain exhausted — surface the final provider's error.
+        assert last_exc is not None  # loop ran at least once (clients non-empty)
+        raise last_exc
+
+    def chat(
+        self,
+        messages: list[dict],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> str:
+        return self._try_chain(
+            lambda client, *a, **k: client.chat(*a, **k),
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    def call_method(self, method_name: str, *args, **kwargs) -> Any:
+        def _invoke(client, *a, **k):
+            caller = getattr(client, "call_method", None)
+            if callable(caller):
+                return caller(method_name, *a, **k)
+            return getattr(client, method_name)(*a, **k)
+
+        return self._try_chain(_invoke, *args, **kwargs)
+
+    def is_available(self) -> bool:
+        return any(client.is_available() for client in self._clients)
+
+
 def get_llm_client(provider: str = "openai") -> LLMClient:
-    """Return a circuit-breaker-wrapped LLM client for the given provider."""
+    """Return a circuit-breaker-wrapped LLM client for a single provider."""
     normalized = str(provider or "openai").strip().lower()
     if normalized == "openai":
         from AINDY.platform_layer.openai_client import get_openai_client
@@ -103,3 +177,57 @@ def get_llm_client(provider: str = "openai") -> LLMClient:
 
         return get_deepseek_client()
     raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+def resolve_provider_chain(providers: list[str] | None = None) -> list[str]:
+    """Resolve the ordered, de-duplicated provider chain (AGENT-HARDEN-5).
+
+    When *providers* is given it is used verbatim (normalized); otherwise the
+    chain is ``settings.LLM_PROVIDER`` followed by ``settings.LLM_FALLBACK_PROVIDERS``
+    (comma-separated). Unknown providers are dropped; order is preserved; the
+    result always has at least one entry (``"openai"`` as the ultimate default).
+    """
+    if providers:
+        raw = list(providers)
+    else:
+        from AINDY.config import settings
+
+        primary = str(getattr(settings, "LLM_PROVIDER", "") or "openai")
+        fallbacks = str(getattr(settings, "LLM_FALLBACK_PROVIDERS", "") or "")
+        raw = [primary, *fallbacks.split(",")]
+
+    chain: list[str] = []
+    seen: set[str] = set()
+    for entry in raw:
+        name = str(entry or "").strip().lower()
+        if name and name in _SUPPORTED_PROVIDERS and name not in seen:
+            seen.add(name)
+            chain.append(name)
+    return chain or ["openai"]
+
+
+def get_llm_client_chain(providers: list[str] | None = None) -> LLMClient:
+    """Return an LLM client that fails over across the configured provider chain.
+
+    A single-provider chain returns that provider's client directly (unchanged
+    behavior); a multi-provider chain returns a ``FallbackLLMClient``. Providers
+    that cannot be constructed (e.g. missing SDK) are skipped so a broken
+    secondary never blocks a healthy primary.
+    """
+    chain = resolve_provider_chain(providers)
+    clients: list[LLMClient] = []
+    resolved: list[str] = []
+    for name in chain:
+        try:
+            clients.append(get_llm_client(name))
+            resolved.append(name)
+        except Exception as exc:
+            logging.warning("[LLM-fallback] provider '%s' unavailable at resolve: %s", name, exc)
+
+    if not clients:
+        # Every configured provider failed to construct — fall back to the
+        # single-provider default, which raises transparently if truly broken.
+        return get_llm_client("openai")
+    if len(clients) == 1:
+        return clients[0]
+    return FallbackLLMClient(clients, providers=resolved)
