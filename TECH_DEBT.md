@@ -264,25 +264,32 @@ fail→verify_failed+undo, no-expects→vacuous).
 
 ### AGENT-HARDEN-7 — Contract / record-playback integration tests
 
-**Status:** Open — **Medium** (testing coverage).
+**Status:** PR1 done (2026-07-06) — LLM/embedding boundaries under recorded-cassette
+contract tests; `respx` adopted. Remaining HTTP tools can be added incrementally.
 
 The blueprint's "three rings" wants **contract tests for each integration** (VCR-style
-record/playback fixtures). Today there are unit tests with `unittest.mock` and real-PG
-integration tests, but **no recorded-cassette contract tests** — `respx` is already a test
-dependency (`pyproject.toml`) yet used in **0** test files. External-boundary behavior (LLM
-providers, embedding API, any HTTP tool) is only mock-asserted, not contract-frozen against a
-recorded real response.
+record/playback fixtures). (Note: the original audit said `respx` was already a dep — it was
+not actually declared; PR1 adds `respx==0.23.1` to `AINDY/requirements.txt` + pyproject `[test]`,
+compatible with the pinned `httpx==0.28.1`.)
 
-**Fix:** adopt `respx` (already installed) for HTTP-boundary contract tests — record a real
-response once, replay it deterministically; assert the adapter's request shape + response
-handling. Start with the LLM/embedding clients (`platform_layer/llm_client.py`,
-`memory/embedding_service.py`). **Effort:** ~1–2 PRs. **Close trigger:** each external
-integration has a recorded contract test that fails when the adapter's wire contract drifts.
+**PR1 — respx contract tests for the primary external boundary.** VCR-style cassettes under
+`tests/fixtures/cassettes/` (recorded response shapes) replayed via `respx` (which intercepts
+the openai SDK's httpx calls). `test_contract_llm_openai.py` freezes OpenAI **chat** and
+**embedding** — asserting the request wire shape (URL, `Authorization`, model/messages/params
+body) **and** response handling (assistant-text / embedding-vector extraction), plus a 500 →
+`LLMCallError` path. `test_contract_llm_deepseek.py` freezes DeepSeek chat. **The DeepSeek
+contract test surfaced a real bug:** `DeepSeekLLMClient` built the OpenAI SDK with no
+`base_url`, so DeepSeek calls were sent to `api.openai.com`; fixed by setting `base_url` from
+new `settings.DEEPSEEK_BASE_URL` (default `https://api.deepseek.com/v1`), and the test now guards
+the endpoint. **Close trigger met** for the LLM/embedding integrations.
+
+**Remaining (opportunistic):** the same respx cassette pattern for any first-party HTTP *tools*
+as they land (`memory/embedding_service.py` rides the same OpenAI boundary already covered).
 
 ### AGENT-HARDEN-8 — Declarative per-capability policy (rate limits + allowlists)
 
-**Status:** IN PROGRESS — **Medium**. PR1 (recipient + domain allowlists) landed; PR2
-(rate limits via Redis) remains.
+**Status:** CLOSED (2026-07-06). Recipient + domain allowlists (PR1) and per-capability
+rate limits (PR2) both enforced.
 
 The blueprint's CAP descriptor carries `limits.rate` (e.g. `30/minute`) and
 `recipients.allowlist` / domain allowlists **per capability**. Today enforcement is coarser:
@@ -307,40 +314,88 @@ upgrades the coarse `egress_scope` label toward an enforced list and complements
 allow/deny incl `@domain`/subdomain, vacuous, `execute_tool` integration). **Close trigger met**
 for recipient/domain bounds.
 
-**PR2 (remaining) — per-capability rate limits.** Enforce `CapabilityPolicy.rate` (`"N/period"`)
-via the existing Redis counters in `kernel/resource_manager.py`, per capability × tenant/run.
-**Relates to:** AGENT-HARDEN-2 (token integrity). ~1 PR.
+**PR2 (done 2026-07-06) — per-capability rate limits.** `ResourceManager.rate_limit_hit(key,
+limit, window_secs)` adds a generic fixed-window counter (shared Redis when available → enforced
+across instances; thread-safe in-memory fallback otherwise; fail-open on backend error).
+`capability_policy.parse_rate` parses `"N/period"` (s/min/hour/day) and `enforce_capability_rate(
+caps, scope)` records one hit per policy-bound capability keyed by `cap × scope` (the tenant/user)
+and denies once the window count passes the limit. Enforced in `execute_tool` **after** the
+recipient/domain check (rate increments the counter, so only otherwise-permitted calls count);
+denial emits `capability.policy_denied` (`kind:"rate"`). Tests: `test_capability_policy.py`
+(parse_rate, deterministic fixed-window via `now=`, allow→deny per scope, execute_tool rate
+integration). **Relates to:** AGENT-HARDEN-2 (token integrity). **Close trigger fully met** — a
+capability can be granted with a declarative rate/recipient/domain bound the runtime enforces.
 
 ### AGENT-HARDEN-9 — Secrets broker (just-in-time retrieval)
 
-**Status:** Open — **Medium** (secret handling).
+**Status:** CLOSED (2026-07-06). Broker abstraction + backends + capability-scoped JIT
+resolution wired at the tool seam — close trigger met.
 
 The blueprint wants secrets pulled **just-in-time** from an OS keychain / Vault, never sitting
-in a database. Today secrets are env vars + the `SECRET_KEY`/`KeyRing`; the plugin sandbox
-declares `secret_injection: "none"` (deny-by-default — good, but that is a posture, not a
-broker). There is **no secrets-broker abstraction** that mints short-lived secret handles to a
-capability at call time.
+in a database. Secrets were process env vars; the plugin sandbox's `secret_injection: "none"`
+is a posture, not a broker.
 
-**Fix:** add a `SecretBroker` interface with pluggable backends (env for dev; OS
-keychain / HashiCorp Vault for prod) that resolves a `SecretRef` to a value **at tool-invoke
-time**, scoped to the capability token, never persisted. **Effort:** ~2 PRs. **Relates to:**
-AGENT-HARDEN-2, -8. **Close trigger:** a tool obtains a secret via a scoped JIT broker call
-rather than a process env var.
+**PR1 — the broker seam.** `platform_layer/secret_broker.py`: a `SecretBroker` ABC +
+`EnvSecretBroker` default that reads a **controlled `AINDY_SECRET_<NAME>` namespace** (not
+arbitrary env vars, so it's a deliberate secret surface a prod backend swaps transparently via
+`set_secret_broker`). `resolve_secret(name, *, capabilities, required_capability?)` is the JIT
+entry point: it's **fail-closed** on a missing gating capability, missing secret, or backend
+error, and the value is fetched at call time and returned to the caller **only — never
+persisted** (not in the DB, not on the token, not in a result). Scoping via
+`register_secret_scope(name, capability)` (or an explicit `required_capability`); ungated
+secrets stay open in dev. **Deliberately NOT a syscall** — the dispatch envelope is trace-logged,
+so a secret value must never transit it; resolution is an in-process call at the tool seam. Tests:
+`test_secret_broker.py` (namespace isolation, capability gate allow/deny, fail-closed paths,
+pluggability, `SecretRef` holds no value).
+
+**PR2 (done 2026-07-06) — real backends + tool-seam scoping.** Backends: `FileSecretBroker`
+(Docker/K8s mounted `<root>/<name>`, default `/run/secrets`, path-traversal-blocked),
+`VaultSecretBroker` (HashiCorp Vault **KV v2** over `httpx` — no `hvac` dep, respx-contract-tested),
+and `ChainSecretBroker` (ordered fallback, e.g. env→file→vault). **Close trigger met via the tool
+seam:** `agents/tool_registry.py` `execute_tool` now wraps the tool invocation in
+`capability_scope(<token allowed_capabilities>)`; a tool calls `resolve_secret(name)` (no caps
+arg → ambient scope) and is gated by the run's grants — the secret is consumed inside the tool
+and never returned to the script. A tool whose token lacks the gating capability is denied
+(fail-closed). OS-keychain (`keyring`) is a trivial further backend given the ABC. Tests:
+`test_secret_broker.py` (File incl. traversal block, Vault KV v2 via respx, Chain fallback,
+ambient scope, and the `execute_tool` allow/deny close-trigger demonstration).
+**Relates to:** AGENT-HARDEN-2, -8.
 
 ### AGENT-HARDEN-10 — Signed plugin bundles + SBOM
 
-**Status:** Open — **Low–Medium** (supply chain).
+**Status:** CLOSED (2026-07-06). Real signing + trust registry + SBOM primitives (PR1) +
+provenance wiring / profile enforcement (PR2). Close trigger met.
 
-The blueprint wants signed plugin bundles (sigstore/cosign) + SBOM. Today
-`platform_layer/extension_provenance.py` hardcodes `"signing": {"status": "unsupported"}`;
-integrity is SHA-256 byte-comparison, not a cryptographic signature — no keys, no trust
-registry, no SBOM.
+The blueprint wants signed plugin bundles (sigstore/cosign) + SBOM. Integrity was SHA-256
+byte-comparison and `extension_provenance.py` hardcodes `"signing": {"status": "unsupported"}` —
+no keys, no trust registry, no SBOM.
 
-**Fix:** add optional cosign-style bundle signing + a trust registry the plugin host verifies
-before load, and emit an SBOM for the plugin bundle. Gate strong-sandbox/production plugin
-load on a valid signature. **Effort:** ~2–3 PRs. **Relates to:** the plugin host attestation
-in `plugin_host.py`. **Close trigger:** a plugin bundle can be signed and the host refuses an
-unsigned/untrusted bundle in production profile.
+**PR1 — the signing foundation.** `platform_layer/extension_signing.py` implements real
+**Ed25519** detached signatures (via `cryptography`, already a dep): `generate_keypair`,
+`sign_digest`/`verify_digest` over a bundle's SHA-256 digest, `key_fingerprint`
+(`sha256:<hex>` key id). A **trust registry** (`register_trusted_key`/`is_trusted`/
+`trusted_public_key`) holds the public keys the host will accept. `verify_bundle_signature`
+(fail-closed: unsigned / untrusted-key / bad-sig all denied) + `enforce_bundle_signature(profile,
+…)` encode the policy: **production profiles refuse** an unsigned/untrusted bundle; dev/
+single-instance allows unsigned but reports `verified:False`. `generate_sbom` emits a
+CycloneDX-lite SBOM (component digests). Tests: `test_extension_signing.py` (sign/verify,
+tamper + wrong-key rejection, trust registry, profile gate allow/deny, SBOM shape).
+
+**PR2 (done 2026-07-06) — provenance wiring + profile enforcement.** A plugin bundle's declared
+provenance may carry a typed `signature: {algorithm, value, key_id}` (`ExtensionSignatureDeclaration`).
+`derive_plugin_artifact_provenance` now verifies it against the trust registry
+(`_describe_and_enforce_signature`) and records a `signing` block (`verified` / `unverified` /
+`unsigned`) in the provenance result. **Enforcement:** scoped to signature-required surfaces
+(external-third-party) and gated by the operator opt-in `AINDY_REQUIRE_SIGNED_PLUGINS` — when set
+on a **production** deployment profile, an unsigned/untrusted/invalid bundle **raises** (refused,
+mirroring the existing integrity-mismatch refusal that already blocks load); default OFF so
+existing first-party/dev plugins keep loading. `extension_provenance_policy()` `signing.status`
+flipped `unsupported` → **`supported`** (`ed25519`) — a **public version-API contract** change,
+so the two frozen assertions (`test_version_api.py`, `test_runtime_public_contract.py`) were
+updated in lockstep with the actual capability so the advertised status stays honest. **Close
+trigger met:** a bundle can be signed and the host refuses an unsigned/untrusted one in a
+production profile. Tests: `test_extension_signing.py` (verified/unverified/unsigned recording,
+production refuses unsigned + untrusted when enforced, dev/opt-out allow, valid-signed passes).
 
 **Not tracked (still out of scope):** Slack/Teams chat approval surface (UI convenience — the
 web `AgentApprovalInbox` + CLI/HTTP already cover approvals; add if a chat-ops need arises);
