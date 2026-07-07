@@ -285,6 +285,59 @@ class ResourceManager:
         # eu_id → tenant_id (for cleanup on mark_completed with unknown eu_id)
         self._eu_tenant: dict[str, str] = {}
         self._pending_purge: set[str] = set()
+        # AGENT-HARDEN-8 PR2 — per-capability fixed-window rate counters (in-memory
+        # fallback when Redis is absent): key → (bucket, count).
+        self._rate_windows: dict[str, tuple[int, int]] = {}
+        self._rate_lock = threading.Lock()
+
+    def rate_limit_hit(
+        self,
+        key: str,
+        *,
+        limit: int,
+        window_secs: int,
+        now: float | None = None,
+    ) -> tuple[int, bool]:
+        """Record one hit against a fixed-window rate counter; return (count, exceeded).
+
+        Uses the shared Redis counters when available (so the limit is enforced
+        across instances) and falls back to a thread-safe in-memory window
+        otherwise. ``exceeded`` is True once the count for the current window
+        passes ``limit``. Fail-open: any backend error returns ``(0, False)`` so a
+        counter hiccup never blocks a permitted call.
+        """
+        if limit <= 0 or window_secs <= 0:
+            return 0, False
+        import time as _time
+
+        ts = _time.time() if now is None else now
+        bucket = int(ts // window_secs)
+
+        redis_client = None
+        try:
+            redis_client = self._get_redis()
+        except Exception:
+            redis_client = None
+
+        if redis_client is not None:
+            try:
+                rkey = f"aindy:rm:rate:{key}:{bucket}"
+                count = int(redis_client.incr(rkey))
+                redis_client.expire(rkey, window_secs * 2)
+                return count, count > limit
+            except Exception as exc:
+                self._drop_redis_client("[resource_manager] rate counter redis error: %s", exc)
+
+        with self._rate_lock:
+            state = self._rate_windows.get(key)
+            count = 1 if (state is None or state[0] != bucket) else state[1] + 1
+            self._rate_windows[key] = (bucket, count)
+            # Opportunistic prune of stale windows to bound memory.
+            if len(self._rate_windows) > 4096:
+                for k, (b, _c) in list(self._rate_windows.items()):
+                    if b < bucket:
+                        self._rate_windows.pop(k, None)
+        return count, count > limit
 
     def _concurrency_key(self, tenant_id: str) -> str:
         return f"aindy:quota:concurrent:{tenant_id}"
