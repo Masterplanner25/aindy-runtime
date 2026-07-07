@@ -97,7 +97,12 @@ class DeepSeekLLMClient(LLMClient):
         self._api_key = api_key if api_key is not None else settings.DEEPSEEK_API_KEY
         self._default_model = default_model
         self._chat_timeout = chat_timeout
-        self._client = client if client is not None else OpenAI(api_key=self._api_key or "missing-deepseek-api-key")
+        # base_url is load-bearing: DeepSeek is OpenAI-API-compatible but on its own
+        # host; without it the SDK would send DeepSeek calls to api.openai.com.
+        self._client = client if client is not None else OpenAI(
+            api_key=self._api_key or "missing-deepseek-api-key",
+            base_url=getattr(settings, "DEEPSEEK_BASE_URL", None) or "https://api.deepseek.com/v1",
+        )
 
     def chat_completion_response(
         self,

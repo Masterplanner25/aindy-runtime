@@ -264,20 +264,25 @@ fail→verify_failed+undo, no-expects→vacuous).
 
 ### AGENT-HARDEN-7 — Contract / record-playback integration tests
 
-**Status:** Open — **Medium** (testing coverage).
+**Status:** PR1 done (2026-07-06) — LLM/embedding boundaries under recorded-cassette
+contract tests; `respx` adopted. Remaining HTTP tools can be added incrementally.
 
 The blueprint's "three rings" wants **contract tests for each integration** (VCR-style
-record/playback fixtures). Today there are unit tests with `unittest.mock` and real-PG
-integration tests, but **no recorded-cassette contract tests** — `respx` is already a test
-dependency (`pyproject.toml`) yet used in **0** test files. External-boundary behavior (LLM
-providers, embedding API, any HTTP tool) is only mock-asserted, not contract-frozen against a
-recorded real response.
+record/playback fixtures). `respx` was a test dependency with **0** usage.
 
-**Fix:** adopt `respx` (already installed) for HTTP-boundary contract tests — record a real
-response once, replay it deterministically; assert the adapter's request shape + response
-handling. Start with the LLM/embedding clients (`platform_layer/llm_client.py`,
-`memory/embedding_service.py`). **Effort:** ~1–2 PRs. **Close trigger:** each external
-integration has a recorded contract test that fails when the adapter's wire contract drifts.
+**PR1 — respx contract tests for the primary external boundary.** VCR-style cassettes under
+`tests/fixtures/cassettes/` (recorded response shapes) replayed via `respx` (which intercepts
+the openai SDK's httpx calls). `test_contract_llm_openai.py` freezes OpenAI **chat** and
+**embedding** — asserting the request wire shape (URL, `Authorization`, model/messages/params
+body) **and** response handling (assistant-text / embedding-vector extraction), plus a 500 →
+`LLMCallError` path. `test_contract_llm_deepseek.py` freezes DeepSeek chat. **The DeepSeek
+contract test surfaced a real bug:** `DeepSeekLLMClient` built the OpenAI SDK with no
+`base_url`, so DeepSeek calls were sent to `api.openai.com`; fixed by setting `base_url` from
+new `settings.DEEPSEEK_BASE_URL` (default `https://api.deepseek.com/v1`), and the test now guards
+the endpoint. **Close trigger met** for the LLM/embedding integrations.
+
+**Remaining (opportunistic):** the same respx cassette pattern for any first-party HTTP *tools*
+as they land (`memory/embedding_service.py` rides the same OpenAI boundary already covered).
 
 ### AGENT-HARDEN-8 — Declarative per-capability policy (rate limits + allowlists)
 
