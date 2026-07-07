@@ -363,18 +363,32 @@ ambient scope, and the `execute_tool` allow/deny close-trigger demonstration).
 
 ### AGENT-HARDEN-10 — Signed plugin bundles + SBOM
 
-**Status:** Open — **Low–Medium** (supply chain).
+**Status:** PR1 done (2026-07-06) — real signing + trust registry + SBOM + profile gate
+primitives. PR2 (wire the gate into the plugin-host load path + flip the advertised
+`signing.status`) remains.
 
-The blueprint wants signed plugin bundles (sigstore/cosign) + SBOM. Today
-`platform_layer/extension_provenance.py` hardcodes `"signing": {"status": "unsupported"}`;
-integrity is SHA-256 byte-comparison, not a cryptographic signature — no keys, no trust
-registry, no SBOM.
+The blueprint wants signed plugin bundles (sigstore/cosign) + SBOM. Integrity was SHA-256
+byte-comparison and `extension_provenance.py` hardcodes `"signing": {"status": "unsupported"}` —
+no keys, no trust registry, no SBOM.
 
-**Fix:** add optional cosign-style bundle signing + a trust registry the plugin host verifies
-before load, and emit an SBOM for the plugin bundle. Gate strong-sandbox/production plugin
-load on a valid signature. **Effort:** ~2–3 PRs. **Relates to:** the plugin host attestation
-in `plugin_host.py`. **Close trigger:** a plugin bundle can be signed and the host refuses an
-unsigned/untrusted bundle in production profile.
+**PR1 — the signing foundation.** `platform_layer/extension_signing.py` implements real
+**Ed25519** detached signatures (via `cryptography`, already a dep): `generate_keypair`,
+`sign_digest`/`verify_digest` over a bundle's SHA-256 digest, `key_fingerprint`
+(`sha256:<hex>` key id). A **trust registry** (`register_trusted_key`/`is_trusted`/
+`trusted_public_key`) holds the public keys the host will accept. `verify_bundle_signature`
+(fail-closed: unsigned / untrusted-key / bad-sig all denied) + `enforce_bundle_signature(profile,
+…)` encode the policy: **production profiles refuse** an unsigned/untrusted bundle; dev/
+single-instance allows unsigned but reports `verified:False`. `generate_sbom` emits a
+CycloneDX-lite SBOM (component digests). Tests: `test_extension_signing.py` (sign/verify,
+tamper + wrong-key rejection, trust registry, profile gate allow/deny, SBOM shape).
+
+**PR2 (remaining) — enforcement wiring.** Call `enforce_bundle_signature` in the plugin-host
+load path (a bundle declares `{signature, key_id}`; the host verifies against the trust registry
+before load) and **flip `extension_provenance_policy()` `signing.status` → `"supported"`** — a
+**public version-API contract** change (`test_version_api.py` freezes it, cross-repo SDK/UI
+surface) done deliberately with the enforcement so the advertised status stays honest. **Relates
+to:** the plugin host attestation in `plugin_host.py`. **Close trigger** (host refuses an
+unsigned/untrusted bundle in production) lands with PR2's call-site wiring.
 
 **Not tracked (still out of scope):** Slack/Teams chat approval surface (UI convenience — the
 web `AgentApprovalInbox` + CLI/HTTP already cover approvals; add if a chat-ops need arises);
