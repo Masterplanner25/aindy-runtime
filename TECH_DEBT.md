@@ -268,7 +268,9 @@ fail→verify_failed+undo, no-expects→vacuous).
 contract tests; `respx` adopted. Remaining HTTP tools can be added incrementally.
 
 The blueprint's "three rings" wants **contract tests for each integration** (VCR-style
-record/playback fixtures). `respx` was a test dependency with **0** usage.
+record/playback fixtures). (Note: the original audit said `respx` was already a dep — it was
+not actually declared; PR1 adds `respx==0.23.1` to `AINDY/requirements.txt` + pyproject `[test]`,
+compatible with the pinned `httpx==0.28.1`.)
 
 **PR1 — respx contract tests for the primary external boundary.** VCR-style cassettes under
 `tests/fixtures/cassettes/` (recorded response shapes) replayed via `respx` (which intercepts
