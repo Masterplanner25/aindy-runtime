@@ -1,5 +1,7 @@
-"""AGENT-HARDEN-10 (PR1) — signed plugin bundles + SBOM."""
+"""AGENT-HARDEN-10 — signed plugin bundles + SBOM (primitives + provenance wiring)."""
 from __future__ import annotations
+
+import hashlib
 
 import pytest
 
@@ -153,3 +155,100 @@ def test_generate_sbom_shape():
     assert sbom["metadata"]["timestamp"] == "2026-07-06T00:00:00Z"
     assert sbom["components"][0]["hashes"] == [{"alg": "SHA-256", "content": "d" * 64}]
     assert sbom["components"][1]["version"] == "2.31.0"
+
+
+# --------------------------------------------------------------------------- #
+# PR2 — provenance wiring + host enforcement
+# --------------------------------------------------------------------------- #
+
+_OBSERVED = hashlib.sha256(b"bundle-bytes").hexdigest()
+
+
+def _declared(observed, *, signature=None, key_id=None):
+    d = {
+        "extension_id": "vendor.plugin",
+        "version": "1.0.0",
+        "source_type": "external-plugin-artifact",
+        "source_ref": "/plugins/vendor",
+        "integrity": {"algorithm": "sha256", "value": observed},
+    }
+    if signature is not None:
+        d["signature"] = {"algorithm": "ed25519", "value": signature, "key_id": key_id}
+    return d
+
+
+def _derive(observed, *, declared, profile):
+    from AINDY.platform_layer.extension_policy import OWNER_EXTERNAL_THIRD_PARTY
+    from AINDY.platform_layer.extension_provenance import derive_plugin_artifact_provenance
+
+    return derive_plugin_artifact_provenance(
+        owner_class=OWNER_EXTERNAL_THIRD_PARTY,
+        surface="dynamic-plugin-node",
+        extension_name="vendor.plugin",
+        extension_id="vendor.plugin",
+        version="1.0.0",
+        artifact_path="/plugins/vendor",
+        observed_hash=observed,
+        declared=declared,
+        deployment_profile=profile,
+    )
+
+
+def test_provenance_policy_reports_signing_supported():
+    from AINDY.platform_layer.extension_provenance import extension_provenance_policy
+
+    signing = extension_provenance_policy()["signing"]
+    assert signing["status"] == "supported" and signing["algorithm"] == "ed25519"
+
+
+def test_provenance_records_verified_signature():
+    priv, pub = generate_keypair()
+    kid = register_trusted_key(pub)
+    sig = sign_digest(priv, _OBSERVED)
+    prov = _derive(_OBSERVED, declared=_declared(_OBSERVED, signature=sig, key_id=kid), profile="distributed-api")
+    assert prov["signing"]["status"] == "verified" and prov["signing"]["verified"] is True
+    assert prov["signing"]["key_id"] == kid
+
+
+def test_provenance_untrusted_signature_recorded_unverified_in_dev():
+    priv, pub = generate_keypair()  # NOT registered as trusted
+    kid = key_fingerprint(pub)
+    sig = sign_digest(priv, _OBSERVED)
+    prov = _derive(_OBSERVED, declared=_declared(_OBSERVED, signature=sig, key_id=kid), profile="single-instance")
+    assert prov["signing"]["status"] == "unverified" and prov["signing"]["verified"] is False
+
+
+def test_unsigned_bundle_allowed_by_default():
+    prov = _derive(_OBSERVED, declared=_declared(_OBSERVED), profile="distributed-api")
+    assert prov["signing"]["status"] == "unsigned"  # not enforced without the opt-in
+
+
+def test_production_refuses_unsigned_when_enforced(monkeypatch):
+    monkeypatch.setenv("AINDY_REQUIRE_SIGNED_PLUGINS", "1")
+    with pytest.raises(ValueError, match="must be signed"):
+        _derive(_OBSERVED, declared=_declared(_OBSERVED), profile="distributed-api")
+
+
+def test_production_refuses_untrusted_when_enforced(monkeypatch):
+    monkeypatch.setenv("AINDY_REQUIRE_SIGNED_PLUGINS", "1")
+    priv, pub = generate_keypair()  # untrusted
+    kid = key_fingerprint(pub)
+    sig = sign_digest(priv, _OBSERVED)
+    with pytest.raises(ValueError, match="failed signature verification"):
+        _derive(_OBSERVED, declared=_declared(_OBSERVED, signature=sig, key_id=kid), profile="distributed-api")
+
+
+def test_enforced_but_dev_profile_does_not_refuse(monkeypatch):
+    monkeypatch.setenv("AINDY_REQUIRE_SIGNED_PLUGINS", "1")
+    # single-instance is not a production profile → no refusal even when enforce flag is on
+    prov = _derive(_OBSERVED, declared=_declared(_OBSERVED), profile="single-instance")
+    assert prov["signing"]["status"] == "unsigned"
+
+
+def test_enforced_production_allows_valid_signed_bundle(monkeypatch):
+    monkeypatch.setenv("AINDY_REQUIRE_SIGNED_PLUGINS", "1")
+    priv, pub = generate_keypair()
+    kid = register_trusted_key(pub)
+    sig = sign_digest(priv, _OBSERVED)
+    prov = _derive(_OBSERVED, declared=_declared(_OBSERVED, signature=sig, key_id=kid), profile="distributed-api")
+    assert prov["signing"]["verified"] is True
