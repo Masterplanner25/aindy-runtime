@@ -34,6 +34,16 @@ class ExtensionIntegrityDeclaration(BaseModel):
     value: str = Field(..., min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
+class ExtensionSignatureDeclaration(BaseModel):
+    """AGENT-HARDEN-10 — a detached signature over the artifact's sha256 digest."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    algorithm: str = Field("ed25519")
+    value: str = Field(..., min_length=1, max_length=512)   # base64 signature
+    key_id: str = Field(..., min_length=1, max_length=256)  # sha256:<hex> fingerprint
+
+
 class ExtensionProvenanceDeclaration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -42,6 +52,7 @@ class ExtensionProvenanceDeclaration(BaseModel):
     source_type: str = Field(..., min_length=1, max_length=64)
     source_ref: str = Field(..., min_length=1, max_length=2048)
     integrity: ExtensionIntegrityDeclaration | None = None
+    signature: ExtensionSignatureDeclaration | None = None
     publisher: str | None = Field(default=None, max_length=256)
 
 
@@ -49,11 +60,15 @@ def extension_provenance_policy() -> dict[str, Any]:
     return {
         "policy_version": EXTENSION_PROVENANCE_POLICY_VERSION,
         "signing": {
-            "status": "unsupported",
+            "status": "supported",
+            "algorithm": "ed25519",
             "notes": (
-                "The runtime does not implement artifact signing or a remote trust "
-                "registry. Provenance is verified only against runtime-local source "
-                "bytes or canonical registration payloads."
+                "Plugin bundles may carry an Ed25519 detached signature over the "
+                "artifact sha256 digest, verified against a runtime trust registry "
+                "(AINDY.platform_layer.extension_signing). Enforcement (refusing an "
+                "unsigned/untrusted bundle on a production profile) is opt-in via "
+                "AINDY_REQUIRE_SIGNED_PLUGINS; otherwise the signature is verified and "
+                "reported without blocking load."
             ),
         },
         "trust_policies": {
@@ -191,6 +206,7 @@ def derive_plugin_artifact_provenance(
     publisher: str | None = None,
     declared: dict[str, Any] | None = None,
     allow_legacy_missing: bool = False,
+    deployment_profile: str | None = None,
 ) -> dict[str, Any]:
     resolved = validate_extension_owner_class(owner_class)
     artifact_text = str(artifact_path or "").strip()
@@ -237,12 +253,23 @@ def derive_plugin_artifact_provenance(
         raise ValueError(
             f"{surface} {extension_name!r} requires declared provenance for external-third-party ownership"
         )
+    # AGENT-HARDEN-10 — verify a declared bundle signature (and enforce on
+    # signature-required surfaces in a production profile when opted in).
+    signing = _describe_and_enforce_signature(
+        declared_model.signature if declared_model is not None else None,
+        observed_hash=observed_hash,
+        surface=surface,
+        extension_id=payload["extension_id"],
+        deployment_profile=deployment_profile,
+        require_signature=provenance_required(owner_class=resolved, surface=surface),
+    )
     return _finalize_provenance(
         owner_class=resolved,
         surface=surface,
         payload=payload,
         observed_hash=observed_hash,
         verification=verification,
+        signing=signing,
     )
 
 
@@ -327,8 +354,9 @@ def summarize_extension_provenance(entries: list[dict[str, Any]]) -> dict[str, A
         "entries": [],
         "operator_note": (
             "Extension provenance is a runtime audit surface. Integrity is verified "
-            "only against local source bytes or canonical registration payloads; "
-            "the runtime does not implement artifact signing or a remote trust registry."
+            "against local source bytes or canonical registration payloads; plugin "
+            "bundles may additionally carry an Ed25519 detached signature verified "
+            "against the runtime trust registry (see extension_signing)."
         ),
     }
     for entry in entries:
@@ -386,6 +414,64 @@ def _verify_integrity_match(
         )
 
 
+def _describe_and_enforce_signature(
+    declared: "ExtensionSignatureDeclaration | None",
+    *,
+    observed_hash: str | None,
+    surface: str,
+    extension_id: str,
+    deployment_profile: str | None,
+    require_signature: bool,
+) -> dict[str, Any]:
+    """Verify a declared bundle signature and return its ``signing`` block.
+
+    AGENT-HARDEN-10: a declared signature is verified against the trust registry
+    (Ed25519 over the artifact's sha256 digest). Enforcement (a hard refusal) only
+    applies to signature-required surfaces (external third-party) when
+    ``AINDY_REQUIRE_SIGNED_PLUGINS`` is set and the deployment profile is a production
+    one — then an unsigned/untrusted/invalid bundle is **refused** (raises, mirroring
+    integrity enforcement). Otherwise the result is recorded but never blocks load.
+    """
+    from AINDY.platform_layer.extension_signing import (
+        require_signed_plugins,
+        signature_required,
+        verify_bundle_signature,
+    )
+
+    profile = str(deployment_profile or "").strip()
+    enforced = require_signature and require_signed_plugins() and signature_required(profile)
+
+    if declared is None or not observed_hash:
+        if enforced:
+            raise ValueError(
+                f"{surface} {extension_id!r} must be signed: production profile "
+                f"{profile!r} requires a trusted signature (AINDY_REQUIRE_SIGNED_PLUGINS)"
+            )
+        return {"status": "unsigned", "verified": False, "algorithm": None, "key_id": None}
+
+    result = verify_bundle_signature(
+        digest_hex=observed_hash, signature=declared.value, key_id=declared.key_id
+    )
+    if not result["ok"]:
+        if enforced:
+            raise ValueError(
+                f"{surface} {extension_id!r} failed signature verification: {result['error']}"
+            )
+        return {
+            "status": "unverified",
+            "verified": False,
+            "algorithm": declared.algorithm,
+            "key_id": declared.key_id,
+            "error": result["error"],
+        }
+    return {
+        "status": "verified",
+        "verified": True,
+        "algorithm": declared.algorithm,
+        "key_id": declared.key_id,
+    }
+
+
 def _finalize_provenance(
     *,
     owner_class: str,
@@ -393,6 +479,7 @@ def _finalize_provenance(
     payload: dict[str, Any],
     observed_hash: str | None,
     verification: str,
+    signing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": EXTENSION_PROVENANCE_POLICY_VERSION,
@@ -412,7 +499,5 @@ def _finalize_provenance(
                 "derived-local" if observed_hash else "not-applicable"
             ),
         },
-        "signing": {
-            "status": "unsupported",
-        },
+        "signing": signing or {"status": "unsigned", "verified": False},
     }
