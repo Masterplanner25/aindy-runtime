@@ -328,19 +328,30 @@ capability can be granted with a declarative rate/recipient/domain bound the run
 
 ### AGENT-HARDEN-9 — Secrets broker (just-in-time retrieval)
 
-**Status:** Open — **Medium** (secret handling).
+**Status:** PR1 done (2026-07-06) — broker abstraction + env backend + capability-scoped
+JIT resolution. PR2 (keychain/Vault backends + call_tool host-function wiring) remains.
 
 The blueprint wants secrets pulled **just-in-time** from an OS keychain / Vault, never sitting
-in a database. Today secrets are env vars + the `SECRET_KEY`/`KeyRing`; the plugin sandbox
-declares `secret_injection: "none"` (deny-by-default — good, but that is a posture, not a
-broker). There is **no secrets-broker abstraction** that mints short-lived secret handles to a
-capability at call time.
+in a database. Secrets were process env vars; the plugin sandbox's `secret_injection: "none"`
+is a posture, not a broker.
 
-**Fix:** add a `SecretBroker` interface with pluggable backends (env for dev; OS
-keychain / HashiCorp Vault for prod) that resolves a `SecretRef` to a value **at tool-invoke
-time**, scoped to the capability token, never persisted. **Effort:** ~2 PRs. **Relates to:**
-AGENT-HARDEN-2, -8. **Close trigger:** a tool obtains a secret via a scoped JIT broker call
-rather than a process env var.
+**PR1 — the broker seam.** `platform_layer/secret_broker.py`: a `SecretBroker` ABC +
+`EnvSecretBroker` default that reads a **controlled `AINDY_SECRET_<NAME>` namespace** (not
+arbitrary env vars, so it's a deliberate secret surface a prod backend swaps transparently via
+`set_secret_broker`). `resolve_secret(name, *, capabilities, required_capability?)` is the JIT
+entry point: it's **fail-closed** on a missing gating capability, missing secret, or backend
+error, and the value is fetched at call time and returned to the caller **only — never
+persisted** (not in the DB, not on the token, not in a result). Scoping via
+`register_secret_scope(name, capability)` (or an explicit `required_capability`); ungated
+secrets stay open in dev. **Deliberately NOT a syscall** — the dispatch envelope is trace-logged,
+so a secret value must never transit it; resolution is an in-process call at the tool seam. Tests:
+`test_secret_broker.py` (namespace isolation, capability gate allow/deny, fail-closed paths,
+pluggability, `SecretRef` holds no value).
+
+**PR2 (remaining):** OS keychain / HashiCorp Vault backends, and a `get_secret(name)` host
+function at the nodus `call_tool` seam scoped to the run's token capabilities — so a real tool
+resolves a secret via the broker instead of `os.environ`, **completing the close trigger**.
+**Relates to:** AGENT-HARDEN-2, -8.
 
 ### AGENT-HARDEN-10 — Signed plugin bundles + SBOM
 
