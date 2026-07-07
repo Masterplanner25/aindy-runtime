@@ -72,7 +72,7 @@ dependencies = [
   "python-jose==3.5.0",
   "cryptography==48.0.1",
   "python-json-logger==4.1.0",
-  "redis==8.0.0",
+  "redis==8.0.1",
   "regex==2026.6.28",
   "requests==2.34.2",
   "six==1.17.0",
