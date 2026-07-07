@@ -4,10 +4,15 @@ from __future__ import annotations
 import pytest
 
 from AINDY.platform_layer.secret_broker import (
+    ChainSecretBroker,
     EnvSecretBroker,
+    FileSecretBroker,
     SecretBroker,
     SecretRef,
+    VaultSecretBroker,
+    capability_scope,
     clear_secret_scopes,
+    current_capabilities,
     get_secret_broker,
     register_secret_scope,
     resolve_secret,
@@ -117,3 +122,121 @@ def test_secret_ref_holds_no_value():
     ref = SecretRef(name="stripe_key", required_capability="payments.charge")
     assert ref.name == "stripe_key" and ref.required_capability == "payments.charge"
     assert not hasattr(ref, "value")
+
+
+# --------------------------------------------------------------------------- #
+# FileSecretBroker — Docker/K8s mounted secrets
+# --------------------------------------------------------------------------- #
+
+def test_file_broker_reads_mounted_secret(tmp_path):
+    (tmp_path / "db_password").write_text("s3cr3t\n", encoding="utf-8")
+    broker = FileSecretBroker(root=str(tmp_path))
+    assert broker.fetch("db_password") == "s3cr3t"
+    assert broker.fetch("absent") is None
+
+
+def test_file_broker_blocks_path_traversal(tmp_path):
+    broker = FileSecretBroker(root=str(tmp_path))
+    assert broker.fetch("../etc/passwd") is None
+    assert broker.fetch("a/b") is None
+
+
+# --------------------------------------------------------------------------- #
+# VaultSecretBroker — KV v2 over httpx (contract-tested with respx)
+# --------------------------------------------------------------------------- #
+
+def test_vault_broker_reads_kv_v2():
+    import httpx
+    import respx
+
+    with respx.mock:
+        route = respx.get("https://vault.local:8200/v1/secret/data/api_key").mock(
+            return_value=httpx.Response(200, json={"data": {"data": {"value": "vault-secret"}}})
+        )
+        broker = VaultSecretBroker(addr="https://vault.local:8200", token="vault-token")
+        assert broker.fetch("api_key") == "vault-secret"
+        assert route.calls.last.request.headers["x-vault-token"] == "vault-token"
+
+
+def test_vault_broker_missing_returns_none():
+    import httpx
+    import respx
+
+    with respx.mock:
+        respx.get("https://vault.local:8200/v1/secret/data/nope").mock(
+            return_value=httpx.Response(404, json={"errors": []})
+        )
+        broker = VaultSecretBroker(addr="https://vault.local:8200", token="t")
+        assert broker.fetch("nope") is None
+
+
+# --------------------------------------------------------------------------- #
+# ChainSecretBroker — ordered fallback
+# --------------------------------------------------------------------------- #
+
+def test_chain_returns_first_non_empty():
+    chain = ChainSecretBroker(_FakeBroker({}), _FakeBroker({"k": "from-second"}), _FakeBroker({"k": "third"}))
+    assert chain.fetch("k") == "from-second"
+    assert chain.fetch("absent") is None
+
+
+def test_chain_skips_failing_backend():
+    class _Boom(SecretBroker):
+        def fetch(self, name):
+            raise RuntimeError("down")
+
+    chain = ChainSecretBroker(_Boom(), _FakeBroker({"k": "ok"}))
+    assert chain.fetch("k") == "ok"
+
+
+# --------------------------------------------------------------------------- #
+# Ambient capability scope (the tool seam)
+# --------------------------------------------------------------------------- #
+
+def test_resolve_secret_uses_ambient_capability_scope():
+    register_secret_scope("k", "db.read")
+    set_secret_broker(_FakeBroker({"k": "v"}))
+
+    # Outside any scope → denied.
+    assert resolve_secret("k")["ok"] is False
+    with capability_scope(["db.read"]):
+        assert current_capabilities() == ("db.read",)
+        assert resolve_secret("k") == {"ok": True, "value": "v"}
+    # Scope is restored afterward.
+    assert resolve_secret("k")["ok"] is False
+
+
+def test_execute_tool_scopes_secret_to_token_capabilities(monkeypatch):
+    from AINDY.agents import tool_registry as tr
+
+    register_secret_scope("db_password", "db.read")
+    set_secret_broker(_FakeBroker({"db_password": "s3cr3t"}))
+
+    seen = {}
+
+    def _tool(args, user_id, db):
+        seen["secret"] = resolve_secret("db_password")  # no caps arg → ambient token scope
+        return {"ran": True}
+
+    monkeypatch.setattr(tr, "_ensure_tools_loaded", lambda: None)
+    monkeypatch.setattr(tr, "queue_system_event", lambda **kw: None)
+    monkeypatch.setattr("AINDY.agents.capability_policy.has_capability_policies", lambda: False)
+    monkeypatch.setitem(tr.TOOL_REGISTRY, "db_tool", {"fn": _tool})
+
+    # Token grants db.read → the tool resolves the secret.
+    monkeypatch.setattr(
+        "AINDY.agents.capability_service.check_tool_capability",
+        lambda **kw: {"ok": True, "allowed_capabilities": ["db.read", "misc"]},
+    )
+    ok = tr.execute_tool("db_tool", {}, user_id="u", db=object(), run_id="r", execution_token={"token_hash": "h"})
+    assert ok["success"] is True
+    assert seen["secret"] == {"ok": True, "value": "s3cr3t"}
+
+    # Token WITHOUT db.read → the same tool is denied the secret (fail-closed).
+    seen.clear()
+    monkeypatch.setattr(
+        "AINDY.agents.capability_service.check_tool_capability",
+        lambda **kw: {"ok": True, "allowed_capabilities": ["misc"]},
+    )
+    tr.execute_tool("db_tool", {}, user_id="u", db=object(), run_id="r", execution_token={"token_hash": "h"})
+    assert seen["secret"]["ok"] is False and "requires capability 'db.read'" in seen["secret"]["error"]

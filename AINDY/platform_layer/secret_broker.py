@@ -25,11 +25,19 @@ import os
 import re
 import threading
 from abc import ABC, abstractmethod
+import contextlib
+import contextvars
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 _ENV_PREFIX = "AINDY_SECRET_"
 _NAME_RE = re.compile(r"[^A-Z0-9_]")
+# File / Vault secret names must be simple (no path traversal, no injection).
+_SAFE_NAME_RE = re.compile(r"[A-Za-z0-9_.\-]+")
 
 
 @dataclass(frozen=True)
@@ -65,6 +73,122 @@ class EnvSecretBroker(SecretBroker):
     def fetch(self, name: str) -> Optional[str]:
         value = os.environ.get(self._env_key(name))
         return value if value else None
+
+
+class FileSecretBroker(SecretBroker):
+    """Container backend: resolve from a mounted secrets directory.
+
+    Matches the Docker / Kubernetes convention where each secret is a file at
+    ``<root>/<name>`` (default ``/run/secrets``) — so the secret is never in the
+    process env or image. Names are sanitized to a simple charset (no path
+    traversal).
+    """
+
+    def __init__(self, root: str = "/run/secrets") -> None:
+        self._root = Path(root)
+
+    def fetch(self, name: str) -> Optional[str]:
+        if not _SAFE_NAME_RE.fullmatch(str(name)):
+            return None
+        path = self._root / str(name)
+        try:
+            if not path.is_file():
+                return None
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return value or None
+
+
+class VaultSecretBroker(SecretBroker):
+    """HashiCorp Vault KV v2 backend (httpx — no hvac dependency).
+
+    Reads ``{addr}/v1/{mount}/data/{name}`` with an ``X-Vault-Token`` header and
+    returns the configured ``field`` from the secret's data (or the sole value when
+    the secret has exactly one key). Fetch failures return None (fail-closed at the
+    caller). Contract-tested with respx.
+    """
+
+    def __init__(
+        self,
+        *,
+        addr: str,
+        token: str,
+        mount: str = "secret",
+        field: str = "value",
+        timeout: float = 5.0,
+    ) -> None:
+        self._addr = addr.rstrip("/")
+        self._token = token
+        self._mount = mount.strip("/")
+        self._field = field
+        self._timeout = timeout
+
+    def fetch(self, name: str) -> Optional[str]:
+        if not _SAFE_NAME_RE.fullmatch(str(name)):
+            return None
+        import httpx
+
+        url = f"{self._addr}/v1/{self._mount}/data/{name}"
+        try:
+            resp = httpx.get(url, headers={"X-Vault-Token": self._token}, timeout=self._timeout)
+        except Exception as exc:
+            logger.warning("[SecretBroker] vault fetch failed for %r: %s", name, exc)
+            return None
+        if resp.status_code != 200:
+            return None
+        try:
+            data = resp.json()["data"]["data"]
+        except Exception:
+            return None
+        if not isinstance(data, dict) or not data:
+            return None
+        if self._field in data:
+            value = data[self._field]
+        elif len(data) == 1:
+            value = next(iter(data.values()))
+        else:
+            return None
+        return str(value) if value not in (None, "") else None
+
+
+class ChainSecretBroker(SecretBroker):
+    """Try each backend in order; first non-empty value wins (e.g. env → file → vault)."""
+
+    def __init__(self, *brokers: SecretBroker) -> None:
+        self._brokers = brokers
+
+    def fetch(self, name: str) -> Optional[str]:
+        for broker in self._brokers:
+            try:
+                value = broker.fetch(name)
+            except Exception:
+                value = None
+            if value:
+                return value
+        return None
+
+
+# ── Ambient capability scope (set by the tool seam) ───────────────────────────
+# execute_tool wraps a tool's invocation in capability_scope(token_capabilities);
+# a tool then calls resolve_secret(name) and it is gated by the run's grants
+# without the tool threading capabilities through every call.
+_CAPABILITIES_CTX: contextvars.ContextVar[tuple] = contextvars.ContextVar(
+    "secret_broker_capabilities", default=()
+)
+
+
+@contextlib.contextmanager
+def capability_scope(capabilities: Any):
+    token = _CAPABILITIES_CTX.set(tuple(capabilities or ()))
+    try:
+        yield
+    finally:
+        _CAPABILITIES_CTX.reset(token)
+
+
+def current_capabilities() -> tuple:
+    return _CAPABILITIES_CTX.get()
 
 
 # ── Scope registry: secret name → capability required to resolve it ────────────
@@ -120,8 +244,13 @@ def resolve_secret(
     The gate is ``required_capability`` if given, else the capability registered for
     *name* via ``register_secret_scope``. A secret with no registered gate is
     resolvable by any caller (dev convenience) — register a scope to lock it down.
+
+    ``capabilities`` defaults to the ambient ``capability_scope`` set by the tool
+    seam, so a tool can call ``resolve_secret(name)`` and be gated by the run's grants.
     """
     name = str(name)
+    if capabilities is None:
+        capabilities = _CAPABILITIES_CTX.get()
     gate = required_capability if required_capability is not None else SECRET_SCOPES.get(name)
     granted = set(capabilities or [])
     if gate is not None and gate not in granted:
