@@ -197,7 +197,7 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
         "aindy.extension.manifest/v1"
     ]
     assert payload["public_contract"]["extensions"]["provenance_policy"]["policy_version"] == "2026-05-20"
-    assert payload["public_contract"]["extensions"]["provenance_policy"]["signing"]["status"] == "unsupported"
+    assert payload["public_contract"]["extensions"]["provenance_policy"]["signing"]["status"] == "supported"
     assert payload["public_contract"]["extensions"]["execution_models"]["schema_version"] == "2026-05-22"
     assert payload["public_contract"]["extensions"]["execution_models"]["attestation_scope"]["plugin_sandbox_attestation"]["covered_surface_ids"] == [
         "dynamic-plugin-node:first-party-app",

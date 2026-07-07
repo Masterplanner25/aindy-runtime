@@ -95,6 +95,8 @@ def execute_tool(
             "result": None,
             "error": "capability token is required for agent run tool execution",
         }
+    # AGENT-HARDEN-9 — capabilities the tool may resolve secrets under (from the token).
+    _scoped_caps: list = []
     if execution_token is not None:
         if not run_id:
             return {
@@ -144,22 +146,23 @@ def execute_tool(
                 },
                 required=True,
             )
+            _scoped_caps = list(capability_check.get("allowed_capabilities", []) or [])
 
             # AGENT-HARDEN-8 — declarative per-capability policy (recipient / domain
             # egress allowlists). Vacuous unless a policy is registered for one of the
             # tool's required capabilities, so no behavior change until opted in.
             from AINDY.agents.capability_policy import (
                 enforce_capability_policy,
+                enforce_capability_rate,
                 has_capability_policies,
             )
 
             if has_capability_policies():
                 from AINDY.agents.capability_service import _get_capabilities_for_tool
 
-                policy_result = enforce_capability_policy(
-                    _get_capabilities_for_tool(tool_name), args
-                )
-                if not policy_result["allowed"]:
+                _tool_caps = _get_capabilities_for_tool(tool_name)
+
+                def _deny_policy(result):
                     queue_system_event(
                         db=db,
                         event_type="capability.policy_denied",
@@ -168,10 +171,14 @@ def execute_tool(
                         payload={
                             "run_id": str(run_id),
                             "tool_name": tool_name,
-                            "violations": policy_result["violations"],
+                            "violations": result["violations"],
                         },
                         required=True,
                     )
+
+                policy_result = enforce_capability_policy(_tool_caps, args)
+                if not policy_result["allowed"]:
+                    _deny_policy(policy_result)
                     first = policy_result["violations"][0]
                     return {
                         "success": False,
@@ -182,6 +189,21 @@ def execute_tool(
                             f"'{first['capability']}'"
                         ),
                     }
+
+                # Rate limits are checked last (they increment a counter, so only
+                # otherwise-permitted calls count toward the window).
+                rate_result = enforce_capability_rate(_tool_caps, scope=str(user_id))
+                if not rate_result["allowed"]:
+                    _deny_policy(rate_result)
+                    first = rate_result["violations"][0]
+                    return {
+                        "success": False,
+                        "result": None,
+                        "error": (
+                            f"capability rate limit exceeded: '{first['capability']}' "
+                            f"over {first['limit']}/{first['window_secs']}s"
+                        ),
+                    }
         except Exception as exc:
             logger.warning("[AgentTool] %s capability check failed: %s", tool_name, exc)
             return {
@@ -190,7 +212,13 @@ def execute_tool(
                 "error": "capability enforcement failed",
             }
     try:
-        result = entry["fn"](args=args, user_id=user_id, db=db)
+        # AGENT-HARDEN-9 — a tool that calls resolve_secret(name) during execution is
+        # gated by the run's granted capabilities via this ambient scope; the secret
+        # is consumed inside the tool and never returned to the script.
+        from AINDY.platform_layer.secret_broker import capability_scope
+
+        with capability_scope(_scoped_caps):
+            result = entry["fn"](args=args, user_id=user_id, db=db)
         return {"success": True, "result": result, "error": None}
     except Exception as exc:
         logger.warning("[AgentTool] %s failed: %s", tool_name, exc)

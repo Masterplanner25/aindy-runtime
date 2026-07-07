@@ -114,6 +114,72 @@ def _domain_allowed(domain: str, allowlist: tuple[str, ...]) -> bool:
     return False
 
 
+_RATE_PERIODS = {
+    "s": 1, "sec": 1, "second": 1, "seconds": 1,
+    "m": 60, "min": 60, "minute": 60, "minutes": 60,
+    "h": 3600, "hr": 3600, "hour": 3600, "hours": 3600,
+    "d": 86400, "day": 86400, "days": 86400,
+}
+
+
+def parse_rate(rate: Any) -> Optional[tuple[int, int]]:
+    """Parse a ``"N/period"`` rate string → ``(limit, window_secs)`` or None.
+
+    Accepts e.g. ``"30/minute"``, ``"5/s"``, ``"100/hour"``, ``"2/second"``.
+    """
+    if not isinstance(rate, str) or "/" not in rate:
+        return None
+    count_s, _, period_s = rate.partition("/")
+    period_s = period_s.strip().lower()
+    # allow a leading count on the period, e.g. "30/2minutes" is not supported → base unit only
+    window = _RATE_PERIODS.get(period_s)
+    try:
+        limit = int(count_s.strip())
+    except (ValueError, TypeError):
+        return None
+    if window is None or limit <= 0:
+        return None
+    return limit, window
+
+
+def enforce_capability_rate(capabilities: Any, *, scope: str) -> dict[str, Any]:
+    """Enforce declared per-capability rate limits (AGENT-HARDEN-8 PR2).
+
+    For each policy-bound capability with a ``rate``, record one hit against a
+    fixed-window counter (shared Redis when available, else in-memory) keyed by
+    capability × *scope* (the tenant/user). Returns ``{"allowed", "violations"}``
+    where a violation is ``{capability, kind:"rate", limit, window_secs, count}``.
+    Has a side effect (increments the counter) — call it only for otherwise-allowed
+    calls, so the count reflects real permitted usage.
+    """
+    caps = list(capabilities or [])
+    rated = []
+    for c in caps:
+        pol = get_capability_policy(c)
+        if pol is None or not pol.rate:
+            continue
+        parsed = parse_rate(pol.rate)
+        if parsed is not None:
+            rated.append((c, parsed[0], parsed[1]))
+    if not rated:
+        return {"allowed": True, "violations": []}
+
+    from AINDY.kernel.resource_manager import get_resource_manager
+
+    rm = get_resource_manager()
+    violations: list[dict[str, Any]] = []
+    for capability, limit, window_secs in rated:
+        count, exceeded = rm.rate_limit_hit(
+            f"cap:{capability}:{scope}", limit=limit, window_secs=window_secs
+        )
+        if exceeded:
+            violations.append({
+                "capability": capability, "kind": "rate",
+                "limit": limit, "window_secs": window_secs, "count": count,
+            })
+    return {"allowed": not violations, "violations": violations}
+
+
 def enforce_capability_policy(capabilities: Any, args: Any) -> dict[str, Any]:
     """Enforce the declared recipient/domain bounds for *capabilities* against *args*.
 
