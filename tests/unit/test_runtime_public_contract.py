@@ -184,7 +184,7 @@ def test_runtime_public_contract_publishes_extension_provenance_policy():
 
     provenance = metadata["extensions"]["provenance_policy"]
     assert provenance["policy_version"] == "2026-05-20"
-    assert provenance["signing"]["status"] == "unsupported"
+    assert provenance["signing"]["status"] == "supported"
     assert provenance["trust_policies"]["runtime-built-in"] == "runtime-owned-derived"
     assert "dynamic-plugin-node" in provenance["required_when"]["external-third-party"]
 

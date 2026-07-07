@@ -132,6 +132,21 @@ def signature_required(profile: str) -> bool:
     return str(profile or "").strip().lower() in _PRODUCTION_PROFILES
 
 
+def require_signed_plugins() -> bool:
+    """Operator opt-in: enforce signature verification on plugin load.
+
+    Default OFF so existing unsigned first-party/dev plugins keep loading; set
+    ``AINDY_REQUIRE_SIGNED_PLUGINS=1`` to make production profiles **refuse** an
+    unsigned/untrusted bundle. Signature *verification* of a declared signature
+    always runs regardless — this flag only gates the hard refusal.
+    """
+    import os
+
+    return os.environ.get("AINDY_REQUIRE_SIGNED_PLUGINS", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def enforce_bundle_signature(
     *,
     profile: str,

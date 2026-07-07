@@ -363,9 +363,8 @@ ambient scope, and the `execute_tool` allow/deny close-trigger demonstration).
 
 ### AGENT-HARDEN-10 — Signed plugin bundles + SBOM
 
-**Status:** PR1 done (2026-07-06) — real signing + trust registry + SBOM + profile gate
-primitives. PR2 (wire the gate into the plugin-host load path + flip the advertised
-`signing.status`) remains.
+**Status:** CLOSED (2026-07-06). Real signing + trust registry + SBOM primitives (PR1) +
+provenance wiring / profile enforcement (PR2). Close trigger met.
 
 The blueprint wants signed plugin bundles (sigstore/cosign) + SBOM. Integrity was SHA-256
 byte-comparison and `extension_provenance.py` hardcodes `"signing": {"status": "unsupported"}` —
@@ -382,13 +381,21 @@ single-instance allows unsigned but reports `verified:False`. `generate_sbom` em
 CycloneDX-lite SBOM (component digests). Tests: `test_extension_signing.py` (sign/verify,
 tamper + wrong-key rejection, trust registry, profile gate allow/deny, SBOM shape).
 
-**PR2 (remaining) — enforcement wiring.** Call `enforce_bundle_signature` in the plugin-host
-load path (a bundle declares `{signature, key_id}`; the host verifies against the trust registry
-before load) and **flip `extension_provenance_policy()` `signing.status` → `"supported"`** — a
-**public version-API contract** change (`test_version_api.py` freezes it, cross-repo SDK/UI
-surface) done deliberately with the enforcement so the advertised status stays honest. **Relates
-to:** the plugin host attestation in `plugin_host.py`. **Close trigger** (host refuses an
-unsigned/untrusted bundle in production) lands with PR2's call-site wiring.
+**PR2 (done 2026-07-06) — provenance wiring + profile enforcement.** A plugin bundle's declared
+provenance may carry a typed `signature: {algorithm, value, key_id}` (`ExtensionSignatureDeclaration`).
+`derive_plugin_artifact_provenance` now verifies it against the trust registry
+(`_describe_and_enforce_signature`) and records a `signing` block (`verified` / `unverified` /
+`unsigned`) in the provenance result. **Enforcement:** scoped to signature-required surfaces
+(external-third-party) and gated by the operator opt-in `AINDY_REQUIRE_SIGNED_PLUGINS` — when set
+on a **production** deployment profile, an unsigned/untrusted/invalid bundle **raises** (refused,
+mirroring the existing integrity-mismatch refusal that already blocks load); default OFF so
+existing first-party/dev plugins keep loading. `extension_provenance_policy()` `signing.status`
+flipped `unsupported` → **`supported`** (`ed25519`) — a **public version-API contract** change,
+so the two frozen assertions (`test_version_api.py`, `test_runtime_public_contract.py`) were
+updated in lockstep with the actual capability so the advertised status stays honest. **Close
+trigger met:** a bundle can be signed and the host refuses an unsigned/untrusted one in a
+production profile. Tests: `test_extension_signing.py` (verified/unverified/unsigned recording,
+production refuses unsigned + untrusted when enforced, dev/opt-out allow, valid-signed passes).
 
 **Not tracked (still out of scope):** Slack/Teams chat approval surface (UI convenience — the
 web `AgentApprovalInbox` + CLI/HTTP already cover approvals; add if a chat-ops need arises);
