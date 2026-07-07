@@ -281,8 +281,8 @@ integration has a recorded contract test that fails when the adapter's wire cont
 
 ### AGENT-HARDEN-8 — Declarative per-capability policy (rate limits + allowlists)
 
-**Status:** IN PROGRESS — **Medium**. PR1 (recipient + domain allowlists) landed; PR2
-(rate limits via Redis) remains.
+**Status:** CLOSED (2026-07-06). Recipient + domain allowlists (PR1) and per-capability
+rate limits (PR2) both enforced.
 
 The blueprint's CAP descriptor carries `limits.rate` (e.g. `30/minute`) and
 `recipients.allowlist` / domain allowlists **per capability**. Today enforcement is coarser:
@@ -307,9 +307,17 @@ upgrades the coarse `egress_scope` label toward an enforced list and complements
 allow/deny incl `@domain`/subdomain, vacuous, `execute_tool` integration). **Close trigger met**
 for recipient/domain bounds.
 
-**PR2 (remaining) — per-capability rate limits.** Enforce `CapabilityPolicy.rate` (`"N/period"`)
-via the existing Redis counters in `kernel/resource_manager.py`, per capability × tenant/run.
-**Relates to:** AGENT-HARDEN-2 (token integrity). ~1 PR.
+**PR2 (done 2026-07-06) — per-capability rate limits.** `ResourceManager.rate_limit_hit(key,
+limit, window_secs)` adds a generic fixed-window counter (shared Redis when available → enforced
+across instances; thread-safe in-memory fallback otherwise; fail-open on backend error).
+`capability_policy.parse_rate` parses `"N/period"` (s/min/hour/day) and `enforce_capability_rate(
+caps, scope)` records one hit per policy-bound capability keyed by `cap × scope` (the tenant/user)
+and denies once the window count passes the limit. Enforced in `execute_tool` **after** the
+recipient/domain check (rate increments the counter, so only otherwise-permitted calls count);
+denial emits `capability.policy_denied` (`kind:"rate"`). Tests: `test_capability_policy.py`
+(parse_rate, deterministic fixed-window via `now=`, allow→deny per scope, execute_tool rate
+integration). **Relates to:** AGENT-HARDEN-2 (token integrity). **Close trigger fully met** — a
+capability can be granted with a declarative rate/recipient/domain bound the runtime enforces.
 
 ### AGENT-HARDEN-9 — Secrets broker (just-in-time retrieval)
 

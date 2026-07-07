@@ -7,9 +7,11 @@ from AINDY.agents.capability_policy import (
     CapabilityPolicy,
     clear_capability_policies,
     enforce_capability_policy,
+    enforce_capability_rate,
     extract_domains,
     extract_recipients,
     has_capability_policies,
+    parse_rate,
     register_capability_policy,
 )
 
@@ -76,6 +78,60 @@ def test_rate_only_policy_is_not_enforced_here():
 
 
 # --------------------------------------------------------------------------- #
+# Rate limits (PR2)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("raw,expected", [
+    ("30/minute", (30, 60)),
+    ("5/s", (5, 1)),
+    ("2/second", (2, 1)),
+    ("100/hour", (100, 3600)),
+    ("10/day", (10, 86400)),
+    ("bad", None),
+    ("0/minute", None),
+    ("5/fortnight", None),
+    ("", None),
+])
+def test_parse_rate(raw, expected):
+    assert parse_rate(raw) == expected
+
+
+def test_rate_limit_hit_fixed_window_is_deterministic():
+    from AINDY.kernel.resource_manager import ResourceManager
+
+    rm = ResourceManager()
+    # Same window (now fixed) → counts accumulate; 3rd hit exceeds a limit of 2.
+    assert rm.rate_limit_hit("k", limit=2, window_secs=60, now=1000.0) == (1, False)
+    assert rm.rate_limit_hit("k", limit=2, window_secs=60, now=1001.0) == (2, False)
+    assert rm.rate_limit_hit("k", limit=2, window_secs=60, now=1002.0) == (3, True)
+    # New window resets the count.
+    assert rm.rate_limit_hit("k", limit=2, window_secs=60, now=1099.0) == (1, False)
+
+
+def test_enforce_rate_allows_then_denies(monkeypatch):
+    from AINDY.kernel.resource_manager import ResourceManager
+
+    rm = ResourceManager()
+    monkeypatch.setattr("AINDY.kernel.resource_manager.get_resource_manager", lambda: rm)
+    register_capability_policy("send", CapabilityPolicy(rate="2/minute"))
+
+    assert enforce_capability_rate(["send"], scope="userA")["allowed"] is True
+    assert enforce_capability_rate(["send"], scope="userA")["allowed"] is True
+    denied = enforce_capability_rate(["send"], scope="userA")
+    assert denied["allowed"] is False
+    v = denied["violations"][0]
+    assert v["kind"] == "rate" and v["capability"] == "send" and v["limit"] == 2
+
+    # A different tenant scope has its own window.
+    assert enforce_capability_rate(["send"], scope="userB")["allowed"] is True
+
+
+def test_enforce_rate_vacuous_without_rate_policy(monkeypatch):
+    register_capability_policy("send", CapabilityPolicy(recipients=("ok@x.com",)))  # no rate
+    assert enforce_capability_rate(["send"], scope="u") == {"allowed": True, "violations": []}
+
+
+# --------------------------------------------------------------------------- #
 # execute_tool integration
 # --------------------------------------------------------------------------- #
 
@@ -115,6 +171,27 @@ def test_execute_tool_allows_compliant_call(monkeypatch):
         run_id="r", execution_token={"token_hash": "h"},
     )
     assert result["success"] is True and result["result"] == {"sent": True}
+
+
+def test_execute_tool_enforces_rate_limit(monkeypatch):
+    from AINDY.agents.tool_registry import execute_tool
+    from AINDY.kernel.resource_manager import ResourceManager
+
+    rm = ResourceManager()
+    monkeypatch.setattr("AINDY.kernel.resource_manager.get_resource_manager", lambda: rm)
+    register_capability_policy("send_email_cap", CapabilityPolicy(rate="1/minute"))
+    calls = []
+    _wire_tool(monkeypatch, cap="send_email_cap", tool_fn=lambda **kw: calls.append(1) or {"sent": True})
+
+    first = execute_tool(
+        "send_email", {}, user_id="u", db=object(), run_id="r", execution_token={"token_hash": "h"},
+    )
+    assert first["success"] is True
+    second = execute_tool(
+        "send_email", {}, user_id="u", db=object(), run_id="r", execution_token={"token_hash": "h"},
+    )
+    assert second["success"] is False and "rate limit exceeded" in second["error"]
+    assert len(calls) == 1  # the over-limit call never reached the tool
 
 
 def test_execute_tool_unchanged_when_no_policy(monkeypatch):

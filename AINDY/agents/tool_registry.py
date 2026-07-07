@@ -150,16 +150,16 @@ def execute_tool(
             # tool's required capabilities, so no behavior change until opted in.
             from AINDY.agents.capability_policy import (
                 enforce_capability_policy,
+                enforce_capability_rate,
                 has_capability_policies,
             )
 
             if has_capability_policies():
                 from AINDY.agents.capability_service import _get_capabilities_for_tool
 
-                policy_result = enforce_capability_policy(
-                    _get_capabilities_for_tool(tool_name), args
-                )
-                if not policy_result["allowed"]:
+                _tool_caps = _get_capabilities_for_tool(tool_name)
+
+                def _deny_policy(result):
                     queue_system_event(
                         db=db,
                         event_type="capability.policy_denied",
@@ -168,10 +168,14 @@ def execute_tool(
                         payload={
                             "run_id": str(run_id),
                             "tool_name": tool_name,
-                            "violations": policy_result["violations"],
+                            "violations": result["violations"],
                         },
                         required=True,
                     )
+
+                policy_result = enforce_capability_policy(_tool_caps, args)
+                if not policy_result["allowed"]:
+                    _deny_policy(policy_result)
                     first = policy_result["violations"][0]
                     return {
                         "success": False,
@@ -180,6 +184,21 @@ def execute_tool(
                             f"capability policy violation: {first['kind']} "
                             f"{first['value']!r} not allowed by capability "
                             f"'{first['capability']}'"
+                        ),
+                    }
+
+                # Rate limits are checked last (they increment a counter, so only
+                # otherwise-permitted calls count toward the window).
+                rate_result = enforce_capability_rate(_tool_caps, scope=str(user_id))
+                if not rate_result["allowed"]:
+                    _deny_policy(rate_result)
+                    first = rate_result["violations"][0]
+                    return {
+                        "success": False,
+                        "result": None,
+                        "error": (
+                            f"capability rate limit exceeded: '{first['capability']}' "
+                            f"over {first['limit']}/{first['window_secs']}s"
                         ),
                     }
         except Exception as exc:
