@@ -95,6 +95,8 @@ def execute_tool(
             "result": None,
             "error": "capability token is required for agent run tool execution",
         }
+    # AGENT-HARDEN-9 — capabilities the tool may resolve secrets under (from the token).
+    _scoped_caps: list = []
     if execution_token is not None:
         if not run_id:
             return {
@@ -144,6 +146,7 @@ def execute_tool(
                 },
                 required=True,
             )
+            _scoped_caps = list(capability_check.get("allowed_capabilities", []) or [])
 
             # AGENT-HARDEN-8 — declarative per-capability policy (recipient / domain
             # egress allowlists). Vacuous unless a policy is registered for one of the
@@ -209,7 +212,13 @@ def execute_tool(
                 "error": "capability enforcement failed",
             }
     try:
-        result = entry["fn"](args=args, user_id=user_id, db=db)
+        # AGENT-HARDEN-9 — a tool that calls resolve_secret(name) during execution is
+        # gated by the run's granted capabilities via this ambient scope; the secret
+        # is consumed inside the tool and never returned to the script.
+        from AINDY.platform_layer.secret_broker import capability_scope
+
+        with capability_scope(_scoped_caps):
+            result = entry["fn"](args=args, user_id=user_id, db=db)
         return {"success": True, "result": result, "error": None}
     except Exception as exc:
         logger.warning("[AgentTool] %s failed: %s", tool_name, exc)

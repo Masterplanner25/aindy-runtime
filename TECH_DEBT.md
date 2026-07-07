@@ -328,8 +328,8 @@ capability can be granted with a declarative rate/recipient/domain bound the run
 
 ### AGENT-HARDEN-9 — Secrets broker (just-in-time retrieval)
 
-**Status:** PR1 done (2026-07-06) — broker abstraction + env backend + capability-scoped
-JIT resolution. PR2 (keychain/Vault backends + call_tool host-function wiring) remains.
+**Status:** CLOSED (2026-07-06). Broker abstraction + backends + capability-scoped JIT
+resolution wired at the tool seam — close trigger met.
 
 The blueprint wants secrets pulled **just-in-time** from an OS keychain / Vault, never sitting
 in a database. Secrets were process env vars; the plugin sandbox's `secret_injection: "none"`
@@ -348,9 +348,17 @@ so a secret value must never transit it; resolution is an in-process call at the
 `test_secret_broker.py` (namespace isolation, capability gate allow/deny, fail-closed paths,
 pluggability, `SecretRef` holds no value).
 
-**PR2 (remaining):** OS keychain / HashiCorp Vault backends, and a `get_secret(name)` host
-function at the nodus `call_tool` seam scoped to the run's token capabilities — so a real tool
-resolves a secret via the broker instead of `os.environ`, **completing the close trigger**.
+**PR2 (done 2026-07-06) — real backends + tool-seam scoping.** Backends: `FileSecretBroker`
+(Docker/K8s mounted `<root>/<name>`, default `/run/secrets`, path-traversal-blocked),
+`VaultSecretBroker` (HashiCorp Vault **KV v2** over `httpx` — no `hvac` dep, respx-contract-tested),
+and `ChainSecretBroker` (ordered fallback, e.g. env→file→vault). **Close trigger met via the tool
+seam:** `agents/tool_registry.py` `execute_tool` now wraps the tool invocation in
+`capability_scope(<token allowed_capabilities>)`; a tool calls `resolve_secret(name)` (no caps
+arg → ambient scope) and is gated by the run's grants — the secret is consumed inside the tool
+and never returned to the script. A tool whose token lacks the gating capability is denied
+(fail-closed). OS-keychain (`keyring`) is a trivial further backend given the ABC. Tests:
+`test_secret_broker.py` (File incl. traversal block, Vault KV v2 via respx, Chain fallback,
+ambient scope, and the `execute_tool` allow/deny close-trigger demonstration).
 **Relates to:** AGENT-HARDEN-2, -8.
 
 ### AGENT-HARDEN-10 — Signed plugin bundles + SBOM
