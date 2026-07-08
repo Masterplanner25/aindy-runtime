@@ -78,6 +78,10 @@ class AgentRun(Base):
         Index("ix_agent_runs_user_status", "user_id", "status"),
         Index("ix_agent_runs_created_at", "created_at"),
         Index("ix_agent_runs_parent_run_id", "parent_run_id"),
+        # RTR-3: the AgentRun↔FlowRun reconciliation join
+        # (``AgentRun.flow_run_id == str(flow_run.id)`` in stuck_run_service) ran
+        # an unindexed scan on every stuck-run recovery. Index the FK.
+        Index("ix_agent_runs_flow_run_id", "flow_run_id"),
     )
 
     @property

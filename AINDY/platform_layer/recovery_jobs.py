@@ -11,6 +11,7 @@ from AINDY.config import settings
 from AINDY.db.database import SessionLocal
 from AINDY.db.models.flow_run import FlowRun
 from AINDY.db.models.waiting_flow_run import WaitingFlowRun
+from AINDY.kernel.condition_codes import FlowRunStatus
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ async def expire_timed_out_waits(db: AsyncSession) -> int:
     expired_runs = await _select_flow_runs(
         db,
         select(FlowRun).where(
-            FlowRun.status == "waiting",
+            FlowRun.status == FlowRunStatus.WAITING.value,
             FlowRun.wait_deadline.is_not(None),
             FlowRun.wait_deadline < now,
         ),
@@ -114,7 +115,7 @@ async def expire_timed_out_waits(db: AsyncSession) -> int:
     try:
         for flow_run in expired_runs:
             deadline = flow_run.wait_deadline
-            flow_run.status = "failed"
+            flow_run.status = FlowRunStatus.FAILED.value
             flow_run.waiting_for = None
             flow_run.wait_deadline = None
             flow_run.error_message = "WAIT_TIMEOUT"
@@ -169,7 +170,7 @@ async def expire_timed_out_wait_flows(db: AsyncSession) -> int:
             )
 
             if flow_run is not None:
-                flow_run.status = "failed"
+                flow_run.status = FlowRunStatus.FAILED.value
                 flow_run.waiting_for = None
                 flow_run.wait_deadline = None
                 flow_run.error_message = "WAIT_TIMEOUT"
@@ -199,17 +200,21 @@ async def expire_timed_out_wait_flows(db: AsyncSession) -> int:
 
 async def recover_stuck_runs(db: AsyncSession) -> int:
     """
-    Mark stale running FlowRuns as failed.
+    Mark stale active FlowRuns as failed.
 
-    The scan is idempotent because only rows still in ``status == "running"``
-    and older than the configured threshold are updated.
+    The scan is idempotent because only rows still in a non-waiting active state
+    (``running`` / ``executing``) and older than the configured threshold are
+    updated.
     """
     now = _run_now()
     threshold = now - timedelta(minutes=settings.STUCK_RUN_THRESHOLD_MINUTES)
+    # RTR-3: both non-waiting active states (running, executing) can strand.
     stuck_runs = await _select_flow_runs(
         db,
         select(FlowRun).where(
-            FlowRun.status == "running",
+            FlowRun.status.in_(
+                (FlowRunStatus.RUNNING.value, FlowRunStatus.EXECUTING.value)
+            ),
             FlowRun.updated_at < threshold,
         ),
     )
@@ -218,7 +223,7 @@ async def recover_stuck_runs(db: AsyncSession) -> int:
 
     try:
         for flow_run in stuck_runs:
-            flow_run.status = "failed"
+            flow_run.status = FlowRunStatus.FAILED.value
             flow_run.waiting_for = None
             flow_run.wait_deadline = None
             flow_run.error_message = "Stuck FlowRun recovered by periodic scan"

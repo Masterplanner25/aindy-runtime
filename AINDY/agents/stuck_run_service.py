@@ -31,8 +31,17 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 from AINDY.core.execution_signal_helper import record_agent_event
 from AINDY.core.observability_events import emit_observability_event
+from AINDY.kernel.condition_codes import (
+    AgentRunStatus,
+    FlowRunStatus,
+    is_agent_terminal,
+    is_flow_terminal,
+)
 
 _RECOVERY_ERROR_MSG = "Stuck run recovery: process terminated before completion"
+
+# Non-waiting active FlowRun states a stale row can be stranded in (RTR-3).
+_STUCK_FLOW_STATUSES = (FlowRunStatus.RUNNING.value, FlowRunStatus.EXECUTING.value)
 
 
 def _recovery_error_detail(*, detected_at: datetime) -> dict[str, str]:
@@ -61,7 +70,7 @@ def _recover_agent_run(flow_run, db: Session) -> None:
 
     recovered_at = datetime.now(timezone.utc)
     # Mark the FlowRun terminal
-    flow_run.status = "failed"
+    flow_run.status = FlowRunStatus.FAILED.value
     flow_run.waiting_for = None
     flow_run.wait_deadline = None
     flow_run.error_message = _RECOVERY_ERROR_MSG
@@ -81,7 +90,11 @@ def _recover_agent_run(flow_run, db: Session) -> None:
         )
         return
 
-    if agent_run.status != "executing":
+    # RTR-3: only a genuinely terminal AgentRun is left alone. The historical
+    # ``!= "executing"`` guard silently no-op'd recovery for runs parked in
+    # ``delegated`` / ``waiting`` (VM WAIT), stranding them after the FlowRun
+    # was already failed above. Recover any non-terminal linked run.
+    if is_agent_terminal(agent_run.status):
         # Already finalised by another path; nothing to do
         return
 
@@ -103,7 +116,7 @@ def _recover_agent_run(flow_run, db: Session) -> None:
         for s in completed_steps
     ]
 
-    agent_run.status = "failed"
+    agent_run.status = AgentRunStatus.FAILED.value
     agent_run.completed_at = recovered_at
     agent_run.error_message = _RECOVERY_ERROR_MSG
     agent_run.result = {"steps": step_results}
@@ -121,7 +134,7 @@ def _recover_agent_run(flow_run, db: Session) -> None:
 def _recover_generic_run(flow_run, db: Session) -> None:
     """Mark a non-agent FlowRun as failed — log only, no linked model."""
     recovered_at = datetime.now(timezone.utc)
-    flow_run.status = "failed"
+    flow_run.status = FlowRunStatus.FAILED.value
     flow_run.waiting_for = None
     flow_run.wait_deadline = None
     flow_run.error_message = _RECOVERY_ERROR_MSG
@@ -150,7 +163,7 @@ def recover_stuck_agent_run(
       {"ok": False, "error_code": "not_found"}
       {"ok": False, "error_code": "forbidden"}
       {"ok": False, "error_code": "wrong_status",
-                    "detail": "Run is not in executing state"}
+                    "detail": "Run is already in a terminal state"}
       {"ok": False, "error_code": "too_recent",
                     "detail": "Run started less than N minutes ago (use ?force=true to override)"}
 
@@ -173,11 +186,13 @@ def recover_stuck_agent_run(
         if run.user_id != user_id:
             return {"ok": False, "error_code": "forbidden"}
 
-        if run.status != "executing":
+        # RTR-3: reject only a genuinely terminal run; any non-terminal state
+        # (executing / delegated / waiting) is a recoverable stuck run.
+        if is_agent_terminal(run.status):
             return {
                 "ok": False,
                 "error_code": "wrong_status",
-                "detail": "Run is not in executing state",
+                "detail": "Run is already in a terminal state",
             }
 
         if not force and run.started_at:
@@ -200,9 +215,9 @@ def recover_stuck_agent_run(
                 .filter(FlowRun.id == run.flow_run_id)
                 .first()
             )
-            if flow_run and flow_run.status == "running":
+            if flow_run and not is_flow_terminal(flow_run.status):
                 recovered_at = datetime.now(timezone.utc)
-                flow_run.status = "failed"
+                flow_run.status = FlowRunStatus.FAILED.value
                 flow_run.waiting_for = None
                 flow_run.wait_deadline = None
                 flow_run.error_message = _RECOVERY_ERROR_MSG
@@ -227,7 +242,7 @@ def recover_stuck_agent_run(
             for s in completed_steps
         ]
 
-        run.status = "failed"
+        run.status = AgentRunStatus.FAILED.value
         run.completed_at = datetime.now(timezone.utc)
         run.error_message = _RECOVERY_ERROR_MSG
         run.result = {"steps": step_results}
@@ -299,10 +314,13 @@ def scan_and_recover_stuck_runs(
         threshold_dt = now - timedelta(minutes=staleness_minutes)
         timeout_threshold = now - timedelta(minutes=settings.FLOW_WAIT_TIMEOUT_MINUTES)
 
+        # RTR-3: both non-waiting active states are recoverable. ``executing`` is
+        # written by the resume claim; a row stale there (updated_at is bumped on
+        # every node checkpoint) is a crash mid-step, not a live run.
         stuck_runs = (
             db.query(FlowRun)
             .filter(
-                FlowRun.status == "running",
+                FlowRun.status.in_(_STUCK_FLOW_STATUSES),
                 FlowRun.updated_at < threshold_dt,
             )
             .all()
@@ -312,7 +330,7 @@ def scan_and_recover_stuck_runs(
             waiting_runs = (
                 db.query(FlowRun)
                 .filter(
-                    FlowRun.status == "waiting",
+                    FlowRun.status == FlowRunStatus.WAITING.value,
                     FlowRun.updated_at < timeout_threshold,
                 )
                 .all()

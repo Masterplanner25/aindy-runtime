@@ -3197,6 +3197,31 @@ CI job proves full execute-to-completion once the runtime bump ships.
   from `AgentStep`, or replay fresh via `replayed_from_run_id`); thread-mode
   in-flight overlaps RTR-2.
 
+- **Advance 2026-07-08 — HARDEN half done (canonicalization); BUILD half (full
+  unification) still deferred.** The decorative enums in `kernel/condition_codes.py`
+  now mirror what the engines actually write: `FlowRunStatus` gained `EXECUTING`
+  (resume-claim / active-stepping) and `SUCCESS` (real terminal success — the
+  runner never wrote the old `COMPLETED`, now kept as a legacy alias);
+  `AgentRunStatus` gained `WAITING` (the VM WAIT park state that
+  `agent_run_rehydration` already queried). Added the single-source classification
+  layer — `AGENT_TERMINAL_STATUSES` / `FLOW_TERMINAL_STATUSES` /
+  `AGENT_ACTIVE_STATUSES` / `FLOW_ACTIVE_STATUSES`, `is_agent_terminal` /
+  `is_flow_terminal`, and deterministic `flow_status_to_agent` /
+  `agent_status_to_flow` maps. **No-op recovery gap CLOSED:** the six reconcilers
+  (`stuck_run_service`, `recovery_jobs`, `flow_run_rehydration`,
+  `resume_watchdog`, `kernel/scheduler/recovery`, `agent_run_rehydration` +
+  scheduler orphaned-approved) now classify via the helpers instead of the
+  literal `status == "executing"`, so a stuck FlowRun whose linked AgentRun is
+  `delegated` / `waiting` is failed instead of stranded. Both stuck-flow scans now
+  cover `executing` (crash mid-step), not just `running`. Added
+  `ix_agent_runs_flow_run_id` (the reconciliation join was an unindexed scan) —
+  schema-contract `2026-07-07`→`2026-07-08`, Alembic `0010` (idempotent, blank-DB
+  guarded). Tests: `test_run_status_canonicalization.py`. The nullable, post-hoc
+  `AgentRun.flow_run_id` link and the two independent state machines are unchanged
+  — full unification (non-nullable link, run-creation reorder, single authority)
+  is the remaining BUILD half, deferred (trigger unchanged: when divergence is
+  observed in production).
+
 ### RTR-4 — Multi-agent delegation core — **[HARDEN], medium**
 
 - **Evidence:** **working core, not scaffolding.** `db/models/agent_registry.py`

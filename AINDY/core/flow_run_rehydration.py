@@ -127,13 +127,14 @@ def rehydrate_waiting_flow_runs(
     """
     from AINDY.db.models.flow_run import FlowRun
     from AINDY.db.models.execution_unit import ExecutionUnit
+    from AINDY.kernel.condition_codes import FlowRunStatus
 
     scheduler = get_scheduler_engine()
 
     # ── 1. Query all waiting FlowRuns ──────────────────────────────────────────
     scoped_run_ids = {str(run_id) for run_id in (run_ids or []) if run_id}
     try:
-        waiting_query = db.query(FlowRun).filter(FlowRun.status == "waiting")
+        waiting_query = db.query(FlowRun).filter(FlowRun.status == FlowRunStatus.WAITING.value)
         if scoped_run_ids:
             waiting_query = waiting_query.filter(FlowRun.id.in_(scoped_run_ids))
         waiting_runs = waiting_query.all()
@@ -276,11 +277,18 @@ def rehydrate_waiting_flow_runs(
                     # UPDATE WHERE status='waiting' ensures exactly one instance
                     # proceeds.  All others see rowcount=0 and exit immediately.
                     from AINDY.db.models.flow_run import FlowRun as _FlowRun
+                    from AINDY.kernel.condition_codes import FlowRunStatus
 
                     claimed = (
                         _db.query(_FlowRun)
-                        .filter(_FlowRun.id == r_id, _FlowRun.status == "waiting")
-                        .update({"status": "executing"}, synchronize_session=False)
+                        .filter(
+                            _FlowRun.id == r_id,
+                            _FlowRun.status == FlowRunStatus.WAITING.value,
+                        )
+                        .update(
+                            {"status": FlowRunStatus.EXECUTING.value},
+                            synchronize_session=False,
+                        )
                     )
                     try:
                         _db.commit()

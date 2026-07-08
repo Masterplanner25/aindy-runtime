@@ -482,6 +482,7 @@ def _recover_orphaned_approved_runs() -> None:
     try:
         from AINDY.db.database import SessionLocal
         from AINDY.db.models import AgentRun
+        from AINDY.kernel.condition_codes import AgentRunStatus
         from datetime import timedelta
         import threading
 
@@ -491,7 +492,7 @@ def _recover_orphaned_approved_runs() -> None:
             (run.id, run.user_id)
             for run in db.query(AgentRun)
             .filter(
-                AgentRun.status == "approved",
+                AgentRun.status == AgentRunStatus.APPROVED.value,
                 AgentRun.approved_at < cutoff,
             )
             .limit(50)

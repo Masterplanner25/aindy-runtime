@@ -84,6 +84,7 @@ class SchedulerRecoveryMixin:
             from AINDY.db.database import SessionLocal
             from AINDY.db.models.execution_unit import ExecutionUnit
             from AINDY.db.models.flow_run import FlowRun
+            from AINDY.kernel.condition_codes import FlowRunStatus
 
             eu_query_ids: list[uuid.UUID] = []
             for run_id in run_ids:
@@ -96,7 +97,7 @@ class SchedulerRecoveryMixin:
                 waiting_flow_ids = {
                     str(flow_id)
                     for (flow_id,) in (
-                        db.query(FlowRun.id).filter(FlowRun.id.in_(run_ids), FlowRun.status == "waiting").all()
+                        db.query(FlowRun.id).filter(FlowRun.id.in_(run_ids), FlowRun.status == FlowRunStatus.WAITING.value).all()
                     )
                 }
                 waiting_eu_ids = set()
