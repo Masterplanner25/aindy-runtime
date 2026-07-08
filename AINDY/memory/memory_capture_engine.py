@@ -280,6 +280,31 @@ class MemoryCaptureEngine:
                 required=True,
             )
 
+            # RTR-6: surface the captured insight as a first-class reasoning
+            # signal (the reasoning attributes are otherwise implicit in the
+            # MEMORY_WRITE payload + MemoryNode columns). Best-effort.
+            try:
+                from AINDY.core.reasoning_signal import emit_reasoning_signal
+
+                emit_reasoning_signal(
+                    db=self.db,
+                    kind="capture",
+                    user_id=self.user_id,
+                    trace_id=request_trace_id or memory_extra.get("trace_id"),
+                    parent_event_id=causal_context["source_event_id"],
+                    payload={
+                        "node_id": node.get("id") if isinstance(node, dict) else None,
+                        "node_type": node_type,
+                        "memory_type": causal_context["memory_type"],
+                        "impact_score": causal_context["impact_score"],
+                        "causal_depth": causal_context["causal_depth"],
+                        "significance": round(float(score), 4),
+                        "event_type": event_type,
+                    },
+                )
+            except Exception:
+                logger.debug("[ReasoningSignal] capture-signal emit skipped", exc_info=True)
+
             return node
 
         except Exception as exc:

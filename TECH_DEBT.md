@@ -3292,6 +3292,22 @@ CI job proves full execute-to-completion once the runtime bump ships.
   `agent_runtime` / `nodus_adapter` if `SystemEvent` payload conventions get too
   loose.
 
+- **Advance 2026-07-08 — first-class capture signal shipped (event-row-as-record,
+  no model).** New `SystemEventTypes.REASONING_SIGNAL = "reasoning.signal"`
+  (un-prefixed, like the Infinity ledger events) + `core/reasoning_signal.py`
+  `emit_reasoning_signal(kind, payload)` (best-effort, never raises). Wired at
+  `memory_capture_engine.evaluate_and_capture`: on every stored insight it emits
+  a `kind="capture"` signal carrying the reasoning attributes that were otherwise
+  implicit in the `MEMORY_WRITE` payload / `MemoryNode` columns —
+  `{node_id, node_type, memory_type, impact_score, causal_depth, significance,
+  event_type}`. **Recall was deliberately left alone:** recall inputs are already
+  first-class via `RECALL_USED` (INFINITY-RUNTIME-1), so `emit_recall_used` is
+  untouched (still one event) and the `kind="recall"` discriminator is reserved
+  for future use. Frozen `system_event_contract` baseline regenerated
+  (`a12e9f467c28f7ac`). Tests: `test_reasoning_signal.py`. **Deferred (optional):**
+  a dedicated `ReasoningEvent` DB model — not needed while payload conventions
+  hold; add only if they get loose.
+
 ### RTR-7 — Execution-causality as unified intelligence layer ("RippleTrace") — **[HARDEN], medium/low (split)**
 
 - **Naming note:** "RippleTrace" does **not** appear in the runtime by design —

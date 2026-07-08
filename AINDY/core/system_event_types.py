@@ -19,6 +19,12 @@ class SystemEventTypes:
     RECALL_USED = "recall.used"
     SCORE_COMPUTED = "score.computed"
     NEXT_ACTION_CHOSEN = "next_action.chosen"
+    # RTR-6: first-class reasoning signal — a memory-derived input to the
+    # learning loop (kind="recall": memory pulled into a context; kind="capture":
+    # a significance-scored insight derived). Standardizes what previously lived
+    # implicitly in MEMORY_WRITE payloads + MemoryNode columns. Un-prefixed for
+    # the same reason as the ledger events above.
+    REASONING_SIGNAL = "reasoning.signal"
 
     FLOW_NODE_STARTED = "flow.node.started"
     FLOW_WAITING = "flow.waiting"
