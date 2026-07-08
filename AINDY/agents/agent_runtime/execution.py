@@ -215,8 +215,9 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
 
         db.refresh(run)
         _emit_agent_run_score(run, db=db, user_id=user_db_id)
+        hook_next_action = None
         if run.status == "completed":
-            compat._run_completion_hooks(
+            hook_results = compat._run_completion_hooks(
                 getattr(run, "agent_type", "default"),
                 {
                     "run": run,
@@ -227,6 +228,8 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
                 },
             )
             db.refresh(run)
+            hook_next_action = _select_completion_hook_next_action(hook_results)
+        _emit_agent_next_action(run, db=db, user_id=user_db_id, hook_action=hook_next_action)
         logger.info("[AgentRuntime] Run %s %s (%d/%d steps)", run_id, run.status, run.steps_completed, run.steps_total)
         try:
             from AINDY.core.execution_unit_service import ExecutionUnitService
@@ -294,6 +297,46 @@ def _emit_agent_run_score(run, *, db: Session, user_id: str) -> None:
         )
     except Exception:  # best-effort; scoring must not break completion
         logger.debug("[AgentRuntime] score emit skipped for run %s", getattr(run, "id", "?"), exc_info=True)
+
+
+def _select_completion_hook_next_action(hook_results):
+    """Coerce completion-hook returns into a NextAction (INFINITY-RUNTIME-1 Gap 4)."""
+    try:
+        from AINDY.core.next_action import select_hook_next_action
+
+        return select_hook_next_action(hook_results)
+    except Exception:
+        logger.debug("[AgentRuntime] next-action hook coercion skipped", exc_info=True)
+        return None
+
+
+def _emit_agent_next_action(run, *, db: Session, user_id: str, hook_action=None) -> None:
+    """Emit a NEXT_ACTION_CHOSEN record for a finished agent run (Gap 4, record-only).
+
+    Prefers a completion-hook decision; otherwise a runtime-default (done on
+    success, retry/escalate on failure). Covers completed + failed. The runtime
+    takes NO autonomous action — the app orchestrator consumes the event.
+    """
+    status = getattr(run, "status", None)
+    if status not in ("completed", "failed"):
+        return
+    try:
+        from AINDY.core.next_action import default_next_action, emit_next_action_chosen
+
+        action = hook_action or default_next_action(
+            status=status, result=getattr(run, "result", None), attempts_remaining=False
+        )
+        emit_next_action_chosen(
+            db=db,
+            run_id=str(run.id),
+            next_action=action,
+            status=status,
+            trace_id=getattr(run, "trace_id", None) or get_trace_id(),
+            user_id=user_id,
+            source="agent",
+        )
+    except Exception:  # best-effort; must not break completion
+        logger.debug("[AgentRuntime] next-action emit skipped for run %s", getattr(run, "id", "?"), exc_info=True)
 
 
 def _build_execution_memory_context(*, objective: str, plan: dict, user_id: str, trace_id: str | None, db: Session) -> dict:

@@ -157,7 +157,7 @@ inform planning — it only informs execution.
 | StepFailed | ✅ | `SystemEventTypes.FLOW_NODE_FAILED` / `AGENT_STEP_FAILED` |
 | MemoryWritten | ✅ | `SystemEventTypes.MEMORY_WRITE` |
 | ScoreComputed | ✅ | `SystemEventTypes.SCORE_COMPUTED` emitted per run via `core/execution_score.py` (Gap 3, 2026-07-08). |
-| NextActionChosen | ❌ | Not emitted. Autonomy decisions emit `AUTONOMY_DECISION` but not as a post-run next-action. |
+| NextActionChosen | ✅ | `SystemEventTypes.NEXT_ACTION_CHOSEN` emitted per finished run via `core/next_action.py` (Gap 4, 2026-07-08; record-first). |
 | ExecutionCompleted | ✅ | `SystemEventTypes.EXECUTION_COMPLETED` |
 | ExecutionFailed | ✅ | `SystemEventTypes.EXECUTION_FAILED` |
 
@@ -260,7 +260,7 @@ static configuration).
 
 ---
 
-### 11. Next-Action Engine ❌ Not implemented as a first-class system
+### 11. Next-Action Engine ✅ Record-first primitive (2026-07-08; runtime acting deferred)
 
 | Requirement | Status | Evidence |
 |---|---|---|
@@ -279,6 +279,17 @@ records state and writes memory. What happens next is either determined by the f
 (next node), by an app-registered completion hook, or by nothing. The `AutonomousController`
 evaluates triggers for future scheduled runs but does not operate as a real-time
 post-execution decision engine.
+
+> **RESOLVED 2026-07-08 (Gap 4, INFINITY-RUNTIME-1; record-first).** `core/next_action.py`
+> defines the Next-Action contract (`done`/`retry`/`ask_user`/`escalate`/`schedule_follow_up`/
+> `create_memory`/`recommend`/`trigger_execution`). At agent-run completion the runtime now
+> **captures the completion-hook return** (previously discarded at `execution.py:218`), coerces
+> it into a NextAction, falls back to a runtime-default decision (`done` on success,
+> `retry`/`escalate` on failure) when no hook decides, and emits `NEXT_ACTION_CHOSEN` for both
+> `completed` and `failed`. **Record-first:** the runtime records the decision but takes no
+> autonomous action — the app orchestrator consumes the event. This lifts the app-side Infinity
+> Phase 2 gate. Hook-contract-only (no new syscall, no schema). Runtime *acting* on the
+> decision is a deferred follow-up.
 
 ---
 
@@ -400,12 +411,13 @@ Closed: `core/execution_score.py` emits a single `SCORE_COMPUTED` SystemEvent pe
 execution (`{run_id, score, status, dimensions[, duration_ms]}`) at agent-run completion and
 in the generic `ExecutionLoop`. The event row is the durable record — no schema table.
 
-**Gap 4 — Next-action engine does not exist as a runtime primitive.**
-After every run the system records what happened. What should happen next is determined
-by the flow graph or app-registered completion hooks — not by a runtime-owned decision.
-There is no formal post-run decision: retry / ask_user / escalate / schedule_follow_up /
-recommend. Fix: `_run_completion_hooks()` is the right attachment point; it needs a
-contract return type that the runtime acts on.
+**Gap 4 — Next-action engine does not exist as a runtime primitive. ✅ CLOSED 2026-07-08 (record-first).**
+~~After every run the system records what happened. What should happen next is determined
+by the flow graph or app-registered completion hooks — not by a runtime-owned decision.~~
+Closed: `core/next_action.py` defines the NextAction contract; the runtime captures the
+completion-hook return (was discarded), falls back to a runtime-default decision, and emits
+`NEXT_ACTION_CHOSEN` for completed + failed runs. Record-first (no autonomous action; app
+orchestrator consumes it) — **lifts the app-side Infinity Phase 2 gate.**
 
 **Gap 5 — Async jobs are outside the full loop. ✅ CLOSED 2026-07-08 (opt-in).**
 ~~Jobs submitted via `sys.v1.job.submit` do not automatically produce memory, trigger recall,
@@ -423,13 +435,26 @@ workers write memory + score.
 
 ## Verdict
 
-**You have most of the machine form. You do not yet have the closed loop.**
+**All five structural gaps are closed (2026-07-08). The loop is wired end-to-end.**
 
-The infrastructure for every layer exists. The scoring engine is real. The recall engine
-is real. The memory write is automatic on the agent path. The event ledger is 70% complete.
-What is missing is the **wiring**: recall must flow into the planner, scores must emit as
-named events, and the next-action decision must be a runtime-owned primitive rather than an
-app convention.
+> **Original verdict (2026-07-05):** *"You have most of the machine form. You do not yet have
+> the closed loop … What is missing is the wiring: recall must flow into the planner, scores
+> must emit as named events, and the next-action decision must be a runtime-owned primitive."*
 
-When those five gaps are closed, every execution will automatically complete the loop and
-the Infinity Runtime claim will be structurally true.
+That wiring now exists (INFINITY-RUNTIME-1, PRs #194–#197):
+
+- **Gap 1** — recall flows into the planner prompt (`_recall_planner_memory`, gated by
+  `AINDY_PLANNER_MEMORY_INJECTION`), and `RECALL_USED` is emitted at planning + execution recall.
+- **Gap 2** — the ledger's three missing events (`RECALL_USED`, `SCORE_COMPUTED`,
+  `NEXT_ACTION_CHOSEN`) are named and emitted.
+- **Gap 3** — a per-run `SCORE_COMPUTED` record is emitted at each finished execution.
+- **Gap 4** — a runtime-owned Next-Action primitive emits `NEXT_ACTION_CHOSEN` (record-first),
+  lifting the app-side Infinity Phase 2 gate.
+- **Gap 5** — async jobs join the loop (produce memory + score) behind
+  `AINDY_ASYNC_JOB_LOOP_CLOSURE`.
+
+The Infinity Runtime claim is now structurally true. Three behaviors ship **opt-in** (the two
+flags above, both default off) pending app-side soak; the Next-Action primitive is record-only
+(the runtime does not yet *act* on decisions). Remaining runtime-side item: the app-facing
+aggregate observability/execution syscall (`INFINITY-RUNTIME-1` item 3), a separate feature
+request, still open.

@@ -2,8 +2,12 @@
 
 ## INFINITY-RUNTIME-1 — Runtime Infinity loop-closure gaps (accepts app handoff INFINITY-RUNTIME-HANDOFF-1)
 
-**Status:** Open — tracked (accepted 2026-07-05). Runtime-owned counterpart to the
-app-side handoff `aindy-apps-monolith/TECH_DEBT.md` → **INFINITY-RUNTIME-HANDOFF-1**.
+**Status:** Open — narrowed to item 3 only. All **five structural loop-closure gaps CLOSED
+2026-07-08** (PRs #194–#197; see Advance log below); the remaining open scope is the
+app-facing aggregate observability/execution syscall (item 3), a separate feature request.
+Runtime-owned counterpart to the app-side handoff
+`aindy-apps-monolith/TECH_DEBT.md` → **INFINITY-RUNTIME-HANDOFF-1** (Phase 2 now unblocked —
+Gap 4 was the gate).
 
 **Context:** The Infinity scoring/orchestrator/loop is app-owned
 (`aindy-apps-monolith/apps/analytics/services/{scoring,orchestration}/`). This repo owns
@@ -92,6 +96,21 @@ on each advance.
   (6, incl. a mechanism test proving async-context activation lets `EXECUTION_COMPLETED` past
   the gate). Docs: audit Gap 5/§16, `.env.example`. **Remaining: Gap 4 + item-3 aggregate
   syscall.** Notify app-side `INFINITY-RUNTIME-HANDOFF-1`.
+- **2026-07-08 — Gap 4 (Next-Action engine) CLOSED (record-first). ALL FIVE STRUCTURAL GAPS
+  NOW CLOSED.** New `core/next_action.py` defines the NextAction contract
+  (`done`/`retry`/`ask_user`/`escalate`/`schedule_follow_up`/`create_memory`/`recommend`/
+  `trigger_execution`) + `coerce_next_action` (string/dict/obj → normalized) + `default_next_action`
+  (runtime heuristic: done on success, retry/escalate on failure) + `emit_next_action_chosen`.
+  `agents/agent_runtime/execution.py` now **captures the `_run_completion_hooks` return**
+  (previously discarded at :218), coerces it, falls back to the runtime default, and emits
+  `NEXT_ACTION_CHOSEN` for **completed + failed** runs. **Record-first:** runtime records the
+  decision, takes NO autonomous action — app orchestrator consumes it. **This lifts the
+  app-side Infinity Phase 2 gate** (the gap that gated it). Hook-contract-only — no new syscall,
+  no schema. Runtime *acting* on decisions (auto-retry/schedule) is a deferred follow-up. Tests:
+  `test_infinity_next_action.py` (21). Docs: audit §6/§11/Gap 4/Verdict rewritten.
+  **All 5 structural gaps (1–5) closed; only item-3 (app-facing aggregate observability/
+  execution syscall) remains — a separate feature request.** Notify app-side
+  `INFINITY-RUNTIME-HANDOFF-1` (Phase 2 unblocked).
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 
