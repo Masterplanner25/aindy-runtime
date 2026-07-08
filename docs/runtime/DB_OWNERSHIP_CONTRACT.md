@@ -59,7 +59,7 @@ Model categories:
 - execution, waits, and scheduler infrastructure:
   `execution_unit`, `flow_run`, `waiting_flow_run`,
   `background_task_lease`, `job_log`, `event_edge`,
-  `nodus_scheduled_job`, `nodus_trace_event`
+  `nodus_scheduled_job`
 - memory and observability infrastructure:
   `memory_metrics`, `memory_node_history`, `memory_trace`,
   `memory_trace_node`, `request_metric`, `system_event`,

@@ -26,7 +26,7 @@ ALL of the following criteria:
 3. It does not encode business logic belonging to a single domain.
 
 Examples of platform models: User, FlowRun, ExecutionUnit, SystemEvent,
-MemoryTrace, NodusTraceEvent, PlatformAPIKey, AgentRun, AgentStep,
+MemoryTrace, PlatformAPIKey, AgentRun, AgentStep,
 AgentEvent, AgentTrustSettings.
 
 Examples of domain models (must live in apps/X/models.py):

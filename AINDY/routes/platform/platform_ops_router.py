@@ -44,20 +44,6 @@ class RotateSecretKeyRequest(BaseModel):
     new_key: str
 
 
-@router.get("/nodus/trace/{trace_id}", response_model=None)
-@limiter.limit("60/minute")
-def get_nodus_trace(request: Request, trace_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), limit: int = 500):
-    def handler(ctx):
-        from AINDY.runtime.nodus_trace_service import query_nodus_trace
-
-        result = query_nodus_trace(db=db, trace_id=trace_id, user_id=str(current_user["sub"]), limit=limit)
-        if result["count"] == 0:
-            raise HTTPException(status_code=404, detail={"error": "trace_not_found", "message": f"No trace events found for trace_id {trace_id!r}. The execution may not have called any host functions, may belong to another user, or may not exist."})
-        return result
-
-    return _execute_platform_ops(request, "platform.nodus.trace.get", handler, db=db, user_id=str(current_user["sub"]), input_payload={"trace_id": trace_id, "limit": limit})
-
-
 @router.get("/tenants/{tenant_id}/usage", response_model=None)
 @limiter.limit("60/minute")
 def get_tenant_usage(request: Request, tenant_id: str, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):

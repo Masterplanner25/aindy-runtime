@@ -29,7 +29,6 @@ from AINDY.routes.platform.nodus_shared import (
 )
 from AINDY.routes.platform.platform_ops_router import (
     dispatch_syscall,
-    get_nodus_trace,
     get_tenant_usage,
     list_memory_path,
     list_syscalls,

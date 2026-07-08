@@ -33,7 +33,6 @@ from AINDY.routes.platform import (
     dispatch_syscall,
     get_flow,
     get_key,
-    get_nodus_trace,
     get_node,
     get_tenant_usage,
     get_webhook_subscription,

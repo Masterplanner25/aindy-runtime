@@ -23,7 +23,6 @@ from .execution_unit import ExecutionUnit
 from .event_edge import EventEdge
 from .job_log import JobLog
 from .nodus_scheduled_job import NodusScheduledJob
-from .nodus_trace_event import NodusTraceEvent
 from .api_key import PlatformAPIKey
 from .dynamic_flow import DynamicFlow
 from .dynamic_node import DynamicNode
@@ -63,7 +62,6 @@ __all__ = [
     "EffectReversal",
     "JobLog",
     "NodusScheduledJob",
-    "NodusTraceEvent",
     "PlatformAPIKey",
     "DynamicFlow",
     "DynamicNode",
