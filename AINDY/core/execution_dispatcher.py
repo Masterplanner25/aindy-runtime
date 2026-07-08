@@ -431,7 +431,9 @@ def dispatch(
         return DispatchResult(mode=mode, envelope=envelope, meta=meta)
 
     # ASYNC â€” route to distributed queue OR thread pool based on EXECUTION_MODE.
-    _exec_mode = os.getenv("EXECUTION_MODE", "thread").lower()
+    from AINDY.config import resolve_execution_mode
+
+    _exec_mode = resolve_execution_mode()
 
     if _exec_mode == "distributed":
         logger.debug(

@@ -305,7 +305,9 @@ def _is_background_runner_active() -> bool:
 
 
 def _distributed_execution_enabled() -> bool:
-    return os.getenv("EXECUTION_MODE", "thread").lower() == "distributed"
+    from AINDY.config import resolve_execution_mode
+
+    return resolve_execution_mode() == "distributed"
 
 
 def _queue_capacity_limit() -> int:

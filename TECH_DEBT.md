@@ -2185,6 +2185,15 @@ ROOT_ROUTERS = [
 
 **Remaining gap:** `AINDY/.env.example` still ships `EXECUTION_MODE=thread` as the literal default value — a developer who copies `.env.example` directly to `.env` and doesn't run the prod overlay still gets thread mode. Changing the default to `distributed` breaks local dev without Redis. Resolution direction: separate dev and prod `.env` templates, or a first-run wizard that detects the deployment context. Deferred until DEPLOY-TARGET-1 is addressed.
 
+**CLOSED by RTR-2 (2026-07-08).** `config.resolve_execution_mode()` makes the
+*runtime* default deployment-aware: when `EXECUTION_MODE` is unset, production
+resolves to `distributed` (dev/test stay `thread`), so a prod deploy no longer
+depends on remembering to set it — and thread mode now re-dispatches jobs
+stranded by a restart at next startup (`job_recovery.recover_orphaned_thread_jobs`),
+removing the "dropped outright, no recovery" edge for single-server deployments.
+`.env.example` comments the assignment out and documents the deployment-aware
+default. See **RTR-2** advance for detail.
+
 ---
 
 ## SYSMAX-2 — Autonomous trigger scheduler has no queue back-pressure
@@ -3171,6 +3180,26 @@ CI job proves full execute-to-completion once the runtime bump ships.
   count-based admission via `AINDY_ASYNC_MAX_CONCURRENT_*`, **not** isolated
   lanes); close the thread-mode in-flight loss (record survives, execution does
   not). **Related:** SYSMAX-1, TIER3-10 (`async_job_service` coupling), LEASE-1.
+
+- **Advance 2026-07-08 — gaps 1+2 done; per-tenant lanes deferred.**
+  **(1) prod default flipped.** New `config.resolve_execution_mode()` is the single
+  source for the transport decision (replaced 3 duplicated
+  `os.getenv("EXECUTION_MODE","thread")` reads in `async_job_service`,
+  `execution_dispatcher`, `distributed_queue`): an explicit `EXECUTION_MODE` always
+  wins, but when unset **production now defaults to `distributed`**, so a prod deploy
+  that forgets it fails fast at `get_queue` (raises without `REDIS_URL`) instead of
+  silently running lossy thread mode. `.env.example` documents the prod default; the
+  startup advisory updated. **(2) thread-mode in-flight loss closed.**
+  `platform_layer/job_recovery.py` `recover_orphaned_thread_jobs()` re-dispatches
+  `JobLog` rows stranded in `pending`/`running` — **at startup only** (the sole safe
+  moment: no live futures exist, so every such row is definitionally orphaned from
+  the dead process; a periodic scanner can't tell a long-running job from a crashed
+  one because `_ACTIVE_FUTURES` isn't log-keyed). No-op in distributed mode (worker
+  `requeue_stale_jobs` owns it). Wired beside the `stuck_run_service` startup scan.
+  Tests: `test_rtr2_durable_worker.py`. **Deferred: per-tenant queue lanes** — new
+  Redis-key-per-tenant + worker fan-out infra, only meaningful once multi-tenant
+  SaaS is real (**DEPLOY-TARGET-2**); count-based admission
+  (`AINDY_ASYNC_MAX_CONCURRENT_*`) remains the interim isolation. No schema change.
 
 ### RTR-3 — Agent execution integrity — **[HARDEN/BUILD split], high**
 
