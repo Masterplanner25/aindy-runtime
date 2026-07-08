@@ -43,6 +43,10 @@ _STABLE_SYSCALLS = [
     # API_REFERENCE.md Syscall Reference; it drives the approve→execute path.
     # Rename/remove = MAJOR bump like the SDK-called entries above.
     "sys.v1.agent.execute",
+    # observability.support_metrics is the app-side Infinity support layer's
+    # aggregate source (INFINITY-RUNTIME-1 item 3); the app fetches it via a
+    # dependency_adapter, so renaming/removing it is a MAJOR bump.
+    "sys.v1.observability.support_metrics",
 ]
 
 

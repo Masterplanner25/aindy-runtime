@@ -113,6 +113,7 @@ next major version:
 | `sys.v1.job.submit` | `job.submit` |
 | `sys.v1.flow.execute_intent` | `flow.run` |
 | `sys.v1.execution.get` | `execution.read` |
+| `sys.v1.observability.support_metrics` | `execution.read` |
 
 Experimental syscalls (`stable=False`) may change between minor releases.
 
@@ -129,7 +130,7 @@ carry an authorizing scope (or `platform.admin`):
 | `memory.write` | `client.memory.write` | `memory.write` |
 | `flow.run` | `client.flow.run` | `flow.execute` |
 | `event.emit` | `client.events.emit` | `event.emit` |
-| `execution.read` | `client.execution.get` | `execution.read` |
+| `execution.read` | `client.execution.get`, observability support-metrics fetch | `execution.read` |
 
 `client.flow.run` (`sys.v1.flow.run`) is authorized by the **`flow.execute`**
 scope — the same scope that gates `POST /platform/flows/{name}/run`. `client.events.emit`
@@ -137,7 +138,10 @@ scope — the same scope that gates `POST /platform/flows/{name}/run`. `client.e
 emitting can resume waiting flow/agent runs, so it is a side-effecting grant.
 `client.execution.get` (`sys.v1.execution.get`) is read-only and tenant-scoped —
 only ExecutionUnit rows owned by the caller's tenant — and requires the
-`execution.read` scope. `client.nodus.*` uses the dedicated `/platform/nodus/*`
+`execution.read` scope. `sys.v1.observability.support_metrics` (same `execution.read`
+capability/scope) is the read-only, tenant-scoped aggregate the app-side Infinity
+support layer fetches (request/health + agent/async/loop-event rollup;
+INFINITY-RUNTIME-1 item 3). `client.nodus.*` uses the dedicated `/platform/nodus/*`
 routes, not syscall dispatch. Off-surface syscalls (`agent.*`, `job.submit`,
 `nodus.execute`, admin) are not dispatchable through this public route.
 

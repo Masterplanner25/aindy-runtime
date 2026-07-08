@@ -444,6 +444,29 @@ SDK's `client.execution.get()`.
 
 ---
 
+## Domain: `observability`
+
+### `sys.v1.observability.support_metrics`
+
+Tenant-scoped aggregate rollup of observability + execution behavior, for the
+app-side Infinity support layer (INFINITY-RUNTIME-1 item 3). Read-only. Filters
+request metrics, agent-run / async-job distributions, and Infinity loop-event
+counts to the caller's tenant; includes a coarse platform-health signal.
+
+**Capability:** `execution.read`
+
+**Stability:** stable
+
+**Payload:**
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `window_hours` | int | no | Lookback window; clamped to `[1, 168]` (default 24). |
+
+**Returns:** `{generated_at, window_hours, observability: {requests: {total, errors, error_rate_pct, avg_latency_ms}, platform_health_status}, execution: {agent_runs: {total, by_status}, async_jobs: {total, by_status}}, infinity_events: {recall_used, score_computed, next_action_chosen, total}}`
+
+---
+
 ## Scope requirements (`POST /platform/syscall`)
 
 When dispatching a syscall over the API (not from within a Nodus script), the route grants
@@ -462,7 +485,7 @@ the authorizing scopes below (or `platform.admin`, which bypasses the scope gate
 | `memory.write` | `sys.v1.memory.write` | `memory.write` |
 | `flow.run` | `sys.v1.flow.run` | `flow.execute` |
 | `event.emit` | `sys.v1.event.emit` | `event.emit` |
-| `execution.read` | `sys.v1.execution.get` | `execution.read` |
+| `execution.read` | `sys.v1.execution.get`, `sys.v1.observability.support_metrics` | `execution.read` |
 
 Notes:
 - `memory.write` scope implies read — a write-scoped key can also read/search.
