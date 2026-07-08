@@ -13,6 +13,13 @@ class SystemEventTypes:
     ANALYTICS_SCORE_UPDATED = "analytics.score.updated"
     MASTERPLAN_GOAL_STATE_CHANGED = "masterplan.goal_state.changed"
 
+    # Infinity loop-closure ledger (INFINITY-RUNTIME-1). Deliberately NOT
+    # prefixed "execution." so they can be emitted outside a pipeline/async
+    # context (see system_event_service execution-contract gate).
+    RECALL_USED = "recall.used"
+    SCORE_COMPUTED = "score.computed"
+    NEXT_ACTION_CHOSEN = "next_action.chosen"
+
     FLOW_NODE_STARTED = "flow.node.started"
     FLOW_WAITING = "flow.waiting"
     WAIT_TIMEOUT = "WAIT_TIMEOUT"

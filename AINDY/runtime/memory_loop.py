@@ -103,6 +103,25 @@ class ExecutionLoop:
                 user_id=normalized_user_id,
                 db=db,
             )
+            # Per-execution score record (INFINITY-RUNTIME-1 Gap 3). This
+            # substrate has no run_id; correlate on the trace id instead.
+            from AINDY.core.execution_score import emit_execution_score
+
+            emit_execution_score(
+                db=db,
+                run_id=trace_id,
+                score=success_score,
+                status="completed",
+                trace_id=trace_id,
+                user_id=normalized_user_id,
+                dimensions={
+                    "operation_type": self._get_operation_field(
+                        operation, "operation_type", "type", None
+                    ),
+                    "memory_count": len(context.items) if context else 0,
+                },
+                source="execution_loop",
+            )
         except Exception as exc:
             logger.warning("[ExecutionLoop] feedback failed: %s", exc)
             if hasattr(db, "rollback"):
