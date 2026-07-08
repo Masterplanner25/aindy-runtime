@@ -327,7 +327,6 @@ _DOCUMENTED_RUNTIME_ROUTES = [
     ("POST", "/platform/nodus/schedule"),
     ("DELETE", "/platform/nodus/schedule/{job_id}"),
     ("GET", "/platform/nodus/scripts"),
-    ("GET", "/platform/nodus/trace/{trace_id}"),
     ("POST", "/platform/nodus/upload"),
     # Syscall surface
     ("POST", "/platform/syscall"),

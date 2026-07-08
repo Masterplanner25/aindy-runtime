@@ -2770,9 +2770,25 @@ are **"finish/promote what exists," not "build from scratch"** — flagged per
 item as **[BUILD]** (mostly greenfield) vs **[HARDEN]** (substantial prior work
 in-tree).
 
-### RTR-1 — Nodus as primary execution substrate — **[BUILD], highest, cross-cutting**
+### RTR-1 — Nodus as primary execution substrate — **CLOSED 2026-07-07**
 
-The single biggest item; blocks the most. "via_nodus" is currently a misnomer.
+**CLOSED 2026-07-07.** All four defined runtime gaps are resolved: (a) the
+`register_nodus_workflow` registration + discovery surface (Phase 1); (b) the
+VM-backed agent adapter + agent-plan→`.nd` compiler that retires the static
+`AGENT_FLOW` interpretation (Phase 2a–2e, PG-validated); (c) `.nd` asset handling
+— the two stale cross-machine `.nbc` build-droppings were removed and the dir is
+gitignored, with the *managed* content-hash bytecode cache explicitly kept as
+roadmap (Phase 3), not a close-blocker; (d) the dead `NodusTraceEvent` trace path
+**dropped** this session (Alembic `0009`; see the trace-path resolution below).
+The keystone "apps finish phases without editing runtime" hook (`register_nodus_workflow`)
+is live. **Not in scope for this close:** flipping `nodus_vm` to the default /
+retiring `AGENT_FLOW` — that remains opt-in behind `AINDY_AGENT_EXECUTION_BACKEND=nodus_vm`
+pending the app-side soak listed under "Remaining follow-ups" (app-tool execution in
+the monolith, multi-instance agent resume, subprocess-per-segment perf), and the
+AgentRun↔FlowRun unification tracked separately as **RTR-3**.
+
+The historical build log (Phases 1–2e, durability, real-PG parity/soak, #152/#157)
+is retained below for provenance.
 
 **Design (2026-06-29):** the `register_nodus_workflow` registration surface
 (item (a) below) is specified in `docs/runtime/NODUS_WORKFLOW_CONTRACT.md` —
@@ -3022,40 +3038,38 @@ CI job proves full execute-to-completion once the runtime bump ships.
 > (incl. end-to-end VM execution in dependency order) + updated
 > `test_nodus_workflow_registry.py`.
 
-- **Evidence (current state):** `AINDY/runtime/nodus_adapter.py` —
-  `NodusAgentAdapter.execute_with_flow` is a compat shim
-  (`__aindy_compat_wrapper__ = True`) delegating to
-  `execute_agent_flow_orchestration`; the agent path runs a **static Python
-  `AGENT_FLOW` DAG** on `PersistentFlowRunner` — **no Nodus VM**. A real
-  VM-backed path exists only as the opt-in `@register_node("nodus.execute")`
-  node → `nodus_runtime_adapter.NodusRuntimeAdapter._execute()`, which runs
-  `nodus_worker.py` as a **subprocess** into the pip `nodus-lang` package. Agent
-  plans (`execute_agent_run_via_nodus`, `nodus_execution_service.py`) interpret
-  `plan["steps"]` directly in `agent_execute_step`; **no `.nd` is generated,
-  templated, or precompiled.**
-- **No registration surface:** searches for `register_nodus_workflow` /
-  `.nd` discovery return nothing. What exists: `FLOW_REGISTRY` (in-memory dict,
-  `flow_engine/registry.py`), data-only `register_dynamic_flow`
-  (`flow_registry.py:133` — wires pre-registered nodes, **no conditions over
-  HTTP**), and name-keyed `.nodus` script upload (`nodus_script_store.py`,
-  `POST /platform/nodus`). `nodus_flow_compiler.compile_nodus_flow` can turn a
-  Nodus *flow-script* into a flow dict but is **not fed by agent plans** and its
-  conditions are in-memory only.
-- **The gap (runtime work):** (a) a real `register_nodus_workflow` / `.nd`
-  registry + discovery surface so apps register/select workflows without runtime
-  edits — this is the missing hook that forced the "runtime-gated" verdicts;
-  (b) replace/wrap the agent shim with a VM-backed adapter + an agent-plan → `.nd`
-  mapping (generated/templated/precompiled); (c) `.nd` asset storage + versioning
-  in-repo and a managed compile/bytecode cache (today: trivial `memory.nd`, **no
-  versioning**; `.nbc` is the nodus-lang VM's own path+mtime cache, library-written
-  and **stale/cross-machine** — see note below); (d) wire or drop the dead trace
-  path: `NodusTraceEvent` (`db/models/nodus_trace_event.py`) + reader
-  `nodus_trace_service.query_nodus_trace` + `GET /platform/nodus/trace/{trace_id}`
-  exist, but the writer `_flush_nodus_traces()` (`nodus_runtime_adapter.py`) has
-  **no call sites** — no rows are ever written.
-- **What already works:** live Nodus VM runs are **not** a side path — they go
-  through `PersistentFlowRunner` → create a `FlowRun`, link `AgentRun.flow_run_id`,
-  and emit `SystemEvent`s (`source="nodus"`) on the canonical bus.
+**Gap resolution (the four original runtime gaps, all closed):**
+- **(a) registration surface — DONE (Phase 1).** `register_nodus_workflow`
+  (`AINDY/runtime/nodus_workflow_registry.py`) — imperative + declarative
+  (`nodus-workflow` manifest kind), `nodus_workflows` source table, boot
+  rehydration, `run_nodus_workflow` by name, both `flow-graph` and `script` kinds.
+  Apps register/select workflows without runtime edits.
+- **(b) VM-backed agent adapter + plan→`.nd` — DONE (Phase 2a–2e).**
+  `compile_agent_plan` (`agent_plan_compiler.py`) generates a native `workflow {}`
+  from an agent plan (injection-safe — tool names/args ride run state, never
+  source); `execute_agent_run_via_workflow` (`nodus_execution_service.py`) runs it
+  through the capability-enforced `call_tool` seam via the canonical flow-backed
+  Nodus path. Retry/halt, mid-plan WAIT/RESUME with cross-restart durability, and
+  cap-token refresh on resume all landed and were validated on real Postgres.
+- **(c) `.nd` asset handling — DONE for the close; managed cache is roadmap.**
+  The two stale cross-machine `.nbc` build-droppings under
+  `AINDY/nodus/stdlib/.nodus/cache/` were `git rm`'d (dir already gitignored). The
+  *managed* content-hash-keyed bytecode cache + `.nd` version-rollback API remain
+  **Phase 3 roadmap** (NODUS_WORKFLOW_CONTRACT.md §11), not a close-blocker.
+- **(d) dead trace path — DROPPED (2026-07-07).** `NodusTraceEvent` was never
+  wired: `_flush_nodus_traces()` had zero call sites and the worker produced no
+  per-fn records, so no row was ever written. Removed the model, reader
+  (`nodus_trace_service.py`), `GET /platform/nodus/trace/{trace_id}` route, the CLI
+  `trace` command + `--trace` flag, the dead duplicate trace fns in
+  `runtime/__init__.py`, and the orphaned `_sanitize_args`/`_sanitize_result`
+  helpers. Schema-contract bumped `2026-07-05`→`2026-07-07`; Alembic `0009` drops
+  the table (idempotent, blank-DB safe; downgrade recreates). Rationale: execution
+  observability is already canonical via `SystemEvent` (`source="nodus"`) +
+  `EventEdge` (RTR-7), surfaced by `GET /observability/execution_graph/{trace_id}`;
+  the per-function table only duplicated it at finer grain.
+- **Live Nodus VM runs are not a side path** — they go through
+  `PersistentFlowRunner` → create a `FlowRun`, link `AgentRun.flow_run_id`, and emit
+  `SystemEvent`s (`source="nodus"`) on the canonical bus.
 
 ### RTR-2 — Durable worker model — **[HARDEN], high**
 
@@ -3183,17 +3197,18 @@ installing from source — is **apps-side config**, not a runtime gap.
 
 ---
 
-**Side finding (cleanup opportunity, not roadmap):** the two **tracked** `.nbc`
-files under `AINDY/nodus/stdlib/.nodus/cache/` are **stale cross-machine caches**
-— they embed the absolute path `C:\dev\masterplan-infiniteweave-...`, so the
-nodus-lang VM treats them as misses and regenerates. They are build droppings
-committed by accident, **not** load-bearing precompiled assets, and are safe to
-remove from the repo (the dir is now gitignored). Tracked-file removal is a
-separate decision.
+**Side finding — RESOLVED 2026-07-07.** The two **tracked** `.nbc` files under
+`AINDY/nodus/stdlib/.nodus/cache/` were stale cross-machine caches (they embedded
+the absolute path `C:\dev\masterplan-infiniteweave-...`, so the nodus-lang VM
+treated them as misses and regenerated). Build droppings committed by accident,
+**not** load-bearing precompiled assets — `git rm`'d as part of the RTR-1 close
+(the dir stays gitignored).
 
-**Close/advance triggers:** RTR-1 — when a `register_nodus_workflow` surface is
-scheduled (keystone for the "apps finish phases without editing runtime"
-pattern). RTR-2 — when distributed execution is made the prod default or
+**Close/advance triggers:** RTR-1 — **CLOSED 2026-07-07** (the
+`register_nodus_workflow` keystone shipped; all four runtime gaps resolved). The
+downstream "make `nodus_vm` the default / retire `AGENT_FLOW`" decision is tracked
+via the app-side soak follow-ups above and **RTR-3** (AgentRun↔FlowRun
+unification), not RTR-1. RTR-2 — when distributed execution is made the prod default or
 per-tenant lanes are required. RTR-3 — when AgentRun↔FlowRun divergence is
 observed in production. RTR-5 — when runtime-driven autonomous execution windows
 are scheduled. RTR-4/6/7 — when their named gaps block an app phase.

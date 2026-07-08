@@ -27,8 +27,9 @@ evaluators today — never by editing runtime code.
 **Non-goals (Phase 1).**
 - Agent-plan → `.nd` compilation and the VM-backed agent adapter that retires the
   static `AGENT_FLOW` shim — that is **RTR-1 Phase 2** and *consumes* this surface.
-- Fine-grained `NodusTraceEvent` population — **Phase 3** (today a dead write path;
-  see §9).
+- Fine-grained `NodusTraceEvent` population — **DROPPED (RTR-1 close, 2026-07-07)**.
+  The per-function trace table was never wired; `SystemEvent` (`source="nodus"`) +
+  `EventEdge` already cover execution observability. See §9.
 
 ## 2. Architectural lens
 
@@ -230,11 +231,15 @@ This surface **subsumes** today's three half-mechanisms:
   of pre-registered nodes; Nodus workflows are the superset that adds conditional
   routing via source. The two coexist; the doc cross-links them.
 
-**Trace path:** `NodusTraceEvent` (`AINDY/db/models/nodus_trace_event.py`) + its
-reader + `GET /platform/nodus/trace/{trace_id}` exist but the writer
-`_flush_nodus_traces()` has no call sites — a dead path. Phase 3 decides
-**wire-or-drop**; Phase 1 leaves it untouched (workflow runs already emit canonical
-`SystemEvent`s, so observability is not blocked).
+**Trace path: DROPPED (RTR-1 close, 2026-07-07).** The `NodusTraceEvent` model,
+its reader service, the `GET /platform/nodus/trace/{trace_id}` route, and the CLI
+`trace` surface were **removed** (Alembic `0009` drops the table). The writer
+`_flush_nodus_traces()` never had a call site and the worker produced no per-fn
+records, so no row was ever written. Phase 3's "wire-or-drop" decision resolved to
+**drop**: workflow runs already emit canonical `SystemEvent`s (`source="nodus"`)
+linked into the `EventEdge` causal graph (RTR-7), which the per-function table
+only duplicated at finer grain. Observability surface:
+`GET /observability/execution_graph/{trace_id}`.
 
 ## 10. Capability, ownership, provenance
 
@@ -254,7 +259,8 @@ already enforces `SyscallContext.capabilities`).
 - **Phase 2:** agent-plan → `.nd` mapping + VM-backed agent adapter; retire the
   `AGENT_FLOW` shim.
 - **Phase 3:** managed bytecode cache keyed on `content_hash` (replaces the stale
-  path+mtime `.nbc`); wire-or-drop `NodusTraceEvent`; version rollback API.
+  path+mtime `.nbc`); ~~wire-or-drop `NodusTraceEvent`~~ **resolved to drop
+  (2026-07-07, RTR-1 close)**; version rollback API.
 
 ## 12. Test plan (Phase 1)
 

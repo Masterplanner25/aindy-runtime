@@ -224,7 +224,7 @@ canonical in source and cataloged by category in
 - **Agent runtime persistence:** `agent_registry`, `agent_run`, `agent_event`.
 - **Execution, waits, scheduler:** `execution_unit`, `flow_run`,
   `waiting_flow_run`, `job_log`, `event_edge`, `effect_record` (idempotency
-  gate), `nodus_scheduled_job`, `nodus_trace_event`.
+  gate), `nodus_scheduled_job`.
 - **Observability / system state:** `system_event`, `system_state_snapshot`.
 - **Dynamic platform state:** `capability`, `dynamic_flow`, `dynamic_node`,
   `webhook_subscription`.

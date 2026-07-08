@@ -301,22 +301,27 @@ Approved insights:
 
 ## Step 7 — Read the execution trace
 
-Every syscall during the run produced a trace event. Read the full timeline:
+Every syscall during the run emitted a `SystemEvent` (`source="nodus"`) onto the
+canonical event bus, linked into the causal `EventEdge` graph. Read the run's
+execution-causality graph:
 
-> **Runtime note (validated 2026-06-27):** the trace endpoint is
-> `GET /platform/nodus/trace/{trace_id}` (handler
-> `AINDY/routes/platform/platform_ops_router.py`). The path segment is the
-> run's `trace_id`; `run_id` is used here only because the SDK surfaces the
-> same identifier under both keys.
+> **Runtime note (validated 2026-07-07):** the per-function `NodusTraceEvent`
+> table and its `GET /platform/nodus/trace/{trace_id}` reader were **removed**
+> (RTR-1 close) — they duplicated, at finer grain, what `SystemEvent` +
+> `EventEdge` already record. Use the causal execution graph instead:
+> `GET /observability/execution_graph/{trace_id}` (handler
+> `AINDY/routes/observability_router.py`). The path segment is the run's
+> `trace_id`; `run_id` is used here only because the SDK surfaces the same
+> identifier under both keys.
 
 ```python
-print("\nExecution trace:")
-trace = client.get(f"/platform/nodus/trace/{run_id}")
-for event in trace.get("events", []):
-    node   = event.get("node_name", "?")
+print("\nExecution graph:")
+graph = client.get(f"/observability/execution_graph/{run_id}")
+for event in graph.get("events", []):
     etype  = event.get("event_type", "?")
-    dur    = event.get("duration_ms", 0)
-    print(f"  {node:25s} {etype:30s} {dur}ms")
+    source = event.get("source", "?")
+    depth  = event.get("causal_depth", 0)
+    print(f"  depth={depth:<2} {source:10s} {etype}")
 ```
 
 **Expected output:**

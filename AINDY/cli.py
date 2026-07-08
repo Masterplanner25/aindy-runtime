@@ -4,7 +4,7 @@ cli.py — A.I.N.D.Y. Nodus CLI
 
 Routes `nodus run <file>` through the A.I.N.D.Y. platform API instead of
 executing locally.  Supports the full output surface including execution
-result, trace summary, and optional bytecode disassembly.
+result and optional bytecode disassembly.
 
 Configuration
 =============
@@ -17,7 +17,6 @@ Set via environment variables or CLI flags (flags take precedence):
 Usage
 =====
   python cli.py run <file.nd> [options]
-  python cli.py trace <trace_id>
   python cli.py upload <file.nd> [--name NAME] [--description TEXT]
 
 Run options:
@@ -27,15 +26,13 @@ Run options:
   --input JSON           Input payload (JSON object) exposed as input_payload
   --error-policy POLICY  "fail" (default) or "retry"
   --max-retries N        Max retries when error-policy=retry (default 3)
-  --trace                Fetch and display trace after execution
   --dump-bytecode        Show local bytecode disassembly before API execution
   --json                 Print raw JSON API response (no formatting)
 
 Examples:
   python cli.py run script.nd
-  python cli.py run script.nd --trace --input '{"goal": "Q2 growth"}'
+  python cli.py run script.nd --input '{"goal": "Q2 growth"}'
   python cli.py run script.nd --dump-bytecode
-  python cli.py trace <trace_id>
   python cli.py upload my_script.nd --name my_processor
 """
 from __future__ import annotations
@@ -177,50 +174,6 @@ def _fmt_run_result(resp: dict) -> str:
     return "\n".join(lines)
 
 
-def _fmt_trace(resp: dict) -> str:
-    """Format a /platform/nodus/trace/{id} response."""
-    resp = _unwrap_platform_response(resp)
-    trace_id = resp.get("trace_id", "?")
-    count = resp.get("count", 0)
-    steps = resp.get("steps") or []
-    summary = resp.get("summary") or {}
-
-    lines = [
-        "",
-        f"Trace  {trace_id}  ({count} steps)",
-        "-" * 60,
-    ]
-
-    # Summary block
-    fn_counts = summary.get("fn_counts") or {}
-    total_ms = summary.get("total_duration_ms", 0)
-    err_count = summary.get("error_count", 0)
-    fn_names = summary.get("fn_names") or []
-
-    if fn_counts:
-        counts_str = "  ".join(f"{fn}={n}" for fn, n in fn_counts.items())
-        lines.append(f"fn_calls: {counts_str}")
-    lines.append(f"duration: {total_ms}ms total")
-    lines.append(f"errors:   {err_count}")
-    if fn_names:
-        lines.append(f"sequence: {' → '.join(fn_names)}")
-
-    # Step list
-    if steps:
-        lines.append("")
-        lines.append("Steps:")
-        for step in steps:
-            seq = step.get("sequence", "?")
-            fn = (step.get("fn_name") or "?").ljust(14)
-            dur = step.get("duration_ms")
-            dur_str = f"{dur}ms" if dur is not None else "  -"
-            status = step.get("status", "?")
-            err = f"  [{step['error']}]" if step.get("error") else ""
-            lines.append(f"  #{seq:<3} {fn}  {dur_str:>6}  {status}{err}")
-
-    return "\n".join(lines)
-
-
 def _fmt_upload_result(resp: dict) -> str:
     resp = _unwrap_platform_response(resp)
     name = resp.get("name", "?")
@@ -261,7 +214,6 @@ def cmd_run(
     input_payload: dict | None = None,
     error_policy: str = "fail",
     max_retries: int = 3,
-    trace: bool = False,
     dump_bytecode: bool = False,
     json_output: bool = False,
 ) -> int:
@@ -315,61 +267,10 @@ def cmd_run(
     else:
         print(_fmt_run_result(resp))
 
-    # Fetch and display trace
-    if trace:
-        trace_lookup_id = resp.get("run_id") or resp.get("trace_id")
-        if not trace_lookup_id:
-            _print_err("[warn] --trace: no run_id or trace_id in response")
-        else:
-            t_status, t_resp = _http_get(
-                f"{api_url}/platform/nodus/trace/{trace_lookup_id}",
-                token=token,
-            )
-            if t_status == 404:
-                _print_err(
-                    "[warn] --trace: no trace events found — "
-                    "the script may not have called any host functions"
-                )
-            elif t_status >= 400:
-                _print_err(f"[warn] --trace: fetch failed ({t_status})")
-            else:
-                if json_output:
-                    print(json.dumps(t_resp, indent=2))
-                else:
-                    print(_fmt_trace(t_resp))
-
     # Exit code: 1 if script failed
     nodus_status = resp.get("nodus_status")
     if nodus_status and nodus_status != "success":
         return 1
-    return 0
-
-
-def cmd_trace(
-    trace_id: str,
-    *,
-    api_url: str,
-    token: str | None,
-    json_output: bool = False,
-) -> int:
-    """Fetch and display a Nodus execution trace."""
-    status_code, resp = _http_get(
-        f"{api_url}/platform/nodus/trace/{trace_id}",
-        token=token,
-    )
-    if status_code == 404:
-        _print_err(f"[AINDY Nodus] trace not found: {trace_id!r}")
-        return 1
-    if status_code >= 400:
-        _print_err(f"[AINDY Nodus] API error {status_code}: {resp.get('detail') or resp}")
-        return 1
-
-    resp = _unwrap_platform_response(resp)
-
-    if json_output:
-        print(json.dumps(resp, indent=2))
-    else:
-        print(_fmt_trace(resp))
     return 0
 
 
@@ -462,9 +363,7 @@ def _render_help() -> str:
         "Commands:",
         "  run <file.nd> [--api-url URL] [--api-token TOKEN] [--project-root PATH]",
         "                [--input JSON] [--error-policy fail|retry] [--max-retries N]",
-        "                [--trace] [--dump-bytecode] [--json]",
-        "",
-        "  trace <trace_id> [--api-url URL] [--api-token TOKEN] [--json]",
+        "                [--dump-bytecode] [--json]",
         "",
         "  upload <file.nd> [--api-url URL] [--api-token TOKEN]",
         "                   [--name NAME] [--description TEXT] [--overwrite] [--json]",
@@ -475,9 +374,8 @@ def _render_help() -> str:
         "",
         "Examples:",
         "  python cli.py run script.nd",
-        "  python cli.py run script.nd --trace --input '{\"goal\": \"Q2 growth\"}'",
+        "  python cli.py run script.nd --input '{\"goal\": \"Q2 growth\"}'",
         "  python cli.py run script.nd --dump-bytecode --error-policy retry",
-        "  python cli.py trace <uuid>",
         "  python cli.py upload my_script.nd --name my_processor --overwrite",
     ])
 
@@ -505,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
         flags_with_values = _common_with_values | {
             "--project-root", "--input", "--error-policy", "--max-retries",
         }
-        flags_no_values = _common_no_values | {"--trace", "--dump-bytecode"}
+        flags_no_values = _common_no_values | {"--dump-bytecode"}
 
         try:
             positional, flags = _parse_simple_flags(cmd_args, flags_with_values, flags_no_values)
@@ -549,27 +447,7 @@ def main(argv: list[str] | None = None) -> int:
             input_payload=input_payload,
             error_policy=error_policy,
             max_retries=max_retries,
-            trace="--trace" in flags,
             dump_bytecode="--dump-bytecode" in flags,
-            json_output="--json" in flags,
-        )
-
-    if command == "trace":
-        flags_with_values = _common_with_values.copy()
-        try:
-            positional, flags = _parse_simple_flags(cmd_args, flags_with_values, _common_no_values)
-        except ValueError as exc:
-            _print_err(str(exc))
-            return 1
-
-        if not positional:
-            _print_err("Usage: python cli.py trace <trace_id>")
-            return 1
-
-        return cmd_trace(
-            positional[0],
-            api_url=_api_url(flags.get("--api-url")),
-            token=_api_token(flags.get("--api-token")),
             json_output="--json" in flags,
         )
 
