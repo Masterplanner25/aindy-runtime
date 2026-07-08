@@ -25,6 +25,9 @@ class SystemEventTypes:
     # implicitly in MEMORY_WRITE payloads + MemoryNode columns. Un-prefixed for
     # the same reason as the ledger events above.
     REASONING_SIGNAL = "reasoning.signal"
+    # RTR-5: runtime-driven autonomous execute-window lifecycle (started/completed).
+    # Un-prefixed for the same reason as the ledger events above.
+    AUTONOMY_WINDOW = "autonomy.window"
 
     FLOW_NODE_STARTED = "flow.node.started"
     FLOW_WAITING = "flow.waiting"
