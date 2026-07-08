@@ -12,6 +12,9 @@ MESSAGE_TYPES = {
     "operation_result",
     "memory_share",
     "coordination_signal",
+    # RTR-4 delegation handshake: the delegate's response to an operation_request.
+    "operation_accept",
+    "operation_reject",
 }
 
 
@@ -83,6 +86,58 @@ def publish_operation_result(
         user_id=user_id,
         trace_id=trace_id,
         payload={"result": result},
+    )
+
+
+def publish_operation_accept(
+    *,
+    db,
+    sender_agent_id: str,
+    recipient_agent_id: str | None,
+    child_run_id: str,
+    request_message_id: str | None = None,
+    user_id: str | None = None,
+    trace_id: str | None = None,
+) -> str | None:
+    """Delegate accepts a delegated operation — the child run may proceed (RTR-4)."""
+    return publish_message(
+        db=db,
+        message_type="operation_accept",
+        sender_agent_id=sender_agent_id,
+        recipient_agent_id=recipient_agent_id,
+        user_id=user_id,
+        trace_id=trace_id,
+        payload={
+            "child_run_id": str(child_run_id),
+            "request_message_id": str(request_message_id) if request_message_id else None,
+        },
+    )
+
+
+def publish_operation_reject(
+    *,
+    db,
+    sender_agent_id: str,
+    recipient_agent_id: str | None,
+    child_run_id: str,
+    reason: str | None = None,
+    request_message_id: str | None = None,
+    user_id: str | None = None,
+    trace_id: str | None = None,
+) -> str | None:
+    """Delegate rejects a delegated operation — the child run is failed (RTR-4)."""
+    return publish_message(
+        db=db,
+        message_type="operation_reject",
+        sender_agent_id=sender_agent_id,
+        recipient_agent_id=recipient_agent_id,
+        user_id=user_id,
+        trace_id=trace_id,
+        payload={
+            "child_run_id": str(child_run_id),
+            "reason": reason,
+            "request_message_id": str(request_message_id) if request_message_id else None,
+        },
     )
 
 
