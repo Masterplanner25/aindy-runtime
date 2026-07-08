@@ -388,6 +388,23 @@ class Settings(BaseSettings):
 # --------------------------------------------------------------------
 settings = Settings()
 
+
+def resolve_execution_mode() -> str:
+    """Effective async-execution transport — ``"thread"`` or ``"distributed"``.
+
+    RTR-2: an explicit ``EXECUTION_MODE`` env var always wins. When it is unset,
+    **production defaults to ``"distributed"``** (durable) so a prod deploy that
+    forgets to set it fails fast at queue init (``get_queue`` raises without
+    ``REDIS_URL``) instead of silently running thread-mode jobs that are lost on
+    restart. Dev/test stay on ``"thread"``. Reads ``os.getenv`` directly (as the
+    prior call sites did) so the value must be a real environment variable, not
+    ``.env``-only.
+    """
+    raw = os.getenv("EXECUTION_MODE")
+    if raw:
+        return raw.strip().lower()
+    return "distributed" if settings.is_prod else "thread"
+
 # --------------------------------------------------------------------
 # Logging Initialization
 # --------------------------------------------------------------------

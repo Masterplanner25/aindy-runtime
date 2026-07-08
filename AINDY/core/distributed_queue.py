@@ -1146,7 +1146,9 @@ def get_queue(*, force_memory: bool = False) -> DistributedQueueBackend:
                 "[Queue] Redis backend — url=%s queue=%s", redis_url, queue_name
             # legacy log removed
         else:
-            exec_mode = os.getenv("EXECUTION_MODE", "thread").lower()
+            from AINDY.config import resolve_execution_mode
+
+            exec_mode = resolve_execution_mode()
             if exec_mode == "distributed":
                 raise RuntimeError(
                     "EXECUTION_MODE=distributed requires REDIS_URL to be set. "

@@ -561,14 +561,19 @@ def _log_async_job_capacity_advisory() -> None:
     """Log startup guidance for async job capacity in thread mode."""
     if settings.is_testing:
         return
-    if settings.EXECUTION_MODE != "thread":
+    from AINDY.config import resolve_execution_mode
+
+    if resolve_execution_mode() != "thread":
         return
 
     if settings.is_prod:
+        # RTR-2: reaching here means EXECUTION_MODE was *explicitly* set to thread
+        # in production (the unset default is now "distributed"). Still fatal-grade
+        # guidance — thread mode has no durability.
         logger.error(
-            "[startup] EXECUTION_MODE=thread in ENV=production. Thread mode has no job "
-            "durability — in-flight and queued jobs are permanently lost on restart "
-            "(hard cap: %d queued). Set EXECUTION_MODE=distributed and run "
+            "[startup] EXECUTION_MODE=thread explicitly set in ENV=production. Thread mode "
+            "has no job durability — in-flight and queued jobs are permanently lost on "
+            "restart (hard cap: %d queued). Set EXECUTION_MODE=distributed and run "
             "--profile full for production deployments.",
             settings.AINDY_ASYNC_QUEUE_MAXSIZE,
         )
@@ -1369,6 +1374,20 @@ def _recover_stuck_runs(db_factory, enable_background: bool) -> None:
             emit_recovery_failure("stuck_runs", _scan_exc, _scan_db, logger=logger)
         finally:
             _scan_db.close()
+
+        # RTR-2: re-dispatch thread-mode async jobs stranded by the prior crash.
+        # No-op in distributed mode (worker-side stale recovery owns it).
+        try:
+            from AINDY.platform_layer.job_recovery import recover_orphaned_thread_jobs
+
+            _jobs_recovered = recover_orphaned_thread_jobs()
+            if _jobs_recovered:
+                logger.info(
+                    "[startup] Thread-mode job recovery re-dispatched %d job(s)",
+                    _jobs_recovered,
+                )
+        except Exception as _job_exc:
+            logger.error("[startup] thread-mode job recovery failed: %s", _job_exc)
 
 
 def _start_event_bus() -> None:
