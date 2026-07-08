@@ -103,7 +103,7 @@ next-action policy have no runtime representation.
 | Requirement | Status | Evidence |
 |---|---|---|
 | Turns goals into structured plans | ✅ | `generate_plan()` → LLM → `{executive_summary, steps, overall_risk}` |
-| Uses recalled memory before planning | ⚠️ | **Indirectly only** — `_get_planner_context()` returns a `context_block` from the app-registered planner context provider. Whether memory is in that block depends on what the monolith registers. Memory is recalled for execution context (`_build_execution_memory_context`) AFTER plan creation, not during it. |
+| Uses recalled memory before planning | ✅ | Runtime-owned (2026-07-08): `generate_plan` → `_recall_planner_memory` → `MemoryOrchestrator.get_context` recalls objective-keyed memory pre-plan and injects it via `_build_planner_prompt`. Gated by `AINDY_PLANNER_MEMORY_INJECTION` (default off, opt-in); no longer dependent on the app provider's `context_block`. |
 | Selects tools intentionally | ✅ | Planner prompt includes tool catalog with risk levels; LLM selects from registered tools |
 | Defines steps | ✅ | Plan JSON has `steps[]` with tool, args, risk_level, description |
 | Defines success conditions | ⚠️ | `overall_risk` is a proxy, not a success predicate |
@@ -116,6 +116,15 @@ is injected into execution context but not systematically into the planner promp
 The planner receives a `context_block` whose content depends entirely on the app-layer
 planner context provider. This means prior execution history does not automatically
 inform planning — it only informs execution.
+
+> **RESOLVED 2026-07-08 (Gap 1, INFINITY-RUNTIME-1).** `generate_plan` now recalls memory
+> keyed on the objective via a runtime-owned path (`_recall_planner_memory` →
+> `MemoryOrchestrator.get_context`) — independent of the app-registered planner context
+> provider — and threads it into the planner prompt through `_build_planner_prompt`
+> (symmetric to `context_block`). Each recall (planning **and** execution) emits a
+> `RECALL_USED` event (`core/execution_recall.py`). Injection is gated by
+> `AINDY_PLANNER_MEMORY_INJECTION` (default **off**; flip after app-side soak so plan
+> quality does not shift silently). The `RECALL_USED` observability half is always on.
 
 ---
 
@@ -141,7 +150,7 @@ inform planning — it only informs execution.
 |---|---|---|
 | ExecutionStarted | ✅ | `SystemEventTypes.EXECUTION_STARTED` |
 | PlanCreated | ⚠️ | `PLAN_CREATED` exists in `AGENT_EVENT_TYPES` (agent-specific only, not SystemEventTypes) |
-| RecallUsed | ❌ | Not emitted. Memory retrieval happens silently. |
+| RecallUsed | ✅ | `SystemEventTypes.RECALL_USED` emitted at the planning and execution recall sites via `core/execution_recall.py` (Gap 1, 2026-07-08). |
 | StepStarted | ✅ | `SystemEventTypes.FLOW_NODE_STARTED` / `AGENT_STEP` |
 | ToolCalled | ⚠️ | Tool execution emits via `queue_system_event()` in `tool_registry.py`; not a named SystemEventType |
 | StepCompleted | ✅ | `SystemEventTypes.FLOW_NODE_COMPLETED` / `AGENT_STEP_COMPLETED` |
@@ -345,7 +354,7 @@ post-execution decision engine.
 |---|---|
 | Every execution path produces memory | ⚠️ **Mostly.** Agent paths: yes. Flow paths via auto-capture: yes. Async jobs submitted via `sys.v1.job.submit`: **not automatically.** |
 | Every memory can influence recall | ✅ **Yes.** `MemoryScorer` uses `success_rate`, `impact_score`, `usage_count`, `recency` on every recall. |
-| Every recall can improve planning | ❌ **No.** Recall improves execution context. It does not flow into the planner prompt unless the app-layer planner context provider explicitly includes memory. The link is broken at the architecture level. |
+| Every recall can improve planning | ✅ **Yes** (opt-in, 2026-07-08). `generate_plan` recalls memory and injects it into the planner prompt (runtime-owned, gated by `AINDY_PLANNER_MEMORY_INJECTION`, default off); recall is emitted as `RECALL_USED`. Default-on pending app-side soak. |
 | Every plan runs through the same execution contract | ✅ **Yes** for agent runs. ⚠️ **Partially** for flows (no formal contract schema). |
 | Every result is scored | ✅ **Yes** (execution-level, 2026-07-08). Each finished run emits one `SCORE_COMPUTED` record via `core/execution_score.py`; memory nodes are still separately scored by `MemoryLearningEngine`. Multi-dimension (cost/satisfaction) remains future work. |
 | Every score changes future behavior | ✅ **Yes** — but only for memory retrieval ranking. Scores do not feed back into planning, tool selection, or policy updates. |
@@ -373,10 +382,11 @@ API request
 
 ### The five structural gaps
 
-**Gap 1 — Recall → Planning link is broken.**
-Memory is recalled into execution context but not into the planning prompt.
-The planner does not see past execution history as structured input. Fix: the
-planner context provider must explicitly query and inject memory into the system prompt.
+**Gap 1 — Recall → Planning link is broken. ✅ CLOSED 2026-07-08.**
+~~Memory is recalled into execution context but not into the planning prompt.~~
+Closed: `generate_plan` recalls memory (runtime-owned, objective-keyed) and injects it into
+the planner prompt via `_build_planner_prompt`, gated by `AINDY_PLANNER_MEMORY_INJECTION`
+(default off, opt-in). Both recall sites emit `RECALL_USED` (`core/execution_recall.py`).
 
 **Gap 2 — The event ledger is missing three entries.**
 `RecallUsed`, `ScoreComputed`, and `NextActionChosen` are not emitted as `SystemEventTypes`.

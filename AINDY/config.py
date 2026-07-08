@@ -291,6 +291,10 @@ class Settings(BaseSettings):
     AINDY_ASYNC_MAX_CONCURRENT_PER_USER: int = 0
     USE_NATIVE_SCORER: bool = True
     ENFORCE_EXECUTION_CONTRACT: bool = True
+    # INFINITY-RUNTIME-1 Gap 1: inject recalled memory into the agent planner
+    # prompt. Off by default — flip after app-side soak (mirrors the nodus_vm
+    # opt-in discipline) so planner prompts/plan quality don't shift silently.
+    AINDY_PLANNER_MEMORY_INJECTION: bool = False
     SKIP_MONGO_PING: bool = False
     MONGO_REQUIRED: bool = False
     MONGO_HEALTH_TIMEOUT_MS: int = 5000

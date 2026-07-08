@@ -316,6 +316,20 @@ def _build_execution_memory_context(*, objective: str, plan: dict, user_id: str,
             },
             operation_type="agent_execution",
         )
+        try:
+            from AINDY.core.execution_recall import emit_recall_used
+
+            emit_recall_used(
+                db=db,
+                node_ids=context.ids,
+                query=objective,
+                trace_id=trace_id,
+                user_id=user_id,
+                operation_type="agent_execution",
+                source="agent",
+            )
+        except Exception:
+            logger.debug("[AgentRuntime] recall event emit skipped", exc_info=True)
         items = memory_items_to_dicts(context.items)
         return {
             "similar_past_outcomes": [item for item in items if item.get("memory_type") == "outcome"][:3],
