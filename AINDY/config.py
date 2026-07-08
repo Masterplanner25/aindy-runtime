@@ -301,6 +301,11 @@ class Settings(BaseSettings):
     # _execute_job_inline activates the async-execution context (so EXECUTION_*
     # events persist and auto-capture writes memory) and emits SCORE_COMPUTED.
     AINDY_ASYNC_JOB_LOOP_CLOSURE: bool = False
+    # RTR-4 Gap (a): require an inter-agent accept/reject handshake before a
+    # delegated child run executes. Off by default — current behavior dispatches
+    # the child straight to `approved`. When on, the child is held at
+    # `awaiting_delegation` until the delegate calls `respond_to_delegation`.
+    AINDY_DELEGATION_HANDSHAKE: bool = False
     SKIP_MONGO_PING: bool = False
     MONGO_REQUIRED: bool = False
     MONGO_HEALTH_TIMEOUT_MS: int = 5000

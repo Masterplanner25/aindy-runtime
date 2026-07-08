@@ -15,7 +15,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from AINDY.agents.tool_registry import TOOL_REGISTRY
 from AINDY.platform_layer.user_ids import parse_user_id, require_user_id
@@ -446,6 +446,7 @@ def mint_token(
     db,
     approval_mode: str,
     agent_type: str = DEFAULT_AGENT_TYPE,
+    capability_ceiling: Optional[Iterable[str]] = None,
 ) -> Optional[dict]:
     """
     Mint a scoped execution token for a run.
@@ -454,6 +455,13 @@ def mint_token(
       - execution_token: opaque UUID
       - granted_tools: legacy per-tool allowlist
       - allowed_capabilities: canonical capability claims
+
+    ``capability_ceiling`` (RTR-4): when provided, the minted
+    ``allowed_capabilities`` and ``granted_tools`` are clamped to this set — used
+    for delegated child runs so a delegate never receives more than the
+    intersection of the parent's grant and its own registered capabilities
+    (least privilege; no escalation via delegation). An empty ceiling narrows to
+    nothing and the mint returns ``None`` (no viable token).
     """
     try:
         step_count = len((plan or {}).get("steps", []))
@@ -467,6 +475,17 @@ def mint_token(
             return None
 
         allowed_capabilities = get_plan_required_capabilities(plan, agent_type=agent_type)
+        if capability_ceiling is not None:
+            ceiling = {str(c) for c in capability_ceiling}
+            allowed_capabilities = [c for c in allowed_capabilities if c in ceiling]
+            # Drop tools whose required capability is no longer inside the ceiling —
+            # a tool the delegate may not exercise must not stay on the allowlist.
+            granted_tools = [
+                t
+                for t in granted_tools
+                if not _get_capabilities_for_tool(t)
+                or set(_get_capabilities_for_tool(t)) & ceiling
+            ]
         if not allowed_capabilities:
             return None
         if approval_mode == "auto":

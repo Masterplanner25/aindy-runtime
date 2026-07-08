@@ -3242,6 +3242,25 @@ CI job proves full execute-to-completion once the runtime bump ships.
   **delegation-token-scoped private memory** — boundaries today are namespace +
   `is_shared` flags + MAS path isolation, not bound to the delegation token.
 
+- **Advance 2026-07-08 — gaps (a) + (b) done; (c) deferred.**
+  **(b) capability narrowing (active by default, security):** `mint_token` gained
+  a `capability_ceiling` param; `dispatch_delegated_run` now mints the child token
+  under the *delegate's* `agent_type` and clamps `allowed_capabilities` /
+  `granted_tools` to `parent_grant ∩ delegate_registry_capabilities`
+  (`_delegate_capability_ceiling`). No escalation via delegation; the delegated
+  plan's tool capabilities always survive the intersection (parent ran the same
+  plan), so only extraneous caps are dropped. **(a) approval handshake (opt-in,
+  `AINDY_DELEGATION_HANDSHAKE`, default off):** new bus message types
+  `operation_accept` / `operation_reject` + publishers; new non-terminal
+  `AgentRunStatus.AWAITING_DELEGATION`; `respond_to_delegation(child, accept)`
+  promotes an awaiting child to `approved` (execution proceeds via the normal
+  approved path) or fails it — and un-hangs the waiting parent on reject
+  (`delegation_rejected`). Default-off preserves today's fire-and-forget
+  `approved` dispatch. Tests: `test_delegation_hardening.py`. **Deferred:** (c)
+  token-scoped private memory (needs a `MemoryNodeModel` schema change — its own
+  follow-up PR); and wiring `respond_to_delegation` to an HTTP route / syscall
+  (it ships as an importable runtime primitive, record-first).
+
 ### RTR-5 — Autonomous closed loop — **[BUILD], medium (split)**
 
 - **Ownership:** runtime owns the missing execution-window primitive; the

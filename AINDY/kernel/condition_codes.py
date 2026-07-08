@@ -109,7 +109,10 @@ class AgentRunStatus(str, Enum):
     Stable surface — returned in agent execution API responses.
     Terminal states: COMPLETED, FAILED, CANCELLED, VERIFY_FAILED.
     Intermediate: DELEGATED (sub-agent dispatched; not yet terminal),
-    WAITING (parked mid-plan on a WAIT step; resumes on the matching event).
+    WAITING (parked mid-plan on a WAIT step; resumes on the matching event),
+    AWAITING_DELEGATION (RTR-4: child run created for a delegated operation,
+    held pending the delegate's accept/reject before it is promoted to APPROVED;
+    only reached when the ``AINDY_DELEGATION_HANDSHAKE`` opt-in is enabled).
 
     RTR-3 (2026-07-08): WAITING added to mirror the value the VM-backed path
     actually writes when parking a run (``AgentRun.wait_state`` is set alongside
@@ -127,6 +130,7 @@ class AgentRunStatus(str, Enum):
 
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
+    AWAITING_DELEGATION = "awaiting_delegation"
     EXECUTING = "executing"
     WAITING = "waiting"
     DELEGATED = "delegated"
@@ -170,6 +174,7 @@ AGENT_ACTIVE_STATUSES: frozenset[str] = frozenset(
     {
         AgentRunStatus.PENDING_APPROVAL.value,
         AgentRunStatus.APPROVED.value,
+        AgentRunStatus.AWAITING_DELEGATION.value,
         AgentRunStatus.EXECUTING.value,
         AgentRunStatus.DELEGATED.value,
         AgentRunStatus.WAITING.value,
@@ -200,6 +205,7 @@ _FLOW_TO_AGENT_STATUS: dict[str, str] = {
 _AGENT_TO_FLOW_STATUS: dict[str, str] = {
     AgentRunStatus.PENDING_APPROVAL.value: FlowRunStatus.RUNNING.value,
     AgentRunStatus.APPROVED.value: FlowRunStatus.RUNNING.value,
+    AgentRunStatus.AWAITING_DELEGATION.value: FlowRunStatus.RUNNING.value,
     AgentRunStatus.EXECUTING.value: FlowRunStatus.EXECUTING.value,
     AgentRunStatus.DELEGATED.value: FlowRunStatus.EXECUTING.value,
     AgentRunStatus.WAITING.value: FlowRunStatus.WAITING.value,

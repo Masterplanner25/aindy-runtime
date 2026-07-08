@@ -477,6 +477,7 @@ _STABLE_FLOW_RUN_STATUSES = [
 _STABLE_AGENT_RUN_STATUSES = [
     "pending_approval",
     "approved",
+    "awaiting_delegation",  # RTR-4 — delegation handshake hold state (opt-in)
     "executing",
     "waiting",  # RTR-3 — VM WAIT park state (was written, now named)
     "delegated",
