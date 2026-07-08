@@ -106,6 +106,9 @@ def test_capture_path_emits_capture_reasoning_signal():
             source="agent",
             node_type="insight",
             force=True,
+            # Order-independent: a prior test in the full suite may leave the
+            # pipeline-active ContextVar set, which would short-circuit capture.
+            allow_when_pipeline_active=True,
         )
 
     assert node == {"id": "node-123"}
