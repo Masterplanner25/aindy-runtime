@@ -64,6 +64,19 @@ on each advance.
   are constants-only pending their PRs. Tests: `test_infinity_score_event.py`. Docs:
   `INFINITY_LOOP_AUDIT.md` §9/Gap 3. **Remaining: Gaps 1, 4, 5 + item-3 aggregate syscall.**
   Notify app-side `INFINITY-RUNTIME-HANDOFF-1`.
+- **2026-07-08 — Gap 1 (recall→planning) CLOSED + Gap 2's `RECALL_USED` wired.** `generate_plan`
+  (`agents/agent_runtime/planning.py`) now recalls objective-keyed memory pre-plan via a new
+  runtime-owned `_recall_planner_memory` (`MemoryOrchestrator.get_context`, **not** the
+  app-registered planner-context provider — whose runtime-default `context_block` is empty) and
+  injects it into the planner prompt through a new `memory_block` param on `_build_planner_prompt`
+  (symmetric to `context_block`). Injection is gated by config flag `AINDY_PLANNER_MEMORY_INJECTION`
+  (default **off**; opt-in, flip after app soak so plan quality doesn't shift silently — mirrors
+  the nodus_vm discipline). New canonical `core/execution_recall.py` `emit_recall_used` emits one
+  `RECALL_USED` event (`{query, node_ids, count, operation_type}`, no-op on empty recall) at **both**
+  recall sites — planning (`agent_planning`) and execution (`_build_execution_memory_context`,
+  `agent_execution`) — so the ledger's `RecallUsed` entry is no longer silent. No schema change.
+  Tests: `test_infinity_recall_event.py` (11). Docs: audit §4/§6/Gap 1/§16.
+  **Remaining: Gaps 4, 5 + item-3.** Notify app-side `INFINITY-RUNTIME-HANDOFF-1`.
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 

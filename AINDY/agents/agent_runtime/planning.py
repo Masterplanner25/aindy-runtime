@@ -167,11 +167,15 @@ def _build_planner_prompt(
     system_prompt: str,
     planner_context: dict[str, object],
     tools: list[dict],
+    memory_block: str = "",
 ) -> str:
     prompt = str(system_prompt or "")
     context_block = str(planner_context.get("context_block") or "")
     if context_block and context_block not in prompt:
         prompt += context_block
+    memory_block = str(memory_block or "")
+    if memory_block and memory_block not in prompt:
+        prompt += "\n\nRelevant prior memory (recalled for this objective):\n" + memory_block
     if tools:
         prompt += "\n\nAvailable tools:\n" + "\n".join(
             f"- {tool.get('name')}: {tool.get('description', '')} (risk={tool.get('risk', 'unknown')})"
@@ -247,6 +251,43 @@ def _invoke_planner_backend(
     return plan
 
 
+def _recall_planner_memory(
+    objective_text: str, user_id: str | None, db: Session | None
+) -> tuple[str, list[str]]:
+    """Recall prior memory to inject into the planner prompt (INFINITY-RUNTIME-1 Gap 1).
+
+    Runtime-owned — does not depend on the app-registered planner context
+    provider. Returns ``(memory_block, node_ids)``; empty on any failure or when
+    the ``AINDY_PLANNER_MEMORY_INJECTION`` flag is off. Best-effort.
+    """
+    if not getattr(settings, "AINDY_PLANNER_MEMORY_INJECTION", False):
+        return "", []
+    if not user_id or db is None:
+        return "", []
+    try:
+        from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
+        from AINDY.runtime.memory import MemoryOrchestrator
+
+        orchestrator = MemoryOrchestrator(MemoryNodeDAO)
+        context = orchestrator.get_context(
+            user_id=user_id,
+            query=objective_text or "agent planning",
+            db=db,
+            max_tokens=700,
+            metadata={
+                "limit": 6,
+                "node_types": ["outcome", "insight", "decision"],
+            },
+            operation_type="agent_planning",
+        )
+        block = str(getattr(context, "formatted", "") or "")
+        ids = list(getattr(context, "ids", []) or [])
+        return block, ids
+    except Exception as exc:
+        logger.warning("[AgentRuntime] planner memory recall failed: %s", exc)
+        return "", []
+
+
 def generate_plan(
     objective: str | None = None,
     user_id: str | None = None,
@@ -269,10 +310,25 @@ def generate_plan(
             raise PlannerBackendDisabledError(
                 "Agent planner backend is disabled by configuration."
             )
+        memory_block, memory_ids = _recall_planner_memory(objective_text, user_id, db)
+        if memory_ids:
+            from AINDY.core.execution_recall import emit_recall_used
+            from AINDY.platform_layer.trace_context import get_trace_id
+
+            emit_recall_used(
+                db=db,
+                node_ids=memory_ids,
+                query=objective_text,
+                trace_id=get_trace_id(),
+                user_id=user_id,
+                operation_type="agent_planning",
+                source="agent",
+            )
         system_prompt = _build_planner_prompt(
             system_prompt=system_prompt,
             planner_context=planner_context,
             tools=tools,
+            memory_block=memory_block,
         )
         plan = _invoke_planner_backend(
             backend_name=backend_name,
