@@ -1,6 +1,6 @@
 ---
 title: "Security Policy"
-last_verified: "2026-07-02"
+last_verified: "2026-07-07"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -69,9 +69,11 @@ Accepted findings must be documented here under **Accepted Findings**.
 
 ### CVE-2024-23342 — ecdsa Minerva timing attack
 - **Package:** ecdsa (transitive dep of python-jose)
+- **Aliases:** GHSA-wj6h-64fc-37mp (GitHub Dependabot advisory ID)
 - **Fix version:** None released
 - **Accepted:** 2026-05-25
-- **Rationale:** Not reachable. The runtime uses HS256 (HMAC-SHA256) signing for all JWTs (`ALGORITHM = "HS256"` in `AINDY/services/auth_service.py`). The ecdsa package is pulled in transitively by python-jose but EC key operations are never invoked. A Minerva timing attack requires repeated access to an EC signing oracle, which does not exist in this codebase.
+- **Rationale:** Not reachable. The runtime uses HS256 (HMAC-SHA256) signing for all JWTs (`ALGORITHM = "HS256"` in `AINDY/services/auth_service.py`). The ecdsa package is pulled in transitively by python-jose but EC key operations are never invoked (python-jose resolves to its `cryptography_backend`, with `cryptography` pinned). A Minerva timing attack requires repeated access to an EC signing oracle, which does not exist in this codebase.
+- **Dependabot:** alert dismissed as `not_used` on 2026-07-07 (alerts #4, #11).
 - **Reopen trigger:** Any addition of ECDSA/ES256 JWT signing or any direct ecdsa import. A fix release from the ecdsa maintainers would also allow removing this exemption.
 
 ### PYSEC-2026-97 — nltk filestring() path traversal
@@ -90,9 +92,11 @@ Accepted findings must be documented here under **Accepted Findings**.
 
 ### PYSEC-2026-597 (CVE-2026-12243) — nltk url2pathname() percent-encoded path traversal
 - **Package:** nltk (transitive dep of textstat)
+- **Aliases:** GHSA-p4gq-832x-fm9v (GitHub Dependabot advisory ID)
 - **Fix version:** None released
 - **Accepted:** 2026-07-02
 - **Rationale:** Not reachable. Incomplete-fix follow-up to PYSEC-2026-97: `_UNSAFE_NO_PROTOCOL_RE` in `nltk/data.py` rejects literal `../` but not percent-encoded `..%2f`, which `url2pathname()` decodes after the check. Exploitation requires an attacker-controlled resource name passed to `nltk.data.load()`/`nltk.data.find()`. nltk is a transitive dependency of textstat; the runtime never imports nltk directly and never calls those loaders, so no attacker-controlled path reaches `url2pathname()`.
+- **Dependabot:** alert dismissed as `not_used` on 2026-07-07 (alerts #5, #12).
 - **Reopen trigger:** A fix release from the nltk maintainers, or any direct call to `nltk.data.load()`/`find()` added to the codebase.
 
 ## Reporting a Vulnerability
