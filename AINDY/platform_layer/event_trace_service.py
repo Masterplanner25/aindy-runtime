@@ -222,7 +222,7 @@ def _serialize_memory_node(row: MemoryNodeModel) -> dict[str, Any]:
             "tags": row.tags or [],
             "memory_type": row.memory_type,
             "impact_score": row.impact_score,
-            "relationship_depth": getattr(row, "cau" + "sal_depth", None),
+            "relationship_depth": getattr(row, "causal_depth", None),
             "source_event_id": str(row.source_event_id) if row.source_event_id else None,
             "root_event_id": str(row.root_event_id) if row.root_event_id else None,
         },

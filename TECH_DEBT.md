@@ -3329,6 +3329,21 @@ CI job proves full execute-to-completion once the runtime bump ships.
   app-owned. Heavy causal computation depends on the RTR-2 worker model. The
   runtime half is largely complete.
 
+- **Advance 2026-07-08 — runtime half CLOSED.** The last runtime-side seam was
+  `GET /observability/execution_graph/{trace_id}`
+  (`observability_rippletrace_node`), which returned FAILURE ("rippletrace domain
+  not available") whenever the app hadn't registered the `rippletrace_*` symbols —
+  even though the runtime's own `event_trace_service` (`build_trace_graph`,
+  `detect_root_event`, `detect_terminal_events`, `calculate_trace_span`) is a
+  fully-capable equivalent. The node now **falls back to `event_trace_service`**
+  when the app symbols are absent (app-registered symbols still take precedence);
+  only app-domain `insights` are unavailable in the fallback (→ empty list). Also
+  fixed the `getattr(row, "cau" + "sal_depth")` obfuscation in
+  `_serialize_memory_node`. Tests: `test_rippletrace_runtime_fallback.py`. The
+  substantive remainder (migrating the app-side heuristic content-domain graph
+  onto this layer; heavy causal computation via the RTR-2 worker) is **app-owned /
+  RTR-2-gated**, not a runtime gap.
+
 ### RTR-8 — PyPI publication — **CLOSED / stale (do not re-track)**
 
 This backlog item is already done: **PYPI-PUBLISH-1 closed 2026-06-14**; the
