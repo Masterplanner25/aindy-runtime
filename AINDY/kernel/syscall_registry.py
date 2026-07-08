@@ -1323,6 +1323,37 @@ def _handle_execution_get(payload: dict, context: SyscallContext) -> dict:
             db.close()
 
 
+def _handle_observability_support_metrics(payload: dict, context: SyscallContext) -> dict:
+    """sys.v1.observability.support_metrics — tenant-scoped observability + execution rollup.
+
+    INFINITY-RUNTIME-1 item 3. Returns an aggregate the app-side Infinity support
+    layer consumes: per-tenant request metrics + a platform-health signal (Step 3)
+    and agent-run / async-job / Infinity-loop-event distributions (Step 4), over an
+    optional ``window_hours`` window (default 24, max 168). Read-only.
+
+    Payload keys:
+        window_hours (int, optional) — lookback window; clamped to [1, 168].
+    """
+    from AINDY.platform_layer.support_metrics_service import build_support_metrics
+
+    normalized_user_id = _resolve_tenant_user_id(context, {})
+    if normalized_user_id is None:
+        raise ValueError(
+            "sys.v1.observability.support_metrics requires an authenticated tenant context"
+        )
+
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        return build_support_metrics(
+            db,
+            user_id=normalized_user_id,
+            window_hours=payload.get("window_hours"),
+        )
+    finally:
+        if owns_session:
+            db.close()
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 SYSCALL_REGISTRY: VersionedSyscallRegistry = VersionedSyscallRegistry()
@@ -1698,6 +1729,30 @@ SYSCALL_REGISTRY["sys.v1.execution.get"] = SyscallEntry(
 )
 
 
+SYSCALL_REGISTRY["sys.v1.observability.support_metrics"] = SyscallEntry(
+    handler=_handle_observability_support_metrics,
+    capability="execution.read",
+    description=(
+        "Tenant-scoped observability + execution support-metrics rollup "
+        "(request metrics, platform health, agent/async execution behavior, "
+        "Infinity loop-event counts) for the app-side Infinity support layer."
+    ),
+    input_schema={
+        "properties": {"window_hours": {"type": "int"}},
+    },
+    output_schema={
+        "required": ["observability", "execution", "infinity_events"],
+        "properties": {
+            "generated_at": {"type": "string"},
+            "window_hours": {"type": "int"},
+            "observability": {"type": "object"},
+            "execution": {"type": "object"},
+            "infinity_events": {"type": "object"},
+        },
+    },
+)
+
+
 def register_syscall(
     name: str,
     handler: Callable[[dict, SyscallContext], dict],
@@ -1767,6 +1822,6 @@ def get_registered_syscalls() -> list[str]:
 # Minimum number of syscalls expected after a complete boot (all static built-ins).
 # Any count below this floor means Phase 8 did not finish, or a registration was lost.
 # Add 1 per new static entry added to this file.  Do not lower this value.
-SYSCALL_REGISTRY_MIN_COUNT: int = 21
+SYSCALL_REGISTRY_MIN_COUNT: int = 22
 
 

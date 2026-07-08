@@ -2,12 +2,14 @@
 
 ## INFINITY-RUNTIME-1 — Runtime Infinity loop-closure gaps (accepts app handoff INFINITY-RUNTIME-HANDOFF-1)
 
-**Status:** Open — narrowed to item 3 only. All **five structural loop-closure gaps CLOSED
-2026-07-08** (PRs #194–#197; see Advance log below); the remaining open scope is the
-app-facing aggregate observability/execution syscall (item 3), a separate feature request.
+**Status:** **CLOSED 2026-07-08.** All five structural loop-closure gaps + the item-3
+app-facing aggregate syscall are shipped (PRs #194–#198; see Advance log below).
 Runtime-owned counterpart to the app-side handoff
-`aindy-apps-monolith/TECH_DEBT.md` → **INFINITY-RUNTIME-HANDOFF-1** (Phase 2 now unblocked —
-Gap 4 was the gate).
+`aindy-apps-monolith/TECH_DEBT.md` → **INFINITY-RUNTIME-HANDOFF-1** (Phase 2 unblocked —
+Gap 4 was the gate; the support-metrics aggregate is now available for the app's
+`dependency_adapter`). Deferred, non-blocking follow-ups only: flip the two opt-in flags
+after app soak (`AINDY_PLANNER_MEMORY_INJECTION`, `AINDY_ASYNC_JOB_LOOP_CLOSURE`), and let
+the Next-Action primitive *act* (currently record-only).
 
 **Context:** The Infinity scoring/orchestrator/loop is app-owned
 (`aindy-apps-monolith/apps/analytics/services/{scoring,orchestration}/`). This repo owns
@@ -111,6 +113,19 @@ on each advance.
   **All 5 structural gaps (1–5) closed; only item-3 (app-facing aggregate observability/
   execution syscall) remains — a separate feature request.** Notify app-side
   `INFINITY-RUNTIME-HANDOFF-1` (Phase 2 unblocked).
+- **2026-07-08 — Item 3 (app-facing aggregate syscall) CLOSED. INFINITY-RUNTIME-1 fully
+  closed.** New syscall **`sys.v1.observability.support_metrics`** (capability `execution.read`)
+  + `platform_layer/support_metrics_service.py` `build_support_metrics`: a tenant-scoped,
+  read-only rollup of request metrics + platform health (Step 3) and agent-run / async-job /
+  Infinity-loop-event distributions (Step 4), over `window_hours` (default 24, max 168). No new
+  persistence — reuses existing tables via per-tenant group-bys. Chose `execution.read` because
+  it is already on the SDK-SYSCALL-GRANT-1 `/platform/syscall` dispatch surface
+  (`_DISPATCH_CAPABILITY_SCOPES`), so the app fetches it via `dependency_adapter` with the
+  existing `execution.read` scope — **no router/grant changes**. `SYSCALL_REGISTRY_MIN_COUNT`
+  21→22; added to `_STABLE_SYSCALLS` (cross-repo contract). Tests:
+  `test_infinity_support_metrics.py` (7, real-session tenant-scoping + window + event counts).
+  Docs: `SYSCALL_REFERENCE.md` (new domain `observability` + scope table),
+  `SDK_CONTRACT.md`. Notify app-side `INFINITY-RUNTIME-HANDOFF-1` — the aggregate is live.
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 
