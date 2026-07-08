@@ -3306,6 +3306,26 @@ CI job proves full execute-to-completion once the runtime bump ships.
   raise triggers and the runtime only evaluates/defers/queues — there is no
   controlled runtime-driven execution window.
 
+- **Advance 2026-07-08 — execute-window primitive shipped (opt-in, default off).**
+  `agents/autonomous_window.py` `run_execute_window(db, *, user_id, objective, ...)`
+  is the missing primitive: a **bounded** loop that composes the existing
+  primitives — `evaluate_live_trigger` (policy stays app-owned) → `create_run`
+  (which already plans + auto-approve/mints) → `execute_run` — under guardrails:
+  `AINDY_AUTONOMOUS_MAX_ITERATIONS` (default 3), an active-run admission cap
+  (`AINDY_AUTONOMOUS_MAX_ACTIVE_RUNS` via `count_active_executions`), and an
+  optional inter-iteration cooldown (capped 30s). Human approval is respected — a
+  `pending_approval` run ends the window (never force-executed). Gated behind
+  `AINDY_AUTONOMOUS_EXECUTE_WINDOW` (default off): disabled ⇒ no-op, current
+  evaluate/defer/queue behavior unchanged. Registered as async job
+  `agent.autonomous_window` (force-imported in `async_job_service`, mirroring
+  `embedding_jobs`) so the queue/defer path can dispatch it — closing the gap that
+  no runtime handler existed for an autonomous `execute` decision. New event
+  `SystemEventTypes.AUTONOMY_WINDOW` (started/completed); frozen event baseline
+  regenerated (`01030e3f3fdc5e8d`). Tests: `test_autonomous_window.py`. No schema
+  change. **Deferred:** flipping the flag on after soak; routing the existing
+  autonomous `submit`/`process_deferred_jobs` `execute` branch through the window
+  by default.
+
 ### RTR-6 — Reasoning at the memory layer — **[BUILD], medium**
 
 - **Evidence:** recall/capture are real (`runtime/memory/orchestrator.py`

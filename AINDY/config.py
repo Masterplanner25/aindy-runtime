@@ -306,6 +306,18 @@ class Settings(BaseSettings):
     # the child straight to `approved`. When on, the child is held at
     # `awaiting_delegation` until the delegate calls `respond_to_delegation`.
     AINDY_DELEGATION_HANDSHAKE: bool = False
+    # RTR-5: runtime-driven autonomous trigger→plan→execute window. Off by default
+    # — when off, an autonomous "execute" decision is only evaluated/queued (current
+    # behavior). When on, `run_execute_window` actually composes create_run →
+    # execute_run in a bounded loop. Opt-in after soak (mirrors nodus_vm discipline).
+    AINDY_AUTONOMOUS_EXECUTE_WINDOW: bool = False
+    # Max create→plan→execute iterations per window (bound on autonomous action).
+    AINDY_AUTONOMOUS_MAX_ITERATIONS: int = 3
+    # Max concurrent active runs (flow+agent) before the window declines to start
+    # another iteration — admission cap via count_active_executions.
+    AINDY_AUTONOMOUS_MAX_ACTIVE_RUNS: int = 1
+    # Cooldown between window iterations, seconds (0 = none; capped at 30).
+    AINDY_AUTONOMOUS_COOLDOWN_SECONDS: int = 0
     SKIP_MONGO_PING: bool = False
     MONGO_REQUIRED: bool = False
     MONGO_HEALTH_TIMEOUT_MS: int = 5000

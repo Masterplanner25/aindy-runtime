@@ -1,5 +1,5 @@
 {
-  "hash": "a12e9f467c28f7ac",
+  "hash": "01030e3f3fdc5e8d",
   "types": [
     "AINDY.core.system_event_types",
     "WAIT_TIMEOUT",
@@ -11,6 +11,7 @@
     "async_job.failed",
     "async_job.started",
     "autonomy.decision",
+    "autonomy.window",
     "embedding.completed",
     "embedding.failed",
     "embedding.started",
