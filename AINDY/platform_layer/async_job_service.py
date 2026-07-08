@@ -1029,9 +1029,56 @@ def _emit_job_log_written(log_id: str) -> None:
         logger.debug("[AsyncJobService] emit_event job_log.written failed for %s: %s", log_id, exc)
 
 
+def _async_job_loop_closure_enabled() -> bool:
+    """INFINITY-RUNTIME-1 Gap 5 flag — async jobs join the loop (default off)."""
+    try:
+        return bool(getattr(settings, "AINDY_ASYNC_JOB_LOOP_CLOSURE", False))
+    except Exception:
+        return False
+
+
+def _emit_async_job_score(
+    *, db, log_id: str, task_name: str, status: str, result: Any, duration_ms: int | None
+) -> None:
+    """Emit a per-job SCORE_COMPUTED record (INFINITY-RUNTIME-1 Gaps 3 & 5).
+
+    Gated by the loop-closure flag; best-effort via the shared execution-score
+    helper. Reuses Gap 3's primitive so jobs score uniformly with agent runs.
+    """
+    if not _async_job_loop_closure_enabled():
+        return
+    try:
+        from AINDY.core.execution_score import compute_execution_score, emit_execution_score
+        from AINDY.db.models.job_log import JobLog as _JobLog
+
+        log = db.query(_JobLog).filter(_JobLog.id == log_id).first()
+        score = compute_execution_score(status=status, result=result)
+        emit_execution_score(
+            db=db,
+            run_id=str(log_id),
+            score=score,
+            status=status,
+            trace_id=str(log_id),
+            user_id=getattr(log, "user_id", None),
+            duration_ms=duration_ms,
+            dimensions={"task_name": task_name, "execution_mode": "async_job"},
+            source="async_job",
+        )
+    except Exception:
+        logger.debug("[AsyncJob] score emit skipped for %s", log_id, exc_info=True)
+
+
 def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]) -> None:
     JobLog = _job_log_model()
     trace_token = set_trace_id(str(log_id))
+    async_ctx_token = None
+    if _async_job_loop_closure_enabled():
+        try:
+            from AINDY.platform_layer.async_execution_context import activate_async_execution_context
+
+            async_ctx_token = activate_async_execution_context()
+        except Exception:
+            async_ctx_token = None
     parent_token = set_parent_event_id(_ensure_root_execution_event_id(db, str(log_id)))
     try:
         log = db.query(JobLog).filter(JobLog.id == log_id).first()
@@ -1169,6 +1216,14 @@ def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]
                     "result": _normalize_result(result),
                 },
             )
+            _emit_async_job_score(
+                db=db,
+                log_id=str(log_id),
+                task_name=task_name,
+                status="success",
+                result=result,
+                duration_ms=duration_ms,
+            )
         except Exception as exc:
             inline_error = exc
             log.status = "failed"
@@ -1275,12 +1330,28 @@ def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]
                 },
                 required=True,
             )
+            _emit_async_job_score(
+                db=db,
+                log_id=str(log_id),
+                task_name=task_name,
+                status="failed",
+                result=log.result,
+                duration_ms=duration_ms,
+            )
             db.commit()
             _emit_job_log_written(log_id)
             try:
                 db.refresh(log)
             except Exception as exc:
                 logger.debug("[AsyncJobService] JobLog refresh skipped after failure: %s", exc)
+    finally:
+        if async_ctx_token is not None:
+            try:
+                from AINDY.platform_layer.async_execution_context import deactivate_async_execution_context
+
+                deactivate_async_execution_context(async_ctx_token)
+            except Exception:
+                logger.debug("[AsyncJob] async context deactivate skipped for %s", log_id, exc_info=True)
 
 
 def _execute_job(log_id: str, task_name: str, payload: dict[str, Any]) -> None:

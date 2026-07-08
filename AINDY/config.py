@@ -295,6 +295,12 @@ class Settings(BaseSettings):
     # prompt. Off by default — flip after app-side soak (mirrors the nodus_vm
     # opt-in discipline) so planner prompts/plan quality don't shift silently.
     AINDY_PLANNER_MEMORY_INJECTION: bool = False
+    # INFINITY-RUNTIME-1 Gap 5: async jobs join the Infinity loop. Off by default
+    # so infra jobs (embedding ingestion, metric writing) don't start producing
+    # memory nodes + score events until an operator opts in after soak. When on,
+    # _execute_job_inline activates the async-execution context (so EXECUTION_*
+    # events persist and auto-capture writes memory) and emits SCORE_COMPUTED.
+    AINDY_ASYNC_JOB_LOOP_CLOSURE: bool = False
     SKIP_MONGO_PING: bool = False
     MONGO_REQUIRED: bool = False
     MONGO_HEALTH_TIMEOUT_MS: int = 5000
