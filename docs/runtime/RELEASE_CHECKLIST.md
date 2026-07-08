@@ -1,6 +1,6 @@
 ---
 title: "Runtime Release Checklist"
-last_verified: "2026-06-14"
+last_verified: "2026-07-08"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -85,7 +85,8 @@ curl -s http://localhost:8000/health/deep | jq '.checks | keys'
 # Expected: includes "database", "nodus", "syscall_registry"
 
 curl -s http://localhost:8000/health/deep | jq '.checks.syscall_registry'
-# Expected: {"status": "ok", "count": >= 17, "minimum_expected": 17}
+# Expected: {"status": "ok", "count": >= 22, "minimum_expected": 22}
+# (SYSCALL_REGISTRY_MIN_COUNT — the floor; grows as syscalls are added.)
 ```
 
 ### 7. Version Endpoint
@@ -104,7 +105,7 @@ curl -s http://localhost:8000/api/version | jq '{
 
 ```bash
 curl -s http://localhost:8000/health/deep | jq '.checks.syscall_registry.count'
-# Expected: integer >= 17 (SYSCALL_REGISTRY_MIN_COUNT)
+# Expected: integer >= 22 (SYSCALL_REGISTRY_MIN_COUNT)
 ```
 
 ### 9. Readiness Gate
@@ -182,9 +183,19 @@ pytest tests/unit/test_runtime_compatibility_metadata.py -v
 
 ## Sandbox Escape Gate
 
-Run before any GA release. Requires Docker with Linux containers mode.
-
 ### 16. Sandbox Escape Suite
+
+**Automated (Linux):** `.github/workflows/sandbox-escape-linux.yml` runs the full
+suite on every `v*` tag (and `workflow_dispatch`) on `ubuntu-latest`, where Docker
+uses a native Linux-containers backend so no tests skip. **Confirm this job is
+green on the release tag** — it is the primary gate. It uploads
+`sandbox_escape_results.json` as the `linux-sandbox-escape-results` artifact.
+
+**macOS backend certification:** `.github/workflows/macos-sandbox.yml`
+(`workflow_dispatch`, macOS runner) — run when sandbox controls change to
+re-certify the macOS Docker backend (C3 Phase 4). Not a per-release gate.
+
+**Manual / local fallback** (Docker with Linux containers mode):
 
 ```bash
 pytest -m sandbox_escape -v

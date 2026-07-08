@@ -1,0 +1,56 @@
+name: Sandbox Escape Tests (Linux)
+
+# Automated release gate for the adversarial sandbox-escape suite. Runs on every
+# version tag (v*) and on demand. GitHub's ubuntu runners ship Docker with a
+# Linux-containers backend natively, so the full escape suite executes (does not
+# skip) — the same tests the RELEASE_CHECKLIST calls for, without a manual run.
+#
+# Complements macos-sandbox.yml (manual macOS-backend certification). No database
+# is required — the suite only needs Docker.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox-escape-linux:
+    name: Sandbox Escape Tests (Linux / Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      PYTHONPATH: .
+      SANDBOX_ESCAPE_IMAGE: "python:3.11-alpine"
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install package + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Show Docker backend info
+        run: docker info --format 'OSType={{.OSType}} ServerVersion={{.ServerVersion}} Arch={{.Architecture}}'
+
+      - name: Pull escape test image
+        run: docker pull "$SANDBOX_ESCAPE_IMAGE"
+
+      - name: Run sandbox escape tests
+        run: pytest tests/sandbox/ -m sandbox_escape -v
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-sandbox-escape-results
+          path: tests/sandbox/sandbox_escape_results.json
+          if-no-files-found: warn
