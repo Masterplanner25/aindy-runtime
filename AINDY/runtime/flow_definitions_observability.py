@@ -166,7 +166,17 @@ def observability_rippletrace_node(state, context):
                 _generate_trace_insights,
             )
         ):
-            return {"status": "FAILURE", "error": "rippletrace domain not available"}
+            # RTR-7: the app-registered rippletrace domain is optional. The runtime
+            # owns a fully-capable equivalent (EventEdge + event_trace_service), so
+            # fall back to it instead of failing the endpoint. Only domain-specific
+            # `insights` are unavailable without the app (→ empty list).
+            from AINDY.platform_layer import event_trace_service as _ets
+
+            _build_trace_graph = _ets.build_trace_graph
+            _calculate_ripple_span = _ets.calculate_trace_span
+            _detect_root_event = _ets.detect_root_event
+            _detect_terminal_events = _ets.detect_terminal_events
+            _generate_trace_insights = lambda _db, _tid: []  # noqa: E731
 
         db = context.get("db")
         user_id = _uuid.UUID(str(context.get("user_id")))
