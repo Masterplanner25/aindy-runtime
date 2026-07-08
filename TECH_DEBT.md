@@ -77,6 +77,21 @@ on each advance.
   `agent_execution`) — so the ledger's `RecallUsed` entry is no longer silent. No schema change.
   Tests: `test_infinity_recall_event.py` (11). Docs: audit §4/§6/Gap 1/§16.
   **Remaining: Gaps 4, 5 + item-3.** Notify app-side `INFINITY-RUNTIME-HANDOFF-1`.
+- **2026-07-08 — Gap 5 (async jobs in the loop) CLOSED (opt-in).** Root cause found: the async
+  path already emits `EXECUTION_COMPLETED`, but the `execution.*` contract gate
+  (`system_event_service.py:448`, `ENFORCE_EXECUTION_CONTRACT`) raises it and
+  `_emit_async_system_event` swallows the error → never persists → no auto-capture. Fix
+  (`platform_layer/async_job_service.py`): gated by new flag `AINDY_ASYNC_JOB_LOOP_CLOSURE`
+  (default **off**), `_execute_job_inline` activates the async-execution context (mirroring
+  `flow_engine/runner.py`) so `EXECUTION_STARTED/COMPLETED/FAILED` persist and drive
+  auto-capture (jobs produce memory), plus `_emit_async_job_score` emits a per-job
+  `SCORE_COMPUTED` via the Gap-3 helper (`source="async_job"`). Recall-into-jobs deliberately
+  NOT wired (infra job bodies → weak recall relevance; `SCORE_COMPUTED` needs no recalled ids).
+  Default-off because it makes ALL job workers write memory + score (embedding/metric infra
+  jobs included) — opt in after soak. No schema change. Tests: `test_infinity_async_job_loop.py`
+  (6, incl. a mechanism test proving async-context activation lets `EXECUTION_COMPLETED` past
+  the gate). Docs: audit Gap 5/§16, `.env.example`. **Remaining: Gap 4 + item-3 aggregate
+  syscall.** Notify app-side `INFINITY-RUNTIME-HANDOFF-1`.
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 

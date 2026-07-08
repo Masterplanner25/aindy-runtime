@@ -352,7 +352,7 @@ post-execution decision engine.
 
 | Claim | Verdict |
 |---|---|
-| Every execution path produces memory | ⚠️ **Mostly.** Agent paths: yes. Flow paths via auto-capture: yes. Async jobs submitted via `sys.v1.job.submit`: **not automatically.** |
+| Every execution path produces memory | ✅ **Yes** (async jobs opt-in, 2026-07-08). Agent paths: yes. Flow paths via auto-capture: yes. Async jobs: yes when `AINDY_ASYNC_JOB_LOOP_CLOSURE` is enabled (default off pending soak). |
 | Every memory can influence recall | ✅ **Yes.** `MemoryScorer` uses `success_rate`, `impact_score`, `usage_count`, `recency` on every recall. |
 | Every recall can improve planning | ✅ **Yes** (opt-in, 2026-07-08). `generate_plan` recalls memory and injects it into the planner prompt (runtime-owned, gated by `AINDY_PLANNER_MEMORY_INJECTION`, default off); recall is emitted as `RECALL_USED`. Default-on pending app-side soak. |
 | Every plan runs through the same execution contract | ✅ **Yes** for agent runs. ⚠️ **Partially** for flows (no formal contract schema). |
@@ -407,10 +407,17 @@ There is no formal post-run decision: retry / ask_user / escalate / schedule_fol
 recommend. Fix: `_run_completion_hooks()` is the right attachment point; it needs a
 contract return type that the runtime acts on.
 
-**Gap 5 — Async jobs are outside the full loop.**
-Jobs submitted via `sys.v1.job.submit` do not automatically produce memory, trigger recall,
-or get scored. They are fire-and-forget with an audit log. Fix: job completion should emit
-a memory write and score event like the agent path does.
+**Gap 5 — Async jobs are outside the full loop. ✅ CLOSED 2026-07-08 (opt-in).**
+~~Jobs submitted via `sys.v1.job.submit` do not automatically produce memory, trigger recall,
+or get scored. They are fire-and-forget with an audit log.~~
+Closed: gated by `AINDY_ASYNC_JOB_LOOP_CLOSURE` (default off), `_execute_job_inline` now
+activates the async-execution context so its `EXECUTION_*` events (previously raised by the
+contract gate and swallowed by `_emit_async_system_event`) persist and drive auto-capture —
+jobs produce memory — and emits a per-job `SCORE_COMPUTED` record via the Gap-3 helper
+(`_emit_async_job_score`). Recall-into-jobs is deliberately **not** wired (job bodies are
+mostly infra — embedding ingestion, metric writing — where recall relevance is weak);
+`SCORE_COMPUTED` does not require recalled ids. Opt-in until soaked, since it makes all job
+workers write memory + score.
 
 ---
 
