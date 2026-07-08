@@ -46,6 +46,25 @@ runtime feature request, not an app edit.
 execution syscall exposed. Notify the app-side `INFINITY-RUNTIME-HANDOFF-1` reopen trigger
 on each advance.
 
+**Advance log:**
+- **2026-07-08 — Gap 2 (partial) + Gap 3 CLOSED.** Added the three loop-closure event
+  constants (`RECALL_USED`, `SCORE_COMPUTED`, `NEXT_ACTION_CHOSEN`) to
+  `core/system_event_types.py` — deliberately un-prefixed by `execution.` so they emit
+  outside the pipeline/async contract gate. Wired **Gap 3** end-to-end: new canonical
+  `core/execution_score.py` (`compute_execution_score` scalar 0–1 scorer flooring failure
+  statuses to 0.0 and holding a 0.6 success floor via `evaluate_result`; `emit_execution_score`
+  best-effort emitter) emits one `SCORE_COMPUTED` SystemEvent per finished execution carrying
+  the durable `{run_id, score, status, dimensions[, duration_ms]}` record — the event row IS
+  the record, **no schema table / no Alembic / no contract bump**. Emitted at the agent-run
+  terminal path (`agent_runtime/execution.py` `_emit_agent_run_score`, both `completed` and
+  `failed`, covers AGENT_FLOW + nodus_vm backends) and the generic `ExecutionLoop`
+  (`runtime/memory_loop.py`, trace-correlated, `source="execution_loop"`). Fills the
+  never-emitted `ANALYTICS_SCORE_UPDATED` slot the audit flagged. `SCORE_COMPUTED` is the
+  only fully-wired event of the three; `RECALL_USED` (Gap 1) and `NEXT_ACTION_CHOSEN` (Gap 4)
+  are constants-only pending their PRs. Tests: `test_infinity_score_event.py`. Docs:
+  `INFINITY_LOOP_AUDIT.md` §9/Gap 3. **Remaining: Gaps 1, 4, 5 + item-3 aggregate syscall.**
+  Notify app-side `INFINITY-RUNTIME-HANDOFF-1`.
+
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 
 **Source (2026-07-05):** a skeptical self-assessment of the runtime + apps against an

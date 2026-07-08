@@ -1,7 +1,7 @@
 ---
 title: "Infinity Loop Audit"
 api_version: "1.0"
-last_verified: "2026-07-05"
+last_verified: "2026-07-08"
 status: current
 owner: "platform-team"
 ---
@@ -147,7 +147,7 @@ inform planning — it only informs execution.
 | StepCompleted | ✅ | `SystemEventTypes.FLOW_NODE_COMPLETED` / `AGENT_STEP_COMPLETED` |
 | StepFailed | ✅ | `SystemEventTypes.FLOW_NODE_FAILED` / `AGENT_STEP_FAILED` |
 | MemoryWritten | ✅ | `SystemEventTypes.MEMORY_WRITE` |
-| ScoreComputed | ❌ | Not emitted. `MemoryLearningEngine` updates nodes silently. |
+| ScoreComputed | ✅ | `SystemEventTypes.SCORE_COMPUTED` emitted per run via `core/execution_score.py` (Gap 3, 2026-07-08). |
 | NextActionChosen | ❌ | Not emitted. Autonomy decisions emit `AUTONOMY_DECISION` but not as a post-run next-action. |
 | ExecutionCompleted | ✅ | `SystemEventTypes.EXECUTION_COMPLETED` |
 | ExecutionFailed | ✅ | `SystemEventTypes.EXECUTION_FAILED` |
@@ -219,6 +219,14 @@ writes plans to the memory graph.
 There is no single execution score record emitted after each run. `ANALYTICS_SCORE_UPDATED`
 exists in `SystemEventTypes` but is not consistently emitted. Cost, user satisfaction, and
 per-tool scores are absent.
+
+> **RESOLVED 2026-07-08 (Gap 3, INFINITY-RUNTIME-1).** An execution-level score record is
+> now emitted after each finished run: `core/execution_score.py` emits one `SCORE_COMPUTED`
+> SystemEvent carrying `{run_id, score, status, dimensions[, duration_ms]}` at the agent-run
+> terminal path (`agent_runtime/execution.py`, both `completed`/`failed`) and the generic
+> `ExecutionLoop` (`runtime/memory_loop.py`). The event row is the durable, trace-queryable
+> record — no schema table required. The scalar dimension is live (`compute_execution_score`);
+> cost / user-satisfaction / per-tool dimensions remain future `dimensions{}` entries.
 
 ---
 
@@ -339,7 +347,7 @@ post-execution decision engine.
 | Every memory can influence recall | ✅ **Yes.** `MemoryScorer` uses `success_rate`, `impact_score`, `usage_count`, `recency` on every recall. |
 | Every recall can improve planning | ❌ **No.** Recall improves execution context. It does not flow into the planner prompt unless the app-layer planner context provider explicitly includes memory. The link is broken at the architecture level. |
 | Every plan runs through the same execution contract | ✅ **Yes** for agent runs. ⚠️ **Partially** for flows (no formal contract schema). |
-| Every result is scored | ⚠️ **Partially.** Memory nodes used in execution are scored post-run via `MemoryLearningEngine`. The execution itself has no single score record. |
+| Every result is scored | ✅ **Yes** (execution-level, 2026-07-08). Each finished run emits one `SCORE_COMPUTED` record via `core/execution_score.py`; memory nodes are still separately scored by `MemoryLearningEngine`. Multi-dimension (cost/satisfaction) remains future work. |
 | Every score changes future behavior | ✅ **Yes** — but only for memory retrieval ranking. Scores do not feed back into planning, tool selection, or policy updates. |
 
 ---
@@ -375,11 +383,12 @@ planner context provider must explicitly query and inject memory into the system
 The learning loop improves but cannot explain itself. Fix: add these as named system events
 with payloads describing what was recalled, what score was produced, and what was decided.
 
-**Gap 3 — No execution-level score record.**
-`MemoryLearningEngine` scores recalled memory nodes, not the execution as a whole.
-There is no single `{run_id, score, dimensions}` record written after each run.
-`ANALYTICS_SCORE_UPDATED` exists in `SystemEventTypes` but is not consistently emitted.
-Fix: emit a scored execution summary event at run completion.
+**Gap 3 — No execution-level score record. ✅ CLOSED 2026-07-08.**
+~~`MemoryLearningEngine` scores recalled memory nodes, not the execution as a whole.
+There is no single `{run_id, score, dimensions}` record written after each run.~~
+Closed: `core/execution_score.py` emits a single `SCORE_COMPUTED` SystemEvent per finished
+execution (`{run_id, score, status, dimensions[, duration_ms]}`) at agent-run completion and
+in the generic `ExecutionLoop`. The event row is the durable record — no schema table.
 
 **Gap 4 — Next-action engine does not exist as a runtime primitive.**
 After every run the system records what happened. What should happen next is determined

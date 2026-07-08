@@ -214,6 +214,7 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
             reset_parent_event_id(parent_token)
 
         db.refresh(run)
+        _emit_agent_run_score(run, db=db, user_id=user_db_id)
         if run.status == "completed":
             compat._run_completion_hooks(
                 getattr(run, "agent_type", "default"),
@@ -256,6 +257,43 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
         except Exception:
             logger.exception("[AgentRuntime] failed to emit required error event for %s", run_id)
         return None
+
+
+def _emit_agent_run_score(run, *, db: Session, user_id: str) -> None:
+    """Emit a per-run SCORE_COMPUTED record for a finished agent run.
+
+    Covers the terminal ``completed``/``failed`` states reached on the normal
+    (non-exception) path. INFINITY-RUNTIME-1 Gap 3. Best-effort.
+    """
+    status = getattr(run, "status", None)
+    if status not in ("completed", "failed"):
+        return
+    try:
+        from AINDY.core.execution_score import compute_execution_score, emit_execution_score
+
+        duration_ms = None
+        started_at = getattr(run, "started_at", None)
+        completed_at = getattr(run, "completed_at", None)
+        if started_at and completed_at:
+            duration_ms = (completed_at - started_at).total_seconds() * 1000
+
+        score = compute_execution_score(status=status, result=getattr(run, "result", None))
+        emit_execution_score(
+            db=db,
+            run_id=str(run.id),
+            score=score,
+            status=status,
+            trace_id=getattr(run, "trace_id", None) or get_trace_id(),
+            user_id=user_id,
+            duration_ms=duration_ms,
+            dimensions={
+                "steps_completed": getattr(run, "steps_completed", None),
+                "steps_total": getattr(run, "steps_total", None),
+            },
+            source="agent",
+        )
+    except Exception:  # best-effort; scoring must not break completion
+        logger.debug("[AgentRuntime] score emit skipped for run %s", getattr(run, "id", "?"), exc_info=True)
 
 
 def _build_execution_memory_context(*, objective: str, plan: dict, user_id: str, trace_id: str | None, db: Session) -> dict:
