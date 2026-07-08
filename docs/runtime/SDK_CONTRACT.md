@@ -116,12 +116,30 @@ next major version:
 
 Experimental syscalls (`stable=False`) may change between minor releases.
 
-`sys.v1.execution.get` (capability `execution.read`) backs `client.execution.get()`.
-It is read-only and tenant-scoped: it only returns ExecutionUnit rows owned by the
-caller's tenant. Capability grant through `POST /platform/syscall` follows the same
-rule as every other syscall — JWT (`/auth/login`) callers receive the default
-capability set (which includes `execution.read`); platform-API-key callers must
-carry the `execution.read` scope for the intersection to grant it.
+### Capability grant through `POST /platform/syscall`
+
+The dispatch route grants **exactly the requested syscall's own required
+capability** (least-privilege, one per dispatch). JWT (`/auth/login`) callers
+receive it without a scope check. Platform-API-key callers must additionally
+carry an authorizing scope (or `platform.admin`):
+
+| Capability | Backing SDK call | API-key scope |
+|---|---|---|
+| `memory.read` | `client.memory.read/search/list/tree/trace` | `memory.read` or `memory.write` |
+| `memory.write` | `client.memory.write` | `memory.write` |
+| `flow.run` | `client.flow.run` | `flow.execute` |
+| `event.emit` | `client.events.emit` | `event.emit` |
+| `execution.read` | `client.execution.get` | `execution.read` |
+
+`client.flow.run` (`sys.v1.flow.run`) is authorized by the **`flow.execute`**
+scope — the same scope that gates `POST /platform/flows/{name}/run`. `client.events.emit`
+(`sys.v1.event.emit`) requires the **`event.emit`** scope (added 2026-07-07);
+emitting can resume waiting flow/agent runs, so it is a side-effecting grant.
+`client.execution.get` (`sys.v1.execution.get`) is read-only and tenant-scoped —
+only ExecutionUnit rows owned by the caller's tenant — and requires the
+`execution.read` scope. `client.nodus.*` uses the dedicated `/platform/nodus/*`
+routes, not syscall dispatch. Off-surface syscalls (`agent.*`, `job.submit`,
+`nodus.execute`, admin) are not dispatchable through this public route.
 
 ---
 

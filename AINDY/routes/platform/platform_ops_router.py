@@ -40,6 +40,57 @@ def _execute_platform_ops(request: Request, route_name: str, handler, *, db: Ses
     return data
 
 
+# ── Public /platform/syscall dispatch surface (SDK-SYSCALL-GRANT-1) ────────────
+# Maps each grantable syscall capability to the set of API-key scopes that
+# authorize it (any one suffices; platform.admin always suffices). A capability
+# absent from this map is NOT dispatchable via the public POST /platform/syscall
+# route — off-surface syscalls (agent.*, job.submit, nodus.execute, admin) are
+# reached through their own dedicated routes, never this one. The grant is
+# least-privilege: a dispatch is authorized for exactly the requested syscall's
+# own required capability, nothing more (the dispatcher enforces a single
+# capability per syscall).
+_DISPATCH_CAPABILITY_SCOPES: dict[str, set[str]] = {
+    "memory.read":    {Scopes.MEMORY_READ, Scopes.MEMORY_WRITE},
+    "memory.search":  {Scopes.MEMORY_READ, Scopes.MEMORY_WRITE},
+    "memory.write":   {Scopes.MEMORY_WRITE},
+    "execution.read": {Scopes.EXECUTION_READ},
+    "flow.run":       {Scopes.FLOW_EXECUTE},
+    "event.emit":     {Scopes.EVENT_EMIT},
+}
+
+
+def _resolve_dispatch_capabilities(syscall_name: str, current_user: dict) -> list[str]:
+    """Least-privilege capability grant for a POST /platform/syscall dispatch.
+
+    Grants exactly the requested syscall's own required capability, and only when
+    that capability is on the public dispatch surface (``_DISPATCH_CAPABILITY_SCOPES``).
+    API-key callers must additionally carry one of the authorizing scopes (or
+    ``platform.admin``); JWT callers are trusted platform users and are not
+    scope-gated. Unknown or off-surface syscalls yield an empty grant, so the
+    dispatcher returns its canonical error (404 unknown syscall / 403 permission
+    denied) rather than this route inventing one.
+    """
+    from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY
+
+    entry = SYSCALL_REGISTRY.get(syscall_name)
+    required_cap = entry.capability if entry is not None else None
+    authorizing = _DISPATCH_CAPABILITY_SCOPES.get(required_cap or "")
+    if not authorizing:
+        # Unknown syscall, or valid but off the public dispatch surface.
+        return []
+    if current_user.get("auth_type") == "api_key":
+        scopes = set(current_user.get("api_key_scopes") or [])
+        if Scopes.PLATFORM_ADMIN not in scopes and not (authorizing & scopes):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"API key scope {sorted(authorizing)} required "
+                    f"for syscall '{syscall_name}'"
+                ),
+            )
+    return [required_cap]
+
+
 class RotateSecretKeyRequest(BaseModel):
     new_key: str
 
@@ -165,30 +216,9 @@ def list_syscalls(request: Request, version: Optional[str] = None, current_user:
 def dispatch_syscall(request: Request, body: SyscallDispatchRequest, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     def handler(ctx):
         from AINDY.kernel.syscall_dispatcher import get_dispatcher, make_syscall_ctx_from_tool
-        from AINDY.kernel.syscall_registry import DEFAULT_NODUS_CAPABILITIES
 
         user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
-        if current_user.get("auth_type") == "api_key":
-            api_key_scopes = set(current_user.get("api_key_scopes") or [])
-            # Enforce domain-level scope for API key callers based on syscall name prefix.
-            _SYSCALL_REQUIRED_SCOPE: dict[str, str] = {
-                "sys.v1.memory.": Scopes.MEMORY_WRITE,
-                "sys.v1.flow.": Scopes.FLOW_EXECUTE,
-                "sys.v1.agent.": Scopes.AGENT_RUN,
-                "sys.v1.webhook.": Scopes.WEBHOOK_MANAGE,
-            }
-            if Scopes.PLATFORM_ADMIN not in api_key_scopes:
-                for prefix, required in _SYSCALL_REQUIRED_SCOPE.items():
-                    if body.name.startswith(prefix):
-                        if required not in api_key_scopes:
-                            raise HTTPException(
-                                status_code=403,
-                                detail=f"API key scope '{required}' required for syscall '{body.name}'",
-                            )
-                        break
-            capabilities = [s for s in api_key_scopes if s in DEFAULT_NODUS_CAPABILITIES]
-        else:
-            capabilities = list(DEFAULT_NODUS_CAPABILITIES)
+        capabilities = _resolve_dispatch_capabilities(body.name, current_user)
         syscall_ctx = make_syscall_ctx_from_tool(user_id=user_id, capabilities=capabilities)
         result = get_dispatcher().dispatch(body.name, body.payload, syscall_ctx)
         if result["status"] == "error":

@@ -153,34 +153,20 @@ def _make_syscall_user(scopes: list[str]) -> dict:
     return {"auth_type": "api_key", "api_key_scopes": scopes, "sub": str(uuid.uuid4()), "user_id": str(uuid.uuid4())}
 
 
-def _dispatch(syscall_name: str, user: dict):
-    """Call the dispatch_syscall handler fn directly with a mocked dispatcher."""
-    from AINDY.routes.platform.platform_ops_router import dispatch_syscall
-    from AINDY.routes.platform.schemas import SyscallDispatchRequest
+def _dispatch(syscall_name: str, user: dict) -> list[str]:
+    """Resolve the least-privilege capability grant for a dispatch, via the real
+    router helper (SDK-SYSCALL-GRANT-1). Returns the granted capability list;
+    raises HTTPException(403) when an API-key lacks an authorizing scope."""
+    from AINDY.routes.platform.platform_ops_router import _resolve_dispatch_capabilities
 
-    body = SyscallDispatchRequest(name=syscall_name, payload={})
+    return _resolve_dispatch_capabilities(syscall_name, user)
 
-    # Simulate the inner handler running with a mock dispatcher
-    from AINDY.kernel.syscall_registry import DEFAULT_NODUS_CAPABILITIES
-    from AINDY.auth.api_key_auth import Scopes
 
-    api_key_scopes = set(user.get("api_key_scopes") or [])
-    _SYSCALL_REQUIRED_SCOPE = {
-        "sys.v1.memory.": Scopes.MEMORY_WRITE,
-        "sys.v1.flow.": Scopes.FLOW_EXECUTE,
-        "sys.v1.agent.": Scopes.AGENT_RUN,
-        "sys.v1.webhook.": Scopes.WEBHOOK_MANAGE,
-    }
-    if Scopes.PLATFORM_ADMIN not in api_key_scopes:
-        for prefix, required in _SYSCALL_REQUIRED_SCOPE.items():
-            if body.name.startswith(prefix):
-                if required not in api_key_scopes:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"API key scope '{required}' required for syscall '{body.name}'",
-                    )
-                break
+def _jwt_user() -> dict:
+    return {"auth_type": "jwt", "sub": str(uuid.uuid4()), "user_id": str(uuid.uuid4())}
 
+
+# --- memory: write requires write scope; read honors read-or-write scope -------
 
 def test_dispatch_memory_write_requires_memory_write_scope():
     user = _make_syscall_user(["memory.read"])  # has read but not write
@@ -191,18 +177,94 @@ def test_dispatch_memory_write_requires_memory_write_scope():
 
 def test_dispatch_memory_write_passes_with_correct_scope():
     user = _make_syscall_user(["memory.write"])
-    _dispatch("sys.v1.memory.write", user)  # must not raise
+    assert _dispatch("sys.v1.memory.write", user) == ["memory.write"]
 
 
-def test_dispatch_flow_execute_requires_flow_execute_scope():
-    user = _make_syscall_user(["flow.read"])
+def test_dispatch_memory_read_honors_read_scope():
+    user = _make_syscall_user(["memory.read"])
+    assert _dispatch("sys.v1.memory.read", user) == ["memory.read"]
+
+
+def test_dispatch_memory_read_honors_write_scope():
+    # write implies read — a write-scoped key can still read
+    user = _make_syscall_user(["memory.write"])
+    assert _dispatch("sys.v1.memory.read", user) == ["memory.read"]
+
+
+def test_dispatch_memory_read_rejected_without_memory_scope():
+    user = _make_syscall_user(["flow.execute"])
     with pytest.raises(HTTPException) as exc_info:
-        _dispatch("sys.v1.flow.execute", user)
+        _dispatch("sys.v1.memory.read", user)
     assert exc_info.value.status_code == 403
 
 
-def test_dispatch_platform_admin_bypasses_all_domain_scope():
+# --- flow.run: the previously-ungrantable capability (SDK-SYSCALL-GRANT-1) ------
+
+def test_dispatch_flow_run_granted_for_jwt():
+    assert _dispatch("sys.v1.flow.run", _jwt_user()) == ["flow.run"]
+
+
+def test_dispatch_flow_run_requires_flow_execute_scope_for_api_key():
+    user = _make_syscall_user(["flow.read"])  # read but not execute
+    with pytest.raises(HTTPException) as exc_info:
+        _dispatch("sys.v1.flow.run", user)
+    assert exc_info.value.status_code == 403
+
+
+def test_dispatch_flow_run_granted_with_flow_execute_scope():
+    user = _make_syscall_user(["flow.execute"])
+    assert _dispatch("sys.v1.flow.run", user) == ["flow.run"]
+
+
+# --- event.emit: now grantable to API-keys via the event.emit scope ------------
+
+def test_dispatch_event_emit_granted_for_jwt():
+    assert _dispatch("sys.v1.event.emit", _jwt_user()) == ["event.emit"]
+
+
+def test_dispatch_event_emit_requires_event_emit_scope_for_api_key():
+    user = _make_syscall_user(["memory.write"])  # no event.emit scope
+    with pytest.raises(HTTPException) as exc_info:
+        _dispatch("sys.v1.event.emit", user)
+    assert exc_info.value.status_code == 403
+
+
+def test_dispatch_event_emit_granted_with_event_emit_scope():
+    user = _make_syscall_user(["event.emit"])
+    assert _dispatch("sys.v1.event.emit", user) == ["event.emit"]
+
+
+# --- execution.read: unchanged — API-key needs the execution.read scope --------
+
+def test_dispatch_execution_get_requires_execution_read_scope():
+    user = _make_syscall_user(["memory.read"])
+    with pytest.raises(HTTPException) as exc_info:
+        _dispatch("sys.v1.execution.get", user)
+    assert exc_info.value.status_code == 403
+
+
+def test_dispatch_execution_get_granted_with_execution_read_scope():
+    user = _make_syscall_user(["execution.read"])
+    assert _dispatch("sys.v1.execution.get", user) == ["execution.read"]
+
+
+# --- off-surface + admin -------------------------------------------------------
+
+def test_dispatch_offsurface_syscall_grants_nothing():
+    # agent / job / nodus syscalls are not on the public dispatch surface;
+    # they grant no capability and the dispatcher denies them downstream.
+    admin = _make_syscall_user(["platform.admin"])
+    assert _dispatch("sys.v1.agent.run", admin) == []
+    assert _dispatch("sys.v1.job.submit", admin) == []
+    assert _dispatch("sys.v1.nodus.execute", admin) == []
+
+
+def test_dispatch_unknown_syscall_grants_nothing():
+    assert _dispatch("sys.v1.bogus.call", _jwt_user()) == []
+
+
+def test_dispatch_platform_admin_bypasses_scope_gate():
     user = _make_syscall_user(["platform.admin"])
-    _dispatch("sys.v1.memory.write", user)  # must not raise
-    _dispatch("sys.v1.flow.execute", user)  # must not raise
-    _dispatch("sys.v1.agent.run", user)     # must not raise
+    assert _dispatch("sys.v1.memory.write", user) == ["memory.write"]
+    assert _dispatch("sys.v1.flow.run", user) == ["flow.run"]
+    assert _dispatch("sys.v1.event.emit", user) == ["event.emit"]
