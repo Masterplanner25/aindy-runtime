@@ -3217,10 +3217,38 @@ are scheduled. RTR-4/6/7 — when their named gaps block an app phase.
 
 ## SDK-SYSCALL-GRANT-1 — `/platform/syscall` under-grants capabilities to SDK callers
 
-**Status:** Open (2026-07-05)
+**Status:** CLOSED 2026-07-07 (PR pending)
 
-**Problem:** `dispatch_syscall` (`AINDY/routes/platform/platform_ops_router.py`)
-grants a caller only the capabilities present in `DEFAULT_NODUS_CAPABILITIES`
+**Resolution:** `dispatch_syscall` no longer grants a fixed
+`DEFAULT_NODUS_CAPABILITIES` list. `_resolve_dispatch_capabilities`
+(`platform_ops_router.py`) now derives the grant from the **requested syscall's
+own `entry.capability`**, granting exactly that one capability (least-privilege)
+when it is on the governed public **dispatch surface** `_DISPATCH_CAPABILITY_SCOPES`
+= `{memory.read, memory.search, memory.write, execution.read, flow.run, event.emit}`.
+API-key callers must carry an authorizing scope (or `platform.admin`); JWT callers
+are trusted and not scope-gated. Off-surface/unknown syscalls grant nothing → the
+dispatcher returns its canonical 404/403. The old prefix-based domain gate
+(`_SYSCALL_REQUIRED_SCOPE`) was replaced by the capability-based map (more precise —
+the prefix gate couldn't gate `execution.*` and over-required `memory.write` for reads).
+
+Both named gaps fixed: **`flow.run`** is now grantable (authorized by the existing
+`flow.execute` scope — the same scope that gates `POST /platform/flows/{name}/run`,
+so a flow runs under one consistent grant regardless of entrypoint); **`event.emit`**
+is grantable to API-keys via a **new `Scopes.EVENT_EMIT` scope** (added to
+`api_key_auth.py` + `Scopes.ALL`; strictly additive — API-keys couldn't emit at all
+before, so no regression; JWT keeps it by default). Memory reads now honor the
+`memory.read` scope (previously the prefix gate required `memory.write` for all
+`memory.*` — a read-only key couldn't read); `memory.write` scope still implies read.
+
+Cross-repo: the SDK README documented a nonexistent `flow.run` scope (key creation
+would 422 it) and a bogus `syscall.*` scope — corrected to `flow.execute` /
+`platform.admin`. Docs updated: `SYSCALL_REFERENCE.md` §Scope requirements,
+`SDK_CONTRACT.md` §Capability grant. Tests: real `_resolve_dispatch_capabilities`
+coverage in `test_tier3_structural.py` (flow.run/event.emit/execution.read/memory
+grants + scope rejections + off-surface + admin bypass). Not a schema change.
+
+**Problem (historical):** `dispatch_syscall` (`AINDY/routes/platform/platform_ops_router.py`)
+granted a caller only the capabilities present in `DEFAULT_NODUS_CAPABILITIES`
 (`memory.read`, `memory.write`, `memory.search`, `event.emit`, `execution.read`).
 JWT callers receive that full set; platform-API-key callers receive the
 intersection of the set with their key scopes (`[s for s in api_key_scopes if s

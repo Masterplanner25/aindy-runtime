@@ -444,19 +444,33 @@ SDK's `client.execution.get()`.
 
 ---
 
-## Scope requirements
+## Scope requirements (`POST /platform/syscall`)
 
-When calling syscalls via the API (not from within a Nodus script), the API key must carry
-the appropriate scope. The domain → scope mapping:
+When dispatching a syscall over the API (not from within a Nodus script), the route grants
+**exactly the requested syscall's own required capability** — least-privilege, one capability
+per dispatch. Only capabilities on the public **dispatch surface** below are grantable this
+way; every other syscall (`agent.*`, `job.submit`, `nodus.execute`, admin) is reached through
+its own dedicated route, never `/platform/syscall`.
 
-| Syscall prefix | Required scope |
-|----------------|---------------|
-| `sys.v1.memory.*` | `memory:write` |
-| `sys.v1.flow.*` | `flow:execute` |
-| `sys.v1.agent.*` | `agent:run` |
-| `sys.v1.webhook.*` | `webhook:manage` |
+**JWT callers** (`/auth/login`) are trusted platform users and receive the requested
+capability without a scope check. **Platform-API-key callers** must additionally carry one of
+the authorizing scopes below (or `platform.admin`, which bypasses the scope gate):
 
-`sys.v1.event.*`, `sys.v1.nodus.*`, `sys.v1.job.*`, and `sys.v1.execution.*` are enforced
-at the capability level in the calling context's `SyscallContext.capabilities`. A platform
-API key must additionally carry the `execution.read` scope for the dispatch route to grant
-`execution.read`; JWT callers receive it in the default capability set.
+| Syscall capability | Backing syscalls | Authorizing API-key scope(s) |
+|---|---|---|
+| `memory.read` | `sys.v1.memory.read` / `.search` / `.list` / `.tree` / `.trace` | `memory.read` **or** `memory.write` |
+| `memory.write` | `sys.v1.memory.write` | `memory.write` |
+| `flow.run` | `sys.v1.flow.run` | `flow.execute` |
+| `event.emit` | `sys.v1.event.emit` | `event.emit` |
+| `execution.read` | `sys.v1.execution.get` | `execution.read` |
+
+Notes:
+- `memory.write` scope implies read — a write-scoped key can also read/search.
+- `flow.run` is authorized by the **`flow.execute`** scope — the same scope that gates the
+  dedicated `POST /platform/flows/{name}/run` route, so a flow runs under one consistent grant
+  regardless of entrypoint.
+- `event.emit` is a first-class scope (added 2026-07-07). Emitting an event can resume waiting
+  flow/agent runs, so it is a side-effecting grant, not read-only; API keys must opt in by
+  carrying the scope. JWT callers receive it by default.
+- A dispatch for an unknown or off-surface syscall is granted no capability; the dispatcher
+  then returns its canonical `404 Unknown syscall` / `403 Permission denied`.
