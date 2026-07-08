@@ -38,6 +38,7 @@ def scan_and_resume_stranded_flows(db) -> int:
     from AINDY.db.models.flow_run import FlowRun
     from AINDY.db.models.system_event import SystemEvent
     from AINDY.db.models.waiting_flow_run import WaitingFlowRun
+    from AINDY.kernel.condition_codes import FlowRunStatus
     from AINDY.kernel.scheduler_engine import get_scheduler_engine
 
     now = datetime.now(timezone.utc)
@@ -66,7 +67,7 @@ def scan_and_resume_stranded_flows(db) -> int:
             logger.warning("[resume_watchdog] FlowRun query failed for %s: %s", run_id, exc)
             continue
 
-        if flow_run is None or flow_run.status != "waiting":
+        if flow_run is None or flow_run.status != FlowRunStatus.WAITING.value:
             continue
 
         wait_for_event = getattr(row, "event_type", None) or getattr(flow_run, "waiting_for", None)

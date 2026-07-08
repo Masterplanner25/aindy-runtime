@@ -80,14 +80,26 @@ class FlowRunStatus(str, Enum):
     Lifecycle states for a FlowRun entity.
 
     Stable surface — returned in flow execution API responses.
-    Terminal states: COMPLETED, FAILED.
-    Suspendable state: WAITING (WAIT node entered; resumes on matching event).
+
+    Active states: RUNNING (freshly started), EXECUTING (claimed off a WAIT for a
+    resume, or actively stepping). Suspendable state: WAITING (WAIT node entered;
+    resumes on matching event). Terminal states: SUCCESS, FAILED.
+
+    RTR-3 (2026-07-08): this enum now mirrors the values the flow engine actually
+    writes. Terminal success is ``SUCCESS`` (``runner_completion``); ``EXECUTING``
+    is written by the resume claim (``runner_steps`` / ``flow_run_rehydration``).
+    ``COMPLETED`` is a legacy alias the runtime no longer writes — retained so the
+    stable enum surface is not narrowed. Use ``FLOW_TERMINAL_STATUSES`` /
+    ``is_flow_terminal`` rather than comparing against a single literal.
     """
 
     RUNNING = "running"
+    EXECUTING = "executing"
     WAITING = "waiting"
-    COMPLETED = "completed"
+    SUCCESS = "success"
     FAILED = "failed"
+    # Legacy alias — never written by the runtime; terminal success is SUCCESS.
+    COMPLETED = "completed"
 
 
 class AgentRunStatus(str, Enum):
@@ -96,7 +108,12 @@ class AgentRunStatus(str, Enum):
 
     Stable surface — returned in agent execution API responses.
     Terminal states: COMPLETED, FAILED, CANCELLED, VERIFY_FAILED.
-    Intermediate: DELEGATED (sub-agent dispatched; not yet terminal).
+    Intermediate: DELEGATED (sub-agent dispatched; not yet terminal),
+    WAITING (parked mid-plan on a WAIT step; resumes on the matching event).
+
+    RTR-3 (2026-07-08): WAITING added to mirror the value the VM-backed path
+    actually writes when parking a run (``AgentRun.wait_state`` is set alongside
+    it) and that ``agent_run_rehydration`` queries on restart.
 
     CANCELLED (AGENT-HARDEN-1): operator-driven terminal state set by
     ``sys.v1.agent.cancel``. A non-terminal run is flipped to CANCELLED via an
@@ -111,11 +128,110 @@ class AgentRunStatus(str, Enum):
     PENDING_APPROVAL = "pending_approval"
     APPROVED = "approved"
     EXECUTING = "executing"
+    WAITING = "waiting"
     DELEGATED = "delegated"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
     VERIFY_FAILED = "verify_failed"
+
+
+# ── Run-status classification (RTR-3) ─────────────────────────────────────────
+#
+# Single source of truth for "is this run finished?" and for mapping the two
+# lifecycles onto each other. An AgentRun mirrors a FlowRun (RTR-3: the FlowRun is
+# the de-facto execution authority; the AgentRun is a projection linked by a
+# nullable ``flow_run_id``). Recovery/reconciliation code must classify status via
+# these helpers instead of hardcoding a single literal — the historical
+# ``status != "executing"`` guard silently no-op'd recovery for any run parked in
+# ``delegated`` / ``waiting`` / ``approved``, stranding it forever.
+
+AGENT_TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {
+        AgentRunStatus.COMPLETED.value,
+        AgentRunStatus.FAILED.value,
+        AgentRunStatus.CANCELLED.value,
+        AgentRunStatus.VERIFY_FAILED.value,
+    }
+)
+"""AgentRun states that are final — recovery leaves these untouched."""
+
+FLOW_TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {
+        FlowRunStatus.SUCCESS.value,
+        FlowRunStatus.FAILED.value,
+        # Legacy terminal literal — never written by the runtime, honored for reads.
+        FlowRunStatus.COMPLETED.value,
+    }
+)
+"""FlowRun states that are final — recovery leaves these untouched."""
+
+AGENT_ACTIVE_STATUSES: frozenset[str] = frozenset(
+    {
+        AgentRunStatus.PENDING_APPROVAL.value,
+        AgentRunStatus.APPROVED.value,
+        AgentRunStatus.EXECUTING.value,
+        AgentRunStatus.DELEGATED.value,
+        AgentRunStatus.WAITING.value,
+    }
+)
+"""AgentRun states that are not terminal — a stuck one of these is recoverable."""
+
+FLOW_ACTIVE_STATUSES: frozenset[str] = frozenset(
+    {
+        FlowRunStatus.RUNNING.value,
+        FlowRunStatus.EXECUTING.value,
+        FlowRunStatus.WAITING.value,
+    }
+)
+"""FlowRun states that are not terminal."""
+
+# Deterministic terminal correspondence between the two lifecycles. Used by
+# reconcilers that must reflect one side's terminal state onto the other.
+_FLOW_TO_AGENT_STATUS: dict[str, str] = {
+    FlowRunStatus.RUNNING.value: AgentRunStatus.EXECUTING.value,
+    FlowRunStatus.EXECUTING.value: AgentRunStatus.EXECUTING.value,
+    FlowRunStatus.WAITING.value: AgentRunStatus.WAITING.value,
+    FlowRunStatus.SUCCESS.value: AgentRunStatus.COMPLETED.value,
+    FlowRunStatus.COMPLETED.value: AgentRunStatus.COMPLETED.value,
+    FlowRunStatus.FAILED.value: AgentRunStatus.FAILED.value,
+}
+
+_AGENT_TO_FLOW_STATUS: dict[str, str] = {
+    AgentRunStatus.PENDING_APPROVAL.value: FlowRunStatus.RUNNING.value,
+    AgentRunStatus.APPROVED.value: FlowRunStatus.RUNNING.value,
+    AgentRunStatus.EXECUTING.value: FlowRunStatus.EXECUTING.value,
+    AgentRunStatus.DELEGATED.value: FlowRunStatus.EXECUTING.value,
+    AgentRunStatus.WAITING.value: FlowRunStatus.WAITING.value,
+    AgentRunStatus.COMPLETED.value: FlowRunStatus.SUCCESS.value,
+    AgentRunStatus.FAILED.value: FlowRunStatus.FAILED.value,
+    AgentRunStatus.CANCELLED.value: FlowRunStatus.FAILED.value,
+    AgentRunStatus.VERIFY_FAILED.value: FlowRunStatus.FAILED.value,
+}
+
+
+def is_agent_terminal(status: str | None) -> bool:
+    """True when an AgentRun status is final (safe to leave to recovery)."""
+    return status in AGENT_TERMINAL_STATUSES
+
+
+def is_flow_terminal(status: str | None) -> bool:
+    """True when a FlowRun status is final."""
+    return status in FLOW_TERMINAL_STATUSES
+
+
+def flow_status_to_agent(flow_status: str | None) -> str:
+    """Map a FlowRun status onto its AgentRun equivalent (defaults to failed)."""
+    if flow_status is None:
+        return AgentRunStatus.FAILED.value
+    return _FLOW_TO_AGENT_STATUS.get(flow_status, AgentRunStatus.FAILED.value)
+
+
+def agent_status_to_flow(agent_status: str | None) -> str:
+    """Map an AgentRun status onto its FlowRun equivalent (defaults to failed)."""
+    if agent_status is None:
+        return FlowRunStatus.FAILED.value
+    return _AGENT_TO_FLOW_STATUS.get(agent_status, FlowRunStatus.FAILED.value)
 
 
 class DependencyStatus(str, Enum):

@@ -465,12 +465,20 @@ _STABLE_CONDITION_CLASSIFICATIONS = [
     "startup_fatal",
 ]
 
-_STABLE_FLOW_RUN_STATUSES = ["running", "waiting", "completed", "failed"]
+_STABLE_FLOW_RUN_STATUSES = [
+    "running",
+    "executing",  # RTR-3 — resume-claim / active-stepping state (was written, now named)
+    "waiting",
+    "success",  # RTR-3 — real terminal-success literal the runner writes
+    "failed",
+    "completed",  # legacy alias, retained on the stable surface
+]
 
 _STABLE_AGENT_RUN_STATUSES = [
     "pending_approval",
     "approved",
     "executing",
+    "waiting",  # RTR-3 — VM WAIT park state (was written, now named)
     "delegated",
     "completed",
     "failed",

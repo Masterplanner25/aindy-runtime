@@ -45,8 +45,10 @@ def rehydrate_waiting_agent_runs(
         _register_agent_wait,
     )
 
+    from AINDY.kernel.condition_codes import AgentRunStatus
+
     scheduler = get_scheduler_engine()
-    query = db.query(AgentRun).filter(AgentRun.status == "waiting")
+    query = db.query(AgentRun).filter(AgentRun.status == AgentRunStatus.WAITING.value)
     scoped = {str(r) for r in (run_ids or []) if r}
     if scoped:
         query = query.filter(AgentRun.id.in_(scoped))
