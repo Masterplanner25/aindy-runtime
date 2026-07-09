@@ -2466,6 +2466,41 @@ but that is deferred and out of scope here.
 
 ---
 
+## INFINITY-COMPLETION-HOOK-BOUNDARY-1 — First-party completion hooks got `db=None` + a redacted run (post-completion enforcement silently dead)
+
+**Status:** CLOSED (2026-07-08). Runtime counterpart to the app handoff
+`aindy-apps-monolith` PR #64.
+
+**Problem:** every agent-completion hook is invoked via
+`registry.run_agent_completion_hooks` → `_sanitized_extension_input(context)`, and the
+extension-boundary sanitizer (`platform_layer/extension_boundary.py`) **drops `db`**
+(blocked root key) and **redacts the `run` ORM** to `{"_redacted_type": "AgentRun"}`.
+`agent_completion_hook` was also **not** in `_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`, so a
+module-resolvable first-party hook was subprocess-isolated on top. So the app's
+`handle_agent_run_completed` received `db=None` + a run with no id and hit its
+`if run is None or db is None: return None` guard — the post-agent-completion Infinity loop
+enforcement was **silently dead**. **Not a 1.6.0 regression:** the sanitize landed
+`2026-05-20` (commit `93d9c84`, in v1.0.0+). It only became *visible* in 1.6.0 because
+INFINITY-RUNTIME-1 **Gap 4** made `execution.py:220` start *consuming* the hook's return
+(NextAction) — before Gap 4 the return was discarded, so `db=None` went unnoticed. The
+sibling stateful surfaces (`run_tool_provider`/`planner_context`) also sanitize but survive
+because they read live *registry* state, not the DB.
+
+**Fix applied (boundary-preserving, Option A):** (1) the completion-hook context at
+`execution.py:220` now carries `"run_id": str(run.id)` — a string, so it **survives** the
+sanitizer; a first-party hook re-fetches the run by id with its own session. (2)
+`agent_completion_hook` added to `_STATEFUL_IN_PROCESS_CALLBACK_SURFACES` so it runs
+in-process (can open a session / reach live app state) instead of subprocess-isolated. The
+sanitizer is unchanged — the runtime still **never** leaks a `db`/session/ORM handle across
+the boundary (only a string id crosses). Registration stays capability-gated to trusted
+extensions. Tests: `test_completion_hook_boundary.py` (run_id survives / db+run stripped;
+surface runs in-process; end-to-end through `run_agent_completion_hooks` with return
+propagation — the sanitized path no prior test exercised). **App follow-up:** update
+`handle_agent_run_completed` to re-fetch by `run_id` with its own `SessionLocal` (the parked
+`feat/infinity-next-action-ledger` branch); ships in the next runtime release (main ahead of v1.6.0).
+
+---
+
 ## PLANNER-SUBPROC-1 — Agent planner broken on Linux/Docker (run-tool provider isolated into a stateless subprocess)
 
 **Status:** CLOSED (2026-06-27)

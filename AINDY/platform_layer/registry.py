@@ -363,7 +363,15 @@ def _callback_source_path(handler: Handler) -> str | None:
 # capability providers, trigger evaluators) keep subprocess isolation. See
 # PLANNER-SUBPROC-1.
 _STATEFUL_IN_PROCESS_CALLBACK_SURFACES: frozenset[str] = frozenset(
-    {"run_tool_provider", "planner_context"}
+    # These surfaces read live in-process state (registry/DB) that a bare
+    # subprocess (cwd = read-only site-packages, no app manifest) can't
+    # reconstruct — so they run in-process rather than isolated. `run_tool_provider`
+    # / `planner_context` need the live TOOL_REGISTRY / planner state
+    # (PLANNER-SUBPROC-1). `agent_completion_hook` needs to re-open a session and
+    # reach live app state to compute a Gap-4 NextAction from the finished run
+    # (INFINITY-COMPLETION-HOOK-BOUNDARY-1) — subprocess-isolating it left the
+    # post-completion Infinity loop dead.
+    {"run_tool_provider", "planner_context", "agent_completion_hook"}
 )
 
 
