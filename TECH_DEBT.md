@@ -2852,8 +2852,51 @@ MCP/A2A wire clients (JSON-RPC envelopes, handshake, SSE framing) are hosted ada
 via the plugin ABI — *not* kernel primitives (the kernel owns the socket + the gate, not the
 protocol client). `nodus-mcp`/`nodus-a2a` graduate from out-of-tree to registered plugins.
 
-**Reopen trigger:** when first external MCP/A2A interop is scheduled, or when a sandbox needs
-mediated egress without holding credentials.
+**Verified state (2026-07-09, source-audited — the honest built-vs-inert picture).**
+Grounded against source so the reopen scope is real, not aspirational:
+
+- **G4a is scaffolded but inert — the seams are cut, nothing is live.** The enforcement
+  chokepoint already exists at `execute_tool` (`agents/tool_registry.py:160-221`) — the correct
+  place, precisely because agent tool calls bypass the dispatcher (`call_tool` → `run_agent_tool`
+  → `execute_tool`; see IDEM-10). But every guard is dormant:
+  - `enforce_capability_policy` (recipient/domain allowlist, `capability_policy.py`) is wired at
+    `tool_registry.py:179` yet **gated on `has_capability_policies()`** — no policy is registered
+    outside tests, so it is vacuously allow-all in prod.
+  - `enforce_capability_rate` + `ResourceManager.rate_limit_hit` (real Redis fixed-window,
+    `resource_manager.py:293`) wired at `tool_registry.py:195` — vacuous for the same reason.
+  - `capability_scope(_scoped_caps)` wraps the tool call at `tool_registry.py:220`, but its only
+    intended reader — `resolve_secret` (`platform_layer/secret_broker.py:231`, with Env/File/
+    Vault/Chain backends) — **has zero production callers.** The secret broker is fully built and
+    orphaned.
+- **Two design gaps beyond "flip it on":** (1) **no true egress chokepoint** — the domain/
+  recipient check is *static string inspection of the tool's call args* (`extract_domains`/
+  `extract_recipients`), so a tool that builds a URL internally or reads a domain from config is
+  unchecked; the only real network guard, `validate_outbound_extension_url` (SSRF blocklist,
+  `extension_policy.py:224`), fires at *webhook/callback registration*, not tool egress. (2)
+  **secret gating is fail-open on ungated names** — a secret with no registered scope in
+  `SECRET_SCOPES` resolves for any caller.
+- **G4b has zero runtime code; the plug-in point is ready.** No MCP/A2A/JSON-RPC wire code lives
+  in this repo (the `json-rpc` string hits are sandbox exec-boundary labels, unrelated). Real
+  implementations exist out-of-tree at `C:\dev\nodus-mcp` (client+server, `protocol/jsonrpc.py`;
+  `nodus_mcp_aindy/adapters/syscall.py` already duck-types `SyscallEntry`/`TOOL_REGISTRY` → MCP
+  `ToolDefinition`), `C:\dev\nodus-mcp-server`, `C:\dev\nodus-a2a` — none are dependencies, none
+  registered. The plugin ABI is real and ready: `SURFACE_AGENT_TOOL` (`extension_abi.py:18`),
+  `register_agent_tool` (`registry.py:733`), `load_plugins` (`registry.py:1750`). G4b =
+  graduate those repos to plugins through this ABI.
+
+**Two forms of G4a, pick at reopen:** *thin activation* (register a real `CapabilityPolicy` +
+secret scopes + one proving tool that calls `resolve_secret`, behind a default-off flag) ships
+the arg-inspection level of assurance cheaply but leaves egress bypassable. *Strong form* — a
+**mediated egress point** (tools lose raw outbound network; a broker/syscall injects the secret
+and enforces the allowlist at the socket) — is non-bypassable but kernel-adjacent, and it
+**converges with IDEM-10**: both are the same "route side-effecting tool calls through a real
+boundary instead of trusting `execute_tool` to see everything" work. Do the strong form as a
+dedicated effort alongside/after IDEM-10, not as a bolt-on.
+
+**Reopen trigger:** when first external MCP/A2A interop is scheduled (G4b), or when a sandbox
+needs mediated egress without holding credentials (G4a). If only the *story* is needed before
+then, thin-activation G4a is a self-contained opt-in slice; the strong form waits for the
+IDEM-10 boundary work.
 
 ### ECOGAP-5 — Durable timer (5a) + workflow-as-data (5b)
 
