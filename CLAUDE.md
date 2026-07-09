@@ -452,12 +452,17 @@ try/except; new additions need the same treatment or a verified-safe import.
 
 `registry.py:_maybe_wrap_runtime_callback()` routes registered callbacks (trigger
 evaluators, agent completion hooks, capability definition providers, startup hooks)
-through a subprocess via `runtime_callback_worker.py`. **Exception (PLANNER-SUBPROC-1,
-1.4.3): `run_tool_provider` and `planner_context` run in-process** — they read live
-in-process registration state (`TOOL_REGISTRY`, planner context) that a bare subprocess
-can't reconstruct (its cwd is read-only site-packages, so `load_plugins()` finds no app
-manifest and returns zero tools → planner 500 on Linux). They are listed in
-`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`. The subprocess is spawned with:
+through a subprocess via `runtime_callback_worker.py`. **Exception (PLANNER-SUBPROC-1
++ INFINITY-COMPLETION-HOOK-BOUNDARY-1): `run_tool_provider`, `planner_context`, and
+`agent_completion_hook` run in-process** — they read live in-process state
+(`TOOL_REGISTRY`, planner context) or must re-open a session to reach live app state that a
+bare subprocess can't reconstruct (its cwd is read-only site-packages, so `load_plugins()`
+finds no app manifest → zero tools → planner 500 on Linux; and completion hooks no-op'd,
+killing the post-completion Infinity loop). They are listed in
+`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`. **Note:** the boundary sanitizer still strips
+`db`/`run` for completion hooks — the context carries `run_id` (a string that survives) so
+the hook re-fetches with its own session; the runtime never leaks a db/ORM handle. The
+subprocess is spawned with:
 
 ```python
 cwd=str(Path(__file__).resolve().parents[2])

@@ -222,6 +222,13 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
                 {
                     "run": run,
                     "db": db,
+                    # run_id is a string, so it survives the extension-boundary
+                    # sanitizer (which strips db and redacts the run ORM). A
+                    # first-party completion hook re-fetches the run by this id
+                    # with its own session — the runtime never leaks a db/ORM
+                    # handle across the boundary. See INFINITY-COMPLETION-HOOK-
+                    # BOUNDARY-1 / PLANNER-SUBPROC-1.
+                    "run_id": str(run.id),
                     "user_id": user_db_id,
                     "run_type": getattr(run, "agent_type", "default"),
                     "trace_id": run.trace_id or get_trace_id(),
