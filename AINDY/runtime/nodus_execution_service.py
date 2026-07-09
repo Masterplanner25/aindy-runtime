@@ -546,6 +546,7 @@ def _build_agent_resume_callback(
     correlation_id: str | None,
     scoped_token: dict[str, Any] | None,
     total_tool_steps: int,
+    claim_status: str = "waiting",
 ):
     """Build the 0-arg resume closure shared by live-registration and rehydration.
 
@@ -568,16 +569,18 @@ def _build_agent_resume_callback(
 
         _db = SessionLocal()
         try:
+            # ECOGAP-1 Phase 2: WAIT resume claims from 'waiting'; crash
+            # continuation claims from 'executing' (a crashed run left executing).
             claimed = (
                 _db.query(AgentRun)
-                .filter(AgentRun.id == _db_run_id(run_id), AgentRun.status == "waiting")
+                .filter(AgentRun.id == _db_run_id(run_id), AgentRun.status == claim_status)
                 .update({"status": "executing", "wait_state": None}, synchronize_session=False)
             )
             _db.commit()
             if not claimed:
                 logger.info(
-                    "[NodusExecutionService] agent resume skipped for %s (not in waiting / already claimed)",
-                    run_id,
+                    "[NodusExecutionService] agent resume skipped for %s (not in %s / already claimed)",
+                    run_id, claim_status,
                 )
                 return
             # Refresh an expired capability token before running the segment. A run

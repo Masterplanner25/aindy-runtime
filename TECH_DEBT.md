@@ -2655,7 +2655,7 @@ map onto existing entries (noted per item); do not double-track.
 
 ### ECOGAP-1 — Event-sourced durable execution / transparent crash continuation
 
-**Status:** Phase 1 shipped (2026-07-08, opt-in); Phases 2–3 deferred — roadmap (P0)
+**Status:** Phases 1 + 2 shipped (2026-07-08, opt-in); Phase 2a WAL + Phase 3 deferred — roadmap (P0)
 
 aindy-runtime marks non-waiting `running` flows FAILED on restart; there is no replay log.
 WAIT/RESUME + `flow_run_rehydration` + ResumeWatchdog already cover *suspended* flows — the
@@ -2680,12 +2680,27 @@ explicitly declared **continuation-safe** (`registry.mark_flow_continuation_safe
 set by default). A durable attempt counter (`state["__continuation_attempts"]`, no schema
 change) dead-letters a crash-looping run after `AINDY_DURABLE_CONTINUATION_MAX_ATTEMPTS`
 (3). Master flag `AINDY_DURABLE_CONTINUATION` (default off). Tests:
-`test_flow_continuation.py`. **Deferred: Phase 2** — agent-run crash continuation +
-`AgentStep` as a per-step write-ahead log (today a post-segment batch → intra-segment
-crashes can't skip completed steps); **Phase 3** — fold `FlowHistory` as the canonical
-state source + thread the REPLAY-1 clock through the execution hot paths for deterministic
-event-sourced replay; broaden `EffectRecord`/`execution_guarantee` beyond `AGENT_HIGH_RISK`
-so continuation is safe for non-idempotent flows without the per-flow declaration.
+`test_flow_continuation.py`.
+
+**Phase 2 — nodus_vm agent-run crash continuation, segment-boundary (2026-07-08, opt-in).**
+`core/agent_continuation.py` `continue_crashed_agent_runs` (startup-only) re-drives a
+crashed `executing` **nodus_vm** AgentRun from its last completed segment, reusing the
+WAIT-resume machinery — `_build_agent_resume_callback` gained a `claim_status` param so it
+claims from `executing` (crash) as well as `waiting` (WAIT). Detection: startup-time
+`executing` = orphaned (no live runner); nodus_vm runs identified by the linked
+`nodus_agent_execution` FlowRun (AGENT_FLOW runs are left to the flow-side path). Resume
+point + `accumulated` derived from `run.result["steps"]` via `_count_completed_segments`.
+Gated to **continuation-safe agent types** (`mark_agent_type_continuation_safe`) because the
+crashed segment re-runs from its first step (AgentStep is a post-segment batch write, so
+mid-segment progress isn't durable — double-fire risk, so idempotent-only). Crash-loop bound
+in `result["__continuation_attempts"]` (resets on progress; no schema change). Reuses
+`AINDY_DURABLE_CONTINUATION`. Tests: `test_agent_continuation.py`. **Deferred within Phase 2
+(2a):** `AgentStep` as a per-step write-ahead log (+`(run_id,step_index)` uniqueness) so
+intra-segment crashes skip completed steps — needs the tool seam inside the worker subprocess
+or one-VM-run-per-step. **Phase 3** — fold `FlowHistory` as the canonical state source +
+thread the REPLAY-1 clock through the execution hot paths for deterministic event-sourced
+replay; broaden `EffectRecord`/`execution_guarantee` beyond `AGENT_HIGH_RISK` so continuation
+is safe for non-idempotent flows/agents without the per-declaration.
 
 **Reopen trigger:** when Phase 2/3 (agent-run continuation, event-sourced replay) is scheduled.
 

@@ -1545,6 +1545,24 @@ def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
         finally:
             _agent_rehydrate_db.close()
 
+        # ECOGAP-1 Phase 2: re-drive crashed (executing) nodus_vm agent runs from
+        # their last completed segment. Startup-only (no live runners); gated by
+        # AINDY_DURABLE_CONTINUATION + per-agent-type continuation-safety. Runs
+        # after waiting-rehydration so a live wait it registers is de-duped there.
+        from AINDY.core.agent_continuation import continue_crashed_agent_runs
+
+        _agent_continue_db = db_factory()
+        try:
+            _n_agent_continued = continue_crashed_agent_runs(_agent_continue_db)
+            if _n_agent_continued:
+                logger.info(
+                    "[startup] Crash-continued %d agent run(s)", _n_agent_continued
+                )
+        except Exception as _agent_continue_exc:
+            logger.error("[startup] agent crash-continuation failed: %s", _agent_continue_exc)
+        finally:
+            _agent_continue_db.close()
+
     # Nodus workflow rehydration: recompile every active nodus_workflows row
     # (RTR-1) into FLOW_REGISTRY / the in-memory workflow registry so registered
     # workflows survive a restart. Must run after register_all_flows() so the
