@@ -2655,7 +2655,7 @@ map onto existing entries (noted per item); do not double-track.
 
 ### ECOGAP-1 — Event-sourced durable execution / transparent crash continuation
 
-**Status:** Phases 1 + 2 shipped (2026-07-08, opt-in); Phase 2a WAL + Phase 3 deferred — roadmap (P0)
+**Status:** Phases 1 + 2 + 2a shipped (2026-07-08, opt-in); full per-step WAL + Phase 3 deferred — roadmap (P0)
 
 aindy-runtime marks non-waiting `running` flows FAILED on restart; there is no replay log.
 WAIT/RESUME + `flow_run_rehydration` + ResumeWatchdog already cover *suspended* flows — the
@@ -2694,10 +2694,23 @@ Gated to **continuation-safe agent types** (`mark_agent_type_continuation_safe`)
 crashed segment re-runs from its first step (AgentStep is a post-segment batch write, so
 mid-segment progress isn't durable — double-fire risk, so idempotent-only). Crash-loop bound
 in `result["__continuation_attempts"]` (resets on progress; no schema change). Reuses
-`AINDY_DURABLE_CONTINUATION`. Tests: `test_agent_continuation.py`. **Deferred within Phase 2
-(2a):** `AgentStep` as a per-step write-ahead log (+`(run_id,step_index)` uniqueness) so
-intra-segment crashes skip completed steps — needs the tool seam inside the worker subprocess
-or one-VM-run-per-step. **Phase 3** — fold `FlowHistory` as the canonical state source +
+`AINDY_DURABLE_CONTINUATION`. Tests: `test_agent_continuation.py`.
+
+**Phase 2a — per-step segment granularity (2026-07-08, opt-in).** Chose the
+one-VM-run-per-step route over a cross-process WAL. `split_agent_plan` now expands each
+multi-step segment into one segment per tool step behind `AINDY_DURABLE_STEP_GRANULARITY`
+(default off) — `_expand_to_step_segments`, base_index kept contiguous, a segment's trailing
+WAIT attached to its last step. Safe because `compile_agent_segment` builds `input_payload`
+from each segment's own steps and args are static (no VM-level inter-step data flow), so a
+1-step segment is self-contained. Reuses everything: the existing per-segment `AgentStep`
+write + Phase 2 continuation now resume at **step** granularity (completed steps skip; a crash
+re-runs only the in-flight step). Cost: one subprocess VM run per step (hence opt-in). No
+worker/compiler/schema change. Tests: `test_agent_step_granularity.py`. **Still deferred:**
+the full pending→success **write-ahead log** written from the worker subprocess (at-most-once
+for the in-flight step → safe for *non-idempotent* agents) — needs `(run_id, step_index)`
+uniqueness + threading `step_index` through `call_tool`; folded into Phase 3 since
+non-idempotent safety fundamentally needs the EffectRecord broadening. **Phase 3** — fold
+`FlowHistory` as the canonical state source +
 thread the REPLAY-1 clock through the execution hot paths for deterministic event-sourced
 replay; broaden `EffectRecord`/`execution_guarantee` beyond `AGENT_HIGH_RISK` so continuation
 is safe for non-idempotent flows/agents without the per-declaration.

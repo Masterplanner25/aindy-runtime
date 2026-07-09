@@ -326,6 +326,11 @@ class Settings(BaseSettings):
     AINDY_DURABLE_CONTINUATION: bool = False
     # Max continuation attempts before a crash-looping flow is dead-lettered.
     AINDY_DURABLE_CONTINUATION_MAX_ATTEMPTS: int = 3
+    # ECOGAP-1 Phase 2a: run each agent tool step as its own segment so crash
+    # continuation (Phase 2) resumes at STEP granularity — a crash re-runs only the
+    # in-flight step, not the whole segment, and completed steps are skipped. Off by
+    # default: it trades one subprocess VM run per step for finer-grained durability.
+    AINDY_DURABLE_STEP_GRANULARITY: bool = False
     SKIP_MONGO_PING: bool = False
     MONGO_REQUIRED: bool = False
     MONGO_HEALTH_TIMEOUT_MS: int = 5000
