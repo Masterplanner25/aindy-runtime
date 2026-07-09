@@ -1388,6 +1388,7 @@ def _ensure_inline_log_terminal(db, log_id: str) -> None:
 # Register late-bound handlers that depend on async_job_service.
 from AINDY.memory import embedding_jobs as _embedding_jobs  # noqa: E402,F401
 from AINDY.agents import autonomous_window as _autonomous_window  # noqa: E402,F401
+from AINDY.core import next_action_dispatch as _next_action_dispatch  # noqa: E402,F401
 
 
 
