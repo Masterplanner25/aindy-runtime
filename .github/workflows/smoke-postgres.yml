@@ -6,7 +6,10 @@ name: Boot Smoke (PostgreSQL)
 # and uploads the result as a JSON artifact for baseline tracking.
 #
 # Installs the published wheel from PyPI: `pip install aindy-runtime==<version>`
-# (version read from AINDY/_version.py in the checkout).
+# (version read from AINDY/_version.py in the checkout). On a pre-publish
+# version-bump PR the version is not on PyPI yet, so the job skips gracefully
+# (green, with a ::notice) instead of failing — it re-runs for real once the tag
+# publishes. See the "Check whether this version is published on PyPI" gate step.
 
 on:
   push:
@@ -83,10 +86,30 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Boot Smoke validates the PUBLISHED wheel. On a pre-publish version-bump PR
+      # (AINDY/_version.py ahead of the latest PyPI release) the version does not
+      # exist yet, so we skip gracefully instead of failing red — the job re-runs
+      # green automatically once the tag publishes.
+      - name: Check whether this version is published on PyPI
+        id: pypi_check
+        run: |
+          AINDY_VERSION=$(python -c "exec(open('AINDY/_version.py').read()); print(__version__)")
+          echo "version=$AINDY_VERSION" >> "$GITHUB_OUTPUT"
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/aindy-runtime/$AINDY_VERSION/json")
+          if [ "$CODE" = "200" ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "aindy-runtime==$AINDY_VERSION is on PyPI — running full boot smoke."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Boot Smoke skipped::aindy-runtime==$AINDY_VERSION is not yet on PyPI (HTTP $CODE). Expected on a pre-publish version-bump PR; this job re-runs green automatically once the tag publishes."
+          fi
+
       - name: Install PostgreSQL client libs
+        if: steps.pypi_check.outputs.published == 'true'
         run: sudo apt-get install -y --no-install-recommends libpq-dev
 
       - name: Cache pip
+        if: steps.pypi_check.outputs.published == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pip
@@ -94,24 +117,27 @@ jobs:
           restore-keys: ${{ runner.os }}-smoke-pg-${{ matrix.python-version }}-
 
       - name: Install aindy-runtime from PyPI
+        if: steps.pypi_check.outputs.published == 'true'
         run: |
           python -m pip install --upgrade pip
-          AINDY_VERSION=$(python -c "exec(open('AINDY/_version.py').read()); print(__version__)")
-          python -m pip install "aindy-runtime==$AINDY_VERSION"
+          python -m pip install "aindy-runtime==${{ steps.pypi_check.outputs.version }}"
 
       - name: Enable pgvector extension
+        if: steps.pypi_check.outputs.published == 'true'
         run: |
           PGPASSWORD=aindy_smoke psql \
             -h localhost -U aindy_smoke -d aindy_smoke \
             -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
       - name: Apply Alembic migrations
+        if: steps.pypi_check.outputs.published == 'true'
         # Marks alembic_version_runtime at head. Domain tables don't exist yet —
         # the server's Phase 5 startup bootstraps them via create_all().
         # This mirrors the Docker Compose deploy path (alembic runs before server).
         run: python -m alembic upgrade head
 
       - name: Start server and record TTFA
+        if: steps.pypi_check.outputs.published == 'true'
         run: |
           START_MS=$(date +%s%3N)
           echo "SERVER_START_MS=$START_MS" >> "$GITHUB_ENV"
@@ -143,6 +169,7 @@ jobs:
           fi
 
       - name: Assert /health/deep is healthy and record deep TTFA
+        if: steps.pypi_check.outputs.published == 'true'
         run: |
           # /health/deep may lag a few seconds while startup phases complete
           for i in $(seq 1 60); do
@@ -170,6 +197,7 @@ jobs:
           fi
 
       - name: Assert /health/deep syscall registry is populated
+        if: steps.pypi_check.outputs.published == 'true'
         run: |
           python - <<'PY'
           import urllib.request, json
@@ -184,6 +212,7 @@ jobs:
           PY
 
       - name: Assert /api/version surface
+        if: steps.pypi_check.outputs.published == 'true'
         run: |
           python - <<'PY'
           import urllib.request, json
@@ -199,11 +228,11 @@ jobs:
           PY
 
       - name: Stop server
-        if: always()
+        if: ${{ always() && steps.pypi_check.outputs.published == 'true' }}
         run: kill "$(cat /tmp/server.pid)" 2>/dev/null || true
 
       - name: Write TTFA artifact
-        if: always()
+        if: ${{ always() && steps.pypi_check.outputs.published == 'true' }}
         run: |
           mkdir -p smoke-results
           python - <<'PY'
@@ -227,7 +256,7 @@ jobs:
           PY
 
       - name: Upload TTFA artifact
-        if: always()
+        if: ${{ always() && steps.pypi_check.outputs.published == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: smoke-ttfa-py${{ matrix.python-version }}
@@ -235,5 +264,5 @@ jobs:
           retention-days: 90
 
       - name: Dump server log on failure
-        if: failure()
+        if: ${{ failure() && steps.pypi_check.outputs.published == 'true' }}
         run: cat /tmp/server.log || true

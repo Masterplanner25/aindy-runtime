@@ -4,6 +4,88 @@
 
 ---
 
+## 1.6.0 — 2026-07-08
+
+Large, **fully backward-compatible** feature release: agent-framework security
+hardening, the Infinity learning-loop closure, and seven runtime-roadmap items.
+No breaking changes to any stable surface — all new enum values, syscalls, events,
+and config flags are additive, and every behavior change ships **opt-in / default
+off**. Satisfies the apps requirement `aindy-runtime>=1.5.3,<2.0`.
+
+### Added — Agent framework hardening (AGENT-HARDEN-1..10)
+
+- **Operator cancel / emergency stop** — `sys.v1.agent.cancel` + terminal
+  `AgentRunStatus.CANCELLED`, cooperative check at VM segment boundaries (#165).
+- **Keyed capability-token integrity** — `token_hash` is now HMAC-SHA256 keyed on
+  the KeyRing secret (was unkeyed SHA-256); active+previous verify (#166).
+- **Compensating-undo engine** — `SyscallEntry.compensate` hook + append-only
+  `effect_reversals` table + `sys.v1.agent.undo` (Alembic 0008) (#168).
+- **Effect simulation / dry-run** — shadow `call_tool` seam + `sys.v1.agent.simulate`
+  + virtual-tool rehearsal environment (#170, #171, #172).
+- **LLM provider fallback chain** — `FallbackLLMClient` + provider-chain resolution (#167).
+- **Verifier stage** — per-step post-condition check; fail → `VERIFY_FAILED` + rollback (#169).
+- **Per-capability policy** — recipient/domain allowlists + rate limits (#173, #185).
+- **Secrets broker** — JIT capability-scoped secret resolution (Env/File/Vault/Chain) (#187, #188).
+- **Signed plugin bundles + SBOM** — Ed25519 detached signatures + trust registry
+  + profile enforcement (#189, #190).
+- **Contract tests** — respx recorded cassettes for the OpenAI/DeepSeek boundaries (#186).
+
+### Added — Infinity learning-loop closure (INFINITY-RUNTIME-1, all five gaps)
+
+- Per-run `SCORE_COMPUTED` execution record (#194); recall→planning link +
+  `RECALL_USED` (#195); async jobs join the loop, opt-in `AINDY_ASYNC_JOB_LOOP_CLOSURE` (#196);
+  Next-Action engine + `NEXT_ACTION_CHOSEN`, record-first (#197); tenant-scoped
+  aggregate syscall `sys.v1.observability.support_metrics` (#198).
+
+### Added — Runtime roadmap (RTR)
+
+- **RTR-1** — `register_nodus_workflow` VM-backed agent path; dropped the dead
+  `NodusTraceEvent` trace path (Alembic 0009) (#192).
+- **RTR-3** — AgentRun↔FlowRun status canonicalization: `FlowRunStatus` gains
+  `EXECUTING`/`SUCCESS`, `AgentRunStatus` gains `WAITING`; single-source
+  classification helpers; stuck-run no-op recovery gap closed across six
+  reconcilers; `ix_agent_runs_flow_run_id` (Alembic 0010) (#199).
+- **RTR-4** — per-delegate capability narrowing (least-privilege, active by
+  default) + opt-in delegation handshake `AINDY_DELEGATION_HANDSHAKE`
+  (`AWAITING_DELEGATION`, `respond_to_delegation`) (#200).
+- **RTR-6** — first-class `reasoning.signal` at the memory-capture layer (#201).
+- **RTR-7** — execution-graph endpoint falls back to the runtime
+  `event_trace_service` when app `rippletrace_*` symbols are absent (#202).
+- **RTR-2** — production defaults to `EXECUTION_MODE=distributed` (fail-fast, via
+  `config.resolve_execution_mode()`); thread-mode orphaned-job recovery at startup (#203).
+- **RTR-5** — runtime-driven autonomous execute-window `run_execute_window`
+  (bounded trigger→plan→execute), opt-in `AINDY_AUTONOMOUS_EXECUTE_WINDOW`;
+  new `agent.autonomous_window` job + `AUTONOMY_WINDOW` event (#204).
+
+### Added — SDK surface
+
+- `sys.v1.execution.get` execution-introspection syscall (#164).
+- **SDK-SYSCALL-GRANT-1** — `/platform/syscall` now grants the requested
+  syscall's own capability (least-privilege, one cap/dispatch); `flow.run`
+  grantable via `flow.execute` scope; new `event.emit` scope (#193).
+
+### Changed
+
+- `SYSCALL_REGISTRY_MIN_COUNT` raised to 22 (new agent/observability syscalls).
+- New `SystemEventTypes` (additive): `RECALL_USED`, `SCORE_COMPUTED`,
+  `NEXT_ACTION_CHOSEN`, `REASONING_SIGNAL`, `AUTONOMY_WINDOW`.
+- New opt-in config flags, all **default off**: `AINDY_PLANNER_MEMORY_INJECTION`,
+  `AINDY_ASYNC_JOB_LOOP_CLOSURE`, `AINDY_DELEGATION_HANDSHAKE`,
+  `AINDY_AUTONOMOUS_EXECUTE_WINDOW` (+ `AINDY_AUTONOMOUS_MAX_ITERATIONS` /
+  `_MAX_ACTIVE_RUNS` / `_COOLDOWN_SECONDS`).
+- Schema contract version `2026-07-05` → `2026-07-08` (additive: `effect_reversals`
+  table, `agent_runs.flow_run_id` index; `nodus_trace_events` dropped). Alembic
+  chain extended to `0010`.
+- Dependency bumps (redis, click, ruff, tzlocal, charset-normalizer, and platform
+  dev deps).
+
+### Compatibility
+
+- No breaking changes to stable surfaces. `aindy-sdk` / `aindy-ui-kit`
+  compatibility window unchanged; recommended requirement remains `>=1.0,<2.0`.
+
+---
+
 ## 1.5.3 — 2026-07-05
 
 ### Fixed
