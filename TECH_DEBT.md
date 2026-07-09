@@ -2655,7 +2655,7 @@ map onto existing entries (noted per item); do not double-track.
 
 ### ECOGAP-1 — Event-sourced durable execution / transparent crash continuation
 
-**Status:** Deferred — roadmap (P0 among these gaps)
+**Status:** Phase 1 shipped (2026-07-08, opt-in); Phases 2–3 deferred — roadmap (P0)
 
 aindy-runtime marks non-waiting `running` flows FAILED on restart; there is no replay log.
 WAIT/RESUME + `flow_run_rehydration` + ResumeWatchdog already cover *suspended* flows — the
@@ -2664,7 +2664,30 @@ LangGraph (pending-writes-then-checkpoint, partial); ADK/OpenHands/Open Interpre
 event logs. Absorb targets: ADK append-event fold, LangGraph `versions_seen` vector clock,
 Temporal at-least-once idempotent-start. **Do not import weaker JSON-snapshot models.**
 
-**Reopen trigger:** when crash-continuation of in-flight non-waiting flows is scheduled.
+**Phase 1 — flow-level continue-from-last-node (2026-07-08, opt-in default off).**
+Key realization: the substrate already existed — `FlowRun.state` is a full post-node
+snapshot and `current_node` already points at the next, not-yet-run node, and
+`PersistentFlowRunner.resume()` drives the loop from there whenever status != `waiting`.
+`core/flow_continuation.py` `try_continue_flow_run` re-claims a stranded
+`running`/`executing` FlowRun (atomic `UPDATE … WHERE status IN (running,executing)`) and
+re-drives `resume()` on a bg thread — mirroring the WAIT-rehydration path, minus the wait.
+Wired into `stuck_run_service.scan_and_recover_stuck_runs` behind a new `continue_stranded`
+param that **only the startup caller sets** — continuation is startup-only (no live runners;
+continuing a hung-but-alive run would double-drive it — same principle as the RTR-2 job
+recovery). The periodic watchdog + async `recovery_jobs` still fail stranded runs. Safety:
+the one node that re-runs on continuation must be idempotent, so it only applies to flows
+explicitly declared **continuation-safe** (`registry.mark_flow_continuation_safe`; empty
+set by default). A durable attempt counter (`state["__continuation_attempts"]`, no schema
+change) dead-letters a crash-looping run after `AINDY_DURABLE_CONTINUATION_MAX_ATTEMPTS`
+(3). Master flag `AINDY_DURABLE_CONTINUATION` (default off). Tests:
+`test_flow_continuation.py`. **Deferred: Phase 2** — agent-run crash continuation +
+`AgentStep` as a per-step write-ahead log (today a post-segment batch → intra-segment
+crashes can't skip completed steps); **Phase 3** — fold `FlowHistory` as the canonical
+state source + thread the REPLAY-1 clock through the execution hot paths for deterministic
+event-sourced replay; broaden `EffectRecord`/`execution_guarantee` beyond `AGENT_HIGH_RISK`
+so continuation is safe for non-idempotent flows without the per-flow declaration.
+
+**Reopen trigger:** when Phase 2/3 (agent-run continuation, event-sourced replay) is scheduled.
 
 ### ECOGAP-2 — Hostile-safe sandboxing (strong-VM tier on non-Linux) — SEE C2/C3
 

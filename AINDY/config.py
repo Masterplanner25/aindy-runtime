@@ -318,6 +318,14 @@ class Settings(BaseSettings):
     AINDY_AUTONOMOUS_MAX_ACTIVE_RUNS: int = 1
     # Cooldown between window iterations, seconds (0 = none; capped at 30).
     AINDY_AUTONOMOUS_COOLDOWN_SECONDS: int = 0
+    # ECOGAP-1 Phase 1: transparent crash continuation of non-waiting flows. Off by
+    # default — when off, a stuck running/executing FlowRun is failed on restart
+    # (current behavior). When on, a flow whose name is registered
+    # continuation-safe is re-driven from its last-committed node via
+    # PersistentFlowRunner.resume() instead of failed. Opt-in after soak.
+    AINDY_DURABLE_CONTINUATION: bool = False
+    # Max continuation attempts before a crash-looping flow is dead-lettered.
+    AINDY_DURABLE_CONTINUATION_MAX_ATTEMPTS: int = 3
     SKIP_MONGO_PING: bool = False
     MONGO_REQUIRED: bool = False
     MONGO_HEALTH_TIMEOUT_MS: int = 5000

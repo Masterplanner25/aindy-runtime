@@ -17,9 +17,12 @@ from AINDY.runtime.flow_engine.node_executor import (
     resolve_next_node,
 )
 from AINDY.runtime.flow_engine.registry import (
+    CONTINUATION_SAFE_FLOWS,
     FLOW_REGISTRY,
     NODE_REGISTRY,
     _registry_flow_plan,
+    is_flow_continuation_safe,
+    mark_flow_continuation_safe,
     register_flow,
     register_node,
     select_strategy,
