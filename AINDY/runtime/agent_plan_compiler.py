@@ -293,7 +293,50 @@ def split_agent_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
 
     # Trailing tool steps (or an empty tail after a wait) form the terminal segment.
     segments.append({"tool_steps": current, "base_index": base_index, "wait": None})
+
+    if _step_granularity_enabled():
+        segments = _expand_to_step_segments(segments)
     return segments
+
+
+def _step_granularity_enabled() -> bool:
+    """ECOGAP-1 Phase 2a: whether each tool step becomes its own segment."""
+    try:
+        from AINDY.config import settings
+
+        return bool(getattr(settings, "AINDY_DURABLE_STEP_GRANULARITY", False))
+    except Exception:
+        return False
+
+
+def _expand_to_step_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Split each multi-step segment into one segment per tool step (Phase 2a).
+
+    ``base_index`` stays contiguous (so ``AgentStep.step_index`` is unchanged) and a
+    segment's trailing WAIT is attached to its LAST step's segment — so WAIT/RESUME
+    semantics are identical, only the crash-continuation resume point becomes
+    per-step instead of per-segment. Bare-wait and single-step segments pass through.
+    Args are static per step (`compile_agent_segment` builds `input_payload` from
+    each segment's own steps), so a 1-step segment is self-contained.
+    """
+    expanded: list[dict[str, Any]] = []
+    for seg in segments:
+        tool_steps = seg["tool_steps"]
+        if len(tool_steps) <= 1:
+            expanded.append(seg)
+            continue
+        base = seg["base_index"]
+        wait = seg["wait"]
+        last = len(tool_steps) - 1
+        for offset, step in enumerate(tool_steps):
+            expanded.append(
+                {
+                    "tool_steps": [step],
+                    "base_index": base + offset,
+                    "wait": wait if offset == last else None,
+                }
+            )
+    return expanded
 
 
 def compile_agent_plan(plan: dict[str, Any]) -> dict[str, Any]:
