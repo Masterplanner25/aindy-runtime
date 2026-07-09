@@ -318,6 +318,21 @@ class Settings(BaseSettings):
     AINDY_AUTONOMOUS_MAX_ACTIVE_RUNS: int = 1
     # Cooldown between window iterations, seconds (0 = none; capped at 30).
     AINDY_AUTONOMOUS_COOLDOWN_SECONDS: int = 0
+    # INFINITY-RUNTIME-1 Deliverable C: act on a post-execution NextAction. Off by
+    # default — when off, a `trigger_execution` decision is only recorded
+    # (NEXT_ACTION_CHOSEN, current behavior). When on, an app-sourced
+    # `trigger_execution` with an objective dispatches ONE bounded follow-up run
+    # (create_run→execute_run), reusing the admission + approval rails. The runtime
+    # never acts on its own runtime-default decision. Opt-in after soak.
+    AINDY_NEXT_ACTION_ACTING: bool = False
+    # Max NextAction follow-up chain depth (net-new rail): a run reached via N
+    # trigger_execution hops from a root will not dispatch another once N == this
+    # cap — prevents a hook that always returns trigger_execution from self-
+    # perpetuating. The window's max-iterations bounds one window, not a chain.
+    AINDY_NEXT_ACTION_MAX_CHAIN: int = 3
+    # Max concurrent active runs (flow+agent) before a NextAction follow-up is
+    # declined — admission cap via count_active_executions (0 disables the cap).
+    AINDY_NEXT_ACTION_MAX_ACTIVE: int = 1
     # ECOGAP-1 Phase 1: transparent crash continuation of non-waiting flows. Off by
     # default — when off, a stuck running/executing FlowRun is failed on restart
     # (current behavior). When on, a flow whose name is registered

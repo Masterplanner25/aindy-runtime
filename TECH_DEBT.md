@@ -7,9 +7,24 @@ app-facing aggregate syscall are shipped (PRs #194–#198; see Advance log below
 Runtime-owned counterpart to the app-side handoff
 `aindy-apps-monolith/TECH_DEBT.md` → **INFINITY-RUNTIME-HANDOFF-1** (Phase 2 unblocked —
 Gap 4 was the gate; the support-metrics aggregate is now available for the app's
-`dependency_adapter`). Deferred, non-blocking follow-ups only: flip the two opt-in flags
-after app soak (`AINDY_PLANNER_MEMORY_INJECTION`, `AINDY_ASYNC_JOB_LOOP_CLOSURE`), and let
-the Next-Action primitive *act* (currently record-only).
+`dependency_adapter`). **Deliverable C (autonomous acting on NextAction) shipped opt-in
+2026-07-09** — the record-first Gap 4 now has a bounded acting half: `core/next_action_dispatch.py`
+`maybe_act_on_next_action` (wired into `_emit_agent_next_action` after the `NEXT_ACTION_CHOSEN`
+emit) dispatches ONE follow-up run for an **app-sourced** `trigger_execution` decision carrying an
+objective. It goes through the async job `agent.next_action_followup` → `create_run` → (if
+auto-approved) `execute_run`, reusing the existing rails — the approval gate is structurally
+preserved (a `pending_approval` follow-up is left for a human, never force-executed), capability
+preflight applies, and admission is bounded by `count_active_executions`. One net-new rail: a
+**chain-depth cap** (`parent_run_id` hops, `AINDY_NEXT_ACTION_MAX_CHAIN`, default 3) so a hook that
+always returns `trigger_execution` cannot self-perpetuate — the window's max-iterations bounds a
+single window, not a NextAction chain. Gated `AINDY_NEXT_ACTION_ACTING` (default off). The runtime
+never acts on its own runtime-default decision (`trigger_execution` is never a runtime default,
+plus an explicit non-default `source` guard). Agent runs only (async/flow completion paths have no
+NextAction seam). No syscall/schema, no new SystemEventType. Tests:
+`tests/unit/test_next_action_acting.py` (16 — gating, chain-depth walk/cap, admission cap, dispatch
+payload, approval-respecting follow-up job). Deferred, non-blocking follow-ups only: flip the three
+opt-in flags after app soak (`AINDY_PLANNER_MEMORY_INJECTION`, `AINDY_ASYNC_JOB_LOOP_CLOSURE`,
+`AINDY_NEXT_ACTION_ACTING`); broaden acting verbs (`retry`/`schedule_follow_up`) if a need arises.
 
 **Context:** The Infinity scoring/orchestrator/loop is app-owned
 (`aindy-apps-monolith/apps/analytics/services/{scoring,orchestration}/`). This repo owns

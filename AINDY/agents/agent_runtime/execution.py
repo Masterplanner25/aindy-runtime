@@ -342,6 +342,12 @@ def _emit_agent_next_action(run, *, db: Session, user_id: str, hook_action=None)
             user_id=user_id,
             source="agent",
         )
+        # Deliverable C — acting half (opt-in, default-off). Record-first stays the
+        # default; when AINDY_NEXT_ACTION_ACTING is on, an app-sourced
+        # trigger_execution dispatches one bounded follow-up run. Best-effort.
+        from AINDY.core.next_action_dispatch import maybe_act_on_next_action
+
+        maybe_act_on_next_action(run, action, db=db, user_id=user_id)
     except Exception:  # best-effort; must not break completion
         logger.debug("[AgentRuntime] next-action emit skipped for run %s", getattr(run, "id", "?"), exc_info=True)
 
