@@ -294,12 +294,14 @@ def test_platform_only_runtime_agent_suggestions_are_empty_without_app_providers
 def test_platform_only_runtime_completion_hook_is_generic_noop(platform_only_runtime):
     _startup, _main = _reload_platform_only_modules()
 
+    # INFINITY-COMPLETION-HOOK-BOUNDARY-1: agent_completion_hook now runs IN-PROCESS
+    # (like run_tool_provider / planner_context) so a first-party hook can re-open a
+    # session and reach live state — it is no longer routed through the isolated
+    # runtime-callback worker. The generic runtime default is still a no-op.
     results = registry.run_agent_completion_hooks("default", {"run": object(), "db": object(), "user_id": "user-1"})
-    invocation = registry.get_runtime_callback_invocations()["agent_completion_hook:default"]
 
     assert results == [None]
-    assert invocation["execution_mode"] == "isolated-runtime-callback"
-    assert invocation["worker_pid"] != os.getpid()
+    assert "agent_completion_hook:default" not in registry.get_runtime_callback_invocations()
 
 
 def test_platform_only_app_owned_capabilities_fail_predictably(platform_only_runtime):
