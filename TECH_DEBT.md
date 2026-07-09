@@ -601,6 +601,64 @@ row count so unbounded growth is detected without polling.
 
 ---
 
+## IDEM-10 — The EXACTLY_ONCE idempotency gate is dead in production; agent tool calls bypass it entirely
+
+**Status:** Open — verified 2026-07-09 (during ECOGAP-1 Phase 3a scoping). High:
+the documented, unit-tested "EXACTLY_ONCE" idempotency contract has **never deduplicated a
+single syscall in a real run**, and the side-effecting agent tool calls never reach the gate.
+
+**Finding (source-verified).** The gate in `kernel/syscall_dispatcher.py:504-579` resolves
+`execution_guarantee` from `ExecutionUnit.extra.retry_policy.execution_guarantee`, looked up
+by `ExecutionUnit.id == context.execution_unit_id`, and only enters the EXACTLY_ONCE branch
+(`:553`) when that yields `"EXACTLY_ONCE"`. In production it **never does**, for two
+independent reasons:
+
+1. **The guarantee is never persisted to any EU.** The only resolver that stamps
+   `EXACTLY_ONCE` — `require_execution_unit` → `_resolve_policy_for_eu`
+   (`core/execution_gate.py:174-241`) — is never called with `eu_type="agent"` (no
+   `_route_prefixes` entry maps to `agent`; `registry.py:125`), and `gate_and_dispatch`
+   (`execution_gate.py:364`) is **dead code with no callers**. The agent-run EU is created
+   directly via `ExecutionUnitService.create` (`agents/agent_runtime/creation.py:76-84`)
+   with **no `retry_policy`** — and it stores `"overall_risk"`, which `_resolve_policy_for_eu`
+   ignores (it reads `"risk_level"`, `execution_gate.py:193`). So the gate's guarantee read
+   (`syscall_dispatcher.py:528-533`) always returns `"AT_LEAST_ONCE"`.
+2. **Even if persisted, the lookup can't match.** `ExecutionUnit.id` is always a standalone
+   `uuid4` (`execution_unit_service.py:69`), never equal to the `execution_unit_id` a syscall
+   carries (FlowRun.id, a fresh per-`sys()` random uuid via `make_syscall_ctx_from_tool:900`,
+   or a trace_id). The EU is linked to a run via `source_id`/`flow_run_id`, not its PK.
+
+**And the part that actually matters:** agent **tool** calls (the side-effecting operations —
+`send_email`, etc.) bypass the dispatcher entirely — `call_tool` → `run_agent_tool` →
+`execute_tool` (`nodus_worker.py:242-262`, `tool_registry.py`) never touches the gate. So the
+operations that most need at-most-once protection have **none, at any layer**.
+
+**Why it wasn't caught:** `tests/unit/test_idempotency_gate.py` stubs an EU with a matching
+bare-UUID PK and `extra={"retry_policy":{"execution_guarantee":"EXACTLY_ONCE"}}` — a state
+production never constructs — so the gate's logic is verified in isolation while its
+production wiring is absent.
+
+**The real fix (two layers, the actual shape of ECOGAP-1 Phase 3a — was mis-scoped as a
+nodus_vm "gate skip" edge):**
+- **Resurrect the gate:** persist the guarantee on agent-run EUs (`risk_level`, not
+  `overall_risk`), and thread a **stable** action_id scope + an **explicit** guarantee to the
+  gate — `AgentRun.id` (a stable bare UUID) is already present in the nodus worker context as
+  `ctx["run_id"]`/`tool_run_id` (`nodus_worker.py:187`) but not forwarded into the
+  SyscallContext. `compute_action_id(scope=...)` accepts any string, so the scope need not be
+  the EU PK. Preserve the #157 protections: the `_is_uuid` guard (`:516`), the `begin_nested`
+  SAVEPOINT (`:524`), the no-bare-`run_<uuid>`-cast invariant.
+- **Route tool calls through idempotency:** `run_agent_tool` writes an `EffectRecord` keyed on
+  the stable run scope + tool + args (write-ahead in the worker subprocess) — this is what
+  actually makes agent crash-continuation safe for **non-idempotent** tools. Converges with
+  ECOGAP-1 Phase 2a/3b (the per-step WAL).
+
+**Relationship to ECOGAP-1:** ECOGAP-1 Phases 1/2/2a ship crash continuation gated to
+*idempotent-declared* flows/agents precisely because this layer doesn't exist. IDEM-10 is the
+prerequisite for **declaration-free** continuation (the ECOGAP-1 Phase 3 payoff). Scope the
+two layers as a dedicated effort — this is the kernel's most correctness-sensitive path
+(#157 history) and larger than a single contained PR.
+
+---
+
 ## C2 — Cross-Platform Container-Grade Sandbox
 
 Status: CLOSED (2026-05-24)
@@ -2749,6 +2807,11 @@ non-idempotent safety fundamentally needs the EffectRecord broadening. **Phase 3
 thread the REPLAY-1 clock through the execution hot paths for deterministic event-sourced
 replay; broaden `EffectRecord`/`execution_guarantee` beyond `AGENT_HIGH_RISK` so continuation
 is safe for non-idempotent flows/agents without the per-declaration.
+**Phase 3a re-scoped 2026-07-09 → tracked as IDEM-10:** the investigation found the
+EXACTLY_ONCE gate is dead in production (guarantee never persisted / EU-PK lookup can't match)
+and agent tool calls bypass the dispatcher entirely, so "extend the gate for the nodus_vm
+edge" was a false premise — the real work is resurrecting the gate + routing tool calls
+through idempotency (IDEM-10), the prerequisite for declaration-free continuation.
 
 **Reopen trigger:** when Phase 2/3 (agent-run continuation, event-sourced replay) is scheduled.
 

@@ -421,7 +421,7 @@ This bit us during C3 Phase 0: all 17 escape tests were silently skipped on firs
 
 ## TECH_DEBT.md — IDEM-* numbering
 
-Entries are numbered sequentially. Do not reuse a number. IDEM-1 through IDEM-9 are recorded in TECH_DEBT.md. Next available: **IDEM-10**.
+Entries are numbered sequentially. Do not reuse a number. IDEM-1 through IDEM-10 are recorded in TECH_DEBT.md. **IDEM-10 (open, 2026-07-09): the EXACTLY_ONCE idempotency gate is dead in production — never persisted to an EU + EU-PK lookup can't match; agent tool calls bypass the dispatcher entirely.** Next available: **IDEM-11**.
 
 When closing an entry, change `Status: Deferred — Low Priority` to `Status: CLOSED (YYYY-MM-DD)`
 and replace the description with what was implemented and any remaining gap.
@@ -508,7 +508,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 
 Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within a prefix.
 
-- **IDEM-\*** — idempotency audit findings. Next available: **IDEM-10**.
+- **IDEM-\*** — idempotency audit findings. **IDEM-10 open (2026-07-09): EXACTLY_ONCE gate never fires in prod + agent tool calls bypass it — the real ECOGAP-1 Phase 3a.** Next available: **IDEM-11**.
 - **CLI-1** — lazy settings getter / module-level import hazard. Open, deferred post-1.0.
 - **CLI-SANDBOX-FORMAT-1** — `sandbox` raw JSON output wall. Open, deferred to 1.0.1.
 - **C2, C3** — cross-platform sandbox tiers. All phases closed 2026-06-06.
