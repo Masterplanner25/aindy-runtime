@@ -4,6 +4,47 @@
 
 ---
 
+## 1.6.2 — 2026-07-09
+
+Backward-compatible, opt-in. Closes the last open Infinity loop item — the runtime can
+now *act* on a post-execution Next-Action decision (previously record-only) — plus a
+verified-scope docs correction for ECOGAP-4. No schema change; no new syscall or
+SystemEventType; no breaking changes to any stable surface. Satisfies
+`aindy-runtime>=1.5.3,<2.0`.
+
+### Added — Deliverable C: act on NextAction (INFINITY-RUNTIME-1)
+
+Gap 4 shipped record-first (emit `NEXT_ACTION_CHOSEN`, take no action). This adds the
+bounded acting half, **opt-in behind `AINDY_NEXT_ACTION_ACTING` (default off)**.
+
+- **Bounded follow-up dispatch** (`core/next_action_dispatch.py`): when an **app-sourced**
+  completion-hook decision is `trigger_execution` with an objective, the runtime dispatches
+  ONE follow-up run via the async job `agent.next_action_followup` → `create_run` → (if
+  auto-approved) `execute_run`. Wired into `_emit_agent_next_action` after the record emit (#213).
+- **Rails reused:** the approval gate is structurally preserved — a `pending_approval`
+  follow-up is left for a human, never force-executed; capability preflight applies; admission
+  is bounded by `count_active_executions`.
+- **One net-new rail:** a chain-depth cap (`parent_run_id` hops, `AINDY_NEXT_ACTION_MAX_CHAIN`,
+  default 3) so a hook that always returns `trigger_execution` cannot self-perpetuate.
+- **Never acts on a runtime-default decision** (`trigger_execution` is never a runtime default,
+  plus an explicit non-default `source` guard). Agent runs only — async/flow completion paths
+  have no NextAction seam.
+
+### Docs
+
+- **ECOGAP-4 verified-scope correction** (#212): recorded the source-audited built-but-inert
+  state of the G4a egress/secret-broker scaffolding and G4b's out-of-tree MCP/A2A adapters,
+  with reopen triggers — no code change.
+
+### Compatibility
+
+- No breaking changes to stable surfaces; `aindy-sdk` / `aindy-ui-kit` window unchanged.
+- **App follow-up (opt-in):** to let the runtime close the Infinity loop autonomously, set
+  `AINDY_NEXT_ACTION_ACTING=true` after soak and have the completion hook return a
+  `trigger_execution` decision carrying `{"args": {"objective": "..."}}`.
+
+---
+
 ## 1.6.1 — 2026-07-09
 
 Backward-compatible. A fix that restores a silently-dead behavior, plus the first
