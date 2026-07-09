@@ -4,6 +4,48 @@
 
 ---
 
+## 1.6.1 — 2026-07-09
+
+Backward-compatible. A fix that restores a silently-dead behavior, plus the first
+increments of event-sourced durable execution (all opt-in, default off). No schema
+change; no breaking changes to any stable surface. Satisfies `aindy-runtime>=1.5.3,<2.0`.
+
+### Fixed
+
+- **First-party agent-completion hooks were unusable — post-completion enforcement
+  silently dead (INFINITY-COMPLETION-HOOK-BOUNDARY-1).** `run_agent_completion_hooks`
+  sanitized the hook context (dropping `db`, redacting the `run` ORM) and subprocess-isolated
+  the hook, so a first-party `handle_agent_run_completed` received `db=None` + a run with no
+  id and no-op'd — killing the app-side Infinity loop's post-agent-completion trigger. **Not
+  a 1.6.0 regression:** the sanitizer has been present since v1.0.0; INFINITY-RUNTIME-1 Gap 4
+  (1.6.0) merely started *consuming* the hook's return, making it visible. Fix
+  (boundary-preserving): the completion-hook context now carries `run_id` (a string that
+  survives the sanitizer) and `agent_completion_hook` runs in-process — a first-party hook
+  re-fetches the run by id with its own session; the runtime still never leaks a db/session/ORM
+  handle across the boundary (#209).
+
+### Added — ECOGAP-1: transparent crash continuation (Phase 1 + 2 + 2a)
+
+All opt-in behind `AINDY_DURABLE_CONTINUATION` (default off), startup-only,
+idempotent-gated. On restart a run stranded mid-execution is re-driven from its last
+committed checkpoint instead of failed.
+
+- **Phase 1 — flow-level** (`core/flow_continuation.py`): re-drive a stranded non-waiting
+  `running`/`executing` FlowRun from `current_node`/`state` via `PersistentFlowRunner.resume()`;
+  per-flow `mark_flow_continuation_safe`; crash-loop dead-letter (#206).
+- **Phase 2 — nodus_vm agent** (`core/agent_continuation.py`): re-drive a crashed agent run
+  from its last completed segment; per-agent-type `mark_agent_type_continuation_safe` (#207).
+- **Phase 2a — per-step granularity** (`AINDY_DURABLE_STEP_GRANULARITY`, default off): each
+  agent tool step becomes its own segment so continuation resumes at step granularity (#208).
+
+### Compatibility
+
+- No breaking changes to stable surfaces; `aindy-sdk` / `aindy-ui-kit` window unchanged.
+- **App follow-up:** `handle_agent_run_completed` should re-fetch the run by `run_id` with its
+  own `SessionLocal` (it no longer receives a usable `run`/`db` — by design).
+
+---
+
 ## 1.6.0 — 2026-07-08
 
 Large, **fully backward-compatible** feature release: agent-framework security
