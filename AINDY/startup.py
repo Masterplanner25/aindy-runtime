@@ -1352,9 +1352,16 @@ def _recover_stuck_runs(db_factory, enable_background: bool) -> None:
                 staleness_minutes=settings.STUCK_RUN_THRESHOLD_MINUTES,
                 include_wait_timeouts=True,
                 return_stats=True,
+                # ECOGAP-1: startup is the only safe moment to re-drive stranded
+                # non-waiting flows (no live runners). Gated by
+                # AINDY_DURABLE_CONTINUATION + per-flow continuation-safety.
+                continue_stranded=True,
             )
             _recovered = int(_scan_result.get("recovered", 0))
             _dead_lettered = int(_scan_result.get("dead_lettered", 0))
+            _continued = int(_scan_result.get("continued", 0))
+            if _continued:
+                logger.info("[startup] Crash-continued %d stranded flow run(s)", _continued)
             if _recovered:
                 logger.info("[startup] Stuck-run scan recovered %d run(s)", _recovered)
                 try:

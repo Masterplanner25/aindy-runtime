@@ -288,15 +288,21 @@ def scan_and_recover_stuck_runs(
     *,
     include_wait_timeouts: bool = False,
     return_stats: bool = False,
+    continue_stranded: bool = False,
 ) -> int | dict[str, int]:
     """
     Scan for stuck FlowRun rows and mark them failed.
 
     A run is considered stuck when:
-      - status == "running"
+      - status in ("running", "executing")
       - updated_at < now() - staleness_minutes
 
-    Returns counters for recovered and dead-lettered runs.
+    ``continue_stranded`` (ECOGAP-1): when True — set only by the startup caller,
+    where no live runners exist — a continuation-safe flow is re-driven from its
+    last-committed node instead of failed. The periodic watchdog leaves it False
+    (failing a possibly-live run is safer than double-driving it).
+
+    Returns counters for recovered, dead-lettered, and continued runs.
     Never raises — all exceptions are caught internally.
     """
     if staleness_minutes is None:
@@ -304,10 +310,12 @@ def scan_and_recover_stuck_runs(
 
     recovered = 0
     dead_lettered = 0
+    continued = 0
 
     try:
         from AINDY.db.models.flow_run import FlowRun
         from AINDY.config import settings
+        from AINDY.core.flow_continuation import try_continue_flow_run
         from AINDY.agents.dead_letter_service import move_to_dead_letter
 
         now = datetime.now(timezone.utc)
@@ -343,7 +351,7 @@ def scan_and_recover_stuck_runs(
                 staleness_minutes,
                 settings.FLOW_WAIT_TIMEOUT_MINUTES,
             )
-            return {"recovered": 0, "dead_lettered": 0} if return_stats else 0
+            return {"recovered": 0, "dead_lettered": 0, "continued": 0} if return_stats else 0
 
         logger.warning(
             "[StuckRunService] Startup scan: found %d stuck run(s) and %d timed-out waiting run(s) "
@@ -356,6 +364,15 @@ def scan_and_recover_stuck_runs(
 
         for flow_run in stuck_runs:
             try:
+                # ECOGAP-1: try transparent crash continuation before failing —
+                # ONLY at startup (continue_stranded=True). Continuing a run
+                # mid-operation would risk double-driving a hung-but-alive runner;
+                # at startup no live runners exist. Handled (continued or
+                # dead-lettered) → skip the failure path.
+                if continue_stranded and try_continue_flow_run(flow_run, db):
+                    continued += 1
+                    continue
+
                 if flow_run.workflow_type == "agent_execution":
                     _recover_agent_run(flow_run, db)
                 else:
@@ -409,7 +426,10 @@ def scan_and_recover_stuck_runs(
             "[StuckRunService] Startup scan aborted with unexpected error: %s", exc
         )
 
+    if continued:
+        logger.info("[StuckRunService] Crash-continued %d stranded flow run(s)", continued)
+
     if return_stats:
-        return {"recovered": recovered, "dead_lettered": dead_lettered}
+        return {"recovered": recovered, "dead_lettered": dead_lettered, "continued": continued}
     return recovered
 
