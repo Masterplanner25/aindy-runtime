@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-06-06"
+last_verified: "2026-07-09"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -259,6 +259,44 @@ container-grade sandbox claim holds on Windows with Docker Desktop Linux contain
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner`
 on Windows + Docker Desktop Linux containers mode.
+
+---
+
+### Entry 002 — 2026-07-09
+
+**Platform:** GitHub Actions `ubuntu-latest` runner (native Linux Docker daemon) — the
+`sandbox-escape-linux.yml` release gate, fired automatically on the `v1.6.2` tag  
+**Host OS:** Ubuntu (GitHub-hosted `ubuntu-latest`), native Linux kernel — Docker uses a native
+Linux-containers backend, not a Docker Desktop VM  
+**Container image:** `python:3.11-alpine` (sha256:25976e9d34a0fab1f278cae931f34c8303d97bf0c0d7f85b6b4dcf641d7702a4)  
+**Test command:** `pytest -m sandbox_escape` (via workflow; `SANDBOX_ESCAPE_IMAGE=python:3.11-alpine`)  
+**Commit:** `02fc620` (release tag `v1.6.2`)  
+**Operator:** CI (release gate, run 29058111003)
+
+**Results by category:**
+
+| Category | Tests | Pass | Fail | Skip | Notes |
+|---|---|---|---|---|---|
+| Filesystem escape | 3 | 3 | 0 | 0 | Read-only rootfs, read-only bind mount, scoped tmpfs all verified |
+| Network escape | 3 | 3 | 0 | 0 | TCP, UDP, kernel interface evidence all blocked (`--network none`) |
+| Process / pids | 2 | 2 | 0 | 0 | pids limit + cgroup evidence — ran natively on the runner kernel, **0 skips** |
+| Privilege escalation | 4 | 4 | 0 | 0 | CAP_NET_RAW, CAP_CHOWN removed; NoNewPrivs=1 in /proc; combined-controls check |
+| Host env leak | 2 | 2 | 0 | 0 | No production secrets present; PYTHONIOENCODING transmitted |
+| Path boundary | 3 | 3 | 0 | 0 | Canary not reachable; plugin root accessible; traversal contained |
+
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP  
+**Total runtime:** 4.39 seconds (sum of per-test container durations; `tested_at` 2026-07-09T23:43:52Z)  
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`)
+
+**Platform notes:**  
+This is the **primary release gate** — it runs on every `v*` tag on a native Linux runner where
+Docker uses a real Linux-containers backend, so the Linux-kernel-only controls (pids cgroup,
+capability drop, no-new-privileges) execute natively and **cannot skip**. Entry 001 verified the
+same 17 vectors on Windows + Docker Desktop (Linux VM backend); this entry confirms them on a
+native Linux kernel for the exact commit being published to PyPI as `aindy-runtime==1.6.2`.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v1.6.2` release commit.
 
 ---
 
