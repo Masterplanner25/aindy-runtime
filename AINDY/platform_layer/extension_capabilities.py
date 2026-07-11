@@ -11,6 +11,7 @@ from AINDY.platform_layer.extension_policy import (
 
 CAP_MEMORY_READ = "memory.read"
 CAP_MEMORY_WRITE = "memory.write"
+CAP_MEMORY_DELETE = "memory.delete"
 CAP_FLOW_RUN = "flow.run"
 CAP_EVENT_EMIT = "event.emit"
 CAP_TOOL_INVOKE = "tool.invoke"
@@ -27,6 +28,7 @@ PLUGIN_HOST_ENV_ALLOWLIST = [
 EXTENSION_RUNTIME_CAPABILITIES = {
     CAP_MEMORY_READ,
     CAP_MEMORY_WRITE,
+    CAP_MEMORY_DELETE,
     CAP_FLOW_RUN,
     CAP_EVENT_EMIT,
     CAP_TOOL_INVOKE,

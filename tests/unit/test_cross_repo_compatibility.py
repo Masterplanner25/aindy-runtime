@@ -31,6 +31,7 @@ pytestmark = pytest.mark.runtime_only
 _STABLE_SYSCALLS = [
     "sys.v1.memory.read",
     "sys.v1.memory.write",
+    "sys.v1.memory.delete",
     "sys.v1.memory.search",
     "sys.v1.memory.tree",
     "sys.v1.memory.trace",

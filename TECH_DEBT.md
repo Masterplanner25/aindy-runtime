@@ -2484,6 +2484,32 @@ Sites updated (12): `kernel/syscall_dispatcher.py` (EffectRecord gate — 3 site
 
 ---
 
+## MEM-DELETE-1 — memory.delete shipped hard/syscall-only; four opt-in upgrades deferred
+
+**Status:** Core SHIPPED (2026-07-11); upgrades deferred by explicit scope decision.
+
+`sys.v1.memory.delete` (capability + dedicated `memory.delete` scope) ships as a **hard,
+syscall-only, node-id** delete: tenant-scoped, idempotent, DB `ON DELETE CASCADE` to the
+node's history / trace memberships / causal edges / links. Irreversible. No REST route, no
+audit event, no bulk/path delete. Verified against real Postgres (isolation + cascade +
+idempotency). Key files: `db/dao/memory_node_dao.py::delete_by_id`,
+`kernel/syscall_registry.py::_handle_memory_delete`, scope in `auth/api_key_auth.py`,
+dispatch map in `routes/platform/platform_ops_router.py`.
+
+Four upgrades were consciously deferred (each independently addable, no rework of the core):
+
+- **G1 — REST `DELETE /platform/nodes/{node_id}` route** (`memory_router.py`) that dispatches
+  the syscall. **Reopen trigger:** a non-SDK HTTP client needs delete, or production asks for it.
+- **G2 — `MEMORY_DELETED` audit event.** Adds a `SystemEventTypes` value → **trips the
+  frozen-hash baseline** (update in lockstep). Skipped for v1; the dispatch envelope + OTel span
+  already record the call. **Reopen trigger:** deletion needs a first-class audit signal.
+- **G3 — Bulk / MAS-path delete** (e.g. wipe a namespace subtree). Bigger feature; the SDK
+  signature is node-id-only. **Reopen trigger:** subtree/bulk deletion is requested.
+- **G4 — Soft delete** (add `is_deleted`/`deleted_at` to `MemoryNodeModel`). Preserves audit +
+  reversible (can hook AGENT-HARDEN-3 undo), but needs a schema-contract bump + migration +
+  threading `is_deleted == False` through ~8 read sites. **Reopen trigger:** audit-preservation
+  or undoable delete becomes a requirement (would likely supersede the hard delete).
+
 ## MEM-NODETYPE-1 — Memory write defaults to a node_type the validator rejects
 
 **Status:** CLOSED (2026-06-27)

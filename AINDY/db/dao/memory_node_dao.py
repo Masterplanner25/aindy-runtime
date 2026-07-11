@@ -307,6 +307,34 @@ class MemoryNodeDAO:
         """Alias for get_by_id() — provides API compatibility with legacy MemoryNodeDAO."""
         return self.get_by_id(node_id)
 
+    def delete_by_id(self, node_id: str, user_id: str = None) -> bool:
+        """Hard-delete a memory node the caller owns. Returns True if a row was removed.
+
+        Tenant-scoped: with ``user_id`` set, only the owner's node is eligible — another
+        tenant's node (or a shared node owned by someone else) returns False without
+        revealing whether it exists. Idempotent: a missing/invalid node_id returns False,
+        never raises.
+
+        Hard delete. The DB cascades (``ON DELETE CASCADE``) to the node's history
+        (``memory_node_history``), trace-node memberships (``memory_trace_nodes``), causal
+        edges (``event_edges``), and links (``memory_links``). Irreversible. Flushes but
+        does not commit — the caller owns the transaction boundary.
+        """
+        node = self._get_model_by_id(node_id, user_id=user_id)
+        if node is None:
+            return False
+        try:
+            # Core DELETE by primary key so the DB-level ON DELETE CASCADE fires
+            # regardless of ORM relationship configuration.
+            self.db.query(MemoryNodeModel).filter(
+                MemoryNodeModel.id == node.id
+            ).delete(synchronize_session=False)
+            self.db.flush()
+        except SQLAlchemyError:
+            logger.exception("[MemoryNodeDAO] delete_by_id failed for node_id=%s", node_id)
+            raise
+        return True
+
     def find_by_tags(
         self,
         tags: List[str],
