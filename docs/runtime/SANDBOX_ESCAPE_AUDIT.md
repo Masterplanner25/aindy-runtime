@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-07-09"
+last_verified: "2026-07-11"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -297,6 +297,91 @@ native Linux kernel for the exact commit being published to PyPI as `aindy-runti
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v1.6.2` release commit.
+
+---
+
+### Entry 003 — 2026-07-09 (back-filled 2026-07-11)
+
+> **Back-fill note.** This records the `v1.6.0` Linux release-gate run, which fired on
+> 2026-07-09T00:25Z — *before* Entry 002 (`v1.6.2`, same day 23:43Z) — but was not
+> written up at the time. Per the append-only rule it is added here at the bottom rather
+> than inserted in date order; the header date is the actual run date, and the parenthetical
+> is when the entry was authored. Reconstructed from the run's `linux-sandbox-escape-results`
+> artifact (run 28985157820), not a re-run.
+
+**Platform:** GitHub Actions `ubuntu-latest` runner (native Linux Docker daemon) — the
+`sandbox-escape-linux.yml` release gate, fired automatically on the `v1.6.0` tag  
+**Host OS:** Ubuntu (GitHub-hosted `ubuntu-latest`), native Linux kernel — Docker uses a native
+Linux-containers backend, not a Docker Desktop VM  
+**Container image:** `python:3.11-alpine` (sha256:25976e9d34a0fab1f278cae931f34c8303d97bf0c0d7f85b6b4dcf641d7702a4)  
+**Test command:** `pytest -m sandbox_escape` (via workflow; `SANDBOX_ESCAPE_IMAGE=python:3.11-alpine`)  
+**Commit:** `f148fcb` (release tag `v1.6.0`)  
+**Operator:** CI (release gate, run 28985157820)
+
+**Results by category:**
+
+| Category | Tests | Pass | Fail | Skip | Notes |
+|---|---|---|---|---|---|
+| Filesystem escape | 3 | 3 | 0 | 0 | Read-only rootfs, read-only bind mount, scoped tmpfs all verified |
+| Network escape | 3 | 3 | 0 | 0 | TCP, UDP, kernel interface evidence all blocked (`--network none`) |
+| Process / pids | 2 | 2 | 0 | 0 | pids limit hit after 9 spawns; cgroup `pids.max=10` — ran natively, **0 skips** |
+| Privilege escalation | 4 | 4 | 0 | 0 | CAP_NET_RAW, CAP_CHOWN removed; NoNewPrivs=1 in /proc; combined-controls check |
+| Host env leak | 2 | 2 | 0 | 0 | No production secrets present; PYTHONIOENCODING transmitted |
+| Path boundary | 3 | 3 | 0 | 0 | Canary not reachable; plugin root accessible; traversal contained |
+
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP  
+**Total runtime:** 4.01 seconds (sum of per-test container durations; `tested_at` 2026-07-09T00:25:34Z)  
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`)
+
+**Platform notes:**  
+First `v*` tag to fire the `sandbox-escape-linux.yml` gate after it was added in the v1.6.0
+release PR. Native Linux runner, so the Linux-kernel-only controls (pids cgroup, capability
+drop, no-new-privileges) executed natively and could not skip. Same 17 vectors, same image
+digest as Entries 002 and 004.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v1.6.0` release commit.
+
+---
+
+### Entry 004 — 2026-07-09 (back-filled 2026-07-11)
+
+> **Back-fill note.** This records the `v1.6.1` Linux release-gate run (2026-07-09T13:21Z),
+> which also predates the already-recorded Entry 002 (`v1.6.2`, 23:43Z). Added at the bottom
+> per the append-only rule; reconstructed from the run's artifact (run 29020836863), not a
+> re-run. See Entry 003's note for the back-fill rationale.
+
+**Platform:** GitHub Actions `ubuntu-latest` runner (native Linux Docker daemon) — the
+`sandbox-escape-linux.yml` release gate, fired automatically on the `v1.6.1` tag  
+**Host OS:** Ubuntu (GitHub-hosted `ubuntu-latest`), native Linux kernel — Docker uses a native
+Linux-containers backend, not a Docker Desktop VM  
+**Container image:** `python:3.11-alpine` (sha256:25976e9d34a0fab1f278cae931f34c8303d97bf0c0d7f85b6b4dcf641d7702a4)  
+**Test command:** `pytest -m sandbox_escape` (via workflow; `SANDBOX_ESCAPE_IMAGE=python:3.11-alpine`)  
+**Commit:** `9e8b8d2` (release tag `v1.6.1`)  
+**Operator:** CI (release gate, run 29020836863)
+
+**Results by category:**
+
+| Category | Tests | Pass | Fail | Skip | Notes |
+|---|---|---|---|---|---|
+| Filesystem escape | 3 | 3 | 0 | 0 | Read-only rootfs, read-only bind mount, scoped tmpfs all verified |
+| Network escape | 3 | 3 | 0 | 0 | TCP, UDP, kernel interface evidence all blocked (`--network none`) |
+| Process / pids | 2 | 2 | 0 | 0 | pids limit hit after 9 spawns; cgroup `pids.max=10` — ran natively, **0 skips** |
+| Privilege escalation | 4 | 4 | 0 | 0 | CAP_NET_RAW, CAP_CHOWN removed; NoNewPrivs=1 in /proc; combined-controls check |
+| Host env leak | 2 | 2 | 0 | 0 | No production secrets present; PYTHONIOENCODING transmitted |
+| Path boundary | 3 | 3 | 0 | 0 | Canary not reachable; plugin root accessible; traversal contained |
+
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP  
+**Total runtime:** 4.11 seconds (sum of per-test container durations; `tested_at` 2026-07-09T13:21:04Z)  
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`)
+
+**Platform notes:**  
+Identical 17-vector result on the same native-Linux gate and same image digest as Entries 002
+and 003, for the `v1.6.1` commit published to PyPI as `aindy-runtime==1.6.1`. With Entries 002
+and 003 this completes the audit trail for all three v1.6.x releases (v1.6.0, v1.6.1, v1.6.2).
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v1.6.1` release commit.
 
 ---
 
