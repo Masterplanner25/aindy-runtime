@@ -16,6 +16,12 @@ Operable via a built-in platform UI and a REST API backed by the `aindy-sdk`.
 - **Syscall contract** — single `SyscallDispatcher` entry point with schema validation, idempotency gates, and tenant isolation
 - **Platform UI** — operator dashboard for flows, agents, scheduler, and observability (served at `/platform`)
 - **Plugin registry** — mount routers, flows, jobs, syscalls, and event handlers from external Python packages at boot time
+- **Nodus script execution** — embedded execution service for the Nodus DSL (`.nodus` / `.nd`), with memory builtins and WAIT/RESUME propagation back into the flow engine
+- **Distributed operation** — Redis-backed distributed job queue, lease-based leadership election for background schedulers, and orphan-run recovery watchdogs
+- **Effect compensation** — append-only effect-reversal ledger with `sys.v1.agent.undo` to walk back a run's recorded side effects, plus `sys.v1.agent.simulate` for zero-side-effect rehearsal against virtual tools
+- **Sandbox certification** — Docker-backed extension sandbox with an escape-test suite, posture reporting (`aindy-runtime sandbox`), and an append-only audit log
+- **Webhooks** — subscription CRUD on the platform API for pushing runtime events to external endpoints
+- **Federated memory recall** — cross-agent recall via `POST /memory/federated/recall`, dispatched through the syscall contract
 
 **Stability:** public surfaces declared under `docs/runtime/` are stable. Extension and
 orchestration surfaces marked experimental may change between minor versions. In-process
@@ -124,7 +130,10 @@ and use `AINDYClient`. See [After the server starts](#after-the-server-starts) a
 
 **2. Agent runs** — Submit agent objectives via `POST /apps/agent/run`. The runtime
 executes the objective through its flow engine. No in-process code needed — just an
-authenticated HTTP call with a capability token.
+authenticated HTTP call with a capability token. Note: the `/apps/agent/run` route
+itself is registered by the app plugin layer (pattern 3), not the bare runtime — a
+plugin bootstrap such as `aindy-apps-monolith` must be mounted for this endpoint to
+exist.
 
 **3. Trusted Python extensions (in-process)** — Set
 `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` to load a Python package into the
@@ -190,8 +199,11 @@ python -m pip install -e .[release]
 ## CLI
 
 ```
+aindy-runtime init       Scaffold AINDY/.env (with generated SECRET_KEY), Dockerfile,
+                         docker-compose.yml, and docker/init-pgvector.sql for a new install
 aindy-runtime serve      Start the HTTP API server (requires DATABASE_URL)
 aindy-runtime sandbox    Report sandbox capabilities and exit
+aindy-runtime auth promote-admin <email>   Grant admin to a registered user (grant-only)
 aindy-runtime --help     Show help and exit
 aindy-runtime --version  Show version and exit
 ```
