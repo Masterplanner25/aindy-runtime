@@ -17,6 +17,39 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+# Default Nodus wall-clock budget. Applied to BOTH the outer subprocess timeout
+# (subprocess.run(timeout=)) and the inner nodus-lang run_source(timeout_ms=) —
+# they share one value so a run can never outlive its budget at either layer.
+# The app-profile path cold-starts the whole plugin stack inside the fresh worker
+# subprocess (~12s), so the default is too tight there; raise it with
+# AINDY_NODUS_MAX_EXECUTION_MS. See TECH_DEBT NODUS-WARMPOOL-1 for the durable fix
+# (a warm worker that keeps cold-start out of the script budget entirely).
+_DEFAULT_MAX_EXECUTION_MS = 30_000
+
+
+def _resolve_default_max_execution_ms() -> int:
+    """Resolve the fallback Nodus budget from AINDY_NODUS_MAX_EXECUTION_MS (ms)."""
+    raw = os.getenv("AINDY_NODUS_MAX_EXECUTION_MS", "").strip()
+    if not raw:
+        return _DEFAULT_MAX_EXECUTION_MS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "[NodusRuntimeAdapter] invalid AINDY_NODUS_MAX_EXECUTION_MS=%r; using %d",
+            raw,
+            _DEFAULT_MAX_EXECUTION_MS,
+        )
+        return _DEFAULT_MAX_EXECUTION_MS
+    if value <= 0:
+        logger.warning(
+            "[NodusRuntimeAdapter] AINDY_NODUS_MAX_EXECUTION_MS must be > 0 (got %d); using %d",
+            value,
+            _DEFAULT_MAX_EXECUTION_MS,
+        )
+        return _DEFAULT_MAX_EXECUTION_MS
+    return value
+
 
 @dataclass
 class NodusExecutionContext:
@@ -65,21 +98,23 @@ class NodusRuntimeAdapter:
         self,
         script: str,
         context: NodusExecutionContext,
-        max_execution_ms: int = 30_000,
+        max_execution_ms: Optional[int] = None,
     ) -> NodusExecutionResult:
         filename = f"<nodus:eu:{context.execution_unit_id}>"
-        effective_ms = (
-            context.max_execution_ms
-            if context.max_execution_ms is not None
-            else max_execution_ms
-        )
+        # Precedence: per-run context override → explicit arg → env default.
+        if context.max_execution_ms is not None:
+            effective_ms = context.max_execution_ms
+        elif max_execution_ms is not None:
+            effective_ms = max_execution_ms
+        else:
+            effective_ms = _resolve_default_max_execution_ms()
         return self._execute(script, filename, context, max_execution_ms=effective_ms)
 
     def run_file(
         self,
         path: str,
         context: NodusExecutionContext,
-        max_execution_ms: int = 30_000,
+        max_execution_ms: Optional[int] = None,
     ) -> NodusExecutionResult:
         try:
             with open(path, "r", encoding="utf-8") as fh:
@@ -100,8 +135,10 @@ class NodusRuntimeAdapter:
         script: str,
         filename: str,
         context: NodusExecutionContext,
-        max_execution_ms: int = 30_000,
+        max_execution_ms: Optional[int] = None,
     ) -> NodusExecutionResult:
+        if max_execution_ms is None:
+            max_execution_ms = _resolve_default_max_execution_ms()
         # Legacy in-process initial_globals included: "sys": _nodus_syscall
         if re.search(r"^\s*while\s+True\s*:\s*$", script, re.MULTILINE):
             return NodusExecutionResult(

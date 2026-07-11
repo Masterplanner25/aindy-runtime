@@ -235,11 +235,9 @@ class MemoryCaptureEngine:
                         node["is_shared"] = db_node.is_shared
             except Exception:
                 emit_observability_event(
-                    logger,
-                    event="memory_capture_namespace_update_failed",
+                    event_type="memory_capture_namespace_update_failed",
                     user_id=self.user_id,
-                    namespace=namespace,
-                    node_id=node_id,
+                    payload={"namespace": namespace, "node_id": node_id},
                 )
                 raise
 
