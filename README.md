@@ -138,8 +138,12 @@ exist.
 **3. Trusted Python extensions (in-process)** — Set
 `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` to load a Python package into the
 runtime process at startup. Extensions register routers, flows, jobs, syscalls, and
-event handlers through the plugin registry. This is the pattern used by
-`aindy-apps-monolith`.
+event handlers through the plugin registry. **Any** trusted Python package that ships
+a schema-valid `aindy_plugins.json` manifest can plug in this way — point the runtime
+at it with `AINDY_APP_PLUGIN_MANIFEST=/path/to/aindy_plugins.json`, or let it discover
+an `aindy_plugins.json` in the working directory. The plugin layer is not tied to any
+particular app package; `aindy-apps-monolith` is the first-party reference
+implementation, not a required dependency.
 
 **Reference implementation:** [`aindy-apps-monolith`](https://github.com/Masterplanner25/aindy-apps-monolith)
 contains 16 working domain apps built on this pattern. The canonical how-to doc is
@@ -356,9 +360,11 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml \
 system, agent runtime, syscall registry, platform UI, and all stable operator surfaces
 declared under `docs/runtime/`.
 
-App-layer code (`apps/`, `aindy_plugins.json`, app-profile Alembic migrations) belongs
-in [`aindy-apps-monolith`](https://github.com/Masterplanner25/aindy-apps-monolith), which
-demonstrates the plugin pattern at scale across 16 domain apps.
+App-layer code (`apps/`, `aindy_plugins.json`, app-profile Alembic migrations) lives in a
+plugin package, not this repo — any package that implements the plugin manifest can serve
+that role. A.I.N.D.Y.'s own apps live in
+[`aindy-apps-monolith`](https://github.com/Masterplanner25/aindy-apps-monolith), the
+first-party reference that demonstrates the plugin pattern at scale across 16 domain apps.
 
 Full boundary definition: [`docs/runtime/RUNTIME_BOUNDARY.md`](docs/runtime/RUNTIME_BOUNDARY.md)
 
