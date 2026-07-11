@@ -120,7 +120,21 @@ requires three follow-up steps — in this order — or CI fails:
 - The runtime uses `alembic_version_runtime` (not the monolith's `alembic_version`).
 - Migration naming: `NNNN_short_description.py`, e.g. `0004_effect_records_completed_at_index.py`.
 - `downgrade()` must drop what `upgrade()` created. For index-only migrations, `DROP INDEX IF EXISTS` is sufficient.
-- Current chain: `0001` → `0002` → … → `0007` → `0008` (`0008_effect_reversals`, AGENT-HARDEN-3).
+- Current chain: `0001` → `0002` → … → `0009` → `0010` (`0010_agent_runs_flow_run_id_index`, RTR-3).
+
+**Head-revision bump protocol (APP-DEPLOY-1 / `bootstrap-schema`):** when you add a new
+`alembic/versions/NNNN_*.py`, also bump `RUNTIME_ALEMBIC_HEAD_REVISION` in
+`AINDY/db/alembic_head.py` to the new head. That constant is the packaged source of truth
+the `aindy-runtime bootstrap-schema` command stamps into `alembic_version_runtime` — the
+`alembic/` scripts dir lives at the repo root and is **not** shipped in the wheel
+(`packages.find = AINDY*`), so the command cannot read the head from the scripts at
+install time. `tests/unit/test_runtime_alembic_head.py` fails if the constant drifts from
+the actual scripts-dir head, so a forgotten bump is caught in CI. Note `memory_nodes`
+(defined in the runtime-owned `AINDY/memory/memory_persistence.py`) is runtime-owned and
+included by `runtime_owned_table_names()`; it is create_all-managed via the schema
+contract, NOT alembic-tracked (it is absent from env.py's `_RUNTIME_TABLES` autogenerate
+allowlist because alembic's `env.py` does not import the memory model — a deliberate,
+not-a-bug asymmetry).
 
 **Blank-database safety (ALEMBIC-FRESH-DB-1):** In Docker compose deployments, `alembic
 upgrade head` runs before the server starts, so before `_enforce_schema_guard` / `create_all`
@@ -567,6 +581,8 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Schema baseline | `scripts/schema_version_baseline.json` |
 | Scheduler jobs | `AINDY/platform_layer/scheduler_service.py` |
 | Alembic migrations | `alembic/versions/` |
+| Runtime Alembic head constant + stamp helper | `AINDY/db/alembic_head.py` — `RUNTIME_ALEMBIC_HEAD_REVISION`, `stamp_runtime_alembic_head()` |
+| `bootstrap-schema` CLI command | `AINDY/runtime_only.py` — `_bootstrap_schema()` |
 | Idempotency contract | `docs/runtime/IDEMPOTENCY_CONTRACT.md` |
 | Nodus developer guide (scripts + builtins) | `docs/runtime/NODUS_DEVELOPER_GUIDE.md` |
 | Syscall API reference (all registered calls) | `docs/runtime/SYSCALL_REFERENCE.md` |

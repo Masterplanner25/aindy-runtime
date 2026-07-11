@@ -208,6 +208,78 @@ def _promote_admin(email: str) -> NoReturn:
         db.close()
 
 
+def _bootstrap_schema(reconcile: bool) -> NoReturn:
+    """Build runtime-owned tables from packaged metadata and stamp alembic_version_runtime.
+
+    The clean-ownership deploy primitive (APP-DEPLOY-1): builds ONLY the runtime's own
+    tables (never app tables) from packaged ORM metadata, then stamps the runtime's
+    Alembic version table to head so a create_all-built database has a proper baseline
+    for future runtime upgrades. Idempotent. Requires DATABASE_URL.
+    """
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print(
+            "error: DATABASE_URL is not set.\n"
+            "Set DATABASE_URL before running this command.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    try:
+        from AINDY.db.database import engine
+        from AINDY.db.schema_contract import ensure_runtime_schema
+        from AINDY.db.alembic_head import (
+            RUNTIME_ALEMBIC_VERSION_TABLE,
+            stamp_runtime_alembic_head,
+        )
+    except Exception as exc:
+        print(f"error: could not import database layer: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+    try:
+        # (a) Build/reconcile the runtime-owned tables. Reuses the exact path the
+        # server runs on a blank DB at startup, scoped to runtime-owned tables only.
+        report = ensure_runtime_schema(
+            engine,
+            allow_bootstrap=True,
+            allow_reconcile=reconcile,
+        )
+        if report.bootstrapped:
+            print("ok: bootstrapped runtime-owned tables from packaged metadata.")
+        elif report.reconciled:
+            print("ok: reconciled runtime-owned tables to packaged metadata.")
+        else:
+            print("ok: runtime-owned tables already present (no table changes).")
+
+        if not report.ok:
+            print(
+                f"error: runtime-owned schema is not ready: {report.summary()}\n"
+                "Re-run with --reconcile for an additive column/index fix, or perform "
+                "the required offline migration before retrying.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+        # (b) Stamp the runtime's Alembic baseline (the half the app layer cannot do).
+        rev = stamp_runtime_alembic_head(engine)
+        print(f"ok: stamped {RUNTIME_ALEMBIC_VERSION_TABLE} to revision {rev}.")
+        raise SystemExit(0)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        exc_str = str(exc)
+        if any(k in exc_str for k in ("OperationalError", "could not connect", "could not translate", "Connection refused")):
+            print(
+                "error: could not connect to database.\n"
+                "Check that DATABASE_URL points to a reachable PostgreSQL instance.\n"
+                f"  detail: {exc.__cause__ or exc}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+
 def _init(target_dir: str, force: bool) -> NoReturn:
     """Scaffold AINDY/.env, Dockerfile, docker-compose.yml, and docker/init-pgvector.sql."""
     import secrets
@@ -483,6 +555,27 @@ def main() -> None:
         help="Output raw JSON instead of the human-readable summary.",
     )
 
+    bootstrap_parser = subparsers.add_parser(
+        "bootstrap-schema",
+        help="Create runtime-owned tables from packaged metadata and stamp the Alembic baseline.",
+        description=(
+            "Idempotently bootstrap the runtime-owned database surface: build the "
+            "runtime's own tables from packaged ORM metadata (never app-owned tables) "
+            "and stamp alembic_version_runtime to the runtime head revision. This gives "
+            "a create_all-built database a proper Alembic baseline so a later runtime "
+            "schema upgrade has a stamped line to migrate from. Safe to run repeatedly. "
+            "Requires DATABASE_URL. Intended for a deploy entrypoint that splits schema "
+            "ownership: run this for runtime tables + baseline, then have the app build "
+            "only its own tables."
+        ),
+    )
+    bootstrap_parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        default=False,
+        help="Also apply additive column/index reconciles if the runtime schema is out of date.",
+    )
+
     auth_parser = subparsers.add_parser(
         "auth",
         help="Auth management commands.",
@@ -513,6 +606,8 @@ def main() -> None:
         _serve()
     elif args.command == "sandbox":
         _run_sandbox_check(output_json=getattr(args, "output_json", False))
+    elif args.command == "bootstrap-schema":
+        _bootstrap_schema(reconcile=getattr(args, "reconcile", False))
     elif args.command == "auth":
         if args.auth_command == "promote-admin":
             _promote_admin(args.email)

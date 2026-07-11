@@ -207,6 +207,8 @@ aindy-runtime init       Scaffold AINDY/.env (with generated SECRET_KEY), Docker
                          docker-compose.yml, and docker/init-pgvector.sql for a new install
 aindy-runtime serve      Start the HTTP API server (requires DATABASE_URL)
 aindy-runtime sandbox    Report sandbox capabilities and exit
+aindy-runtime bootstrap-schema   Create runtime-owned tables from packaged metadata
+                                 and stamp the Alembic baseline (idempotent; requires DATABASE_URL)
 aindy-runtime auth promote-admin <email>   Grant admin to a registered user (grant-only)
 aindy-runtime --help     Show help and exit
 aindy-runtime --version  Show version and exit
@@ -438,6 +440,31 @@ The extracted runtime is self-hostable for its own database surface.
   `AINDY_SCHEMA_RECONCILE=true` before mutating an initialized database
 - on incompatible drift, startup fails closed when `AINDY_ENFORCE_SCHEMA=true`
 - app-owned tables and the monolith Alembic history remain app-repo concerns
+
+**Blessed deploy primitive — `aindy-runtime bootstrap-schema`.** A deploy entrypoint
+that wants a clean ownership split (rather than replaying the full app migration
+history onto a fresh database) can run:
+
+```bash
+aindy-runtime bootstrap-schema      # idempotent; requires DATABASE_URL + pgvector
+```
+
+This does two things the server also does at startup, but as an explicit, standalone,
+idempotent step: (a) builds the **runtime-owned** tables from packaged ORM metadata —
+scoped to the runtime's own table set, never app tables — and (b) stamps the runtime's
+`alembic_version_runtime` table to the runtime head revision. Step (b) is the half an
+app-side bootstrap cannot do correctly: it gives a `create_all`-built database a proper
+Alembic baseline, so a later runtime schema upgrade migrates from a stamped line instead
+of replaying the whole chain onto live tables. The recommended split is:
+
+```bash
+aindy-runtime bootstrap-schema      # runtime tables + runtime Alembic baseline
+# then, in the app deploy step: build only the app-owned tables
+```
+
+Pass `--reconcile` to also apply additive column/index fixes if the runtime schema is
+out of date. On an already-current database the command is a no-op that re-stamps the
+same head.
 
 ## Docs
 
