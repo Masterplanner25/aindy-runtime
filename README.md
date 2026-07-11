@@ -16,6 +16,12 @@ Operable via a built-in platform UI and a REST API backed by the `aindy-sdk`.
 - **Syscall contract** — single `SyscallDispatcher` entry point with schema validation, idempotency gates, and tenant isolation
 - **Platform UI** — operator dashboard for flows, agents, scheduler, and observability (served at `/platform`)
 - **Plugin registry** — mount routers, flows, jobs, syscalls, and event handlers from external Python packages at boot time
+- **Nodus script execution** — embedded execution service for the Nodus DSL (`.nodus` / `.nd`), with memory builtins and WAIT/RESUME propagation back into the flow engine
+- **Distributed operation** — Redis-backed distributed job queue, lease-based leadership election for background schedulers, and orphan-run recovery watchdogs
+- **Effect compensation** — append-only effect-reversal ledger with `sys.v1.agent.undo` to walk back a run's recorded side effects, plus `sys.v1.agent.simulate` for zero-side-effect rehearsal against virtual tools
+- **Sandbox certification** — Docker-backed extension sandbox with an escape-test suite, posture reporting (`aindy-runtime sandbox`), and an append-only audit log
+- **Webhooks** — subscription CRUD on the platform API for pushing runtime events to external endpoints
+- **Federated memory recall** — cross-agent recall via `POST /memory/federated/recall`, dispatched through the syscall contract
 
 **Stability:** public surfaces declared under `docs/runtime/` are stable. Extension and
 orchestration surfaces marked experimental may change between minor versions. In-process
@@ -124,13 +130,20 @@ and use `AINDYClient`. See [After the server starts](#after-the-server-starts) a
 
 **2. Agent runs** — Submit agent objectives via `POST /apps/agent/run`. The runtime
 executes the objective through its flow engine. No in-process code needed — just an
-authenticated HTTP call with a capability token.
+authenticated HTTP call with a capability token. Note: the `/apps/agent/run` route
+itself is registered by the app plugin layer (pattern 3), not the bare runtime — a
+plugin bootstrap such as `aindy-apps-monolith` must be mounted for this endpoint to
+exist.
 
 **3. Trusted Python extensions (in-process)** — Set
 `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS=true` to load a Python package into the
 runtime process at startup. Extensions register routers, flows, jobs, syscalls, and
-event handlers through the plugin registry. This is the pattern used by
-`aindy-apps-monolith`.
+event handlers through the plugin registry. **Any** trusted Python package that ships
+a schema-valid `aindy_plugins.json` manifest can plug in this way — point the runtime
+at it with `AINDY_APP_PLUGIN_MANIFEST=/path/to/aindy_plugins.json`, or let it discover
+an `aindy_plugins.json` in the working directory. The plugin layer is not tied to any
+particular app package; `aindy-apps-monolith` is the first-party reference
+implementation, not a required dependency.
 
 **Reference implementation:** [`aindy-apps-monolith`](https://github.com/Masterplanner25/aindy-apps-monolith)
 contains 16 working domain apps built on this pattern. The canonical how-to doc is
@@ -190,8 +203,11 @@ python -m pip install -e .[release]
 ## CLI
 
 ```
+aindy-runtime init       Scaffold AINDY/.env (with generated SECRET_KEY), Dockerfile,
+                         docker-compose.yml, and docker/init-pgvector.sql for a new install
 aindy-runtime serve      Start the HTTP API server (requires DATABASE_URL)
 aindy-runtime sandbox    Report sandbox capabilities and exit
+aindy-runtime auth promote-admin <email>   Grant admin to a registered user (grant-only)
 aindy-runtime --help     Show help and exit
 aindy-runtime --version  Show version and exit
 ```
@@ -344,9 +360,11 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml \
 system, agent runtime, syscall registry, platform UI, and all stable operator surfaces
 declared under `docs/runtime/`.
 
-App-layer code (`apps/`, `aindy_plugins.json`, app-profile Alembic migrations) belongs
-in [`aindy-apps-monolith`](https://github.com/Masterplanner25/aindy-apps-monolith), which
-demonstrates the plugin pattern at scale across 16 domain apps.
+App-layer code (`apps/`, `aindy_plugins.json`, app-profile Alembic migrations) lives in a
+plugin package, not this repo — any package that implements the plugin manifest can serve
+that role. A.I.N.D.Y.'s own apps live in
+[`aindy-apps-monolith`](https://github.com/Masterplanner25/aindy-apps-monolith), the
+first-party reference that demonstrates the plugin pattern at scale across 16 domain apps.
 
 Full boundary definition: [`docs/runtime/RUNTIME_BOUNDARY.md`](docs/runtime/RUNTIME_BOUNDARY.md)
 
