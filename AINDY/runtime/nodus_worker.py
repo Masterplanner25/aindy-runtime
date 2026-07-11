@@ -321,7 +321,15 @@ def main() -> int:
 
     stdout_buffer = io.StringIO()
     result_payload: dict[str, Any]
-    max_execution_ms = int(payload.get("max_execution_ms") or 30_000)
+    # The adapter always populates payload["max_execution_ms"] (env-resolved via
+    # AINDY_NODUS_MAX_EXECUTION_MS). The env fallback here only covers a standalone
+    # worker invocation with no budget in the payload, so both entry points agree.
+    _payload_budget = payload.get("max_execution_ms")
+    if _payload_budget:
+        max_execution_ms = int(_payload_budget)
+    else:
+        _env_budget = os.getenv("AINDY_NODUS_MAX_EXECUTION_MS", "").strip()
+        max_execution_ms = int(_env_budget) if _env_budget.isdigit() and int(_env_budget) > 0 else 30_000
 
     with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stdout_buffer):
         try:

@@ -2753,6 +2753,73 @@ users.
 
 ---
 
+## NODUS-WARMPOOL-1 — Nodus worker cold-start is billed against the script budget
+
+**Status:** Open — deferred (P1; quick knob shipped, durable fix outstanding)
+
+**Symptom (verified 2026-07-09, live Linux serve, app-profile).** A real agent run
+reached `executing` then failed with `"Nodus script exceeded 30000ms wall-clock
+timeout"` at 0/3 steps. The plan, planner, and app were all fine — the run died on
+the runtime's own execution budget, not on script work.
+
+**Root cause — architecture, not a nodus-lang bug.** Every Nodus execution spawns a
+**fresh worker subprocess** (`NodusRuntimeAdapter._execute` →
+`subprocess.run([sys.executable, "nodus_worker.py"], timeout=timeout_s)`,
+`nodus_runtime_adapter.py`). Under an app profile, that subprocess cold-starts the
+**entire plugin stack** (`load_plugins()` over ~17 apps, ~12s) *before the script
+runs a single step*. That boot time is billed against the same wall-clock budget the
+script gets, so a heavy profile can burn most/all of a 30s budget on import cost
+alone. The kill is the runtime's outer `subprocess.run(timeout=)` (pure AINDY code) —
+nodus-lang's inner `run_source(timeout_ms=)` never gets the deciding vote. A nodus-lang
+upgrade cannot fix this.
+
+Second, smaller instance of the same shape: `runtime_callback_worker` spawns a
+subprocess with a ~10s timeout (`runtime_callback_host.py`), which similarly pays a
+cold-start tax on the app profile.
+
+**Quick mitigation (shipped, this entry's PR).** `AINDY_NODUS_MAX_EXECUTION_MS`
+(default 30000) now sets the budget for **both** the outer subprocess timeout and the
+inner `run_source(timeout_ms=)` in one value; a per-run
+`NodusExecutionContext.max_execution_ms` still overrides. Operators can raise it (e.g.
+180000) to get past the cold-start wall. This makes the profile *runnable* but does not
+remove the tax — every run still re-boots the stack, so p50 latency stays ~cold-start
++ script.
+
+**Durable fix (not yet built) — keep cold-start out of the script budget.** Options,
+in rough order of effort:
+- **Warm worker / worker pool** — a long-lived worker process (or small pool) that
+  imports the plugin stack once and services many script executions over a pipe/socket,
+  so import cost is paid at boot, not per run. Requires a request/response protocol
+  (the current contract is one-shot JSON over stdin/stdout) and lifecycle management
+  (health, restart-on-crash, max-requests recycling to bound leaks).
+- **Separate the two clocks** — even without pooling, measure and exclude worker
+  cold-start from the script budget: start the wall-clock only once the worker signals
+  "stack loaded, script starting," so `AINDY_NODUS_MAX_EXECUTION_MS` bounds *script*
+  time, not boot + script.
+- **Lazy/narrowed plugin load in the worker** — only load the apps a given script
+  actually needs (the worker currently loads everything). Cuts the tax rather than
+  moving it.
+
+**Constraints to respect.** The worker's `cwd` is `parents[2]` (in a wheel:
+read-only site-packages — see the `_maybe_wrap_runtime_callback` CWD hazard in
+CLAUDE.md), so a warm worker must not assume a writable cwd. Subprocess isolation is
+also load-bearing for the sandbox posture (`--network none` on the extension path) and
+for the stateful-in-process callback carve-outs (`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`);
+a pool must preserve per-run state isolation (fresh `state`/`memory_context` per
+request, no cross-run leakage).
+
+**Reopen/resolve trigger:** when app-profile Nodus execution latency or the
+cold-start tax becomes a product concern (heavier profiles, tighter SLAs, or the
+literal-completed CI run needing a green under a realistic budget). Until then the env
+knob is the supported workaround.
+
+Key files: `AINDY/runtime/nodus_runtime_adapter.py` (`_execute`, subprocess spawn +
+timeout, `_resolve_default_max_execution_ms`), `AINDY/runtime/nodus_worker.py`
+(one-shot worker entry, `load_plugins()` cold-start), `AINDY/platform_layer/
+runtime_callback_host.py` (the sibling 10s callback subprocess).
+
+---
+
 ## ECOGAP-* — Ecosystem capability gaps (corrected lens)
 
 Derived from the 12-project ecosystem re-audit, re-judged against source-verified
