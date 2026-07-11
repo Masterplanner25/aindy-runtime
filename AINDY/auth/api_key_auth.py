@@ -7,6 +7,7 @@ class Scopes:
     FLOW_EXECUTE    = "flow.execute"
     MEMORY_READ     = "memory.read"
     MEMORY_WRITE    = "memory.write"
+    MEMORY_DELETE   = "memory.delete"
     AGENT_RUN       = "agent.run"
     EXECUTION_READ  = "execution.read"
     EVENT_EMIT      = "event.emit"
@@ -18,6 +19,7 @@ class Scopes:
         FLOW_EXECUTE,
         MEMORY_READ,
         MEMORY_WRITE,
+        MEMORY_DELETE,
         AGENT_RUN,
         EXECUTION_READ,
         EVENT_EMIT,

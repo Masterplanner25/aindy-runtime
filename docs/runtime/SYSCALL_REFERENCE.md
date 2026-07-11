@@ -82,6 +82,29 @@ Persist a new memory node for the calling user.
 
 ---
 
+### `sys.v1.memory.delete`
+
+Hard-delete a memory node owned by the calling user.
+
+**Stability:** stable
+
+**Capability:** `memory.delete` (dedicated scope — a `memory.write`-scoped key does **not** grant delete).
+
+**Payload:**
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `node_id` | string | yes | UUID of the node to delete. |
+
+**Returns:** `{deleted: bool, node_id: "..."}`
+
+**Semantics:** Tenant-scoped and idempotent. Deleting a missing node, or a node owned
+by another tenant, returns `{deleted: false, ...}` without error and without revealing
+whether the node exists. Hard delete — the database cascades (`ON DELETE CASCADE`) to the
+node's history, trace memberships, causal edges, and links. **Irreversible.**
+
+---
+
 ### `sys.v1.memory.search`
 
 Semantic search over the user's memory nodes.
@@ -483,6 +506,7 @@ the authorizing scopes below (or `platform.admin`, which bypasses the scope gate
 |---|---|---|
 | `memory.read` | `sys.v1.memory.read` / `.search` / `.list` / `.tree` / `.trace` | `memory.read` **or** `memory.write` |
 | `memory.write` | `sys.v1.memory.write` | `memory.write` |
+| `memory.delete` | `sys.v1.memory.delete` | `memory.delete` (dedicated — **not** granted by `memory.write`) |
 | `flow.run` | `sys.v1.flow.run` | `flow.execute` |
 | `event.emit` | `sys.v1.event.emit` | `event.emit` |
 | `execution.read` | `sys.v1.execution.get`, `sys.v1.observability.support_metrics` | `execution.read` |

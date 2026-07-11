@@ -53,6 +53,7 @@ _DISPATCH_CAPABILITY_SCOPES: dict[str, set[str]] = {
     "memory.read":    {Scopes.MEMORY_READ, Scopes.MEMORY_WRITE},
     "memory.search":  {Scopes.MEMORY_READ, Scopes.MEMORY_WRITE},
     "memory.write":   {Scopes.MEMORY_WRITE},
+    "memory.delete":  {Scopes.MEMORY_DELETE},
     "execution.read": {Scopes.EXECUTION_READ},
     "flow.run":       {Scopes.FLOW_EXECUTE},
     "event.emit":     {Scopes.EVENT_EMIT},

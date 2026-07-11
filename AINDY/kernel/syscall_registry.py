@@ -429,6 +429,35 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
     return result
 
 
+def _handle_memory_delete(payload: dict, context: SyscallContext) -> dict:
+    """sys.v1.memory.delete — hard-delete a memory node owned by the caller.
+
+    Payload keys:
+        node_id (str) — required; UUID of the node to delete.
+
+    Tenant-scoped and idempotent: deleting a missing node, or a node owned by another
+    tenant, returns ``{"deleted": False, "node_id": ...}`` without error and without
+    revealing existence. Hard delete — the DB cascades to the node's history, trace
+    memberships, causal edges, and links (irreversible).
+    """
+    from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
+
+    node_id = payload.get("node_id", "")
+    if not node_id:
+        raise ValueError("sys.v1.memory.delete requires 'node_id'")
+
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        dao = MemoryNodeDAO(db)
+        deleted = dao.delete_by_id(str(node_id), user_id=context.user_id)
+        result = {"deleted": bool(deleted), "node_id": str(node_id)}
+    except Exception:
+        _finish_handler_write(db, owns_session=owns_session, success=False)
+        raise
+    _finish_handler_write(db, owns_session=owns_session, success=True)
+    return result
+
+
 def _handle_memory_search(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.memory.search — semantic search over the user's memory nodes.
 
@@ -1396,6 +1425,19 @@ SYSCALL_REGISTRY["sys.v1.memory.write"] = SyscallEntry(
         "properties": {"node": {"type": "dict"}, "path": {"type": "string"}},
     },
 )
+SYSCALL_REGISTRY["sys.v1.memory.delete"] = SyscallEntry(
+    handler=_handle_memory_delete,
+    capability="memory.delete",
+    description="Hard-delete a memory node owned by the caller (tenant-scoped, idempotent).",
+    input_schema={
+        "required": ["node_id"],
+        "properties": {"node_id": {"type": "string"}},
+    },
+    output_schema={
+        "required": ["deleted"],
+        "properties": {"deleted": {"type": "bool"}, "node_id": {"type": "string"}},
+    },
+)
 SYSCALL_REGISTRY["sys.v1.memory.search"] = SyscallEntry(
     handler=_handle_memory_search,
     capability="memory.read",
@@ -1822,6 +1864,6 @@ def get_registered_syscalls() -> list[str]:
 # Minimum number of syscalls expected after a complete boot (all static built-ins).
 # Any count below this floor means Phase 8 did not finish, or a registration was lost.
 # Add 1 per new static entry added to this file.  Do not lower this value.
-SYSCALL_REGISTRY_MIN_COUNT: int = 22
+SYSCALL_REGISTRY_MIN_COUNT: int = 23
 
 
