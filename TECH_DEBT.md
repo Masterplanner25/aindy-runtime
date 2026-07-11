@@ -2951,7 +2951,33 @@ existing client seam.
 
 ### ECOGAP-4 — MCP/A2A: gated-egress boundary (runtime) + wire adapters (plugin)
 
-**Status:** Deferred — roadmap (P1 for the runtime half)
+**Status:** G4b **client-side SHIPPED** 2026-07-11 (opt-in). G4b server-side + G4a still deferred.
+
+**Update 2026-07-11 — G4b client-side interop shipped (opt-in).** AINDY agents can now call
+external MCP servers' tools. `AINDY/platform_layer/mcp_client.py` (`bootstrap()` on the default
+runtime manifest, no-op unless `AINDY_MCP_CLIENT_ENABLED` + `AINDY_MCP_SERVERS`) connects to each
+server, discovers its tools via `nodus_mcp_aindy.discover_tools`, and registers each via
+`register_tool` → `TOOL_REGISTRY` with capability `outbound.mcp`, risk high. `pip install
+aindy-runtime[mcp]`. Verified with a live SSE round-trip. Doc: `docs/runtime/MCP_INTEGRATION.md`.
+
+**Three corrections to the 2026-07-09 scope (verify-first, during the build):**
+1. **A2A is out.** `nodus-a2a` is NOT a wire protocol — it's an in-process coordinator
+   (registry + delegation *decisions*), zero transport/HTTP/agent-cards. External A2A interop
+   is not deliverable from it; it would be a from-scratch build. G4b is MCP-only.
+2. **The executable registration is `register_tool` → `TOOL_REGISTRY`, not `register_agent_tool`.**
+   `register_agent_tool` writes to `_agent_tools`, read only by observability/listing — never by
+   `execute_tool`. (Latent ABI gap: the "official" agent-tool plugin surface is discovery-only;
+   a small runtime fix could bridge `_agent_tools` → execution to make it real.)
+3. **`nodus-mcp` packaging gap** (adapters excluded from the wheel) — handed off as nodus-mcp
+   issue #5, **RESOLVED in nodus-mcp 0.1.1** (adapters now shipped). A second upstream bug found:
+   `nodus_mcp_aindy.NodusServer.run_sse_app()` omits the `/messages/` POST mount (server-side,
+   blocks the deferred server direction) — hand off when server-side is scheduled.
+
+**Deferred (unchanged):** G4b **server-side** (expose AINDY tools/syscalls as MCP to Claude
+Desktop) — needs an inbound identity/tenant model, which pulls in G4a; and both forms of **G4a**
+(thin activation + strong mediated-egress, the latter converging with IDEM-10). Original scope below.
+
+**Original status:** Deferred — roadmap (P1 for the runtime half)
 
 Two altitudes, split deliberately. **G4a (runtime):** a capability-gated egress boundary +
 secret-broker so executed/sandboxed code never holds keys (OpenHands' control-plane pattern) —

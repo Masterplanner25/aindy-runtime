@@ -16,6 +16,9 @@ CAP_FLOW_RUN = "flow.run"
 CAP_EVENT_EMIT = "event.emit"
 CAP_TOOL_INVOKE = "tool.invoke"
 CAP_OUTBOUND_HTTP = "outbound.http"
+# Outbound MCP tool egress (ECOGAP-4 / G4b) — distinct from outbound.http so G4a can
+# gate MCP tool calls specifically once activated.
+CAP_OUTBOUND_MCP = "outbound.mcp"
 PLUGIN_HOST_ENV_ALLOWLIST = [
     "PATH",
     "PATHEXT",
@@ -33,6 +36,7 @@ EXTENSION_RUNTIME_CAPABILITIES = {
     CAP_EVENT_EMIT,
     CAP_TOOL_INVOKE,
     CAP_OUTBOUND_HTTP,
+    CAP_OUTBOUND_MCP,
 }
 
 TRUSTED_INTERNAL_AUTHORITY = "trusted-internal-ambient-authority"

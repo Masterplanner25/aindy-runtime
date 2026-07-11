@@ -1,0 +1,76 @@
+---
+title: "MCP Integration (client-side)"
+api_version: "1.0"
+last_verified: "2026-07-11"
+status: current
+owner: "platform-team"
+---
+
+# MCP Integration
+
+ECOGAP-4 / G4b. Lets AINDY agents call tools hosted on external **MCP (Model Context
+Protocol)** servers, by discovering those tools at startup and registering each as a
+normal AINDY agent tool. The MCP wire protocol lives in the published `nodus-mcp`
+package; the runtime only wires it in.
+
+**Status:** client-side (agents call *out* to external MCP tools) is shipped and opt-in.
+Server-side (exposing AINDY tools *as* an MCP server to Claude Desktop etc.) is deferred
+— see [TECH_DEBT ECOGAP-4](../../TECH_DEBT.md).
+
+## Enable it
+
+1. Install the extra:
+   ```bash
+   pip install "aindy-runtime[mcp]"
+   ```
+   (`mcp` is pinned explicitly here because `nodus-mcp` treats the official SDK as
+   optional and does not pull it in, but the SSE client transport requires it.)
+2. Configure servers and turn it on:
+   ```bash
+   AINDY_MCP_CLIENT_ENABLED=true
+   AINDY_MCP_SERVERS=[{"name":"fs","url":"http://localhost:8080/sse","risk":"high"}]
+   ```
+3. Restart. On first tool load the runtime connects to each server, lists its tools, and
+   registers them as `mcp_<server>_<tool>` (e.g. `mcp_fs_read_file`).
+
+Off by default — outbound MCP egress is a deliberate operator choice.
+
+## How it works
+
+- `AINDY.platform_layer.mcp_client.bootstrap()` runs (memoized, once per process) from
+  `tool_registry._ensure_tools_loaded` — the one entry point that runs in every
+  tool-executing process, including the nodus_worker subprocess — so MCP tools resolve
+  wherever `execute_tool` runs. It is a **no-op unless enabled** and boot-safe (any
+  failure — an unreachable server, bad config — is logged and swallowed; it does not even
+  import `nodus-mcp` when disabled). It is wired here rather than via a plugin manifest
+  entry because the runtime `platform-only` profile must stay manifest-empty (the "runtime
+  boots clean without plugins" contract). Discovery runs once per process; in the
+  per-execution nodus_worker subprocess that is once per spawn — a known cost tied to
+  NODUS-WARMPOOL-1, incurred only when MCP is enabled.
+- When enabled, each remote MCP tool is registered via `register_tool` into `TOOL_REGISTRY`
+  — the **executable** tool path (`register_agent_tool`'s `_agent_tools` surface is
+  discovery-only and is not run by `execute_tool`).
+- Registered tools carry capability **`outbound.mcp`** and default **risk `high`**, so agent
+  runs must be granted that capability and (per risk policy) approved. This is also the seam
+  G4a will gate once mediated egress is activated.
+- MCP clients are async but `execute_tool` is synchronous; all async work runs on one
+  dedicated background event loop (`mcp_client._run_sync`), which is safe whether or not the
+  caller is already inside a running loop. v1 connects per call; a persistent per-server
+  connection pool is a deferred optimization.
+
+## Tool naming and collisions
+
+Tools are namespaced `mcp_<server>_<remote-tool-name>`; the `name` in each `AINDY_MCP_SERVERS`
+entry must be unique. This keeps external tools from colliding with runtime-native tools.
+
+## Verification
+
+A live round-trip (real SSE `NodusServer` → discovery → tool call through the sync bridge)
+is exercised in development; the unit suite (`tests/unit/test_mcp_client.py`) covers
+registration shape, the bridge, resilience, and the disabled no-op with `nodus-mcp` mocked.
+
+## Known upstream issue
+
+`nodus_mcp_aindy.NodusServer.run_sse_app()` (server-side, deferred direction) builds its
+Starlette app with the `/sse` stream route but omits the `/messages/` POST mount the SSE
+transport needs, so a client's POST-back 404s. Tracked upstream; not on the client path.
