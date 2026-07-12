@@ -1272,6 +1272,7 @@ def execute_nodus_runtime(
     context_cls=None,
     simulate: bool = False,
     virtual_tools: dict[str, Any] | None = None,
+    effect_scope: str = "",
 ):
     """
     Canonical Nodus runtime entrypoint used by both route helpers and flow nodes.
@@ -1309,6 +1310,7 @@ def execute_nodus_runtime(
         execution_token=execution_token,
         simulate=bool(simulate),
         virtual_tools=virtual_tools or {},
+        effect_scope=str(effect_scope or ""),
     )
     adapter = adapter_cls(db=db)
     if script is not None:
