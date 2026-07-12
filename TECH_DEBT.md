@@ -3182,21 +3182,38 @@ IDEM-10 boundary work.
 
 ### ECOGAP-5 — Durable timer (5a) + workflow-as-data (5b)
 
-**Status:** 5a — Deferred, P3 (debt-shaped, narrow). 5b — Deferred, P2 (Nodus/language layer).
+**Status:** 5a — SHIPPED 2026-07-12 (in working tree, uncommitted). 5b — largely already
+DELIVERED (RTR-1); tracking was stale.
 
-**5a (runtime, narrow):** user schedules are already durable-as-data (`NodusScheduledJob`) and
-rehydrated into APScheduler on boot via `restore_nodus_scheduled_jobs()`, so the in-memory
-jobstore is rebuilt from DB each start. Residual = misfire/missed-window handling for fires due
-*during* downtime, plus one unifying durable timer/FireTime primitive. **Not** "schedules lost."
+**5a — SHIPPED (with a latent-bug fix found by verify-first).** Two parts:
+1. **Correctness fix (load-bearing):** `nodus_schedule_service._parse_cron` imported the *vendored*
+   `AINDY.apscheduler` CronTrigger and handed it to the real scheduler, which rejects a foreign
+   trigger instance (`TypeError: Expected a trigger instance or string`) — so restored Nodus jobs
+   silently failed to register in production. Fixed to import the top-level `apscheduler` name (the
+   same one `scheduler_service` uses; real in prod, vendored stub under the test pythonpath shadow),
+   pinned to UTC. Real-apscheduler verified: the scheduler now accepts the trigger and computes a
+   next-run. This means the durable timer actually *fires* now, which the misfire work presupposes.
+2. **Downtime-misfire policy (the scoped work):** per-job `misfire_policy` column on
+   `NodusScheduledJob` (`skip` default = prior behavior | `run_once`) + `_has_missed_fire` detection
+   (via real CronTrigger.get_next_fire_time) + a coalesced one-shot catch-up scheduled in
+   `restore_nodus_scheduled_jobs()` when a `run_once` job's fire was due during downtime. Exposed on
+   `POST /platform/nodus/schedule` (`misfire_policy`). Schema-contract bump 2026-07-12.1 →
+   2026-07-12.2, Alembic 0013 (blank-DB-guarded), head → 0013. 12 unit tests.
+   The "unifying durable FireTime primitive" remains a deferred larger ambition (no second use yet).
 
-**5b (Nodus):** `FLOW_REGISTRY` is in-process Python — business structure compiled into runtime
-code. The fix is a loadable graph artifact (Nodus `.nodus/graphs/<id>.json`) the runtime
-interprets — an **anti-creep** mechanism that lifts business logic *out* of the kernel, on the
-language layer, not a runtime gap. Absorb: ADK frontier/JoinNode scheduling, MS typed-message
-actor graph, LangGraph reducer-cell/serde discipline.
+**5b — largely DELIVERED via RTR-1; the entry was stale.** The claim ("`FLOW_REGISTRY` is in-process
+Python; fix = a loadable `.nodus/graphs/<id>.json`") no longer holds: workflow-as-data ships as the
+`NodusWorkflow` table (versioned `.nd` **source** as the durable, content-hashed artifact; Alembic
+0006) + `register_nodus_workflow` (persist) + `rehydrate_nodus_workflows` (recompile every active row
+into the registry on boot, `startup.py`) + `run_nodus_workflow` (execute by name via
+`PersistentFlowRunner`). `FLOW_REGISTRY` holds only runtime **kernel** flows (nodus_execute, memory)
+— legitimately runtime-owned, not business creep; app/business workflows are already data-defined and
+DB-persisted. The loadable-artifact-the-runtime-interprets mechanism exists and is live (`.nd` source
+rather than a lossy JSON graph, which is arguably better). Residual: an optional JSON graph
+export/import is speculative — defer until a concrete non-`.nd` artifact need appears.
 
-**Reopen trigger:** 5a — when misfire-on-downtime is reported. 5b — when data-defined flow
-execution (beyond code-defined `FLOW_REGISTRY`) is scheduled.
+**Reopen trigger:** 5a — the FireTime primitive, if a second durable-timer use appears. 5b — a
+concrete need for a non-`.nd` graph artifact format.
 
 ### ECOGAP-6 — Execution-path test coverage
 
