@@ -157,15 +157,29 @@ scope dedups (1 node), and outside the scope does not (2 nodes) — the signal i
 Tests: `tests/unit/test_dur2_per_run_at_most_once.py` + declaration-free cases in the syscall/tool
 harnesses.
 
-**Honest reach (→ DUR-2b).** A contextvar stays within one execution context, so the signal reaches
-**parent-side** effects (deferred memory writes) and **in-process** dispatches, but **not a nodus
-worker subprocess** — so a continued run's nodus-executed syscalls/`call_tool` don't yet inherit it
-(needs threading the flag through the subprocess payload). Separately, on the **agent-segment** path
-each segment execution currently gets a *fresh* `execution_unit_id` (`run_nodus_script_via_flow`
-mints `trace_id or uuid4()`), so its memory scope isn't stable across a re-run — the dedup is *safe*
-there (fresh scope → no collision) but *ineffective* until a stable per-(run, segment) scope lands.
-Both are **DUR-2b**. On the **flow** continuation path (stable flow-run id + node name) DUR-2 is fully
-effective for the dominant parent-side memory writes.
+**Reach (both gaps closed by DUR-2b).** A contextvar stays within one execution context, so DUR-2
+alone reaches **parent-side** effects (deferred memory writes) + **in-process** dispatches but not
+the nodus worker subprocess; and the **agent-segment** path needed a stable per-segment scope. Both
+are resolved by DUR-2b (below).
+
+### DUR-2b — Subprocess propagation + stable per-segment scope — ✅ SHIPPED 2026-07-12
+Two fixes that make the **agent / nodus-subprocess** continuation path fully at-most-once (the
+prerequisite for a safe DUR-3):
+1. **Subprocess propagation.** The parent writes `durable_effects=durable_effects_active()` into the
+   nodus worker payload (`_execute`); the worker (`nodus_worker.main`) re-establishes
+   `durable_effects_scope()` around `run_source`, so in-subprocess `sys()`/`call_tool()` effect gates
+   dedup declaration-free.
+2. **Stable per-segment memory scope** — and a **correction** to the DUR-2 note: agent segments do
+   **not** get a fresh `execution_unit_id`; `_run_agent_segment_flow` passes `trace_id=correlation_id`,
+   so **all segments share the run's `execution_unit_id`** AND run through the one constant
+   `nodus.execute` node — meaning the DUR-1 scope `(eu:node:ordinal)` would **collide across segments**
+   (silent memory loss), not merely be ineffective, once the gate is on. Fix: `_run_agent_segment_flow`
+   threads `__effect_scope=agent_plan_seg<N>` via `extra_initial_state`; the flow node handler appends
+   it (`_dur_effect_scope`) so each segment's scope is distinct and reproduced identically on a re-run.
+   PG-verified: two segments writing at the same ordinal under the shared run eu no longer collide, and
+   a segment re-run dedups. Tests: `tests/unit/test_dur2b_subprocess_and_segment_scope.py`. (Latent —
+   agent memory gating is only reachable behind `AINDY_DURABLE_CONTINUATION` + a continuation-safe agent
+   type, so this closed the hazard before DUR-3 can enable it.)
 
 ### DUR-3 — Flip continuation default-safe
 With effects guarded per-run, **invert/remove the continuation-safe declaration gate** so
@@ -219,10 +233,12 @@ continuation drivers — mostly "add a chokepoint + a per-run signal + flip a ga
 - **DUR-1 (memory-effect boundary) — ✅ SHIPPED 2026-07-12.** Opt-in `AINDY_MEMORY_IDEMPOTENCY`;
   position-keyed dedup at `_apply_deferred_memory_writes`; PG-verified. The keystone/standalone win.
 - **DUR-2 (per-run at-most-once signal) — ✅ SHIPPED 2026-07-12.** `durable_effects_scope()` contextvar;
-  all three chokepoints honor it (declaration-free); continuation drivers set it; PG-verified. Reaches
-  parent-side/in-process effects — subprocess + agent-segment stable scope are **DUR-2b**.
-- **Next: DUR-2b** (subprocess propagation + stable per-segment scope) and **DUR-3** (flip continuation
-  default-safe). DUR-4 is optional/independent.
+  all three chokepoints honor it (declaration-free); continuation drivers set it; PG-verified.
+- **DUR-2b (subprocess propagation + stable per-segment scope) — ✅ SHIPPED 2026-07-12.** Threads the
+  signal into the nodus subprocess payload; adds a per-segment memory-scope discriminator (fixing a
+  cross-segment collision on the agent path). PG-verified. **The agent/nodus continuation path is now
+  fully at-most-once — DUR-3 is unblocked.**
+- **Next: DUR-3** (flip continuation default-safe). DUR-4 is optional/independent.
 - All opt-in/default-off; release remains on hold past v1.6.2.
 
 ## Cross-references

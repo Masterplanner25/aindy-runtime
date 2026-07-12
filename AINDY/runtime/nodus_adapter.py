@@ -537,6 +537,20 @@ NodusAgentAdapter.execute_with_flow.__aindy_compat_wrapper__ = True
 # Node name: "nodus.execute"
 # Flow definition: NODUS_SCRIPT_FLOW  (importable from nodus_runtime_adapter)
 
+def _dur_effect_scope(context: dict, state: dict) -> str:
+    """DUR-1/DUR-2b — the deferred-memory dedup discriminator for a nodus execution.
+
+    The flow node name separates sibling nodes that share a flow run's execution_unit_id
+    (DUR-1). Every agent segment runs through this one ``nodus.execute`` node AND shares the
+    run's execution_unit_id (correlation_id), so a caller-supplied per-segment
+    ``__effect_scope`` (``agent_plan_seg<N>``, threaded via extra_initial_state) is appended
+    to keep segment scopes distinct and reproduced identically on a continuation re-run.
+    """
+    node = str(context.get("node_name") or "")
+    seg = str((state or {}).get("__effect_scope") or "")
+    return f"{node}:{seg}" if seg else node
+
+
 @register_node("nodus.execute")
 def nodus_execute_node(state: dict, context: dict) -> dict:
     """
@@ -691,10 +705,12 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         state=nodus_initial_state,
         execution_token=_execution_token,
         run_id=_agent_run_id,
-        # DUR-1 — the flow node name discriminates this node's memory-write dedup scope from
-        # sibling nodes that share the flow run's execution_unit_id (mandatory for correctness
-        # once AINDY_MEMORY_IDEMPOTENCY is on). Set by execute_node() at node_executor.py.
-        effect_scope=str(context.get("node_name") or ""),
+        # DUR-1/DUR-2b — the deferred-memory dedup discriminator for this execution. The flow
+        # node name separates sibling nodes that share the flow run's execution_unit_id
+        # (DUR-1). On the agent path all segments share the run's execution_unit_id
+        # (correlation_id), so a caller-supplied per-segment ``__effect_scope`` (agent_plan_seg<N>,
+        # DUR-2b) is appended to keep segment scopes distinct + re-run-stable.
+        effect_scope=_dur_effect_scope(context, state),
         simulate=_simulate,
         virtual_tools=_virtual_tools,
         event_sink=_build_event_sink(

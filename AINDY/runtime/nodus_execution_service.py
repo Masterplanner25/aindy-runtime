@@ -496,6 +496,12 @@ def _run_agent_segment_flow(
         extra_initial_state={
             "execution_token": scoped_token,
             "agent_run_id": str(run_id),
+            # DUR-2b — a stable, per-segment memory-effect discriminator. All segments of a
+            # run share the same execution_unit_id (correlation_id via trace_id above), so
+            # without this the deferred-memory dedup scope (run:node:ordinal) would collide
+            # ACROSS segments. workflow_name is agent_plan_seg<N> — distinct per segment and
+            # reproduced identically on a continuation re-run. See DUR-2b.
+            "__effect_scope": str(compiled.get("workflow_name") or ""),
         },
     )
 

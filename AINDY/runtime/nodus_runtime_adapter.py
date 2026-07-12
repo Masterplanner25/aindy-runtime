@@ -180,6 +180,10 @@ class NodusRuntimeAdapter:
                     "execution_token": context.execution_token,
                     "simulate": bool(context.simulate),
                     "virtual_tools": context.virtual_tools or {},
+                    # DUR-2b — carry the per-run at-most-once signal across the subprocess
+                    # boundary (a contextvar can't). The worker re-establishes the scope so
+                    # subprocess-executed sys()/call_tool() honor it. See DUR-2b.
+                    "durable_effects": _durable_effects_active_safe(),
                 },
             }
         )
@@ -324,6 +328,17 @@ def _apply_deferred_events(
 def _memory_idempotency_enabled() -> bool:
     """DUR-1 master flag. When off (default), deferred memory writes are never dedup-gated."""
     return os.getenv("AINDY_MEMORY_IDEMPOTENCY", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _durable_effects_active_safe() -> bool:
+    """DUR-2b — the current per-run at-most-once signal, defensively (never raises in the
+    subprocess-payload build path)."""
+    try:
+        from AINDY.kernel.effect_ledger import durable_effects_active
+
+        return bool(durable_effects_active())
+    except Exception:
+        return False
 
 
 def _memory_effect_action_id(scope: str, ordinal: int) -> str:

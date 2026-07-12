@@ -191,6 +191,10 @@ def main() -> int:
     # AGENT-HARDEN-4 — effect simulation. When set, call_tool is shadowed: no real
     # tool runs, and each call records a predicted "would-write" intent here.
     simulate_mode = bool(ctx.get("simulate"))
+    # DUR-2b — per-run at-most-once signal propagated across the subprocess boundary. When
+    # set, wrap run_source so the in-subprocess sys()/call_tool() effect gates dedup
+    # declaration-free (the parent's contextvar cannot cross into this process).
+    durable_effects = bool(ctx.get("durable_effects"))
     simulated_effects: list[dict[str, Any]] = []
     # AGENT-HARDEN-4b — fake tool implementations (the simulated world).
     virtual_tools = ctx.get("virtual_tools")
@@ -331,7 +335,13 @@ def main() -> int:
         _env_budget = os.getenv("AINDY_NODUS_MAX_EXECUTION_MS", "").strip()
         max_execution_ms = int(_env_budget) if _env_budget.isdigit() and int(_env_budget) > 0 else 30_000
 
-    with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stdout_buffer):
+    if durable_effects:
+        from AINDY.kernel.effect_ledger import durable_effects_scope
+
+        _durable_cm = durable_effects_scope()
+    else:
+        _durable_cm = contextlib.nullcontext()
+    with _durable_cm, contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stdout_buffer):
         try:
             raw_result = runtime.run_source(
                 script,
