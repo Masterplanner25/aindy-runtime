@@ -34,10 +34,29 @@ def _ensure_tools_loaded() -> None:
         # entry point is this function. Without it the nodus_vm call_tool seam returns
         # "Tool not found" for runtime tools (RTR-1 parity blocker). Idempotent.
         _ensure_runtime_agent_defaults()
+        # ECOGAP-4 / G4b — register client-side MCP tools here for the same reason
+        # (available wherever execute_tool runs). No-op unless AINDY_MCP_CLIENT_ENABLED;
+        # memoized so the network discovery runs at most once per process. platform-only
+        # must stay manifest-empty, so this is wired here rather than via a plugin entry.
+        _ensure_mcp_client_tools()
     except Exception as exc:
         logger.debug("agent tool plugin load skipped: %s", exc)
     finally:
         _LOADING_PLUGINS = False
+
+
+_MCP_CLIENT_LOADED = False
+
+
+def _ensure_mcp_client_tools() -> None:
+    """Bootstrap client-side MCP tools once per process (memoized, boot-safe)."""
+    global _MCP_CLIENT_LOADED
+    if _MCP_CLIENT_LOADED:
+        return
+    _MCP_CLIENT_LOADED = True
+    from AINDY.platform_layer import mcp_client
+
+    mcp_client.bootstrap()  # itself a no-op when disabled; never raises
 
 
 def register_tool(

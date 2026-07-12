@@ -109,6 +109,13 @@ release = [
   "build==1.5.0",
   "twine==6.2.0",
 ]
+mcp = [
+  # Client-side MCP interop (ECOGAP-4 / G4b). `mcp` is listed explicitly because
+  # nodus-mcp treats the official SDK as optional and does not pull it in, but the
+  # MCPClientAdapter SSE transport requires it. Install with: pip install aindy-runtime[mcp]
+  "nodus-mcp>=0.1.1",
+  "mcp>=1.0.0",
+]
 security = [
   # pip-audit scans installed deps against OSV. Run with: pip install -e .[security]
   "pip-audit>=2.7.0",
