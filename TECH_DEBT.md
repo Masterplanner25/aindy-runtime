@@ -3200,14 +3200,30 @@ execution (beyond code-defined `FLOW_REGISTRY`) is scheduled.
 
 ### ECOGAP-6 — Execution-path test coverage
 
-**Status:** Deferred — **debt** (P2)
+**Status:** Largely CLOSED 2026-07-12 (in working tree, uncommitted). The original framing
+was partly stale — see the corrected map below.
 
-`AINDY/worker/` and the Surface-B Nodus execution path are at low/zero coverage; the integration
-tier is mocked-only in CI. This is genuine hygiene debt (a shortcut in existing code), not a
-capability gap. Coverage claims for the durable-execution and Nodus-dispatch paths are therefore
-under-tested. Pairs with `ECOGAP-1` (the replay path most needs real coverage).
+**What the code actually shows (corrected):** Surface-B (the live Nodus subprocess path) is
+*not* uncovered — `tests/integration/test_agent_vm_parity.py` + `test_planner_loop_execute_to_completion.py`
+drive the **real subprocess, real flow engine, WAIT→RESUME, tool-failure/retry on real Postgres**,
+and CI's `integration-postgres` job runs the whole `tests/integration/` tier against real PG+Redis
+(with a coverage upload). So "Surface-B low/zero" and "integration tier mocked in CI" were both
+overstated. The genuine gap was **`AINDY/worker/worker_loop.py` (897 L, the prod-default distributed
+job executor) at zero coverage** — it is never loaded on the inline/TESTING path — plus the small
+worker modules, and the ECOGAP-1 continuation *resume* being unit-only (mocked `_dispatch_resume`).
 
-**Reopen trigger:** before relying on `worker/` or Surface-B behavior in a release claim.
+**Shipped 2026-07-12 (test-only, no product changes):**
+- `tests/unit/test_worker_loop.py` — 20 tests: claim/fetch, `process_one_job` (idle / happy /
+  already-claimed / missing / failure→DLQ / shutdown-requeue), dead-letter drain, stale-recovery,
+  failure-rate alert window, health/heartbeat, semaphore, signal draining, single-thread loop.
+- `tests/unit/test_worker_processes.py` — 4 tests: `metric_writer_worker` + `memory_ingest_worker`
+  lifecycle + `worker/__main__` orchestration (happy path + schema-gate).
+- `tests/integration/test_ecogap6_flow_continuation.py` — 2 real-PG tests: `PersistentFlowRunner.resume()`
+  drives a stranded 1-node continuation-safe flow to `success`, and the full `try_continue_flow_run`
+  claim→increment→resume→`success` chain (the piece the unit suite mocked). **Real-PG verified.**
+
+**Remaining (small):** `worker/__init__.py` helper coverage; broader multi-node continuation shapes.
+Pairs with `ECOGAP-1`. **Reopen trigger:** before relying on new `worker/` behavior in a release claim.
 
 ---
 
