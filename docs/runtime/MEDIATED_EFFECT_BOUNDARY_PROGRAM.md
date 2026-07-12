@@ -153,12 +153,20 @@ change (same discipline that kept MEB-0 out of the dispatcher):
   still reads its guarantee from the (dead) EU lookup, so **no behavior change** — this only
   pays off the temporary duplication MEB-0 left behind. Verified: `test_idempotency_gate` +
   the tool/contract suites green; the aliases resolve to `effect_ledger`.
-- **MEB-1b — TODO (gate repair, the behavior change).** Make the gate *fire* by reading the
-  guarantee from a per-syscall `SyscallEntry.execution_guarantee` declaration (flag-gated,
-  default off) instead of the unmatchable EU PK lookup, scoped to `execution_unit_id`. Keep the
-  separate `_gate_db` session and the `_is_uuid` #157 guard. **Deferred out of MEB-1:**
-  populating `execution_id` on the writer (needs an EU-by-source lookup — a compensation-ledger
-  bonus, not core idempotency; tracked as a follow-up).
+- **MEB-1b — ✅ SHIPPED 2026-07-11 (gate repair, the behavior change).** The gate now *fires*
+  from a per-syscall `SyscallEntry.execution_guarantee` declaration (new additive field,
+  default `AT_LEAST_ONCE`), flag-gated by `AINDY_SYSCALL_IDEMPOTENCY` (default off), scoped to
+  `execution_unit_id` — the dead `ExecutionUnit.extra` PK lookup is removed. Kept the separate
+  `_gate_db` session and the `_is_uuid` #157 guard (the gate stays scoped to UUID runs); a ledger
+  failure degrades to AT_LEAST_ONCE. **No syscall declares `EXACTLY_ONCE` yet — this ships the
+  mechanism, inert until a syscall opts in AND the flag is on.** Verified: gate unit suite
+  rewritten to the entry+flag mechanism (fires/skips/replay/degrade/uuid-guard/action-id), plus a
+  new real-Postgres end-to-end dedup test (`tests/integration/test_idempotency_gate_e2e.py::
+  test_syscall_idempotency_dedup_e2e`) that runs in CI's Integration job — the only cover for the
+  `_gate_db` transaction lifecycle under a real transaction. **Deferred (follow-ups):** populating
+  `execution_id` on the writer (EU-by-source lookup — compensation-ledger bonus); relaxing the
+  `_is_uuid` guard for broader (`run_<uuid>`) coverage now that the EU-PK cast is gone; and
+  adopting `EXACTLY_ONCE` on specific syscalls (e.g. memory.write) — a per-syscall decision.
 
 ### MEB-2 — G4a activation (enforcement)
 Orthogonal to idempotency; hangs off the MEB-0 seam.
@@ -206,9 +214,11 @@ prerequisite for **declaration-free** continuation (the ECOGAP-1 Phase 3 payoff)
   per-tool `EXACTLY_ONCE`; shared primitive in `kernel/effect_ledger.py`; PG-verified.
 - **MEB-1a — ✅ SHIPPED 2026-07-11.** Dispatcher consolidated onto `kernel/effect_ledger.py`
   (duplicated private copies removed); behavior-preserving.
-- **Next: MEB-1b** — repair the gate to fire from a per-syscall `execution_guarantee` (flag-gated)
-  instead of the dead EU lookup, so syscall idempotency is real too.
-- Then MEB-2 (G4a) and MEB-3 (multi-tenant MCP), in any order.
+- **MEB-1b — ✅ SHIPPED 2026-07-11.** Dispatcher gate repaired: fires from a per-syscall
+  `execution_guarantee` (flag-gated) instead of the dead EU lookup. IDEM-10 is now closed at the
+  mechanism level for both the tool (MEB-0) and syscall (MEB-1b) paths.
+- **Next: MEB-2 (G4a)** and **MEB-3 (multi-tenant MCP)**, in any order — plus the MEB-1 follow-ups
+  (adopt EXACTLY_ONCE on chosen syscalls; populate execution_id; optionally relax the _is_uuid guard).
 
 Even if MEB-2b and MEB-3 are never done, MEB-0 was the standalone win — the single biggest real
 gap (side-effecting agent tools had no idempotency at any layer) is closed.

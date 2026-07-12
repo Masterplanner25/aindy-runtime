@@ -141,6 +141,12 @@ def _is_uuid(value: Any) -> bool:
     except (ValueError, AttributeError, TypeError):
         return False
 
+
+def _syscall_idempotency_enabled() -> bool:
+    """MEB-1b global gate. When off (default), the syscall idempotency gate never fires."""
+    return os.getenv("AINDY_SYSCALL_IDEMPOTENCY", "").strip().lower() in {"1", "true", "yes"}
+
+
 # Lazy import of ResourceManager to avoid circular imports at module load.
 # The resource manager is only consulted inside dispatch(), so it's safe.
 def _get_rm():
@@ -431,41 +437,41 @@ class SyscallDispatcher:
             deprecation_warning = " ".join(parts) + "."
             logger.warning("[SyscallDispatcher] %s", deprecation_warning)
 
-        # Step 2f — idempotency gate (EXACTLY_ONCE syscalls only)
+        # Step 2f — idempotency gate (MEB-1b). Fires only when ALL hold: the global flag
+        # AINDY_SYSCALL_IDEMPOTENCY is on, the syscall declares
+        # execution_guarantee="EXACTLY_ONCE", the run carries a scope, and that scope is a
+        # bare UUID. Default AT_LEAST_ONCE = no dedup (current behavior). The guarantee now
+        # comes from the SyscallEntry — an addressable source — NOT the ExecutionUnit.extra
+        # lookup, which never matched the id a syscall carries (IDEM-10). The #157 _is_uuid
+        # guard is kept (the gate stays scoped to the flow/dispatch paths) even though the
+        # old EU-PK cast that motivated it is gone. A SEPARATE _gate_db session is used so a
+        # ledger failure can never poison the handler's connection (#157); on any failure we
+        # degrade to AT_LEAST_ONCE.
         _gate_db = None
         _gate_action_id = None
-        _guarantee = "AT_LEAST_ONCE"
-        # ExecutionUnit.id is a UUID column. A run-scoped execution_unit_id such as
-        # 'run_<uuid>' (also carried as the agent correlation/trace id in the
-        # nodus_vm resume path) is NOT a bare UUID, so binding it to that column
-        # makes PostgreSQL reject the cast (InvalidTextRepresentation) — and since
-        # it can never match a UUID primary key anyway, the lookup is pointless.
-        # Only attempt the EU lookup when the id parses as a UUID; otherwise default
-        # to AT_LEAST_ONCE without issuing a query that would abort the transaction
-        # and cascade into InFailedSqlTransaction on the handler's INSERT (#157).
-        if _orig_eu_id and _is_uuid(context.execution_unit_id):
+        _entry_guarantee = str(getattr(entry, "execution_guarantee", "AT_LEAST_ONCE")).upper()
+        if (
+            _entry_guarantee == "EXACTLY_ONCE"
+            and _orig_eu_id
+            and _is_uuid(context.execution_unit_id)
+            and _syscall_idempotency_enabled()
+        ):
+            from AINDY.core.execution_gate import compute_action_id
+            _gate_action_id = compute_action_id(
+                action_type=name,
+                input_payload=dict(payload or {}),
+                scope=str(context.execution_unit_id),
+            )
             try:
                 from AINDY.db.database import SessionLocal
-                from AINDY.db.models.execution_unit import ExecutionUnit
                 _gate_db = SessionLocal()
-                # Defense-in-depth: run the lookup inside a SAVEPOINT so any query
-                # failure is rolled back locally and can never leave a poisoned
-                # (aborted) transaction on the pooled connection (#157).
-                with _gate_db.begin_nested():
-                    _eu_row = _gate_db.query(ExecutionUnit).filter(
-                        ExecutionUnit.id == str(context.execution_unit_id)
-                    ).first()
-                _guarantee = (
-                    (_eu_row.extra or {}).get("retry_policy", {}).get(
-                        "execution_guarantee", "AT_LEAST_ONCE"
-                    )
-                    if _eu_row is not None else "AT_LEAST_ONCE"
+                _already_done, _cached = _resolve_effect_record(
+                    _gate_db, _gate_action_id, name, payload
                 )
             except Exception as _gate_exc:
+                # A ledger failure must not block the syscall — degrade to AT_LEAST_ONCE.
                 if _gate_db is not None:
                     try:
-                        # Roll back before returning the connection to the pool so a
-                        # failed lookup never hands back an aborted transaction.
                         _gate_db.rollback()
                     except Exception:
                         pass
@@ -473,40 +479,27 @@ class SyscallDispatcher:
                         _gate_db.close()
                     except Exception:
                         pass
-                    _gate_db = None
-                _guarantee = "AT_LEAST_ONCE"
+                _gate_db = None
+                _gate_action_id = None
                 logger.warning(
-                    "[SyscallDispatcher] idempotency gate EU lookup skipped for %r: %s",
+                    "[SyscallDispatcher] idempotency gate degraded to AT_LEAST_ONCE for %r: %s",
                     name, _gate_exc,
                 )
-
-        if _guarantee == "EXACTLY_ONCE" and _gate_db is not None:
-            from AINDY.core.execution_gate import compute_action_id
-            _gate_action_id = compute_action_id(
-                action_type=name,
-                input_payload=dict(payload or {}),
-                scope=str(context.execution_unit_id),
-            )
-            _already_done, _cached = _resolve_effect_record(
-                _gate_db, _gate_action_id, name, payload
-            )
-            if _already_done:
-                _gate_db.close()
-                _gate_db = None
-                return {
-                    "status": "success",
-                    "data": _cached or {},
-                    "trace_id": context.trace_id,
-                    "execution_unit_id": context.execution_unit_id,
-                    "syscall": name,
-                    "version": parsed_version,
-                    "duration_ms": int((time.monotonic() - t_start) * 1000),
-                    "error": None,
-                    "warning": None,
-                }
-        elif _gate_db is not None:
-            _gate_db.close()
-            _gate_db = None
+            else:
+                if _already_done:
+                    _gate_db.close()
+                    _gate_db = None
+                    return {
+                        "status": "success",
+                        "data": _cached or {},
+                        "trace_id": context.trace_id,
+                        "execution_unit_id": context.execution_unit_id,
+                        "syscall": name,
+                        "version": parsed_version,
+                        "duration_ms": int((time.monotonic() - t_start) * 1000),
+                        "error": None,
+                        "warning": None,
+                    }
 
         # Step 3 â€" execute handler
         try:

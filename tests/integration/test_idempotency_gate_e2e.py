@@ -115,3 +115,71 @@ def test_in_band_stale_pending_recovery_e2e(testing_session_factory):
         )
     finally:
         session_c.close()
+
+
+@pytest.mark.integration
+def test_syscall_idempotency_dedup_e2e(monkeypatch, testing_session_factory):
+    """MEB-1b end-to-end on real Postgres: an EXACTLY_ONCE syscall dispatched twice with the
+    same scope + payload runs its handler ONCE and replays the cached result on the retry.
+
+    Exercises the full composed path the unit tests mock: dispatch → gate reads the entry's
+    execution_guarantee (flag on) → the gate's own SessionLocal writes/reads the real
+    effect_records row → replay. The kernel-sensitive _gate_db lifecycle under a real
+    transaction is only covered here.
+    """
+    from unittest.mock import patch
+
+    from AINDY.db.models.effect_record import EffectRecord
+    from AINDY.kernel import syscall_registry as R
+    from AINDY.kernel import syscall_dispatcher as D
+    from AINDY.core.execution_gate import compute_action_id
+
+    monkeypatch.setenv("AINDY_SYSCALL_IDEMPOTENCY", "true")
+
+    name = f"sys.v1.test.eo_{uuid.uuid4().hex[:8]}"
+    eu_id = str(uuid.uuid4())
+    payload = {"x": 1}
+    action_id = compute_action_id(action_type=name, input_payload=payload, scope=eu_id)
+    runs = []
+
+    def handler(p, ctx):
+        runs.append(1)
+        return {"ran": len(runs), "echo": p}
+
+    R.SYSCALL_REGISTRY[name] = R.SyscallEntry(
+        handler=handler, capability="test.idem", execution_guarantee="EXACTLY_ONCE"
+    )
+
+    class _OkRm:
+        def check_quota(self, x):
+            return True, None
+
+        def record_usage(self, x, u):
+            return None
+
+    def _ctx():
+        return R.SyscallContext(
+            execution_unit_id=eu_id, user_id=str(uuid.uuid4()),
+            capabilities=["test.idem"], trace_id="t",
+        )
+
+    dispatcher = D.SyscallDispatcher()  # fresh instance — don't mutate the singleton
+    dispatcher._emit_syscall_event = lambda *a, **kw: None
+    try:
+        with patch.object(D, "_get_rm", lambda: _OkRm()):
+            r1 = dispatcher.dispatch(name, payload, _ctx())
+            r2 = dispatcher.dispatch(name, payload, _ctx())  # same scope+payload → replay
+        assert r1["status"] == "success"
+        assert r2["status"] == "success"
+        assert len(runs) == 1, f"EXACTLY_ONCE handler must run once; ran {len(runs)}"
+        assert r2["data"] == r1["data"], "retry must replay the first result"
+    finally:
+        R.SYSCALL_REGISTRY.pop(name, None)
+        cleanup = testing_session_factory()
+        try:
+            cleanup.query(EffectRecord).filter(
+                EffectRecord.action_id == action_id
+            ).delete()
+            cleanup.commit()
+        finally:
+            cleanup.close()

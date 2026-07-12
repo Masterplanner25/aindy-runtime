@@ -630,9 +630,16 @@ unaddressable EU PK). The finding below is the verified source of that plan.
 two identical calls). This closes "the part that actually matters" (tool calls had NO
 idempotency at any layer). **MEB-1a SHIPPED 2026-07-11:** the dispatcher's duplicated
 effect-record copies + STALE constant were removed; it now imports them from
-`kernel/effect_ledger.py` (behavior-preserving — gate still dead). **Remaining for IDEM-10:
-MEB-1b** — repair the gate to fire from a per-syscall `SyscallEntry.execution_guarantee`
-(flag-gated) instead of the unmatchable EU-PK lookup, so the syscall path gets idempotency too.
+`kernel/effect_ledger.py` (behavior-preserving — gate still dead). **MEB-1b SHIPPED 2026-07-11:**
+the gate now fires from a per-syscall `SyscallEntry.execution_guarantee` (new additive field,
+default AT_LEAST_ONCE) + `AINDY_SYSCALL_IDEMPOTENCY` flag (default off), scoped to
+`execution_unit_id`; the dead EU-PK lookup is removed. Kept the separate `_gate_db` + `_is_uuid`
+#157 guards; ledger failure degrades to AT_LEAST_ONCE. Verified: rewritten gate unit suite + a
+real-PG dedup e2e (`test_idempotency_gate_e2e::test_syscall_idempotency_dedup_e2e`, CI Integration
+job). **IDEM-10 is CLOSED at the mechanism level** (tool path MEB-0, syscall path MEB-1b). No
+syscall declares EXACTLY_ONCE yet. **Follow-ups (not IDEM-10-blocking):** adopt EXACTLY_ONCE on
+chosen syscalls (e.g. memory.write); populate `execution_id` on the writer (EU-by-source lookup,
+compensation-ledger link); optionally relax `_is_uuid` for `run_<uuid>` coverage.
 
 **Status:** Open — verified 2026-07-09 (during ECOGAP-1 Phase 3a scoping). High:
 the documented, unit-tested "EXACTLY_ONCE" idempotency contract has **never deduplicated a
