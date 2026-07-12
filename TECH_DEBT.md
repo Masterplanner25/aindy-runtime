@@ -2951,7 +2951,19 @@ existing client seam.
 
 ### ECOGAP-4 — MCP/A2A: gated-egress boundary (runtime) + wire adapters (plugin)
 
-**Status:** G4b **client-side SHIPPED** 2026-07-11 (opt-in). G4b server-side + G4a still deferred.
+**Status:** G4b **client-side + server-side(stdio) SHIPPED** 2026-07-11 (opt-in). G4b SSE + G4a deferred.
+
+**Update 2026-07-11 — G4b server-side (stdio) shipped (opt-in).** AINDY can run as an MCP
+*server* exposing syscalls as tools to external clients (Claude Desktop). `aindy-runtime
+mcp-server --transport stdio` (`AINDY/platform_layer/mcp_server.py` + CLI in `runtime_only.py`):
+builds a `nodus_mcp_aindy` ToolRegistry from an allowlist of syscalls, each MCP tool handler
+`dispatch_syscall(name, args, user_id=<configured>)` (least-privilege cap per syscall,
+SDK-SYSCALL-GRANT-1). **Decisions:** single configured identity `AINDY_MCP_SERVER_USER_ID`
+(per-session/multi-tenant auth deferred = G4a), read-only default (`AINDY_MCP_SERVER_ALLOW_WRITES`
+opts in writes, `AINDY_MCP_SERVER_TOOLS` overrides). Verified write→read-back on real Postgres.
+**Deferred:** SSE transport (nodus-mcp #7 — `run_sse_app` omits `/messages/` mount) + multi-tenant
+per-session auth (= G4a). Doc: `docs/runtime/MCP_INTEGRATION.md`.
+
 
 **Update 2026-07-11 — G4b client-side interop shipped (opt-in).** AINDY agents can now call
 external MCP servers' tools. `AINDY/platform_layer/mcp_client.py` (`bootstrap()` on the default

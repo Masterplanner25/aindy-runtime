@@ -209,6 +209,8 @@ aindy-runtime serve      Start the HTTP API server (requires DATABASE_URL)
 aindy-runtime sandbox    Report sandbox capabilities and exit
 aindy-runtime bootstrap-schema   Create runtime-owned tables from packaged metadata
                                  and stamp the Alembic baseline (idempotent; requires DATABASE_URL)
+aindy-runtime mcp-server         Serve AINDY syscalls as an MCP server over stdio for external
+                                 MCP clients (needs the [mcp] extra; read-only by default)
 aindy-runtime auth promote-admin <email>   Grant admin to a registered user (grant-only)
 aindy-runtime --help     Show help and exit
 aindy-runtime --version  Show version and exit
