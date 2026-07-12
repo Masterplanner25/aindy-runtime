@@ -2974,7 +2974,8 @@ existing client seam.
 
 ### ECOGAP-4 — MCP/A2A: gated-egress boundary (runtime) + wire adapters (plugin)
 
-**Status:** G4b **client-side + server-side(stdio) SHIPPED** 2026-07-11 (opt-in). G4b SSE + G4a deferred.
+**Status:** G4b **client-side + server-side(stdio + SSE, incl. MEB-3a per-session multi-tenant)
+SHIPPED** 2026-07-11 (opt-in). MEB-3b attribution schema bump + G4a strong-egress deferred.
 
 **Update 2026-07-11 — G4b server-side (stdio) shipped (opt-in).** AINDY can run as an MCP
 *server* exposing syscalls as tools to external clients (Claude Desktop). `aindy-runtime
@@ -2989,6 +2990,20 @@ per-session auth. The multi-tenant work is **MEB-3** in the Mediated Effect Boun
 (`docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`): per-session identity via
 `NodusServer.auth_hook` → `mint_token` + tenant/session columns on EffectRecord, on top of the
 MEB-0/1 effect boundary. Doc: `docs/runtime/MCP_INTEGRATION.md`.
+
+**Update 2026-07-11 — SSE transport + MEB-3a per-session multi-tenant SHIPPED (opt-in).** Both
+upstream blockers fixed in **nodus-mcp 0.1.2** (#7 `/messages/` mount; #8 `auth_hook` receives real
+per-call context with `headers`), pin bumped `nodus-mcp>=0.1.2`. `aindy-runtime mcp-server
+--transport sse --host --port` now serves over HTTP. Under `AINDY_MCP_SERVER_MULTI_TENANT=true` the
+`auth_hook` resolves each session's `Authorization: Bearer <jwt>` / `X-Platform-Key` header to a
+real user via the existing auth surface (`decode_access_token` / `_resolve_platform_key_as_user` —
+no new mechanism) and dispatches each call as that identity (threaded via a `_SESSION_IDENTITY`
+contextvar), fail-closed (no identity → denied). Multi-tenant rejected over stdio (no per-request
+headers). Opt-in, default off; stdio single-identity unchanged. Verified: real 0.1.2 SSE app builds
+with `/sse` + `/messages/` and the auth_hook attached. **This is MEB-3a (no schema).** **MEB-3b**
+(tenant/session attribution columns on EffectRecord — the program's only schema-contract bump) +
+optional per-session capability-ceiling token remain deferred (attribution/audit, not required by
+3a).
 
 
 **Update 2026-07-11 — G4b client-side interop shipped (opt-in).** AINDY agents can now call

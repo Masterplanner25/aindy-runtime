@@ -110,11 +110,16 @@ release = [
   "twine==6.2.0",
 ]
 mcp = [
-  # Client-side MCP interop (ECOGAP-4 / G4b). `mcp` is listed explicitly because
+  # MCP interop (ECOGAP-4 / G4b client + server). `mcp` is listed explicitly because
   # nodus-mcp treats the official SDK as optional and does not pull it in, but the
   # MCPClientAdapter SSE transport requires it. Install with: pip install aindy-runtime[mcp]
-  "nodus-mcp>=0.1.1",
+  # >=0.1.2 required for the server-side SSE transport (/messages/ mount, #7) and the
+  # per-session auth_hook context (headers/session, #8) that MEB-3a multi-tenant uses.
+  "nodus-mcp>=0.1.2",
   "mcp>=1.0.0",
+  # SSE server transport (aindy-runtime mcp-server --transport sse).
+  "uvicorn>=0.30.0",
+  "starlette>=0.37.0",
 ]
 security = [
   # pip-audit scans installed deps against OSV. Run with: pip install -e .[security]

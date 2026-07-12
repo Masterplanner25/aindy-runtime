@@ -6,13 +6,13 @@ is mocked so nothing hits the kernel/DB.
 """
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.runtime_only
-
 from AINDY.platform_layer import mcp_server
+
+pytestmark = pytest.mark.runtime_only
 
 
 def test_identity_required(monkeypatch):
@@ -76,3 +76,87 @@ def test_registered_handler_dispatches_as_configured_identity():
     assert args[0] == "sys.v1.memory.read"
     assert args[1] == {"path": "/memory/x/**"}
     assert kwargs["user_id"] == "user-xyz"
+
+
+# ── MEB-3a — per-session (multi-tenant) identity ────────────────────────────────
+
+def test_multi_tenant_flag(monkeypatch):
+    monkeypatch.setenv("AINDY_MCP_SERVER_MULTI_TENANT", "true")
+    assert mcp_server.multi_tenant_enabled() is True
+    monkeypatch.setenv("AINDY_MCP_SERVER_MULTI_TENANT", "false")
+    assert mcp_server.multi_tenant_enabled() is False
+    monkeypatch.delenv("AINDY_MCP_SERVER_MULTI_TENANT", raising=False)
+    assert mcp_server.multi_tenant_enabled() is False
+
+
+def test_resolve_session_identity_none_without_headers():
+    assert mcp_server._resolve_session_identity({}) is None
+    assert mcp_server._resolve_session_identity({"headers": {}}) is None
+    assert mcp_server._resolve_session_identity({"headers": {"x-other": "v"}}) is None
+
+
+def test_resolve_session_identity_bearer_jwt():
+    ctx = {"headers": {"Authorization": "Bearer sometoken"}}  # header case is normalized
+    with patch("AINDY.db.database.SessionLocal", return_value=MagicMock()), patch(
+        "AINDY.services.auth_service.decode_access_token", return_value={"sub": "u-1"}
+    ), patch(
+        "AINDY.services.auth_service._resolve_authenticated_jwt_user",
+        return_value={"user_id": "user-jwt"},
+    ):
+        assert mcp_server._resolve_session_identity(ctx) == "user-jwt"
+
+
+def test_resolve_session_identity_platform_key():
+    ctx = {"headers": {"x-platform-key": "pk-123"}}
+    with patch("AINDY.db.database.SessionLocal", return_value=MagicMock()), patch(
+        "AINDY.services.auth_service._resolve_platform_key_as_user",
+        return_value={"user_id": "user-pk"},
+    ):
+        assert mcp_server._resolve_session_identity(ctx) == "user-pk"
+
+
+def test_auth_hook_denies_without_identity():
+    hook = mcp_server.build_auth_hook()
+    with pytest.raises(PermissionError):
+        hook("sys.v1.memory.read", {}, {"headers": {}})
+
+
+def test_auth_hook_denies_on_invalid_credential():
+    from fastapi import HTTPException
+
+    hook = mcp_server.build_auth_hook()
+    with patch("AINDY.db.database.SessionLocal", return_value=MagicMock()), patch(
+        "AINDY.services.auth_service.decode_access_token",
+        side_effect=HTTPException(status_code=401, detail="bad"),
+    ):
+        with pytest.raises(PermissionError):
+            hook("sys.v1.memory.read", {}, {"headers": {"authorization": "Bearer nope"}})
+
+
+def test_auth_hook_sets_session_identity_and_handler_uses_it():
+    # The auth_hook resolves a per-session identity; the handler dispatches as THAT id,
+    # overriding the configured fallback.
+    pytest.importorskip("nodus_mcp_aindy")
+    token = mcp_server._SESSION_IDENTITY.set(None)
+    try:
+        hook = mcp_server.build_auth_hook()
+        with patch.object(mcp_server, "_resolve_session_identity", return_value="tenant-7"):
+            hook("sys.v1.memory.read", {}, {"headers": {"authorization": "Bearer t"}})
+        assert mcp_server._SESSION_IDENTITY.get() == "tenant-7"
+
+        registry = mcp_server.build_registry("configured-fallback", ["sys.v1.memory.read"])
+        tool = registry.get(registry.names()[0])
+        with patch("AINDY.kernel.syscall_dispatcher.dispatch_syscall") as m:
+            m.return_value = {"status": "success"}
+            tool.handler({"path": "/x/**"})
+        # Dispatched as the per-session identity, not the configured fallback.
+        assert m.call_args.kwargs["user_id"] == "tenant-7"
+    finally:
+        mcp_server._SESSION_IDENTITY.reset(token)
+
+
+def test_serve_stdio_rejects_multi_tenant(monkeypatch):
+    monkeypatch.setenv("AINDY_MCP_SERVER_MULTI_TENANT", "true")
+    monkeypatch.setenv("AINDY_MCP_SERVER_USER_ID", "u-1")
+    with pytest.raises(RuntimeError, match="only meaningful over the SSE"):
+        mcp_server.serve_stdio()
