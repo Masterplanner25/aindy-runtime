@@ -184,6 +184,17 @@ Orthogonal to idempotency; hangs off the MEB-0 seam.
   with the sandbox `--network none` extension path. Dedicated sub-effort.
 
 ### MEB-3 — Multi-tenant MCP attribution (identity)
+
+**⚠ UPSTREAM-BLOCKED (verified 2026-07-11).** The headline — per-session MCP identity via
+`NodusServer.auth_hook` → `mint_token` — is not achievable with nodus-mcp 0.1.1: (1) the MCP
+`call_tool` handler receives only `(name, arguments)`, so `auth_hook` is invoked with an **empty
+context dict** and cannot see the session/client (nodus-mcp #8); and (2) multi-session only exists
+over the SSE/HTTP transport, which is itself blocked by nodus-mcp #7 (`run_sse_app` omits the
+`/messages/` mount). stdio is inherently single-client. Both gates are upstream (nodus-mcp). The
+attribution *schema* work below is deliverable but its primary consumer is blocked, so building it
+now is infrastructure ahead of a blocked consumer + the program's only schema-contract bump —
+deferred pending the upstream fixes or an independent consumer.
+
 Add tenant/session columns to EffectRecord (**schema-contract bump + Alembic migration** — the
 program's only schema change) and wire the MCP server's `NodusServer.auth_hook` to map each
 session → `mint_token(run_id=session, user_id=…, capability_ceiling=…)` → dispatch as that
@@ -227,11 +238,24 @@ prerequisite for **declaration-free** continuation (the ECOGAP-1 Phase 3 payoff)
   secret scopes (`AINDY_CAPABILITY_POLICIES` / `AINDY_SECRET_SCOPES`) make the dormant
   `execute_tool` enforcement live. Opt-in; static arg-inspection level (MEB-2b is the true socket
   chokepoint).
-- **Next: MEB-2b** (true egress chokepoint) and **MEB-3 (multi-tenant MCP)** — plus the MEB-1
-  follow-ups (adopt EXACTLY_ONCE on chosen syscalls; populate execution_id; relax _is_uuid).
+- **MEB-2b — ✅ SHIPPED 2026-07-11.** True egress chokepoint: `platform_layer/egress_guard.py`
+  wraps `socket.getaddrinfo` and denies hostname resolution outside the capability policy's
+  domain allowlist — catching runtime-built URLs that MEB-2a's static arg inspection cannot see.
+  Installed once, process-wide, but **inert unless an `egress_scope` allowlist is set**;
+  `execute_tool` scopes it only for the tool `fn` call, only when the tool's capability carries a
+  `domains` policy and `AINDY_EGRESS_ENFORCEMENT` is on. Opt-in, off by default. Honest limits
+  (documented in the module): IP-literal connections perform no `getaddrinfo` and are uncovered; a
+  resolution on a thread that doesn't inherit the contextvar escapes the scope; only resolution is
+  guarded, not the eventual connect. The non-bypassable form remains the sandbox `--network none`
+  + mediated proxy — this is the in-process strong-form for the non-sandboxed tool path.
+- **Next: MEB-3 (multi-tenant MCP)** — UPSTREAM-BLOCKED on nodus-mcp (auth_hook receives empty
+  context, #8; SSE transport blocked, #7). Plus the MEB-1 follow-ups (adopt EXACTLY_ONCE on chosen
+  syscalls; populate execution_id; relax _is_uuid) and the MEB-2b IP-literal / thread-escape
+  hardening.
 
-Even if MEB-2b and MEB-3 are never done, MEB-0 was the standalone win — the single biggest real
-gap (side-effecting agent tools had no idempotency at any layer) is closed.
+Even if MEB-3 is never done, MEB-0 was the standalone win — the single biggest real gap
+(side-effecting agent tools had no idempotency at any layer) is closed, and MEB-2a/2b now give
+the tool path a live, runtime-aware egress boundary.
 
 ## Cross-references
 

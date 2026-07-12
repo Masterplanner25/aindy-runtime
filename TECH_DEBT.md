@@ -3067,9 +3067,19 @@ scan is insufficient). The multi-tenant MCP identity work is **MEB-3**. Both han
 `AINDY_SECRET_SCOPES` (JSON) load via `_ensure_tools_loaded` (memoized, every process) and
 register real `CapabilityPolicy`s + secret scopes, flipping the dormant `execute_tool`
 recipient/domain/rate + `resolve_secret` gates live. Opt-in (empty config = no-op). Verified with
-a real `execute_tool` out-of-allowlist-domain denial. **Remaining G4a: MEB-2b** — a true socket/
-httpx egress chokepoint (static arg-inspection is bypassable by a runtime-built URL), plus the
-fail-open-on-ungated-secret hardening.
+a real `execute_tool` out-of-allowlist-domain denial.
+
+**MEB-2b SHIPPED 2026-07-11:** true egress chokepoint — `platform_layer/egress_guard.py` wraps
+`socket.getaddrinfo` and raises `EgressDenied` for any hostname resolution outside the active
+capability-policy domain allowlist, catching **runtime-built URLs** that MEB-2a's static
+arg-string scan cannot see. Installed once process-wide but inert unless an `egress_scope`
+allowlist is set; `execute_tool` scopes it for the tool `fn` call only, only when the tool's
+capability carries a `domains` policy and `AINDY_EGRESS_ENFORCEMENT` is on (opt-in, default off).
+Honest limits (documented in-module): IP-literal connects do no `getaddrinfo` and are uncovered;
+a resolution on a non-context-inheriting thread escapes; only resolution is guarded, not connect.
+The non-bypassable form is still sandbox `--network none` + mediated proxy — MEB-2b is the
+in-process strong-form for the non-sandboxed tool path. **Remaining G4a:** IP-literal /
+thread-escape hardening + fail-open-on-ungated-secret hardening.
 
 **Two forms of G4a, pick at reopen:** *thin activation* (register a real `CapabilityPolicy` +
 secret scopes + one proving tool that calls `resolve_secret`, behind a default-off flag) ships
