@@ -209,7 +209,7 @@ def test_runtime_schema_report_exports_machine_readable_operator_payload():
         report = ensure_runtime_schema(engine, allow_bootstrap=True)
         payload = report.to_dict()
 
-        assert payload["schema_contract_version"] == "2026-07-11"
+        assert payload["schema_contract_version"] == "2026-07-12"
         assert payload["state"] == "upgrade_required"
         assert payload["operator_action"] == "startup_reconcile"
         assert payload["inspection"]["entrypoints"]["module"] == "python -m AINDY.db.schema_ops inspect --format json"
@@ -243,7 +243,7 @@ def test_runtime_schema_ops_inspect_command_emits_machine_readable_payload(capsy
 
         assert exit_code == 0
         assert '"state": "upgrade_required"' in output
-        assert '"schema_contract_version": "2026-07-11"' in output
+        assert '"schema_contract_version": "2026-07-12"' in output
         assert '"owned_by": "aindy-runtime"' in output
     finally:
         engine.dispose()

@@ -218,13 +218,23 @@ at-most-once. Permission is a small helper on each side (`_flow_continuation_per
 side effects remain the operator's responsibility via the deny-list — the runtime guarantees
 at-most-once only for effects that pass its boundary (memory / syscalls / tools).
 
-### DUR-4 — FlowHistory canonicalization + fold (optional robustness)
-Make the event log a true fold source: close the out-of-band write gaps, add a **genesis row + a
-monotonic `sequence_number`** (indexed with `flow_run_id` — **the program's one schema-contract
-bump**), capture the exception-failure path, and write a folder that honors per-status apply rules
-(SUCCESS→`update`, WAIT/FAILURE→no-apply) + shallow merge. Value: torn-snapshot recovery +
-event-sourced audit. **Not on the critical path** — do only if we want belt-and-suspenders beyond
-the `FlowRun.state` snapshot. Independent of DUR-1→3.
+### DUR-4 — FlowHistory canonicalization + fold — ✅ SHIPPED 2026-07-12
+Makes `flow_history` a deterministically ordered, fold-able event log — the program's **one
+schema-contract bump** (`2026-07-11`→`2026-07-12`, Alembic `0012`, head `0011`→`0012`): a nullable
+monotonic **`sequence_number`** per `flow_run` + index `ix_flow_history_run_seq`, populated by the
+runner writer (`max()+1`, safe because a run's nodes execute sequentially and it continues across a
+resume). `core/flow_history_fold.py` reconstructs `FlowRun.state` from the ordered rows — the last
+row's full `input_state` checkpoint with its `output_patch` applied **only on SUCCESS** (shallow
+merge, parity with the engine's per-status apply). An **opt-in** resume repair
+(`AINDY_DURABLE_FOLD_REPAIR`, default off) rebuilds a lost/torn snapshot from the fold before
+resuming — the last history row commits *before* the snapshot advance, so it is at least as fresh
+for the last completed node (`current_node` is a separate column, unaffected). Verified on real
+Postgres: column + index materialize, the folder reconstructs across out-of-order rows honoring the
+WAIT-no-apply rule, and Alembic `0012` adds/drops cleanly. Tests:
+`tests/unit/test_dur4_flow_history_fold.py`. **Deferred (audit-completeness only, non-critical because
+each row's `input_state` is a full pre-image the fold anchors on):** a first-class genesis row,
+capturing the exception-failure path as a terminal row, and closing the out-of-band state-injection
+write gaps (event-payload / trace injection).
 
 ### Out of scope — kernel deterministic replay
 Threading the REPLAY-1 clock + a seeded id source through the kernel execution hot paths.
@@ -278,8 +288,14 @@ continuation drivers — mostly "add a chokepoint + a per-run signal + flip a ga
   `AINDY_DURABLE_CONTINUATION_ALL` makes continuation cover all flows/agents except an opt-out
   deny-list. **The ECOGAP-1 headline — transparent crash continuation without per-flow declaration —
   is delivered** (opt-in; flip the default after soak).
-- **Remaining: DUR-4** (optional FlowHistory canonicalization + fold — the only schema bump).
-- All opt-in/default-off; release remains on hold past v1.6.2.
+- **DUR-4 (FlowHistory canonicalization + fold) — ✅ SHIPPED 2026-07-12.** `sequence_number` column
+  (the program's one schema bump, Alembic `0012`) + `flow_history_fold.reconstruct_flow_run_state` +
+  opt-in `AINDY_DURABLE_FOLD_REPAIR` torn-snapshot recovery. PG-verified.
+
+**★ ECOGAP-1 Phase 3 (Durable Execution) is COMPLETE** — DUR-1 → DUR-4 all shipped. Transparent
+crash continuation without per-flow declaration, with at-most-once runtime-mediated effects and an
+event-sourced fold for torn-snapshot recovery. All opt-in/default-off; one additive schema bump.
+Remaining is soak-then-flip-defaults, not new build. Release remains on hold past v1.6.2.
 
 ## Cross-references
 

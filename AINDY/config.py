@@ -346,6 +346,9 @@ class Settings(BaseSettings):
     # un-mediated side effects must be excluded via mark_flow_continuation_unsafe /
     # mark_agent_type_continuation_unsafe. Off by default (declaration still required).
     AINDY_DURABLE_CONTINUATION_ALL: bool = False
+    # DUR-4: on continuation, rebuild a lost/torn FlowRun.state snapshot from the
+    # FlowHistory event-log fold before resuming. Off by default (resume trusts the snapshot).
+    AINDY_DURABLE_FOLD_REPAIR: bool = False
     # Max continuation attempts before a crash-looping flow is dead-lettered.
     AINDY_DURABLE_CONTINUATION_MAX_ATTEMPTS: int = 3
     # ECOGAP-1 Phase 2a: run each agent tool step as its own segment so crash
