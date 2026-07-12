@@ -624,6 +624,13 @@ row count so unbounded growth is detected without polling.
 matters) + **MEB-1** (repair the dispatcher gate to key on a stable scope, not the
 unaddressable EU PK). The finding below is the verified source of that plan.
 
+**MEB-0 SHIPPED 2026-07-11:** side-effecting agent tools now have idempotency — opt-in via
+`AINDY_TOOL_IDEMPOTENCY` + per-tool `execution_guarantee="EXACTLY_ONCE"`, deduped per
+(run_id, tool, args) through `kernel/effect_ledger.py`. PG-verified (tool runs once across
+two identical calls). This closes "the part that actually matters" (tool calls had NO
+idempotency at any layer). **Remaining for IDEM-10: MEB-1** — repair the dispatcher gate
+(syscall path) and consolidate its duplicated effect-record copies onto `effect_ledger`.
+
 **Status:** Open — verified 2026-07-09 (during ECOGAP-1 Phase 3a scoping). High:
 the documented, unit-tested "EXACTLY_ONCE" idempotency contract has **never deduplicated a
 single syscall in a real run**, and the side-effecting agent tool calls never reach the gate.

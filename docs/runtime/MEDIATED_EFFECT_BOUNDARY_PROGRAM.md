@@ -124,12 +124,23 @@ unaddressable EU PK.
 Phases are dependency-ordered. MEB-0 is the keystone and a standalone win; the rest can follow
 in any order after it.
 
-### MEB-0 — Tool-path effect boundary (keystone)
-Insert `compute_action_id` + the EffectRecord upsert (pending → execute → finalize) into
+### MEB-0 — Tool-path effect boundary (keystone) — ✅ SHIPPED 2026-07-11
+Inserts `compute_action_id` + the EffectRecord upsert (pending → execute → finalize) into
 `execute_tool`, scoped to the stable `run_id` from the token. **Delivers agent-tool
 idempotency — the "part that actually matters" (IDEM-10)** — and creates the seam MEB-2 and
-MEB-3 hang off. Reuses the existing primitive; **no schema change**. Default `AT_LEAST_ONCE`
-(no behavior change); `EXACTLY_ONCE` opt-in per-tool or per-run.
+MEB-3 hang off. No schema change.
+
+**Shipped shape (opt-in, doubly-gated):** the global flag `AINDY_TOOL_IDEMPOTENCY` (default
+off) AND a per-tool `execution_guarantee="EXACTLY_ONCE"` (via `register_tool`), with a stable
+`run_id`. Default `AT_LEAST_ONCE` = current behavior (no dedup). On a match, a retry replays
+the cached result (`idempotent_replay: true`) instead of re-executing; a ledger failure
+degrades to AT_LEAST_ONCE; a failed tool leaves the slot reclaimable (retryable). The shared
+primitive lives in **`AINDY/kernel/effect_ledger.py`** (`resolve_effect_record` /
+`complete_effect_record`), used only by the tool path for now — **the byte-identical private
+copies in `syscall_dispatcher` are intentionally left in place; MEB-1 consolidates them.**
+Verified on real Postgres (tool executed once across two identical calls; second replayed).
+Keys only on `EffectRecord.action_id` (text), never the EU UUID — so it does not touch the
+#157 lookup path. Tests: `tests/unit/test_tool_idempotency.py`.
 
 ### MEB-1 — Repair the dispatcher gate (IDEM-10 layer 1)
 Make the syscall gate key on the same stable scope instead of the unmatchable EU PK, and
@@ -177,11 +188,16 @@ verified against throwaway Postgres, not SQLite.** This is foundational work, no
 *idempotent-declared* flows/agents precisely because this layer doesn't exist. MEB-0/1 are the
 prerequisite for **declaration-free** continuation (the ECOGAP-1 Phase 3 payoff).
 
-## Recommended entry point
+## Progress / next
 
-**MEB-0.** Self-contained, no schema change, closes the single biggest real gap (tool-call
-idempotency), and builds the seam the other concerns require. Even if MEB-2b and MEB-3 are never
-done, MEB-0 is a standalone win.
+- **MEB-0 — ✅ SHIPPED 2026-07-11.** Tool-call idempotency behind `AINDY_TOOL_IDEMPOTENCY` +
+  per-tool `EXACTLY_ONCE`; shared primitive in `kernel/effect_ledger.py`; PG-verified.
+- **Next: MEB-1** — consolidate the dispatcher gate onto `kernel/effect_ledger.py` (removing the
+  duplicated private copies) and repair its scope key so syscall idempotency is real too.
+- Then MEB-2 (G4a) and MEB-3 (multi-tenant MCP), in any order.
+
+Even if MEB-2b and MEB-3 are never done, MEB-0 was the standalone win — the single biggest real
+gap (side-effecting agent tools had no idempotency at any layer) is closed.
 
 ## Cross-references
 
