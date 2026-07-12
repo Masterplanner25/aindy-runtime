@@ -618,6 +618,12 @@ row count so unbounded growth is detected without polling.
 
 ## IDEM-10 — The EXACTLY_ONCE idempotency gate is dead in production; agent tool calls bypass it entirely
 
+**PLAN:** consolidated into the Mediated Effect Boundary program —
+`docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`. IDEM-10 is delivered by **MEB-0**
+(tool-path effect boundary — gives agent tool calls idempotency, the part that actually
+matters) + **MEB-1** (repair the dispatcher gate to key on a stable scope, not the
+unaddressable EU PK). The finding below is the verified source of that plan.
+
 **Status:** Open — verified 2026-07-09 (during ECOGAP-1 Phase 3a scoping). High:
 the documented, unit-tested "EXACTLY_ONCE" idempotency contract has **never deduplicated a
 single syscall in a real run**, and the side-effecting agent tool calls never reach the gate.
@@ -2962,7 +2968,10 @@ SDK-SYSCALL-GRANT-1). **Decisions:** single configured identity `AINDY_MCP_SERVE
 (per-session/multi-tenant auth deferred = G4a), read-only default (`AINDY_MCP_SERVER_ALLOW_WRITES`
 opts in writes, `AINDY_MCP_SERVER_TOOLS` overrides). Verified write→read-back on real Postgres.
 **Deferred:** SSE transport (nodus-mcp #7 — `run_sse_app` omits `/messages/` mount) + multi-tenant
-per-session auth (= G4a). Doc: `docs/runtime/MCP_INTEGRATION.md`.
+per-session auth. The multi-tenant work is **MEB-3** in the Mediated Effect Boundary program
+(`docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`): per-session identity via
+`NodusServer.auth_hook` → `mint_token` + tenant/session columns on EffectRecord, on top of the
+MEB-0/1 effect boundary. Doc: `docs/runtime/MCP_INTEGRATION.md`.
 
 
 **Update 2026-07-11 — G4b client-side interop shipped (opt-in).** AINDY agents can now call
@@ -3030,14 +3039,21 @@ Grounded against source so the reopen scope is real, not aspirational:
   `register_agent_tool` (`registry.py:733`), `load_plugins` (`registry.py:1750`). G4b =
   graduate those repos to plugins through this ABI.
 
+**PLAN (G4a):** consolidated into the Mediated Effect Boundary program —
+`docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`. G4a is **MEB-2**: *2a thin activation*
+(register a real `CapabilityPolicy` + secret scopes + a real `resolve_secret` path) and *2b
+strong* (a true socket/httpx egress chokepoint — the static `extract_domains`/`extract_recipients`
+scan is insufficient). The multi-tenant MCP identity work is **MEB-3**. Both hang off **MEB-0**
+(the `execute_tool` effect boundary). Detail below.
+
 **Two forms of G4a, pick at reopen:** *thin activation* (register a real `CapabilityPolicy` +
 secret scopes + one proving tool that calls `resolve_secret`, behind a default-off flag) ships
 the arg-inspection level of assurance cheaply but leaves egress bypassable. *Strong form* — a
 **mediated egress point** (tools lose raw outbound network; a broker/syscall injects the secret
 and enforces the allowlist at the socket) — is non-bypassable but kernel-adjacent, and it
 **converges with IDEM-10**: both are the same "route side-effecting tool calls through a real
-boundary instead of trusting `execute_tool` to see everything" work. Do the strong form as a
-dedicated effort alongside/after IDEM-10, not as a bolt-on.
+boundary instead of trusting `execute_tool` to see everything" work — now the MEB program. Do
+the strong form as a dedicated effort alongside/after MEB-0/1, not as a bolt-on.
 
 **Reopen trigger:** when first external MCP/A2A interop is scheduled (G4b), or when a sandbox
 needs mediated egress without holding credentials (G4a). If only the *story* is needed before

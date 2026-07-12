@@ -522,7 +522,7 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 
 Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within a prefix.
 
-- **IDEM-\*** — idempotency audit findings. **IDEM-10 open (2026-07-09): EXACTLY_ONCE gate never fires in prod + agent tool calls bypass it — the real ECOGAP-1 Phase 3a.** Next available: **IDEM-11**.
+- **IDEM-\*** — idempotency audit findings. **IDEM-10 open (2026-07-09): EXACTLY_ONCE gate never fires in prod + agent tool calls bypass it — the real ECOGAP-1 Phase 3a.** Now consolidated into the **Mediated Effect Boundary program** (`docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`): IDEM-10 = MEB-0 (tool-path effect boundary, keystone) + MEB-1 (dispatcher gate repair); G4a = MEB-2; multi-tenant MCP = MEB-3. Start at MEB-0 (self-contained, no schema change). Next available: **IDEM-11**.
 - **CLI-1** — lazy settings getter / module-level import hazard. Open, deferred post-1.0.
 - **CLI-SANDBOX-FORMAT-1** — `sandbox` raw JSON output wall. Open, deferred to 1.0.1.
 - **C2, C3** — cross-platform sandbox tiers. All phases closed 2026-06-06.
