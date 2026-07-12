@@ -248,6 +248,14 @@ _BROKER: SecretBroker | None = None
 _BROKER_LOCK = threading.Lock()
 
 
+def _secret_fail_closed_enabled() -> bool:
+    """MEB-2b: when on, a secret with no registered scope is DENIED (fail-closed) instead
+    of being resolvable by any caller. Default off preserves the dev-convenience behavior."""
+    import os
+
+    return os.getenv("AINDY_SECRET_FAIL_CLOSED", "").strip().lower() in {"1", "true", "yes"}
+
+
 def get_secret_broker() -> SecretBroker:
     global _BROKER
     if _BROKER is None:
@@ -278,8 +286,9 @@ def resolve_secret(
     persisted. Denied (fail-closed) when the gating capability is not granted.
 
     The gate is ``required_capability`` if given, else the capability registered for
-    *name* via ``register_secret_scope``. A secret with no registered gate is
-    resolvable by any caller (dev convenience) — register a scope to lock it down.
+    *name* via ``register_secret_scope``. A secret with no registered gate is resolvable
+    by any caller by default (dev convenience) — register a scope to lock it down, or set
+    ``AINDY_SECRET_FAIL_CLOSED=true`` to deny every unscoped secret (MEB-2b hardening).
 
     ``capabilities`` defaults to the ambient ``capability_scope`` set by the tool
     seam, so a tool can call ``resolve_secret(name)`` and be gated by the run's grants.
@@ -289,7 +298,18 @@ def resolve_secret(
         capabilities = _CAPABILITIES_CTX.get()
     gate = required_capability if required_capability is not None else SECRET_SCOPES.get(name)
     granted = set(capabilities or [])
-    if gate is not None and gate not in granted:
+    if gate is None:
+        # No scope registered for this secret. Fail-closed when opted in; else fail-open
+        # (dev convenience) so an unscoped secret stays resolvable.
+        if _secret_fail_closed_enabled():
+            return {
+                "ok": False,
+                "error": (
+                    f"secret {name!r} has no registered scope and "
+                    "AINDY_SECRET_FAIL_CLOSED is on (fail-closed)"
+                ),
+            }
+    elif gate not in granted:
         return {
             "ok": False,
             "error": f"secret {name!r} requires capability {gate!r}",

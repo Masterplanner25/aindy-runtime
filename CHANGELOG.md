@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added — MEB-2b hardening: raw IP-literal egress + fail-closed secrets
+
+Backward-compatible; both surfaces opt-in / inert by default.
+
+- **Raw IP-literal connects are now covered.** `platform_layer/egress_guard.py` also wraps
+  `socket.socket.connect`/`connect_ex`: under an active egress allowlist, a connect to an IP
+  the caller did not obtain from an *allowed* `getaddrinfo` (tracked per-context) is denied —
+  closing the raw-`socket.connect((ip, port))` bypass that skips DNS. Inert outside a scoped
+  tool call.
+- **`resolve_secret` fail-closed option.** `AINDY_SECRET_FAIL_CLOSED=true` denies any secret
+  with no registered scope (default off preserves the dev-convenience fail-open).
+- Remaining honest limit (intentionally not closed in-process): a resolve/connect on a thread
+  that doesn't inherit the contextvar still escapes the scope — the sandbox `--network none`
+  path is the real fix.
+
 ### Added — MEB-1: memory.write EXACTLY_ONCE + gate scope relaxation
 
 Backward-compatible; inert unless `AINDY_SYSCALL_IDEMPOTENCY` is enabled (default off).

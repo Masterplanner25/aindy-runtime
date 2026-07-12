@@ -271,11 +271,18 @@ prerequisite for **declaration-free** continuation (the ECOGAP-1 Phase 3 payoff)
   domain allowlist — catching runtime-built URLs that MEB-2a's static arg inspection cannot see.
   Installed once, process-wide, but **inert unless an `egress_scope` allowlist is set**;
   `execute_tool` scopes it only for the tool `fn` call, only when the tool's capability carries a
-  `domains` policy and `AINDY_EGRESS_ENFORCEMENT` is on. Opt-in, off by default. Honest limits
-  (documented in the module): IP-literal connections perform no `getaddrinfo` and are uncovered; a
-  resolution on a thread that doesn't inherit the contextvar escapes the scope; only resolution is
-  guarded, not the eventual connect. The non-bypassable form remains the sandbox `--network none`
-  + mediated proxy — this is the in-process strong-form for the non-sandboxed tool path.
+  `domains` policy and `AINDY_EGRESS_ENFORCEMENT` is on. Opt-in, off by default. The
+  non-bypassable form remains the sandbox `--network none` + mediated proxy — this is the
+  in-process strong-form for the non-sandboxed tool path.
+- **MEB-2b hardening — ✅ SHIPPED 2026-07-11.** Two of the three documented gaps closed:
+  (1) **raw IP-literal connects** are now covered — `socket.socket.connect`/`connect_ex` are wrapped
+  and deny any IP the caller did not obtain from an *allowed* `getaddrinfo` (tracked per-context in
+  `_RESOLVED_IPS`); a raw `socket.connect((ip, port))` that skips DNS is fail-closed. (2)
+  **`resolve_secret` fail-closed** — `AINDY_SECRET_FAIL_CLOSED=true` denies any secret with no
+  registered scope (default off keeps the dev-convenience fail-open). Remaining honest limit
+  (intentionally not closed in-process): a resolve/connect on a **thread that doesn't inherit the
+  contextvar** still escapes the scope — closing it would need global `threading.Thread` wrapping;
+  the sandbox path is the real fix.
 - **MEB-3a — ✅ SHIPPED 2026-07-11.** Per-session multi-tenant MCP identity over SSE (nodus-mcp
   0.1.2 unblocked #7 + #8): auth_hook resolves each session's bearer/platform-key header to a real
   user; calls dispatch as that identity, fail-closed. No schema. Opt-in
@@ -295,9 +302,9 @@ with per-tenant/session effect attribution.
 **Remaining non-blocking follow-ups** (mechanism-complete, adoption/hardening only): `memory.write`
 now declares `EXACTLY_ONCE` and the gate scope is widened (2026-07-11) — remaining is broadening
 `EXACTLY_ONCE` to `event.emit`/`flow.run` (per-syscall decision) and populating `execution_id` on the
-writer (deferred until a `compensate` hook consumes it); MEB-2b IP-literal / thread-escape coverage +
-fail-closed on ungated secret; and, for MEB-3b, an attribution index + the optional per-session
-capability-ceiling token.
+writer (deferred until a `compensate` hook consumes it); MEB-2b thread-escape coverage (intentionally
+left to the sandbox path — IP-literal + fail-closed-secret hardening shipped 2026-07-11); and, for
+MEB-3b, an attribution index + the optional per-session capability-ceiling token.
 
 ## Cross-references
 
