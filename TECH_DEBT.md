@@ -2879,7 +2879,21 @@ map onto existing entries (noted per item); do not double-track.
 
 ### ECOGAP-1 — Event-sourced durable execution / transparent crash continuation
 
-**Status:** Phases 1 + 2 + 2a shipped (2026-07-08, opt-in); full per-step WAL + Phase 3 deferred — roadmap (P0)
+**Status:** Phases 1 + 2 + 2a shipped (2026-07-08, opt-in); **Phase 3 scoped + reframed 2026-07-12 → `docs/runtime/DURABLE_EXECUTION_PROGRAM.md` (DUR-1..4)** — roadmap (P0)
+
+**Phase 3 reframe (2026-07-12, source-audited).** A four-front audit reframed Phase 3 away from
+"event-sourced deterministic replay in the kernel." Findings: (1) continuation resumes *forward*
+and re-runs **exactly one** node/segment — only *its* effects are unsafe; (2) the memory-write
+idioms that dominate the hot path (`remember()`, deferred `memory.write()`) **bypass every
+EffectRecord chokepoint** (direct `MemoryNodeDAO.save()`), so they double-write on replay; (3)
+kernel deterministic replay is **out of scope** — wrong layer (determinism is a VM concern per
+`ECOSYSTEM_CAPABILITY_GAPS.md:109`), unnecessary (forward-resume ≠ code re-execution), and huge
+(~20 raw `uuid4` sites + an unreachable subprocess boundary). Reframed program (`DUR-1..4`):
+**DUR-1** memory-effect boundary (3rd EffectRecord chokepoint, keyed on run+step identity —
+keystone/standalone win, no schema); **DUR-2** per-run at-most-once signal (declaration-free);
+**DUR-3** flip continuation default-safe (drop the continuation-safe declaration gate); **DUR-4**
+(optional) FlowHistory canonicalization + fold (the only schema bump). Core DUR-1→3 needs no
+schema change. Full plan + file:line evidence: `docs/runtime/DURABLE_EXECUTION_PROGRAM.md`.
 
 aindy-runtime marks non-waiting `running` flows FAILED on restart; there is no replay log.
 WAIT/RESUME + `flow_run_rehydration` + ResumeWatchdog already cover *suspended* flows — the
