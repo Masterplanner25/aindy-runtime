@@ -691,6 +691,10 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         state=nodus_initial_state,
         execution_token=_execution_token,
         run_id=_agent_run_id,
+        # DUR-1 — the flow node name discriminates this node's memory-write dedup scope from
+        # sibling nodes that share the flow run's execution_unit_id (mandatory for correctness
+        # once AINDY_MEMORY_IDEMPOTENCY is on). Set by execute_node() at node_executor.py.
+        effect_scope=str(context.get("node_name") or ""),
         simulate=_simulate,
         virtual_tools=_virtual_tools,
         event_sink=_build_event_sink(

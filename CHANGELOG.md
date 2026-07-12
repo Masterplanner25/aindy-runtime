@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added — DUR-1: memory-effect idempotency boundary (Durable Execution / ECOGAP-1 Phase 3)
+
+Backward-compatible; inert unless `AINDY_MEMORY_IDEMPOTENCY` is enabled (default off). The
+keystone of the reframed ECOGAP-1 Phase 3 (`docs/runtime/DURABLE_EXECUTION_PROGRAM.md`).
+
+- **Deferred memory writes are now dedup-guarded** through the shared MEB `EffectRecord` ledger
+  at `nodus_runtime_adapter._apply_deferred_memory_writes` (both `memory.write` and `remember`
+  kinds). A continuation re-run of the same node no longer persists a duplicate memory node.
+- **Keyed on position identity — (run, node/segment, ordinal) — never content**, so a re-run
+  dedups even when content carries a fresh uuid/timestamp, and two distinct writes never collapse.
+  The per-node discriminator (`effect_scope`, the flow node name threaded via
+  `execute_nodus_runtime`) is required for correctness: flow nodes share the run's
+  `execution_unit_id`, so without it two siblings would collide on ordinal 0.
+- A ledger failure degrades to at-least-once; a failed write leaves the slot reclaimable.
+- Standalone win: dedups deferred memory writes on *any* retry, not only crash continuation.
+- Verified on real Postgres (re-run dedups; sibling node at same ordinal doesn't collide;
+  distinct ordinals don't collapse).
+
 ### Added — MEB-2b hardening: raw IP-literal egress + fail-closed secrets
 
 Backward-compatible; both surfaces opt-in / inert by default.

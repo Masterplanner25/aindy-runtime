@@ -67,6 +67,14 @@ class NodusExecutionContext:
     # refused (fail-closed).
     run_id: str = ""
     execution_token: Optional[dict[str, Any]] = None
+    # DUR-1 (durable execution) — a stable per-node/segment discriminator for the
+    # memory-effect idempotency boundary. Flow nodes SHARE the flow run's
+    # execution_unit_id, so deferred memory-write dedup must be scoped by this too or two
+    # nodes' writes collide on (eu_id, ordinal). Set to the flow node name on the flow-node
+    # path (nodus_adapter); left "" on direct callers whose execution_unit_id is per-call
+    # unique. Only consulted when AINDY_MEMORY_IDEMPOTENCY is on. See
+    # docs/runtime/DURABLE_EXECUTION_PROGRAM.md (DUR-1).
+    effect_scope: str = ""
     # AGENT-HARDEN-4 — effect simulation. When True, the call_tool seam routes to
     # the shadow executor (simulate_agent_tool): tools are NOT executed, a predicted
     # result is returned so the plan keeps flowing, and each call records a
@@ -313,6 +321,25 @@ def _apply_deferred_events(
             )
 
 
+def _memory_idempotency_enabled() -> bool:
+    """DUR-1 master flag. When off (default), deferred memory writes are never dedup-gated."""
+    return os.getenv("AINDY_MEMORY_IDEMPOTENCY", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _memory_effect_action_id(scope: str, ordinal: int) -> str:
+    """A content-independent dedup key for the ordinal-th memory write in *scope*.
+
+    Keyed purely on (scope, ordinal) — NOT the write's content — so a continuation re-run of
+    the same node dedups even when content carries a fresh uuid/timestamp, and two distinct
+    writes at distinct ordinals never collapse.
+    """
+    from AINDY.core.execution_gate import compute_action_id
+
+    return compute_action_id(
+        action_type="memory.write", input_payload={"seq": int(ordinal)}, scope=str(scope)
+    )
+
+
 def _apply_deferred_memory_writes(
     db: Any,
     memory_writes: list[dict[str, Any]],
@@ -321,9 +348,46 @@ def _apply_deferred_memory_writes(
     if not memory_writes:
         return
 
+    # DUR-1 — memory-effect idempotency boundary. When AINDY_MEMORY_IDEMPOTENCY is on, each
+    # deferred write is dedup-guarded through the shared EffectRecord ledger so a
+    # continuation re-run of the same node does NOT persist a duplicate memory node. Keyed on
+    # POSITION identity — (run, node/segment, ordinal) — never content, so it dedups a re-run
+    # regardless of non-deterministic content and never collapses two distinct writes. The
+    # per-node ``effect_scope`` is load-bearing: flow nodes share the run's
+    # execution_unit_id, so without it two nodes' writes would collide on the same ordinal.
+    # Default off = current behavior (no dedup). See docs/runtime/DURABLE_EXECUTION_PROGRAM.md.
+    _idem = _memory_idempotency_enabled()
+    _scope = None
+    if _idem:
+        _eff = str(getattr(context, "effect_scope", "") or "")
+        _scope = f"{context.execution_unit_id}:{_eff}"
+
     bridge = None
     dao = None
-    for write in memory_writes:
+    for ordinal, write in enumerate(memory_writes):
+        # DUR-1 gate: claim/replay this (run, node, ordinal) slot before writing.
+        _action_id = None
+        if _idem:
+            _action_id = _memory_effect_action_id(_scope, ordinal)
+            try:
+                from AINDY.kernel.effect_ledger import resolve_effect_record
+
+                _already, _cached = resolve_effect_record(
+                    db, _action_id, "memory.write", {"seq": ordinal},
+                    tenant_id=str(context.user_id) if context.user_id else None,
+                )
+            except Exception as exc:
+                # A ledger failure must never block the write — degrade to at-least-once.
+                logger.warning(
+                    "[NodusRuntimeAdapter] memory effect resolve failed; writing unguarded: %s",
+                    exc,
+                )
+                _already, _action_id = False, None
+            if _already:
+                # This node/ordinal already committed its write on a prior run — skip.
+                continue
+
+        _ok = False
         kind = str(write.get("kind") or "remember")
         if kind == "memory.write":
             if dao is None:
@@ -333,39 +397,52 @@ def _apply_deferred_memory_writes(
                     dao = MemoryNodeDAO(db)
                 except Exception as exc:
                     logger.warning("[NodusRuntimeAdapter] Memory DAO unavailable: %s", exc)
-                    continue
-            try:
-                content = str(write.get("content") or "")
-                if not content:
-                    continue
-                dao.save(
-                    content=content,
-                    tags=list(write.get("tags") or []),
-                    user_id=context.user_id,
-                    node_type=str(write.get("node_type") or "insight"),
-                    source="nodus_script",
-                    extra={"significance": float(write.get("significance") or 0.5)},
-                )
-            except Exception as exc:
-                logger.warning("[NodusRuntimeAdapter] Deferred memory.write failed: %s", exc)
-            continue
+                    dao = None
+            if dao is not None:
+                try:
+                    content = str(write.get("content") or "")
+                    if not content:
+                        continue
+                    dao.save(
+                        content=content,
+                        tags=list(write.get("tags") or []),
+                        user_id=context.user_id,
+                        node_type=str(write.get("node_type") or "insight"),
+                        source="nodus_script",
+                        extra={"significance": float(write.get("significance") or 0.5)},
+                    )
+                    _ok = True
+                except Exception as exc:
+                    logger.warning("[NodusRuntimeAdapter] Deferred memory.write failed: %s", exc)
+        else:
+            if bridge is None:
+                try:
+                    from AINDY.memory.nodus_memory_bridge import create_nodus_bridge
 
-        if bridge is None:
-            try:
-                from AINDY.memory.nodus_memory_bridge import create_nodus_bridge
+                    bridge = create_nodus_bridge(
+                        db=db,
+                        user_id=context.user_id,
+                        session_tags=["nodus_runtime_adapter", context.execution_unit_id],
+                    )
+                except Exception as exc:
+                    logger.warning("[NodusRuntimeAdapter] Memory bridge unavailable: %s", exc)
+                    bridge = None
+            if bridge is not None:
+                try:
+                    bridge.remember(*(write.get("args") or []))
+                    _ok = True
+                except Exception as exc:
+                    logger.warning("[NodusRuntimeAdapter] Deferred remember() failed: %s", exc)
 
-                bridge = create_nodus_bridge(
-                    db=db,
-                    user_id=context.user_id,
-                    session_tags=["nodus_runtime_adapter", context.execution_unit_id],
-                )
+        # Finalize the slot only on a successful write; a failed write leaves the pending
+        # row reclaimable so a later retry can complete it.
+        if _idem and _action_id and _ok:
+            try:
+                from AINDY.kernel.effect_ledger import complete_effect_record
+
+                complete_effect_record(db, _action_id, "success", {"written": True})
             except Exception as exc:
-                logger.warning("[NodusRuntimeAdapter] Memory bridge unavailable: %s", exc)
-                continue
-        try:
-            bridge.remember(*(write.get("args") or []))
-        except Exception as exc:
-            logger.warning("[NodusRuntimeAdapter] Deferred remember() failed: %s", exc)
+                logger.warning("[NodusRuntimeAdapter] memory effect finalize failed: %s", exc)
 
 
 def _build_event_sink(

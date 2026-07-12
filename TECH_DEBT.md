@@ -2879,7 +2879,7 @@ map onto existing entries (noted per item); do not double-track.
 
 ### ECOGAP-1 — Event-sourced durable execution / transparent crash continuation
 
-**Status:** Phases 1 + 2 + 2a shipped (2026-07-08, opt-in); **Phase 3 scoped + reframed 2026-07-12 → `docs/runtime/DURABLE_EXECUTION_PROGRAM.md` (DUR-1..4)** — roadmap (P0)
+**Status:** Phases 1 + 2 + 2a shipped (2026-07-08, opt-in); **Phase 3 scoped + reframed 2026-07-12 → `docs/runtime/DURABLE_EXECUTION_PROGRAM.md` (DUR-1..4); DUR-1 keystone SHIPPED 2026-07-12** (opt-in `AINDY_MEMORY_IDEMPOTENCY`, position-keyed memory-write dedup, PG-verified) — roadmap (P0)
 
 **Phase 3 reframe (2026-07-12, source-audited).** A four-front audit reframed Phase 3 away from
 "event-sourced deterministic replay in the kernel." Findings: (1) continuation resumes *forward*

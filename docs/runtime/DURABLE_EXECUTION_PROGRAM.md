@@ -109,10 +109,25 @@ Dependency-ordered. **DUR-1 is the keystone and a standalone win**; the core (DU
 **no schema change** — the only bump lives in the optional DUR-4 (same shape as MEB, where only
 MEB-3b touched schema). Every phase is opt-in / default-off and verified on throwaway Postgres.
 
-### DUR-1 — Memory-effect boundary (keystone) — extends MEB
+### DUR-1 — Memory-effect boundary (keystone) — extends MEB — ✅ SHIPPED 2026-07-12
 Add a **third `EffectRecord` chokepoint** at the direct-DAO memory writes so `remember()`, the
 deferred `memory.write()`, and `share` dedup like the tool/syscall paths. Reuse the MEB primitive
 (`kernel/effect_ledger.resolve_effect_record` / `complete_effect_record`) verbatim.
+
+**Shipped shape (opt-in, `AINDY_MEMORY_IDEMPOTENCY`, default off).** The gate lives at the single
+parent-side commit point `nodus_runtime_adapter._apply_deferred_memory_writes` (covers both
+`memory.write` and `remember` deferred kinds). Keyed content-independently on **(run, node/segment,
+ordinal)** via `_memory_effect_action_id(scope, ordinal)` — `scope = f"{execution_unit_id}:{effect_scope}"`
+where `effect_scope` is the flow node name (threaded through `execute_nodus_runtime` from
+`context["node_name"]`). **The per-node discriminator is load-bearing, not just for continuation:**
+flow nodes share the run's `execution_unit_id`, so without it two sibling nodes writing memory would
+collide on ordinal 0 and the second would be silently skipped — data loss on a *normal* run once the
+flag is on. A ledger failure degrades to at-least-once; a failed write leaves the slot reclaimable.
+Verified on real Postgres: a node re-run dedups (1 node, not 2), a sibling node at the same ordinal
+does **not** collide, distinct ordinals don't collapse, and 4 distinct slots produce 4 effect_records.
+Tests: `tests/unit/test_dur1_memory_effect_boundary.py`. **Deferred within DUR-1:** any *immediate*
+(non-deferred) `remember` path, and populating `EffectRecord.execution_id` (needs a ledger param —
+the MEB-1 follow-up).
 
 - **Dedup key = (run, step) identity, NOT content.** Key `action_id` on
   `compute_action_id(action_type="memory.write", input_payload={…stable…}, scope=<eu_id>:<step_id>)`
@@ -186,8 +201,10 @@ continuation drivers — mostly "add a chokepoint + a per-run signal + flip a ga
 
 ## Progress / next
 
-- **DUR-1 (memory-effect boundary)** — the keystone and standalone win; start here.
-- DUR-2 → DUR-3 follow in order; DUR-4 is optional/independent.
+- **DUR-1 (memory-effect boundary) — ✅ SHIPPED 2026-07-12.** Opt-in `AINDY_MEMORY_IDEMPOTENCY`;
+  position-keyed dedup at `_apply_deferred_memory_writes`; PG-verified. The keystone/standalone win.
+- **Next: DUR-2** (per-run at-most-once signal) → DUR-3 (flip continuation default-safe); DUR-4 is
+  optional/independent.
 - All opt-in/default-off; release remains on hold past v1.6.2.
 
 ## Cross-references
