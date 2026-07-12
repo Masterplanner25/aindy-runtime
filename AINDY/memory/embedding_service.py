@@ -1,7 +1,11 @@
 """
 Embedding Service
 
-Generates vector embeddings via OpenAI text-embedding-ada-002.
+Generates vector embeddings via the configured EmbeddingProvider
+(``AINDY_EMBEDDING_PROVIDER`` — OpenAI by default; local for offline/air-gapped).
+This module owns the cross-provider orchestration (empty/testing short-circuit,
+retry loop, metrics, dimension validation); the raw model call lives in
+``embedding_providers`` (ECOGAP-3 Phase 1).
 Uses C++ kernel for cosine similarity when available.
 Falls back to pure Python.
 """
@@ -9,29 +13,34 @@ import logging
 import os
 import sys
 import time
-from typing import Optional
 import threading
 
 from AINDY.config import settings
 from AINDY.kernel.circuit_breaker import CircuitOpenError
-from AINDY.platform_layer.external_call_service import perform_external_call
+from AINDY.memory.embedding_providers import (
+    DEFAULT_EMBEDDING_DIMENSIONS,
+    DEFAULT_OPENAI_EMBEDDING_MODEL,
+    OpenAIEmbeddingProvider,
+    build_embedding_provider,
+    validate_embedding_configuration,
+)
 from AINDY.platform_layer.metrics import (
     embedding_generation_latency_seconds,
     embedding_generation_retries_total,
     embedding_generation_total,
 )
-from AINDY.platform_layer.openai_client import create_embedding
-from AINDY.platform_layer.openai_client import get_openai_client
 
-EMBEDDING_MODEL = "text-embedding-ada-002"
-EMBEDDING_DIMENSIONS = 1536
-_DEFAULT_PERFORM_EXTERNAL_CALL = perform_external_call
+# Backward-compat module constants. The live model/dimension now come from the
+# active provider; these remain for any external importer and reflect the OpenAI
+# default (unchanged production behavior).
+EMBEDDING_MODEL = DEFAULT_OPENAI_EMBEDDING_MODEL
+EMBEDDING_DIMENSIONS = DEFAULT_EMBEDDING_DIMENSIONS
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingFailedError(RuntimeError):
     """
-    Raised by generate_embedding() when the OpenAI API call fails after all
+    Raised by generate_embedding() when the provider call fails after all
     retry attempts. Callers in the async-job path let this propagate so the
     worker can leave the node deferred in a pending state for later retry.
     Query-path callers
@@ -40,41 +49,58 @@ class EmbeddingFailedError(RuntimeError):
     """
 
 
-_client = None
-_client_lock = threading.Lock()
+_provider = None
+_provider_lock = threading.Lock()
+
+
+def get_embedding_provider():
+    """Return the process-wide embedding provider, building + validating it once."""
+    global _provider
+    if _provider is None:
+        with _provider_lock:
+            if _provider is None:
+                provider = build_embedding_provider()
+                validate_embedding_configuration(provider)
+                _provider = provider
+    return _provider
+
+
+def reset_embedding_provider() -> None:
+    """Drop the cached provider (test/reconfiguration hook)."""
+    global _provider
+    with _provider_lock:
+        _provider = None
 
 
 def get_client():
-    global _client
-    if _client is None:
-        with _client_lock:
-            if _client is None:
-                _client = get_openai_client()
-    return _client
+    """Backward-compat: return a raw OpenAI client. Prefer get_embedding_provider().
+    Only meaningful when the active provider is OpenAI."""
+    provider = get_embedding_provider()
+    if isinstance(provider, OpenAIEmbeddingProvider):
+        return provider._get_client()
+    from AINDY.platform_layer.openai_client import get_openai_client
+
+    return get_openai_client()
 
 
 def generate_embedding(text: str) -> list:
     """
-    Generate a 1536-dim embedding for *text*.
+    Generate an embedding for *text* via the configured provider.
 
     Returns a zero vector immediately when *text* is empty — that is an
     intentional no-op, not a failure.
 
-    Raises EmbeddingFailedError when the OpenAI API call fails after all
+    Raises EmbeddingFailedError when the provider call fails after all
     retry attempts, so callers (e.g. process_embedding_job) receive the
     actual error and can keep the memory node pending for background retry.
     """
+    provider = get_embedding_provider()
     if not text or not text.strip():
-        return [0.0] * EMBEDDING_DIMENSIONS
-    if (
-        settings.is_testing
-        and perform_external_call is _DEFAULT_PERFORM_EXTERNAL_CALL
-        and _client is None
-    ):
-        return [0.0] * EMBEDDING_DIMENSIONS
+        return [0.0] * provider.dimensions
+    if settings.is_testing and getattr(provider, "testing_short_circuit", lambda: False)():
+        return [0.0] * provider.dimensions
 
     text = text[:32000]
-    client = get_client()
     last_exc: Exception | None = None
     started_at = time.perf_counter()
     max_attempts = max(1, int(settings.OPENAI_MAX_RETRIES or 1))
@@ -82,21 +108,12 @@ def generate_embedding(text: str) -> list:
 
     for attempt in range(max_attempts):
         try:
-            response = perform_external_call(
-                service_name="openai",
-                endpoint="embeddings.create",
-                model=EMBEDDING_MODEL,
-                method="openai.embeddings",
-                extra={"purpose": "embedding_generation"},
-                operation=lambda: create_embedding(
-                    client,
-                    input=text,
-                    model=EMBEDDING_MODEL,
-                    timeout=settings.OPENAI_EMBEDDING_TIMEOUT_SECONDS,
-                ),
-            )
-            embedding = response.data[0].embedding
-            assert len(embedding) == EMBEDDING_DIMENSIONS
+            embedding = provider.embed_one(text)
+            if len(embedding) != provider.dimensions:
+                raise ValueError(
+                    f"provider {provider.name!r} returned {len(embedding)}-dim vector, "
+                    f"expected {provider.dimensions}"
+                )
             if attempt:
                 embedding_generation_retries_total.inc(attempt)
             embedding_generation_total.labels(outcome="success").inc()
@@ -106,7 +123,7 @@ def generate_embedding(text: str) -> list:
             embedding_generation_total.labels(outcome="failure").inc()
             embedding_generation_latency_seconds.observe(time.perf_counter() - started_at)
             raise EmbeddingFailedError(
-                f"Embedding generation failed fast because the OpenAI circuit is open: {e}"
+                f"Embedding generation failed fast because the provider circuit is open: {e}"
             ) from e
         except Exception as e:
             last_exc = e
@@ -150,7 +167,7 @@ def generate_query_embedding(query: str) -> list:
         logging.warning(
             "Query embedding failed — returning zero vector for graceful degradation: %s", exc
         )
-        return [0.0] * EMBEDDING_DIMENSIONS
+        return [0.0] * get_embedding_provider().dimensions
 
 
 def cosine_similarity_python(a: list, b: list) -> float:

@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from pgvector.sqlalchemy import Vector
+from AINDY.memory.embedding_providers import resolve_embedding_column_dimensions
 from AINDY.utils import prepare_input_text
 from AINDY.platform_layer.trace_context import get_current_trace_id
 from AINDY.platform_layer.user_ids import parse_user_id
@@ -38,7 +39,7 @@ class MemoryNodeModel(Base):
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
     extra = Column(JSONB, default=dict, nullable=False)
-    embedding = Column(Vector(1536), nullable=True)
+    embedding = Column(Vector(resolve_embedding_column_dimensions()), nullable=True)
     embedding_pending = Column(Boolean, nullable=False, default=True, index=True)
     embedding_status = Column(String(16), nullable=False, default="pending", index=True)
     success_count = Column(Integer, nullable=False, default=0)

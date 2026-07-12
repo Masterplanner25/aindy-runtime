@@ -75,10 +75,37 @@ class Settings(BaseSettings):
     # failure. Empty LLM_FALLBACK_PROVIDERS = single-provider behavior (unchanged).
     LLM_PROVIDER: str = "openai"
     LLM_FALLBACK_PROVIDERS: str = ""
+    # ECOGAP-3 Phase 2: hosted LLM provider breadth. openai + deepseek are built in;
+    # anthropic (native SDK, pip install aindy-runtime[anthropic]) and azure_openai
+    # (reuses the openai SDK) register behind the same FallbackLLMClient seam. Select
+    # via LLM_PROVIDER / LLM_FALLBACK_PROVIDERS.
+    ANTHROPIC_API_KEY: str | None = None
+    ANTHROPIC_MODEL: str = "claude-opus-4-8"
+    ANTHROPIC_MAX_TOKENS: int = 4096
+    ANTHROPIC_BASE_URL: str = ""
+    AZURE_OPENAI_API_KEY: str | None = None
+    AZURE_OPENAI_ENDPOINT: str = ""
+    AZURE_OPENAI_API_VERSION: str = "2024-10-21"
+    AZURE_OPENAI_DEPLOYMENT: str = ""
     OPENAI_CHAT_TIMEOUT_SECONDS: float = 30.0
     OPENAI_EMBEDDING_TIMEOUT_SECONDS: float = 15.0
     OPENAI_MAX_RETRIES: int = 3
     OPENAI_RETRY_BACKOFF_BASE_SECONDS: float = 1.0
+    # ECOGAP-3 Phase 1: memory embedding provider selection. Default "openai" keeps
+    # the historically-live OpenAI path (text-embedding-ada-002, 1536-dim) unchanged.
+    # "local" uses sentence-transformers for offline/air-gapped deployments
+    # (pip install aindy-runtime[embeddings-local]). A provider whose dimension differs
+    # from the memory_nodes column (1536) is fail-closed until the schema-configurable-
+    # dimension + re-embed migration lands. See PROVIDER_BREADTH_PROGRAM.md.
+    AINDY_EMBEDDING_PROVIDER: str = "openai"
+    AINDY_EMBEDDING_OPENAI_MODEL: str = "text-embedding-ada-002"
+    AINDY_EMBEDDING_LOCAL_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+    AINDY_EMBEDDING_LOCAL_DIMENSIONS: int = 384
+    AINDY_EMBEDDING_LOCAL_DEVICE: str = ""
+    # The memory_nodes pgvector column dimension. Default 1536 (OpenAI). Must equal the
+    # active provider's output dimension. Changing it on an existing deployment requires
+    # `aindy-runtime memory reembed` (create_all never alters an existing column).
+    AINDY_EMBEDDING_DIMENSIONS: int = 1536
     AINDY_AGENT_PLANNER_BACKEND: str = "runtime_local"
     AINDY_AGENT_PLANNER_MODEL: str = "gpt-4o"
     AINDY_AGENT_PLANNER_TEMPERATURE: float = 0.3

@@ -430,9 +430,13 @@ class MemoryNodeDAO:
                 from pgvector.sqlalchemy import Vector
                 from sqlalchemy import Float, cast
 
+                from AINDY.memory.embedding_providers import (
+                    resolve_embedding_column_dimensions,
+                )
+
                 distance_expr = cast(
                     MemoryNodeModel.embedding.op("<=>")(
-                        cast(query_embedding, Vector(1536))
+                        cast(query_embedding, Vector(resolve_embedding_column_dimensions()))
                     ),
                     Float,
                 )
