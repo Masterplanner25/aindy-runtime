@@ -175,7 +175,7 @@ class SyscallEntry:
         "handler", "capability", "description",
         "input_schema", "output_schema",
         "stable", "deprecated", "deprecated_since", "replacement",
-        "compensate",
+        "compensate", "execution_guarantee",
     )
 
     def __init__(
@@ -190,6 +190,7 @@ class SyscallEntry:
         deprecated_since: str | None = None,
         replacement: str | None = None,
         compensate: Callable[[dict, "SyscallContext"], dict | None] | None = None,
+        execution_guarantee: str = "AT_LEAST_ONCE",
     ) -> None:
         self.handler = handler
         self.capability = capability
@@ -200,6 +201,12 @@ class SyscallEntry:
         self.deprecated = deprecated
         self.deprecated_since = deprecated_since
         self.replacement = replacement
+        # MEB-1b: per-syscall idempotency declaration — "AT_LEAST_ONCE" (default) or
+        # "EXACTLY_ONCE". EXACTLY_ONCE opts the syscall into the dispatcher effect
+        # boundary (dedup per (execution_unit_id, syscall, payload)), and only when the
+        # global AINDY_SYSCALL_IDEMPOTENCY flag is also on. This is the addressable
+        # guarantee source that replaces the dead ExecutionUnit.extra lookup (IDEM-10).
+        self.execution_guarantee = execution_guarantee
         # AGENT-HARDEN-3: optional compensating-undo hook. When set, a completed
         # effect of this syscall is *reversible* — undo_run_effects invokes it with
         # (effect: dict, context) to roll the effect back. None → the effect is
