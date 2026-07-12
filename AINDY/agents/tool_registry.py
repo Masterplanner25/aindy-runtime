@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Callable
 
 from AINDY.core.execution_signal_helper import queue_system_event
@@ -67,8 +68,15 @@ def register_tool(
     required_capability: str,
     category: str,
     egress_scope: str,
+    execution_guarantee: str = "AT_LEAST_ONCE",
 ):
-    """Register an agent tool implementation with platform metadata."""
+    """Register an agent tool implementation with platform metadata.
+
+    execution_guarantee (MEB-0): "AT_LEAST_ONCE" (default) or "EXACTLY_ONCE". A tool that
+    is non-idempotent (send_email, etc.) declares "EXACTLY_ONCE" to opt into the tool-path
+    effect boundary — a retry with the same (run, tool, args) replays the cached result
+    instead of re-executing. Only active when AINDY_TOOL_IDEMPOTENCY is also enabled.
+    """
     def wrapper(fn: Callable) -> Callable:
         TOOL_REGISTRY[name] = {
             "fn": fn,
@@ -78,10 +86,41 @@ def register_tool(
             "required_capability": required_capability,
             "category": category,
             "egress_scope": egress_scope,
+            "execution_guarantee": execution_guarantee,
         }
         return fn
 
     return wrapper
+
+
+def _tool_idempotency_enabled() -> bool:
+    return os.getenv("AINDY_TOOL_IDEMPOTENCY", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _finalize_tool_effect(db, action_id: str, status: str, result, tool_name: str) -> None:
+    """Finalize an EffectRecord best-effort — a ledger failure must never mask the tool
+    outcome. On success, cache a JSON-safe result for replay; on failure, cache nothing
+    (a ``failed``/left-``pending`` row does not block a later retry)."""
+    from AINDY.kernel.effect_ledger import complete_effect_record
+
+    payload = None
+    if status == "success":
+        try:
+            import json as _json
+
+            _json.dumps(result)
+            payload = {"result": result}
+        except (TypeError, ValueError):
+            logger.warning(
+                "[AgentTool] %s EXACTLY_ONCE result is not JSON-serializable; "
+                "caching empty (replay will return None)",
+                tool_name,
+            )
+            payload = {"result": None}
+    try:
+        complete_effect_record(db, action_id, status, payload)
+    except Exception as exc:
+        logger.warning("[AgentTool] %s effect finalize (%s) failed: %s", tool_name, status, exc)
 
 
 def register_tool_suggestion_provider(provider: Callable) -> Callable:
@@ -230,6 +269,35 @@ def execute_tool(
                 "result": None,
                 "error": "capability enforcement failed",
             }
+    # MEB-0 — tool-path effect boundary (idempotency). Doubly-gated and opt-in: the global
+    # AINDY_TOOL_IDEMPOTENCY flag AND a per-tool execution_guarantee of EXACTLY_ONCE, with a
+    # stable run scope. Default AT_LEAST_ONCE = current behavior (no dedup). Keys only on
+    # EffectRecord.action_id (text) — never the ExecutionUnit UUID — so it sidesteps the
+    # #157 lookup path. See docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md (MEB-0).
+    _guarantee = str(entry.get("execution_guarantee", "AT_LEAST_ONCE")).upper()
+    _idempotent = _guarantee == "EXACTLY_ONCE" and bool(run_id) and _tool_idempotency_enabled()
+    _action_id = None
+    if _idempotent:
+        from AINDY.core.execution_gate import compute_action_id
+        from AINDY.kernel.effect_ledger import resolve_effect_record
+
+        _action_id = compute_action_id(
+            action_type=tool_name, input_payload=args or {}, scope=str(run_id)
+        )
+        try:
+            _already, _cached = resolve_effect_record(db, _action_id, tool_name, args or {})
+        except Exception as exc:
+            # A ledger failure must not block the tool — degrade to AT_LEAST_ONCE.
+            logger.warning("[AgentTool] %s effect resolve failed; running unguarded: %s", tool_name, exc)
+            _already, _cached, _idempotent = False, None, False
+        else:
+            if _already:
+                return {
+                    "success": True,
+                    "result": (_cached or {}).get("result") if isinstance(_cached, dict) else None,
+                    "error": None,
+                    "idempotent_replay": True,
+                }
     try:
         # AGENT-HARDEN-9 — a tool that calls resolve_secret(name) during execution is
         # gated by the run's granted capabilities via this ambient scope; the secret
@@ -238,9 +306,13 @@ def execute_tool(
 
         with capability_scope(_scoped_caps):
             result = entry["fn"](args=args, user_id=user_id, db=db)
+        if _idempotent:
+            _finalize_tool_effect(db, _action_id, "success", result, tool_name)
         return {"success": True, "result": result, "error": None}
     except Exception as exc:
         logger.warning("[AgentTool] %s failed: %s", tool_name, exc)
+        if _idempotent:
+            _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
         return {"success": False, "result": None, "error": str(exc)}
 
 
