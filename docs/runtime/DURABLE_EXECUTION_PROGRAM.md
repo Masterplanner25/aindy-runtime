@@ -201,12 +201,22 @@ immediate bridge memory, syscalls, tools — parent and subprocess). The only re
 writing another table directly) — which the runtime fundamentally cannot gate. That is why DUR-3 is
 an *opt-in* flip with an *opt-out* deny-list, not an unconditional default.
 
-### DUR-3 — Flip continuation default-safe
-With runtime-mediated effects guarded per-run, **invert the continuation-safe declaration gate** so
-continuation covers all flows/agents — behind an **opt-in** default-safe flag (the operator accepts
-the mediated-effect contract) plus an **opt-out** deny-list (`mark_flow_continuation_unsafe`) for
-flows with known raw side effects. The existing per-flow declaration path stays as the default. This
-is the ECOGAP-1 headline. No schema. Depends on DUR-2c.
+### DUR-3 — Flip continuation default-safe — ✅ SHIPPED 2026-07-12
+The ECOGAP-1 headline. With runtime-mediated effects guarded per-run (DUR-1/2/2b/2c), the per-flow /
+per-agent continuation-safe **declaration is no longer required for safety**. New opt-in flag
+**`AINDY_DURABLE_CONTINUATION_ALL`** (default off): when on — alongside the master
+`AINDY_DURABLE_CONTINUATION` — crash continuation covers **all** flows/agents **except** those on an
+**opt-out deny-list** (`mark_flow_continuation_unsafe` / `mark_agent_type_continuation_unsafe`, for
+flows/agents with raw un-mediated side effects the runtime can't dedup). Default off keeps the exact
+current behavior (per-flow/per-agent declaration required). Both continuation drivers already wrap
+the re-drive in `durable_effects_scope()` (DUR-2), so a default-safe continuation's effects are
+at-most-once. Permission is a small helper on each side (`_flow_continuation_permitted` /
+`_agent_continuation_permitted`). No schema. Tests:
+`tests/unit/test_dur3_continuation_default_safe.py`.
+
+**Staged rollout:** ship opt-in (done); flip the default after real-world soak. Raw un-mediated
+side effects remain the operator's responsibility via the deny-list — the runtime guarantees
+at-most-once only for effects that pass its boundary (memory / syscalls / tools).
 
 ### DUR-4 — FlowHistory canonicalization + fold (optional robustness)
 Make the event log a true fold source: close the out-of-band write gaps, add a **genesis row + a
@@ -264,7 +274,11 @@ continuation drivers — mostly "add a chokepoint + a per-run signal + flip a ga
   idempotent. PG-verified. **All runtime-mediated effects on a continued run are now at-most-once —
   DUR-3 is unblocked** (only raw un-mediated node side effects remain, handled by DUR-3's opt-in +
   opt-out design).
-- **Next: DUR-3** (opt-in default-safe flip + opt-out deny-list). DUR-4 is optional/independent.
+- **DUR-3 (flip continuation default-safe) — ✅ SHIPPED 2026-07-12.** Opt-in
+  `AINDY_DURABLE_CONTINUATION_ALL` makes continuation cover all flows/agents except an opt-out
+  deny-list. **The ECOGAP-1 headline — transparent crash continuation without per-flow declaration —
+  is delivered** (opt-in; flip the default after soak).
+- **Remaining: DUR-4** (optional FlowHistory canonicalization + fold — the only schema bump).
 - All opt-in/default-off; release remains on hold past v1.6.2.
 
 ## Cross-references

@@ -37,6 +37,11 @@ _NODUS_VM_WORKFLOW = "nodus_agent_execution"
 # crashed segment cannot double-fire a side effect. Empty by default.
 CONTINUATION_SAFE_AGENT_TYPES: set[str] = set()
 
+# DUR-3: agent types explicitly declared UNSAFE — excluded from continuation even under
+# default-safe mode (AINDY_DURABLE_CONTINUATION_ALL). Use for agents whose tools have raw,
+# un-mediated side effects the at-most-once boundary cannot dedup. Empty by default.
+CONTINUATION_UNSAFE_AGENT_TYPES: set[str] = set()
+
 
 def mark_agent_type_continuation_safe(agent_type: str) -> None:
     """Declare an agent type safe to re-drive from its last completed segment."""
@@ -45,6 +50,30 @@ def mark_agent_type_continuation_safe(agent_type: str) -> None:
 
 def is_agent_type_continuation_safe(agent_type: str | None) -> bool:
     return agent_type in CONTINUATION_SAFE_AGENT_TYPES
+
+
+def mark_agent_type_continuation_unsafe(agent_type: str) -> None:
+    """DUR-3: declare an agent type that must NEVER be continued, even under default-safe."""
+    CONTINUATION_UNSAFE_AGENT_TYPES.add(agent_type)
+
+
+def is_agent_type_continuation_unsafe(agent_type: str | None) -> bool:
+    return agent_type in CONTINUATION_UNSAFE_AGENT_TYPES
+
+
+def _default_safe_enabled() -> bool:
+    """DUR-3: continuation applies to all agent types (except deny-listed) rather than only
+    declaration-safe ones. Gated by AINDY_DURABLE_CONTINUATION_ALL (default off)."""
+    from AINDY.config import settings
+
+    return bool(getattr(settings, "AINDY_DURABLE_CONTINUATION_ALL", False))
+
+
+def _agent_continuation_permitted(agent_type: str | None) -> bool:
+    """DUR-3 permission: default-safe → all except deny-listed; else declaration required."""
+    if _default_safe_enabled():
+        return not is_agent_type_continuation_unsafe(agent_type)
+    return is_agent_type_continuation_safe(agent_type)
 
 
 def _continuation_enabled() -> bool:
@@ -120,7 +149,7 @@ def continue_crashed_agent_runs(db) -> int:
         continued = 0
         for run in crashed:
             try:
-                if not is_agent_type_continuation_safe(run.agent_type):
+                if not _agent_continuation_permitted(run.agent_type):
                     continue
                 if not _is_nodus_vm_run(run, db):
                     continue  # AGENT_FLOW / unknown — handled by the flow-side path
