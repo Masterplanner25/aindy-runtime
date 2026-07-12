@@ -332,6 +332,18 @@ class PersistentFlowRunner:
                 patch = result.get("output_patch", {})
                 exec_ms = result.get("_execution_time_ms", 0) or execute_response["exec_ms"]
 
+                # DUR-4 — monotonic per-run ordinal so FlowHistory is a deterministically
+                # ordered, fold-able event log. max()+1 is safe: a run's nodes execute
+                # sequentially (no concurrent writers), and it continues correctly across a
+                # resume (seeds from the highest existing sequence).
+                from sqlalchemy import func as _sqlfunc
+
+                _next_seq = (
+                    self.db.query(_sqlfunc.max(FlowHistory.sequence_number))
+                    .filter(FlowHistory.flow_run_id == run.id)
+                    .scalar()
+                    or 0
+                ) + 1
                 self.db.add(
                     FlowHistory(
                         flow_run_id=run.id,
@@ -341,6 +353,7 @@ class PersistentFlowRunner:
                         output_patch=_json_safe(patch),
                         execution_time_ms=exec_ms,
                         error_message=result.get("error"),
+                        sequence_number=_next_seq,
                     )
                 )
                 self.db.commit()

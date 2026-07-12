@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added — DUR-4: FlowHistory canonicalization + fold (Durable Execution; completes ECOGAP-1 Phase 3)
+
+Backward-compatible and additive; the resume repair is opt-in (default off).
+
+- **Schema-contract bump `2026-07-11` → `2026-07-12`** (Alembic `0012`, runtime head `0011` →
+  `0012`): a nullable monotonic `sequence_number` on `flow_history` (per `flow_run`) + index
+  `ix_flow_history_run_seq`, making the node event-log deterministically ordered and fold-able.
+  Populated by the runner writer (`max()+1`; a run's nodes execute sequentially and it continues
+  across a resume). Blank-DB-guarded migration; `downgrade` drops both.
+- **Folder** (`core/flow_history_fold.py`): `reconstruct_flow_run_state(db, run_id)` rebuilds
+  `FlowRun.state` from the ordered rows — the last row's full `input_state` checkpoint with its
+  `output_patch` applied only on SUCCESS (shallow merge, parity with the engine).
+- **Opt-in resume repair** (`AINDY_DURABLE_FOLD_REPAIR`, default off): on continuation, rebuild a
+  lost/torn snapshot from the fold before resuming (the last history row commits before the snapshot
+  advance, so it is at least as fresh for the last completed node).
+- Verified on real Postgres: column + index materialize, the folder reconstructs across out-of-order
+  rows honoring the WAIT-no-apply rule, and Alembic `0012` adds/drops cleanly.
+- **This completes ECOGAP-1 Phase 3 (Durable Execution): DUR-1 → DUR-4 all shipped.**
+
 ### Added — DUR-3: transparent crash continuation without per-flow declaration (ECOGAP-1 headline)
 
 Backward-compatible; default off preserves current behavior. The ECOGAP-1 Phase 3 headline.

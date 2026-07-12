@@ -54,6 +54,14 @@ def _default_safe_enabled() -> bool:
     return bool(getattr(settings, "AINDY_DURABLE_CONTINUATION_ALL", False))
 
 
+def _fold_repair_enabled() -> bool:
+    """DUR-4: rebuild a lost/torn FlowRun.state snapshot from the FlowHistory fold before
+    resuming. Gated by AINDY_DURABLE_FOLD_REPAIR (default off)."""
+    from AINDY.config import settings
+
+    return bool(getattr(settings, "AINDY_DURABLE_FOLD_REPAIR", False))
+
+
 def _flow_continuation_permitted(flow_name: str) -> bool:
     """DUR-3 permission: default-safe → all flows except deny-listed
     (mark_flow_continuation_unsafe, for raw un-mediated side effects); else the per-flow
@@ -115,6 +123,21 @@ def try_continue_flow_run(flow_run, db) -> bool:
         run = db.query(FlowRun).filter(FlowRun.id == flow_run.id).first()
         if run is None:
             return False
+        # DUR-4 — if the durable snapshot was lost/torn but the FlowHistory event log survived,
+        # rebuild state from the fold before resuming (opt-in). The last history row commits
+        # BEFORE the snapshot advance, so it is at least as fresh for the last completed node.
+        # current_node lives in its own column and is unaffected.
+        if _fold_repair_enabled() and not (run.state or {}):
+            from AINDY.core.flow_history_fold import reconstruct_flow_run_state
+
+            rebuilt = reconstruct_flow_run_state(db, str(run.id))
+            if rebuilt:
+                run.state = rebuilt
+                db.commit()
+                logger.warning(
+                    "[FlowContinuation] rebuilt lost snapshot for run=%s from FlowHistory "
+                    "fold (%d keys)", run.id, len(rebuilt),
+                )
         new_state = dict(run.state or {})
         new_state[_ATTEMPTS_KEY] = attempts + 1
         run.state = new_state

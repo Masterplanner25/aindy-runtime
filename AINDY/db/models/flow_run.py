@@ -15,6 +15,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -75,7 +76,15 @@ class FlowHistory(Base):
     output_patch = Column(JSON, nullable=True)
     error_message = Column(Text, nullable=True)
     execution_time_ms = Column(Integer, nullable=True)
+    sequence_number = Column(Integer, nullable=True)
+    """DUR-4 — monotonic per-flow_run node ordinal. Makes FlowHistory a deterministically
+    ordered, fold-able event log (created_at alone is too coarse for same-instant commits).
+    Nullable — pre-DUR-4 rows have none; the folder falls back to created_at then id."""
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_flow_history_run_seq", "flow_run_id", "sequence_number"),
+    )
 
 
 class EventOutcome(Base):
