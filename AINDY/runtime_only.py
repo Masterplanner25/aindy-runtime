@@ -280,6 +280,70 @@ def _bootstrap_schema(reconcile: bool) -> NoReturn:
         raise SystemExit(2)
 
 
+def _reembed_memory(*, yes: bool, no_drain: bool, dry_run: bool) -> NoReturn:
+    """Re-embed all memory nodes with the configured provider (ECOGAP-3 Phase 1).
+
+    Run after changing AINDY_EMBEDDING_PROVIDER / AINDY_EMBEDDING_DIMENSIONS: alters the
+    pgvector column to the new dimension and regenerates every vector. Destructive
+    (drops existing embeddings) — intended with traffic stopped. Requires DATABASE_URL +
+    PostgreSQL.
+    """
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print("error: DATABASE_URL is not set.", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        from AINDY.memory.embedding_migration import reembed_all_memory_nodes
+        from AINDY.memory.embedding_providers import (
+            EmbeddingProviderError,
+            resolve_embedding_column_dimensions,
+        )
+    except Exception as exc:
+        print(f"error: could not import migration layer: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+    try:
+        if dry_run:
+            report = reembed_all_memory_nodes(dry_run=True)
+            print(
+                f"dry-run: provider={report['provider']} target_dim={report['target_dimension']} "
+                f"rows={report['total_rows']}"
+            )
+            raise SystemExit(0)
+
+        if not yes:
+            print(
+                "error: reembed is destructive (drops and regenerates every memory embedding "
+                f"at dimension {resolve_embedding_column_dimensions()}).\n"
+                "Stop traffic, then re-run with --yes to proceed (or --dry-run to preview).",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
+        report = reembed_all_memory_nodes(alter_column=True, drain=not no_drain)
+        print(
+            f"ok: provider={report['provider']} dim={report['target_dimension']} "
+            f"column_altered={report['column_altered']} reembedded={report['reembedded']} "
+            f"deferred={report['deferred']} (total {report['total_rows']})"
+        )
+        if no_drain:
+            print("note: --no-drain set; the background embedding sweep will regenerate vectors.")
+        raise SystemExit(0)
+    except SystemExit:
+        raise
+    except EmbeddingProviderError as exc:
+        print(f"error: provider/dimension mismatch: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    except Exception as exc:
+        exc_str = str(exc)
+        if any(k in exc_str for k in ("OperationalError", "could not connect", "Connection refused")):
+            print(f"error: could not connect to database.\n  detail: {exc.__cause__ or exc}", file=sys.stderr)
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+
 def _run_mcp_server(transport: str, host: str = "0.0.0.0", port: int = 8080) -> NoReturn:
     """Serve AINDY syscalls as an MCP server (ECOGAP-4 / G4b, server-side).
 
@@ -641,6 +705,28 @@ def main() -> None:
         "--port", type=int, default=8080, help="SSE bind port (default 8080). Ignored for stdio.",
     )
 
+    memory_parser = subparsers.add_parser(
+        "memory",
+        help="Memory management commands.",
+        description="Memory subsystem utilities for the aindy-runtime.",
+    )
+    memory_sub = memory_parser.add_subparsers(dest="memory_command")
+    reembed_parser = memory_sub.add_parser(
+        "reembed",
+        help="Re-embed all memory nodes with the configured provider (ECOGAP-3 Phase 1).",
+        description=(
+            "Regenerate every memory embedding with the currently-configured provider and "
+            "dimension (AINDY_EMBEDDING_PROVIDER / AINDY_EMBEDDING_DIMENSIONS). Alters the "
+            "pgvector column to the target dimension, then re-embeds each node. DESTRUCTIVE: "
+            "drops existing embeddings. Intended with traffic stopped. Requires DATABASE_URL "
+            "+ PostgreSQL. Use --dry-run to preview; --yes to proceed; --no-drain to alter + "
+            "mark pending and let the background sweep regenerate."
+        ),
+    )
+    reembed_parser.add_argument("--yes", action="store_true", default=False, help="Confirm the destructive re-embed.")
+    reembed_parser.add_argument("--no-drain", action="store_true", default=False, help="Alter + mark pending only; defer regeneration to the background sweep.")
+    reembed_parser.add_argument("--dry-run", action="store_true", default=False, help="Report the plan without mutating anything.")
+
     auth_parser = subparsers.add_parser(
         "auth",
         help="Auth management commands.",
@@ -679,6 +765,16 @@ def main() -> None:
             host=getattr(args, "host", "0.0.0.0"),
             port=getattr(args, "port", 8080),
         )
+    elif args.command == "memory":
+        if args.memory_command == "reembed":
+            _reembed_memory(
+                yes=getattr(args, "yes", False),
+                no_drain=getattr(args, "no_drain", False),
+                dry_run=getattr(args, "dry_run", False),
+            )
+        else:
+            memory_parser.print_help()
+            raise SystemExit(0)
     elif args.command == "auth":
         if args.auth_command == "promote-admin":
             _promote_admin(args.email)

@@ -109,6 +109,19 @@ release = [
   "build==1.5.0",
   "twine==6.2.0",
 ]
+embeddings-local = [
+  # ECOGAP-3 Phase 1: offline/air-gapped memory embeddings via a local model
+  # (AINDY_EMBEDDING_PROVIDER=local). Not in the base wheel — keeps it lean and avoids
+  # a torch dependency for the OpenAI-default deployment. Install with:
+  # pip install aindy-runtime[embeddings-local]
+  "sentence-transformers>=2.2.0",
+]
+anthropic = [
+  # ECOGAP-3 Phase 2: Anthropic (Claude) as an LLM provider (LLM_PROVIDER=anthropic),
+  # via the official SDK. Not in the base wheel. Azure OpenAI needs no extra (it reuses
+  # the openai SDK). Install with: pip install aindy-runtime[anthropic]
+  "anthropic>=0.40.0",
+]
 mcp = [
   # MCP interop (ECOGAP-4 / G4b client + server). `mcp` is listed explicitly because
   # nodus-mcp treats the official SDK as optional and does not pull it in, but the

@@ -732,16 +732,24 @@ Matrix rewritten (NF-8). NF-2 contract decision documented in the new
 
 ## C3 — Cross-Platform Strong Sandbox
 
-Status: PHASE 0 COMPLETE (2026-06-04) — Phases 1-4 open
+Status: PHASES 0-5 COMPLETE (2026-06-04 → 06) — one deferred capability remains:
+a native strong-sandbox VM runner on non-Linux hosts (trigger-on-demand, not scheduled).
+
+All scoped phase work shipped and is CI-gated (17/17 escape tests pass, real Docker):
+Phase 0 escape suite, Phase 1 WSL2/Windows backend detection, Phase 2 macOS backend
+detection + policy, Phase 3 threat model + `sandbox_escape_test_posture()`, Phase 4
+release gate, Phase 5 macOS CI certification workflow. See the per-phase bodies below.
+
+**Only remaining gap (deliberately deferred, large net-new build):** strong-sandbox and
+`hostile-third-party` profiles are Linux-only —
+`STRONG_SANDBOX_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)` and
+`HOSTILE_THIRD_PARTY_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)` are unchanged. Non-Linux
+hosts reach `container-sandbox-certified` (C2 — closed) but not `strong-sandbox-certified`.
+Closing C3 fully needs a platform-native strong-VM runner. **Preparation plan scoped in
+`docs/runtime/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`** (Windows-native + macOS tracks) so
+either track can start the day a trigger lands.
 
 Source: `C2_SANDBOX_AUDIT.md` "What This Audit Does NOT Cover" / `ISOLATION_MODEL_PLAN.md` Gap 4 (C3 remainder).
-
-Strong-sandbox and `hostile-third-party` profile support remains Linux-only.
-`STRONG_SANDBOX_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)` and
-`HOSTILE_THIRD_PARTY_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)` are unchanged.
-Non-Linux hosts can reach `container-sandbox-certified` (C2 — closed) but not
-`strong-sandbox-certified`. Closing requires platform-specific sandbox runtimes
-(Windows Containers, WSL-mediated isolation, macOS Virtualization.framework).
 
 **Phase 0 (2026-06-04) — Adversarial escape test suite: COMPLETE**
 
@@ -1416,7 +1424,13 @@ Settings fields from this repo immediately (see STRIPE-SETTINGS-CLEANUP-1).
 
 ## MEMORY-EMBEDDING-PROVIDER-1 — OpenAI is the sole embedding provider; no abstraction layer
 
-**Status:** Deferred — Low Priority
+**Status:** RESOLVED at mechanism level 2026-07-12 (in working tree, uncommitted) as ECOGAP-3
+Phase 1 — see `docs/runtime/PROVIDER_BREADTH_PROGRAM.md` + §ECOGAP-3 above. `EmbeddingProvider`
+abstraction (`embedding_providers.py`, OpenAI default + local sentence-transformers), configurable
+column dimension (`AINDY_EMBEDDING_DIMENSIONS`), and a re-embed migration
+(`aindy-runtime memory reembed`, real-PG verified) make a local/offline embedding backend usable
+end-to-end. The original (now-historical) analysis follows; note its "pgvector is planned" framing
+was stale — pgvector had already shipped, so the real work was the dimensionality/migration story.
 
 **Discovered:** 2026-05-27 during `.env.example` drift audit (OpenAI timeout /
 retry settings surfaced as the only tunable LLM parameters).
@@ -1459,6 +1473,15 @@ content cannot use the memory subsystem without code changes.
 
 **Trigger:** First operator request for a non-OpenAI embedding backend, or when
 the offline / air-gapped deployment profile is formally supported.
+
+**Scoped 2026-07-12 as Phase 1 of the Provider Breadth Program —
+`docs/runtime/PROVIDER_BREADTH_PROGRAM.md`.** Verified-against-code update to the sketch below:
+(a) the embedding funnel is exactly two functions (`generate_embedding` /
+`generate_query_embedding`) so the seam is a clean insertion point; (b) the resolution sketch's
+"pgvector is planned / upstream unlock" framing is **stale — pgvector already shipped**
+(`Vector(1536)` live), so the real un-addressed problem is **dimensionality + existing-vector
+migration** (the `1536` literal is baked into the ORM column, the service constants, AND the DAO
+similarity cast — a schema-contract change). See the program doc §3.2 for the migration options.
 
 **Upstream unlock:** Resolving this entry also unblocks the planned pgvector
 semantic similarity work. At pgvector integration time, the deployment needs to
@@ -2975,7 +2998,11 @@ debt. Reconcile the external v2 aggregate + OpenHands/OI/SWE per-project audits 
 
 ### ECOGAP-3 — Provider breadth + embedding SPOF — extends MEMORY-EMBEDDING-PROVIDER-1
 
-**Status:** Deferred — roadmap (P1)
+**Status:** RESOLVED at mechanism level 2026-07-12 (in working tree, uncommitted) — both phases
+built. See §MEMORY-EMBEDDING-PROVIDER-1 above (Phase 1 embedding abstraction + reembed migration,
+real-PG verified) and its Phase 2 note (LLM registry + Anthropic/Azure providers, real-SDK
+verified), and `docs/runtime/PROVIDER_BREADTH_PROGRAM.md`. Remaining: additional concrete providers
+(Gemini/Bedrock) on demand; soak. Original roadmap note follows.
 
 Only OpenAI + DeepSeek concretely in tree; OpenAI hard-required for embeddings. The embedding
 half is **MEMORY-EMBEDDING-PROVIDER-1**; this entry adds LLM-client breadth (Azure/Anthropic/
@@ -2983,6 +3010,35 @@ Gemini/Bedrock/local) behind `CircuitBreakerLLMClient`. Absorb: CrewAI native mu
 cross-loop cache-breakpoint, Devika 7-backend registry, litellm reach (Aider/SWE/ADK). Most
 broadly cited concrete weakness (9/12 projects). Mechanically straightforward behind the
 existing client seam.
+
+**Scoped 2026-07-12 — `docs/runtime/PROVIDER_BREADTH_PROGRAM.md`.** Two phases, sequenced by
+owner: **Phase 1 = embedding SPOF** (the `MEMORY-EMBEDDING-PROVIDER-1` half — no seam today,
+harder: dimensionality de-hardcode + existing-vector migration is the crux), **Phase 2 = LLM
+hosted breadth** (seam already exists behind `FallbackLLMClient`/`resolve_provider_chain`).
+
+**Phase 1 BUILT in working tree 2026-07-12 (uncommitted).** Increment 1 (the seam):
+`embedding_providers.py` (EmbeddingProvider protocol + OpenAI default + local + fail-closed dim
+validation) + `embedding_service.py` dispatch refactor + `AINDY_EMBEDDING_*` settings +
+`[embeddings-local]` extra; zero behavior change on OpenAI default. Increment 2 (dimension +
+migration): `AINDY_EMBEDDING_DIMENSIONS`-configurable pgvector column
+(`resolve_embedding_column_dimensions()` in `memory_persistence.py` → **schema-contract bump
+2026-07-12 → 2026-07-12.1**, baseline regenerated, 2 assertions updated) + `embedding_migration.py`
+`reembed_all_memory_nodes()` + `aindy-runtime memory reembed` (ALTER column + re-embed,
+fail-closed, PG-only). **Real-PG verified** (vector(1536)→reembed→vector(8), rows re-embedded).
+15 unit tests green across `test_embedding_providers.py` + `test_embedding_migration.py`.
+**MEMORY-EMBEDDING-PROVIDER-1 is now resolved at the mechanism level** (local embeddings usable
+end-to-end).
+
+**Phase 2 (LLM hosted-provider breadth) BUILT in working tree 2026-07-12 (uncommitted).**
+`llm_client.py` provider dispatch → extensible registry (`_PROVIDER_FACTORIES` +
+`register_llm_provider` + `registered_provider_names`); two concrete providers behind the existing
+`FallbackLLMClient` seam: **Anthropic** (`anthropic_client.py`, official `anthropic` SDK/Messages
+API, optional `[anthropic]` extra) + **Azure OpenAI** (`azure_openai_client.py`, reuses `openai`
+SDK). Config `LLM_PROVIDER`/`LLM_FALLBACK_PROVIDERS` + `ANTHROPIC_*`/`AZURE_OPENAI_*`. 10 tests
+green; real-SDK verified. ★ Correctness catch (claude-api skill): Anthropic client does NOT forward
+`temperature` (400 on Opus 4.8/Sonnet 5), maps system→`system=`, defaults required `max_tokens`,
+default model `claude-opus-4-8`. **ECOGAP-3 now resolved at mechanism level (both phases).**
+Remaining: more concrete providers (Gemini/Bedrock) on demand; soak/flip. No schema change.
 
 **Reopen trigger:** when a non-OpenAI provider or local-model path is scheduled.
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from AINDY.kernel.circuit_breaker import CircuitBreaker, CircuitOpenError
 
@@ -91,7 +91,54 @@ class CircuitBreakerLLMClient:
         return self._client.is_available()
 
 
-_SUPPORTED_PROVIDERS: tuple[str, ...] = ("openai", "deepseek")
+# ECOGAP-3 Phase 2: extensible provider registry. Each factory returns an
+# already-wrapped LLMClient (typically a CircuitBreakerLLMClient) and imports its
+# concrete client lazily, so llm_client has no import-time dependency on any provider
+# module. Add a provider by registering a factory here (or via register_llm_provider).
+
+
+def _openai_factory() -> "LLMClient":
+    from AINDY.platform_layer.openai_client import get_openai_client
+
+    return get_openai_client()
+
+
+def _deepseek_factory() -> "LLMClient":
+    from AINDY.platform_layer.deepseek_client import get_deepseek_client
+
+    return get_deepseek_client()
+
+
+def _anthropic_factory() -> "LLMClient":
+    from AINDY.platform_layer.anthropic_client import get_anthropic_client
+
+    return get_anthropic_client()
+
+
+def _azure_openai_factory() -> "LLMClient":
+    from AINDY.platform_layer.azure_openai_client import get_azure_openai_client
+
+    return get_azure_openai_client()
+
+
+_PROVIDER_FACTORIES: dict[str, Callable[[], "LLMClient"]] = {
+    "openai": _openai_factory,
+    "deepseek": _deepseek_factory,
+    "anthropic": _anthropic_factory,
+    "azure_openai": _azure_openai_factory,
+}
+
+
+def register_llm_provider(name: str, factory: Callable[[], "LLMClient"]) -> None:
+    """Register (or override) a provider factory. The name is what appears in
+    LLM_PROVIDER / LLM_FALLBACK_PROVIDERS. Lets a plugin add a provider without
+    editing this module."""
+    _PROVIDER_FACTORIES[str(name or "").strip().lower()] = factory
+
+
+def registered_provider_names() -> tuple[str, ...]:
+    """The provider names currently resolvable via get_llm_client / the fallback chain."""
+    return tuple(sorted(_PROVIDER_FACTORIES))
 
 
 class FallbackLLMClient:
@@ -168,15 +215,10 @@ class FallbackLLMClient:
 def get_llm_client(provider: str = "openai") -> LLMClient:
     """Return a circuit-breaker-wrapped LLM client for a single provider."""
     normalized = str(provider or "openai").strip().lower()
-    if normalized == "openai":
-        from AINDY.platform_layer.openai_client import get_openai_client
-
-        return get_openai_client()
-    if normalized == "deepseek":
-        from AINDY.platform_layer.deepseek_client import get_deepseek_client
-
-        return get_deepseek_client()
-    raise ValueError(f"Unsupported LLM provider: {provider}")
+    factory = _PROVIDER_FACTORIES.get(normalized)
+    if factory is None:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+    return factory()
 
 
 def resolve_provider_chain(providers: list[str] | None = None) -> list[str]:
@@ -200,7 +242,7 @@ def resolve_provider_chain(providers: list[str] | None = None) -> list[str]:
     seen: set[str] = set()
     for entry in raw:
         name = str(entry or "").strip().lower()
-        if name and name in _SUPPORTED_PROVIDERS and name not in seen:
+        if name and name in _PROVIDER_FACTORIES and name not in seen:
             seen.add(name)
             chain.append(name)
     return chain or ["openai"]
