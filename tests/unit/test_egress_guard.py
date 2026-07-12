@@ -21,23 +21,37 @@ pytestmark = pytest.mark.runtime_only
 def _reset_guard():
     """The guard is a process-wide install — reset it around every test."""
     orig = socket.getaddrinfo
+    orig_connect = socket.socket.connect
+    orig_connect_ex = socket.socket.connect_ex
     eg._installed = False
     eg._orig_getaddrinfo = None
+    eg._orig_connect = None
+    eg._orig_connect_ex = None
     yield
     socket.getaddrinfo = orig
+    socket.socket.connect = orig_connect
+    socket.socket.connect_ex = orig_connect_ex
     eg._installed = False
     eg._orig_getaddrinfo = None
+    eg._orig_connect = None
+    eg._orig_connect_ex = None
 
 
 def _install_with_stub():
     """Install the guard, then swap its original resolver for a no-network stub.
 
     socket.getaddrinfo becomes the guard (which delegates to the stub for allowed hosts),
-    so no real DNS happens.
+    so no real DNS happens. The stub returns a getaddrinfo-shaped record whose sockaddr
+    carries a fixed IP so the connect-level guard can be exercised without real DNS.
     """
     eg.install_egress_guard()
     stub_calls = []
-    eg._orig_getaddrinfo = lambda *a, **k: stub_calls.append(a[0]) or [("stub",)]
+
+    def _stub(host, *a, **k):
+        stub_calls.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))]
+
+    eg._orig_getaddrinfo = _stub
     return stub_calls
 
 
@@ -61,6 +75,80 @@ def test_guard_allows_host_in_allowlist_and_subdomains():
         socket.getaddrinfo("allowed.com", 80)
         socket.getaddrinfo("api.allowed.com", 443)  # subdomain allowed
     assert stub_calls == ["allowed.com", "api.allowed.com"]
+
+
+# ── MEB-2b hardening: raw IP-literal connect guard ─────────────────────────────
+
+def _stub_connect():
+    """Swap the real connect for a no-network recorder; return the call list."""
+    connects = []
+    eg._orig_connect = lambda self, address: connects.append(address)
+    return connects
+
+
+def test_connect_denies_raw_ip_literal_under_scope():
+    """A raw socket.connect to an IP literal (skipping DNS) is denied under an allowlist."""
+    _install_with_stub()
+    _stub_connect()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with eg.egress_scope(["allowed.com"]):
+            with pytest.raises(eg.EgressDenied):
+                s.connect(("93.184.216.34", 80))
+    finally:
+        s.close()
+
+
+def test_connect_allows_ip_previously_resolved_from_allowed_host():
+    """An IP obtained from an allowed getaddrinfo is vouched-for, so connect succeeds."""
+    _install_with_stub()
+    connects = _stub_connect()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with eg.egress_scope(["allowed.com"]):
+            socket.getaddrinfo("allowed.com", 80)  # stub returns 93.184.216.34
+            s.connect(("93.184.216.34", 80))
+    finally:
+        s.close()
+    assert connects == [("93.184.216.34", 80)]
+
+
+def test_connect_inert_without_scope():
+    """Outside an egress scope the connect guard passes straight through."""
+    _install_with_stub()
+    connects = _stub_connect()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.connect(("203.0.113.5", 80))
+    finally:
+        s.close()
+    assert connects == [("203.0.113.5", 80)]
+
+
+def test_connect_ignores_hostname_target():
+    """A hostname target at connect() is left to the getaddrinfo guard, not denied here."""
+    _install_with_stub()
+    connects = _stub_connect()
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with eg.egress_scope(["allowed.com"]):
+            s.connect(("some-host.internal", 80))  # not an IP literal
+    finally:
+        s.close()
+    assert connects == [("some-host.internal", 80)]
+
+
+def test_connect_ex_also_guarded():
+    """connect_ex is guarded the same way as connect."""
+    _install_with_stub()
+    eg._orig_connect_ex = lambda self, address: 0
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        with eg.egress_scope(["allowed.com"]):
+            with pytest.raises(eg.EgressDenied):
+                s.connect_ex(("93.184.216.34", 80))
+    finally:
+        s.close()
 
 
 def test_scope_resets_after_block():

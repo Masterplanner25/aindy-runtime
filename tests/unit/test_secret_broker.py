@@ -86,6 +86,27 @@ def test_resolve_ungated_secret_is_open_in_dev():
     assert resolve_secret("k", capabilities=[])["value"] == "v"  # no scope registered
 
 
+def test_resolve_ungated_secret_denied_when_fail_closed(monkeypatch):
+    """MEB-2b: AINDY_SECRET_FAIL_CLOSED denies any secret with no registered scope."""
+    monkeypatch.setenv("AINDY_SECRET_FAIL_CLOSED", "true")
+    set_secret_broker(_FakeBroker({"k": "v"}))
+    r = resolve_secret("k", capabilities=[])
+    assert r["ok"] is False and "no registered scope" in r["error"]
+
+
+def test_fail_closed_still_honors_registered_scope(monkeypatch):
+    """Fail-closed only governs UNSCOPED secrets — a scoped secret with the granted
+    capability still resolves; without it, the capability error (not the fail-closed one)."""
+    from AINDY.platform_layer.secret_broker import register_secret_scope
+
+    monkeypatch.setenv("AINDY_SECRET_FAIL_CLOSED", "true")
+    set_secret_broker(_FakeBroker({"k": "v"}))
+    register_secret_scope("k", "secrets.read")
+    assert resolve_secret("k", capabilities=["secrets.read"])["value"] == "v"
+    denied = resolve_secret("k", capabilities=[])
+    assert denied["ok"] is False and "requires capability" in denied["error"]
+
+
 def test_resolve_missing_secret_fails_closed():
     set_secret_broker(_FakeBroker({}))
     r = resolve_secret("absent", capabilities=[])
