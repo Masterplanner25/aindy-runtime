@@ -170,10 +170,16 @@ change (same discipline that kept MEB-0 out of the dispatcher):
 
 ### MEB-2 — G4a activation (enforcement)
 Orthogonal to idempotency; hangs off the MEB-0 seam.
-- **2a (thin):** wire `register_capability_policy` + `register_secret_scope` from config/plugins
-  so `has_capability_policies()` is non-empty and `resolve_secret` has a real path. Activates the
-  existing (bypassable) static enforcement. Opt-in flag.
-- **2b (strong):** a **true egress chokepoint** — mediate outbound network (httpx/socket) at the
+- **2a (thin) — ✅ SHIPPED 2026-07-11.** Config-driven activation: `AINDY_CAPABILITY_POLICIES`
+  (JSON) → `register_capability_policy` and `AINDY_SECRET_SCOPES` (JSON) → `register_secret_scope`,
+  loaded (memoized) in `tool_registry._ensure_tools_loaded` so the gates are live in every process
+  that runs `execute_tool`. Any registered policy flips `has_capability_policies()` true, activating
+  the recipient/domain/rate enforcement in `execute_tool`; secret scopes make `resolve_secret`
+  fail-closed. Empty/absent config = no-op (behavior unchanged). Verified: config parse/register +
+  a real `execute_tool` denial of an out-of-allowlist domain. **Known limits (→ 2b / follow-up):**
+  enforcement is static arg-string inspection (a runtime-built URL is uncovered), and
+  `resolve_secret` is fail-open on secret names with no registered scope.
+- **2b (strong) — TODO:** a **true egress chokepoint** — mediate outbound network (httpx/socket) at the
   boundary so a tool cannot bypass by constructing a URL at runtime. Kernel-adjacent; converges
   with the sandbox `--network none` extension path. Dedicated sub-effort.
 
@@ -217,8 +223,12 @@ prerequisite for **declaration-free** continuation (the ECOGAP-1 Phase 3 payoff)
 - **MEB-1b — ✅ SHIPPED 2026-07-11.** Dispatcher gate repaired: fires from a per-syscall
   `execution_guarantee` (flag-gated) instead of the dead EU lookup. IDEM-10 is now closed at the
   mechanism level for both the tool (MEB-0) and syscall (MEB-1b) paths.
-- **Next: MEB-2 (G4a)** and **MEB-3 (multi-tenant MCP)**, in any order — plus the MEB-1 follow-ups
-  (adopt EXACTLY_ONCE on chosen syscalls; populate execution_id; optionally relax the _is_uuid guard).
+- **MEB-2a — ✅ SHIPPED 2026-07-11.** G4a thin activation: config-driven capability policies +
+  secret scopes (`AINDY_CAPABILITY_POLICIES` / `AINDY_SECRET_SCOPES`) make the dormant
+  `execute_tool` enforcement live. Opt-in; static arg-inspection level (MEB-2b is the true socket
+  chokepoint).
+- **Next: MEB-2b** (true egress chokepoint) and **MEB-3 (multi-tenant MCP)** — plus the MEB-1
+  follow-ups (adopt EXACTLY_ONCE on chosen syscalls; populate execution_id; relax _is_uuid).
 
 Even if MEB-2b and MEB-3 are never done, MEB-0 was the standalone win — the single biggest real
 gap (side-effecting agent tools had no idempotency at any layer) is closed.
