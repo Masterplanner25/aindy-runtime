@@ -280,12 +280,13 @@ def _bootstrap_schema(reconcile: bool) -> NoReturn:
         raise SystemExit(2)
 
 
-def _run_mcp_server(transport: str) -> NoReturn:
+def _run_mcp_server(transport: str, host: str = "0.0.0.0", port: int = 8080) -> NoReturn:
     """Serve AINDY syscalls as an MCP server (ECOGAP-4 / G4b, server-side).
 
-    Standalone process an MCP client (e.g. Claude Desktop) spawns. Requires DATABASE_URL
-    and AINDY_MCP_SERVER_USER_ID. Read-only tools by default; set
-    AINDY_MCP_SERVER_ALLOW_WRITES=true to expose writes.
+    stdio: a standalone process an MCP client (e.g. Claude Desktop) spawns, acting as the
+    single configured AINDY_MCP_SERVER_USER_ID. sse: a remote HTTP server; with
+    AINDY_MCP_SERVER_MULTI_TENANT=true each session's bearer/platform-key header resolves to
+    a real user and calls dispatch as that identity (MEB-3a). Requires DATABASE_URL.
     """
     from AINDY.config import settings
     if not settings.DATABASE_URL:
@@ -296,16 +297,8 @@ def _run_mcp_server(transport: str) -> NoReturn:
         )
         raise SystemExit(1)
 
-    if transport != "stdio":
-        print(
-            f"error: transport {transport!r} is not supported yet — SSE is deferred "
-            "(nodus-mcp #7). Use --transport stdio.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-
     try:
-        from AINDY.platform_layer.mcp_server import serve_stdio
+        from AINDY.platform_layer import mcp_server
     except Exception as exc:
         print(
             "error: MCP server support is unavailable. Install the extra:\n"
@@ -315,7 +308,10 @@ def _run_mcp_server(transport: str) -> NoReturn:
         raise SystemExit(2)
 
     try:
-        serve_stdio()  # blocks until the MCP client disconnects
+        if transport == "sse":
+            mcp_server.serve_sse(host=host, port=port)  # blocks
+        else:
+            mcp_server.serve_stdio()  # blocks until the MCP client disconnects
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
@@ -622,19 +618,27 @@ def main() -> None:
         "mcp-server",
         help="Serve AINDY syscalls as an MCP server for external MCP clients (Claude Desktop, etc.).",
         description=(
-            "Expose an allowlist of AINDY syscalls as MCP tools over stdio, as a standalone "
-            "process an MCP client spawns. Every external call runs as the single configured "
-            "identity AINDY_MCP_SERVER_USER_ID. Read-only tools by default; set "
-            "AINDY_MCP_SERVER_ALLOW_WRITES=true to expose writes, or AINDY_MCP_SERVER_TOOLS to "
-            "override the allowlist. Requires DATABASE_URL and the [mcp] extra "
-            "(pip install 'aindy-runtime[mcp]'). SSE transport is deferred (nodus-mcp #7)."
+            "Expose an allowlist of AINDY syscalls as MCP tools, as a standalone process an "
+            "MCP client spawns (stdio) or connects to (SSE). Over stdio, every call runs as the "
+            "single configured identity AINDY_MCP_SERVER_USER_ID. Over SSE with "
+            "AINDY_MCP_SERVER_MULTI_TENANT=true, each session's Authorization: Bearer / "
+            "X-Platform-Key header resolves to a real user and calls dispatch as that identity "
+            "(MEB-3a). Read-only tools by default; set AINDY_MCP_SERVER_ALLOW_WRITES=true to "
+            "expose writes, or AINDY_MCP_SERVER_TOOLS to override the allowlist. Requires "
+            "DATABASE_URL and the [mcp] extra (pip install 'aindy-runtime[mcp]')."
         ),
     )
     mcp_server_parser.add_argument(
         "--transport",
-        choices=["stdio"],
+        choices=["stdio", "sse"],
         default="stdio",
-        help="MCP transport (stdio only in v1; SSE deferred).",
+        help="MCP transport: stdio (local single-operator) or sse (remote / multi-tenant).",
+    )
+    mcp_server_parser.add_argument(
+        "--host", default="0.0.0.0", help="SSE bind host (default 0.0.0.0). Ignored for stdio.",
+    )
+    mcp_server_parser.add_argument(
+        "--port", type=int, default=8080, help="SSE bind port (default 8080). Ignored for stdio.",
     )
 
     auth_parser = subparsers.add_parser(
@@ -670,7 +674,11 @@ def main() -> None:
     elif args.command == "bootstrap-schema":
         _bootstrap_schema(reconcile=getattr(args, "reconcile", False))
     elif args.command == "mcp-server":
-        _run_mcp_server(transport=getattr(args, "transport", "stdio"))
+        _run_mcp_server(
+            transport=getattr(args, "transport", "stdio"),
+            host=getattr(args, "host", "0.0.0.0"),
+            port=getattr(args, "port", 8080),
+        )
     elif args.command == "auth":
         if args.auth_command == "promote-admin":
             _promote_admin(args.email)

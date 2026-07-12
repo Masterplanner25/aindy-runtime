@@ -183,23 +183,28 @@ Orthogonal to idempotency; hangs off the MEB-0 seam.
   boundary so a tool cannot bypass by constructing a URL at runtime. Kernel-adjacent; converges
   with the sandbox `--network none` extension path. Dedicated sub-effort.
 
-### MEB-3 — Multi-tenant MCP attribution (identity)
+### MEB-3 — Multi-tenant MCP (identity + attribution)
 
-**⚠ UPSTREAM-BLOCKED (verified 2026-07-11).** The headline — per-session MCP identity via
-`NodusServer.auth_hook` → `mint_token` — is not achievable with nodus-mcp 0.1.1: (1) the MCP
-`call_tool` handler receives only `(name, arguments)`, so `auth_hook` is invoked with an **empty
-context dict** and cannot see the session/client (nodus-mcp #8); and (2) multi-session only exists
-over the SSE/HTTP transport, which is itself blocked by nodus-mcp #7 (`run_sse_app` omits the
-`/messages/` mount). stdio is inherently single-client. Both gates are upstream (nodus-mcp). The
-attribution *schema* work below is deliverable but its primary consumer is blocked, so building it
-now is infrastructure ahead of a blocked consumer + the program's only schema-contract bump —
-deferred pending the upstream fixes or an independent consumer.
+**Upstream unblocked 2026-07-11 (nodus-mcp 0.1.2):** both gates that blocked this at 0.1.1 are
+fixed — `auth_hook` now receives a real per-call context (`session`/`request_id`/`request`/
+**`headers`**, #8) and `run_sse_app()` mounts `/messages/` (#7). Split into two pieces:
 
-Add tenant/session columns to EffectRecord (**schema-contract bump + Alembic migration** — the
-program's only schema change) and wire the MCP server's `NodusServer.auth_hook` to map each
-session → `mint_token(run_id=session, user_id=…, capability_ceiling=…)` → dispatch as that
-identity. Upgrades server-side MCP from single-identity to real multi-tenant. Leans on MEB-0/1 +
-the identity primitive.
+**MEB-3a — per-session identity (no schema). ✅ SHIPPED 2026-07-11.** `platform_layer/mcp_server.py`
+adds an SSE transport (`aindy-runtime mcp-server --transport sse`) and, under
+`AINDY_MCP_SERVER_MULTI_TENANT=true`, an `auth_hook` that resolves each session's
+`Authorization: Bearer <jwt>` or `X-Platform-Key` header to a real user id via the **existing** auth
+surface (`decode_access_token` / `_resolve_platform_key_as_user` — no new mechanism) and dispatches
+every call as that identity (threaded handler-side via a `_SESSION_IDENTITY` contextvar). Fail-closed:
+a call with no resolvable identity is denied; the syscall dispatcher then enforces per-syscall
+capability + tenant isolation for that user. Multi-tenant is rejected over stdio (no per-request
+headers). Opt-in, off by default; stdio behaviour unchanged. Verified: real nodus-mcp 0.1.2 SSE app
+builds with `/sse` + `/messages/` and the auth_hook attached.
+
+**MEB-3b — EffectRecord attribution columns (schema bump). Deferred.** Add tenant/session columns to
+EffectRecord (**schema-contract bump + Alembic migration** — the program's only schema change) so
+each effect/idempotency row records *which* session produced it. Pure attribution/audit; separable
+from the 3a identity mapping and not required by it. Optionally mint a per-session capability token
+(`mint_token(run_id=session, …)`) for a capability ceiling below the resolved user's full grant.
 
 ## Decisions
 
@@ -248,14 +253,18 @@ prerequisite for **declaration-free** continuation (the ECOGAP-1 Phase 3 payoff)
   resolution on a thread that doesn't inherit the contextvar escapes the scope; only resolution is
   guarded, not the eventual connect. The non-bypassable form remains the sandbox `--network none`
   + mediated proxy — this is the in-process strong-form for the non-sandboxed tool path.
-- **Next: MEB-3 (multi-tenant MCP)** — UPSTREAM-BLOCKED on nodus-mcp (auth_hook receives empty
-  context, #8; SSE transport blocked, #7). Plus the MEB-1 follow-ups (adopt EXACTLY_ONCE on chosen
-  syscalls; populate execution_id; relax _is_uuid) and the MEB-2b IP-literal / thread-escape
-  hardening.
+- **MEB-3a — ✅ SHIPPED 2026-07-11.** Per-session multi-tenant MCP identity over SSE (nodus-mcp
+  0.1.2 unblocked #7 + #8): auth_hook resolves each session's bearer/platform-key header to a real
+  user; calls dispatch as that identity, fail-closed. No schema. Opt-in
+  (`AINDY_MCP_SERVER_MULTI_TENANT`).
+- **Next: MEB-3b (EffectRecord attribution columns)** — the program's only schema-contract bump;
+  deferred (attribution/audit, not required by 3a). Plus the MEB-1 follow-ups (adopt EXACTLY_ONCE
+  on chosen syscalls; populate execution_id; relax _is_uuid) and the MEB-2b IP-literal /
+  thread-escape hardening.
 
-Even if MEB-3 is never done, MEB-0 was the standalone win — the single biggest real gap
-(side-effecting agent tools had no idempotency at any layer) is closed, and MEB-2a/2b now give
-the tool path a live, runtime-aware egress boundary.
+MEB-0 was the standalone win — the single biggest real gap (side-effecting agent tools had no
+idempotency at any layer) is closed; MEB-2a/2b give the tool path a live, runtime-aware egress
+boundary; and MEB-3a makes the server-side MCP surface genuinely multi-tenant.
 
 ## Cross-references
 

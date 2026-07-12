@@ -16,8 +16,9 @@ package; the runtime only wires it in.
 **Status:** both directions shipped, opt-in.
 - **Client-side** — AINDY agents call *out* to external MCP tools (below).
 - **Server-side** — expose AINDY syscalls *as* an MCP server to Claude Desktop etc. over
-  stdio ([below](#server-side--expose-aindy-syscalls-as-mcp)). SSE transport and multi-tenant
-  auth are deferred — see [TECH_DEBT ECOGAP-4](../../TECH_DEBT.md).
+  stdio or SSE, with opt-in per-session multi-tenant identity over SSE (MEB-3a)
+  ([below](#server-side--expose-aindy-syscalls-as-mcp)). Only the EffectRecord attribution
+  schema bump (MEB-3b) is deferred — see [TECH_DEBT ECOGAP-4](../../TECH_DEBT.md).
 
 ## Enable it
 
@@ -85,21 +86,40 @@ aindy-runtime mcp-server --transport stdio
 
 Claude Desktop config (`claude_desktop_config.json`) points `command`/`args` at that.
 
-- **Single configured identity.** Every external call runs as `AINDY_MCP_SERVER_USER_ID`.
-  Correct for the canonical local single-operator case. Per-session / multi-tenant auth (via
-  `NodusServer.auth_hook` + minted capability tokens) is the deferred G4a path.
+- **Single configured identity (default).** Every external call runs as
+  `AINDY_MCP_SERVER_USER_ID`. Correct for the canonical local single-operator case (Claude
+  Desktop on your machine). For per-session multi-tenant identity, see below.
 - **Read-only by default.** Exposes `memory.read/search/list/tree/trace`. Set
   `AINDY_MCP_SERVER_ALLOW_WRITES=true` to also expose `memory.write`, `memory.delete`,
   `flow.run`, `event.emit`. `AINDY_MCP_SERVER_TOOLS` overrides the allowlist explicitly.
 - **How it dispatches.** Each exposed syscall becomes an MCP tool whose handler calls
-  `dispatch_syscall(name, args, user_id=<configured>)` — which grants the syscall its own
+  `dispatch_syscall(name, args, user_id=<identity>)` — which grants the syscall its own
   capability (least-privilege, SDK-SYSCALL-GRANT-1) and manages its own DB session. The
   allowlist is the gate. Verified end-to-end on Postgres (write → read-back through the tool
   handlers).
-- **Transport:** stdio only in v1. SSE is deferred (nodus-mcp #7, below).
 
-## Known upstream issue
+### SSE transport + per-session multi-tenant (MEB-3a)
 
-`nodus_mcp_aindy.NodusServer.run_sse_app()` (server-side, deferred direction) builds its
-Starlette app with the `/sse` stream route but omits the `/messages/` POST mount the SSE
-transport needs, so a client's POST-back 404s. Tracked upstream; not on the client path.
+Serve over HTTP instead of stdio, and optionally resolve a distinct identity per session:
+
+```bash
+AINDY_MCP_SERVER_MULTI_TENANT=true \
+DATABASE_URL=postgresql://... \
+aindy-runtime mcp-server --transport sse --host 0.0.0.0 --port 8080
+```
+
+- **Per-session identity.** With `AINDY_MCP_SERVER_MULTI_TENANT=true`, an `auth_hook` resolves
+  each session's `Authorization: Bearer <jwt>` or `X-Platform-Key` header to a real user via the
+  runtime's existing auth surface (`decode_access_token` / platform-key — no new mechanism), and
+  every call dispatches as *that* identity. The syscall dispatcher then enforces per-syscall
+  capability + tenant isolation for that user.
+- **Fail-closed.** A call whose headers resolve to no valid identity is denied. Writes still
+  require `AINDY_MCP_SERVER_ALLOW_WRITES=true`.
+- **stdio stays single-identity.** Multi-tenant is meaningful only over SSE (stdio carries no
+  per-request headers); the server refuses to start stdio with the flag on. Without the flag, SSE
+  runs as the single configured `AINDY_MCP_SERVER_USER_ID`.
+- **Requires `nodus-mcp>=0.1.2`** (SSE `/messages/` mount + `auth_hook` header context).
+
+**Deferred (MEB-3b):** tenant/session attribution columns on `EffectRecord` (records *which*
+session produced each effect — the program's only schema-contract bump) and an optional
+per-session capability-ceiling token. See `MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`.
