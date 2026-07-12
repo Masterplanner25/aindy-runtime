@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from typing import Callable
@@ -178,6 +179,7 @@ def execute_tool(
         }
     # AGENT-HARDEN-9 — capabilities the tool may resolve secrets under (from the token).
     _scoped_caps: list = []
+    _egress_domains: set = set()  # MEB-2b — socket-level allowlist for this tool's caps
     if execution_token is not None:
         if not run_id:
             return {
@@ -235,6 +237,7 @@ def execute_tool(
             from AINDY.agents.capability_policy import (
                 enforce_capability_policy,
                 enforce_capability_rate,
+                get_capability_policy,
                 has_capability_policies,
             )
 
@@ -242,6 +245,12 @@ def execute_tool(
                 from AINDY.agents.capability_service import _get_capabilities_for_tool
 
                 _tool_caps = _get_capabilities_for_tool(tool_name)
+                # MEB-2b — collect the domain allowlist for socket-level egress enforcement
+                # (applied around the fn call below when AINDY_EGRESS_ENFORCEMENT is on).
+                for _c in _tool_caps:
+                    _pol = get_capability_policy(_c)
+                    if _pol is not None and _pol.domains:
+                        _egress_domains.update(_pol.domains)
 
                 def _deny_policy(result):
                     queue_system_event(
@@ -321,13 +330,26 @@ def execute_tool(
                     "error": None,
                     "idempotent_replay": True,
                 }
+    # MEB-2b — socket-level egress chokepoint. When a domain policy applies to this tool's
+    # capability and AINDY_EGRESS_ENFORCEMENT is on, enforce the allowlist at DNS resolution
+    # for the duration of the fn call — catching runtime-built URLs that MEB-2a's static
+    # arg-string inspection misses. Inert otherwise. See MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
+    _egress_cm = contextlib.nullcontext()
+    if _egress_domains:
+        from AINDY.platform_layer.egress_guard import egress_enforcement_enabled
+
+        if egress_enforcement_enabled():
+            from AINDY.platform_layer.egress_guard import egress_scope, install_egress_guard
+
+            install_egress_guard()
+            _egress_cm = egress_scope(_egress_domains)
     try:
         # AGENT-HARDEN-9 — a tool that calls resolve_secret(name) during execution is
         # gated by the run's granted capabilities via this ambient scope; the secret
         # is consumed inside the tool and never returned to the script.
         from AINDY.platform_layer.secret_broker import capability_scope
 
-        with capability_scope(_scoped_caps):
+        with _egress_cm, capability_scope(_scoped_caps):
             result = entry["fn"](args=args, user_id=user_id, db=db)
         if _idempotent:
             _finalize_tool_effect(db, _action_id, "success", result, tool_name)
