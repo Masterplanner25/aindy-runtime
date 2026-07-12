@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added — DUR-2b: subprocess propagation + stable per-segment scope (Durable Execution)
+
+Backward-compatible; only active for an (opt-in `AINDY_DURABLE_CONTINUATION`) continued run.
+Makes the agent / nodus-subprocess continuation path fully at-most-once — the prerequisite for
+a safe DUR-3.
+
+- **Subprocess propagation.** The DUR-2 per-run at-most-once signal is a contextvar and cannot
+  cross the nodus worker subprocess. The parent now writes `durable_effects` into the worker
+  payload and the worker re-establishes `durable_effects_scope()` around `run_source`, so
+  in-subprocess `sys()`/`call_tool()` effect gates dedup declaration-free.
+- **Stable per-segment memory scope** (also a correctness fix): all segments of a nodus_vm agent
+  run share the run's `execution_unit_id` (`correlation_id`) and run through the one constant
+  `nodus.execute` node, so the DUR-1 memory-dedup scope would **collide across segments** once the
+  gate is on. `_run_agent_segment_flow` now threads a per-segment `__effect_scope`
+  (`agent_plan_seg<N>`) that the node handler appends, keeping each segment's scope distinct and
+  re-run-stable. (Latent — agent memory gating is only reachable behind `AINDY_DURABLE_CONTINUATION`
+  + a continuation-safe agent type — but fixed before DUR-3 can enable it.)
+- Verified on real Postgres: two segments writing at the same ordinal under the shared run eu no
+  longer collide, and a segment re-run dedups.
+
 ### Added — DUR-2: per-run at-most-once signal (Durable Execution / ECOGAP-1 Phase 3)
 
 Backward-compatible; the signal is only set by the (opt-in `AINDY_DURABLE_CONTINUATION`)
