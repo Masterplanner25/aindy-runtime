@@ -184,6 +184,9 @@ class NodusRuntimeAdapter:
                     # boundary (a contextvar can't). The worker re-establishes the scope so
                     # subprocess-executed sys()/call_tool() honor it. See DUR-2b.
                     "durable_effects": _durable_effects_active_safe(),
+                    # DUR-2c — the per-(run, segment) memory-effect scope, so the worker can
+                    # dedup immediate in-subprocess bridge writes (remember/record_outcome).
+                    "effect_scope": str(context.effect_scope or ""),
                 },
             }
         )

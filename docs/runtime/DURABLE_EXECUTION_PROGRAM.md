@@ -181,10 +181,32 @@ prerequisite for a safe DUR-3):
    agent memory gating is only reachable behind `AINDY_DURABLE_CONTINUATION` + a continuation-safe agent
    type, so this closed the hazard before DUR-3 can enable it.)
 
+### DUR-2c — Gate immediate in-subprocess bridge writes — ✅ SHIPPED 2026-07-12
+Verify-first for DUR-3 found a reach hole: `remember()`, `record_outcome()`, and `share()` are
+`AINDYMemoryBridge` methods that write **immediately, in-subprocess, via a direct DAO** — they do
+**not** go through the deferred list DUR-1 gates, so a continuation re-run would double-write them
+(a duplicate memory node for the common `remember()`). DUR-2c closes it: `AINDYMemoryBridge` gains a
+`run_scope` + a `_gate()` helper that dedups through the shared effect ledger, keyed
+content-independently on `(run_scope, per-action ordinal)` with **cached-result replay** (a re-run's
+`remember()` returns the *original* node id). Active only under the per-run at-most-once signal
+(propagated into the subprocess by DUR-2b) or `AINDY_MEMORY_IDEMPOTENCY`. `remember` +
+`record_outcome` are gated; **`share` is left ungated — setting an existing node to `shared` is
+naturally idempotent.** The per-(run, segment) scope is threaded into the subprocess payload
+(`effect_scope`). PG-verified: a re-run's `remember()` replays the same id (1 node, not 2); without
+the signal it does not dedup. Tests: `tests/unit/test_dur2c_immediate_memory_gate.py`.
+
+**With DUR-2c, all *runtime-mediated* effects on a continued run are at-most-once** (deferred memory,
+immediate bridge memory, syscalls, tools — parent and subprocess). The only remaining re-fire is a
+**raw, un-mediated side effect in arbitrary node code** (e.g. a node calling `requests.post` or
+writing another table directly) — which the runtime fundamentally cannot gate. That is why DUR-3 is
+an *opt-in* flip with an *opt-out* deny-list, not an unconditional default.
+
 ### DUR-3 — Flip continuation default-safe
-With effects guarded per-run, **invert/remove the continuation-safe declaration gate** so
-continuation covers all flows/agents — first still behind the master `AINDY_DURABLE_CONTINUATION`
-flag, then default-on after soak. This is the ECOGAP-1 headline. No schema. Depends on DUR-2.
+With runtime-mediated effects guarded per-run, **invert the continuation-safe declaration gate** so
+continuation covers all flows/agents — behind an **opt-in** default-safe flag (the operator accepts
+the mediated-effect contract) plus an **opt-out** deny-list (`mark_flow_continuation_unsafe`) for
+flows with known raw side effects. The existing per-flow declaration path stays as the default. This
+is the ECOGAP-1 headline. No schema. Depends on DUR-2c.
 
 ### DUR-4 — FlowHistory canonicalization + fold (optional robustness)
 Make the event log a true fold source: close the out-of-band write gaps, add a **genesis row + a
@@ -236,9 +258,13 @@ continuation drivers — mostly "add a chokepoint + a per-run signal + flip a ga
   all three chokepoints honor it (declaration-free); continuation drivers set it; PG-verified.
 - **DUR-2b (subprocess propagation + stable per-segment scope) — ✅ SHIPPED 2026-07-12.** Threads the
   signal into the nodus subprocess payload; adds a per-segment memory-scope discriminator (fixing a
-  cross-segment collision on the agent path). PG-verified. **The agent/nodus continuation path is now
-  fully at-most-once — DUR-3 is unblocked.**
-- **Next: DUR-3** (flip continuation default-safe). DUR-4 is optional/independent.
+  cross-segment collision on the agent path). PG-verified.
+- **DUR-2c (gate immediate bridge writes) — ✅ SHIPPED 2026-07-12.** `remember`/`record_outcome` (immediate,
+  in-subprocess, direct-DAO) now dedup through the ledger with cached-id replay; `share` is naturally
+  idempotent. PG-verified. **All runtime-mediated effects on a continued run are now at-most-once —
+  DUR-3 is unblocked** (only raw un-mediated node side effects remain, handled by DUR-3's opt-in +
+  opt-out design).
+- **Next: DUR-3** (opt-in default-safe flip + opt-out deny-list). DUR-4 is optional/independent.
 - All opt-in/default-off; release remains on hold past v1.6.2.
 
 ## Cross-references
