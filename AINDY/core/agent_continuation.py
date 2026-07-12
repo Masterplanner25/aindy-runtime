@@ -59,6 +59,18 @@ def _max_attempts() -> int:
     return max(1, int(getattr(settings, "AINDY_DURABLE_CONTINUATION_MAX_ATTEMPTS", 3)))
 
 
+def _durable_resume(callback):
+    """Wrap a resume callback so its effects run under the DUR-2 per-run at-most-once scope."""
+
+    def _run():
+        from AINDY.kernel.effect_ledger import durable_effects_scope
+
+        with durable_effects_scope():
+            callback()
+
+    return _run
+
+
 def _count_completed_segments(segments: list, completed_steps: int) -> int:
     """Number of segments fully covered by `completed_steps` committed tool steps.
 
@@ -149,7 +161,13 @@ def continue_crashed_agent_runs(db) -> int:
                     total_tool_steps=total_tool_steps,
                     claim_status="executing",
                 )
-                threading.Thread(target=callback, daemon=True).start()
+                # DUR-2 — mark the re-driven segment's effects at-most-once (declaration-free)
+                # for the duration of the resume. Set inside the thread so the contextvar
+                # covers the callback's call tree. NB: this reaches PARENT-side effects
+                # (deferred memory writes); nodus-subprocess syscalls/tools don't inherit it
+                # (DUR-2b), and per-segment memory dedup needs a stable segment scope (each
+                # segment execution currently gets a fresh execution_unit_id).
+                threading.Thread(target=_durable_resume(callback), daemon=True).start()
                 continued += 1
                 logger.warning(
                     "[AgentContinuation] re-driving crashed agent run=%s from segment %d (attempt %d/%d)",

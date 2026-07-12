@@ -144,13 +144,28 @@ the MEB-1 follow-up).
 - **Standalone win:** dedups memory writes on *any* retry, not only continuation — closes the
   largest remaining IDEM-10 bypass.
 
-### DUR-2 — Per-run at-most-once signal
-Reconnect a **per-EU/per-run guarantee** that all three chokepoints consult, so the re-running
-node's syscalls/tools/memory-writes dedup **without each declaring `EXACTLY_ONCE`**. Two candidate
-mechanisms (decide during design): (a) an ambient contextvar the continuation driver sets before
-re-driving; (b) revive the orphaned `eu.extra["retry_policy"]["execution_guarantee"]` read for
-continued runs only. This is the literal "broaden beyond `AGENT_HIGH_RISK`, declaration-free" work.
-No schema. Depends on DUR-1.
+### DUR-2 — Per-run at-most-once signal — ✅ SHIPPED 2026-07-12
+Chose mechanism (a): an ambient contextvar. `kernel/effect_ledger.durable_effects_scope()` /
+`durable_effects_active()` mark the current execution context as at-most-once; all three chokepoints
+(memory `_apply_deferred_memory_writes`, syscall dispatcher gate, tool `execute_tool`) now fire under
+`durable_effects_active()` **regardless of the per-tool/per-syscall `EXACTLY_ONCE` declaration or the
+per-effect master flag** — the literal "broaden beyond `AGENT_HIGH_RISK`, declaration-free" work. Both
+continuation drivers set the scope around the re-drive (`flow_continuation._dispatch_resume` wraps
+`runner.resume`; `agent_continuation` wraps the resume callback via `_durable_resume`). No schema.
+Verified on real Postgres: with `AINDY_MEMORY_IDEMPOTENCY` **off**, a re-applied write inside the
+scope dedups (1 node), and outside the scope does not (2 nodes) — the signal is what engages it.
+Tests: `tests/unit/test_dur2_per_run_at_most_once.py` + declaration-free cases in the syscall/tool
+harnesses.
+
+**Honest reach (→ DUR-2b).** A contextvar stays within one execution context, so the signal reaches
+**parent-side** effects (deferred memory writes) and **in-process** dispatches, but **not a nodus
+worker subprocess** — so a continued run's nodus-executed syscalls/`call_tool` don't yet inherit it
+(needs threading the flag through the subprocess payload). Separately, on the **agent-segment** path
+each segment execution currently gets a *fresh* `execution_unit_id` (`run_nodus_script_via_flow`
+mints `trace_id or uuid4()`), so its memory scope isn't stable across a re-run — the dedup is *safe*
+there (fresh scope → no collision) but *ineffective* until a stable per-(run, segment) scope lands.
+Both are **DUR-2b**. On the **flow** continuation path (stable flow-run id + node name) DUR-2 is fully
+effective for the dominant parent-side memory writes.
 
 ### DUR-3 — Flip continuation default-safe
 With effects guarded per-run, **invert/remove the continuation-safe declaration gate** so
@@ -203,8 +218,11 @@ continuation drivers — mostly "add a chokepoint + a per-run signal + flip a ga
 
 - **DUR-1 (memory-effect boundary) — ✅ SHIPPED 2026-07-12.** Opt-in `AINDY_MEMORY_IDEMPOTENCY`;
   position-keyed dedup at `_apply_deferred_memory_writes`; PG-verified. The keystone/standalone win.
-- **Next: DUR-2** (per-run at-most-once signal) → DUR-3 (flip continuation default-safe); DUR-4 is
-  optional/independent.
+- **DUR-2 (per-run at-most-once signal) — ✅ SHIPPED 2026-07-12.** `durable_effects_scope()` contextvar;
+  all three chokepoints honor it (declaration-free); continuation drivers set it; PG-verified. Reaches
+  parent-side/in-process effects — subprocess + agent-segment stable scope are **DUR-2b**.
+- **Next: DUR-2b** (subprocess propagation + stable per-segment scope) and **DUR-3** (flip continuation
+  default-safe). DUR-4 is optional/independent.
 - All opt-in/default-off; release remains on hold past v1.6.2.
 
 ## Cross-references

@@ -203,6 +203,25 @@ def test_gate_skips_scope_without_uuid_tail(monkeypatch):
     assert resolve_calls == [], "a non-UUID-tail scope must not engage the gate"
 
 
+def test_gate_fires_under_durable_signal_declaration_free(monkeypatch):
+    """DUR-2: inside durable_effects_scope, an AT_LEAST_ONCE syscall gates even with the
+    master flag off — declaration-free per-run at-most-once."""
+    from AINDY.kernel.effect_ledger import durable_effects_scope
+
+    resolve_calls = []
+    _register_handler(lambda p, c: {"ok": True}, guarantee="AT_LEAST_ONCE")
+    d = _dispatcher(monkeypatch, flag=False)  # AINDY_SYSCALL_IDEMPOTENCY off
+    monkeypatch.setattr(syscall_dispatcher, "_resolve_effect_record",
+                        lambda *a, **k: resolve_calls.append(1) or (False, None))
+    monkeypatch.setattr(syscall_dispatcher, "_complete_effect_record", lambda *a, **k: None)
+    with patch("AINDY.db.database.SessionLocal", return_value=MagicMock()):
+        with durable_effects_scope():
+            result = d.dispatch(_SYSCALL_NAME, {}, _ctx(eu_id=_VALID_EU_UUID))
+    _unregister()
+    assert result["status"] == "success"
+    assert resolve_calls == [1], "durable signal must engage the gate declaration-free"
+
+
 def test_gate_scope_engaged_predicate():
     """Unit coverage of the widened engage predicate directly."""
     from AINDY.kernel.syscall_dispatcher import _gate_scope_engaged

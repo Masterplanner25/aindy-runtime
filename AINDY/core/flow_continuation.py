@@ -143,6 +143,7 @@ def _dispatch_resume(*, run_id: str, flow_name: str, user_id, workflow_type) -> 
     def _bg():
         try:
             from AINDY.db.database import SessionLocal
+            from AINDY.kernel.effect_ledger import durable_effects_scope
             from AINDY.runtime.flow_engine import FLOW_REGISTRY, PersistentFlowRunner
 
             bg_db = SessionLocal()
@@ -153,7 +154,13 @@ def _dispatch_resume(*, run_id: str, flow_name: str, user_id, workflow_type) -> 
                     user_id=user_id,
                     workflow_type=workflow_type,
                 )
-                runner.resume(run_id)
+                # DUR-2 — the single node that re-runs on continuation must produce
+                # at-most-once effects. This per-run signal engages the effect-boundary
+                # chokepoints for this re-drive without any per-tool/per-syscall
+                # EXACTLY_ONCE declaration. Set inside the bg thread so the contextvar
+                # covers the resume call tree (contextvars don't cross thread spawn).
+                with durable_effects_scope():
+                    runner.resume(run_id)
             finally:
                 bg_db.close()
         except Exception as exc:

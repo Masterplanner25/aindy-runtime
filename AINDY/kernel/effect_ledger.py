@@ -18,6 +18,7 @@ part of the ``action_id`` dedup hash.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import hashlib
 import json
@@ -65,6 +66,37 @@ def reset_effect_attribution(token: contextvars.Token) -> None:
 def current_effect_attribution() -> tuple[Optional[str], Optional[str]]:
     """Return the ambient (tenant_id, session_id) attribution, or (None, None)."""
     return _effect_attribution.get()
+
+
+# DUR-2 (durable execution) — per-run "at-most-once" signal. A continuation driver sets
+# this while re-driving a crashed run so the effect-boundary chokepoints (memory / syscall /
+# tool) dedup that run's effects WITHOUT each tool/syscall having to declare EXACTLY_ONCE —
+# i.e. declaration-free at-most-once, scoped to the re-driven run. Like all contextvars it
+# stays within one execution context: it reaches parent-side effects (deferred memory
+# writes) and in-process dispatches, but NOT a nodus worker subprocess (that propagation is
+# DUR-2b). See docs/runtime/DURABLE_EXECUTION_PROGRAM.md (DUR-2).
+_durable_effects: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "aindy_durable_effects", default=False
+)
+
+
+@contextlib.contextmanager
+def durable_effects_scope():
+    """Mark the current execution context as at-most-once for all effects written in it.
+
+    Effect-boundary chokepoints consulted via ``durable_effects_active()`` will dedup even
+    when the individual tool/syscall is AT_LEAST_ONCE and its per-effect master flag is off.
+    """
+    token = _durable_effects.set(True)
+    try:
+        yield
+    finally:
+        _durable_effects.reset(token)
+
+
+def durable_effects_active() -> bool:
+    """True inside a ``durable_effects_scope()`` — the run wants declaration-free at-most-once."""
+    return _durable_effects.get()
 
 
 def resolve_effect_record(

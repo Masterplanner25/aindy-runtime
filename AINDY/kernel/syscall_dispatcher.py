@@ -65,6 +65,7 @@ from contextvars import ContextVar
 from AINDY.kernel.effect_ledger import (
     STALE_PENDING_THRESHOLD_SECONDS,
     complete_effect_record as _complete_effect_record,
+    durable_effects_active as _durable_effects_active,
     resolve_effect_record as _resolve_effect_record,
 )
 from typing import Any
@@ -467,11 +468,15 @@ class SyscallDispatcher:
         _gate_db = None
         _gate_action_id = None
         _entry_guarantee = str(getattr(entry, "execution_guarantee", "AT_LEAST_ONCE")).upper()
+        # DUR-2 — a continued run's per-run at-most-once signal engages the gate for ANY
+        # syscall (declaration-free), independent of the per-syscall guarantee + master flag.
+        # Reaches in-process dispatches; a nodus subprocess doesn't inherit it (DUR-2b).
+        _durable = _durable_effects_active()
         if (
-            _entry_guarantee == "EXACTLY_ONCE"
+            (_entry_guarantee == "EXACTLY_ONCE" or _durable)
             and _orig_eu_id
             and _gate_scope_engaged(context.execution_unit_id)
-            and _syscall_idempotency_enabled()
+            and (_syscall_idempotency_enabled() or _durable)
         ):
             from AINDY.core.execution_gate import compute_action_id
             _gate_action_id = compute_action_id(

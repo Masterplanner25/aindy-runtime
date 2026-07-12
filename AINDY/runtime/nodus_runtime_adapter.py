@@ -356,7 +356,11 @@ def _apply_deferred_memory_writes(
     # per-node ``effect_scope`` is load-bearing: flow nodes share the run's
     # execution_unit_id, so without it two nodes' writes would collide on the same ordinal.
     # Default off = current behavior (no dedup). See docs/runtime/DURABLE_EXECUTION_PROGRAM.md.
-    _idem = _memory_idempotency_enabled()
+    # DUR-2 — a continued run's per-run at-most-once signal engages the gate even when the
+    # global AINDY_MEMORY_IDEMPOTENCY flag is off (scoped to the re-driven run).
+    from AINDY.kernel.effect_ledger import durable_effects_active
+
+    _idem = _memory_idempotency_enabled() or durable_effects_active()
     _scope = None
     if _idem:
         _eff = str(getattr(context, "effect_scope", "") or "")
