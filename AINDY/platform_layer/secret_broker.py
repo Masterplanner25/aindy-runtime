@@ -207,6 +207,42 @@ def clear_secret_scopes() -> None:
         SECRET_SCOPES.clear()
 
 
+def load_secret_scopes_from_env(raw: "Optional[str]" = None) -> int:
+    """MEB-2a: register secret scopes from ``AINDY_SECRET_SCOPES`` (JSON).
+
+    Format: ``{"<secret_name>": "<required_capability>"}`` — locks a secret name to a
+    capability so ``resolve_secret`` is fail-closed unless the run holds that capability.
+    Empty/absent config is a no-op. Returns the number of scopes registered.
+    """
+    import json
+    import logging
+    import os
+
+    _logger = logging.getLogger(__name__)
+    if raw is None:
+        raw = os.getenv("AINDY_SECRET_SCOPES", "").strip()
+    if not raw:
+        return 0
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        _logger.error("[secret_broker] AINDY_SECRET_SCOPES is not valid JSON: %s", exc)
+        return 0
+    if not isinstance(data, dict):
+        _logger.error("[secret_broker] AINDY_SECRET_SCOPES must be a JSON object")
+        return 0
+    count = 0
+    for name, cap in data.items():
+        if not isinstance(cap, str) or not cap:
+            _logger.warning("[secret_broker] skipping secret scope %r: capability must be a string", name)
+            continue
+        register_secret_scope(str(name), cap)
+        count += 1
+    if count:
+        _logger.info("[secret_broker] registered %d secret scope(s) from AINDY_SECRET_SCOPES", count)
+    return count
+
+
 # ── Pluggable broker singleton ─────────────────────────────────────────────────
 _BROKER: SecretBroker | None = None
 _BROKER_LOCK = threading.Lock()

@@ -3063,6 +3063,14 @@ strong* (a true socket/httpx egress chokepoint — the static `extract_domains`/
 scan is insufficient). The multi-tenant MCP identity work is **MEB-3**. Both hang off **MEB-0**
 (the `execute_tool` effect boundary). Detail below.
 
+**MEB-2a SHIPPED 2026-07-11:** config-driven activation — `AINDY_CAPABILITY_POLICIES` /
+`AINDY_SECRET_SCOPES` (JSON) load via `_ensure_tools_loaded` (memoized, every process) and
+register real `CapabilityPolicy`s + secret scopes, flipping the dormant `execute_tool`
+recipient/domain/rate + `resolve_secret` gates live. Opt-in (empty config = no-op). Verified with
+a real `execute_tool` out-of-allowlist-domain denial. **Remaining G4a: MEB-2b** — a true socket/
+httpx egress chokepoint (static arg-inspection is bypassable by a runtime-built URL), plus the
+fail-open-on-ungated-secret hardening.
+
 **Two forms of G4a, pick at reopen:** *thin activation* (register a real `CapabilityPolicy` +
 secret scopes + one proving tool that calls `resolve_secret`, behind a default-off flag) ships
 the arg-inspection level of assurance cheaply but leaves egress bypassable. *Strong form* — a

@@ -40,6 +40,10 @@ def _ensure_tools_loaded() -> None:
         # memoized so the network discovery runs at most once per process. platform-only
         # must stay manifest-empty, so this is wired here rather than via a plugin entry.
         _ensure_mcp_client_tools()
+        # ECOGAP-4 / G4a (MEB-2a) — register config-driven capability policies + secret
+        # scopes here too, so the (dormant) enforce_capability_policy / resolve_secret gates
+        # in execute_tool are active in EVERY process. No-op unless the config env is set.
+        _ensure_capability_governance()
     except Exception as exc:
         logger.debug("agent tool plugin load skipped: %s", exc)
     finally:
@@ -47,6 +51,7 @@ def _ensure_tools_loaded() -> None:
 
 
 _MCP_CLIENT_LOADED = False
+_GOVERNANCE_LOADED = False
 
 
 def _ensure_mcp_client_tools() -> None:
@@ -58,6 +63,24 @@ def _ensure_mcp_client_tools() -> None:
     from AINDY.platform_layer import mcp_client
 
     mcp_client.bootstrap()  # itself a no-op when disabled; never raises
+
+
+def _ensure_capability_governance() -> None:
+    """MEB-2a: register config-driven capability policies + secret scopes once per process
+    (memoized). No-op unless AINDY_CAPABILITY_POLICIES / AINDY_SECRET_SCOPES are set; never
+    raises (a config-load failure must not break tool execution)."""
+    global _GOVERNANCE_LOADED
+    if _GOVERNANCE_LOADED:
+        return
+    _GOVERNANCE_LOADED = True
+    try:
+        from AINDY.agents.capability_policy import load_capability_policies_from_env
+        from AINDY.platform_layer.secret_broker import load_secret_scopes_from_env
+
+        load_capability_policies_from_env()
+        load_secret_scopes_from_env()
+    except Exception as exc:
+        logger.debug("capability governance load skipped: %s", exc)
 
 
 def register_tool(

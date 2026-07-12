@@ -19,10 +19,15 @@ from the call args (emails and URL hosts), so no per-tool arg schema is required
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
@@ -57,6 +62,53 @@ def clear_capability_policies() -> None:
 
 def has_capability_policies() -> bool:
     return bool(CAPABILITY_POLICIES)
+
+
+def load_capability_policies_from_env(raw: Optional[str] = None) -> int:
+    """MEB-2a: register capability policies from ``AINDY_CAPABILITY_POLICIES`` (JSON).
+
+    Format::
+
+        {"<capability>": {"recipients": ["@example.com"], "domains": ["api.x.com"],
+                          "rate": "30/minute"}}
+
+    Registering any policy flips ``has_capability_policies()`` true, activating the
+    (otherwise dormant) recipient/domain/rate enforcement in ``execute_tool``. Empty/absent
+    config is a no-op (behavior unchanged). Invalid JSON or entries are logged and skipped.
+    Returns the number of policies registered.
+    """
+    if raw is None:
+        raw = os.getenv("AINDY_CAPABILITY_POLICIES", "").strip()
+    if not raw:
+        return 0
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.error("[capability_policy] AINDY_CAPABILITY_POLICIES is not valid JSON: %s", exc)
+        return 0
+    if not isinstance(data, dict):
+        logger.error("[capability_policy] AINDY_CAPABILITY_POLICIES must be a JSON object")
+        return 0
+    count = 0
+    for cap, spec in data.items():
+        if not isinstance(spec, dict):
+            logger.warning("[capability_policy] skipping %r: policy spec must be an object", cap)
+            continue
+        recipients = spec.get("recipients")
+        domains = spec.get("domains")
+        rate = spec.get("rate")
+        register_capability_policy(
+            str(cap),
+            CapabilityPolicy(
+                recipients=tuple(str(r) for r in recipients) if isinstance(recipients, list) else None,
+                domains=tuple(str(d) for d in domains) if isinstance(domains, list) else None,
+                rate=str(rate) if isinstance(rate, str) else None,
+            ),
+        )
+        count += 1
+    if count:
+        logger.info("[capability_policy] registered %d policy(ies) from AINDY_CAPABILITY_POLICIES", count)
+    return count
 
 
 def _iter_strings(value: Any):
