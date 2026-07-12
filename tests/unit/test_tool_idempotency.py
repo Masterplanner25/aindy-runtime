@@ -116,6 +116,21 @@ def test_at_least_once_tool_never_deduped():
     m_resolve.assert_not_called()
 
 
+def test_at_least_once_tool_deduped_under_durable_signal():
+    """DUR-2: inside durable_effects_scope, an AT_LEAST_ONCE tool with the master flag OFF is
+    still boundary-gated — declaration-free per-run at-most-once."""
+    from AINDY.kernel.effect_ledger import durable_effects_scope
+
+    runs = []
+    _register("t4d", "AT_LEAST_ONCE", runs)
+    with _mocks(flag=False) as (m_resolve, m_complete):
+        with durable_effects_scope():
+            result = _run("t4d")
+    assert result["success"] is True
+    m_resolve.assert_called_once()   # durable signal engaged the boundary...
+    m_complete.assert_called_once()  # ...despite flag off + AT_LEAST_ONCE
+
+
 def test_no_run_id_no_boundary():
     runs = []
     _register("t5", "EXACTLY_ONCE", runs)

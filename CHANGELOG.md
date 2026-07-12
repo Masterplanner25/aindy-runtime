@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added — DUR-2: per-run at-most-once signal (Durable Execution / ECOGAP-1 Phase 3)
+
+Backward-compatible; the signal is only set by the (opt-in `AINDY_DURABLE_CONTINUATION`)
+crash-continuation drivers. Makes a continued run's effects dedup **without** any per-tool or
+per-syscall `EXACTLY_ONCE` declaration.
+
+- **`kernel/effect_ledger.durable_effects_scope()` / `durable_effects_active()`** — a contextvar
+  marking the current execution context as at-most-once.
+- **All three effect-boundary chokepoints honor it** (memory `_apply_deferred_memory_writes`,
+  the syscall dispatcher gate, and tool `execute_tool`): inside the scope they dedup regardless of
+  the per-effect `execution_guarantee` or the per-effect master flag.
+- **Both continuation drivers set the scope** around the re-drive (`flow_continuation` wraps
+  `runner.resume`; `agent_continuation` wraps the resume callback).
+- Verified on real Postgres: with `AINDY_MEMORY_IDEMPOTENCY` off, a re-applied write inside the
+  scope dedups (1 node) and outside it does not (2 nodes).
+- **Honest reach:** a contextvar covers parent-side + in-process effects, not a nodus worker
+  subprocess; and the agent-segment path needs a stable per-segment scope. Both are DUR-2b. The
+  flow continuation path (dominant parent-side memory writes) is fully covered.
+
 ### Added — DUR-1: memory-effect idempotency boundary (Durable Execution / ECOGAP-1 Phase 3)
 
 Backward-compatible; inert unless `AINDY_MEMORY_IDEMPOTENCY` is enabled (default off). The
