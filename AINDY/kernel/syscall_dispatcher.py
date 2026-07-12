@@ -466,7 +466,12 @@ class SyscallDispatcher:
                 from AINDY.db.database import SessionLocal
                 _gate_db = SessionLocal()
                 _already_done, _cached = _resolve_effect_record(
-                    _gate_db, _gate_action_id, name, payload
+                    _gate_db, _gate_action_id, name, payload,
+                    # MEB-3b — attribute the effect to the caller (tenant_id == user_id in
+                    # this single-user-per-tenant model). session_id, when present, comes
+                    # ambiently from the effect-attribution contextvar (e.g. a multi-tenant
+                    # MCP session set in the auth_hook).
+                    tenant_id=str(context.user_id) if context.user_id else None,
                 )
             except Exception as _gate_exc:
                 # A ledger failure must not block the syscall — degrade to AT_LEAST_ONCE.

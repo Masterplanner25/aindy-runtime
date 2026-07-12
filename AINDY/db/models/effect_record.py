@@ -54,6 +54,19 @@ class EffectRecord(Base):
     step_id = Column(String(256), nullable=True)
     """Step identifier within the execution (e.g. agent step index as string)."""
 
+    tenant_id = Column(String(256), nullable=True)
+    """Attribution (MEB-3b): the tenant that produced this effect. In A.I.N.D.Y.'s
+    single-user-per-tenant model tenant_id == user_id. Nullable — recorded when the
+    write site knows the caller (both effect-boundary chokepoints pass it); not part of
+    the action_id dedup hash (attribution/audit only). See
+    docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md (MEB-3b)."""
+
+    session_id = Column(String(256), nullable=True)
+    """Attribution (MEB-3b): the session that produced this effect (e.g. the multi-tenant
+    MCP session, threaded via kernel.effect_ledger.set_effect_attribution). Nullable and
+    not part of the dedup hash — on a replayed action the row keeps the FIRST writer's
+    session, which is the correct "which session produced the effect" answer."""
+
     status = Column(String(32), nullable=False, default="pending")
     """Lifecycle status: 'pending' | 'success' | 'failed'."""
 

@@ -6,19 +6,24 @@ write a ``pending`` row keyed by a deterministic ``action_id``, execute, then fi
 ``success``/``failed`` (caching the result for replay). Race-safe via the unique
 constraint on ``action_id`` with stale-pending recovery.
 
-MEB-0 uses this at the agent tool path (``execute_tool``). The syscall dispatcher gate
-still carries its own byte-identical private copies
-(``syscall_dispatcher._resolve_effect_record`` / ``_complete_effect_record``); **MEB-1
-consolidates the dispatcher onto this module and removes that duplication.** Keep the two
-in sync until then.
+Both effect-boundary chokepoints use this module: the agent tool path (``execute_tool``,
+MEB-0) and the syscall dispatcher gate (which imports ``resolve_effect_record`` /
+``complete_effect_record`` as ``_resolve_effect_record`` / ``_complete_effect_record``
+since MEB-1a consolidated its duplicated private copies away).
+
+MEB-3b adds optional tenant/session attribution: pass ``tenant_id`` / ``session_id`` to
+``resolve_effect_record`` (or set them ambiently via ``set_effect_attribution``) to record
+which tenant/session produced each effect. Attribution is stored on the row only — never
+part of the ``action_id`` dedup hash.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import Any, Optional
 
 from AINDY.kernel.clock import utcnow
 
@@ -27,9 +32,49 @@ logger = logging.getLogger(__name__)
 # Abandoned ``pending`` rows older than this are reclaimable (mirrors the dispatcher).
 STALE_PENDING_THRESHOLD_SECONDS = 900
 
+# MEB-3b — ambient attribution for effect records. A write site that can't pass tenant/
+# session explicitly (e.g. a syscall dispatched several frames below a multi-tenant MCP
+# auth_hook) sets this contextvar; ``resolve_effect_record`` reads it as a per-field
+# fallback. Contextvars propagate down the synchronous/async call tree within one
+# execution context, so a value set in the MCP auth_hook is visible to the effect write
+# inside the handler's ``dispatch_syscall``. Attribution/audit only — never part of the
+# action_id dedup hash.
+_effect_attribution: contextvars.ContextVar[tuple[Optional[str], Optional[str]]] = (
+    contextvars.ContextVar("aindy_effect_attribution", default=(None, None))
+)
+
+
+def set_effect_attribution(
+    *, tenant_id: Optional[str] = None, session_id: Optional[str] = None
+) -> contextvars.Token:
+    """Set the ambient (tenant_id, session_id) attribution for effect records written in
+    this execution context. Returns the token so a caller can ``reset_effect_attribution``.
+    Either field may be None to leave that field unattributed."""
+    return _effect_attribution.set((tenant_id, session_id))
+
+
+def reset_effect_attribution(token: contextvars.Token) -> None:
+    """Restore the attribution contextvar to its prior value (pairs with the returned token)."""
+    try:
+        _effect_attribution.reset(token)
+    except (ValueError, LookupError):
+        # Token from a different context (e.g. reset on another thread) — best-effort.
+        pass
+
+
+def current_effect_attribution() -> tuple[Optional[str], Optional[str]]:
+    """Return the ambient (tenant_id, session_id) attribution, or (None, None)."""
+    return _effect_attribution.get()
+
 
 def resolve_effect_record(
-    db, action_id: str, action_type: str, payload: dict
+    db,
+    action_id: str,
+    action_type: str,
+    payload: dict,
+    *,
+    tenant_id: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> tuple[bool, Any]:
     """Claim or replay an effect slot. Returns ``(already_succeeded, cached_result)``.
 
@@ -41,6 +86,12 @@ def resolve_effect_record(
     """
     from AINDY.db.models.effect_record import EffectRecord
     from sqlalchemy.exc import IntegrityError
+
+    # MEB-3b — resolve attribution: explicit kwargs win per-field; else the ambient
+    # contextvar. Recorded on the row only; never folded into action_id/input_hash.
+    _ctx_tenant, _ctx_session = current_effect_attribution()
+    eff_tenant = tenant_id if tenant_id is not None else _ctx_tenant
+    eff_session = session_id if session_id is not None else _ctx_session
 
     record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
     if record is not None and record.status == "success":
@@ -57,6 +108,8 @@ def resolve_effect_record(
                     action_type=action_type,
                     input_hash=input_hash,
                     status="pending",
+                    tenant_id=eff_tenant,
+                    session_id=eff_session,
                 )
             )
             db.commit()
@@ -85,10 +138,13 @@ def resolve_effect_record(
                     action_id,
                 )
                 return False, None
-            # Stale pending (abandoned) or prior failure: reclaim the slot in-place.
+            # Stale pending (abandoned) or prior failure: reclaim the slot in-place and
+            # re-attribute it to the writer that is reclaiming it (MEB-3b).
             record.status = "pending"
             record.completed_at = None
             record.created_at = utcnow()
+            record.tenant_id = eff_tenant
+            record.session_id = eff_session
             db.commit()
     return False, None
 
