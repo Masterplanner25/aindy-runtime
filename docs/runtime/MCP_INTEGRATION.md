@@ -13,9 +13,11 @@ Protocol)** servers, by discovering those tools at startup and registering each 
 normal AINDY agent tool. The MCP wire protocol lives in the published `nodus-mcp`
 package; the runtime only wires it in.
 
-**Status:** client-side (agents call *out* to external MCP tools) is shipped and opt-in.
-Server-side (exposing AINDY tools *as* an MCP server to Claude Desktop etc.) is deferred
-— see [TECH_DEBT ECOGAP-4](../../TECH_DEBT.md).
+**Status:** both directions shipped, opt-in.
+- **Client-side** — AINDY agents call *out* to external MCP tools (below).
+- **Server-side** — expose AINDY syscalls *as* an MCP server to Claude Desktop etc. over
+  stdio ([below](#server-side--expose-aindy-syscalls-as-mcp)). SSE transport and multi-tenant
+  auth are deferred — see [TECH_DEBT ECOGAP-4](../../TECH_DEBT.md).
 
 ## Enable it
 
@@ -68,6 +70,33 @@ entry must be unique. This keeps external tools from colliding with runtime-nati
 A live round-trip (real SSE `NodusServer` → discovery → tool call through the sync bridge)
 is exercised in development; the unit suite (`tests/unit/test_mcp_client.py`) covers
 registration shape, the bridge, resilience, and the disabled no-op with `nodus-mcp` mocked.
+
+## Server-side — expose AINDY syscalls as MCP
+
+Run AINDY as an MCP **server** so an external MCP client (Claude Desktop, etc.) can call
+AINDY syscalls as tools. It's a standalone process the client spawns over stdio:
+
+```bash
+pip install "aindy-runtime[mcp]"
+AINDY_MCP_SERVER_USER_ID=<a-registered-user-id> \
+DATABASE_URL=postgresql://... \
+aindy-runtime mcp-server --transport stdio
+```
+
+Claude Desktop config (`claude_desktop_config.json`) points `command`/`args` at that.
+
+- **Single configured identity.** Every external call runs as `AINDY_MCP_SERVER_USER_ID`.
+  Correct for the canonical local single-operator case. Per-session / multi-tenant auth (via
+  `NodusServer.auth_hook` + minted capability tokens) is the deferred G4a path.
+- **Read-only by default.** Exposes `memory.read/search/list/tree/trace`. Set
+  `AINDY_MCP_SERVER_ALLOW_WRITES=true` to also expose `memory.write`, `memory.delete`,
+  `flow.run`, `event.emit`. `AINDY_MCP_SERVER_TOOLS` overrides the allowlist explicitly.
+- **How it dispatches.** Each exposed syscall becomes an MCP tool whose handler calls
+  `dispatch_syscall(name, args, user_id=<configured>)` — which grants the syscall its own
+  capability (least-privilege, SDK-SYSCALL-GRANT-1) and manages its own DB session. The
+  allowlist is the gate. Verified end-to-end on Postgres (write → read-back through the tool
+  handlers).
+- **Transport:** stdio only in v1. SSE is deferred (nodus-mcp #7, below).
 
 ## Known upstream issue
 

@@ -280,6 +280,48 @@ def _bootstrap_schema(reconcile: bool) -> NoReturn:
         raise SystemExit(2)
 
 
+def _run_mcp_server(transport: str) -> NoReturn:
+    """Serve AINDY syscalls as an MCP server (ECOGAP-4 / G4b, server-side).
+
+    Standalone process an MCP client (e.g. Claude Desktop) spawns. Requires DATABASE_URL
+    and AINDY_MCP_SERVER_USER_ID. Read-only tools by default; set
+    AINDY_MCP_SERVER_ALLOW_WRITES=true to expose writes.
+    """
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print(
+            "error: DATABASE_URL is not set.\n"
+            "The MCP server dispatches syscalls that need a database.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    if transport != "stdio":
+        print(
+            f"error: transport {transport!r} is not supported yet — SSE is deferred "
+            "(nodus-mcp #7). Use --transport stdio.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    try:
+        from AINDY.platform_layer.mcp_server import serve_stdio
+    except Exception as exc:
+        print(
+            "error: MCP server support is unavailable. Install the extra:\n"
+            f"  pip install 'aindy-runtime[mcp]'\n  detail: {exc}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    try:
+        serve_stdio()  # blocks until the MCP client disconnects
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    raise SystemExit(0)
+
+
 def _init(target_dir: str, force: bool) -> NoReturn:
     """Scaffold AINDY/.env, Dockerfile, docker-compose.yml, and docker/init-pgvector.sql."""
     import secrets
@@ -576,6 +618,25 @@ def main() -> None:
         help="Also apply additive column/index reconciles if the runtime schema is out of date.",
     )
 
+    mcp_server_parser = subparsers.add_parser(
+        "mcp-server",
+        help="Serve AINDY syscalls as an MCP server for external MCP clients (Claude Desktop, etc.).",
+        description=(
+            "Expose an allowlist of AINDY syscalls as MCP tools over stdio, as a standalone "
+            "process an MCP client spawns. Every external call runs as the single configured "
+            "identity AINDY_MCP_SERVER_USER_ID. Read-only tools by default; set "
+            "AINDY_MCP_SERVER_ALLOW_WRITES=true to expose writes, or AINDY_MCP_SERVER_TOOLS to "
+            "override the allowlist. Requires DATABASE_URL and the [mcp] extra "
+            "(pip install 'aindy-runtime[mcp]'). SSE transport is deferred (nodus-mcp #7)."
+        ),
+    )
+    mcp_server_parser.add_argument(
+        "--transport",
+        choices=["stdio"],
+        default="stdio",
+        help="MCP transport (stdio only in v1; SSE deferred).",
+    )
+
     auth_parser = subparsers.add_parser(
         "auth",
         help="Auth management commands.",
@@ -608,6 +669,8 @@ def main() -> None:
         _run_sandbox_check(output_json=getattr(args, "output_json", False))
     elif args.command == "bootstrap-schema":
         _bootstrap_schema(reconcile=getattr(args, "reconcile", False))
+    elif args.command == "mcp-server":
+        _run_mcp_server(transport=getattr(args, "transport", "stdio"))
     elif args.command == "auth":
         if args.auth_command == "promote-admin":
             _promote_admin(args.email)
