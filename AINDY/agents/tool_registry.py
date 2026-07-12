@@ -317,7 +317,11 @@ def execute_tool(
             action_type=tool_name, input_payload=args or {}, scope=str(run_id)
         )
         try:
-            _already, _cached = resolve_effect_record(db, _action_id, tool_name, args or {})
+            _already, _cached = resolve_effect_record(
+                db, _action_id, tool_name, args or {},
+                # MEB-3b — attribute the effect to the caller (tenant_id == user_id).
+                tenant_id=str(user_id) if user_id else None,
+            )
         except Exception as exc:
             # A ledger failure must not block the tool — degrade to AT_LEAST_ONCE.
             logger.warning("[AgentTool] %s effect resolve failed; running unguarded: %s", tool_name, exc)

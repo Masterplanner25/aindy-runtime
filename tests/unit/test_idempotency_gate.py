@@ -124,7 +124,7 @@ def test_gate_calls_handler_when_no_prior_record(monkeypatch):
     _register_handler(lambda p, c: handler_calls.append(1) or {"fresh": True}, guarantee="EXACTLY_ONCE")
     d = _dispatcher(monkeypatch, flag=True)
     monkeypatch.setattr(syscall_dispatcher, "_resolve_effect_record",
-                        lambda db, aid, at, pl: resolve_calls.append(aid) or (False, None))
+                        lambda db, aid, at, pl, **k: resolve_calls.append(aid) or (False, None))
     monkeypatch.setattr(syscall_dispatcher, "_complete_effect_record",
                         lambda db, aid, st, rp: complete_calls.append((aid, st)))
     with patch("AINDY.db.database.SessionLocal", return_value=MagicMock()):
@@ -207,7 +207,7 @@ def test_compute_action_id_used_for_gate_key(monkeypatch):
     _register_handler(lambda p, c: {"ok": True}, guarantee="EXACTLY_ONCE")
     d = _dispatcher(monkeypatch, flag=True)
     monkeypatch.setattr(syscall_dispatcher, "_resolve_effect_record",
-                        lambda db, aid, at, pl: received.append(aid) or (False, None))
+                        lambda db, aid, at, pl, **k: received.append(aid) or (False, None))
     monkeypatch.setattr(syscall_dispatcher, "_complete_effect_record", lambda *a, **k: None)
     payload = {"key": "value", "num": 42}
     with patch("AINDY.db.database.SessionLocal", return_value=MagicMock()):

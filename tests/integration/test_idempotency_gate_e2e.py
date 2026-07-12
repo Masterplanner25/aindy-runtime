@@ -138,6 +138,7 @@ def test_syscall_idempotency_dedup_e2e(monkeypatch, testing_session_factory):
 
     name = f"sys.v1.test.eo_{uuid.uuid4().hex[:8]}"
     eu_id = str(uuid.uuid4())
+    caller_id = str(uuid.uuid4())  # fixed so we can assert MEB-3b attribution below
     payload = {"x": 1}
     action_id = compute_action_id(action_type=name, input_payload=payload, scope=eu_id)
     runs = []
@@ -159,7 +160,7 @@ def test_syscall_idempotency_dedup_e2e(monkeypatch, testing_session_factory):
 
     def _ctx():
         return R.SyscallContext(
-            execution_unit_id=eu_id, user_id=str(uuid.uuid4()),
+            execution_unit_id=eu_id, user_id=caller_id,
             capabilities=["test.idem"], trace_id="t",
         )
 
@@ -173,6 +174,19 @@ def test_syscall_idempotency_dedup_e2e(monkeypatch, testing_session_factory):
         assert r2["status"] == "success"
         assert len(runs) == 1, f"EXACTLY_ONCE handler must run once; ran {len(runs)}"
         assert r2["data"] == r1["data"], "retry must replay the first result"
+
+        # MEB-3b — the gate attributes the effect row to the caller (tenant_id == user_id);
+        # session_id is unset here (no MCP session in this path).
+        check = testing_session_factory()
+        try:
+            row = check.query(EffectRecord).filter(
+                EffectRecord.action_id == action_id
+            ).first()
+            assert row is not None, "gate must have written the effect row"
+            assert row.tenant_id == caller_id, row.tenant_id
+            assert row.session_id is None, row.session_id
+        finally:
+            check.close()
     finally:
         R.SYSCALL_REGISTRY.pop(name, None)
         cleanup = testing_session_factory()

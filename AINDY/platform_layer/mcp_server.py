@@ -30,9 +30,11 @@ Design (verified against the runtime seams):
     per-request headers, so multi-tenant is meaningful only over the SSE/HTTP transport
     (nodus-mcp>=0.1.2: ``/messages/`` mount #7 + ``auth_hook`` header context #8).
 
-MEB-3b (EffectRecord tenant/session attribution columns — the program's only
-schema-contract bump) is a separate, deferred follow-up; it records *which* session
-produced each effect and is not required for the per-session identity mapping here.
+MEB-3b (EffectRecord tenant/session attribution columns) records *which* tenant/session
+produced each effect. The per-session ``auth_hook`` here stashes the resolved identity +
+session id ambiently (``effect_ledger.set_effect_attribution``); any effect record written
+under the call (e.g. an ``EXACTLY_ONCE`` syscall) is attributed to that tenant/session. It
+is attribution/audit only and not required for the per-session identity mapping.
 """
 from __future__ import annotations
 
@@ -131,11 +133,27 @@ def _resolve_session_identity(context: dict) -> Optional[str]:
     return None
 
 
+def _session_token(context: dict) -> Optional[str]:
+    """A stable-per-connection session identifier string for effect attribution (MEB-3b).
+
+    The MCP request context surfaces ``session`` — the ``ServerSession`` object, stable for
+    the life of one SSE connection. We stringify its identity as ``mcp:<id>``; this is
+    process-local (an ``id()`` distinguishes concurrent sessions within one server process,
+    which is what "which session produced this effect" needs for audit). Returns None when
+    no session object is present (e.g. stdio).
+    """
+    sess = (context or {}).get("session")
+    if sess is None:
+        return None
+    return f"mcp:{id(sess)}"
+
+
 def build_auth_hook():
     """auth_hook for per-session (multi-tenant) identity: resolve the caller and stash it.
 
     Fail-closed: a call whose headers resolve to no identity is denied. Raising any
-    exception makes NodusServer refuse the tool call.
+    exception makes NodusServer refuse the tool call. Also stashes the session id ambiently
+    (MEB-3b) so any effect record written under this call is attributed to the session.
     """
 
     def _auth_hook(name: str, args: dict, context: dict) -> None:
@@ -149,6 +167,13 @@ def build_auth_hook():
                 "MCP call denied: no identity — send Authorization: Bearer <jwt> or X-Platform-Key"
             )
         _SESSION_IDENTITY.set(identity)
+        # MEB-3b — attribute effects written under this call to the tenant (resolved
+        # identity) + session. tenant_id is also set at the dispatcher gate from the
+        # SyscallContext, but setting it here covers any effect-boundary write reached in
+        # this execution context; the contextvar propagates down into dispatch_syscall.
+        from AINDY.kernel.effect_ledger import set_effect_attribution
+
+        set_effect_attribution(tenant_id=str(identity), session_id=_session_token(context))
 
     return _auth_hook
 

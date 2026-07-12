@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added — MEB-3b: EffectRecord tenant/session attribution (Mediated Effect Boundary)
+
+Completes the MEB program. Backward-compatible and additive; attribution/audit only.
+
+- **Schema-contract bump `2026-07-08` → `2026-07-11`** (Alembic `0011`, runtime head
+  `0010` → `0011`): two nullable columns on `effect_records`, `tenant_id` and `session_id`.
+  Blank-DB-guarded and idempotent; `downgrade` drops both.
+- **Attribution writer** (`kernel/effect_ledger.py`): `resolve_effect_record` takes optional
+  `tenant_id`/`session_id` (persisted on the row, **never folded into the `action_id` dedup
+  hash**) with a per-field fallback to an ambient `set_effect_attribution` contextvar. A
+  replayed action keeps the FIRST writer's attribution.
+- **Populated at both effect-boundary chokepoints:** the syscall dispatcher gate and the agent
+  tool path attribute the tenant (`== user_id`); the multi-tenant MCP `auth_hook` additionally
+  stashes the resolved identity + session id ambiently.
+- PG-verified: columns materialize via `create_all`, the writer round-trips explicit + contextvar
+  attribution, replay preserves the first writer, and Alembic `0011` adds/drops cleanly.
+
 ---
 
 ## 1.6.2 — 2026-07-09

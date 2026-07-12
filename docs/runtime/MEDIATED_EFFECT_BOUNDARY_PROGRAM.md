@@ -200,11 +200,22 @@ capability + tenant isolation for that user. Multi-tenant is rejected over stdio
 headers). Opt-in, off by default; stdio behaviour unchanged. Verified: real nodus-mcp 0.1.2 SSE app
 builds with `/sse` + `/messages/` and the auth_hook attached.
 
-**MEB-3b — EffectRecord attribution columns (schema bump). Deferred.** Add tenant/session columns to
-EffectRecord (**schema-contract bump + Alembic migration** — the program's only schema change) so
-each effect/idempotency row records *which* session produced it. Pure attribution/audit; separable
-from the 3a identity mapping and not required by it. Optionally mint a per-session capability token
-(`mint_token(run_id=session, …)`) for a capability ceiling below the resolved user's full grant.
+**MEB-3b — EffectRecord attribution columns (schema bump). ✅ SHIPPED 2026-07-11.** Added the
+nullable `tenant_id` + `session_id` columns to `effect_records` (**schema-contract bump
+`2026-07-08`→`2026-07-11` + Alembic `0011` + head bump `0010`→`0011`** — the program's only schema
+change). `resolve_effect_record` now takes optional `tenant_id`/`session_id` (persisted on the row,
+**never folded into the `action_id` dedup hash** — Decision 1) with a per-field fallback to an ambient
+`kernel/effect_ledger.set_effect_attribution` contextvar. Both effect-boundary chokepoints attribute
+the tenant (`== user_id`): the dispatcher gate passes `context.user_id`, the tool path passes the
+caller's `user_id`. The multi-tenant MCP `auth_hook` additionally stashes the resolved identity +
+session id ambiently, so any effect written under an MCP call (e.g. an `EXACTLY_ONCE` syscall) is
+attributed to that tenant/session; a replayed action keeps the FIRST writer's attribution. Pure
+attribution/audit — separable from the 3a identity mapping and not required by it. Verified on real
+Postgres: create_all materializes the columns, the writer round-trips explicit + contextvar
+attribution, replay preserves the first writer, and Alembic `0011` adds/drops the columns cleanly
+(blank-DB-guarded). Deferred: an index on the attribution columns (audit queries seq-scan the
+regularly-GC'd table today) and the optional per-session capability-ceiling token
+(`mint_token(run_id=session, …)`).
 
 ## Decisions
 
@@ -257,14 +268,22 @@ prerequisite for **declaration-free** continuation (the ECOGAP-1 Phase 3 payoff)
   0.1.2 unblocked #7 + #8): auth_hook resolves each session's bearer/platform-key header to a real
   user; calls dispatch as that identity, fail-closed. No schema. Opt-in
   (`AINDY_MCP_SERVER_MULTI_TENANT`).
-- **Next: MEB-3b (EffectRecord attribution columns)** — the program's only schema-contract bump;
-  deferred (attribution/audit, not required by 3a). Plus the MEB-1 follow-ups (adopt EXACTLY_ONCE
-  on chosen syscalls; populate execution_id; relax _is_uuid) and the MEB-2b IP-literal /
-  thread-escape hardening.
+- **MEB-3b — ✅ SHIPPED 2026-07-11.** EffectRecord `tenant_id`/`session_id` attribution columns —
+  the program's only schema-contract bump (`2026-07-11`, Alembic `0011`). `resolve_effect_record`
+  persists per-field attribution (explicit kwargs or an ambient `set_effect_attribution` contextvar);
+  both chokepoints attribute the tenant (`== user_id`) and the MCP auth_hook stashes tenant+session.
+  Never folded into the dedup hash; replay keeps the first writer. PG-verified end to end.
 
-MEB-0 was the standalone win — the single biggest real gap (side-effecting agent tools had no
-idempotency at any layer) is closed; MEB-2a/2b give the tool path a live, runtime-aware egress
-boundary; and MEB-3a makes the server-side MCP surface genuinely multi-tenant.
+**The MEB program is functionally complete** — all four phases (MEB-0 through MEB-3) shipped. MEB-0
+was the standalone win (side-effecting agent tools had no idempotency at any layer); MEB-1 repaired
+and consolidated the dispatcher gate; MEB-2a/2b give the tool path a live, runtime-aware egress
+boundary; MEB-3a makes the server-side MCP surface genuinely multi-tenant; MEB-3b closes the loop
+with per-tenant/session effect attribution.
+
+**Remaining non-blocking follow-ups** (mechanism-complete, adoption/hardening only): adopt
+`EXACTLY_ONCE` on chosen syscalls (MEB-1); populate `execution_id` on the writer + relax `_is_uuid`
+(MEB-1); MEB-2b IP-literal / thread-escape coverage + fail-closed on ungated secret; and, for MEB-3b,
+an attribution index + the optional per-session capability-ceiling token.
 
 ## Cross-references
 

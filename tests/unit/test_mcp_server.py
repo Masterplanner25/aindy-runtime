@@ -155,6 +155,38 @@ def test_auth_hook_sets_session_identity_and_handler_uses_it():
         mcp_server._SESSION_IDENTITY.reset(token)
 
 
+def test_session_token_stringifies_session_object_or_none():
+    class _Sess:
+        pass
+
+    sess = _Sess()
+    assert mcp_server._session_token({"session": sess}) == f"mcp:{id(sess)}"
+    assert mcp_server._session_token({"session": None}) is None
+    assert mcp_server._session_token({}) is None
+
+
+def test_auth_hook_sets_effect_attribution(monkeypatch):
+    # MEB-3b — the auth_hook stashes the resolved identity + session id ambiently so any
+    # effect record written under the call is attributed to that tenant/session.
+    from AINDY.kernel import effect_ledger
+
+    attr_token = effect_ledger.set_effect_attribution(tenant_id=None, session_id=None)
+    id_token = mcp_server._SESSION_IDENTITY.set(None)
+
+    class _Sess:
+        pass
+
+    sess = _Sess()
+    try:
+        hook = mcp_server.build_auth_hook()
+        with patch.object(mcp_server, "_resolve_session_identity", return_value="tenant-9"):
+            hook("sys.v1.memory.read", {}, {"headers": {"authorization": "Bearer t"}, "session": sess})
+        assert effect_ledger.current_effect_attribution() == ("tenant-9", f"mcp:{id(sess)}")
+    finally:
+        effect_ledger.reset_effect_attribution(attr_token)
+        mcp_server._SESSION_IDENTITY.reset(id_token)
+
+
 def test_serve_stdio_rejects_multi_tenant(monkeypatch):
     monkeypatch.setenv("AINDY_MCP_SERVER_MULTI_TENANT", "true")
     monkeypatch.setenv("AINDY_MCP_SERVER_USER_ID", "u-1")
