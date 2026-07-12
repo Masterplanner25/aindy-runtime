@@ -163,10 +163,22 @@ change (same discipline that kept MEB-0 out of the dispatcher):
   rewritten to the entry+flag mechanism (fires/skips/replay/degrade/uuid-guard/action-id), plus a
   new real-Postgres end-to-end dedup test (`tests/integration/test_idempotency_gate_e2e.py::
   test_syscall_idempotency_dedup_e2e`) that runs in CI's Integration job — the only cover for the
-  `_gate_db` transaction lifecycle under a real transaction. **Deferred (follow-ups):** populating
-  `execution_id` on the writer (EU-by-source lookup — compensation-ledger bonus); relaxing the
-  `_is_uuid` guard for broader (`run_<uuid>`) coverage now that the EU-PK cast is gone; and
-  adopting `EXACTLY_ONCE` on specific syscalls (e.g. memory.write) — a per-syscall decision.
+  `_gate_db` transaction lifecycle under a real transaction.
+
+- **MEB-1 adoption — ✅ SHIPPED 2026-07-11.** First syscall opts into the gate:
+  `sys.v1.memory.write` now declares `execution_guarantee="EXACTLY_ONCE"` — a retried flow step
+  that re-writes the same node in the same run scope replays the cached node instead of persisting
+  a duplicate (still inert unless `AINDY_SYSCALL_IDEMPOTENCY` is on). The gate-engage predicate was
+  **widened** (`_is_uuid` → `_gate_scope_engaged`): it now fires for a prefixed run id whose tail is
+  a UUID (`run_<uuid>`, `flow:<uuid>`), not just a bare UUID — safe because the scope is only hashed
+  into the `action_id`, never cast (the EU-PK cast that motivated the bare-UUID-only guard is gone).
+  Verified on real Postgres (`test_memory_write_exactly_once_e2e`): two identical dispatches persist
+  ONE node and the retry replays it; the handler's return dict is JSON-safe so the gate caches it as
+  JSONB. **Still deferred:** populating `execution_id` on the writer (EU-by-source lookup) — a
+  compensation-ledger link with **no consumer yet** (no syscall declares a `compensate` hook), and
+  correct EU resolution from the gate scope is ambiguous (`get_by_source` needs a `source_type` the
+  gate doesn't carry); best done consumer-driven when a compensator lands. Broadening `EXACTLY_ONCE`
+  to `event.emit`/`flow.run` remains a per-syscall decision.
 
 ### MEB-2 — G4a activation (enforcement)
 Orthogonal to idempotency; hangs off the MEB-0 seam.
@@ -280,10 +292,12 @@ and consolidated the dispatcher gate; MEB-2a/2b give the tool path a live, runti
 boundary; MEB-3a makes the server-side MCP surface genuinely multi-tenant; MEB-3b closes the loop
 with per-tenant/session effect attribution.
 
-**Remaining non-blocking follow-ups** (mechanism-complete, adoption/hardening only): adopt
-`EXACTLY_ONCE` on chosen syscalls (MEB-1); populate `execution_id` on the writer + relax `_is_uuid`
-(MEB-1); MEB-2b IP-literal / thread-escape coverage + fail-closed on ungated secret; and, for MEB-3b,
-an attribution index + the optional per-session capability-ceiling token.
+**Remaining non-blocking follow-ups** (mechanism-complete, adoption/hardening only): `memory.write`
+now declares `EXACTLY_ONCE` and the gate scope is widened (2026-07-11) — remaining is broadening
+`EXACTLY_ONCE` to `event.emit`/`flow.run` (per-syscall decision) and populating `execution_id` on the
+writer (deferred until a `compensate` hook consumes it); MEB-2b IP-literal / thread-escape coverage +
+fail-closed on ungated secret; and, for MEB-3b, an attribution index + the optional per-session
+capability-ceiling token.
 
 ## Cross-references
 

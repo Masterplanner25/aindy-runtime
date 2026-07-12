@@ -125,12 +125,7 @@ _EU_ID_CTX: ContextVar[str] = ContextVar("syscall_eu_id", default="")
 
 
 def _is_uuid(value: Any) -> bool:
-    """True when ``value`` is a bare UUID (str or uuid.UUID).
-
-    The idempotency gate keys ExecutionUnit lookups on a UUID primary-key column;
-    run-scoped ids like ``run_<uuid>`` (trace/correlation ids) must not be bound to
-    it or PostgreSQL rejects the cast and aborts the transaction (#157).
-    """
+    """True when ``value`` is a bare UUID (str or uuid.UUID)."""
     if isinstance(value, _uuid.UUID):
         return True
     if not isinstance(value, str):
@@ -140,6 +135,28 @@ def _is_uuid(value: Any) -> bool:
         return True
     except (ValueError, AttributeError, TypeError):
         return False
+
+
+def _gate_scope_engaged(value: Any) -> bool:
+    """True when a run scope should engage the idempotency gate: a bare UUID, or a
+    prefixed run id whose tail (after the last ``_`` or ``:``) is a UUID — e.g.
+    ``run_<uuid>`` or ``flow:<uuid>``.
+
+    Historically the gate only fired for a bare UUID because it bound the scope to a
+    UUID primary-key column and PostgreSQL aborts the transaction on a bad cast (#157).
+    MEB-1b removed that EU-PK lookup — the scope is now only hashed into the ``action_id``
+    (never cast) — so this widened match is #157-safe and lets the gate cover real
+    flow/run scopes that carry a ``run_``/``flow:`` prefix.
+    """
+    if _is_uuid(value):
+        return True
+    if isinstance(value, str) and value:
+        tail = value
+        for sep in ("_", ":"):
+            if sep in tail:
+                tail = tail.rsplit(sep, 1)[-1]
+        return _is_uuid(tail)
+    return False
 
 
 def _syscall_idempotency_enabled() -> bool:
@@ -439,21 +456,21 @@ class SyscallDispatcher:
 
         # Step 2f — idempotency gate (MEB-1b). Fires only when ALL hold: the global flag
         # AINDY_SYSCALL_IDEMPOTENCY is on, the syscall declares
-        # execution_guarantee="EXACTLY_ONCE", the run carries a scope, and that scope is a
-        # bare UUID. Default AT_LEAST_ONCE = no dedup (current behavior). The guarantee now
-        # comes from the SyscallEntry — an addressable source — NOT the ExecutionUnit.extra
-        # lookup, which never matched the id a syscall carries (IDEM-10). The #157 _is_uuid
-        # guard is kept (the gate stays scoped to the flow/dispatch paths) even though the
-        # old EU-PK cast that motivated it is gone. A SEPARATE _gate_db session is used so a
-        # ledger failure can never poison the handler's connection (#157); on any failure we
-        # degrade to AT_LEAST_ONCE.
+        # execution_guarantee="EXACTLY_ONCE", the run carries a scope, and that scope engages
+        # the gate (a bare UUID or a prefixed run id like run_<uuid> — see
+        # _gate_scope_engaged). Default AT_LEAST_ONCE = no dedup (current behavior). The
+        # guarantee now comes from the SyscallEntry — an addressable source — NOT the
+        # ExecutionUnit.extra lookup, which never matched the id a syscall carries (IDEM-10).
+        # The scope is only hashed into the action_id (never cast), so the widened predicate
+        # stays #157-safe. A SEPARATE _gate_db session is used so a ledger failure can never
+        # poison the handler's connection (#157); on any failure we degrade to AT_LEAST_ONCE.
         _gate_db = None
         _gate_action_id = None
         _entry_guarantee = str(getattr(entry, "execution_guarantee", "AT_LEAST_ONCE")).upper()
         if (
             _entry_guarantee == "EXACTLY_ONCE"
             and _orig_eu_id
-            and _is_uuid(context.execution_unit_id)
+            and _gate_scope_engaged(context.execution_unit_id)
             and _syscall_idempotency_enabled()
         ):
             from AINDY.core.execution_gate import compute_action_id

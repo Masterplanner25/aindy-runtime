@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added — MEB-1: memory.write EXACTLY_ONCE + gate scope relaxation
+
+Backward-compatible; inert unless `AINDY_SYSCALL_IDEMPOTENCY` is enabled (default off).
+
+- **`sys.v1.memory.write` now declares `execution_guarantee="EXACTLY_ONCE"`** — the first
+  syscall to opt into the idempotency gate. A retried flow step re-writing the same node in
+  the same run scope replays the cached node instead of persisting a duplicate. The handler's
+  return dict is JSON-safe, so the gate caches it as JSONB for replay.
+- **Gate scope predicate widened** (`_is_uuid` → `_gate_scope_engaged`): the gate now fires
+  for a prefixed run id whose tail is a UUID (`run_<uuid>`, `flow:<uuid>`), not only a bare
+  UUID. Safe because the scope is only hashed into the `action_id`, never cast to a DB UUID
+  column (the EU-PK cast that motivated the original guard was removed in MEB-1b).
+- Verified on real Postgres: two identical `memory.write` dispatches persist ONE node and the
+  retry replays it (`test_memory_write_exactly_once_e2e`, Integration job).
+
 ### Added — MEB-3b: EffectRecord tenant/session attribution (Mediated Effect Boundary)
 
 Completes the MEB program. Backward-compatible and additive; attribution/audit only.

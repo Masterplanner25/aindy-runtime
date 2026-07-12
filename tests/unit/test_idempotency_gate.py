@@ -171,19 +171,50 @@ def test_gate_absent_execution_unit_skips_gate(monkeypatch):
     assert resolve_calls == []
 
 
-def test_gate_skips_non_uuid_scope(monkeypatch):
-    """#157 guard retained: a run-scoped (non-UUID) execution_unit_id must NOT engage the
-    gate, even EXACTLY_ONCE + flag on."""
+def test_gate_engages_prefixed_uuid_scope(monkeypatch):
+    """MEB-1 scope relaxation: a prefixed run id whose tail is a UUID (run_<uuid>) now
+    ENGAGES the gate. The scope is only hashed into the action_id (never cast), so this is
+    #157-safe — the bare-UUID-only guard that motivated the old skip is no longer needed."""
     handler_calls, resolve_calls = [], []
     _register_handler(lambda p, c: handler_calls.append(1) or {"ok": True}, guarantee="EXACTLY_ONCE")
     d = _dispatcher(monkeypatch, flag=True)
     monkeypatch.setattr(syscall_dispatcher, "_resolve_effect_record",
                         lambda *a, **k: resolve_calls.append(1) or (False, None))
-    result = d.dispatch(_SYSCALL_NAME, {}, _ctx(eu_id="run_897ef792-4918-44fa-856a-ebdbbd548859"))
+    monkeypatch.setattr(syscall_dispatcher, "_complete_effect_record", lambda *a, **k: None)
+    with patch("AINDY.db.database.SessionLocal", return_value=MagicMock()):
+        result = d.dispatch(_SYSCALL_NAME, {}, _ctx(eu_id="run_897ef792-4918-44fa-856a-ebdbbd548859"))
     _unregister()
     assert handler_calls == [1]
     assert result["status"] == "success"
-    assert resolve_calls == [], "non-UUID scope must not engage the gate (#157 guard)"
+    assert resolve_calls == [1], "run_<uuid> scope must engage the gate after MEB-1 relaxation"
+
+
+def test_gate_skips_scope_without_uuid_tail(monkeypatch):
+    """A scope with no UUID tail (e.g. 'job-42') still must NOT engage the gate."""
+    handler_calls, resolve_calls = [], []
+    _register_handler(lambda p, c: handler_calls.append(1) or {"ok": True}, guarantee="EXACTLY_ONCE")
+    d = _dispatcher(monkeypatch, flag=True)
+    monkeypatch.setattr(syscall_dispatcher, "_resolve_effect_record",
+                        lambda *a, **k: resolve_calls.append(1) or (False, None))
+    result = d.dispatch(_SYSCALL_NAME, {}, _ctx(eu_id="job-42-not-a-uuid"))
+    _unregister()
+    assert handler_calls == [1]
+    assert result["status"] == "success"
+    assert resolve_calls == [], "a non-UUID-tail scope must not engage the gate"
+
+
+def test_gate_scope_engaged_predicate():
+    """Unit coverage of the widened engage predicate directly."""
+    from AINDY.kernel.syscall_dispatcher import _gate_scope_engaged
+
+    assert _gate_scope_engaged(_VALID_EU_UUID) is True
+    assert _gate_scope_engaged(f"run_{_VALID_EU_UUID}") is True
+    assert _gate_scope_engaged(f"flow:{_VALID_EU_UUID}") is True
+    assert _gate_scope_engaged(f"agent_run_{_VALID_EU_UUID}") is True
+    assert _gate_scope_engaged("run_not-a-uuid") is False
+    assert _gate_scope_engaged("job-42") is False
+    assert _gate_scope_engaged("") is False
+    assert _gate_scope_engaged(None) is False
 
 
 def test_gate_fires_for_valid_uuid_scope(monkeypatch):
