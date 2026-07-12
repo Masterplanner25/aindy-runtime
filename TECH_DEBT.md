@@ -628,8 +628,11 @@ unaddressable EU PK). The finding below is the verified source of that plan.
 `AINDY_TOOL_IDEMPOTENCY` + per-tool `execution_guarantee="EXACTLY_ONCE"`, deduped per
 (run_id, tool, args) through `kernel/effect_ledger.py`. PG-verified (tool runs once across
 two identical calls). This closes "the part that actually matters" (tool calls had NO
-idempotency at any layer). **Remaining for IDEM-10: MEB-1** — repair the dispatcher gate
-(syscall path) and consolidate its duplicated effect-record copies onto `effect_ledger`.
+idempotency at any layer). **MEB-1a SHIPPED 2026-07-11:** the dispatcher's duplicated
+effect-record copies + STALE constant were removed; it now imports them from
+`kernel/effect_ledger.py` (behavior-preserving — gate still dead). **Remaining for IDEM-10:
+MEB-1b** — repair the gate to fire from a per-syscall `SyscallEntry.execution_guarantee`
+(flag-gated) instead of the unmatchable EU-PK lookup, so the syscall path gets idempotency too.
 
 **Status:** Open — verified 2026-07-09 (during ECOGAP-1 Phase 3a scoping). High:
 the documented, unit-tested "EXACTLY_ONCE" idempotency contract has **never deduplicated a

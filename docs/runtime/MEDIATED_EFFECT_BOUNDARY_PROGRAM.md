@@ -143,10 +143,22 @@ Keys only on `EffectRecord.action_id` (text), never the EU UUID — so it does n
 #157 lookup path. Tests: `tests/unit/test_tool_idempotency.py`.
 
 ### MEB-1 — Repair the dispatcher gate (IDEM-10 layer 1)
-Make the syscall gate key on the same stable scope instead of the unmatchable EU PK, and
-populate `execution_id` on the writer (closes the compensation-link gap). Preserve the #157
-protections: the `_is_uuid` guard (`:516`), the `begin_nested` SAVEPOINT (`:524`), no bare
-`run_<uuid>` cast. Now syscall idempotency is real, sharing MEB-0's scope model.
+Split into two PRs so the behavior-preserving refactor lands separately from the behavior
+change (same discipline that kept MEB-0 out of the dispatcher):
+
+- **MEB-1a — ✅ SHIPPED 2026-07-11 (consolidation, behavior-preserving).** The dispatcher's
+  duplicated private `_resolve_effect_record` / `_complete_effect_record` copies and the
+  `STALE_PENDING_THRESHOLD_SECONDS` constant were removed; the dispatcher now imports them from
+  `kernel/effect_ledger.py` (the module MEB-0 introduced). Gate call sites unchanged; the gate
+  still reads its guarantee from the (dead) EU lookup, so **no behavior change** — this only
+  pays off the temporary duplication MEB-0 left behind. Verified: `test_idempotency_gate` +
+  the tool/contract suites green; the aliases resolve to `effect_ledger`.
+- **MEB-1b — TODO (gate repair, the behavior change).** Make the gate *fire* by reading the
+  guarantee from a per-syscall `SyscallEntry.execution_guarantee` declaration (flag-gated,
+  default off) instead of the unmatchable EU PK lookup, scoped to `execution_unit_id`. Keep the
+  separate `_gate_db` session and the `_is_uuid` #157 guard. **Deferred out of MEB-1:**
+  populating `execution_id` on the writer (needs an EU-by-source lookup — a compensation-ledger
+  bonus, not core idempotency; tracked as a follow-up).
 
 ### MEB-2 — G4a activation (enforcement)
 Orthogonal to idempotency; hangs off the MEB-0 seam.
@@ -192,8 +204,10 @@ prerequisite for **declaration-free** continuation (the ECOGAP-1 Phase 3 payoff)
 
 - **MEB-0 — ✅ SHIPPED 2026-07-11.** Tool-call idempotency behind `AINDY_TOOL_IDEMPOTENCY` +
   per-tool `EXACTLY_ONCE`; shared primitive in `kernel/effect_ledger.py`; PG-verified.
-- **Next: MEB-1** — consolidate the dispatcher gate onto `kernel/effect_ledger.py` (removing the
-  duplicated private copies) and repair its scope key so syscall idempotency is real too.
+- **MEB-1a — ✅ SHIPPED 2026-07-11.** Dispatcher consolidated onto `kernel/effect_ledger.py`
+  (duplicated private copies removed); behavior-preserving.
+- **Next: MEB-1b** — repair the gate to fire from a per-syscall `execution_guarantee` (flag-gated)
+  instead of the dead EU lookup, so syscall idempotency is real too.
 - Then MEB-2 (G4a) and MEB-3 (multi-tenant MCP), in any order.
 
 Even if MEB-2b and MEB-3 are never done, MEB-0 was the standalone win — the single biggest real

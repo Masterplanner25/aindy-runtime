@@ -55,10 +55,18 @@ from __future__ import annotations
 import logging
 import os
 import time
-import hashlib as _gate_hashlib
-import json as _gate_json
 import uuid as _uuid
 from contextvars import ContextVar
+
+# MEB-1a — the EffectRecord idempotency primitive is shared with the agent tool path
+# (MEB-0) in kernel/effect_ledger.py. The dispatcher gate uses it via these aliases;
+# the previously-duplicated private copies were removed here. See
+# docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
+from AINDY.kernel.effect_ledger import (
+    STALE_PENDING_THRESHOLD_SECONDS,
+    complete_effect_record as _complete_effect_record,
+    resolve_effect_record as _resolve_effect_record,
+)
 from typing import Any
 
 from AINDY.config import settings
@@ -141,15 +149,6 @@ def _get_rm():
 
 logger = logging.getLogger(__name__)
 
-# Stale-pending threshold: a pending EffectRecord with no completed_at and
-# created_at older than this many seconds is considered abandoned (handler
-# interrupted mid-execution) and is eligible for in-band recovery.
-# 900 s = 15 min, chosen to exceed the maximum expected handler wall-clock
-# time plus a safety margin. Resolution of Open Question #3 in
-# docs/runtime/IDEMPOTENCY_CONTRACT.md.
-STALE_PENDING_THRESHOLD_SECONDS = 900
-
-
 def _quota_backend_failure_may_fail_open() -> bool:
     return bool(settings.is_testing or settings.is_dev)
 
@@ -192,79 +191,10 @@ class SyscallContractViolation(Exception):
     """
 
 
-def _resolve_effect_record(db, action_id: str, action_type: str, payload: dict):
-    from AINDY.db.models.effect_record import EffectRecord
-    from sqlalchemy.exc import IntegrityError
-    from datetime import datetime, timezone, timedelta
-    from AINDY.kernel.clock import utcnow
-
-    record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
-    if record is not None and record.status == "success":
-        return True, record.result_payload
-    if record is None:
-        payload_bytes = _gate_json.dumps(
-            dict(payload or {}), sort_keys=True, separators=(",", ":")
-        ).encode()
-        input_hash = _gate_hashlib.sha256(payload_bytes).hexdigest()
-        try:
-            db.add(EffectRecord(
-                action_id=action_id,
-                action_type=action_type,
-                input_hash=input_hash,
-                status="pending",
-            ))
-            db.commit()
-        except IntegrityError as exc:
-            # Only handle the unique-constraint violation on action_id; any
-            # other integrity violation (FK, check, etc.) must propagate.
-            _err_str = str(exc) + str(getattr(exc, "orig", ""))
-            if "uq_effect_records_action_id" not in _err_str:
-                raise
-            db.rollback()
-            # Re-query to discover what raced us into the constraint violation.
-            record = db.query(EffectRecord).filter(
-                EffectRecord.action_id == action_id
-            ).first()
-            if record is None:
-                raise  # Unexpected: constraint fired but no row found.
-            if record.status == "success":
-                # Concurrent call completed successfully first.
-                return True, record.result_payload
-            stale_cutoff = (
-                utcnow()
-                - timedelta(seconds=STALE_PENDING_THRESHOLD_SECONDS)
-            )
-            if record.status == "pending" and record.created_at >= stale_cutoff:
-                # A live concurrent call is already in flight for this action.
-                # Degrade to AT_LEAST_ONCE for this invocation; strict
-                # at-most-once under concurrent retry requires application-layer
-                # advisory locking (see IDEMPOTENCY_CONTRACT.md).
-                logger.warning(
-                    "[SyscallDispatcher] concurrent pending EffectRecord for"
-                    " action_id=%s; degrading to AT_LEAST_ONCE for this call",
-                    action_id,
-                )
-                return False, None
-            # Stale pending (abandoned mid-execution) or prior failure: reset
-            # the row in-place and claim the slot for this attempt.  Consistent
-            # with retry-after-failure semantics: failed records do not block
-            # future attempts (see IDEMPOTENCY_CONTRACT.md § Stale Pending Recovery).
-            record.status = "pending"
-            record.completed_at = None
-            record.created_at = utcnow()
-            db.commit()
-    return False, None
-
-
-def _complete_effect_record(db, action_id: str, status: str, result_payload):
-    from AINDY.db.models.effect_record import EffectRecord
-    from AINDY.kernel.clock import utcnow
-    record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
-    if record is not None:
-        record.status = status
-        record.result_payload = result_payload if isinstance(result_payload, dict) else None
-        record.completed_at = utcnow()
-        db.commit()
+# _resolve_effect_record / _complete_effect_record now live in kernel/effect_ledger.py
+# (imported as the private aliases at the top of this module). MEB-1a removed the
+# duplicated copies; the gate call sites below are unchanged. See
+# docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
 
 
 class SyscallDispatcher:
