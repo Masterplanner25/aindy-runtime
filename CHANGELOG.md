@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added — DUR-2c: gate immediate in-subprocess memory writes (Durable Execution)
+
+Backward-compatible; only active for an (opt-in `AINDY_DURABLE_CONTINUATION`) continued run or
+under `AINDY_MEMORY_IDEMPOTENCY`. Closes the last effect-reach hole before DUR-3.
+
+- `remember()`, `record_outcome()`, `share()` are `AINDYMemoryBridge` methods that write
+  **immediately, in-subprocess, via a direct DAO** — they bypass the deferred list DUR-1 gates,
+  so a continuation re-run would double-write them (a duplicate memory node for `remember()`).
+- `AINDYMemoryBridge` gains a `run_scope` + a `_gate()` helper that dedups `remember` and
+  `record_outcome` through the shared effect ledger, keyed content-independently on
+  `(run_scope, per-action ordinal)` with **cached-result replay** — a re-run's `remember()`
+  returns the *original* node id instead of creating a duplicate. `share` is left ungated
+  (setting an existing node to `shared` is naturally idempotent).
+- The per-(run, segment) scope is threaded into the subprocess payload (`effect_scope`).
+- Verified on real Postgres: a re-run's `remember()` replays the same id (1 node, not 2); without
+  the signal it does not dedup.
+- **All runtime-mediated effects on a continued run are now at-most-once** (deferred + immediate
+  memory, syscalls, tools, parent + subprocess); only raw un-mediated node side effects remain.
+
 ### Added — DUR-2b: subprocess propagation + stable per-segment scope (Durable Execution)
 
 Backward-compatible; only active for an (opt-in `AINDY_DURABLE_CONTINUATION`) continued run.

@@ -12,11 +12,28 @@ Phase 3 will add: recall_from (cross-agent), recall_all_agents (federated).
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 _MAX_LIMIT = 50
+
+
+def _immediate_effects_gated() -> bool:
+    """DUR-2c — whether immediate in-subprocess memory effects should be dedup-guarded.
+
+    Active under the per-run at-most-once signal (a continuation re-drive, propagated into
+    the subprocess by DUR-2b) or the global ``AINDY_MEMORY_IDEMPOTENCY`` flag.
+    """
+    try:
+        from AINDY.kernel.effect_ledger import durable_effects_active
+
+        if durable_effects_active():
+            return True
+    except Exception:
+        pass
+    return os.getenv("AINDY_MEMORY_IDEMPOTENCY", "").strip().lower() in {"1", "true", "yes"}
 
 
 class AINDYMemoryBridge:
@@ -30,14 +47,70 @@ class AINDYMemoryBridge:
     transactions during script execution.
     """
 
-    def __init__(self, user_id: str) -> None:
+    def __init__(self, user_id: str, run_scope: str = "") -> None:
         self._user_id = user_id
+        # DUR-2c — a stable per-(run, segment) scope for gating immediate memory effects
+        # (remember/record_outcome) so a continuation re-run doesn't re-fire them. Empty =
+        # gating inactive (current behavior). Keyed on this scope + a per-action ordinal
+        # (content-independent), reproduced identically when the same segment re-runs.
+        self._run_scope = str(run_scope or "")
+        self._effect_ordinals: dict[str, int] = {}
 
     def _session(self):
         """Open a short-lived DB session. Caller is responsible for close()."""
         from AINDY.db.database import SessionLocal
 
         return SessionLocal()
+
+    def _gate(self, action_type: str, do_write):
+        """DUR-2c — dedup an immediate memory effect through the shared EffectRecord ledger.
+
+        Inactive (falls straight through to ``do_write()``) unless a run scope is set AND the
+        per-run at-most-once signal / flag is active. Keyed content-independently on
+        ``(run_scope, per-action ordinal)`` so a segment re-run replays the cached result
+        instead of re-writing. A ledger failure degrades to at-least-once.
+        """
+        if not (self._run_scope and _immediate_effects_gated()):
+            return do_write()
+        try:
+            from AINDY.core.execution_gate import compute_action_id
+            from AINDY.kernel.effect_ledger import (
+                complete_effect_record,
+                resolve_effect_record,
+            )
+        except Exception:
+            return do_write()
+
+        ordinal = self._effect_ordinals.get(action_type, 0)
+        self._effect_ordinals[action_type] = ordinal + 1
+        action_id = compute_action_id(
+            action_type=action_type, input_payload={"seq": ordinal}, scope=self._run_scope
+        )
+        db = self._session()
+        try:
+            already, cached = resolve_effect_record(
+                db, action_id, action_type, {"seq": ordinal},
+                tenant_id=str(self._user_id) if self._user_id else None,
+            )
+        except Exception as exc:
+            logger.warning("[AINDYMemoryBridge._gate] resolve failed; writing unguarded: %s", exc)
+            try:
+                db.close()
+            except Exception:
+                pass
+            return do_write()
+        if already:
+            db.close()
+            return (cached or {}).get("result")
+
+        result = do_write()
+        try:
+            complete_effect_record(db, action_id, "success", {"result": result})
+        except Exception as exc:
+            logger.warning("[AINDYMemoryBridge._gate] finalize failed: %s", exc)
+        finally:
+            db.close()
+        return result
 
     @staticmethod
     def _safe_node(node: Any) -> dict[str, Any]:
@@ -98,30 +171,38 @@ class AINDYMemoryBridge:
         node_type: Optional[str] = None,
         tags: Optional[list] = None,
     ) -> Optional[str]:
-        """Persist a memory node and return its ID."""
+        """Persist a memory node and return its ID.
+
+        DUR-2c: dedup-gated under a continuation re-drive so a re-run replays the original
+        node id (cached) instead of persisting a duplicate.
+        """
         if not content or not isinstance(content, str):
             return None
-        db = self._session()
-        try:
-            from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
 
-            dao = MemoryNodeDAO(db)
-            result = dao.save(
-                content=content,
-                tags=list(tags or []),
-                user_id=self._user_id,
-                node_type=node_type or "insight",
-                source="nodus_script",
-                extra={},
-            )
-            if isinstance(result, dict):
-                return str(result.get("id") or "") or None
-            return str(result.id) if result and hasattr(result, "id") else None
-        except Exception as exc:
-            logger.warning("[AINDYMemoryBridge.remember] failed: %s", exc)
-            return None
-        finally:
-            db.close()
+        def _do() -> Optional[str]:
+            db = self._session()
+            try:
+                from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
+
+                dao = MemoryNodeDAO(db)
+                result = dao.save(
+                    content=content,
+                    tags=list(tags or []),
+                    user_id=self._user_id,
+                    node_type=node_type or "insight",
+                    source="nodus_script",
+                    extra={},
+                )
+                if isinstance(result, dict):
+                    return str(result.get("id") or "") or None
+                return str(result.id) if result and hasattr(result, "id") else None
+            except Exception as exc:
+                logger.warning("[AINDYMemoryBridge.remember] failed: %s", exc)
+                return None
+            finally:
+                db.close()
+
+        return self._gate("memory.remember", _do)
 
     def get_suggestions(
         self,
@@ -155,25 +236,38 @@ class AINDYMemoryBridge:
             db.close()
 
     def record_outcome(self, node_id: str, outcome: str) -> None:
-        """Record whether a recalled memory was helpful."""
-        db = self._session()
-        try:
-            from AINDY.runtime.memory.memory_feedback import MemoryFeedbackEngine
+        """Record whether a recalled memory was helpful.
 
-            engine = MemoryFeedbackEngine()
-            success_score = 1.0 if str(outcome).lower() == "success" else 0.0
-            engine.record_usage(
-                memory_ids=[str(node_id)],
-                success_score=success_score,
-                db=db,
-            )
-        except Exception as exc:
-            logger.warning("[AINDYMemoryBridge.record_outcome] failed: %s", exc)
-        finally:
-            db.close()
+        DUR-2c: dedup-gated under a continuation re-drive so a re-run doesn't double-apply
+        the usage/score update.
+        """
+
+        def _do() -> None:
+            db = self._session()
+            try:
+                from AINDY.runtime.memory.memory_feedback import MemoryFeedbackEngine
+
+                engine = MemoryFeedbackEngine()
+                success_score = 1.0 if str(outcome).lower() == "success" else 0.0
+                engine.record_usage(
+                    memory_ids=[str(node_id)],
+                    success_score=success_score,
+                    db=db,
+                )
+            except Exception as exc:
+                logger.warning("[AINDYMemoryBridge.record_outcome] failed: %s", exc)
+            finally:
+                db.close()
+            return None
+
+        self._gate("memory.record_outcome", _do)
 
     def share(self, node_id: str) -> bool:
-        """Promote a private memory node to shared visibility."""
+        """Promote a private memory node to shared visibility.
+
+        Not dedup-gated (DUR-2c): setting an existing node's visibility to ``shared`` is
+        naturally idempotent, so a continuation re-run is a harmless no-op.
+        """
         db = self._session()
         try:
             from AINDY.db.dao.memory_node_dao import MemoryNodeDAO

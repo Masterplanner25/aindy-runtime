@@ -205,7 +205,12 @@ def main() -> int:
     from AINDY.nodus.runtime.memory_bridge import AINDYMemoryBridge
 
     memory_deferral = DeferredMemoryBuiltins(memory_context, user_id, execution_unit_id)
-    bridge = AINDYMemoryBridge(user_id=user_id)
+    # DUR-2c — the per-(run, segment) scope for gating IMMEDIATE bridge writes
+    # (remember/record_outcome) so a continuation re-run replays instead of re-writing.
+    # Mirrors the parent-side deferred-write scope: run id + the per-segment effect_scope.
+    _effect_scope = str(ctx.get("effect_scope") or "")
+    _bridge_run_scope = f"{tool_run_id or execution_unit_id}:{_effect_scope}"
+    bridge = AINDYMemoryBridge(user_id=user_id, run_scope=_bridge_run_scope)
 
     # Host functions registered with the VM.
     def _set_state(key: str, value: Any) -> None:
