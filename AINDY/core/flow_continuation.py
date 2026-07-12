@@ -46,6 +46,28 @@ def _max_attempts() -> int:
     return max(1, int(getattr(settings, "AINDY_DURABLE_CONTINUATION_MAX_ATTEMPTS", 3)))
 
 
+def _default_safe_enabled() -> bool:
+    """DUR-3: continuation applies to all flows (except deny-listed) rather than only
+    declaration-safe ones. Gated by AINDY_DURABLE_CONTINUATION_ALL (default off)."""
+    from AINDY.config import settings
+
+    return bool(getattr(settings, "AINDY_DURABLE_CONTINUATION_ALL", False))
+
+
+def _flow_continuation_permitted(flow_name: str) -> bool:
+    """DUR-3 permission: default-safe → all flows except deny-listed
+    (mark_flow_continuation_unsafe, for raw un-mediated side effects); else the per-flow
+    continuation-safe DECLARATION is still required (current behavior)."""
+    from AINDY.runtime.flow_engine import (
+        is_flow_continuation_safe,
+        is_flow_continuation_unsafe,
+    )
+
+    if _default_safe_enabled():
+        return not is_flow_continuation_unsafe(flow_name)
+    return is_flow_continuation_safe(flow_name)
+
+
 def try_continue_flow_run(flow_run, db) -> bool:
     """Attempt to continue one stranded non-waiting FlowRun.
 
@@ -64,9 +86,11 @@ def try_continue_flow_run(flow_run, db) -> bool:
             return False
 
         flow_name = flow_run.flow_name
-        from AINDY.runtime.flow_engine import FLOW_REGISTRY, is_flow_continuation_safe
+        from AINDY.runtime.flow_engine import FLOW_REGISTRY
 
-        if not is_flow_continuation_safe(flow_name) or flow_name not in FLOW_REGISTRY:
+        if flow_name not in FLOW_REGISTRY:
+            return False
+        if not _flow_continuation_permitted(flow_name):
             return False
 
         from AINDY.db.models.flow_run import FlowRun

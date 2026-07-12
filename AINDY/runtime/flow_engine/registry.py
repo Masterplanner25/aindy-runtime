@@ -9,6 +9,13 @@ FLOW_REGISTRY: dict[str, dict] = {}
 # unless explicitly opted in. Used by `core.flow_continuation`.
 CONTINUATION_SAFE_FLOWS: set[str] = set()
 
+# DUR-3: flows explicitly declared UNSAFE to continue — used only when default-safe
+# continuation is enabled (AINDY_DURABLE_CONTINUATION_ALL). A flow whose nodes have raw,
+# un-mediated side effects (a direct external call / a write outside the runtime's effect
+# boundary, which the at-most-once layer cannot dedup) belongs here so it is NEVER continued
+# even under default-safe. Empty by default.
+CONTINUATION_UNSAFE_FLOWS: set[str] = set()
+
 
 def _registry_flow_plan(
     intent_type: str,
@@ -56,3 +63,16 @@ def mark_flow_continuation_safe(name: str) -> None:
 
 def is_flow_continuation_safe(name: str) -> bool:
     return name in CONTINUATION_SAFE_FLOWS
+
+
+def mark_flow_continuation_unsafe(name: str) -> None:
+    """DUR-3: declare a flow that must NEVER be continued, even under default-safe mode.
+
+    Use for a flow whose nodes perform raw side effects the runtime cannot mediate/dedup
+    (a direct external call, a write outside the EffectRecord boundary).
+    """
+    CONTINUATION_UNSAFE_FLOWS.add(name)
+
+
+def is_flow_continuation_unsafe(name: str) -> bool:
+    return name in CONTINUATION_UNSAFE_FLOWS

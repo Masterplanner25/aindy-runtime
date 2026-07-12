@@ -339,6 +339,13 @@ class Settings(BaseSettings):
     # continuation-safe is re-driven from its last-committed node via
     # PersistentFlowRunner.resume() instead of failed. Opt-in after soak.
     AINDY_DURABLE_CONTINUATION: bool = False
+    # DUR-3: default-safe continuation. When on (and AINDY_DURABLE_CONTINUATION is on),
+    # continuation applies to ALL flows/agents — the per-flow/per-agent continuation-safe
+    # DECLARATION is no longer required, because DUR-1/2/2b/2c make a re-run's runtime-
+    # mediated effects (memory, syscalls, tools) at-most-once. A flow/agent with raw
+    # un-mediated side effects must be excluded via mark_flow_continuation_unsafe /
+    # mark_agent_type_continuation_unsafe. Off by default (declaration still required).
+    AINDY_DURABLE_CONTINUATION_ALL: bool = False
     # Max continuation attempts before a crash-looping flow is dead-lettered.
     AINDY_DURABLE_CONTINUATION_MAX_ATTEMPTS: int = 3
     # ECOGAP-1 Phase 2a: run each agent tool step as its own segment so crash

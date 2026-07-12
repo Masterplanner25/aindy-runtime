@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added — DUR-3: transparent crash continuation without per-flow declaration (ECOGAP-1 headline)
+
+Backward-compatible; default off preserves current behavior. The ECOGAP-1 Phase 3 headline.
+
+- New opt-in flag **`AINDY_DURABLE_CONTINUATION_ALL`** (default off): when on alongside
+  `AINDY_DURABLE_CONTINUATION`, crash continuation covers **all** flows/agents — the per-flow /
+  per-agent continuation-safe *declaration* is no longer required, because DUR-1/2/2b/2c make a
+  re-run's runtime-mediated effects (memory / syscalls / tools) at-most-once.
+- **Opt-out deny-list** for the residual risk: `mark_flow_continuation_unsafe` /
+  `mark_agent_type_continuation_unsafe` exclude a flow/agent whose nodes have raw un-mediated side
+  effects (a direct external call / a write outside the effect boundary) the runtime cannot dedup.
+- Default off keeps the exact current behavior (declaration required). Staged: ship opt-in, flip
+  the default after soak.
+
 ### Added — DUR-2c: gate immediate in-subprocess memory writes (Durable Execution)
 
 Backward-compatible; only active for an (opt-in `AINDY_DURABLE_CONTINUATION`) continued run or
