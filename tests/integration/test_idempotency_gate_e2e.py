@@ -197,3 +197,80 @@ def test_syscall_idempotency_dedup_e2e(monkeypatch, testing_session_factory):
             cleanup.commit()
         finally:
             cleanup.close()
+
+
+@pytest.mark.integration
+def test_memory_write_exactly_once_e2e(monkeypatch, testing_session_factory):
+    """MEB-1 end-to-end on real Postgres: ``sys.v1.memory.write`` (declared EXACTLY_ONCE)
+    dispatched twice with the same (payload, run scope) persists exactly ONE memory node
+    and replays the cached node on the retry. Also exercises the MEB-1 scope relaxation —
+    a ``run_<uuid>`` scope engages the gate.
+    """
+    from unittest.mock import patch
+
+    from AINDY.db.models.user import User
+    from AINDY.db.models.effect_record import EffectRecord  # noqa: F401 (truncated by cleanup)
+    from AINDY.memory.memory_persistence import MemoryNodeModel
+    from AINDY.services.auth_service import hash_password
+    from AINDY.kernel import syscall_dispatcher as D
+    from AINDY.kernel import syscall_registry as R
+
+    monkeypatch.setenv("AINDY_SYSCALL_IDEMPOTENCY", "true")
+
+    # A committed user (memory_nodes.user_id -> users.id) the handler's OWN SessionLocal can
+    # see — created via testing_session_factory (real commit), not db_session (a rolled-back
+    # savepoint, invisible cross-session). cleanup_committed_test_state truncates afterward.
+    setup = testing_session_factory()
+    try:
+        user = User(
+            email=f"meb1-{uuid.uuid4().hex[:8]}@aindy.test",
+            username=f"meb1-{uuid.uuid4().hex[:8]}",
+            hashed_password=hash_password("x"),
+            is_active=True,
+        )
+        setup.add(user)
+        setup.commit()
+        user_id = str(user.id)
+    finally:
+        setup.close()
+
+    scope = f"run_{uuid.uuid4()}"  # prefixed scope — exercises the MEB-1 relaxation
+    content = f"meb1-e2e-{uuid.uuid4().hex}"
+    payload = {"content": content, "node_type": "insight"}
+
+    class _OkRm:
+        def check_quota(self, x):
+            return True, None
+
+        def record_usage(self, x, u):
+            return None
+
+    def _ctx():
+        return R.SyscallContext(
+            execution_unit_id=scope, user_id=user_id,
+            capabilities=["memory.write"], trace_id="t",
+        )
+
+    dispatcher = D.SyscallDispatcher()  # fresh instance — don't mutate the singleton
+    dispatcher._emit_syscall_event = lambda *a, **kw: None
+    with patch.object(D, "_get_rm", lambda: _OkRm()):
+        r1 = dispatcher.dispatch("sys.v1.memory.write", payload, _ctx())
+        r2 = dispatcher.dispatch("sys.v1.memory.write", payload, _ctx())  # retry → replay
+
+    assert r1["status"] == "success", r1
+    assert r2["status"] == "success", r2
+
+    check = testing_session_factory()
+    try:
+        nodes = check.query(MemoryNodeModel).filter(
+            MemoryNodeModel.content == content
+        ).all()
+        assert len(nodes) == 1, (
+            f"EXACTLY_ONCE memory.write must persist ONE node; got {len(nodes)}"
+        )
+        assert r1["data"]["node"]["id"] == str(nodes[0].id)
+        assert r2["data"]["node"]["id"] == r1["data"]["node"]["id"], (
+            "the retry must replay the first node, not create a second"
+        )
+    finally:
+        check.close()

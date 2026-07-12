@@ -1431,6 +1431,14 @@ SYSCALL_REGISTRY["sys.v1.memory.write"] = SyscallEntry(
         "required": ["node"],
         "properties": {"node": {"type": "dict"}, "path": {"type": "string"}},
     },
+    # MEB-1 — memory.write is non-idempotent (a retried flow step would persist a
+    # DUPLICATE node). Declaring EXACTLY_ONCE opts it into the syscall idempotency gate:
+    # a retry with the same (name, payload, run scope) replays the cached node instead of
+    # writing a second one. Only active when AINDY_SYSCALL_IDEMPOTENCY is enabled (default
+    # off) and the run carries a gate-engaging scope. The handler's return dict is
+    # JSON-safe (MemoryNodeDAO._node_to_dict stringifies ids/timestamps), so the gate can
+    # cache it as JSONB for replay.
+    execution_guarantee="EXACTLY_ONCE",
 )
 SYSCALL_REGISTRY["sys.v1.memory.delete"] = SyscallEntry(
     handler=_handle_memory_delete,
