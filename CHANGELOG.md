@@ -1,6 +1,53 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 — 2026-07-13
+
+### Added — RTR-4 gap (c): delegation-token-scoped private memory
+
+Backward-compatible and additive; inert unless `AINDY_DELEGATION_PRIVATE_MEMORY` is enabled
+(default off). A delegated child run's memory is private to that run.
+
+- **Schema-contract bump `2026-07-12` → `2026-07-12.4`**: a nullable, indexed `owner_run_id`
+  UUID on `memory_nodes` (no FK, so it stays additive/startup-reconcilable; `memory_nodes` is
+  `create_all`-managed, not alembic-tracked). NULL = tenant-shared (every existing node), so no
+  backfill and no behavior change when the flag is off.
+- **One boundary, two sides.** A delegate run binds `set_owner_run_id(run.id)` around its
+  execution (`mint_token` now carries `parent_run_id` so the token is identifiable). The write
+  path stamps `owner_run_id` at the universal `MemoryNodeDAO.save` chokepoint — covering the
+  deferred capture path *and* the syscall handler — and the read path (the centralized
+  `apply_memory_owner_scope` helper) scopes reads to the same run. A run-private node is visible
+  only to reads from that run; tenant-shared (NULL) nodes stay visible to everyone.
+- **Fail-open-to-shared** and a `visibility=shared` escape hatch (a delegate publishing upward is
+  not private). Never a cross-run or cross-tenant leak (tenant isolation via `user_id` unchanged).
+- Preceded by a pure, behavior-preserving refactor that collapsed ~13 duplicated owner/visibility
+  filter blocks into the single `apply_memory_owner_scope` helper.
+
+### Changed — NODUS-SYS-SURFACE-1: fail loud on the `std:sys` syscall path
+
+- Idiomatic `import "std:sys"` routes to nodus's in-process 4-syscall stub, **not** the AINDY
+  dispatcher; only the bare `sys(...)` builtin reaches `dispatch_syscall`. The stub could not be
+  aliased (the VM resolves builtins before host fns), so `nodus_worker._install_std_sys_guard()`
+  monkeypatches `syscall_runtime.call_syscall` to fail loud with a "use the bare `sys(...)`
+  builtin" error rather than silently no-op. Documented in NODUS_DEVELOPER_GUIDE §3.4.
+
+### Added — ECOGAP-5a: durable timer (scheduled-job registration + downtime misfire policy)
+
+- Per-job **misfire policy + catch-up** for scheduled jobs, so a job whose fire time was missed
+  during downtime is handled deterministically instead of silently dropped. Fixed a latent
+  registration gap where the real scheduler never registered nodus jobs. Schema-contract bump to
+  `2026-07-12.2`, Alembic `0013`.
+
+### Added — ECOGAP-3: provider breadth — embedding SPOF + LLM breadth
+
+- **Embedding provider abstraction** (removes the OpenAI single-point-of-failure for embeddings)
+  with a configurable embedding dimension and a `memory reembed` maintenance command; schema-contract
+  bump to `2026-07-12.1`. **LLM provider registry** widened (Anthropic / Azure). Note: `Vector(N)`
+  dimension is frozen at import; Claude models reject a `temperature` parameter.
+
+### Tests — ECOGAP-6: execution-path coverage
+
+- 26 tests closing the biggest execution-path coverage gap (`worker_loop.py`, worker processes,
+  real-Postgres crash-continuation). Test-only; no runtime change.
 
 ### Added — DUR-4: FlowHistory canonicalization + fold (Durable Execution; completes ECOGAP-1 Phase 3)
 
@@ -157,6 +204,31 @@ Completes the MEB program. Backward-compatible and additive; attribution/audit o
   stashes the resolved identity + session id ambiently.
 - PG-verified: columns materialize via `create_all`, the writer round-trips explicit + contextvar
   attribution, replay preserves the first writer, and Alembic `0011` adds/drops cleanly.
+
+### Added — MEB-0: tool-path effect boundary (agent tool idempotency)
+
+Backward-compatible; inert by default. The keystone of the Mediated Effect Boundary program —
+the first place agent tool calls (which bypass the syscall dispatcher entirely) get an
+at-most-once guard, resolving the real half of IDEM-10.
+
+- Agent `execute_tool` now resolves an `EffectRecord` through the shared kernel effect ledger,
+  keyed on position identity `(run, tool, ordinal)`, so a retried/continued tool call replays
+  the cached result instead of re-executing the effect. No schema change; no syscall declares it.
+
+### Added — `sys.v1.memory.delete` — hard, syscall-only, tenant-scoped delete (MEM-DELETE-1)
+
+- New syscall with a **dedicated `memory.delete` capability scope** (NOT granted by
+  `memory.write`): hard, node-id, tenant-scoped, idempotent delete with DB `ON DELETE CASCADE`
+  across history / traces / edges / links. Bumped `SYSCALL_REGISTRY_MIN_COUNT` and the stable-syscall
+  set. Verified on real Postgres (isolation + cascade + idempotency). `client.memory.delete` is the
+  SDK consumer. REST route / audit event / bulk / soft-delete deferred.
+
+### Added — `aindy-runtime bootstrap-schema` CLI (APP-DEPLOY-1)
+
+- Builds the runtime-owned tables and stamps the Alembic head from the packaged
+  `RUNTIME_ALEMBIC_HEAD_REVISION` constant (the `alembic/` scripts dir is not shipped in the
+  wheel). `memory_nodes` is runtime-owned and create_all-managed. Note: JSONB is Postgres-only and
+  pgvector requires `CREATE EXTENSION`.
 
 ---
 
