@@ -16,7 +16,11 @@ from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from AINDY.memory.memory_persistence import MemoryNodeModel, MemoryLinkModel
+from AINDY.memory.memory_persistence import (
+    MemoryNodeModel,
+    MemoryLinkModel,
+    apply_memory_owner_scope,
+)
 from AINDY.platform_layer.trace_context import get_current_trace_id
 from AINDY.platform_layer.user_ids import parse_user_id, require_user_id
 
@@ -79,8 +83,7 @@ class MemoryNodeDAO:
             return None
         query = self.db.query(MemoryNodeModel).filter(MemoryNodeModel.id == node_uuid)
         owner_user_id = parse_user_id(user_id)
-        if owner_user_id:
-            query = query.filter(MemoryNodeModel.user_id == owner_user_id)
+        query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=False)
         node = query.first()
         if node is None:
             return None
@@ -127,10 +130,7 @@ class MemoryNodeDAO:
     def _embedded_query(self, *, user_id: str | None, node_type: str | None):
         query = self.db.query(MemoryNodeModel)
         owner_user_id = parse_user_id(user_id)
-        if owner_user_id:
-            query = query.filter(MemoryNodeModel.user_id == owner_user_id)
-        else:
-            query = query.filter(MemoryNodeModel.visibility.in_(["shared", "global"]))
+        query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=True)
         if node_type:
             query = query.filter(MemoryNodeModel.node_type == node_type)
         return query
@@ -359,10 +359,7 @@ class MemoryNodeDAO:
         """
         query = self.db.query(MemoryNodeModel)
         owner_user_id = parse_user_id(user_id)
-        if owner_user_id:
-            query = query.filter(MemoryNodeModel.user_id == owner_user_id)
-        else:
-            query = query.filter(MemoryNodeModel.visibility.in_(["shared", "global"]))
+        query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=True)
         clean_tags = [t for t in (tags or []) if t]
         if clean_tags:
             if self._is_postgres():
@@ -526,10 +523,7 @@ class MemoryNodeDAO:
             if target_ids:
                 query = self.db.query(MemoryNodeModel).filter(MemoryNodeModel.id.in_(target_ids))
                 owner_user_id = parse_user_id(user_id)
-                if owner_user_id:
-                    query = query.filter(MemoryNodeModel.user_id == owner_user_id)
-                else:
-                    query = query.filter(MemoryNodeModel.visibility.in_(["shared", "global"]))
+                query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=True)
                 if limit:
                     query = query.limit(limit)
                 nodes = query.all()
@@ -547,8 +541,7 @@ class MemoryNodeDAO:
                 seen_ids = {d["id"] for d in linked}
                 query = self.db.query(MemoryNodeModel).filter(MemoryNodeModel.id.in_(source_ids))
                 owner_user_id = parse_user_id(user_id)
-                if owner_user_id:
-                    query = query.filter(MemoryNodeModel.user_id == owner_user_id)
+                query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=False)
                 if limit:
                     query = query.limit(limit)
                 nodes = query.all()
@@ -1029,10 +1022,7 @@ class MemoryNodeDAO:
             MemoryNodeModel.content.ilike(like_pattern)
         )
         owner_user_id = parse_user_id(user_id)
-        if owner_user_id:
-            sql_query = sql_query.filter(MemoryNodeModel.user_id == owner_user_id)
-        else:
-            sql_query = sql_query.filter(MemoryNodeModel.visibility.in_(["shared", "global"]))
+        sql_query = apply_memory_owner_scope(sql_query, owner_user_id=owner_user_id, shared_fallback=True)
         if node_type:
             sql_query = sql_query.filter(MemoryNodeModel.node_type == node_type)
 
@@ -1423,8 +1413,7 @@ class MemoryNodeDAO:
         if user_id not in (None, "") and owner_user_id is None:
             raise ValueError("invalid user_id")
         query = self.db.query(MemoryNodeModel.id).filter(MemoryNodeModel.id.in_([sid, tid]))
-        if owner_user_id:
-            query = query.filter(MemoryNodeModel.user_id == owner_user_id)
+        query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=False)
         count = query.count()
         if count != 2:
             raise ValueError("source and/or target node does not exist")
@@ -1621,8 +1610,7 @@ class MemoryNodeDAO:
 
         query = self.db.query(MemoryNodeModel).filter(MemoryNodeModel.path == path)
         owner = parse_user_id(user_id)
-        if owner:
-            query = query.filter(MemoryNodeModel.user_id == owner)
+        query = apply_memory_owner_scope(query, owner_user_id=owner, shared_fallback=False)
         node = query.first()
         if node is None:
             return None
@@ -1637,8 +1625,7 @@ class MemoryNodeDAO:
             MemoryNodeModel.parent_path == parent_path
         )
         owner = parse_user_id(user_id)
-        if owner:
-            query = query.filter(MemoryNodeModel.user_id == owner)
+        query = apply_memory_owner_scope(query, owner_user_id=owner, shared_fallback=False)
         rows = query.limit(limit).all()
         return [enrich_node_with_path(self._node_to_dict(n)) for n in rows]
 
@@ -1651,8 +1638,7 @@ class MemoryNodeDAO:
             MemoryNodeModel.path.like(f"{safe_prefix}%")
         )
         owner = parse_user_id(user_id)
-        if owner:
-            query = query.filter(MemoryNodeModel.user_id == owner)
+        query = apply_memory_owner_scope(query, owner_user_id=owner, shared_fallback=False)
         rows = query.limit(limit).all()
         return [enrich_node_with_path(self._node_to_dict(n)) for n in rows]
 
@@ -1693,8 +1679,7 @@ class MemoryNodeDAO:
             # No path filter — fall through to tag/query filter below
             base_q = self.db.query(MemoryNodeModel)
             owner = parse_user_id(user_id)
-            if owner:
-                base_q = base_q.filter(MemoryNodeModel.user_id == owner)
+            base_q = apply_memory_owner_scope(base_q, owner_user_id=owner, shared_fallback=False)
             candidates = [enrich_node_with_path(self._node_to_dict(n)) for n in base_q.limit(limit * 4).all()]
 
         # Filter by tags

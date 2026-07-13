@@ -58,6 +58,32 @@ class MemoryNodeModel(Base):
 Index("ix_memory_nodes_tags_gin", MemoryNodeModel.tags, postgresql_using="gin")
 
 
+def apply_memory_owner_scope(query, *, owner_user_id, shared_fallback: bool = True):
+    """Apply the tenant read-scope predicate to a ``MemoryNodeModel`` query.
+
+    Single source of truth for how a memory read is scoped to a caller. Every
+    owner/visibility filter across the DAOs and the scorer routes through here
+    so the run-scope boundary (RTR-4 gap c: delegation-token-scoped private
+    memory) can be added in exactly one place rather than fanned out across
+    ~13 duplicated filter blocks.
+
+    Behavior (unchanged from the inline blocks it replaces):
+      - ``owner_user_id`` truthy  → restrict to nodes owned by that user_id.
+      - no owner + ``shared_fallback`` → restrict to ``visibility in
+        (shared, global)`` (the "no caller ⇒ only the shared pool" default).
+      - no owner + not ``shared_fallback`` → leave the query unfiltered; the
+        caller scopes it by other means (e.g. an explicit id/path predicate).
+
+    ``owner_user_id`` is expected already-parsed (via ``parse_user_id``); the
+    truthiness check matches the prior inline ``if owner_user_id:`` guards.
+    """
+    if owner_user_id:
+        return query.filter(MemoryNodeModel.user_id == owner_user_id)
+    if shared_fallback:
+        return query.filter(MemoryNodeModel.visibility.in_(["shared", "global"]))
+    return query
+
+
 @event.listens_for(MemoryNodeModel, "before_insert")
 @event.listens_for(MemoryNodeModel, "before_update")
 def validate_node_type(mapper, connection, target):
@@ -180,10 +206,7 @@ class MemoryNodeDAO:
     def find_by_tags(self, tags: List[str], limit: int = 100, mode: str = "AND", user_id: Optional[str] = None):
         query = self.db.query(MemoryNodeModel)
         owner_user_id = parse_user_id(user_id)
-        if owner_user_id:
-            query = query.filter(MemoryNodeModel.user_id == owner_user_id)
-        else:
-            query = query.filter(MemoryNodeModel.visibility.in_(["shared", "global"]))
+        query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=True)
         tags = [t for t in (tags or []) if t]
         if tags:
             if self._is_postgres():
