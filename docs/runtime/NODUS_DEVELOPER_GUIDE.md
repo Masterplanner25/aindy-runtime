@@ -162,6 +162,15 @@ if result["status"] == "success" {
 **The syscall never throws.** A failed dispatch returns `{status: "error", error: "...", data: nil}`.
 Always check `result["status"]` before accessing `result["data"]`.
 
+> **⚠ Use the bare `sys(...)` builtin — do NOT `import "std:sys"` (NODUS-SYS-SURFACE-1).**
+> nodus-lang ships a `std:sys` stdlib module whose `sys.call(name, payload)` looks equivalent
+> but resolves to nodus's *native* `syscall` builtin — an in-process, ephemeral 4-syscall stub
+> with **no capability enforcement, quota, idempotency, or persistence**. It never reaches
+> A.I.N.D.Y.'s dispatcher. Under aindy-runtime that path is **guarded to fail loud**: a script
+> that calls `syscall(...)` (directly or via `import "std:sys"`) errors with
+> *"std:sys is not routed to the AINDY syscall dispatcher … use the bare `sys("<name>", <payload>)`
+> builtin"*. Only the bare `sys(...)` builtin documented above reaches the real dispatcher.
+
 See [SYSCALL_REFERENCE.md](./SYSCALL_REFERENCE.md) for the full list of available syscalls,
 their payloads, and their return shapes.
 

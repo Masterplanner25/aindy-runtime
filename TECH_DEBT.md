@@ -2764,7 +2764,35 @@ changed, so `SCHEMA_CONTRACT_VERSION` is untouched.
 
 ## NODUS-SYS-SURFACE-1 — Idiomatic `std:sys` bypasses the AINDY SyscallDispatcher
 
-**Status:** Open — deferred (latent footgun, no current incident)
+**Status:** CLOSED 2026-07-12 (fail-loud guard + doc; in working tree, uncommitted).
+
+**Resolution.** A guard in `nodus_worker.py` (`_install_std_sys_guard`, installed in `main()`
+after the host-function registrations) converts the silent wrong-backend into an immediate,
+clear error: a `.nd` script that reaches nodus's native `syscall` builtin (directly or via
+`import "std:sys"`) now fails with *"std:sys is not routed to the AINDY syscall dispatcher …
+use the bare `sys("<name>", <payload>)` builtin"* instead of silently using the ephemeral
+in-process stub. Verified end-to-end (real `NodusRuntime.run_source` → `ok:false` + the message)
++ 3 unit tests (`test_nodus_std_sys_guard.py`). Documented in `NODUS_DEVELOPER_GUIDE.md` §3.4.
+Surface B (the bare `sys(...)` builtin → `dispatch_syscall`) is a different function and is
+unaffected.
+
+**Corrected analysis (the original fix option below was infeasible).** The entry proposed
+"register a `syscall` host builtin that forwards to `_sys_dispatch`" — but `register_function`
+**raises `ValueError: Cannot override built-in function`** for any name in `BUILTIN_NAMES`, and
+`syscall` is a builtin; the VM also resolves native builtins before host functions. So the
+idiomatic path cannot be aliased via the public API. The one interceptable seam is
+`nodus.services.syscall_runtime.call_syscall` (`builtin_syscall` re-imports it per call, so a
+module-attribute swap takes effect) — which the guard uses to fail loud. A *transparent* alias
+(forward `call_syscall` → AINDY `dispatch_syscall`) was rejected: it couples to nodus internals,
+must thread `user_id`, and `std:sys`'s memory-KV contract differs from AINDY's `sys.v1.memory.*`
+syscalls, so aliasing would quietly change semantics rather than "just work". Fail-loud is the
+honest fix; a host-overridable syscall hook is an upstream nodus-lang ask if transparent routing
+is ever wanted.
+
+---
+_Historical (pre-close) analysis:_
+
+**Status (historical):** Open — deferred (latent footgun, no current incident)
 
 A `.nd` script has **two name-disjoint ways to issue a syscall**, and only one of
 them reaches AINDY. They look interchangeable but route to entirely different
