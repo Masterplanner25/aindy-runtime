@@ -20,6 +20,7 @@ from AINDY.memory.memory_persistence import (
     MemoryNodeModel,
     MemoryLinkModel,
     apply_memory_owner_scope,
+    resolve_owner_run_id,
 )
 from AINDY.platform_layer.trace_context import get_current_trace_id
 from AINDY.platform_layer.user_ids import parse_user_id, require_user_id
@@ -176,9 +177,18 @@ class MemoryNodeDAO:
         namespace: str | None = None,
         addr_type: str | None = None,
         parent_path: str | None = None,
+        owner_run_id=None,
+        private_to_run: bool | None = None,
         commit: bool = True,
     ) -> dict:
-        """Insert a new memory node and return its dict representation."""
+        """Insert a new memory node and return its dict representation.
+
+        RTR-4 gap (c): ``owner_run_id`` (explicit) / ``private_to_run`` are the
+        per-write controls; when neither is set the run scope is taken from the
+        ContextVar (a delegated run stamps its own id, everything else stays
+        tenant-shared). All routed through ``resolve_owner_run_id`` — a no-op
+        (returns None) whenever the feature flag is off.
+        """
         node_extra = dict(extra or {})
         trace_id = get_current_trace_id()
         if trace_id and not node_extra.get("trace_id"):
@@ -205,6 +215,11 @@ class MemoryNodeDAO:
             namespace=namespace,
             addr_type=addr_type,
             parent_path=parent_path,
+            owner_run_id=resolve_owner_run_id(
+                explicit=owner_run_id,
+                private_to_run=private_to_run,
+                visibility=visibility,
+            ),
         )
 
         try:

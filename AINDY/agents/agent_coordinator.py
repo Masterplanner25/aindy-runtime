@@ -393,6 +393,9 @@ def dispatch_delegated_run(
             approval_mode="manual",
             agent_type=child_agent_type,
             capability_ceiling=capability_ceiling,
+            # RTR-4 gap (c): mark the token as a delegate so its memory writes
+            # can be auto-scoped run-private (when the feature flag is on).
+            parent_run_id=str(parent_run.id),
         )
         if child_token:
             child_run.capability_token = child_token

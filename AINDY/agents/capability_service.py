@@ -447,6 +447,7 @@ def mint_token(
     approval_mode: str,
     agent_type: str = DEFAULT_AGENT_TYPE,
     capability_ceiling: Optional[Iterable[str]] = None,
+    parent_run_id: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Mint a scoped execution token for a run.
@@ -508,6 +509,10 @@ def mint_token(
 
         return {
             "run_id": str(run_id),
+            # RTR-4 gap (c): present (and non-None) only for delegated child runs.
+            # The write path reads it to decide whether a memory write is
+            # auto-stamped run-private; the read path never needs it.
+            "parent_run_id": str(parent_run_id) if parent_run_id else None,
             "user_id": str(user_id),
             "agent_type": agent_type or DEFAULT_AGENT_TYPE,
             "execution_token": execution_token,
