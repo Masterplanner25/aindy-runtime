@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from AINDY.memory.memory_persistence import MemoryNodeModel
+from AINDY.memory.memory_persistence import MemoryNodeModel, apply_memory_owner_scope
 from AINDY.platform_layer.user_ids import parse_user_id
 
 
@@ -61,8 +61,9 @@ def get_relevant_memories(context: dict[str, Any], db, limit: int = 8) -> list[d
     assert isinstance(user_id, UUID)
 
     rows = (
-        db.query(MemoryNodeModel)
-        .filter(MemoryNodeModel.user_id == user_id)
+        apply_memory_owner_scope(
+            db.query(MemoryNodeModel), owner_user_id=user_id, shared_fallback=False
+        )
         .order_by(
             MemoryNodeModel.impact_score.desc(),
             MemoryNodeModel.created_at.desc(),
