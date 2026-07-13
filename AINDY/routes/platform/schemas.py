@@ -121,6 +121,8 @@ class NodusScheduleRequest(BaseModel):
     job_name: Optional[str] = Field(None, max_length=256)
     error_policy: str = Field("fail")
     max_retries: int = Field(3, ge=1, le=10)
+    # ECOGAP-5a: downtime-misfire handling. "skip" (default, prior behavior) or "run_once".
+    misfire_policy: str = Field("skip")
 
     @model_validator(mode="after")
     def _require_source(self) -> "NodusScheduleRequest":
@@ -132,6 +134,8 @@ class NodusScheduleRequest(BaseModel):
             raise ValueError("Provide 'script' or 'script_name', not both")
         if self.error_policy not in ("fail", "retry"):
             raise ValueError("error_policy must be 'fail' or 'retry'")
+        if self.misfire_policy not in ("skip", "run_once"):
+            raise ValueError("misfire_policy must be 'skip' or 'run_once'")
         return self
 
 

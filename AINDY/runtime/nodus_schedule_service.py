@@ -45,6 +45,11 @@ logger = logging.getLogger(__name__)
 # APScheduler job ID prefix â€” makes jobs easy to identify in scheduler listings
 _JOB_ID_PREFIX = "nodus_scheduled_"
 
+# ECOGAP-5a — per-job downtime-misfire policy.
+MISFIRE_SKIP = "skip"          # default: a fire due during downtime is dropped (prior behavior)
+MISFIRE_RUN_ONCE = "run_once"  # dispatch ONE coalesced catch-up run at boot, then resume
+_VALID_MISFIRE_POLICIES = (MISFIRE_SKIP, MISFIRE_RUN_ONCE)
+
 
 # ---------------------------------------------------------------------------
 # Internal job runner (APScheduler callback)
@@ -203,6 +208,7 @@ def create_nodus_scheduled_job(
     input_payload: Optional[dict] = None,
     error_policy: str = "fail",
     max_retries: int = 3,
+    misfire_policy: str = MISFIRE_SKIP,
 ) -> dict:
     """
     Persist a new ``NodusScheduledJob`` and register it with APScheduler.
@@ -244,6 +250,12 @@ def create_nodus_scheduled_job(
     # Validate cron expression before touching DB
     _trigger = _parse_cron(cron_expression)
 
+    _misfire = str(misfire_policy or MISFIRE_SKIP).strip().lower()
+    if _misfire not in _VALID_MISFIRE_POLICIES:
+        raise ValueError(
+            f"invalid misfire_policy {misfire_policy!r}; expected one of {_VALID_MISFIRE_POLICIES}"
+        )
+
     from AINDY.db.models.nodus_scheduled_job import NodusScheduledJob
     from AINDY.utils.uuid_utils import normalize_uuid
 
@@ -258,6 +270,7 @@ def create_nodus_scheduled_job(
         input_payload=input_payload or {},
         error_policy=error_policy,
         max_retries=max_retries,
+        misfire_policy=_misfire,
         is_active=True,
     )
     db.add(job_row)
@@ -369,6 +382,9 @@ def restore_nodus_scheduled_jobs() -> int:
                 trigger = _parse_cron(row.cron_expression)
                 _register_with_scheduler(row, trigger)
                 restored += 1
+                # ECOGAP-5a: if a fire was due while the process was down and this job
+                # opted into run_once, dispatch one coalesced catch-up.
+                _maybe_schedule_misfire_catchup(row, trigger)
             except Exception as exc:
                 logger.warning(
                     "[NodusSchedule] Could not restore job %s (%r): %s",
@@ -392,19 +408,35 @@ def restore_nodus_scheduled_jobs() -> int:
 
 def _parse_cron(cron_expression: str):
     """
-    Parse and validate a 5-field cron expression using APScheduler's
-    ``CronTrigger.from_crontab()``.
+    Parse and validate a 5-field (UTC) cron expression into a CronTrigger.
 
-    Raises ValueError (with a descriptive message) if APScheduler is not
-    available or the expression is invalid.
+    Prefers the real APScheduler ``CronTrigger`` — the runtime scheduler
+    (``scheduler_service``) runs real APScheduler when installed, and it rejects a
+    *foreign* trigger instance (``TypeError: Expected a trigger instance or string``),
+    which previously left restored Nodus jobs unregistered. The real trigger also
+    provides ``get_next_fire_time()`` (used for next-run reporting and ECOGAP-5a
+    misfire detection), which the vendored fallback stub lacks. Falls back to the
+    vendored trigger only when APScheduler is absent.
+
+    Raises ValueError if APScheduler is unavailable or the expression is invalid.
     """
+    # Import the SAME top-level ``apscheduler`` the runtime scheduler uses (scheduler_service).
+    # In production that is real APScheduler; the test harness shadows it with a vendored
+    # stub via pythonpath. Using the top-level name keeps the trigger type consistent with the
+    # scheduler that will run it (a foreign trigger instance is rejected with a TypeError).
     try:
-        from AINDY.apscheduler.triggers.cron import CronTrigger
+        from apscheduler.triggers.cron import CronTrigger
     except ImportError as exc:
         raise ValueError("APScheduler is not installed â€” cannot schedule Nodus jobs") from exc
 
     try:
-        return CronTrigger.from_crontab(cron_expression)
+        try:
+            # Real APScheduler: pin to UTC so a "0 10 * * *" cron means 10:00 UTC regardless of
+            # the host timezone.
+            return CronTrigger.from_crontab(cron_expression, timezone="UTC")
+        except TypeError:
+            # The vendored fallback stub's from_crontab has no timezone parameter.
+            return CronTrigger.from_crontab(cron_expression)
     except Exception as exc:
         raise ValueError(
             f"Invalid cron expression {cron_expression!r}: {exc}"
@@ -442,6 +474,72 @@ def _register_with_scheduler(job_row: Any, trigger: Any) -> None:
     )
 
 
+def _has_missed_fire(trigger: Any, reference: Any, now: datetime) -> bool:
+    """True if the cron *trigger* had a scheduled fire strictly after *reference* and at or
+    before *now* — i.e. a fire was due while the process was down.
+
+    Coalesced: we only need to know that *at least one* fire was missed (the first fire after
+    the reference being <= now), not how many. Returns False if the reference is unknown or the
+    trigger cannot compute fire times (the vendored fallback stub)."""
+    if reference is None:
+        return False
+    getter = getattr(trigger, "get_next_fire_time", None)
+    if getter is None:
+        return False
+    try:
+        if getattr(reference, "tzinfo", None) is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        nxt = getter(reference, reference)  # first fire strictly after `reference`
+    except Exception:
+        return False
+    return nxt is not None and nxt <= now
+
+
+def _maybe_schedule_misfire_catchup(job_row: Any, trigger: Any) -> bool:
+    """ECOGAP-5a: for a run_once job that missed a fire during downtime, schedule ONE
+    immediate catch-up run. No-op for skip policy or when no fire was missed. Never raises."""
+    policy = str(getattr(job_row, "misfire_policy", MISFIRE_SKIP) or MISFIRE_SKIP).strip().lower()
+    if policy != MISFIRE_RUN_ONCE:
+        return False
+
+    now = datetime.now(timezone.utc)
+    reference = job_row.last_run_at or job_row.created_at
+    if not _has_missed_fire(trigger, reference, now):
+        return False
+
+    try:
+        from datetime import timedelta
+
+        from apscheduler.triggers.date import DateTrigger
+
+        from AINDY.platform_layer.scheduler_service import get_scheduler
+
+        scheduler = get_scheduler()
+        job_id_str = str(job_row.id)
+        label = job_row.job_name or f"nodus_job_{job_id_str}"
+        scheduler.add_job(
+            _run_scheduled_nodus_job,
+            args=[job_id_str],
+            trigger=DateTrigger(run_date=now + timedelta(seconds=5)),
+            id=f"{_JOB_ID_PREFIX}{job_id_str}_catchup",
+            name=f"Nodus catch-up: {label}",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.warning(
+            "[NodusSchedule] misfire catch-up scheduled for job %s (%r) — a fire was missed "
+            "during downtime (last_run=%s)",
+            job_id_str, label, reference,
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "[NodusSchedule] misfire catch-up could not be scheduled for job %s: %s",
+            getattr(job_row, "id", "?"), exc,
+        )
+        return False
+
+
 def _remove_from_scheduler(job_id: str) -> None:
     """Remove a job from APScheduler (best-effort â€” never raises)."""
     try:
@@ -465,6 +563,7 @@ def _serialize_job(row: Any, next_run_at: Optional[str] = None) -> dict:
         "cron_expression": row.cron_expression,
         "error_policy": row.error_policy,
         "max_retries": row.max_retries,
+        "misfire_policy": getattr(row, "misfire_policy", MISFIRE_SKIP),
         "is_active": row.is_active,
         "last_run_at": row.last_run_at.isoformat() if row.last_run_at else None,
         "last_run_status": row.last_run_status,

@@ -64,6 +64,7 @@ def create_nodus_schedule(request: Request, body: NodusScheduleRequest, db: Sess
                 input_payload=body.input,
                 error_policy=body.error_policy,
                 max_retries=body.max_retries,
+                misfire_policy=body.misfire_policy,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail={"error": str(exc)})

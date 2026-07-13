@@ -53,6 +53,12 @@ class NodusScheduledJob(Base):
     error_policy = Column(String(16), nullable=False, default="fail")
     max_retries = Column(Integer, nullable=False, default=3)
 
+    # ECOGAP-5a: how to handle a scheduled fire that was due while the process was
+    # down (missed on restart because rehydration recomputes next_run from "now").
+    # "skip"     — do nothing extra; the next fire is in the future (default = prior behavior)
+    # "run_once" — dispatch ONE coalesced catch-up run at boot, then resume the schedule
+    misfire_policy = Column(String(16), nullable=False, default="skip", server_default="skip")
+
     # Lifecycle
     is_active = Column(Boolean, nullable=False, default=True, index=True)
 
