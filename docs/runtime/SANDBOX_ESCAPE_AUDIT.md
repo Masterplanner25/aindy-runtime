@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-07-11"
+last_verified: "2026-07-13"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -382,6 +382,44 @@ and 003 this completes the audit trail for all three v1.6.x releases (v1.6.0, v1
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v1.6.1` release commit.
+
+---
+
+### Entry 005 — 2026-07-13
+
+`sandbox-escape-linux.yml` release gate, fired automatically on the `v1.7.0` tag
+**Host OS:** Ubuntu (GitHub-hosted `ubuntu-latest`), native Linux kernel — Docker uses a native
+Linux-containers backend, not a Docker Desktop VM
+**Container image:** `python:3.11-alpine` (same image as Entries 002–004; exact digest recorded in
+the run artifact)
+**Test command:** `pytest -m sandbox_escape` (via workflow; `SANDBOX_ESCAPE_IMAGE=python:3.11-alpine`)
+**Commit:** `e0a0ad4` (release tag `v1.7.0`)
+**Operator:** CI (release gate, run 29248612153)
+
+**Results by category:**
+
+| Category | Tests | Pass | Fail | Skip | Notes |
+|---|---|---|---|---|---|
+| Filesystem escape | 3 | 3 | 0 | 0 | Read-only rootfs, read-only bind mount, scoped tmpfs all verified |
+| Network escape | 3 | 3 | 0 | 0 | TCP, UDP, kernel interface evidence all blocked (`--network none`) |
+| Process / pids | 2 | 2 | 0 | 0 | pids limit hit; cgroup `pids.max=10` — ran natively, **0 skips** |
+| Privilege escalation | 4 | 4 | 0 | 0 | CAP_NET_RAW, CAP_CHOWN removed; NoNewPrivs=1 in /proc; combined-controls check |
+| Host env leak | 2 | 2 | 0 | 0 | No production secrets present; PYTHONIOENCODING transmitted |
+| Path boundary | 3 | 3 | 0 | 0 | Canary not reachable; plugin root accessible; traversal contained |
+
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run 29248612153) — holds
+exact per-test durations and the image digest.
+
+**Platform notes:**
+Identical 17-vector result on the same native-Linux gate and image as Entries 002–004, for the
+`v1.7.0` release commit published to PyPI as `aindy-runtime==1.7.0`. v1.7.0 is a large but wholly
+additive/opt-in release (Durable Execution DUR-1..4, the Mediated Effect Boundary program, MCP
+client+server, ECOGAP-3/5/6, RTR-4 gap (c) delegation-scoped memory) — no change to the sandbox
+runner or its controls, so the container-grade posture is unchanged from v1.6.x.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v1.7.0` release commit.
 
 ---
 
