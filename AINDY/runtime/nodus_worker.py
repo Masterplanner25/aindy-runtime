@@ -167,6 +167,41 @@ def _remember_factory(memory: DeferredMemoryBuiltins) -> Any:
     return _remember
 
 
+_STD_SYS_GUARD_MESSAGE = (
+    "std:sys is not routed to the AINDY syscall dispatcher under aindy-runtime — the "
+    'idiomatic `import "std:sys"` resolves to nodus\'s in-process, ephemeral syscall stub '
+    "(no capability enforcement, quota, idempotency, or persistence). Use the bare "
+    '`sys("<name>", <payload>)` builtin instead.'
+)
+
+
+def _install_std_sys_guard() -> bool:
+    """NODUS-SYS-SURFACE-1 — fail loud on the idiomatic `std:sys` path.
+
+    A `.nd` script has two name-disjoint syscall surfaces: the bare ``sys(name, payload)``
+    builtin AINDY registers (routes to ``dispatch_syscall`` — kernel, capabilities,
+    Postgres), and nodus's native ``syscall`` builtin reached via ``import "std:sys"``
+    (routes to ``nodus.services.syscall_runtime.call_syscall``, a hardcoded 4-syscall
+    in-process ephemeral stub). The native path cannot be aliased to ``_sys_dispatch``:
+    ``register_function`` forbids overriding a builtin, and the VM resolves native builtins
+    before host functions. So convert the silent wrong-backend into an immediate, clear
+    error by replacing the underlying ``call_syscall`` (``builtin_syscall`` re-imports it
+    per call, so the module-attribute swap takes effect). Never raises during setup.
+
+    Returns True if the guard was installed.
+    """
+    try:
+        import nodus.services.syscall_runtime as _sr
+
+        def _guard(name: Any, payload: Any, *, vm: Any = None) -> Any:
+            raise RuntimeError(f"{_STD_SYS_GUARD_MESSAGE} (attempted syscall: {name!r})")
+
+        _sr.call_syscall = _guard
+        return True
+    except Exception:
+        return False
+
+
 def main() -> int:
     raw = sys.stdin.read()
     payload = json.loads(raw or "{}")
@@ -301,6 +336,10 @@ def main() -> int:
     runtime.register_function("__memory_stdlib_recall_from", bridge.recall_from, arity=4)
     runtime.register_function("__memory_stdlib_recall_all", bridge.recall_all_agents, arity=3)
     runtime.register_function("__memory_stdlib_share", bridge.share, arity=1)
+
+    # NODUS-SYS-SURFACE-1 — fail loud if a script reaches nodus's native `syscall` builtin
+    # (via `import "std:sys"`) instead of AINDY's `sys(...)` builtin.
+    _install_std_sys_guard()
 
     def _runtime_emitted_events() -> list[dict[str, Any]]:
         _AINDY_INTERNAL = ("vm_", "runtime.", "nodus.")
