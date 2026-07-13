@@ -12,6 +12,11 @@ from AINDY.core.system_event_service import emit_error_event
 from AINDY.platform_layer.trace_context import get_parent_event_id, get_trace_id, reset_parent_event_id, set_parent_event_id
 
 from AINDY.agents.agent_runtime.shared import LOCAL_AGENT_ID, get_runtime_compat_module, logger
+from AINDY.memory.memory_persistence import (
+    delegation_private_memory_enabled,
+    reset_owner_run_id,
+    set_owner_run_id,
+)
 
 
 def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
@@ -201,6 +206,13 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
             required=True,
         )
         parent_token = set_parent_event_id(execution_started_event_id)
+        # RTR-4 gap (c): for a delegated child run (token carries parent_run_id),
+        # bind its owner scope for the span of execution so memory writes are
+        # stamped run-private and its own reads see them. No-op unless the
+        # feature flag is on. Reset in finally to prevent cross-run leakage.
+        owner_run_token = None
+        if delegation_private_memory_enabled() and capability_token.get("parent_run_id"):
+            owner_run_token = set_owner_run_id(str(run.id))
         try:
             execute_agent_run_via_nodus(
                 run_id=str(run.id),
@@ -212,6 +224,8 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
             )
         finally:
             reset_parent_event_id(parent_token)
+            if owner_run_token is not None:
+                reset_owner_run_id(owner_run_token)
 
         db.refresh(run)
         _emit_agent_run_score(run, db=db, user_id=user_db_id)

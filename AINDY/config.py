@@ -333,6 +333,13 @@ class Settings(BaseSettings):
     # the child straight to `approved`. When on, the child is held at
     # `awaiting_delegation` until the delegate calls `respond_to_delegation`.
     AINDY_DELEGATION_HANDSHAKE: bool = False
+    # RTR-4 Gap (c): delegation-token-scoped private memory. Off by default — when
+    # off, owner_run_id is always written NULL and reads ignore it (memory is
+    # tenant-scoped exactly as today). When on, a delegated child run's memory
+    # writes are stamped with its run_id (unless the write opts out via
+    # visibility=shared/global or private_to_run=false) and reads restrict
+    # run-private nodes to the same run. Opt-in after soak (mirrors nodus_vm).
+    AINDY_DELEGATION_PRIVATE_MEMORY: bool = False
     # RTR-5: runtime-driven autonomous trigger→plan→execute window. Off by default
     # — when off, an autonomous "execute" decision is only evaluated/queued (current
     # behavior). When on, `run_execute_window` actually composes create_run →

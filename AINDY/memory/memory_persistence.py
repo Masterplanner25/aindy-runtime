@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from datetime import datetime
 import uuid
 from typing import List, Optional
@@ -31,6 +32,14 @@ class MemoryNodeModel(Base):
     is_shared = Column(Boolean, nullable=False, default=False)
     visibility = Column(String(16), nullable=False, default="private", index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+    # RTR-4 gap (c): delegation-token-scoped private memory. NULL = tenant-shared
+    # (every existing node; today's behavior). A non-NULL owner_run_id marks a node
+    # private to that one agent run — visible only to reads from the same run, not
+    # to the parent or sibling delegates. Deliberately NO ForeignKey: a bare indexed
+    # UUID keeps the column additive/startup-reconcilable (a FK would flip
+    # _column_reconcile_supported to False and force an offline migration). The
+    # boundary is this column alone; the MAS path stays tenant-addressed.
+    owner_run_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     source_event_id = Column(UUID(as_uuid=True), ForeignKey("system_events.id"), nullable=True, index=True)
     root_event_id = Column(UUID(as_uuid=True), ForeignKey("system_events.id"), nullable=True, index=True)
     causal_depth = Column(Integer, nullable=False, default=0)
@@ -58,7 +67,92 @@ class MemoryNodeModel(Base):
 Index("ix_memory_nodes_tags_gin", MemoryNodeModel.tags, postgresql_using="gin")
 
 
-def apply_memory_owner_scope(query, *, owner_user_id, shared_fallback: bool = True):
+# RTR-4 gap (c): the active run's owner scope. Set (via set_owner_run_id) only
+# for a *delegated* child run, for the span of its execution — see execution.py.
+# One ContextVar serves both sides of the boundary: the write path stamps
+# owner_run_id from it, and the read path scopes to it. NULL/None everywhere else
+# means "tenant-shared" (today's behavior). Persistence that flushes outside the
+# span simply sees None → fail-open-to-shared (never a cross-run/tenant leak).
+_owner_run_id_ctx: ContextVar[Optional[str]] = ContextVar("aindy_owner_run_id", default=None)
+
+
+def set_owner_run_id(run_id: Optional[str]):
+    """Bind the current run's owner scope; returns a token for ``reset_owner_run_id``."""
+    return _owner_run_id_ctx.set(run_id)
+
+
+def reset_owner_run_id(token) -> None:
+    """Restore the previous owner scope. Always call in a ``finally``."""
+    try:
+        _owner_run_id_ctx.reset(token)
+    except (ValueError, LookupError):
+        # token from a different context (defensive); clear rather than leak.
+        _owner_run_id_ctx.set(None)
+
+
+def get_owner_run_id() -> Optional[str]:
+    """The current run's owner scope, or None when unscoped (tenant-shared)."""
+    return _owner_run_id_ctx.get()
+
+
+def resolve_owner_run_id(*, explicit=None, private_to_run=None, visibility=None):
+    """Compute the ``owner_run_id`` to persist for a memory write (RTR-4 gap c).
+
+    Precedence (only when the feature flag is on; otherwise always None):
+      1. ``private_to_run is False`` → None (explicit opt-out; publish tenant-wide).
+      2. ``visibility`` in (shared, global) → None (escape hatch: a delegate
+         deliberately publishing upward is not private).
+      3. ``explicit`` run id given → that run.
+      4. otherwise → the ContextVar (set for a delegate run, else None).
+    Returns a ``uuid.UUID`` or None.
+    """
+    if not delegation_private_memory_enabled():
+        return None
+    if private_to_run is False:
+        return None
+    if visibility in ("shared", "global"):
+        return None
+    if explicit is not None:
+        return _coerce_uuid(explicit)
+    return _coerce_uuid(get_owner_run_id())
+
+
+def _coerce_uuid(value):
+    """Return ``value`` as a ``uuid.UUID`` or ``None`` if it can't be parsed.
+
+    Fail-open-to-shared: a run id that can't be resolved yields ``None`` so the
+    caller treats the read as unattributed rather than mis-scoping it.
+    """
+    if value is None:
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def delegation_private_memory_enabled() -> bool:
+    """RTR-4 gap (c): whether run-scoped private memory is active.
+
+    Off by default — when off, ``owner_run_id`` is written NULL and the read-scope
+    helper ignores the run-scope clause, so memory behaves exactly as it did
+    pre-feature (tenant-scoped only). Read by both the write path
+    (``_handle_memory_write``) and the read path (``apply_memory_owner_scope``,
+    the scorer), so it lives here next to the column and helper.
+    """
+    try:
+        from AINDY.config import settings
+
+        return bool(getattr(settings, "AINDY_DELEGATION_PRIVATE_MEMORY", False))
+    except Exception:
+        return False
+
+
+def apply_memory_owner_scope(
+    query, *, owner_user_id, shared_fallback: bool = True, current_run_id=None
+):
     """Apply the tenant read-scope predicate to a ``MemoryNodeModel`` query.
 
     Single source of truth for how a memory read is scoped to a caller. Every
@@ -76,11 +170,38 @@ def apply_memory_owner_scope(query, *, owner_user_id, shared_fallback: bool = Tr
 
     ``owner_user_id`` is expected already-parsed (via ``parse_user_id``); the
     truthiness check matches the prior inline ``if owner_user_id:`` guards.
+
+    RTR-4 gap (c): when ``delegation_private_memory_enabled()`` is on, a run-scope
+    clause is ANDed on top of the tenant filter — a run-private node
+    (``owner_run_id`` set) is visible only to reads carrying the same
+    ``current_run_id``; tenant-shared rows (``owner_run_id IS NULL``) stay visible
+    to everyone. A read with no run context sees only the NULL (tenant-shared)
+    rows — it never leaks another run's private memory. When the flag is off the
+    clause is skipped entirely, so behavior is byte-for-byte the pre-feature
+    filter.
     """
     if owner_user_id:
-        return query.filter(MemoryNodeModel.user_id == owner_user_id)
-    if shared_fallback:
-        return query.filter(MemoryNodeModel.visibility.in_(["shared", "global"]))
+        query = query.filter(MemoryNodeModel.user_id == owner_user_id)
+    elif shared_fallback:
+        query = query.filter(MemoryNodeModel.visibility.in_(["shared", "global"]))
+
+    if delegation_private_memory_enabled():
+        # Reads self-resolve the active run from the ContextVar when the caller
+        # doesn't pass one — so every read site is run-scoped without threading
+        # current_run_id through each signature.
+        resolved_run = current_run_id if current_run_id is not None else get_owner_run_id()
+        run_uuid = _coerce_uuid(resolved_run)
+        if run_uuid is not None:
+            query = query.filter(
+                or_(
+                    MemoryNodeModel.owner_run_id.is_(None),
+                    MemoryNodeModel.owner_run_id == run_uuid,
+                )
+            )
+        else:
+            # Unattributed read (no run context): only tenant-shared rows are
+            # visible; a run-private node must never surface here.
+            query = query.filter(MemoryNodeModel.owner_run_id.is_(None))
     return query
 
 
@@ -167,6 +288,10 @@ class MemoryNodeDAO:
                         else {}
                     ),
                 },
+                owner_run_id=resolve_owner_run_id(
+                    explicit=getattr(memory_node, "owner_run_id", None),
+                    visibility=getattr(memory_node, "visibility", None),
+                ),
             )
             self.db.add(db_node)
             self.db.commit()
