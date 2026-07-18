@@ -359,7 +359,14 @@ set_state("approved_by", approval["approver_id"])
 
 ## 8. Nodus version and upgrade notes
 
-A.I.N.D.Y. pins **nodus-lang == 4.0.3** (NODUS-UPGRADE-1 closed 2026-06-11).
+A.I.N.D.Y. pins **nodus-lang == 4.1.0** (NODUS-UPGRADE-1). History: 4.0.3 (2026-06-11)
+→ 4.0.5 (2026-06-19) → 4.1.0 (2026-07-17), each a no-code-change bump. The 4.0.5 → 4.1.0
+bump was risk-probed before landing: the full nodus unit surface (worker/adapter/execution/
+workflow-registry/**std-sys-guard**/tool-seam) passes identically, and the three
+version-fragile internal couplings the runtime depends on all survived —
+`nodus.services.syscall_runtime.call_syscall` (the NODUS-SYS-SURFACE-1 fail-loud monkeypatch
+target), `nodus.runtime.embedding.NodusRuntime._get_active_vm()`, and `register_function`
+builtin registration. No new transitive deps.
 
 **Notable v4 breaking changes vs v3** (none affect A.I.N.D.Y. scripts):
 
