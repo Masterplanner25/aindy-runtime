@@ -39,6 +39,34 @@ VALID_ACTIONS = frozenset(
     {DONE, RETRY, ASK_USER, ESCALATE, SCHEDULE_FOLLOW_UP, CREATE_MEMORY, RECOMMEND, TRIGGER_EXECUTION}
 )
 
+# ── Dispatch-outcome contract (Deliverable C / FR-3) ──────────────────────────
+# The disposition an app reads from a NEXT_ACTION_DISPATCHED event to learn what the
+# runtime did with a chosen ``trigger_execution``. Exactly one is emitted per
+# app-sourced trigger_execution candidate once acting is enabled (the "decision"
+# stage); the follow-up job then emits one of the ``FOLLOWUP_*`` outcomes carrying the
+# concrete run id (the "resolution" stage). Cross-repo contract — extend additively.
+DISPATCH_ENQUEUED = "dispatched"
+DISPATCH_DECLINED_NO_OBJECTIVE = "declined_no_objective"
+DISPATCH_DECLINED_CHAIN_DEPTH = "declined_chain_depth"
+DISPATCH_DECLINED_ADMISSION = "declined_admission"
+DISPATCH_DECLINED_ENQUEUE_ERROR = "declined_enqueue_error"
+DISPATCH_DECLINED_ERROR = "declined_error"
+DISPATCH_FOLLOWUP_EXECUTED = "followup_executed"
+DISPATCH_FOLLOWUP_PENDING_APPROVAL = "followup_pending_approval"
+DISPATCH_FOLLOWUP_CREATE_FAILED = "followup_create_failed"
+
+DISPATCH_DISPOSITIONS = frozenset({
+    DISPATCH_ENQUEUED,
+    DISPATCH_DECLINED_NO_OBJECTIVE,
+    DISPATCH_DECLINED_CHAIN_DEPTH,
+    DISPATCH_DECLINED_ADMISSION,
+    DISPATCH_DECLINED_ENQUEUE_ERROR,
+    DISPATCH_DECLINED_ERROR,
+    DISPATCH_FOLLOWUP_EXECUTED,
+    DISPATCH_FOLLOWUP_PENDING_APPROVAL,
+    DISPATCH_FOLLOWUP_CREATE_FAILED,
+})
+
 _SUCCESS_STATUSES = frozenset({"completed", "success", "verified", "executed"})
 _FAILURE_STATUSES = frozenset({"failed", "error", "verify_failed", "dead_letter"})
 
@@ -175,4 +203,62 @@ def emit_next_action_chosen(
         )
     except Exception as exc:  # next-action recording must not break completion
         logger.warning("[NextAction] emit failed run=%s: %s", run_id, exc)
+        return None
+
+
+def emit_next_action_dispatched(
+    *,
+    db,
+    parent_run_id: str | None,
+    disposition: str,
+    dispatched: bool,
+    reason: str | None = None,
+    objective_preview: str | None = None,
+    chain_depth: int | None = None,
+    followup_run_id: str | None = None,
+    followup_status: str | None = None,
+    trace_id: str | None = None,
+    user_id: str | None = None,
+    source: str = "agent",
+    parent_event_id: str | None = None,
+) -> str | None:
+    """Emit one ``NEXT_ACTION_DISPATCHED`` event — the dispatch-outcome contract (FR-3).
+
+    Records what the runtime did with a chosen ``trigger_execution``: the ``disposition``
+    (one of ``DISPATCH_DISPOSITIONS``), whether a follow-up was ``dispatched``, and — at
+    the resolution stage — the concrete ``followup_run_id`` / ``followup_status``. Links to
+    the originating ``NEXT_ACTION_CHOSEN`` via ``parent_event_id`` so the app reads the
+    CHOSEN → DISPATCHED chain from the ledger. Best-effort — never raises.
+    """
+    from AINDY.core.execution_signal_helper import queue_system_event
+    from AINDY.core.system_event_types import SystemEventTypes
+
+    payload: dict[str, Any] = {
+        "parent_run_id": str(parent_run_id) if parent_run_id else None,
+        "disposition": disposition,
+        "dispatched": bool(dispatched),
+        "reason": reason,
+    }
+    if objective_preview is not None:
+        payload["objective_preview"] = objective_preview
+    if chain_depth is not None:
+        payload["chain_depth"] = chain_depth
+    if followup_run_id is not None:
+        payload["followup_run_id"] = str(followup_run_id)
+    if followup_status is not None:
+        payload["followup_status"] = followup_status
+
+    try:
+        return queue_system_event(
+            db=db,
+            event_type=SystemEventTypes.NEXT_ACTION_DISPATCHED,
+            user_id=user_id,
+            trace_id=trace_id,
+            parent_event_id=parent_event_id,
+            source=source,
+            payload=payload,
+            required=False,
+        )
+    except Exception as exc:  # dispatch-outcome recording must not break completion
+        logger.warning("[NextAction] dispatch-outcome emit failed parent=%s: %s", parent_run_id, exc)
         return None
