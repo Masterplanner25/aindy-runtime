@@ -33,6 +33,17 @@ def capture_submit(monkeypatch):
     return calls
 
 
+@pytest.fixture
+def capture_outcomes(monkeypatch):
+    """Capture emit_next_action_dispatched calls (the FR-3 dispatch-outcome contract)."""
+    outcomes: list[dict] = []
+    monkeypatch.setattr(
+        "AINDY.core.next_action.emit_next_action_dispatched",
+        lambda **kw: outcomes.append(kw) or "evt-id",
+    )
+    return outcomes
+
+
 def _enable(monkeypatch, *, max_chain=3, max_active=1):
     monkeypatch.setattr(nad, "_acting_settings", lambda: (True, max_chain, max_active))
 
@@ -239,3 +250,107 @@ def test_followup_job_handles_create_failure(monkeypatch):
 def test_followup_job_no_objective_short_circuits():
     out = _get_job()({"objective": "", "user_id": "u1"}, db=object())
     assert out["error"] == "no_objective"
+
+
+# --- FR-3 dispatch-outcome contract ------------------------------------------
+
+
+def test_no_outcome_emitted_for_pre_candidate_noops(monkeypatch, capture_submit, capture_outcomes):
+    """Disabled / non-trigger / runtime-default / None make no dispatch decision → no event."""
+    monkeypatch.setattr(nad, "_completing_run_depth", lambda *a, **k: 0)
+    # disabled
+    monkeypatch.setattr(nad, "_acting_settings", lambda: (False, 3, 1))
+    nad.maybe_act_on_next_action(_run(), _trigger(), db=object(), user_id="u1")
+    # enabled but non-candidate verbs / sources
+    _enable(monkeypatch)
+    nad.maybe_act_on_next_action(_run(), make_next_action("done", source="completion_hook"), db=object(), user_id="u1")
+    nad.maybe_act_on_next_action(_run(), _trigger(source="runtime_default"), db=object(), user_id="u1")
+    nad.maybe_act_on_next_action(_run(), None, db=object(), user_id="u1")
+    assert capture_outcomes == []
+
+
+def test_outcome_dispatched_on_enqueue(monkeypatch, capture_submit, capture_outcomes):
+    _enable(monkeypatch)
+    monkeypatch.setattr(nad, "_completing_run_depth", lambda *a, **k: 1)
+    assert nad.maybe_act_on_next_action(
+        _run("parent-1"), _trigger(objective="do it"), db=object(), user_id="u1",
+        parent_event_id="chosen-evt",
+    ) is True
+    assert len(capture_outcomes) == 1
+    o = capture_outcomes[0]
+    assert o["disposition"] == "dispatched"
+    assert o["dispatched"] is True
+    assert o["parent_run_id"] == "parent-1"
+    assert o["chain_depth"] == 2  # depth + 1
+    assert o["parent_event_id"] == "chosen-evt"
+    assert o["objective_preview"] == "do it"
+
+
+def test_outcome_declined_no_objective(monkeypatch, capture_submit, capture_outcomes):
+    _enable(monkeypatch)
+    monkeypatch.setattr(nad, "_completing_run_depth", lambda *a, **k: 0)
+    action = make_next_action(TRIGGER_EXECUTION, args={}, source="completion_hook")
+    assert nad.maybe_act_on_next_action(_run(), action, db=object(), user_id="u1") is False
+    assert [o["disposition"] for o in capture_outcomes] == ["declined_no_objective"]
+    assert capture_outcomes[0]["dispatched"] is False
+
+
+def test_outcome_declined_chain_depth(monkeypatch, capture_submit, capture_outcomes):
+    _enable(monkeypatch, max_chain=3)
+    monkeypatch.setattr(nad, "_completing_run_depth", lambda *a, **k: 3)  # == cap
+    assert nad.maybe_act_on_next_action(_run(), _trigger(), db=object(), user_id="u1") is False
+    assert capture_outcomes[0]["disposition"] == "declined_chain_depth"
+    assert capture_outcomes[0]["chain_depth"] == 3
+
+
+def test_outcome_declined_admission(monkeypatch, capture_outcomes):
+    _enable(monkeypatch, max_active=1)
+    monkeypatch.setattr(nad, "_completing_run_depth", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "AINDY.agents.autonomous_controller.count_active_executions",
+        lambda db, user_id=None: 1,
+    )
+    assert nad.maybe_act_on_next_action(_run(), _trigger(), db=object(), user_id="u1") is False
+    assert capture_outcomes[0]["disposition"] == "declined_admission"
+
+
+def test_outcome_resolution_followup_executed(monkeypatch, capture_outcomes):
+    monkeypatch.setattr(
+        "AINDY.agents.agent_runtime.create_run",
+        lambda **kw: {"run_id": "new-1", "status": "approved"},
+    )
+    monkeypatch.setattr(
+        "AINDY.agents.agent_runtime.execute_run",
+        lambda **kw: {"status": "completed"},
+    )
+    monkeypatch.setattr(nad, "_link_parent", lambda *a, **k: None)
+    _get_job()(
+        {"objective": "go", "user_id": "u1", "parent_run_id": "p1",
+         "parent_event_id": "chosen-evt", "chain_depth": 2},
+        db=object(),
+    )
+    assert len(capture_outcomes) == 1
+    o = capture_outcomes[0]
+    assert o["disposition"] == "followup_executed"
+    assert o["followup_run_id"] == "new-1"
+    assert o["followup_status"] == "completed"
+    assert o["parent_run_id"] == "p1"
+    assert o["parent_event_id"] == "chosen-evt"
+
+
+def test_outcome_resolution_pending_approval(monkeypatch, capture_outcomes):
+    monkeypatch.setattr(
+        "AINDY.agents.agent_runtime.create_run",
+        lambda **kw: {"run_id": "new-2", "status": "pending_approval"},
+    )
+    monkeypatch.setattr(nad, "_link_parent", lambda *a, **k: None)
+    _get_job()({"objective": "go", "user_id": "u1", "parent_run_id": "p1"}, db=object())
+    assert capture_outcomes[0]["disposition"] == "followup_pending_approval"
+    assert capture_outcomes[0]["followup_run_id"] == "new-2"
+
+
+def test_outcome_resolution_create_failed(monkeypatch, capture_outcomes):
+    monkeypatch.setattr("AINDY.agents.agent_runtime.create_run", lambda **kw: None)
+    _get_job()({"objective": "go", "user_id": "u1", "parent_run_id": "p1"}, db=object())
+    assert capture_outcomes[0]["disposition"] == "followup_create_failed"
+    assert capture_outcomes[0]["followup_run_id"] is None

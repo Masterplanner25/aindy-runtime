@@ -208,26 +208,50 @@ already provides the bounded, opt-in autonomous-acting half (flag `AINDY_NEXT_AC
 default off; chain-depth cap; approval gate + admission reuse; app-sourced
 `trigger_execution` only). See the INFINITY-RUNTIME-1 entry above for the full description.
 
-**Genuine remaining delta vs. the ask:**
+**Remaining delta vs. the ask:**
 - (a) Broaden acting verbs beyond `trigger_execution` (`retry`/`schedule_follow_up`) —
-  already tracked as a deferred INFINITY-RUNTIME-1 follow-up.
-- (b) **App-consumable dispatch-outcome contract** (ask part 2): the app wants to read what
-  the runtime *did* with a chosen next action (`NEXT_ACTION_CHOSEN` → dispatch → outcome
-  chain). Currently reuses existing events; there is no dedicated outcome record/event. This
-  is the real net-new piece if FR-3 is prioritized — needs an event/schema decision (mind
-  the frozen-hash baseline when adding a `SystemEventTypes` value).
-- (c) Flip `AINDY_NEXT_ACTION_ACTING` after app soak.
+  still a deferred INFINITY-RUNTIME-1 follow-up (touches RetryPolicy / scheduler semantics).
+- (b) **App-consumable dispatch-outcome contract — SHIPPED 2026-07-17.** New un-prefixed
+  ledger event **`SystemEventTypes.NEXT_ACTION_DISPATCHED`** (`next_action.dispatched`) +
+  `core/next_action.py::emit_next_action_dispatched` + the `DISPATCH_DISPOSITIONS` contract.
+  Every app-sourced `trigger_execution` candidate (once acting is enabled) emits exactly one
+  outcome event, parented to its `NEXT_ACTION_CHOSEN` via `parent_event_id`, with a canonical
+  `disposition`: decision stage (`dispatched` / `declined_no_objective` /
+  `declined_chain_depth` / `declined_admission` / `declined_enqueue_error` / `declined_error`)
+  and resolution stage from the follow-up job (`followup_executed` / `followup_pending_approval`
+  / `followup_create_failed`, carrying `followup_run_id` + `followup_status`). Pre-candidate
+  no-ops emit nothing. `execution.py` threads the chosen event id as the dispatch parent. The
+  app reads the `NEXT_ACTION_CHOSEN → NEXT_ACTION_DISPATCHED` chain from the ledger. Frozen-hash
+  baseline regenerated (`tests/baselines/system_event_contract.json`, `3389c3b6…`). No schema
+  change (SystemEvent already carries `parent_event_id` + JSON `payload`). Tests:
+  `tests/unit/test_next_action_acting.py` (+8 outcome cases). Contract doc:
+  `docs/runtime/INFINITY_LOOP_AUDIT.md` (Gap 4).
+- (c) Flip `AINDY_NEXT_ACTION_ACTING` after app soak (unchanged).
 
 ### FR-4 — Docs relocation: Bucket A + runtime half of `INVARIANTS.md`
 
-**App ref:** `DOCS-MIGRATION-2` · **Status: OPEN (hygiene, zero functional impact).** The
-ownership map `docs/runtime/RUNTIME_DOCSET_BOUNDARY.md` exists. Remaining: relocate Bucket
-A docs (architecture/DATA_MODEL_MAP, MODEL_OWNERSHIP_POLICY, governance/{AGENT_WORKING_RULES,
-ERROR_HANDLING_POLICY,CHANGELOG}, four `tutorials/*`) from the pre-split archive into this
-repo, and author the runtime half of `INVARIANTS.md` (PostgreSQL/UTC/session-isolation/
-memory-graph/embedding/schema-drift invariants), cross-linking the app-domain half. New
-`docs/runtime/` files must carry the five-key YAML frontmatter or `Runtime Docs Validation`
-fails.
+**App ref:** `DOCS-MIGRATION-2` · **Status: ALREADY SATISFIED — no work required.** Verified
+2026-07-17: FR-4 was completed by this repo's **DOCS-BUCKET-A-1** migration on
+2026-06-27/28, ~3 weeks *before* the handoff was written (2026-07-17); the handoff was
+authored without visibility into it (same stale premise as FR-2 / FR-3). Every FR-4 item is
+present and git-tracked with frontmatter:
+
+- **Bucket A relocate-as-is:** `docs/architecture/{DATA_MODEL_MAP,MODEL_OWNERSHIP_POLICY}.md`
+  (DATA_MODEL_MAP surgically runtime-scoped, DOCS-BUCKET-A-1 residual 1),
+  `docs/platform/governance/{AGENT_WORKING_RULES,ERROR_HANDLING_POLICY,CHANGELOG}.md`,
+  `docs/tutorials/{index,01-memory-driven-workflow,02-event-driven-automation,03-scheduled-execution}.md`
+  (the "four tutorials" = 3 + index; the pre-split archive itself has no 4th/Nodus tutorial —
+  WAIT/RESUME is covered as the Nodus `event.wait()` builtin in tutorial 2).
+- **Runtime half of `INVARIANTS.md`:** authored at `docs/platform/governance/INVARIANTS.md`
+  ("runtime-owned half" — PostgreSQL/UTC/session-isolation/memory-graph/embedding/schema-guard
+  invariants, enforcement sites re-verified), cross-linked to the app-owned half in
+  `aindy-apps-monolith` (DOCS-BUCKET-A-1 residual 4).
+
+**No relocation to perform** — and DOCS-BUCKET-A-1's last deferred residual (the optional
+runtime/app editorial split of `ERROR_HANDLING_POLICY.md`) was also completed 2026-07-17, so
+**DOCS-BUCKET-A-1 is now CLOSED**. App-side adoption (per the handoff) is non-functional:
+update the reciprocal cross-links + author the app-side error-handling companion, both of
+which the app repo owns. Tracked in full under **DOCS-BUCKET-A-1** below.
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 
@@ -3361,7 +3385,11 @@ Pairs with `ECOGAP-1`. **Reopen trigger:** before relying on new `worker/` behav
 
 ## DOCS-BUCKET-A-1 — Runtime docset relocation (Bucket A) residuals
 
-**Status:** Open — Low Priority (relocation landed 2026-06-27)
+**Status:** **CLOSED 2026-07-17.** Relocation landed 2026-06-27; both close-trigger
+residuals now resolved — residual 1 (`DATA_MODEL_MAP.md` surgery, 2026-06-28) and
+residual 2 (`ERROR_HANDLING_POLICY.md` runtime/app editorial split, 2026-07-17). Also
+resolves app handoff **FR-4** (`APP-FR-*` above). Remaining items 6/7 are annotations/
+by-design non-Bucket-A pointers, not open work.
 
 The Bucket A migration relocated runtime-owned docs that were left behind in the
 pre-split monolith archive (`C:\dev\masterplan-infiniteweave-monday-node-2025-0411\docs`)
@@ -3410,12 +3438,20 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
    `DB_OWNERSHIP_CONTRACT.md` + source, not field-mapped here. Expand only if a
    full current data-model reference is needed.
 
-2. **`ERROR_HANDLING_POLICY.md` is a combined-monolith audit.** Its "Current
-   Implementation" sections are ~90% app-owned routers/services (genesis, arm,
-   social, dashboard, rippletrace, network_bridge, search/seo, tasks). Paths were
-   repointed to `apps/...` with a scope banner, but the doc is a candidate for a
-   later runtime-only / app-only editorial split. The **Policy Rules** sections
-   are repo-agnostic and remain valid.
+2. **`ERROR_HANDLING_POLICY.md` runtime/app editorial split — DONE 2026-07-17.** The
+   combined-monolith audit is now a **runtime-only** doc: each section keeps its normative,
+   repo-agnostic **Policy Rules** (unchanged) and a rewritten **Runtime Implementation**
+   observing `AINDY/...` only (syscall-dispatcher envelope, `llm_client` fallback chain +
+   `CircuitBreaker`, `get_db`/`memory_persistence` rollback, scheduler-job pattern,
+   `_build_log_handler` OSError guard — all re-verified against source). The ~90% app-owned
+   "Current Implementation" observations (genesis, ARM, social, bridge, dashboard,
+   authorship, network_bridge, rippletrace, search/seo, tasks) were split out to an
+   **App-owned implementation** pointer section directing to `aindy-apps-monolith`
+   (`DOCS-MIGRATION-2`); the full pre-split observations remain in git history + the
+   pre-split archive. Also dropped one stale gap (the `/tools/seo/*` health-check reference
+   no longer exists in `AINDY/routes/health_router.py`). App companion authoring is
+   app-team-owned follow-up. Note: the app repo (`aindy-apps-monolith`) has no
+   error-handling doc yet and was on an active WIP branch at split time — untouched.
 
 3. **Unverified path tokens — RESOLVED 2026-06-28.** The lone dangling token,
    `deepseek_arm_service.py`, was an **app-owned** ARM concern (not a runtime
@@ -3455,8 +3491,9 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
    `PLUGIN_REGISTRY_PATTERN.md`, `platform/interfaces/API_CONTRACTS.md`,
    `apps/*`) are **not** Bucket A docs and remain unresolved by design.
 
-**Close trigger:** when `DATA_MODEL_MAP.md` surgery lands (residual 1) and the
-`ERROR_HANDLING_POLICY.md` runtime/app split (residual 2) is decided.
+**Close trigger:** ~~when `DATA_MODEL_MAP.md` surgery lands (residual 1) and the
+`ERROR_HANDLING_POLICY.md` runtime/app split (residual 2) is decided.~~ **MET 2026-07-17 —
+both residuals resolved (see Status above).**
 
 ---
 
