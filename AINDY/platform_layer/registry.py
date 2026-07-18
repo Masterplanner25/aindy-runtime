@@ -44,6 +44,7 @@ from AINDY.platform_layer.registry_contracts import (
     validate_agent_tool,
     validate_capability_definition,
     validate_capability_names,
+    validate_connector_handler,
     validate_event_handler,
     validate_execution_adapter,
     validate_flow_plan,
@@ -94,6 +95,7 @@ _root_routers: list[Any] = []
 _legacy_root_routers: list[Any] = []
 _syscalls: dict[str, Handler] = {}
 _jobs: dict[str, Handler] = {}
+_connectors: dict[str, dict[str, Any]] = {}
 _flows: list[Handler] = []
 _flow_result_keys: dict[str, str] = {}
 _flow_result_extractors: dict[str, Handler] = {}
@@ -158,6 +160,7 @@ INPROC_CAP_REGISTER_ROUTER = "registry.register_router"
 INPROC_CAP_REGISTER_ROOT_ROUTER = "registry.register_root_router"
 INPROC_CAP_REGISTER_LEGACY_ROOT_ROUTER = "registry.register_legacy_root_router"
 INPROC_CAP_REGISTER_JOB = "registry.register_job"
+INPROC_CAP_REGISTER_CONNECTOR = "registry.register_connector"
 INPROC_CAP_REGISTER_FLOW = "registry.register_flow"
 INPROC_CAP_REGISTER_FLOW_RESULT = "registry.register_flow_result"
 INPROC_CAP_REGISTER_FLOW_PLAN = "registry.register_flow_plan"
@@ -198,6 +201,7 @@ _ALL_INPROC_EXTENSION_CAPABILITIES = {
     INPROC_CAP_REGISTER_ROOT_ROUTER,
     INPROC_CAP_REGISTER_LEGACY_ROOT_ROUTER,
     INPROC_CAP_REGISTER_JOB,
+    INPROC_CAP_REGISTER_CONNECTOR,
     INPROC_CAP_REGISTER_FLOW,
     INPROC_CAP_REGISTER_FLOW_RESULT,
     INPROC_CAP_REGISTER_FLOW_PLAN,
@@ -500,6 +504,54 @@ def get_job(name: str) -> Handler | None:
 
 def iter_jobs() -> Iterable[tuple[str, Handler]]:
     return tuple(_jobs.items())
+
+
+def register_connector(
+    connector_type: str,
+    handler: Handler,
+    *,
+    capability: str | None = None,
+    description: str | None = None,
+    overwrite: bool = False,
+) -> Handler:
+    """Register an outbound-connector handler (FR-1 / MASTERPLAN-CONNECTOR-RUNTIME-1).
+
+    Symmetric to :func:`register_job`. A connector is an app-contributed outbound
+    integration (``social`` / ``crm`` / ``email`` / ``webhook`` / ``stripe`` / …)
+    dispatched by the runtime via
+    ``AINDY.platform_layer.connector_service.dispatch_connector`` rather than a hardcoded
+    app-side ``if/elif`` ladder. The handler is invoked as ``handler(action, ctx)`` where
+    ``action`` is the connector action dict and ``ctx`` is a
+    :class:`~AINDY.platform_layer.connector_service.ConnectorContext`.
+
+    ``capability`` is the capability that gates this connector's outbound I/O — it is the
+    scope under which the dispatcher enforces the (opt-in) recipient/domain allowlists,
+    rate limits, socket-level egress guard, and JIT credential vaulting. When omitted it
+    defaults to ``outbound.<connector_type>``. Enforcement is vacuous until a
+    ``CapabilityPolicy`` / secret scope is registered for that capability, so registering
+    a connector changes dispatch routing only, not behavior.
+    """
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_CONNECTOR)
+    validate_connector_handler(connector_type, handler)
+    key = str(connector_type)
+    if key in _connectors and not overwrite:
+        raise ValueError(
+            f"connector {key!r} is already registered; pass overwrite=True to replace it"
+        )
+    _connectors[key] = {
+        "handler": handler,
+        "capability": str(capability) if capability else f"outbound.{key}",
+        "description": str(description) if description else "",
+    }
+    return handler
+
+
+def get_connector(connector_type: str) -> dict[str, Any] | None:
+    return _connectors.get(str(connector_type))
+
+
+def iter_connectors() -> Iterable[tuple[str, dict[str, Any]]]:
+    return tuple(_connectors.items())
 
 
 def register_flow(register_fn: Handler) -> Handler:

@@ -19,6 +19,11 @@ class SystemEventTypes:
     RECALL_USED = "recall.used"
     SCORE_COMPUTED = "score.computed"
     NEXT_ACTION_CHOSEN = "next_action.chosen"
+    # Deliverable C / FR-3 dispatch-outcome contract: what the runtime *did* with a
+    # chosen trigger_execution (dispatched / declined-with-reason, then the resolved
+    # follow-up run). Parents to NEXT_ACTION_CHOSEN via parent_event_id; the app reads
+    # the CHOSEN → DISPATCHED chain from the ledger. Un-prefixed for the same reason.
+    NEXT_ACTION_DISPATCHED = "next_action.dispatched"
     # RTR-6: first-class reasoning signal — a memory-derived input to the
     # learning loop (kind="recall": memory pulled into a context; kind="capture":
     # a significance-scored insight derived). Standardizes what previously lived
