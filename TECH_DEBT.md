@@ -247,10 +247,10 @@ present and git-tracked with frontmatter:
   invariants, enforcement sites re-verified), cross-linked to the app-owned half in
   `aindy-apps-monolith` (DOCS-BUCKET-A-1 residual 4).
 
-**No relocation to perform.** The only open sub-item is DOCS-BUCKET-A-1's *own* deferred
-residual 2 — the optional runtime/app editorial split of `ERROR_HANDLING_POLICY.md` (its
-Policy Rules are already repo-agnostic and valid) — which is outside FR-4's "relocate as-is"
-ask. App-side adoption (per the handoff) is non-functional: update the reciprocal cross-links,
+**No relocation to perform** — and DOCS-BUCKET-A-1's last deferred residual (the optional
+runtime/app editorial split of `ERROR_HANDLING_POLICY.md`) was also completed 2026-07-17, so
+**DOCS-BUCKET-A-1 is now CLOSED**. App-side adoption (per the handoff) is non-functional:
+update the reciprocal cross-links + author the app-side error-handling companion, both of
 which the app repo owns. Tracked in full under **DOCS-BUCKET-A-1** below.
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
@@ -3385,7 +3385,11 @@ Pairs with `ECOGAP-1`. **Reopen trigger:** before relying on new `worker/` behav
 
 ## DOCS-BUCKET-A-1 — Runtime docset relocation (Bucket A) residuals
 
-**Status:** Open — Low Priority (relocation landed 2026-06-27)
+**Status:** **CLOSED 2026-07-17.** Relocation landed 2026-06-27; both close-trigger
+residuals now resolved — residual 1 (`DATA_MODEL_MAP.md` surgery, 2026-06-28) and
+residual 2 (`ERROR_HANDLING_POLICY.md` runtime/app editorial split, 2026-07-17). Also
+resolves app handoff **FR-4** (`APP-FR-*` above). Remaining items 6/7 are annotations/
+by-design non-Bucket-A pointers, not open work.
 
 The Bucket A migration relocated runtime-owned docs that were left behind in the
 pre-split monolith archive (`C:\dev\masterplan-infiniteweave-monday-node-2025-0411\docs`)
@@ -3434,12 +3438,20 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
    `DB_OWNERSHIP_CONTRACT.md` + source, not field-mapped here. Expand only if a
    full current data-model reference is needed.
 
-2. **`ERROR_HANDLING_POLICY.md` is a combined-monolith audit.** Its "Current
-   Implementation" sections are ~90% app-owned routers/services (genesis, arm,
-   social, dashboard, rippletrace, network_bridge, search/seo, tasks). Paths were
-   repointed to `apps/...` with a scope banner, but the doc is a candidate for a
-   later runtime-only / app-only editorial split. The **Policy Rules** sections
-   are repo-agnostic and remain valid.
+2. **`ERROR_HANDLING_POLICY.md` runtime/app editorial split — DONE 2026-07-17.** The
+   combined-monolith audit is now a **runtime-only** doc: each section keeps its normative,
+   repo-agnostic **Policy Rules** (unchanged) and a rewritten **Runtime Implementation**
+   observing `AINDY/...` only (syscall-dispatcher envelope, `llm_client` fallback chain +
+   `CircuitBreaker`, `get_db`/`memory_persistence` rollback, scheduler-job pattern,
+   `_build_log_handler` OSError guard — all re-verified against source). The ~90% app-owned
+   "Current Implementation" observations (genesis, ARM, social, bridge, dashboard,
+   authorship, network_bridge, rippletrace, search/seo, tasks) were split out to an
+   **App-owned implementation** pointer section directing to `aindy-apps-monolith`
+   (`DOCS-MIGRATION-2`); the full pre-split observations remain in git history + the
+   pre-split archive. Also dropped one stale gap (the `/tools/seo/*` health-check reference
+   no longer exists in `AINDY/routes/health_router.py`). App companion authoring is
+   app-team-owned follow-up. Note: the app repo (`aindy-apps-monolith`) has no
+   error-handling doc yet and was on an active WIP branch at split time — untouched.
 
 3. **Unverified path tokens — RESOLVED 2026-06-28.** The lone dangling token,
    `deepseek_arm_service.py`, was an **app-owned** ARM concern (not a runtime
@@ -3479,8 +3491,9 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
    `PLUGIN_REGISTRY_PATTERN.md`, `platform/interfaces/API_CONTRACTS.md`,
    `apps/*`) are **not** Bucket A docs and remain unresolved by design.
 
-**Close trigger:** when `DATA_MODEL_MAP.md` surgery lands (residual 1) and the
-`ERROR_HANDLING_POLICY.md` runtime/app split (residual 2) is decided.
+**Close trigger:** ~~when `DATA_MODEL_MAP.md` surgery lands (residual 1) and the
+`ERROR_HANDLING_POLICY.md` runtime/app split (residual 2) is decided.~~ **MET 2026-07-17 —
+both residuals resolved (see Status above).**
 
 ---
 
