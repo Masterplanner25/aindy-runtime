@@ -98,6 +98,39 @@ The following operator surfaces are stable for the platform SPA:
 | DB verification | `/platform/db/` |
 | Syscall catalog | `/platform/syscalls` |
 
+### Canonical platform route paths (authoritative — `@aindy/ui-kit` `ROUTES` must match)
+
+**Every runtime platform route carries the full `/platform/` prefix.** Child routers under
+`AINDY/routes/platform/` declare bare paths (`/flows/strategies`) but are mounted with
+`app.include_router(route, prefix="/platform", …)`, so the served path is
+`/platform/flows/strategies`. **A `ROUTES` value that drops the `/platform` (or a router's
+own group segment) will 404** — this is the UIKIT-ROUTE-DRIFT-1 failure mode. The canonical
+runtime-owned paths a UI kit may target:
+
+| `ROUTES` key (typical) | Canonical served path | Router |
+|---|---|---|
+| `OPERATOR.FLOW_STRATEGIES` | `/platform/flows/strategies` | `flows_router.py` |
+| Flow definitions (list/get/run/create/delete) | `/platform/flows`, `/platform/flows/{name}`, `/platform/flows/{name}/run` | `flows_router.py` |
+| Syscall catalog / dispatch | `/platform/syscalls`, `/platform/syscall` | `platform_ops_router.py` |
+| Memory operator views | `/platform/memory`, `/platform/memory/tree`, `/platform/memory/trace` | `platform_ops_router.py` |
+| API keys | `/platform/keys`, `/platform/keys/{key_id}` | `keys_router.py` |
+| Coordination nodes | `/platform/nodes`, `/platform/nodes/{name}` | `nodes_router.py` |
+| Nodus operator | `/platform/nodus/run`, `/platform/nodus/scripts`, `/platform/nodus/schedule`, `/platform/nodus/flow` | `nodus_*_router.py` |
+| Queue / dead-letters | `/platform/queue/health`, `/platform/queue/dead-letters` | `queue_router.py` |
+| Admin | `/platform/admin/users`, `/platform/admin/agents` | `admin_router.py` |
+| Webhooks | `/platform/webhooks` | `webhooks_router.py` |
+| Tenant usage | `/platform/tenants/{tenant_id}/usage` | `platform_ops_router.py` |
+
+> **Runtime routes vs app routes — the ownership line for `ROUTES`.** The paths above are
+> **runtime-owned**: a UI kit built on the runtime should carry these (with the full
+> `/platform` prefix), and getting one wrong breaks *every* consumer. Paths like
+> `/compute/*` (analytics calculations) and `/seo/*` are **NOT runtime routes** — they are
+> app-domain routes served by the apps-monolith (`apps/analytics`, `apps/search`). They must
+> **not** be baked into a shared UI kit; they belong in an app-owned route map that spreads
+> and extends the kit's runtime `ROUTES` (mirroring the backend split: runtime owns runtime
+> routes, apps own app routes). A different app on the runtime would define its own such map,
+> not inherit these. See UIKIT-ROUTE-DRIFT-1.
+
 ---
 
 ## Leakage Risks
