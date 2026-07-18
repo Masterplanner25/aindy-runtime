@@ -215,6 +215,39 @@ def validate_job_handler(name: str, handler: Any) -> None:
     )
 
 
+def validate_connector_handler(name: str, handler: Any) -> None:
+    """Validate an outbound-connector handler (FR-1 ``register_connector``).
+
+    A connector handler is dispatched as ``handler(action, ctx)`` where ``action`` is the
+    connector action dict and ``ctx`` is the :class:`ConnectorContext`. Accepts the
+    canonical two-parameter shape, keyword-only required params, or flexible ``*args`` /
+    ``**kwargs`` — symmetric with :func:`validate_job_handler`.
+    """
+    _validate_non_empty_string("name", name, "Connector handler", name or "<unnamed>")
+    if not callable(handler):
+        _fail("Connector handler", name, f"must be callable. Got: {type(handler).__name__}")
+    if _has_varargs(handler):
+        return
+    sig = _signature(handler)
+    if any(param.kind == inspect.Parameter.POSITIONAL_ONLY for param in sig.parameters.values()):
+        _fail("Connector handler", name, f"must not use positional-only parameters. Got: {_signature_text(handler)}")
+    params = _required_parameters(handler)
+    positional_required = [p for p in params if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD]
+    keyword_only_required = [p for p in params if p.kind == inspect.Parameter.KEYWORD_ONLY]
+    names = {p.name for p in positional_required}
+    if len(positional_required) <= 2 and names <= {"action", "ctx"}:
+        return
+    if not positional_required and keyword_only_required:
+        # keyword-only required params (e.g. def h(*, action, ctx)) — accept.
+        return
+    _fail(
+        "Connector handler",
+        name,
+        "must accept (action, ctx), a subset thereof, keyword-only required parameters, "
+        f"or flexible *args/**kwargs. Got: {_signature_text(handler)}",
+    )
+
+
 def validate_flow_registration(name: str, handler: Any) -> None:
     _validate_non_empty_string("name", name, "Flow registration", name or "<unnamed>")
     _validate_noarg_callable("Flow registration", name, handler)

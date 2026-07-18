@@ -142,6 +142,93 @@ on each advance.
   Docs: `SYSCALL_REFERENCE.md` (new domain `observability` + scope table),
   `SDK_CONTRACT.md`. Notify app-side `INFINITY-RUNTIME-HANDOFF-1` — the aggregate is live.
 
+## APP-FR-* — App-side runtime feature requests (handoff 2026-07-17)
+
+**Source:** `aindy-apps-monolith` handoff doc "Runtime Feature Requests — handoff to
+aindy-runtime" (last_verified 2026-07-17). Four runtime-owned items surfaced during the
+apps build. Verified against runtime source on receipt (2026-07-17): **two of the four
+are already shipped here** — the handoff was written without visibility into the runtime's
+current state. IDs mirror the app doc (FR-1..FR-4). App-side priority was
+FR-3 > FR-1 > FR-2 > FR-4; corrected runtime picture: the only fully net-new item is FR-1.
+
+### FR-1 — Connector registration hook + capability-enforced outbound I/O
+
+**App ref:** `MASTERPLAN-CONNECTOR-RUNTIME-1` · **Status: SHIPPED 2026-07-17.** All three
+parts built, opt-in/vacuous-by-default, no schema. Contract:
+`docs/runtime/CONNECTOR_CONTRACT.md`.
+
+**What shipped:**
+1. **`register_connector(connector_type, handler, *, capability=None, description=None,
+   overwrite=False)`** in `AINDY/platform_layer/registry.py` (+ `get_connector` /
+   `iter_connectors`, `INPROC_CAP_REGISTER_CONNECTOR`, `validate_connector_handler` in
+   `registry_contracts.py`). Symmetric to `register_job`; handler shape `handler(action,
+   ctx)`; capability defaults to `outbound.<type>`. Dispatch via
+   **`dispatch_connector(connector_type, action, …)`** in `connector_service.py` returning a
+   normalized `{success,result,error[,denied]}` envelope; `ConnectorContext.call(...)` is
+   the pre-bound authorized-call helper handed to the handler.
+2. **`authorized_external_call(...)` + `OutboundCallDenied`** in `external_call_service.py`
+   — grows the (observability-only) `perform_external_call` into a real chokepoint by
+   composing the SAME stack `execute_tool` applies to agent tools:
+   `enforce_capability_policy` (recipient/domain allowlist) → `enforce_capability_rate`
+   (AGENT-HARDEN-8) → socket-level `egress_guard` scope → `capability_scope` for
+   `resolve_secret` JIT vaulting (AGENT-HARDEN-9) → `perform_external_call` observability.
+   Denials raise before any network I/O. `dispatch_connector` also wraps the whole handler
+   in the egress + capability scope, so a connector using raw `urllib`/`smtplib` is still
+   guarded.
+3. **`outbound_http.outbound_request(...)`** — shared HTTP client with exponential-backoff
+   retry (transport errors + 408/429/5xx) and a per-service `CircuitBreaker`, routed
+   through `authorized_external_call` (authorization enforced once, outside the retry loop).
+
+Enforcement is vacuous until a `CapabilityPolicy` (`AINDY_CAPABILITY_POLICIES`) / secret
+scope (`AINDY_SECRET_SCOPES`) / `AINDY_EGRESS_ENFORCEMENT` is configured — registering a
+connector changes routing only. Tests: `tests/unit/test_connector_registry.py` (16) +
+`tests/unit/test_outbound_http.py` (4). Strong-form egress still converges with the MEB
+program / IDEM-10. **App adoption target (unchanged):** delete the `if/elif` ladder in
+`apps/automation/services/automation_execution_service.py::execute_automation_action`,
+register each connector via the hook; delivery behavior unchanged, enforcement added.
+
+### FR-2 — `register_nodus_workflow` hook for app-defined `.nd` workflows
+
+**App ref:** `APP-DEBT-MIGRATED-1` · **Status: ALREADY SHIPPED (RTR-1, closed 2026-07-07).**
+The exact hook exists: `register_nodus_workflow(name, source, kind=, version=,
+capabilities=, owner_class=, provenance=, overwrite=)` —
+`AINDY/runtime/nodus_workflow_registry.py`, called from the manifest/extension load path
+in `registry.py:1711`. Symmetric to `register_flow`, reachable from the intent-execution
+path. Supporting surface: DB model `nodus_workflow.py`, migration `0006`, router
+`nodus_flow_router.py`, contract `docs/runtime/NODUS_WORKFLOW_CONTRACT.md`, tests
+`test_nodus_workflow_registry.py`. **Action: none in runtime — notify app team it exists;
+app adopts behind its `register_flow_strategy("reasoning", …)` seam per the contract doc.**
+
+### FR-3 — Next-Action engine: record-first → autonomous pre-dispatch
+
+**App ref:** `INFINITY-RUNTIME-1` Gap 4 · **Status: CORE SHIPPED (Deliverable C, #213,
+v1.6.2, 2026-07-09) — narrow delta remains.** The handoff describes the runtime as still
+record-first-only; it is not. `core/next_action_dispatch.py` `maybe_act_on_next_action`
+already provides the bounded, opt-in autonomous-acting half (flag `AINDY_NEXT_ACTION_ACTING`
+default off; chain-depth cap; approval gate + admission reuse; app-sourced
+`trigger_execution` only). See the INFINITY-RUNTIME-1 entry above for the full description.
+
+**Genuine remaining delta vs. the ask:**
+- (a) Broaden acting verbs beyond `trigger_execution` (`retry`/`schedule_follow_up`) —
+  already tracked as a deferred INFINITY-RUNTIME-1 follow-up.
+- (b) **App-consumable dispatch-outcome contract** (ask part 2): the app wants to read what
+  the runtime *did* with a chosen next action (`NEXT_ACTION_CHOSEN` → dispatch → outcome
+  chain). Currently reuses existing events; there is no dedicated outcome record/event. This
+  is the real net-new piece if FR-3 is prioritized — needs an event/schema decision (mind
+  the frozen-hash baseline when adding a `SystemEventTypes` value).
+- (c) Flip `AINDY_NEXT_ACTION_ACTING` after app soak.
+
+### FR-4 — Docs relocation: Bucket A + runtime half of `INVARIANTS.md`
+
+**App ref:** `DOCS-MIGRATION-2` · **Status: OPEN (hygiene, zero functional impact).** The
+ownership map `docs/runtime/RUNTIME_DOCSET_BOUNDARY.md` exists. Remaining: relocate Bucket
+A docs (architecture/DATA_MODEL_MAP, MODEL_OWNERSHIP_POLICY, governance/{AGENT_WORKING_RULES,
+ERROR_HANDLING_POLICY,CHANGELOG}, four `tutorials/*`) from the pre-split archive into this
+repo, and author the runtime half of `INVARIANTS.md` (PostgreSQL/UTC/session-isolation/
+memory-graph/embedding/schema-drift invariants), cross-linking the app-domain half. New
+`docs/runtime/` files must carry the five-key YAML frontmatter or `Runtime Docs Validation`
+fails.
+
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 
 **Source (2026-07-05):** a skeptical self-assessment of the runtime + apps against an
