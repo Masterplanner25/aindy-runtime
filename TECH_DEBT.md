@@ -2977,7 +2977,9 @@ users.
 
 ## NODUS-WARMPOOL-1 — Nodus worker cold-start is billed against the script budget
 
-**Status:** Open — deferred (P1; quick knob shipped, durable fix outstanding)
+**Status:** Open — P1. Quick knob shipped 2026-07-10; **Option A (clock split) shipped
+2026-07-18** — the script budget now bounds *script* time, not boot+script. Options B/C
+(latency removal) remain deferred. See the A/B/C plan below.
 
 **Symptom (verified 2026-07-09, live Linux serve, app-profile).** A real agent run
 reached `executing` then failed with `"Nodus script exceeded 30000ms wall-clock
@@ -3007,20 +3009,40 @@ inner `run_source(timeout_ms=)` in one value; a per-run
 remove the tax — every run still re-boots the stack, so p50 latency stays ~cold-start
 + script.
 
-**Durable fix (not yet built) — keep cold-start out of the script budget.** Options,
-in rough order of effort:
-- **Warm worker / worker pool** — a long-lived worker process (or small pool) that
-  imports the plugin stack once and services many script executions over a pipe/socket,
-  so import cost is paid at boot, not per run. Requires a request/response protocol
-  (the current contract is one-shot JSON over stdin/stdout) and lifecycle management
-  (health, restart-on-crash, max-requests recycling to bound leaks).
-- **Separate the two clocks** — even without pooling, measure and exclude worker
-  cold-start from the script budget: start the wall-clock only once the worker signals
-  "stack loaded, script starting," so `AINDY_NODUS_MAX_EXECUTION_MS` bounds *script*
-  time, not boot + script.
-- **Lazy/narrowed plugin load in the worker** — only load the apps a given script
-  actually needs (the worker currently loads everything). Cuts the tax rather than
-  moving it.
+**Durable-fix plan — keep cold-start out of the script budget (A/B/C).** In rough
+order of effort. Sized against the actual IPC contract (adapter
+`subprocess.run(input=json, timeout=)` ↔ worker `stdin.read()` → register ~15 builtins
+→ `run_source(timeout_ms=)` → `stdout.write(json)` → exit; the plugin load fires inside
+`main()` after the stdin read, not at import; no phase marker exists today).
+
+- **Option A — Separate the two clocks. ✅ SHIPPED 2026-07-18 (this entry's second PR).**
+  The worker's inner `run_source(timeout_ms=max_execution_ms)` is the authoritative
+  *script* clock; the adapter's outer `subprocess.run(timeout=)` is widened to
+  `max_execution_ms + AINDY_NODUS_BOOT_ALLOWANCE_MS` (default 15000) so it is a hard
+  safety net for boot + a hung worker, not the script budget. A script that overruns now
+  hits the inner nodus timer first → the worker returns `status:"timeout"` → the adapter's
+  existing clean "Nodus script exceeded {max}ms" path (budget = script time). The rare
+  outer kill now reports a distinct boot+script message. Pure adapter-side change (no
+  worker/protocol change, subprocess isolation fully preserved). **Removes the "boot billed
+  to script" bug; does NOT remove per-run re-boot latency** (that's B/C). Knob:
+  `AINDY_NODUS_BOOT_ALLOWANCE_MS` (0 = old shared-budget behavior). Sibling
+  `runtime_callback_host.py` still shares one budget — apply the same split there if it
+  becomes a concern.
+- **Option C — Lazy/narrowed plugin load (deferred).** Load only the apps a given script
+  needs instead of all ~17. Cuts the tax rather than moving it; reduces latency too.
+  Effort: medium — needs a correct "needed apps" computation and selective `load_plugins()`;
+  risk: under-loading can miss a dynamically-called tool.
+- **Option B — Warm worker / worker pool (deferred; the true durable fix).** A long-lived
+  worker (or small pool) imports the plugin stack once and services many executions over a
+  socket, so import cost is paid at boot, not per run. Effort: high — a real project:
+  (1) a framed request/response protocol (the current one-shot stdin/stdout contract can't
+  multiplex); (2) pool lifecycle (health, restart-on-crash, max-requests recycling, drain);
+  (3) **per-run state isolation** — the crux: fresh `state`/`memory_context`/
+  `DeferredMemoryBuiltins`/`user_id` + the `std_sys` guard monkeypatch must reset per request
+  with zero cross-run leakage (builtins close over per-run bridge objects; ContextVars);
+  (4) concurrency/backpressure. Must preserve: read-only cwd in a wheel, and subprocess
+  isolation as load-bearing for the sandbox `--network none` extension path + the
+  stateful-in-process callback carve-outs. Reopen only when p50 latency is a product SLA.
 
 **Constraints to respect.** The worker's `cwd` is `parents[2]` (in a wheel:
 read-only site-packages — see the `_maybe_wrap_runtime_callback` CWD hazard in
