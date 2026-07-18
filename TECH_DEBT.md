@@ -150,6 +150,8 @@ apps build. Verified against runtime source on receipt (2026-07-17): **two of th
 are already shipped here** — the handoff was written without visibility into the runtime's
 current state. IDs mirror the app doc (FR-1..FR-4). App-side priority was
 FR-3 > FR-1 > FR-2 > FR-4; corrected runtime picture: the only fully net-new item is FR-1.
+**FR-1/FR-3/FR-4 shipped in v1.8.0; FR-2 pre-existing.** A fifth item (**FR-5**) surfaced
+2026-07-18 (native workflows couldn't reach app callables) — verified real; see below.
 
 ### FR-1 — Connector registration hook + capability-enforced outbound I/O
 
@@ -252,6 +254,42 @@ runtime/app editorial split of `ERROR_HANDLING_POLICY.md`) was also completed 20
 **DOCS-BUCKET-A-1 is now CLOSED**. App-side adoption (per the handoff) is non-functional:
 update the reciprocal cross-links + author the app-side error-handling companion, both of
 which the app repo owns. Tracked in full under **DOCS-BUCKET-A-1** below.
+
+### FR-5 — `run_nodus_workflow` cannot invoke app callables (NEW 2026-07-18)
+
+**App ref:** `APP-DEBT-MIGRATED-1` (Nodus-native reasoning). **Verified real** (unlike the
+original handoff's stale premises): a `.nd` launched via the public `run_nodus_workflow`
+could not reach app logic through *either* VM surface —
+- `call_tool("<app tool>", …)` → fail-closed `"tool execution requires a capability token"`
+  (`nodus_worker.run_agent_tool`), and `run_nodus_workflow` exposed no token param; and
+- `sys("sys.v1.<app syscall>", …)` → `"Unknown syscall"` because the kernel `dispatch_syscall`
+  resolves only `SYSCALL_REGISTRY`, never app-registered (`register_syscall`) syscalls.
+
+The app asked for either fix; decision **2026-07-18: build both** — (a) now, (b) as a follow-up.
+
+**(a) — capability-token threading. ✅ SHIPPED 2026-07-18.** `run_nodus_workflow` gains paired
+`capability_token` + `run_id` params. When present they thread into flow state as
+`execution_token` / `agent_run_id` — the **same proven keys the agent path uses**
+(`nodus_execution_service.py:496`, read at `nodus_adapter.py:145,684`) — so the `nodus.execute`
+node hands them to the `call_tool` seam and `execute_tool`/`check_tool_capability` enforce the
+token per tool (unchanged; fail-closed preserved). The token binds to `run_id` + `user_id`, so
+both are required together (guarded with a `ValueError`). Also folds in the previously-dropped
+`initial_state`. Pure additive threading — no kernel change, no new enforcement surface.
+Contract: `NODUS_WORKFLOW_CONTRACT.md` §8.1. Tests: `test_nodus_workflow_registry.py` (+5).
+
+**(b) — resolve app syscalls in the VM `sys()` — OPEN (follow-up).** Make `dispatch_syscall`
+fall back to the platform registry's app-registered syscalls (`register_syscall` → `_syscalls`)
+when a name is absent from `SYSCALL_REGISTRY`, with the capability enforcement that app-syscall
+resolution in the VM context requires. Bigger, security-sensitive (kernel dispatcher + a new
+VM-reachable surface) — hence sequenced after (a). Key files:
+`AINDY/kernel/syscall_dispatcher.py` (`dispatch_syscall`, resolves `SYSCALL_REGISTRY.get` only),
+`AINDY/platform_layer/registry.py` (`get_syscall`/`_syscalls`), `AINDY/runtime/nodus_worker.py`
+(`_sys_dispatch`).
+
+**App adoption (once both land):** rewrite `reasoning_apply_v1.nd` to call
+`reasoning.evaluate` (under a) or a new app syscall (under b), behind
+`AINDY_REASONING_NODUS_NATIVE` (default off), normalizing `nodus_output_state` to the existing
+recommendation envelope; PG-tier integration test.
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 

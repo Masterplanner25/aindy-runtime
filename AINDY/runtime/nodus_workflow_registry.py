@@ -343,6 +343,8 @@ def run_nodus_workflow(
     error_policy: str = "halt",
     trace_id: str | None = None,
     initial_state: dict[str, Any] | None = None,
+    capability_token: dict[str, Any] | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Run a registered Nodus workflow by name.
 
@@ -353,6 +355,18 @@ def run_nodus_workflow(
     * ``flow-graph`` — the stored ``workflow {}`` / ``goal {}`` source is run with
       a ``run_workflow(<name>)`` (or ``run_goal``) invocation appended, so the
       native workflow executes its steps in dependency order.
+
+    **FR-5(a) — reaching app tools from a native workflow.** A workflow whose ``.nd``
+    calls ``call_tool("<app tool>", args)`` needs a scoped capability token, or the
+    call is refused fail-closed ("tool execution requires a capability token"). Pass
+    ``capability_token`` (a token the caller minted via
+    ``capability_service.mint_token``) together with the ``run_id`` it was minted for.
+    They are threaded into flow state as ``execution_token`` / ``agent_run_id`` — the
+    same keys the agent path uses — so the nodus.execute node hands them to the
+    ``call_tool`` seam and ``execute_tool`` enforces the token per tool (validity, granted
+    tools, required capabilities ⊆ allowed). The token binds to ``run_id`` + ``user_id``,
+    so both must be supplied together (a token without a matching ``run_id`` cannot
+    validate). ``initial_state`` (previously dropped) is also merged into flow state here.
     """
     from AINDY.runtime.nodus_execution_service import run_nodus_script_via_flow
 
@@ -364,6 +378,20 @@ def run_nodus_workflow(
     if meta["kind"] == KIND_FLOW_GRAPH:
         script = _with_workflow_invocation(meta)
 
+    extra_initial_state: dict[str, Any] = dict(initial_state or {})
+    if capability_token is not None:
+        if not run_id:
+            raise ValueError(
+                "run_nodus_workflow: capability_token requires the run_id it was minted "
+                "for (the token binds to run_id + user_id; call_tool cannot validate "
+                "a token without a matching run_id)"
+            )
+        # Reuse the agent path's proven flow-state keys: the nodus.execute node reads
+        # state['execution_token'] + state['agent_run_id'] and threads them to the
+        # capability-enforced call_tool seam (context only — never the script namespace).
+        extra_initial_state["execution_token"] = capability_token
+        extra_initial_state["agent_run_id"] = str(run_id)
+
     return run_nodus_script_via_flow(
         script=script,
         input_payload=input_payload or {},
@@ -372,6 +400,7 @@ def run_nodus_workflow(
         user_id=user_id,
         workflow_type=f"nodus_workflow:{name}",
         trace_id=trace_id,
+        extra_initial_state=extra_initial_state or None,
     )
 
 

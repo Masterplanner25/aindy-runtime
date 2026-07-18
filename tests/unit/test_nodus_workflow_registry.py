@@ -256,3 +256,66 @@ def test_run_goal_appends_run_goal_invocation(monkeypatch):
     )
     nwr.run_nodus_workflow("run_goal_wf", db="DB", user_id="u1")
     assert captured["script"].rstrip().endswith("run_goal(win)")
+
+
+# --------------------------------------------------------------------------- #
+# FR-5(a) — capability token / run_id threading for call_tool
+# --------------------------------------------------------------------------- #
+
+def _capture_run(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        "AINDY.runtime.nodus_execution_service.run_nodus_script_via_flow",
+        lambda **kw: captured.update(kw) or {"status": "completed"},
+    )
+    return captured
+
+
+def test_no_token_leaves_extra_initial_state_empty(monkeypatch):
+    _register_script(name="plain", source="let x = 1")
+    captured = _capture_run(monkeypatch)
+    nwr.run_nodus_workflow("plain", db="DB", user_id="u1")
+    # No token, no initial_state → nothing threaded (extra_initial_state stays None).
+    assert captured["extra_initial_state"] is None
+
+
+def test_capability_token_and_run_id_thread_into_flow_state(monkeypatch):
+    _register_script(name="tooled", source='let r = call_tool("reasoning.evaluate", {})')
+    captured = _capture_run(monkeypatch)
+    token = {"execution_token": "tok-123", "granted_tools": ["reasoning.evaluate"]}
+    nwr.run_nodus_workflow(
+        "tooled", db="DB", user_id="u1", capability_token=token, run_id="run-9"
+    )
+    eis = captured["extra_initial_state"]
+    # Reuses the agent path's proven keys so the nodus.execute node → call_tool seam picks them up.
+    assert eis["execution_token"] == token
+    assert eis["agent_run_id"] == "run-9"
+
+
+def test_capability_token_without_run_id_raises(monkeypatch):
+    _register_script(name="tooled2", source="let x = 1")
+    _capture_run(monkeypatch)
+    token = {"execution_token": "tok"}
+    with pytest.raises(ValueError, match="capability_token requires the run_id"):
+        nwr.run_nodus_workflow("tooled2", db="DB", user_id="u1", capability_token=token)
+
+
+def test_initial_state_is_merged_and_no_longer_dropped(monkeypatch):
+    _register_script(name="seeded", source="let x = 1")
+    captured = _capture_run(monkeypatch)
+    nwr.run_nodus_workflow(
+        "seeded", db="DB", user_id="u1", initial_state={"seed": 42}
+    )
+    assert captured["extra_initial_state"] == {"seed": 42}
+
+
+def test_initial_state_and_token_coexist(monkeypatch):
+    _register_script(name="both", source="let x = 1")
+    captured = _capture_run(monkeypatch)
+    token = {"execution_token": "t"}
+    nwr.run_nodus_workflow(
+        "both", db="DB", user_id="u1", initial_state={"seed": 1},
+        capability_token=token, run_id="r1",
+    )
+    eis = captured["extra_initial_state"]
+    assert eis == {"seed": 1, "execution_token": token, "agent_run_id": "r1"}
