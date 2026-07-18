@@ -218,6 +218,41 @@ pipeline (verified) — this surface only adds the *registration + selection* la
 in front of it. Agent-plan → workflow (Phase 2) becomes: compile the plan to an
 `.nd`, `register_nodus_workflow(..., kind="script")`, run by name.
 
+### 8.1 Reaching app tools from a native workflow — `capability_token` (FR-5a)
+
+A workflow whose `.nd` calls `call_tool("<app tool>", args)` needs a **scoped capability
+token**, or the call is refused fail-closed (`"tool execution requires a capability
+token"`). `run_nodus_workflow` exposes two paired parameters for this:
+
+```python
+run_nodus_workflow(
+    name, *, db, user_id,
+    input_payload=None, error_policy="halt", trace_id=None, initial_state=None,
+    capability_token=None,   # a token minted via capability_service.mint_token
+    run_id=None,             # the run_id that token was minted for (REQUIRED with a token)
+)
+```
+
+- The token binds to `run_id` + `user_id` (`validate_token`), so **both must be supplied
+  together** — a `capability_token` without a matching `run_id` raises `ValueError`.
+- They are threaded into flow state as `execution_token` / `agent_run_id` — the **same keys
+  the agent path uses** — so the `nodus.execute` node hands them to the `call_tool` seam and
+  `execute_tool` enforces the token per tool (validity/expiry/hash, granted tools, required
+  capabilities ⊆ allowed). Enforcement is unchanged; this only makes the seam reachable from
+  the public entry point.
+- The token rides in flow state / context **only** — never the script namespace.
+- `initial_state` is merged into flow state here too (it was previously dropped).
+
+**Caller recipe (app side):** pick a `run_id`, `mint_token(run_id, user_id, plan, db,
+approval_mode, …)` with a plan granting the tools the `.nd` calls (e.g. `reasoning.evaluate`),
+then `run_nodus_workflow(name, …, capability_token=token, run_id=run_id)`.
+
+> **Sibling gap (FR-5b):** reaching an app callable via `sys("sys.v1.<app syscall>", …)`
+> instead of `call_tool` is a separate mechanism — the VM's `sys()` routes to the kernel
+> `dispatch_syscall`, which resolves only `SYSCALL_REGISTRY`, not app-registered
+> (`register_syscall`) syscalls. Tracked separately; `call_tool` + `capability_token` is the
+> supported path today.
+
 ## 9. Consolidation — no fourth mechanism
 
 This surface **subsumes** today's three half-mechanisms:
