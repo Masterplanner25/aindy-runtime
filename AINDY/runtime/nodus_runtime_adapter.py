@@ -17,14 +17,17 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# Default Nodus wall-clock budget. Applied to BOTH the outer subprocess timeout
-# (subprocess.run(timeout=)) and the inner nodus-lang run_source(timeout_ms=) —
-# they share one value so a run can never outlive its budget at either layer.
-# The app-profile path cold-starts the whole plugin stack inside the fresh worker
-# subprocess (~12s), so the default is too tight there; raise it with
-# AINDY_NODUS_MAX_EXECUTION_MS. See TECH_DEBT NODUS-WARMPOOL-1 for the durable fix
-# (a warm worker that keeps cold-start out of the script budget entirely).
+# Nodus wall-clock budgets. NODUS-WARMPOOL-1 Option A (clock split): the *script* budget
+# below is the inner nodus-lang run_source(timeout_ms=) clock — it bounds script time only.
+# The outer subprocess.run(timeout=) is widened to script_budget + BOOT_ALLOWANCE so worker
+# cold-start (the app-profile path imports the whole plugin stack, ~12s, inside main()
+# before the script runs) is NOT billed against the script budget. A script that overruns
+# hits the inner nodus timer first (clean "script exceeded {max}ms"); the outer kill is a
+# hard safety net for boot + a hung worker. Set BOOT_ALLOWANCE=0 to restore the old
+# single-shared-budget behavior. Per-run NodusExecutionContext.max_execution_ms still wins
+# over the env default. See TECH_DEBT NODUS-WARMPOOL-1 (Options B/C remove the re-boot itself).
 _DEFAULT_MAX_EXECUTION_MS = 30_000
+_DEFAULT_BOOT_ALLOWANCE_MS = 15_000
 
 
 def _resolve_default_max_execution_ms() -> int:
@@ -48,6 +51,36 @@ def _resolve_default_max_execution_ms() -> int:
             _DEFAULT_MAX_EXECUTION_MS,
         )
         return _DEFAULT_MAX_EXECUTION_MS
+    return value
+
+
+def _resolve_boot_allowance_ms() -> int:
+    """Resolve the worker cold-start headroom from AINDY_NODUS_BOOT_ALLOWANCE_MS (ms).
+
+    NODUS-WARMPOOL-1 Option A: this is added to the *script* budget to form the outer
+    subprocess timeout, so plugin-stack cold-start is not billed against the script clock.
+    Default 15000. ``0`` is valid and disables the split (outer == inner == old behavior).
+    A negative or non-integer value falls back to the default.
+    """
+    raw = os.getenv("AINDY_NODUS_BOOT_ALLOWANCE_MS", "").strip()
+    if not raw:
+        return _DEFAULT_BOOT_ALLOWANCE_MS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "[NodusRuntimeAdapter] invalid AINDY_NODUS_BOOT_ALLOWANCE_MS=%r; using %d",
+            raw,
+            _DEFAULT_BOOT_ALLOWANCE_MS,
+        )
+        return _DEFAULT_BOOT_ALLOWANCE_MS
+    if value < 0:
+        logger.warning(
+            "[NodusRuntimeAdapter] AINDY_NODUS_BOOT_ALLOWANCE_MS must be >= 0 (got %d); using %d",
+            value,
+            _DEFAULT_BOOT_ALLOWANCE_MS,
+        )
+        return _DEFAULT_BOOT_ALLOWANCE_MS
     return value
 
 
@@ -158,7 +191,13 @@ class NodusRuntimeAdapter:
             )
 
         worker_path = Path(__file__).parent / "nodus_worker.py"
-        timeout_s = max_execution_ms / 1000.0
+        # NODUS-WARMPOOL-1 Option A: the worker gets max_execution_ms as its inner
+        # run_source(timeout_ms=) script clock (payload below, unchanged). The outer
+        # subprocess kill gets script_budget + boot allowance, so worker cold-start isn't
+        # billed against the script budget. A script overrun trips the inner timer first.
+        boot_allowance_ms = _resolve_boot_allowance_ms()
+        outer_budget_ms = max_execution_ms + boot_allowance_ms
+        timeout_s = outer_budget_ms / 1000.0
         trace_id = ""
         if isinstance(context.state, dict):
             trace_id = str(context.state.get("trace_id") or "")
@@ -207,12 +246,20 @@ class NodusRuntimeAdapter:
                 timeout=timeout_s,
             )
         except subprocess.TimeoutExpired:
+            # Outer hard kill — only fires when boot + script exceed the widened
+            # (script + boot-allowance) budget, i.e. a genuinely hung worker/boot. A normal
+            # script overrun trips the inner run_source clock first and returns via the
+            # clean worker "timeout" status path below (NODUS-WARMPOOL-1 Option A).
             return NodusExecutionResult(
                 output_state={},
                 emitted_events=[],
                 memory_writes=[],
                 status="failure",
-                error=f"Nodus script exceeded {max_execution_ms}ms wall-clock timeout",
+                error=(
+                    f"Nodus worker exceeded {outer_budget_ms}ms hard limit "
+                    f"({max_execution_ms}ms script budget + {boot_allowance_ms}ms boot allowance) "
+                    "— worker or plugin cold-start hung"
+                ),
             )
         except Exception as exc:
             logger.error("[NodusRuntimeAdapter] Worker start failed for '%s': %s", filename, exc)
