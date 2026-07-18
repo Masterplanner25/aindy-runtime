@@ -277,14 +277,26 @@ both are required together (guarded with a `ValueError`). Also folds in the prev
 `initial_state`. Pure additive threading — no kernel change, no new enforcement surface.
 Contract: `NODUS_WORKFLOW_CONTRACT.md` §8.1. Tests: `test_nodus_workflow_registry.py` (+5).
 
-**(b) — resolve app syscalls in the VM `sys()` — OPEN (follow-up).** Make `dispatch_syscall`
-fall back to the platform registry's app-registered syscalls (`register_syscall` → `_syscalls`)
-when a name is absent from `SYSCALL_REGISTRY`, with the capability enforcement that app-syscall
-resolution in the VM context requires. Bigger, security-sensitive (kernel dispatcher + a new
-VM-reachable surface) — hence sequenced after (a). Key files:
-`AINDY/kernel/syscall_dispatcher.py` (`dispatch_syscall`, resolves `SYSCALL_REGISTRY.get` only),
-`AINDY/platform_layer/registry.py` (`get_syscall`/`_syscalls`), `AINDY/runtime/nodus_worker.py`
-(`_sys_dispatch`).
+**(b) — app syscalls reachable from the VM `sys()`. ✅ SHIPPED 2026-07-18 — corrected
+diagnosis.** The handoff framed this as "make `dispatch_syscall` resolve app-registered
+syscalls (they're in a separate registry)". **Verify-first found that wrong:** apps register
+syscalls via the **kernel** `register_syscall` (`syscall_registry.py:1813`) with full metadata
+(`capability="analytics.read"`, `input_schema`) **into `SYSCALL_REGISTRY`** — which
+`dispatch` already consults. The real cause is a **subprocess plugin-load gap** (sibling to
+PLANNER-SUBPROC-1): the worker's `sys()` seam went straight to `dispatch_syscall` with **no
+plugin-load entry point**, while `execute_tool` (the `call_tool` seam) lazily calls
+`_ensure_tools_loaded()` → `load_plugins()` → each app's `bootstrap()` (which registers its
+syscalls). So a `sys()`-only workflow dispatched against an unpopulated registry →
+`"Unknown syscall"`. **Fix:** the new module-level `nodus_worker.dispatch_worker_syscall`
+runs `_ensure_tools_loaded()` (idempotent, lazy — only when `sys()` is used, so no tax on
+tool-only/pure-script runs) before dispatching. Enforcement is **unchanged and real** — the
+app syscall keeps its declared capability, which the worker's `dispatch_syscall` grants via
+`_infer_dispatch_capability` (e.g. `get_kpi_snapshot` → `analytics.read`) and the dispatcher
+enforces; no kernel change, no new backdoor. Tests: `test_nodus_sys_dispatch.py` (4, incl. the
+load-before-dispatch ordering). End-to-end app-syscall resolution is app-side PG-tier
+integration (`test_nodus_vm.py`). Key files: `AINDY/runtime/nodus_worker.py`
+(`dispatch_worker_syscall` / `_sys_dispatch`), `AINDY/agents/tool_registry.py`
+(`_ensure_tools_loaded`).
 
 **App adoption (once both land):** rewrite `reasoning_apply_v1.nd` to call
 `reasoning.evaluate` (under a) or a new app syscall (under b), behind
