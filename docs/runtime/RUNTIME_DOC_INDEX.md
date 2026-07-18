@@ -63,6 +63,7 @@ Start with:
 - `SYSCALL_REFERENCE.md`
 - `SYSCALL_SYSTEM.md` (architecture detail)
 - `NODUS_WORKFLOW_CONTRACT.md` (RTR-1 — `register_nodus_workflow` design + contract)
+- `CONNECTOR_CONTRACT.md` (FR-1 — `register_connector` + authorized outbound boundary)
 
 ### Release / QA Reviewers
 Start with:
