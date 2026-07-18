@@ -230,14 +230,28 @@ default off; chain-depth cap; approval gate + admission reuse; app-sourced
 
 ### FR-4 — Docs relocation: Bucket A + runtime half of `INVARIANTS.md`
 
-**App ref:** `DOCS-MIGRATION-2` · **Status: OPEN (hygiene, zero functional impact).** The
-ownership map `docs/runtime/RUNTIME_DOCSET_BOUNDARY.md` exists. Remaining: relocate Bucket
-A docs (architecture/DATA_MODEL_MAP, MODEL_OWNERSHIP_POLICY, governance/{AGENT_WORKING_RULES,
-ERROR_HANDLING_POLICY,CHANGELOG}, four `tutorials/*`) from the pre-split archive into this
-repo, and author the runtime half of `INVARIANTS.md` (PostgreSQL/UTC/session-isolation/
-memory-graph/embedding/schema-drift invariants), cross-linking the app-domain half. New
-`docs/runtime/` files must carry the five-key YAML frontmatter or `Runtime Docs Validation`
-fails.
+**App ref:** `DOCS-MIGRATION-2` · **Status: ALREADY SATISFIED — no work required.** Verified
+2026-07-17: FR-4 was completed by this repo's **DOCS-BUCKET-A-1** migration on
+2026-06-27/28, ~3 weeks *before* the handoff was written (2026-07-17); the handoff was
+authored without visibility into it (same stale premise as FR-2 / FR-3). Every FR-4 item is
+present and git-tracked with frontmatter:
+
+- **Bucket A relocate-as-is:** `docs/architecture/{DATA_MODEL_MAP,MODEL_OWNERSHIP_POLICY}.md`
+  (DATA_MODEL_MAP surgically runtime-scoped, DOCS-BUCKET-A-1 residual 1),
+  `docs/platform/governance/{AGENT_WORKING_RULES,ERROR_HANDLING_POLICY,CHANGELOG}.md`,
+  `docs/tutorials/{index,01-memory-driven-workflow,02-event-driven-automation,03-scheduled-execution}.md`
+  (the "four tutorials" = 3 + index; the pre-split archive itself has no 4th/Nodus tutorial —
+  WAIT/RESUME is covered as the Nodus `event.wait()` builtin in tutorial 2).
+- **Runtime half of `INVARIANTS.md`:** authored at `docs/platform/governance/INVARIANTS.md`
+  ("runtime-owned half" — PostgreSQL/UTC/session-isolation/memory-graph/embedding/schema-guard
+  invariants, enforcement sites re-verified), cross-linked to the app-owned half in
+  `aindy-apps-monolith` (DOCS-BUCKET-A-1 residual 4).
+
+**No relocation to perform.** The only open sub-item is DOCS-BUCKET-A-1's *own* deferred
+residual 2 — the optional runtime/app editorial split of `ERROR_HANDLING_POLICY.md` (its
+Policy Rules are already repo-agnostic and valid) — which is outside FR-4's "relocate as-is"
+ask. App-side adoption (per the handoff) is non-functional: update the reciprocal cross-links,
+which the app repo owns. Tracked in full under **DOCS-BUCKET-A-1** below.
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 
