@@ -247,11 +247,19 @@ run_nodus_workflow(
 approval_mode, …)` with a plan granting the tools the `.nd` calls (e.g. `reasoning.evaluate`),
 then `run_nodus_workflow(name, …, capability_token=token, run_id=run_id)`.
 
-> **Sibling gap (FR-5b):** reaching an app callable via `sys("sys.v1.<app syscall>", …)`
-> instead of `call_tool` is a separate mechanism — the VM's `sys()` routes to the kernel
-> `dispatch_syscall`, which resolves only `SYSCALL_REGISTRY`, not app-registered
-> (`register_syscall`) syscalls. Tracked separately; `call_tool` + `capability_token` is the
-> supported path today.
+### 8.2 Reaching app syscalls from a native workflow — `sys()` (FR-5b)
+
+A workflow may also reach app logic via `sys("sys.v1.<app syscall>", payload)`. App domains
+register these into the kernel `SYSCALL_REGISTRY` (via `kernel.syscall_registry.register_syscall`
+with a real `capability` + `input_schema`) from each app's `bootstrap()`. In the Nodus worker
+subprocess, that registration only happens once `load_plugins()` has run — and the worker's
+`sys()` seam now triggers it: `nodus_worker.dispatch_worker_syscall` calls `_ensure_tools_loaded()`
+(the worker's plugin-load entry point) before dispatching, so app syscalls resolve instead of
+returning `"Unknown syscall"`. This is lazy (only when `sys()` is used) and enforcement is
+unchanged — the app syscall's declared capability is granted per-dispatch via
+`_infer_dispatch_capability` (e.g. `get_kpi_snapshot` → `analytics.read`) and enforced by the
+dispatcher. `call_tool` + `capability_token` (§8.1) and `sys()` are both supported paths;
+choose `call_tool` for tool-shaped app logic, `sys()` for domain syscalls.
 
 ## 9. Consolidation — no fourth mechanism
 

@@ -202,6 +202,41 @@ def _install_std_sys_guard() -> bool:
         return False
 
 
+def dispatch_worker_syscall(name: str, payload: Any, *, user_id: str) -> Any:
+    """Dispatch a Nodus ``sys()`` call, ensuring app syscalls are registered first (FR-5b).
+
+    App domains register their syscalls into the kernel ``SYSCALL_REGISTRY`` from each
+    app's ``bootstrap()`` (via ``kernel.syscall_registry.register_syscall`` with a real
+    capability + schema). ``load_plugins()`` runs that bootstrap, but in the Nodus worker
+    subprocess ``load_plugins`` is only reached lazily by ``execute_tool`` — the
+    ``call_tool`` seam. The ``sys()`` seam had **no** plugin-load entry point, so a
+    workflow that used ``sys("sys.v1.<app syscall>", …)`` without a prior ``call_tool``
+    dispatched against an unpopulated registry → ``"Unknown syscall"``.
+
+    Loading the stack here (idempotent + memoized; lazy — only when ``sys()`` is actually
+    used, so it doesn't tax tool-only or pure-script runs) registers app syscalls in this
+    subprocess. Dispatch then flows through the normal capability-enforced pipeline: the app
+    syscall keeps its declared capability (e.g. ``analytics.read``), which the worker's
+    ``dispatch_syscall`` grants via ``_infer_dispatch_capability`` and the dispatcher
+    enforces — so this closes the resolution gap without weakening enforcement.
+    """
+    try:
+        from AINDY.agents.tool_registry import _ensure_tools_loaded
+        from AINDY.db.database import SessionLocal
+        from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+
+        _ensure_tools_loaded()
+        call_payload = dict(payload) if isinstance(payload, dict) else {}
+        call_payload.setdefault("user_id", user_id)
+        db = SessionLocal()
+        try:
+            return dispatch_syscall(name, call_payload, db=db, user_id=user_id)
+        finally:
+            db.close()
+    except Exception as exc:
+        return {"status": "error", "error": str(exc), "data": None, "syscall": name}
+
+
 def main() -> int:
     raw = sys.stdin.read()
     payload = json.loads(raw or "{}")
@@ -255,32 +290,12 @@ def main() -> int:
         return state.get(key)
 
     def _sys_dispatch(name: str, payload_arg: Any) -> Any:
-        """Dispatch a Nodus sys() call through the AINDY syscall layer."""
-        try:
-            from AINDY.db.database import SessionLocal
-            from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+        """Dispatch a Nodus sys() call through the AINDY syscall layer.
 
-            call_payload = dict(payload_arg) if isinstance(payload_arg, dict) else {}
-            if "user_id" not in call_payload:
-                call_payload["user_id"] = user_id
-
-            db = SessionLocal()
-            try:
-                return dispatch_syscall(
-                    name,
-                    call_payload,
-                    db=db,
-                    user_id=user_id,
-                )
-            finally:
-                db.close()
-        except Exception as exc:
-            return {
-                "status": "error",
-                "error": str(exc),
-                "data": None,
-                "syscall": name,
-            }
+        Delegates to the module-level ``dispatch_worker_syscall`` so the sys() path loads
+        the app plugin stack (registering app syscalls) before dispatch — FR-5b.
+        """
+        return dispatch_worker_syscall(name, payload_arg, user_id=user_id)
 
     runtime = NodusRuntime(project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None)
     def _call_tool(tool_name: Any, args: Any) -> Any:
