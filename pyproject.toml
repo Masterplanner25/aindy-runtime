@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=80", "wheel"]
+requires = ["setuptools>=83.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -143,6 +143,10 @@ security = [
   "bcrypt>=4.0.1",
   "passlib>=1.7.4",
   "python-jose>=3.5.0",
+  # setuptools>=83.0.0 clears CVE-2026-59890 / PYSEC-2026-3447 (FileList MANIFEST.in
+  # glob matching, packaging-time only). Fix released, so we upgrade rather than ignore;
+  # this floor also forces the pip-audit env off the runner's ambient 79.0.1.
+  "setuptools>=83.0.0",
 ]
 
 [project.scripts]
