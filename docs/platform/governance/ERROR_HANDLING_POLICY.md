@@ -1,45 +1,37 @@
 ---
-title: "Error Handling Policy"
-last_verified: "2026-06-27"
+title: "Error Handling Policy (runtime-owned)"
+last_verified: "2026-07-17"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
-# Error Handling Policy
+# Error Handling Policy (runtime-owned)
 
-This document distinguishes current behavior from required policy rules. It does not redesign the system and does not assume unimplemented mechanisms. Undefined behavior is explicitly marked.
+This document distinguishes current behavior from required policy rules. It does not
+redesign the system and does not assume unimplemented mechanisms. Undefined behavior is
+explicitly marked.
 
-> **Post-split note (2026-06-27):** Relocated into `aindy-runtime` from the
-> pre-split monolith archive. The **Policy Rules** subsections (B) are the
-> normative, repo-agnostic governance. The **Current Implementation**
-> subsections (A) are historical snapshots of monolith behavior at authoring
-> time; the module paths in them have been updated for the runtime/apps split.
-> Paths under `AINDY/...` are runtime-owned in this repo; paths under
-> `apps/...` are app-owned and now live in the **aindy-apps-monolith** repo.
-> Most of the routers and services observed below are app-owned — this policy
-> originated as a combined-monolith audit and is a candidate for a later
-> runtime-only / app-only editorial split (tracked in TECH_DEBT.md).
+> **Scope (editorial split, 2026-07-17 — DOCS-BUCKET-A-1 residual 2):** This is the
+> **runtime-owned** Error Handling Policy for `aindy-runtime`. The **Policy Rules** in each
+> section are normative and **repo-agnostic** — they bind the runtime *and* any app plugin.
+> The **Runtime Implementation** notes observe runtime code (`AINDY/...`) only. This doc
+> originated as a combined-monolith audit; the app-domain implementation observations
+> (`apps/...` routers/services — genesis, ARM, social, bridge, dashboard, authorship,
+> network_bridge, rippletrace, search/seo, tasks) have been split out to the app repo — see
+> [App-owned implementation](#app-owned-implementation-aindy-apps-monolith). The Policy Rules
+> here remain the normative upstream those app surfaces must satisfy.
 
 ## 1. HTTP Error Classification (4xx vs 5xx)
 
-### A. Current Implementation
-- Exceptions are handled inconsistently across routes.
-- `HTTPException` is used for client errors and some server errors:
-- `apps/masterplan/routes/genesis_router.py` _(app-owned)_: raises `HTTPException` for missing parameters, not found sessions, and error conditions during masterplan lock.
-- `apps/arm/routes/arm_router.py` _(app-owned)_: wraps service calls in `try/except` and raises `HTTPException(status_code=500, ...)` on any exception.
-- `apps/bridge/routes/bridge_router.py` _(app-owned)_: raises `HTTPException(status_code=403, ...)` on permission failures.
-- `apps/social/routes/social_router.py` _(app-owned)_: raises `HTTPException(status_code=404, ...)` when profile not found.
-- Many routes do not wrap exceptions; unhandled exceptions will propagate to FastAPI and return 500 responses with default behavior.
-- Routes with minimal or no explicit error handling (no `try/except` and limited `HTTPException` usage) include:
-- `apps/authorship/routes/authorship_router.py` _(app-owned)_
-- `apps/dashboard/routes/dashboard_router.py` _(app-owned)_
-- `AINDY/routes/db_verify_router.py`
-- `apps/dashboard/routes/health_dashboard_router.py` _(app-owned)_
-- `apps/network_bridge/routes/network_bridge_router.py` _(app-owned)_
-- `apps/rippletrace/routes/rippletrace_router.py` _(app-owned)_
-- `apps/search/routes/seo_routes.py` _(app-owned)_
-- `apps/tasks/routes/task_router.py` _(app-owned)_
-- Behavior for unhandled exceptions: Not explicitly defined in current implementation; FastAPI default behavior returns 500.
+### A. Runtime Implementation
+- Exceptions are handled per-route; there is no centralized runtime error formatter, so an
+  unhandled exception propagates to FastAPI and returns a default 500.
+- `AINDY/routes/db_verify_router.py`: minimal explicit error handling (no broad
+  `try/except`); relies on FastAPI default behavior on failure.
+- `SyscallDispatcher.dispatch()` (`AINDY/kernel/syscall_dispatcher.py`) is the exception:
+  it wraps every handler in a uniform `{status, data, trace_id, duration_ms, error}`
+  envelope, with explicit typed re-raises (e.g. `SyscallContractViolation`) placed *before*
+  its belt-and-suspenders `except Exception`.
 
 ### B. Policy Rules
 - 4xx errors are used for client/input/auth/validation issues.
@@ -49,16 +41,17 @@ This document distinguishes current behavior from required policy rules. It does
 
 ## 2. Model Provider Failure Handling
 
-### A. Current Implementation
-- `apps/masterplan/services/genesis_ai.py` _(app-owned)_:
-  - `call_genesis_llm()`: Expects JSON from `response.choices[0].message.content` and uses `json.loads`. On JSON parsing failure, returns a fixed fallback dict: `{"reply": "I need a bit more clarity. Can you elaborate?", "state_update": {}, "synthesis_ready": False}`. No retry logic. No explicit timeout.
-  - `call_genesis_synthesis_llm()`: Uses `response_format={"type": "json_object"}`. On JSON parse failure, returns a minimal valid structure. No retry logic. No explicit timeout.
-  - ✅ **`validate_draft_integrity()` (added 2026-03-17 Genesis Block 4):** Implements 3-attempt retry loop with `for attempt in range(retry_limit)`. On all-retry failure, returns a structured fail-safe dict with `audit_passed=False` and a `confidence_concern` finding. Uses `response_format={"type": "json_object"}`.
-- ARM DeepSeek service _(app-owned, aindy-apps-monolith)_ — the pre-split `deepseek_arm_service.py` was refactored into the `apps/arm/services/deepseek/` package (analyzer: `deepseek_code_analyzer.py`), wired via `apps/arm/bootstrap.py` and `apps/arm/syscalls.py`:
-  - Calls DeepSeek analyzer functions without wrapping exceptions.
-  - Exceptions are handled at the route level in `apps/arm/routes/arm_router.py` _(app-owned)_, which returns HTTP 500.
-  - No retry logic. No explicit timeout.
-  - ✅ **`DeepSeekCodeAnalyzer._call_openai()` (ARM Phase 1, 2026-03-17):** Implements retry with configurable `retry_limit` and `retry_delay_seconds`.
+### A. Runtime Implementation
+- The runtime's LLM boundary is `AINDY/platform_layer/llm_client.py`. Provider failures are
+  contained, not fatal: `FallbackLLMClient` + `get_llm_client_chain()` /
+  `resolve_provider_chain()` (config-driven via `LLM_PROVIDER` + `LLM_FALLBACK_PROVIDERS`,
+  AGENT-HARDEN-5) fail an open-breaker primary over to a secondary provider.
+- `CircuitBreaker` (`AINDY/kernel/circuit_breaker.py`) trips a provider after
+  `failure_threshold` consecutive failures and fails fast (`CircuitOpenError`) until the
+  recovery timeout elapses, so a degraded provider cannot stall the process.
+- Runtime callers surface provider errors as 5xx envelopes; there is no runtime code path
+  that crashes the process on a model error. (App-domain model orchestration — Genesis /
+  ARM — is app-owned; see the app companion.)
 
 ### B. Policy Rules
 - Model failures must not crash the application process.
@@ -67,14 +60,15 @@ This document distinguishes current behavior from required policy rules. It does
 
 ## 3. Database Transaction Handling
 
-### A. Current Implementation
+### A. Runtime Implementation
 - Per-request sessions are created in `AINDY/db/database.py:get_db()` and closed in `finally`.
-- Many services explicitly `commit()` after writes.
-- `AINDY/memory/memory_persistence.py` performs `rollback()` on SQLAlchemy errors before re-raising.
-- Many routes and services do not explicitly rollback on exceptions.
-- ✅ **`apps/masterplan/services/masterplan_factory.py: create_masterplan_from_genesis()` _(app-owned)_ (Genesis Block 5, 2026-03-17):** All DB mutations (masterplan insert + session status freeze + commit) wrapped in try/except with `db.rollback()` in the except clause before re-raise. Atomic unit.
-- Background loops in `apps/tasks/services/task_service.py` _(app-owned; renamed from `task_services.py`)_ create a new `SessionLocal()` per iteration and close it in `finally`.
-- DB session created in `AINDY/main.py` startup event is not explicitly closed.
+- `AINDY/memory/memory_persistence.py` performs `rollback()` on SQLAlchemy errors before
+  re-raising.
+- Scheduler jobs (`AINDY/platform_layer/scheduler_service.py`) follow the documented pattern:
+  open `SessionLocal()` inside `try`, `commit()` + `close()` inside `try`, `logger.error` on
+  failure — each job isolates its own failure.
+- EffectRecord resolution/completion uses `db.commit()` (not `flush()`) so effect state is
+  durable across session close (`AINDY/kernel/syscall_dispatcher.py`).
 
 ### B. Policy Rules
 - Any exception during DB mutation must trigger `rollback()`.
@@ -84,20 +78,21 @@ This document distinguishes current behavior from required policy rules. It does
 
 ## 4. Logging and Severity Mapping
 
-### A. Current Implementation
-- Logging module configured in `AINDY/config.py` with file and stream handlers.
+### A. Runtime Implementation
+- Logging is configured in `AINDY/config.py`; `_build_log_handler` guards file-handler setup
+  with `except OSError` so a read-only subprocess cwd (site-packages) never crashes logging.
 - `AINDY/main.py` logs requests and responses in middleware.
-- Many modules use `print(...)` for operational and error messages (e.g., `apps/tasks/services/task_service.py`, `apps/network_bridge/routes/network_bridge_router.py`, `apps/social/routes/social_router.py` — all app-owned).
-- Structured logging is not implemented.
-- Stack trace exposure in API responses is not explicitly controlled in the code.
+- Structured logging is not centralized; runtime modules use the stdlib `logging` module
+  (not `print`) for operational and error messages.
+- Stack-trace exposure in API responses is not explicitly controlled at the code level.
 
 ### B. Policy Rules
 - Severity levels:
-- `DEBUG`: internal tracing.
-- `INFO`: lifecycle events and expected transitions.
-- `WARNING`: recoverable anomalies.
-- `ERROR`: failed operations.
-- `CRITICAL`: invariant violation or unsafe state.
+  - `DEBUG`: internal tracing.
+  - `INFO`: lifecycle events and expected transitions.
+  - `WARNING`: recoverable anomalies.
+  - `ERROR`: failed operations.
+  - `CRITICAL`: invariant violation or unsafe state.
 - Do not expose stack traces in production API responses.
 
 ## 5. Error Response Contract
@@ -112,14 +107,29 @@ Policy requirement for API errors (even if not fully implemented):
 }
 ```
 
-- Current implementation uses this shape for core routes, but unhandled exceptions still return FastAPI defaults.
+- The syscall envelope (`{status, data, trace_id, duration_ms, error}`) satisfies this for
+  the dispatch surface; unhandled route exceptions still return FastAPI defaults (no
+  centralized formatter — see Known Gaps).
 
-## 6. Known Gaps
-- Inconsistent error handling across routes (`apps/*/routes/*` _(app-owned)_ and `AINDY/routes/*`).
-- ✅ **PARTIALLY RESOLVED (2026-03-17):** Retry logic added to `validate_draft_integrity()` (3-attempt) and `DeepSeekCodeAnalyzer._call_openai()` (configurable). Still missing in `call_genesis_llm()`, `call_genesis_synthesis_llm()`.
-- No explicit timeout handling for external model calls (all three OpenAI service functions).
-- Mixed use of `print(...)` and logging; no structured logging.
-- No centralized error response formatter; default FastAPI error handling is used.
-- DB session created in `AINDY/main.py` startup is not explicitly closed.
-- ✅ **PARTIALLY RESOLVED (2026-03-17):** `create_masterplan_from_genesis()` now has atomic rollback. Most other services/routes still lack explicit rollback.
-- Health check uses `/tools/seo/*` endpoints in `AINDY/routes/health_router.py`, which are not defined in `apps/search/routes/seo_routes.py` _(app-owned)_. This can produce failing endpoint checks and degraded health classification unrelated to actual service health.
+## 6. Known Gaps (runtime-scoped)
+- Inconsistent error handling across `AINDY/routes/*`: no centralized error-response
+  formatter, so unhandled exceptions return FastAPI defaults rather than the §5 contract.
+- No centralized error response formatter for HTTP routes (the syscall envelope covers only
+  the dispatch surface).
+- Structured logging is not centralized; no stack-trace suppression is enforced in
+  production API responses at the code level.
+
+## App-owned implementation (aindy-apps-monolith)
+
+This policy began as a combined-monolith audit. The app-domain **Current Implementation**
+observations it originally carried — Genesis (masterplan) routes/services (`genesis_router`,
+`genesis_ai`, `masterplan_factory`), ARM DeepSeek (`apps/arm/services/deepseek/`), and the
+`social`, `bridge`, `dashboard`, `authorship`, `network_bridge`, `rippletrace`,
+`search/seo`, and `tasks` surfaces — are **app-owned** and were split out on 2026-07-17.
+They are not reproduced here.
+
+- The **Policy Rules** in §§1–5 above are the normative upstream those app surfaces must
+  satisfy; the app repo should reference them rather than restate them.
+- The full pre-split observations remain in this file's **git history** and the pre-split
+  archive; the app team owns authoring an app-side error-handling implementation companion in
+  `aindy-apps-monolith` (`DOCS-MIGRATION-2` on the app board).
