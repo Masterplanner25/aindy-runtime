@@ -208,15 +208,25 @@ already provides the bounded, opt-in autonomous-acting half (flag `AINDY_NEXT_AC
 default off; chain-depth cap; approval gate + admission reuse; app-sourced
 `trigger_execution` only). See the INFINITY-RUNTIME-1 entry above for the full description.
 
-**Genuine remaining delta vs. the ask:**
+**Remaining delta vs. the ask:**
 - (a) Broaden acting verbs beyond `trigger_execution` (`retry`/`schedule_follow_up`) —
-  already tracked as a deferred INFINITY-RUNTIME-1 follow-up.
-- (b) **App-consumable dispatch-outcome contract** (ask part 2): the app wants to read what
-  the runtime *did* with a chosen next action (`NEXT_ACTION_CHOSEN` → dispatch → outcome
-  chain). Currently reuses existing events; there is no dedicated outcome record/event. This
-  is the real net-new piece if FR-3 is prioritized — needs an event/schema decision (mind
-  the frozen-hash baseline when adding a `SystemEventTypes` value).
-- (c) Flip `AINDY_NEXT_ACTION_ACTING` after app soak.
+  still a deferred INFINITY-RUNTIME-1 follow-up (touches RetryPolicy / scheduler semantics).
+- (b) **App-consumable dispatch-outcome contract — SHIPPED 2026-07-17.** New un-prefixed
+  ledger event **`SystemEventTypes.NEXT_ACTION_DISPATCHED`** (`next_action.dispatched`) +
+  `core/next_action.py::emit_next_action_dispatched` + the `DISPATCH_DISPOSITIONS` contract.
+  Every app-sourced `trigger_execution` candidate (once acting is enabled) emits exactly one
+  outcome event, parented to its `NEXT_ACTION_CHOSEN` via `parent_event_id`, with a canonical
+  `disposition`: decision stage (`dispatched` / `declined_no_objective` /
+  `declined_chain_depth` / `declined_admission` / `declined_enqueue_error` / `declined_error`)
+  and resolution stage from the follow-up job (`followup_executed` / `followup_pending_approval`
+  / `followup_create_failed`, carrying `followup_run_id` + `followup_status`). Pre-candidate
+  no-ops emit nothing. `execution.py` threads the chosen event id as the dispatch parent. The
+  app reads the `NEXT_ACTION_CHOSEN → NEXT_ACTION_DISPATCHED` chain from the ledger. Frozen-hash
+  baseline regenerated (`tests/baselines/system_event_contract.json`, `3389c3b6…`). No schema
+  change (SystemEvent already carries `parent_event_id` + JSON `payload`). Tests:
+  `tests/unit/test_next_action_acting.py` (+8 outcome cases). Contract doc:
+  `docs/runtime/INFINITY_LOOP_AUDIT.md` (Gap 4).
+- (c) Flip `AINDY_NEXT_ACTION_ACTING` after app soak (unchanged).
 
 ### FR-4 — Docs relocation: Bucket A + runtime half of `INVARIANTS.md`
 

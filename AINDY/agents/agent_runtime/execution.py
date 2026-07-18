@@ -347,7 +347,7 @@ def _emit_agent_next_action(run, *, db: Session, user_id: str, hook_action=None)
         action = hook_action or default_next_action(
             status=status, result=getattr(run, "result", None), attempts_remaining=False
         )
-        emit_next_action_chosen(
+        chosen_event_id = emit_next_action_chosen(
             db=db,
             run_id=str(run.id),
             next_action=action,
@@ -356,12 +356,15 @@ def _emit_agent_next_action(run, *, db: Session, user_id: str, hook_action=None)
             user_id=user_id,
             source="agent",
         )
-        # Deliverable C — acting half (opt-in, default-off). Record-first stays the
-        # default; when AINDY_NEXT_ACTION_ACTING is on, an app-sourced
-        # trigger_execution dispatches one bounded follow-up run. Best-effort.
+        # Deliverable C / FR-3 — acting half (opt-in, default-off). Record-first stays the
+        # default; when AINDY_NEXT_ACTION_ACTING is on, an app-sourced trigger_execution
+        # dispatches one bounded follow-up run and records a NEXT_ACTION_DISPATCHED outcome
+        # parented to the chosen event. Best-effort.
         from AINDY.core.next_action_dispatch import maybe_act_on_next_action
 
-        maybe_act_on_next_action(run, action, db=db, user_id=user_id)
+        maybe_act_on_next_action(
+            run, action, db=db, user_id=user_id, parent_event_id=chosen_event_id
+        )
     except Exception:  # best-effort; must not break completion
         logger.debug("[AgentRuntime] next-action emit skipped for run %s", getattr(run, "id", "?"), exc_info=True)
 
