@@ -158,6 +158,7 @@ inform planning — it only informs execution.
 | MemoryWritten | ✅ | `SystemEventTypes.MEMORY_WRITE` |
 | ScoreComputed | ✅ | `SystemEventTypes.SCORE_COMPUTED` emitted per run via `core/execution_score.py` (Gap 3, 2026-07-08). |
 | NextActionChosen | ✅ | `SystemEventTypes.NEXT_ACTION_CHOSEN` emitted per finished run via `core/next_action.py` (Gap 4, 2026-07-08; record-first). |
+| NextActionDispatched | ✅ | `SystemEventTypes.NEXT_ACTION_DISPATCHED` — dispatch-outcome contract (Deliverable C / FR-3); one per app-sourced `trigger_execution` candidate, parented to `NEXT_ACTION_CHOSEN`. |
 | ExecutionCompleted | ✅ | `SystemEventTypes.EXECUTION_COMPLETED` |
 | ExecutionFailed | ✅ | `SystemEventTypes.EXECUTION_FAILED` |
 
@@ -418,6 +419,32 @@ Closed: `core/next_action.py` defines the NextAction contract; the runtime captu
 completion-hook return (was discarded), falls back to a runtime-default decision, and emits
 `NEXT_ACTION_CHOSEN` for completed + failed runs. Record-first (no autonomous action; app
 orchestrator consumes it) — **lifts the app-side Infinity Phase 2 gate.**
+
+**Acting half + dispatch-outcome contract (Deliverable C / FR-3, opt-in).** With
+`AINDY_NEXT_ACTION_ACTING` on, `core/next_action_dispatch.py::maybe_act_on_next_action`
+dispatches one bounded follow-up run for an app-sourced `trigger_execution` (see the
+INFINITY-RUNTIME-1 entry in `TECH_DEBT.md` for the acting rails). The **dispatch-outcome
+contract** makes what the runtime did app-readable: every app-sourced `trigger_execution`
+candidate emits exactly one `NEXT_ACTION_DISPATCHED` event, parented to its
+`NEXT_ACTION_CHOSEN` via `parent_event_id`, carrying a canonical `disposition`
+(`core/next_action.py::DISPATCH_DISPOSITIONS`):
+
+| Stage | Disposition | Meaning |
+|---|---|---|
+| decision | `dispatched` | a follow-up run was enqueued |
+| decision | `declined_no_objective` | `trigger_execution` carried no objective |
+| decision | `declined_chain_depth` | the NextAction→run chain hit `AINDY_NEXT_ACTION_MAX_CHAIN` |
+| decision | `declined_admission` | the active-run cap (`AINDY_NEXT_ACTION_MAX_ACTIVE`) was reached |
+| decision | `declined_enqueue_error` / `declined_error` | enqueue / admission / depth-walk fault |
+| resolution | `followup_executed` | the follow-up run was created and executed (`followup_status`) |
+| resolution | `followup_pending_approval` | created but held by the approval gate (not executed) |
+| resolution | `followup_create_failed` | `create_run` produced no run |
+
+Payload fields: `parent_run_id`, `disposition`, `dispatched`, `reason`,
+`objective_preview`, `chain_depth`, and (resolution stage) `followup_run_id` /
+`followup_status`. The app reads the `NEXT_ACTION_CHOSEN → NEXT_ACTION_DISPATCHED` chain
+from the ledger. Pre-candidate no-ops (acting disabled / non-`trigger_execution` verb /
+runtime-default source) emit nothing — no dispatch decision was made.
 
 **Gap 5 — Async jobs are outside the full loop. ✅ CLOSED 2026-07-08 (opt-in).**
 ~~Jobs submitted via `sys.v1.job.submit` do not automatically produce memory, trigger recall,
