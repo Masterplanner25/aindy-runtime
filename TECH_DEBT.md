@@ -1630,7 +1630,7 @@ the builder stage `pip install` line.
 
 ## NODUS-UPGRADE-1 — nodus-lang pinned at 3.0.2; v4.0.0 available
 
-**Status:** CLOSED (2026-06-11); pin last updated 2026-06-19 (4.0.3 → 4.0.5)
+**Status:** CLOSED (2026-06-11); pin last updated 2026-07-17 (4.0.5 → 4.1.0)
 
 **Implemented:** Bumped `pyproject.toml` + `AINDY/requirements.txt` pin from `nodus-lang==3.0.2`
 to `nodus-lang==4.0.3` (latest). One embedding API fix required: `nodus_worker.py` accessed
@@ -1640,6 +1640,17 @@ changes needed. `NODUS_DEVELOPER_GUIDE.md` §6 heading and §8 upgrade notes upd
 **2026-06-19:** Bumped to `nodus-lang==4.0.5`. No code changes required — 4.0.4 fixed
 `identity.session_id()` propagation to child VMs and retry trace bleed; 4.0.5 is stability
 graduations and companion tooling only. All 504 unit tests green.
+
+**2026-07-17:** Bumped to `nodus-lang==4.1.0` (skipping 4.0.6–4.0.8). No code changes
+required. Risk-probed before landing (local install of 4.1.0): the full nodus unit surface —
+`test_nodus_{execution_budget,flow_compiler,runtime_contract,schedule_misfire,std_sys_guard,
+tool_seam,workflow_registry}` — passes identically to 4.0.5 (61 tests), and the three
+version-fragile internal couplings the runtime depends on all survived the bump:
+`nodus.services.syscall_runtime.call_syscall` (the NODUS-SYS-SURFACE-1 fail-loud monkeypatch
+target), `nodus.runtime.embedding.NodusRuntime._get_active_vm()`, and `register_function`
+builtin registration. The install pulled no new/changed transitive deps (pip-audit
+unaffected). Does NOT address NODUS-WARMPOOL-1 (cold-start wall-clock timeout — a runtime
+architecture issue, not a nodus-lang concern).
 
 ---
 
