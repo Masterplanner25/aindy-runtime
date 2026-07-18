@@ -1,5 +1,68 @@
 # Changelog
 
+## 1.8.0 — 2026-07-17
+
+Additive and backward-compatible; all new enforcement/behavior is opt-in and inert by
+default. No schema-contract change (stays `2026-07-12.4`). Resolves the four app-side
+runtime feature requests (`APP-FR-1..4`); two were already satisfied by prior work.
+
+### Added — FR-1: connector registration hook + capability-enforced outbound I/O
+
+Apps register outbound connectors through a runtime hook instead of a hardcoded `if/elif`
+ladder, and every outbound call flows through the same authorization stack `execute_tool`
+applies to agent tools.
+
+- **`register_connector(connector_type, handler, *, capability=…)`** in
+  `platform_layer/registry.py` (+ `get_connector` / `iter_connectors`,
+  `INPROC_CAP_REGISTER_CONNECTOR`, `validate_connector_handler`), symmetric to
+  `register_job`. Dispatch via `connector_service.dispatch_connector` returning a normalized
+  `{success, result, error[, denied]}` envelope; `ConnectorContext.call(...)` is the
+  pre-bound authorized-call helper handed to each connector.
+- **`authorized_external_call(...)` + `OutboundCallDenied`** (`external_call_service.py`)
+  grow the observability-only `perform_external_call` into a real chokepoint: capability
+  recipient/domain allowlist → rate limit → socket-level egress guard → JIT credential
+  vaulting (`resolve_secret`) → observability. Denials raise before any network I/O.
+- **`outbound_http.outbound_request(...)`** — shared HTTP client with exponential-backoff
+  retry and a per-service circuit breaker, routed through the authorized boundary.
+- Vacuous until a `CapabilityPolicy` / secret scope / `AINDY_EGRESS_ENFORCEMENT` is
+  configured — registering a connector changes routing only. Contract:
+  `docs/runtime/CONNECTOR_CONTRACT.md`.
+
+### Added — FR-3: `NEXT_ACTION_DISPATCHED` dispatch-outcome contract
+
+Completes the Deliverable C acting loop with an app-readable record of what the runtime
+*did* with a chosen `trigger_execution` (the record-first `NEXT_ACTION_CHOSEN` only said
+what it *chose*).
+
+- New un-prefixed ledger event `SystemEventTypes.NEXT_ACTION_DISPATCHED` +
+  `emit_next_action_dispatched` + the `DISPATCH_DISPOSITIONS` contract in `core/next_action.py`.
+  Every app-sourced `trigger_execution` candidate (once acting is enabled) emits exactly one
+  outcome — decision stage (`dispatched` / `declined_no_objective` / `declined_chain_depth`
+  / `declined_admission` / `declined_enqueue_error` / `declined_error`) and resolution stage
+  from the follow-up job (`followup_executed` / `followup_pending_approval` /
+  `followup_create_failed`) — parented to its `NEXT_ACTION_CHOSEN` via `parent_event_id`.
+- No schema change (`SystemEvent` already carries `parent_event_id` + JSON `payload`).
+
+### Changed — FR-4 / DOCS-BUCKET-A-1: docs reconciliation + `ERROR_HANDLING_POLICY.md` split
+
+- `ERROR_HANDLING_POLICY.md` split into a **runtime-only** doc (normative repo-agnostic
+  Policy Rules + `AINDY/...` implementation, including the runtime's real model-failure story
+  via `llm_client` fallback chain + `CircuitBreaker`); app-domain observations pointer to
+  `aindy-apps-monolith`. Closes DOCS-BUCKET-A-1 (FR-2 and FR-4 were already satisfied by
+  prior work — `register_nodus_workflow` / the Bucket A migration).
+
+### Security
+
+- Pin `setuptools>=83.0.0` (build-system + `[security]` extra) to clear CVE-2026-59890 /
+  PYSEC-2026-3447 (packaging-time `FileList` MANIFEST.in glob matching; not runtime-reachable).
+
+### Dependencies
+
+- `nodus-lang` 4.0.5 → 4.1.0 (risk-probed: full nodus unit surface + the version-fragile
+  internal couplings verified; no code changes, no new transitive deps). `nltk` 3.9.4 →
+  3.10.0. Dev/tooling: `ruff` 0.15.20 → 0.15.22, `typescript` 6.0.3 → 7.0.2, `postcss`
+  8.5.16 → 8.5.19.
+
 ## 1.7.0 — 2026-07-13
 
 ### Added — RTR-4 gap (c): delegation-token-scoped private memory
