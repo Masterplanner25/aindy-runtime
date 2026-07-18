@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.9.0 — 2026-07-18
+
+Additive and backward-compatible; no schema-contract change (stays `2026-07-12.4`).
+Nodus-native execution reach (app handoff FR-5) plus a Nodus cold-start correctness fix.
+
+### Added — FR-5: native Nodus workflows can reach app logic
+
+A `.nd` run via `run_nodus_workflow` can now invoke app callables through **both** VM
+surfaces (previously neither worked from the public entry point):
+
+- **(a) `call_tool` + capability token.** `run_nodus_workflow` gains paired
+  `capability_token` + `run_id` params, threaded into flow state as
+  `execution_token` / `agent_run_id` (the keys the agent path already uses) so the
+  `call_tool` seam is reachable and `execute_tool` enforces the token per tool. The token
+  binds to `run_id` + `user_id`, so both are required together. `initial_state`
+  (previously dropped) is now merged into flow state.
+- **(b) `sys()` + app syscalls.** The worker's `sys()` seam now loads the app plugin
+  stack (`dispatch_worker_syscall` → `_ensure_tools_loaded()`, lazy/idempotent) before
+  dispatch, so app-registered syscalls resolve instead of returning `"Unknown syscall"`.
+  Enforcement is unchanged — each app syscall keeps its declared capability. (Corrected
+  diagnosis: apps already register into `SYSCALL_REGISTRY`; the gap was a subprocess
+  plugin-load ordering issue, not dispatcher resolution.)
+
+Contract: `NODUS_WORKFLOW_CONTRACT.md` §§8.1–8.2.
+
+### Changed — NODUS-WARMPOOL-1 Option A: worker cold-start off the script budget
+
+The worker's inner `run_source(timeout_ms=)` is now the authoritative *script* clock; the
+outer `subprocess.run(timeout=)` is widened to `AINDY_NODUS_MAX_EXECUTION_MS` +
+**`AINDY_NODUS_BOOT_ALLOWANCE_MS`** (default 15000). A script overrun trips the inner nodus
+timer first (clean "script exceeded {max}ms"); the outer kill becomes a hard safety net for
+boot + a hung worker. Fixes app-profile runs that died on the ~12s plugin cold-start rather
+than script work. Set `AINDY_NODUS_BOOT_ALLOWANCE_MS=0` to restore the old shared budget.
+(Per-run re-boot latency is unchanged — a warm-pool fix, NODUS-WARMPOOL-1 B/C, remains
+deferred.)
+
 ## 1.8.0 — 2026-07-17
 
 Additive and backward-compatible; all new enforcement/behavior is opt-in and inert by
