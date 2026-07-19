@@ -171,12 +171,102 @@ def test_pool_recycles_after_max_requests(monkeypatch):
 def test_pool_drops_worker_on_crash(monkeypatch):
     created = _patch_worker_factory(monkeypatch)
     p = NodusWorkerPool()
-    p.execute({}, timeout_s=5)  # spawns created[0]
+    p.execute({}, timeout_s=5)  # spawns created[0], returned to idle
     created[0].raise_on_execute = WorkerCrashed("boom")
     with pytest.raises(WorkerCrashed):
         p.execute({}, timeout_s=5)
     assert created[0].killed is True
-    assert p._worker is None  # dropped → next call respawns (no retry, no double-exec)
+    assert p._idle == []  # not returned to the idle set
+    assert p._size == 0  # dropped → next call respawns (no retry, no double-exec)
+
+
+# ── Phase 2: concurrency + backpressure ──────────────────────────────────────
+
+def test_pool_serves_concurrent_requests_up_to_size(monkeypatch):
+    monkeypatch.setattr(pool_mod, "_pool_size", lambda: 2)
+    created: list = []
+    start = threading.Event()
+    inflight = threading.Semaphore(0)
+
+    class _BlockWorker:
+        def __init__(self):
+            self.requests = 0
+            self.killed = False
+            created.append(self)
+
+        def alive(self):
+            return True
+
+        def execute(self, payload, *, timeout_s):
+            inflight.release()  # announce we're running
+            start.wait(3)       # hold the worker until released
+            self.requests += 1
+            return {"ok": True}
+
+        def kill(self):
+            self.killed = True
+
+    monkeypatch.setattr(pool_mod, "WarmNodusWorker", _BlockWorker)
+    p = NodusWorkerPool()
+    results: list = []
+
+    def _run():
+        results.append(p.execute({}, timeout_s=5))
+
+    t1 = threading.Thread(target=_run)
+    t2 = threading.Thread(target=_run)
+    t1.start()
+    t2.start()
+    # Both requests must be in-flight at the same time — proves N=2 run concurrently
+    # (a serial pool would only release inflight once until the first finished).
+    assert inflight.acquire(timeout=3)
+    assert inflight.acquire(timeout=3)
+    assert len(created) == 2
+    start.set()
+    t1.join(3)
+    t2.join(3)
+    assert results == [{"ok": True}, {"ok": True}]
+
+
+def test_pool_raises_poolbusy_when_saturated(monkeypatch):
+    monkeypatch.setattr(pool_mod, "_pool_size", lambda: 1)
+    monkeypatch.setattr(pool_mod, "_acquire_timeout_s", lambda: 0.05)
+    running = threading.Event()
+    release = threading.Event()
+
+    class _BlockWorker:
+        def __init__(self):
+            self.requests = 0
+
+        def alive(self):
+            return True
+
+        def execute(self, payload, *, timeout_s):
+            running.set()
+            release.wait(3)
+            return {"ok": True}
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(pool_mod, "WarmNodusWorker", _BlockWorker)
+    p = NodusWorkerPool()
+    holder = threading.Thread(target=lambda: p.execute({}, timeout_s=5))
+    holder.start()
+    assert running.wait(3)  # the single worker is now occupied
+    with pytest.raises(pool_mod.PoolBusy):
+        p.execute({}, timeout_s=5)  # saturated → waits _acquire_timeout_s → PoolBusy (spill)
+    release.set()
+    holder.join(3)
+
+
+def test_pool_size_env(monkeypatch):
+    monkeypatch.delenv("AINDY_NODUS_WARM_POOL_SIZE", raising=False)
+    assert pool_mod._pool_size() == 4
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL_SIZE", "8")
+    assert pool_mod._pool_size() == 8
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL_SIZE", "0")  # invalid → default
+    assert pool_mod._pool_size() == 4
 
 
 # ── env knobs ────────────────────────────────────────────────────────────────
