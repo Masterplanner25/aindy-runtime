@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.10.0 — 2026-07-19
+
+Additive and backward-compatible; no schema-contract change (stays `2026-07-12.4`). Closes
+NODUS-WARMPOOL-1 (the durable Nodus cold-start fix) and fixes a HIGH-severity connection-pool
+bug that made browser sign-in unusable.
+
+### Fixed — RT-MEMTXN-LEAK-1: memory recall pinned a DB connection during the embedding call
+
+A browser login took ~40s and exceeded the web client's 30s timeout, so a real user could not
+sign in. `MemoryNodeDAO.recall()` ran a DB query (`_count_complete_embeddings`, which
+autobegins a transaction on the request-shared session) and then made the **synchronous
+embedding API call** while that transaction was open — the connection sat `idle in
+transaction` for the API's duration. Under the concurrent request fan-out a browser login
+triggers, ~60–85 connections piled up and exhausted the pool.
+
+**Fix (reorder, not rollback):** `recall()` now generates the query embedding **before** any DB
+query in the method, so the session holds no pooled connection across the ~seconds API call;
+the fast DB queries re-acquire one only for their execution. Note we deliberately do **not**
+rollback the request-shared session to free its connection — `session.dirty` cannot see
+Core-level `db.execute(UPDATE …)` or an outer transaction, so that would discard in-flight
+request state.
+
+### Added — NODUS-WARMPOOL-1 Option B: warm worker pool (CLOSES the item)
+
+Nodus executions no longer pay the plugin-stack cold-start (~12s on heavy app profiles) on
+every run. All opt-in behind `AINDY_NODUS_WARM_POOL` (default off), with a fresh-subprocess
+fallback on any fault — enabling it can never make execution worse than the default.
+
+- **Phase 1 — warm worker.** `nodus_worker.py` refactored so the one-shot entry and the new
+  `serve_forever()` share `run_one(payload)`, which rebuilds **every** per-request object, so a
+  reused process carries no cross-run state. Length-prefixed JSON framing; new
+  `nodus_worker_pool.py` with respawn-on-crash + max-requests recycle
+  (`AINDY_NODUS_WARM_MAX_REQUESTS`, default 500) and a cross-platform read timeout.
+- **Phase 2 — bounded pool.** Up to `AINDY_NODUS_WARM_POOL_SIZE` (default 4) workers, each
+  serving one request at a time, so N executions run concurrently. Saturation waits
+  `AINDY_NODUS_WARM_ACQUIRE_TIMEOUT_MS` (default 2000) then spills to a fresh subprocess
+  (bounded backpressure — the warm path never blocks unboundedly).
+- **Phase 3 — observability + lifecycle.** `pool.stats()` + Prometheus
+  (`aindy_nodus_warm_pool_events_total{event}`, `aindy_nodus_warm_pool_workers{state}`);
+  `pool.drain(timeout_s)` (stop checkouts → spill, wait for in-flight, kill);
+  `pool.prewarm()` pays the plugin load ahead of traffic via a worker `{"__warmup__": true}`
+  control request (tool-less scripts still skip the load), kicked in a background thread on
+  first use when `AINDY_NODUS_WARM_PREWARM` is on.
+
+### Changed — docs
+
+- `UI_CONTRACT.md` gains an authoritative canonical `/platform/*` route table and the
+  runtime-vs-app route ownership line (a UI kit carries runtime/platform routes; app-domain
+  paths belong in an app-owned route map).
+
 ## 1.9.0 — 2026-07-18
 
 Additive and backward-compatible; no schema-contract change (stays `2026-07-12.4`).
