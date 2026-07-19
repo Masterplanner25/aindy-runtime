@@ -588,7 +588,7 @@ class MemoryNodeDAO:
 
         At least one of query or tags required.
         """
-        from AINDY.memory.embedding_service import generate_query_embedding, release_read_transaction
+        from AINDY.memory.embedding_service import generate_query_embedding
         import math
 
         candidates = []
@@ -596,11 +596,13 @@ class MemoryNodeDAO:
         # Semantic path
         if query:
             # RT-MEMTXN-LEAK-1 — generate_query_embedding() is a slow LLM/embedding-API call.
-            # Release any open read-only transaction on the (request-shared) session BEFORE it,
-            # so the DB connection returns to the pool for the API's duration instead of sitting
-            # `idle in transaction`. The embedding is generated FIRST (no DB query held), then
-            # the DB queries below re-acquire a connection for their (fast) execution.
-            release_read_transaction(self.db)
+            # Generate it FIRST, before any DB query in this method, so the session is not
+            # holding a pooled connection open (`idle in transaction`) for the API's duration.
+            # After the request's prior work commits (auth handler, memory capture), the session
+            # holds no connection here; embedding-first keeps it that way, and the DB queries
+            # below (_count_complete_embeddings, find_similar) then re-acquire a connection for
+            # their fast execution. (We must NOT rollback the request-shared session to release
+            # it — that would discard Core-level updates the request has in flight.)
             query_embedding = None
             query_embedding_ready = False
             try:

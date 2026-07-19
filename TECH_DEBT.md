@@ -19,16 +19,25 @@ SQLAlchemy pool; the rest of the request then waited the full `pool_timeout`. Th
 exactly. Note the recall *code* was not itself leaking sessions — it correctly used the
 caller's `db`; the leak was **holding that one connection across a slow external call**.
 
-**Fix.** New `embedding_service.release_read_transaction(db)` — returns the connection to the
-pool before the embedding call (guarded: only rolls back when the session has no pending
-writes, so a caller mid-write is never rolled back; best-effort, never a correctness gate).
-Applied at all three synchronous `generate_query_embedding` call sites: `MemoryNodeDAO.recall`
-(embedding now generated first, `_count_complete_embeddings` moved after it), the
-`/memory/nodes/search` route, and the `memory_nodes_search_similar` flow node. Net: the
-connection is held only for the (fast) DB queries, not the ~seconds API call, so it no longer
-sits idle-in-transaction and the pool is not exhausted. Tests: `test_memory_txn_leak.py` (5 —
-guard behavior + release-before-embed ordering). End-to-end (no `idle in transaction` under a
-real login, sign-in under 30s) is app-side `pg_stat_activity` verification.
+**Fix (reorder, not rollback).** `MemoryNodeDAO.recall` now generates the query embedding
+**before** any DB query in the method (`_count_complete_embeddings` moved *after* it). After
+the request's prior work commits (auth handler, then the pipeline's memory capture), the
+session holds no pooled connection when recall runs; embedding-first keeps it that way, so the
+~seconds API call happens connection-free, and the fast DB queries below re-acquire a
+connection only for their execution. The `/memory/nodes/search` route and the
+`memory_nodes_search_similar` flow node already embed-first (comments added). Tests:
+`test_memory_txn_leak.py` (2 — embed-before-DB ordering + no-rollback). End-to-end (no
+`idle in transaction` under a real login, sign-in under 30s) is app-side `pg_stat_activity`
+verification.
+
+> **Rejected approach — do NOT rollback the request-shared session to release its connection.**
+> A first cut added `release_read_transaction(db)` (a guarded `db.rollback()` before the
+> embedding). It broke `test_agent_approve_idempotency` (a shared session in flight): the
+> `session.new/dirty/deleted` guard only catches ORM-tracked changes, **not** Core-level
+> `db.execute(UPDATE …)` or a test/pipeline outer transaction — so the rollback discarded
+> in-flight request state. **Rolling back a request-shared session mid-request is unsafe;**
+> the safe remedy is to not open the transaction until after the slow external call (the
+> reorder).
 
 **Possible follow-up (not required):** `get_context`'s multi-`node_type` loop re-embeds the
 same query per type — embed once at the orchestrator and pass the vector down to avoid

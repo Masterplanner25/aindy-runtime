@@ -154,29 +154,6 @@ def generate_embedding(text: str) -> list:
     ) from last_exc
 
 
-def release_read_transaction(db) -> None:
-    """RT-MEMTXN-LEAK-1 — return the DB connection to the pool before a slow embedding call.
-
-    ``generate_query_embedding`` makes a synchronous LLM/embedding-API call (seconds). If a
-    read transaction is open on the (request-shared) session while it runs, the DB connection
-    sits ``idle in transaction`` (``wait_event_type=Client``) for the whole API duration;
-    under concurrency this exhausts the pool (a single browser login fanned out ~60 such
-    connections and hit ``pool_timeout``). Call this immediately BEFORE embedding so the
-    connection is released for the API's duration and re-acquired by the next query.
-
-    Guarded and best-effort: only rolls back when the session holds no pending writes
-    (``new``/``dirty``/``deleted`` all empty), so a caller mid-write is never rolled back;
-    any error is swallowed (this is a pool-hygiene optimization, never a correctness gate).
-    """
-    if db is None:
-        return
-    try:
-        if not (db.new or db.dirty or db.deleted):
-            db.rollback()
-    except Exception:
-        pass
-
-
 def generate_query_embedding(query: str) -> list:
     """
     Generate an embedding for a similarity query.
