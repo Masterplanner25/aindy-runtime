@@ -1,10 +1,30 @@
 # Technical Debt
 
-## RT-MEMTXN-LEAK-1 — memory recall held a DB connection across the embedding API call
+## RT-MEMTXN-LEAK-1 — memory reads held DB connections across the embedding API call
 
-**Status:** **FIXED 2026-07-19.** Accepts app handoff `RT-MEMTXN-LEAK-1` (apps-monolith,
+**Status:** **FIXED in two parts.** Accepts app handoff `RT-MEMTXN-LEAK-1` (apps-monolith,
 HIGH — a browser login took ~40s and exceeded the web client's 30s timeout, so a real user
-could not sign in).
+could not sign in). **Part 1 (recall read path) shipped in v1.10.0** — app-verified as a
+*partial* fix: leaked connections now drain at request end (`idle in transaction` falls back
+to ~2 after login) instead of lingering to the 120s reaper. **Part 2 (embedding-write
+fan-out) fixed 2026-07-19** — the remaining within-request fan-out that kept login at ~45s.
+
+**Part 2 — the embedding-job fan-out (the app's follow-up report).** App-side
+`pg_stat_activity` on 1.10.0 showed 30+ **concurrent** connections, each running **exactly
+one** `SELECT memory_nodes …` then sitting `idle in transaction` with **`xact_age_s ==
+idle_s`** — i.e. each opened a transaction, did one read, and held it for the transaction's
+whole life. Traced to `embedding_jobs.process_embedding_job`: `queue_system_event(...
+EMBEDDING_STARTED, required=True)` commits, which **expires** `memory_node`, so reading
+`memory_node.content` triggers a **refresh `SELECT memory_nodes`** that opens a *fresh*
+transaction — and `generate_embedding()` (the slow LLM/embedding API call) then ran with it
+open. One job is enqueued **per captured memory**, each on its **own** session, so a single
+request fanned out to dozens of concurrently-held connections → pool exhaustion → ~45s login.
+**Fix:** capture `node_content` into a local, `db.commit()` (guarded) to return the connection
+to the pool, *then* embed; the write below re-acquires a connection for its fast execution.
+The job owns its session (not request-shared) and the `EMBEDDING_STARTED` event should be
+durable anyway, so committing there is correct as well as necessary. Test:
+`test_memory_txn_leak.py::test_embedding_job_releases_connection_before_embedding` (pins the
+commit-before-embed order).
 
 **Root cause (traced, not speculated).** `MemoryNodeDAO.recall()` ran
 `_count_complete_embeddings()` (a DB query → autobegins a transaction on the request-shared

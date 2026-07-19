@@ -99,8 +99,26 @@ def process_embedding_job(payload: dict[str, Any], db):
         required=True,
     )
 
+    # RT-MEMTXN-LEAK-1 (follow-up) — release the DB connection BEFORE the slow embedding API
+    # call. `queue_system_event(required=True)` above commits, which expires `memory_node`, so
+    # reading `.content` triggers a refresh `SELECT memory_nodes …` that opens a FRESH
+    # transaction — and `generate_embedding()` then runs (seconds) with it open, pinning the
+    # connection `idle in transaction` (xact_age == idle_s). One job is enqueued per captured
+    # memory, so a single request fans out to dozens of concurrently-held connections and
+    # exhausts the pool (login ~45s). Read the content, commit to return the connection to the
+    # pool, then embed; the write below re-acquires a connection for its fast execution. This
+    # session is the job's own (not request-shared), and the EMBEDDING_STARTED event should be
+    # durable regardless, so committing here is correct as well as necessary.
+    node_content = memory_node.content
     try:
-        embedding = generate_embedding(memory_node.content)
+        db.commit()
+    except Exception as exc:  # never fail the job on pool hygiene
+        logger.warning(
+            "[EmbeddingJobs] pre-embedding commit failed for %s: %s", payload["memory_id"], exc
+        )
+
+    try:
+        embedding = generate_embedding(node_content)
         if not embedding or not any(float(value) != 0.0 for value in embedding):
             raise RuntimeError("Embedding generation returned an empty or zero vector")
 

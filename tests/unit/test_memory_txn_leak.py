@@ -38,6 +38,47 @@ def test_recall_generates_embedding_before_touching_the_db(monkeypatch):
     assert "db_count" in order and order.index("embed") < order.index("db_count")
 
 
+def test_embedding_job_releases_connection_before_embedding(monkeypatch):
+    """RT-MEMTXN-LEAK-1 follow-up — the embedding-write fan-out.
+
+    `queue_system_event(required=True)` commits, expiring memory_node; reading `.content`
+    then triggers a refresh SELECT that opens a FRESH transaction, and generate_embedding()
+    used to run (seconds) with it open — one held connection per queued job, dozens per
+    request, exhausting the pool. The job must commit (release the connection) BEFORE
+    embedding.
+    """
+    import uuid as _uuid
+
+    order: list[str] = []
+
+    node = MagicMock()
+    node.content = "remember this"
+    node.id = _uuid.uuid4()
+    node.extra = {}
+    node.source_event_id = None
+    node.embedding_pending = True
+    node.embedding_status = "pending"
+    node.user_id = "u1"
+
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = node
+    db.commit.side_effect = lambda: order.append("commit")
+
+    monkeypatch.setattr("AINDY.memory.embedding_jobs.queue_system_event", lambda **k: "evt-1")
+    monkeypatch.setattr(
+        "AINDY.memory.embedding_jobs.generate_embedding",
+        lambda text: order.append(f"embed:{text}") or [0.1, 0.2],
+    )
+
+    from AINDY.memory import embedding_jobs
+
+    embedding_jobs.process_embedding_job({"memory_id": str(node.id), "trace_id": "t"}, db)
+
+    # The connection is returned to the pool (commit) BEFORE the slow embedding API call.
+    assert order[0] == "commit"
+    assert order[1] == "embed:remember this"  # embedded from a captured local, not a lazy attr
+
+
 def test_recall_does_not_rollback_the_shared_session(monkeypatch):
     """The fix must never rollback the request-shared session (that discards in-flight writes)."""
     monkeypatch.setattr(
