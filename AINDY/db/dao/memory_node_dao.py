@@ -588,17 +588,19 @@ class MemoryNodeDAO:
 
         At least one of query or tags required.
         """
-        from AINDY.memory.embedding_service import generate_query_embedding
+        from AINDY.memory.embedding_service import generate_query_embedding, release_read_transaction
         import math
 
         candidates = []
 
         # Semantic path
         if query:
-            embedding_rows_available = self._count_complete_embeddings(
-                user_id=user_id,
-                node_type=node_type,
-            )
+            # RT-MEMTXN-LEAK-1 — generate_query_embedding() is a slow LLM/embedding-API call.
+            # Release any open read-only transaction on the (request-shared) session BEFORE it,
+            # so the DB connection returns to the pool for the API's duration instead of sitting
+            # `idle in transaction`. The embedding is generated FIRST (no DB query held), then
+            # the DB queries below re-acquire a connection for their (fast) execution.
+            release_read_transaction(self.db)
             query_embedding = None
             query_embedding_ready = False
             try:
@@ -606,6 +608,11 @@ class MemoryNodeDAO:
                 query_embedding_ready = self._embedding_is_usable(query_embedding)
             except Exception as exc:
                 logger.warning("[MemoryNodeDAO] query embedding generation failed, falling back: %s", exc)
+
+            embedding_rows_available = self._count_complete_embeddings(
+                user_id=user_id,
+                node_type=node_type,
+            )
 
             if query_embedding_ready and embedding_rows_available:
                 similar = self.find_similar(

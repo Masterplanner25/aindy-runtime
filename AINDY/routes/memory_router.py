@@ -423,9 +423,11 @@ async def search_similar_nodes(
     current_user=Depends(get_current_user),
 ):
     def handler(ctx):
-        from AINDY.memory.embedding_service import generate_query_embedding
+        from AINDY.memory.embedding_service import generate_query_embedding, release_read_transaction
         from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
 
+        # RT-MEMTXN-LEAK-1 — don't hold a DB connection across the slow embedding API call.
+        release_read_transaction(db)
         query_embedding = generate_query_embedding(body.query)
         dao = MemoryNodeDAO(db)
         results = dao.find_similar(

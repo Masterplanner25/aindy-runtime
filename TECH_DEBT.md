@@ -1,5 +1,39 @@
 # Technical Debt
 
+## RT-MEMTXN-LEAK-1 — memory recall held a DB connection across the embedding API call
+
+**Status:** **FIXED 2026-07-19.** Accepts app handoff `RT-MEMTXN-LEAK-1` (apps-monolith,
+HIGH — a browser login took ~40s and exceeded the web client's 30s timeout, so a real user
+could not sign in).
+
+**Root cause (traced, not speculated).** `MemoryNodeDAO.recall()` ran
+`_count_complete_embeddings()` (a DB query → autobegins a transaction on the request-shared
+session), then called `generate_query_embedding()` — a **synchronous OpenAI/Anthropic
+embedding-API call (~seconds)** — while that transaction was still open. The DB connection
+sat `idle in transaction` (`wait_event_type=Client`) for the whole API call. Every
+semantic recall runs through this path (the pipeline's per-request `_safe_recall_memory_count`
+→ `MemoryOrchestrator.get_context` → `dao.recall`), so under the concurrent request fan-out
+a browser login triggers, ~60–85 connections piled up idle-in-transaction and exhausted the
+SQLAlchemy pool; the rest of the request then waited the full `pool_timeout`. The app-side
+`pg_stat_activity` snapshot (~61 `idle in transaction` on `SELECT memory_nodes …`) matched
+exactly. Note the recall *code* was not itself leaking sessions — it correctly used the
+caller's `db`; the leak was **holding that one connection across a slow external call**.
+
+**Fix.** New `embedding_service.release_read_transaction(db)` — returns the connection to the
+pool before the embedding call (guarded: only rolls back when the session has no pending
+writes, so a caller mid-write is never rolled back; best-effort, never a correctness gate).
+Applied at all three synchronous `generate_query_embedding` call sites: `MemoryNodeDAO.recall`
+(embedding now generated first, `_count_complete_embeddings` moved after it), the
+`/memory/nodes/search` route, and the `memory_nodes_search_similar` flow node. Net: the
+connection is held only for the (fast) DB queries, not the ~seconds API call, so it no longer
+sits idle-in-transaction and the pool is not exhausted. Tests: `test_memory_txn_leak.py` (5 —
+guard behavior + release-before-embed ordering). End-to-end (no `idle in transaction` under a
+real login, sign-in under 30s) is app-side `pg_stat_activity` verification.
+
+**Possible follow-up (not required):** `get_context`'s multi-`node_type` loop re-embeds the
+same query per type — embed once at the orchestrator and pass the vector down to avoid
+redundant API calls (a latency, not a leak, concern).
+
 ## INFINITY-RUNTIME-1 — Runtime Infinity loop-closure gaps (accepts app handoff INFINITY-RUNTIME-HANDOFF-1)
 
 **Status:** **CLOSED 2026-07-08.** All five structural loop-closure gaps + the item-3

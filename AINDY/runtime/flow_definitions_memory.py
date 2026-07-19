@@ -183,11 +183,13 @@ def memory_nodes_expand_node(state, context):
 def memory_nodes_search_similar_node(state, context):
     try:
         from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
-        from AINDY.memory.embedding_service import generate_query_embedding
+        from AINDY.memory.embedding_service import generate_query_embedding, release_read_transaction
 
         db = context.get("db")
         user_id = str(context.get("user_id"))
         query = state.get("query", "")
+        # RT-MEMTXN-LEAK-1 — release the DB connection before the slow embedding API call.
+        release_read_transaction(db)
         query_embedding = generate_query_embedding(query)
         dao = MemoryNodeDAO(db)
         results = dao.find_similar(
