@@ -237,61 +237,98 @@ class NodusRuntimeAdapter:
             context.user_id,
         )
 
+        # NODUS-WARMPOOL-1 Phase 1 — when the warm pool is enabled, serve this execution
+        # from a long-lived worker (plugin-stack import cost is paid once and amortized).
+        # ANY warm-path fault falls through to the fresh subprocess below, so enabling the
+        # pool can only help, never regress. A stuck warm worker still returns a timeout.
+        result: Optional[dict[str, Any]] = None
         try:
-            proc = subprocess.run(
-                [sys.executable, str(worker_path)],
-                input=payload,
-                capture_output=True,
-                text=True,
-                timeout=timeout_s,
-            )
-        except subprocess.TimeoutExpired:
-            # Outer hard kill — only fires when boot + script exceed the widened
-            # (script + boot-allowance) budget, i.e. a genuinely hung worker/boot. A normal
-            # script overrun trips the inner run_source clock first and returns via the
-            # clean worker "timeout" status path below (NODUS-WARMPOOL-1 Option A).
-            return NodusExecutionResult(
-                output_state={},
-                emitted_events=[],
-                memory_writes=[],
-                status="failure",
-                error=(
-                    f"Nodus worker exceeded {outer_budget_ms}ms hard limit "
-                    f"({max_execution_ms}ms script budget + {boot_allowance_ms}ms boot allowance) "
-                    "— worker or plugin cold-start hung"
-                ),
-            )
-        except Exception as exc:
-            logger.error("[NodusRuntimeAdapter] Worker start failed for '%s': %s", filename, exc)
-            return NodusExecutionResult(
-                output_state={},
-                emitted_events=[],
-                memory_writes=[],
-                status="failure",
-                error=str(exc),
-            )
+            from AINDY.runtime import nodus_worker_pool
 
-        if proc.returncode != 0:
-            return NodusExecutionResult(
-                output_state={},
-                emitted_events=[],
-                memory_writes=[],
-                status="failure",
-                error=(proc.stderr or "").strip() or "Nodus worker exited with non-zero status",
-                raw_result={"stdout": proc.stdout, "stderr": proc.stderr},
-            )
+            _warm_enabled = nodus_worker_pool.warm_pool_enabled()
+        except Exception:
+            _warm_enabled = False
+        if _warm_enabled:
+            try:
+                result = nodus_worker_pool.get_pool().execute(
+                    json.loads(payload), timeout_s=timeout_s
+                )
+            except TimeoutError:
+                return NodusExecutionResult(
+                    output_state={},
+                    emitted_events=[],
+                    memory_writes=[],
+                    status="failure",
+                    error=(
+                        f"Nodus warm worker exceeded {outer_budget_ms}ms hard limit "
+                        f"({max_execution_ms}ms script budget) — worker stuck"
+                    ),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[NodusRuntimeAdapter] warm worker failed for '%s'; falling back to a "
+                    "fresh subprocess: %s",
+                    filename,
+                    exc,
+                )
+                result = None
 
-        try:
-            result = json.loads(proc.stdout)
-        except json.JSONDecodeError as exc:
-            return NodusExecutionResult(
-                output_state={},
-                emitted_events=[],
-                memory_writes=[],
-                status="failure",
-                error=f"Nodus worker returned invalid JSON: {exc}",
-                raw_result={"stdout": proc.stdout, "stderr": proc.stderr},
-            )
+        if result is None:
+            try:
+                proc = subprocess.run(
+                    [sys.executable, str(worker_path)],
+                    input=payload,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_s,
+                )
+            except subprocess.TimeoutExpired:
+                # Outer hard kill — only fires when boot + script exceed the widened
+                # (script + boot-allowance) budget, i.e. a genuinely hung worker/boot. A normal
+                # script overrun trips the inner run_source clock first and returns via the
+                # clean worker "timeout" status path below (NODUS-WARMPOOL-1 Option A).
+                return NodusExecutionResult(
+                    output_state={},
+                    emitted_events=[],
+                    memory_writes=[],
+                    status="failure",
+                    error=(
+                        f"Nodus worker exceeded {outer_budget_ms}ms hard limit "
+                        f"({max_execution_ms}ms script budget + {boot_allowance_ms}ms boot allowance) "
+                        "— worker or plugin cold-start hung"
+                    ),
+                )
+            except Exception as exc:
+                logger.error("[NodusRuntimeAdapter] Worker start failed for '%s': %s", filename, exc)
+                return NodusExecutionResult(
+                    output_state={},
+                    emitted_events=[],
+                    memory_writes=[],
+                    status="failure",
+                    error=str(exc),
+                )
+
+            if proc.returncode != 0:
+                return NodusExecutionResult(
+                    output_state={},
+                    emitted_events=[],
+                    memory_writes=[],
+                    status="failure",
+                    error=(proc.stderr or "").strip() or "Nodus worker exited with non-zero status",
+                    raw_result={"stdout": proc.stdout, "stderr": proc.stderr},
+                )
+
+            try:
+                result = json.loads(proc.stdout)
+            except json.JSONDecodeError as exc:
+                return NodusExecutionResult(
+                    output_state={},
+                    emitted_events=[],
+                    memory_writes=[],
+                    status="failure",
+                    error=f"Nodus worker returned invalid JSON: {exc}",
+                    raw_result={"stdout": proc.stdout, "stderr": proc.stderr},
+                )
 
         output_state = dict(result.get("output_state") or {})
         emitted_events = list(result.get("emitted_events") or [])
