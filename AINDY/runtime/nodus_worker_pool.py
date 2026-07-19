@@ -22,6 +22,7 @@ stdin/stdout, matching ``nodus_worker.serve_forever``.
 """
 from __future__ import annotations
 
+import collections
 import contextlib
 import json
 import logging
@@ -30,6 +31,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -39,6 +41,22 @@ _WORKER_PATH = str(Path(__file__).parent / "nodus_worker.py")
 _DEFAULT_MAX_REQUESTS = 500
 _DEFAULT_POOL_SIZE = 4
 _DEFAULT_ACQUIRE_TIMEOUT_MS = 2000
+_DEFAULT_PREWARM_TIMEOUT_MS = 120_000
+_WARMUP_PAYLOAD = {"__warmup__": True}
+
+
+def prewarm_enabled() -> bool:
+    """NODUS-WARMPOOL-1 Phase 3 — eagerly warm the pool in the background on first use."""
+    return os.getenv("AINDY_NODUS_WARM_PREWARM", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _prewarm_timeout_s() -> float:
+    raw = os.getenv("AINDY_NODUS_WARM_PREWARM_TIMEOUT_MS", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_PREWARM_TIMEOUT_MS / 1000.0
+    return max(1, value) / 1000.0
 
 
 def warm_pool_enabled() -> bool:
@@ -176,14 +194,48 @@ class NodusWorkerPool:
         self._cond = threading.Condition()
         self._idle: list[WarmNodusWorker] = []
         self._size = 0  # total live workers (idle + checked-out)
+        self._closing = False  # Phase 3 — set by drain(); rejects new checkouts
+        # Seed the known events at 0 so stats() always reports every counter.
+        self._stats: "collections.Counter[str]" = collections.Counter(
+            {"spawned": 0, "recycled": 0, "crashed": 0, "spilled": 0, "served": 0}
+        )
+
+    # ── Phase 3: metrics ─────────────────────────────────────────────────────
+    def _metric(self, event: str, n: int = 1) -> None:
+        self._stats[event] += n
+        try:
+            from AINDY.platform_layer.metrics import nodus_warm_pool_events_total
+
+            nodus_warm_pool_events_total.labels(event=event).inc(n)
+        except Exception:
+            pass
+
+    def _emit_gauges(self) -> None:
+        """Update the worker-count gauges. Caller holds ``self._cond``."""
+        try:
+            from AINDY.platform_layer.metrics import nodus_warm_pool_workers
+
+            idle = len(self._idle)
+            nodus_warm_pool_workers.labels(state="total").set(self._size)
+            nodus_warm_pool_workers.labels(state="idle").set(idle)
+            nodus_warm_pool_workers.labels(state="busy").set(self._size - idle)
+        except Exception:
+            pass
+
+    def stats(self) -> dict[str, int]:
+        """Point-in-time pool counters + worker counts (Phase 3 observability)."""
+        with self._cond:
+            idle = len(self._idle)
+            return {**dict(self._stats), "size": self._size, "idle": idle, "busy": self._size - idle}
 
     def _checkout(self) -> WarmNodusWorker:
-        import time
-
         deadline = time.monotonic() + _acquire_timeout_s()
         limit = _max_requests()
         with self._cond:
             while True:
+                if self._closing:
+                    self._metric("spilled")
+                    raise PoolBusy("warm pool is draining")
                 # Hand out a healthy, non-exhausted idle worker; reap the rest.
                 while self._idle:
                     worker = self._idle.pop()
@@ -195,10 +247,13 @@ class NodusWorkerPool:
                 if self._size < _pool_size():
                     worker = WarmNodusWorker()
                     self._size += 1
+                    self._metric("spawned")
+                    self._emit_gauges()
                     return worker
                 # Saturated — wait briefly for a release, else signal a spill.
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or not self._cond.wait(remaining):
+                    self._metric("spilled")
                     raise PoolBusy(f"all {_pool_size()} warm workers busy")
 
     def _checkin(self, worker: WarmNodusWorker, *, healthy: bool) -> None:
@@ -209,8 +264,12 @@ class NodusWorkerPool:
             else:
                 if healthy and limit and worker.requests >= limit:
                     logger.info("[NodusWarmPool] recycling worker after %d requests", worker.requests)
+                    self._metric("recycled")
+                elif not healthy:
+                    self._metric("crashed")
                 worker.kill()
                 self._size -= 1
+            self._emit_gauges()
             self._cond.notify()
 
     def execute(self, payload: dict[str, Any], *, timeout_s: float) -> dict[str, Any]:
@@ -224,7 +283,60 @@ class NodusWorkerPool:
             self._checkin(worker, healthy=False)
             raise
         self._checkin(worker, healthy=True)
+        self._metric("served")
         return result
+
+    # ── Phase 3: eager pre-warm ──────────────────────────────────────────────
+    def prewarm(self, count: Optional[int] = None) -> int:
+        """Spawn up to ``count`` (default pool size) workers and pay their plugin-stack
+        load ahead of real traffic, so the first executions hit hot workers. Returns the
+        number successfully warmed. Best-effort — a failed warm-up just spawns fewer."""
+        target = count if count is not None else _pool_size()
+        warmed = 0
+        for _ in range(target):
+            with self._cond:
+                if self._closing or self._size >= _pool_size():
+                    break
+                worker = WarmNodusWorker()
+                self._size += 1
+                self._metric("spawned")
+                self._emit_gauges()
+            try:
+                worker.execute(_WARMUP_PAYLOAD, timeout_s=_prewarm_timeout_s())
+                healthy = worker.alive()
+            except Exception as exc:
+                logger.warning("[NodusWarmPool] prewarm worker failed: %s", exc)
+                healthy = False
+            with self._cond:
+                if healthy:
+                    self._idle.append(worker)
+                    warmed += 1
+                else:
+                    worker.kill()
+                    self._size -= 1
+                self._emit_gauges()
+                self._cond.notify()
+        if warmed:
+            logger.info("[NodusWarmPool] pre-warmed %d worker(s)", warmed)
+        return warmed
+
+    # ── Phase 3: graceful drain ──────────────────────────────────────────────
+    def drain(self, timeout_s: float = 30.0) -> None:
+        """Stop handing out workers, wait up to ``timeout_s`` for in-flight requests to
+        finish, then kill all workers. New checkouts raise :class:`PoolBusy` (spill)."""
+        deadline = time.monotonic() + timeout_s
+        with self._cond:
+            self._closing = True
+            while (self._size - len(self._idle)) > 0:  # busy workers remain
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not self._cond.wait(remaining):
+                    break
+            for worker in self._idle:
+                worker.kill()
+            self._size -= len(self._idle)
+            self._idle.clear()
+            self._emit_gauges()
+            self._cond.notify_all()
 
     def shutdown(self) -> None:
         with self._cond:
@@ -232,11 +344,19 @@ class NodusWorkerPool:
                 worker.kill()
             self._size -= len(self._idle)
             self._idle.clear()
+            self._emit_gauges()
             self._cond.notify_all()
 
 
 _POOL: Optional[NodusWorkerPool] = None
 _POOL_LOCK = threading.Lock()
+
+
+def _background_prewarm(pool: NodusWorkerPool) -> None:
+    try:
+        pool.prewarm()
+    except Exception as exc:  # pre-warm is best-effort; never crash the app
+        logger.warning("[NodusWarmPool] background prewarm failed: %s", exc)
 
 
 def get_pool() -> NodusWorkerPool:
@@ -245,6 +365,12 @@ def get_pool() -> NodusWorkerPool:
         with _POOL_LOCK:
             if _POOL is None:
                 _POOL = NodusWorkerPool()
+                # Phase 3 — eager pre-warm in the background so the first real executions
+                # hit hot workers (never blocks the caller; opt-in via AINDY_NODUS_WARM_PREWARM).
+                if prewarm_enabled():
+                    threading.Thread(
+                        target=_background_prewarm, args=(_POOL,), daemon=True
+                    ).start()
     return _POOL
 
 

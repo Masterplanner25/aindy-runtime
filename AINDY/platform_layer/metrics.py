@@ -41,6 +41,22 @@ scheduler_waiting_count = Gauge(
     registry=REGISTRY,
 )
 
+# ── Nodus warm-worker pool (NODUS-WARMPOOL-1) ────────────────────────────────
+
+nodus_warm_pool_events_total = Counter(
+    "aindy_nodus_warm_pool_events_total",
+    "Warm-worker pool lifecycle events",
+    ["event"],  # spawned | recycled | crashed | spilled | served
+    registry=REGISTRY,
+)
+
+nodus_warm_pool_workers = Gauge(
+    "aindy_nodus_warm_pool_workers",
+    "Warm-worker pool worker count by state",
+    ["state"],  # total | idle | busy
+    registry=REGISTRY,
+)
+
 # ── Resource manager ─────────────────────────────────────────────────────────
 
 active_executions_total = Gauge(

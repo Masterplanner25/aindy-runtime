@@ -3027,10 +3027,15 @@ users.
 
 ## NODUS-WARMPOOL-1 — Nodus worker cold-start is billed against the script budget
 
-**Status:** Open — P1. Quick knob shipped 2026-07-10; **Option A (clock split) shipped
-2026-07-18**; **Option B Phase 1 (single warm worker) + Phase 2 (bounded worker pool)
-shipped 2026-07-19** — the durable fix: import cost amortized, and up to N executions run
-concurrently. Only Phase 3 (health/drain/metrics) remains deferred. See the A/B/C plan below.
+**Status:** **CLOSED 2026-07-19.** Option A (clock split, 2026-07-18) + Option B — Phase 1
+(single warm worker), Phase 2 (bounded worker pool), Phase 3 (metrics / graceful drain /
+eager pre-warm), all 2026-07-19. The durable fix is complete: plugin-stack import cost is
+amortized across a reused pool, up to N executions run concurrently, and pre-warm removes
+the first-request cold-start. All opt-in (`AINDY_NODUS_WARM_POOL`, default off) with
+fresh-subprocess fallback on any fault. Deferred (not required): an active health-monitor
+heartbeat (reactive crash-reaping + max-requests recycle cover it) and the sibling
+`runtime_callback_host.py` 10s callback subprocess (same tax, separate surface). See the
+A/B/C plan below.
 
 **Symptom (verified 2026-07-09, live Linux serve, app-profile).** A real agent run
 reached `executing` then failed with `"Nodus script exceeded 30000ms wall-clock
@@ -3109,7 +3114,19 @@ order of effort. Sized against the actual IPC contract (adapter
     over-`_max_requests` workers recycled on return. Adapter unchanged (still
     `get_pool().execute`; `PoolBusy`→fallback). Verified with a real 2-worker concurrent smoke
     (isolated state per run). Tests: +3 (concurrency, saturation/`PoolBusy`, pool-size env).
-  - **Phase 3 (deferred) — health checks / graceful drain / metrics / eager pre-warm.**
+  - **Phase 3 — metrics / graceful drain / eager pre-warm. ✅ SHIPPED 2026-07-19.**
+    **Metrics:** internal counters (`spawned`/`recycled`/`crashed`/`spilled`/`served`) +
+    worker gauges via `pool.stats()` and best-effort Prometheus
+    (`aindy_nodus_warm_pool_events_total{event}`, `aindy_nodus_warm_pool_workers{state}`).
+    **Graceful drain:** `pool.drain(timeout_s)` stops new checkouts (they raise `PoolBusy` →
+    spill), waits for in-flight to finish, then kills all workers. **Eager pre-warm:**
+    `pool.prewarm(count)` spawns workers and pays their plugin-stack load ahead of traffic via
+    a new worker `{"__warmup__": true}` control request (calls `_ensure_tools_loaded`, runs no
+    script — so tool-less scripts still skip the load); kicked in a background daemon thread on
+    first `get_pool()` when `AINDY_NODUS_WARM_PREWARM` is on (never blocks the caller).
+    Verified with a real prewarm→hot-execute→drain smoke. Tests: +5. **Deferred (over-
+    engineering):** an active health-monitor heartbeat thread — reactive crash-reaping at
+    checkout + max-requests recycle already keep the pool healthy.
   Must preserve (still true): read-only cwd in a wheel, and subprocess isolation as
   load-bearing for the sandbox `--network none` extension path + the stateful-in-process
   callback carve-outs. Reopen Phase 2 when concurrency/p50 becomes a product SLA.
