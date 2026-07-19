@@ -8,10 +8,14 @@ and amortized across every execution; each request still runs through
 leaks state between runs.
 
 Opt-in — ``AINDY_NODUS_WARM_POOL`` (default off). When off, ``warm_pool_enabled()`` is
-false and the adapter uses the existing fresh-subprocess path unchanged. **Serial**
-(Phase 1): one request at a time under a lock. A pool of N workers for concurrency is the
-Phase 2 follow-up. Any warm-path failure is surfaced to the adapter, which falls back to a
-fresh subprocess — so enabling the pool can never make execution *worse* than the default.
+false and the adapter uses the existing fresh-subprocess path unchanged. **Phase 2** — a
+bounded pool of up to ``AINDY_NODUS_WARM_POOL_SIZE`` (default 4) workers, each serving one
+request at a time, so up to N executions run concurrently. When all N are busy a caller
+waits up to ``AINDY_NODUS_WARM_ACQUIRE_TIMEOUT_MS`` (default 2000) for one to free, then the
+pool raises :class:`PoolBusy` and the adapter spills the request to a fresh subprocess
+(bounded backpressure). Any warm-path failure is surfaced to the adapter, which falls back
+to a fresh subprocess — so enabling the pool can never make execution *worse* than the
+default.
 
 Protocol: length-prefixed JSON (4-byte big-endian length + UTF-8 body) over the worker's
 stdin/stdout, matching ``nodus_worker.serve_forever``.
@@ -33,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 _WORKER_PATH = str(Path(__file__).parent / "nodus_worker.py")
 _DEFAULT_MAX_REQUESTS = 500
+_DEFAULT_POOL_SIZE = 4
+_DEFAULT_ACQUIRE_TIMEOUT_MS = 2000
 
 
 def warm_pool_enabled() -> bool:
@@ -49,8 +55,32 @@ def _max_requests() -> int:
     return value if value >= 0 else _DEFAULT_MAX_REQUESTS
 
 
+def _pool_size() -> int:
+    """Phase 2 — max concurrent warm workers (each serves one request at a time)."""
+    raw = os.getenv("AINDY_NODUS_WARM_POOL_SIZE", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_POOL_SIZE
+    return value if value >= 1 else _DEFAULT_POOL_SIZE
+
+
+def _acquire_timeout_s() -> float:
+    """How long a caller waits for a free warm worker before spilling to a fresh subprocess."""
+    raw = os.getenv("AINDY_NODUS_WARM_ACQUIRE_TIMEOUT_MS", "").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_ACQUIRE_TIMEOUT_MS / 1000.0
+    return max(0, value) / 1000.0
+
+
 class WorkerCrashed(RuntimeError):
     """The warm worker died or closed its pipe mid-request."""
+
+
+class PoolBusy(RuntimeError):
+    """All warm workers are busy and the pool is at capacity (caller should spill)."""
 
 
 class WarmNodusWorker:
@@ -131,42 +161,78 @@ class WarmNodusWorker:
 
 
 class NodusWorkerPool:
-    """Phase 1: a single warm worker guarded by a lock (serial), with respawn + recycle."""
+    """Phase 2 — a bounded pool of warm workers for concurrency.
+
+    Up to ``_pool_size()`` long-lived workers, each serving one request at a time
+    (checked out under a condition, returned to an idle set on completion). A caller
+    gets an idle worker, or grows the pool if there is room, or waits up to
+    ``_acquire_timeout_s()`` for one to free; past that the pool raises :class:`PoolBusy`
+    and the adapter spills the request to a fresh subprocess (bounded backpressure — the
+    warm path never blocks unboundedly). A faulted (crashed/timed-out) worker is dropped,
+    not returned; an over-``_max_requests()`` worker is recycled on return.
+    """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._worker: Optional[WarmNodusWorker] = None
+        self._cond = threading.Condition()
+        self._idle: list[WarmNodusWorker] = []
+        self._size = 0  # total live workers (idle + checked-out)
 
-    def _ensure_worker(self) -> WarmNodusWorker:
-        if self._worker is None or not self._worker.alive():
-            self._worker = WarmNodusWorker()
-            return self._worker
+    def _checkout(self) -> WarmNodusWorker:
+        import time
+
+        deadline = time.monotonic() + _acquire_timeout_s()
         limit = _max_requests()
-        if limit and self._worker.requests >= limit:
-            logger.info("[NodusWarmPool] recycling worker after %d requests", self._worker.requests)
-            self._worker.kill()
-            self._worker = WarmNodusWorker()
-        return self._worker
+        with self._cond:
+            while True:
+                # Hand out a healthy, non-exhausted idle worker; reap the rest.
+                while self._idle:
+                    worker = self._idle.pop()
+                    if worker.alive() and (not limit or worker.requests < limit):
+                        return worker
+                    worker.kill()
+                    self._size -= 1
+                # Grow the pool if there is headroom.
+                if self._size < _pool_size():
+                    worker = WarmNodusWorker()
+                    self._size += 1
+                    return worker
+                # Saturated — wait briefly for a release, else signal a spill.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not self._cond.wait(remaining):
+                    raise PoolBusy(f"all {_pool_size()} warm workers busy")
+
+    def _checkin(self, worker: WarmNodusWorker, *, healthy: bool) -> None:
+        limit = _max_requests()
+        with self._cond:
+            if healthy and worker.alive() and (not limit or worker.requests < limit):
+                self._idle.append(worker)
+            else:
+                if healthy and limit and worker.requests >= limit:
+                    logger.info("[NodusWarmPool] recycling worker after %d requests", worker.requests)
+                worker.kill()
+                self._size -= 1
+            self._cond.notify()
 
     def execute(self, payload: dict[str, Any], *, timeout_s: float) -> dict[str, Any]:
-        with self._lock:
-            worker = self._ensure_worker()
-            try:
-                return worker.execute(payload, timeout_s=timeout_s)
-            except (WorkerCrashed, TimeoutError):
-                # A stuck/dead worker cannot serve the next request. Drop it (no retry — a
-                # partially-run request must not double-execute side effects); the next call
-                # spawns a fresh worker. The adapter maps the raised error to a failure/
-                # timeout envelope or falls back to a fresh subprocess.
-                worker.kill()
-                self._worker = None
-                raise
+        worker = self._checkout()
+        try:
+            result = worker.execute(payload, timeout_s=timeout_s)
+        except (WorkerCrashed, TimeoutError):
+            # A stuck/dead worker cannot be reused; drop it (no retry — a partially-run
+            # request must not double-execute side effects). The adapter maps the raised
+            # error to a failure/timeout envelope or falls back to a fresh subprocess.
+            self._checkin(worker, healthy=False)
+            raise
+        self._checkin(worker, healthy=True)
+        return result
 
     def shutdown(self) -> None:
-        with self._lock:
-            if self._worker is not None:
-                self._worker.kill()
-                self._worker = None
+        with self._cond:
+            for worker in self._idle:
+                worker.kill()
+            self._size -= len(self._idle)
+            self._idle.clear()
+            self._cond.notify_all()
 
 
 _POOL: Optional[NodusWorkerPool] = None

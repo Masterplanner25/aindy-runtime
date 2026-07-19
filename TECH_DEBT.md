@@ -3028,9 +3028,9 @@ users.
 ## NODUS-WARMPOOL-1 — Nodus worker cold-start is billed against the script budget
 
 **Status:** Open — P1. Quick knob shipped 2026-07-10; **Option A (clock split) shipped
-2026-07-18**; **Option B Phase 1 (single warm worker) shipped 2026-07-19** — the durable
-fix: import cost is now paid once and amortized instead of per-run. Phase 2 (worker pool /
-concurrency) + Phase 3 (health/drain/metrics) remain deferred. See the A/B/C plan below.
+2026-07-18**; **Option B Phase 1 (single warm worker) + Phase 2 (bounded worker pool)
+shipped 2026-07-19** — the durable fix: import cost amortized, and up to N executions run
+concurrently. Only Phase 3 (health/drain/metrics) remains deferred. See the A/B/C plan below.
 
 **Symptom (verified 2026-07-09, live Linux serve, app-profile).** A real agent run
 reached `executing` then failed with `"Nodus script exceeded 30000ms wall-clock
@@ -3099,8 +3099,17 @@ order of effort. Sized against the actual IPC contract (adapter
     (still a separate process); read-only-cwd constraint unaffected. Tests:
     `test_nodus_worker_pool.py` (17 — framing, timeout, crash, recycle/respawn/drop, adapter
     warm+fallback) + a real `--serve` IPC smoke.
-  - **Phase 2 (deferred) — pool of N** for concurrency + backpressure (Phase 1 is serial).
-  - **Phase 3 (deferred) — health checks / graceful drain / metrics.**
+  - **Phase 2 — bounded worker pool. ✅ SHIPPED 2026-07-19.** `NodusWorkerPool` grew from a
+    single serial worker to up to `AINDY_NODUS_WARM_POOL_SIZE` (default 4) workers, each
+    serving one request at a time (checked out under a `Condition`, returned to an idle set),
+    so up to N executions run concurrently. When all N are busy a caller waits up to
+    `AINDY_NODUS_WARM_ACQUIRE_TIMEOUT_MS` (default 2000) for a free worker, then raises
+    `PoolBusy` and the adapter **spills to a fresh subprocess** (bounded backpressure — the
+    warm path never blocks unboundedly). Faulted workers are dropped (not returned);
+    over-`_max_requests` workers recycled on return. Adapter unchanged (still
+    `get_pool().execute`; `PoolBusy`→fallback). Verified with a real 2-worker concurrent smoke
+    (isolated state per run). Tests: +3 (concurrency, saturation/`PoolBusy`, pool-size env).
+  - **Phase 3 (deferred) — health checks / graceful drain / metrics / eager pre-warm.**
   Must preserve (still true): read-only cwd in a wheel, and subprocess isolation as
   load-bearing for the sandbox `--network none` extension path + the stateful-in-process
   callback carve-outs. Reopen Phase 2 when concurrency/p50 becomes a product SLA.
