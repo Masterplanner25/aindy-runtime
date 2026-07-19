@@ -595,10 +595,14 @@ class MemoryNodeDAO:
 
         # Semantic path
         if query:
-            embedding_rows_available = self._count_complete_embeddings(
-                user_id=user_id,
-                node_type=node_type,
-            )
+            # RT-MEMTXN-LEAK-1 — generate_query_embedding() is a slow LLM/embedding-API call.
+            # Generate it FIRST, before any DB query in this method, so the session is not
+            # holding a pooled connection open (`idle in transaction`) for the API's duration.
+            # After the request's prior work commits (auth handler, memory capture), the session
+            # holds no connection here; embedding-first keeps it that way, and the DB queries
+            # below (_count_complete_embeddings, find_similar) then re-acquire a connection for
+            # their fast execution. (We must NOT rollback the request-shared session to release
+            # it — that would discard Core-level updates the request has in flight.)
             query_embedding = None
             query_embedding_ready = False
             try:
@@ -606,6 +610,11 @@ class MemoryNodeDAO:
                 query_embedding_ready = self._embedding_is_usable(query_embedding)
             except Exception as exc:
                 logger.warning("[MemoryNodeDAO] query embedding generation failed, falling back: %s", exc)
+
+            embedding_rows_available = self._count_complete_embeddings(
+                user_id=user_id,
+                node_type=node_type,
+            )
 
             if query_embedding_ready and embedding_rows_available:
                 similar = self.find_similar(

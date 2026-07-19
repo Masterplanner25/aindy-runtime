@@ -188,6 +188,8 @@ def memory_nodes_search_similar_node(state, context):
         db = context.get("db")
         user_id = str(context.get("user_id"))
         query = state.get("query", "")
+        # RT-MEMTXN-LEAK-1 — the embedding (slow API call) is generated before the DAO query,
+        # so the session isn't holding a pooled connection open across it.
         query_embedding = generate_query_embedding(query)
         dao = MemoryNodeDAO(db)
         results = dao.find_similar(
