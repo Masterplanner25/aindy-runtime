@@ -246,6 +246,28 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     each call, so a reused (warm) worker process carries no cross-run state
     (NODUS-WARMPOOL-1 Phase 1).
     """
+    # NODUS-WARMPOOL-1 Phase 3 — eager pre-warm. A ``{"__warmup__": true}`` request pays the
+    # plugin-stack load cost (``_ensure_tools_loaded``) ahead of real traffic without running
+    # a script, so a pre-warmed pool worker is hot before its first real execution. Opt-in
+    # (only the pool's prewarm sends it), so tool-less scripts still skip the load.
+    if payload.get("__warmup__"):
+        try:
+            from AINDY.agents.tool_registry import _ensure_tools_loaded
+
+            _ensure_tools_loaded()
+        except Exception:  # a warm-up must never fail the worker
+            pass
+        return {
+            "status": "success",
+            "output_state": {},
+            "emitted_events": [],
+            "memory_writes": [],
+            "simulated_effects": [],
+            "error": None,
+            "stdout_log": "",
+            "warmed": True,
+        }
+
     script = str(payload.get("script") or "")
     if "memory." in script:
         script = re.sub(r'(?m)^(\s*)import\s+"memory"\s*$', r'\1import "memory" as memory', script)
