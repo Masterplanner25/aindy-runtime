@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.10.1 — 2026-07-19
+
+Patch. No schema-contract change (stays `2026-07-12.4`).
+
+### Fixed — RT-MEMTXN-LEAK-1 (part 2): the embedding-job connection fan-out
+
+1.10.0 fixed the *recall* read path, which stopped leaked connections from lingering after a
+request — but app-side verification showed sign-in was still ~45s. A single `POST /auth/login`
+still opened **30+ concurrent** connections that each ran **exactly one** `SELECT memory_nodes
+…` and then sat `idle in transaction` (`xact_age_s == idle_s`), exhausting the pool.
+
+Traced to `embedding_jobs.process_embedding_job`: `queue_system_event(… EMBEDDING_STARTED,
+required=True)` commits, which **expires** `memory_node`, so reading `memory_node.content`
+triggers a **refresh `SELECT memory_nodes`** that opens a *fresh* transaction — and
+`generate_embedding()` (the slow embedding API call) then ran with it open. One job is
+enqueued **per captured memory**, each on its own session, so one request fanned out to dozens
+of concurrently-held connections.
+
+**Fix:** capture the node content into a local, `commit()` to return the connection to the
+pool, then embed; the write re-acquires a connection for its fast execution. (The job owns its
+session — not request-shared — and the `EMBEDDING_STARTED` event should be durable regardless,
+so committing there is correct as well as necessary.)
+
+> **Gotcha worth remembering:** after a commit, touching an ORM attribute silently re-opens a
+> transaction (`expire_on_commit`) — never let a slow external call follow such an access.
+
 ## 1.10.0 — 2026-07-19
 
 Additive and backward-compatible; no schema-contract change (stays `2026-07-12.4`). Closes
