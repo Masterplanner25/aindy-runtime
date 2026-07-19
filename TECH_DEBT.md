@@ -3028,8 +3028,9 @@ users.
 ## NODUS-WARMPOOL-1 — Nodus worker cold-start is billed against the script budget
 
 **Status:** Open — P1. Quick knob shipped 2026-07-10; **Option A (clock split) shipped
-2026-07-18** — the script budget now bounds *script* time, not boot+script. Options B/C
-(latency removal) remain deferred. See the A/B/C plan below.
+2026-07-18**; **Option B Phase 1 (single warm worker) shipped 2026-07-19** — the durable
+fix: import cost is now paid once and amortized instead of per-run. Phase 2 (worker pool /
+concurrency) + Phase 3 (health/drain/metrics) remain deferred. See the A/B/C plan below.
 
 **Symptom (verified 2026-07-09, live Linux serve, app-profile).** A real agent run
 reached `executing` then failed with `"Nodus script exceeded 30000ms wall-clock
@@ -3082,17 +3083,27 @@ order of effort. Sized against the actual IPC contract (adapter
   needs instead of all ~17. Cuts the tax rather than moving it; reduces latency too.
   Effort: medium — needs a correct "needed apps" computation and selective `load_plugins()`;
   risk: under-loading can miss a dynamically-called tool.
-- **Option B — Warm worker / worker pool (deferred; the true durable fix).** A long-lived
-  worker (or small pool) imports the plugin stack once and services many executions over a
-  socket, so import cost is paid at boot, not per run. Effort: high — a real project:
-  (1) a framed request/response protocol (the current one-shot stdin/stdout contract can't
-  multiplex); (2) pool lifecycle (health, restart-on-crash, max-requests recycling, drain);
-  (3) **per-run state isolation** — the crux: fresh `state`/`memory_context`/
-  `DeferredMemoryBuiltins`/`user_id` + the `std_sys` guard monkeypatch must reset per request
-  with zero cross-run leakage (builtins close over per-run bridge objects; ContextVars);
-  (4) concurrency/backpressure. Must preserve: read-only cwd in a wheel, and subprocess
-  isolation as load-bearing for the sandbox `--network none` extension path + the
-  stateful-in-process callback carve-outs. Reopen only when p50 latency is a product SLA.
+- **Option B — Warm worker / worker pool (the true durable fix).**
+  - **Phase 1 — single warm worker. ✅ SHIPPED 2026-07-19.** One long-lived worker loads the
+    plugin stack once and serves executions over a length-prefixed JSON framing; import cost
+    is amortized instead of paid per run. `nodus_worker.py` refactored so `main()` (one-shot,
+    unchanged default) and the new `serve_forever()` share `run_one(payload)` — which rebuilds
+    **every** per-request object (VM, `AINDYMemoryBridge`, builtins, `state`, tokens; the
+    `std_sys` guard is idempotent), so a reused process carries **no** cross-run state
+    (verified: 2 requests to one worker returned x=0 then x=1). New `nodus_worker_pool.py`
+    keeps the worker alive with **respawn-on-crash** + **max-requests recycle**
+    (`AINDY_NODUS_WARM_MAX_REQUESTS`, default 500) + a cross-platform reader-thread timeout.
+    Gated `AINDY_NODUS_WARM_POOL` (default off); the adapter routes through the pool when on
+    and **falls back to a fresh subprocess on any warm-path fault**, so it can only help,
+    never regress. Serial (one request at a time under a lock). Subprocess isolation preserved
+    (still a separate process); read-only-cwd constraint unaffected. Tests:
+    `test_nodus_worker_pool.py` (17 — framing, timeout, crash, recycle/respawn/drop, adapter
+    warm+fallback) + a real `--serve` IPC smoke.
+  - **Phase 2 (deferred) — pool of N** for concurrency + backpressure (Phase 1 is serial).
+  - **Phase 3 (deferred) — health checks / graceful drain / metrics.**
+  Must preserve (still true): read-only cwd in a wheel, and subprocess isolation as
+  load-bearing for the sandbox `--network none` extension path + the stateful-in-process
+  callback carve-outs. Reopen Phase 2 when concurrency/p50 becomes a product SLA.
 
 **Constraints to respect.** The worker's `cwd` is `parents[2]` (in a wheel:
 read-only site-packages — see the `_maybe_wrap_runtime_callback` CWD hazard in

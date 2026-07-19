@@ -237,10 +237,15 @@ def dispatch_worker_syscall(name: str, payload: Any, *, user_id: str) -> Any:
         return {"status": "error", "error": str(exc), "data": None, "syscall": name}
 
 
-def main() -> int:
-    raw = sys.stdin.read()
-    payload = json.loads(raw or "{}")
+def run_one(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute one Nodus request payload and return the result dict.
 
+    Extracted from ``main()`` so the one-shot entry (``main``) and the warm-worker serve
+    loop (``serve_forever``) share the exact same per-request execution. Every per-request
+    object — VM, memory bridge, builtins, state, tokens — is rebuilt from ``payload`` on
+    each call, so a reused (warm) worker process carries no cross-run state
+    (NODUS-WARMPOOL-1 Phase 1).
+    """
     script = str(payload.get("script") or "")
     if "memory." in script:
         script = re.sub(r'(?m)^(\s*)import\s+"memory"\s*$', r'\1import "memory" as memory', script)
@@ -460,9 +465,76 @@ def main() -> int:
                 "stdout_log": stdout_buffer.getvalue(),
             }
 
-    sys.stdout.write(json.dumps(result_payload))
+    return result_payload
+
+
+def main() -> int:
+    """One-shot entry: read a single JSON payload from stdin, run it, write the result.
+
+    The default execution path — the adapter spawns a fresh worker per execution unless
+    the warm pool (NODUS-WARMPOOL-1) is enabled.
+    """
+    raw = sys.stdin.read()
+    payload = json.loads(raw or "{}")
+    sys.stdout.write(json.dumps(run_one(payload)))
     return 0
 
 
+# ── Warm-worker serve loop (NODUS-WARMPOOL-1 Phase 1) ─────────────────────────
+# A long-lived worker loads the plugin stack once (amortized across many executions),
+# then serves requests over a length-prefixed JSON framing on stdin/stdout. Each request
+# runs through run_one, which rebuilds all per-request state, so process reuse never leaks
+# state between runs. Launched by the pool as `nodus_worker.py --serve`.
+
+def _read_exact(stream, n: int) -> "bytes | None":
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = stream.read(n - len(buf))
+        if not chunk:
+            return None  # EOF — parent closed the pipe
+        buf.extend(chunk)
+    return bytes(buf)
+
+
+def serve_forever() -> int:
+    import struct
+
+    # Frame over a private dup of stdout, then point fd 1 at devnull so nothing written
+    # during a request can corrupt the protocol stream. (run_one already redirects
+    # sys.stdout/err to a buffer; this is belt-and-suspenders at the OS-fd level.)
+    raw_in = sys.stdin.buffer
+    framing_out = os.fdopen(os.dup(sys.stdout.fileno()), "wb", buffering=0)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, sys.stdout.fileno())
+    os.close(devnull)
+
+    while True:
+        header = _read_exact(raw_in, 4)
+        if header is None:
+            return 0
+        (length,) = struct.unpack(">I", header)
+        body = _read_exact(raw_in, length)
+        if body is None:
+            return 0
+        try:
+            result = run_one(json.loads(body.decode("utf-8")))
+        except Exception as exc:  # never let one bad request kill the warm worker
+            result = {
+                "status": "failure",
+                "output_state": {},
+                "emitted_events": [],
+                "memory_writes": [],
+                "simulated_effects": [],
+                "error": f"warm worker request error: {exc}",
+                "stdout_log": "",
+            }
+        data = json.dumps(result).encode("utf-8")
+        framing_out.write(struct.pack(">I", len(data)))
+        framing_out.write(data)
+        framing_out.flush()
+
+
 if __name__ == "__main__":
+    if "--serve" in sys.argv:
+        raise SystemExit(serve_forever())
     raise SystemExit(main())
