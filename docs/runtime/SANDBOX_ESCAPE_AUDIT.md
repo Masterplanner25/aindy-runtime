@@ -541,5 +541,43 @@ native Linux, certified for the `v1.10.0` release commit.
 
 ---
 
+### Entry 009 — 2026-07-19
+
+`sandbox-escape-linux.yml` release gate, fired automatically on the `v1.10.1` tag
+**Host OS:** Ubuntu (GitHub-hosted `ubuntu-latest`), native Linux kernel — Docker uses a native
+Linux-containers backend, not a Docker Desktop VM
+**Container image:** `python:3.11-alpine` (same image as Entries 002–008; exact digest recorded in
+the run artifact)
+**Test command:** `pytest -m sandbox_escape` (via workflow; `SANDBOX_ESCAPE_IMAGE=python:3.11-alpine`)
+**Commit:** `6d5e367` (release tag `v1.10.1`)
+**Operator:** CI (release gate, run 29707937509)
+
+**Results by category:**
+
+| Category | Tests | Pass | Fail | Skip | Notes |
+|---|---|---|---|---|---|
+| Filesystem escape | 3 | 3 | 0 | 0 | Read-only rootfs, read-only bind mount, scoped tmpfs all verified |
+| Network escape | 3 | 3 | 0 | 0 | TCP, UDP, kernel interface evidence all blocked (`--network none`) |
+| Process / pids | 2 | 2 | 0 | 0 | pids limit hit; cgroup `pids.max=10` — ran natively, **0 skips** |
+| Privilege escalation | 4 | 4 | 0 | 0 | CAP_NET_RAW, CAP_CHOWN removed; NoNewPrivs=1 in /proc; combined-controls check |
+| Host env leak | 2 | 2 | 0 | 0 | No production secrets present; PYTHONIOENCODING transmitted |
+| Path boundary | 3 | 3 | 0 | 0 | Canary not reachable; plugin root accessible; traversal contained |
+
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed … in 4.66s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run 29707937509) — holds
+exact per-test durations and the image digest.
+
+**Platform notes:**
+Identical 17-vector result on the same native-Linux gate and image as Entries 002–008, for the
+`v1.10.1` release commit published to PyPI as `aindy-runtime==1.10.1`. v1.10.1 is a patch that
+completes RT-MEMTXN-LEAK-1 (the embedding-job connection fan-out: commit to release the DB
+connection before the embedding API call). DB-session hygiene only — no change to the sandbox
+runner or its controls, so the container-grade posture is unchanged from v1.10.0.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v1.10.1` release commit.
+
+---
+
 *To add a new entry: run `pytest -m sandbox_escape -v`, note the summary line, and append
 a new entry following the format above. Do not edit prior entries.*
