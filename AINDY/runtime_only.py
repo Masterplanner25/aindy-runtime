@@ -280,6 +280,57 @@ def _bootstrap_schema(reconcile: bool) -> NoReturn:
         raise SystemExit(2)
 
 
+def _prune_cascade_debris(*, yes: bool, batch_size: int) -> NoReturn:
+    """Delete memory nodes created by the RT-MEMTXN-LEAK-1 capture cascade.
+
+    Deployments that ran a version before the fix accumulated memory nodes recording
+    nothing but the runtime's own embedding jobs starting. Scoped by
+    ``extra.event_payload.task_name`` — precisely the set the fixed capture path now
+    refuses to create — so no user- or app-authored memory can match. Dry-run unless
+    --yes. Requires DATABASE_URL.
+    """
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print("error: DATABASE_URL is not set.", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        from AINDY.memory.cascade_cleanup import prune_cascade_debris
+    except Exception as exc:
+        print(f"error: could not import cleanup layer: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+    try:
+        report = prune_cascade_debris(dry_run=not yes, batch_size=batch_size)
+    except Exception as exc:
+        print(f"error: cascade-debris cleanup failed: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+
+    for item in report["breakdown"]:
+        scope = "global" if item["global"] else "owned"
+        print(
+            f"  {item['count']:>7}  {item['task_name']}  {item['event_type'] or '-'}  ({scope})"
+        )
+
+    if not report["matched"]:
+        print("ok: no cascade debris found — nothing to remove.")
+        raise SystemExit(0)
+
+    if not yes:
+        print(
+            f"dry-run: {report['matched']} node(s) match "
+            f"({report['global']} global, {report['owned']} owned). "
+            "Re-run with --yes to delete."
+        )
+        raise SystemExit(0)
+
+    print(
+        f"ok: deleted {report['deleted']} node(s) in {report['batches']} batch(es) "
+        f"of {batch_size}. Child rows removed by ON DELETE CASCADE."
+    )
+    raise SystemExit(0)
+
+
 def _reembed_memory(*, yes: bool, no_drain: bool, dry_run: bool) -> NoReturn:
     """Re-embed all memory nodes with the configured provider (ECOGAP-3 Phase 1).
 
@@ -727,6 +778,22 @@ def main() -> None:
     reembed_parser.add_argument("--no-drain", action="store_true", default=False, help="Alter + mark pending only; defer regeneration to the background sweep.")
     reembed_parser.add_argument("--dry-run", action="store_true", default=False, help="Report the plan without mutating anything.")
 
+    prune_parser = memory_sub.add_parser(
+        "prune-cascade-debris",
+        help="Delete memory nodes created by the RT-MEMTXN-LEAK-1 capture cascade.",
+        description=(
+            "One-time cleanup for deployments that ran a version before the "
+            "RT-MEMTXN-LEAK-1 fix, where the runtime's own embedding jobs had their "
+            "lifecycle events captured as memory — each capture spawning another job "
+            "and another capture. Scoped by extra.event_payload.task_name (the same "
+            "predicate the fixed capture path uses), so no user- or app-authored memory "
+            "can match. Deletes in committed batches; child rows go via ON DELETE "
+            "CASCADE. Reports without deleting unless --yes. Requires DATABASE_URL."
+        ),
+    )
+    prune_parser.add_argument("--yes", action="store_true", default=False, help="Perform the delete (without this the command only reports).")
+    prune_parser.add_argument("--batch-size", type=int, default=500, help="Rows deleted per committed batch (default 500).")
+
     auth_parser = subparsers.add_parser(
         "auth",
         help="Auth management commands.",
@@ -771,6 +838,11 @@ def main() -> None:
                 yes=getattr(args, "yes", False),
                 no_drain=getattr(args, "no_drain", False),
                 dry_run=getattr(args, "dry_run", False),
+            )
+        elif args.memory_command == "prune-cascade-debris":
+            _prune_cascade_debris(
+                yes=getattr(args, "yes", False),
+                batch_size=getattr(args, "batch_size", 500),
             )
         else:
             memory_parser.print_help()
