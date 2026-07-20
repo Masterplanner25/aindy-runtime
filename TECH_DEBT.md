@@ -3336,6 +3336,40 @@ locally verified and merged.
 
 ---
 
+## MEM-RECALL-N1-1 — `recall()` scoring loop issues 3 queries per candidate
+
+**Status:** Open — performance-only. Surfaced 2026-07-19 while verifying RT-MEMTXN-LEAK-1, and
+**explicitly not** the cause of that incident (recorded here so the two are not conflated).
+
+`MemoryNodeDAO.recall()` scores each candidate in a Python loop, and each iteration issues
+**three** queries (`AINDY/db/dao/memory_node_dao.py`):
+
+| Call | Site | Queries |
+|---|---|---|
+| `get_graph_connectivity_score(c["id"])` | `:680` | 2 — outbound + inbound `COUNT` on `memory_links` |
+| `_get_model_by_id(c["id"])` | `:705` | 1 — full-row `SELECT` on `memory_nodes` |
+
+Candidates are up to `limit * 3` from the semantic path plus `limit * 3` from the tag path, so a
+default `limit=5` recall can issue **45–90 queries**. (`get_success_rate` and
+`get_usage_frequency_score` are free — they read the already-loaded object.)
+
+**The re-fetch is pure waste.** `_get_model_by_id` re-reads a row the candidate query *already*
+selected in full, solely to reach `success_count`, `failure_count`, `usage_count`, and `weight` —
+four columns that `_node_to_dict` (`:52`) does not carry into the candidate dict. Adding them to
+that dict removes the per-candidate `memory_nodes` SELECT entirely, with no behavior change. The
+link counts can then be batched into one `GROUP BY` over the candidate ids.
+
+**Why it is not urgent.** Unlike RT-MEMTXN-LEAK-1, this runs on a *single* session with indexed
+lookups and no external call inside the loop — it lengthens one request, it does not drain the
+pool. App-side measurement after the cascade fix: a direct `recall()` scanned `memory_nodes` 18
+times while holding **1** connection (the `memory_links` counts do not appear in a `memory_nodes`
+scan counter, so the true query count is roughly triple that).
+
+**Reopen/resolve:** when recall latency matters, or when a candidate set grows past the current
+`limit * 3` bound.
+
+---
+
 ## ECOGAP-* — Ecosystem capability gaps (corrected lens)
 
 Derived from the 12-project ecosystem re-audit, re-judged against source-verified
