@@ -65,6 +65,16 @@ scope restoration on exception, the thread-boundary reset, and both dedup branch
 > capturable.** Any capture → job → capture edge is a cycle; the runtime's own maintenance jobs
 > must stay invisible to capture, and nesting must be depth-bounded regardless.
 
+**Debris cleanup.** Deployments that ran an affected version carry a body of memory nodes that
+record nothing but the cascade (on one real stack, 1,912 of 1,970). They are inert once the cycle
+is cut, but they pad every recall candidate set and leave a standing embedding backlog for the
+sweep. `aindy-runtime memory prune-cascade-debris` (`AINDY/memory/cascade_cleanup.py`) removes
+them, scoped by `extra.event_payload.task_name` — the same predicate the fixed capture path uses
+to decide what *not* to create, so no user- or app-authored memory can match and no content
+string is ever matched on. Reports unless `--yes`; deletes in committed batches (one long
+transaction holding a pooled connection is the exact failure mode this item exists to prevent);
+child rows go via `ON DELETE CASCADE`. Tests: `tests/unit/test_cascade_cleanup.py` (10).
+
 > **Diagnostic note:** `pg_stat_activity` shows the *last* statement, not the caller. When
 > `xact_age_s == idle_s` on many connections, the transaction has exactly one statement — that is
 > equally consistent with "held across a slow call" (parts 1–2) and "held by a frame that never

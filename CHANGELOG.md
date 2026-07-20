@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Added — `aindy-runtime memory prune-cascade-debris`
+
+One-time cleanup for deployments that ran a version before the RT-MEMTXN-LEAK-1 fix (v1.10.2).
+Those deployments accumulated memory nodes that record nothing but the runtime's own embedding
+jobs starting — each capture spawning another job and another capture. They are inert once the
+cycle is cut, but they pad every recall candidate set and leave a standing embedding backlog for
+the sweep to grind through on each boot. On one real stack: **1,912 of 1,970 nodes**.
+
+Scoped by `extra.event_payload.task_name` — the same predicate the fixed capture path uses to
+decide what *not* to create — so no user- or app-authored memory can match. Content strings are
+never matched on.
+
+```bash
+aindy-runtime memory prune-cascade-debris            # report only (default)
+aindy-runtime memory prune-cascade-debris --yes      # delete
+aindy-runtime memory prune-cascade-debris --yes --batch-size 200
+```
+
+Deletes in **committed batches** so a large backlog never becomes one long-running transaction
+holding a pooled connection — the failure mode this whole item exists to prevent. Child rows
+(history / traces / edges / links) are removed by `ON DELETE CASCADE`, matching the
+`sys.v1.memory.delete` contract. PostgreSQL and SQLite; any other dialect is refused rather than
+guessed at.
+
 ## 1.10.2 — 2026-07-19
 
 Patch. No schema-contract change (stays `2026-07-12.4`). Closes RT-MEMTXN-LEAK-1.
