@@ -2,12 +2,75 @@
 
 ## RT-MEMTXN-LEAK-1 — memory reads held DB connections across the embedding API call
 
-**Status:** **FIXED in two parts.** Accepts app handoff `RT-MEMTXN-LEAK-1` (apps-monolith,
+**Status:** **FIXED in three parts.** Accepts app handoff `RT-MEMTXN-LEAK-1` (apps-monolith,
 HIGH — a browser login took ~40s and exceeded the web client's 30s timeout, so a real user
 could not sign in). **Part 1 (recall read path) shipped in v1.10.0** — app-verified as a
 *partial* fix: leaked connections now drain at request end (`idle in transaction` falls back
-to ~2 after login) instead of lingering to the 120s reaper. **Part 2 (embedding-write
-fan-out) fixed 2026-07-19** — the remaining within-request fan-out that kept login at ~45s.
+to ~2 after login) instead of lingering to the 120s reaper. **Part 2 (embedding-job
+commit-before-embed) shipped in v1.10.1** — also insufficient on its own. **Part 3 (the
+capture→job→capture cascade) fixed 2026-07-19 — this is the actual root cause.**
+Locally reproduced and verified end-to-end: **login 43.6s → 0.3s, 60 held connections → 0.**
+
+**Part 3 — the cascade (root cause).** Parts 1 and 2 were both real transaction-hold bugs, but
+they were treating symptoms: the *reason* dozens of connections existed at all is an **unbounded
+synchronous recursion**. Diagnosed with a `py-spy` stack dump against the live container (the
+first artifact that showed the Python side; `pg_stat_activity` alone could not distinguish
+"held across a slow call" from "held by a stack frame that never returns"):
+
+```
+submit_async_job                     (async_job_service.py:522)   ← opens its own SessionLocal()
+ └ _emit_async_system_event                  EXECUTION_STARTED
+    └ emit_system_event
+       └ capture_system_event_as_memory      (EXECUTION_* is auto-captured)
+          └ MemoryNodeDAO.save               commit + refresh  ← the held SELECT
+             └ _enqueue_embedding            every new node needs an embedding
+                └ dispatch_job → submit_async_job   ← RECURSES, one level deeper
+```
+
+Every memory node spawns an async job; that job's lifecycle event becomes another memory node.
+The recursion is **synchronous**, and each level holds the session it opened until the descent
+below it returns — so depth is capped only by the connection pool. The observed fingerprint
+falls straight out of this: 60 connections (= pool ceiling), each with **exactly one** statement
+(`SELECT … FROM memory_nodes WHERE id = <uuid>` — the `save()` refresh at that level), 60
+**distinct** ids, `xact_age_s == idle_s`, all `embedding_status='pending'` (they never got
+embedded — the stack was still descending). Once drained, every further checkout waits the full
+`pool_timeout` → ~42s login. It also explains the corpus: 1239 of 1246 nodes were global rows
+reading `"execution.started from async"` — pure cascade debris, 60–120 per minute.
+
+**Three compounding defects, each fixed:**
+
+1. **The cycle existed.** `capture_system_event_as_memory` now drops events whose
+   `payload["task_name"]` is in `RUNTIME_INTERNAL_TASK_NAMES` (`memory.generate_embedding`,
+   `memory.embedding_sweep`). A "the embedding job started" memory has no recall value, and
+   capturing it is precisely what closed the loop. This cuts the cycle at its origin. (It also
+   covers the second entry point: `feedback.abandonment_detected` is auto-captured *and* carried
+   the same `task_name`.)
+2. **Nothing bounded the nesting.** New `AINDY/core/memory_capture_guard.py`:
+   `submit_async_job` runs inside `async_submit_scope()`, and captures are suppressed at
+   submission depth ≥ 2. The outermost submission still captures, so loop-closure signal
+   (INFINITY-RUNTIME-1) is preserved; only the nested submission a capture itself spawned is
+   dropped. `_execute_job` resets the depth via `fresh_async_submit_depth()` — the worker thread
+   inherits the submitter's context through `copy_context()`, and a thread hand-off ends the
+   synchronous chain, so an executing job that legitimately chains further work is unaffected.
+3. **Dedup could never fire.** `_is_duplicate` used `WHERE user_id = :uid`, which is never true
+   when `uid IS NULL` — so the *global* nodes this cascade produced, all with byte-identical
+   content, were never deduplicated. Now branches to `user_id IS NULL` (branch rather than
+   `IS NOT DISTINCT FROM`: unsupported on SQLite, and it would leave the NULL bind untyped on
+   PostgreSQL). Working dedup would independently have capped the cascade at one node.
+
+Tests: `tests/unit/test_memory_capture_cascade.py` (11 — origin cut, depth semantics incl.
+scope restoration on exception, the thread-boundary reset, and both dedup branches).
+
+> **Rule: a memory capture must never be able to enqueue work whose own lifecycle events are
+> capturable.** Any capture → job → capture edge is a cycle; the runtime's own maintenance jobs
+> must stay invisible to capture, and nesting must be depth-bounded regardless.
+
+> **Diagnostic note:** `pg_stat_activity` shows the *last* statement, not the caller. When
+> `xact_age_s == idle_s` on many connections, the transaction has exactly one statement — that is
+> equally consistent with "held across a slow call" (parts 1–2) and "held by a frame that never
+> returned" (part 3). Only a stack dump separates them:
+> `docker exec --privileged -u root <api> py-spy dump --pid 1` (needs `--privileged`; the
+> container does not carry `CAP_SYS_PTRACE`).
 
 **Part 2 — the embedding-job fan-out (the app's follow-up report).** App-side
 `pg_stat_activity` on 1.10.0 showed 30+ **concurrent** connections, each running **exactly

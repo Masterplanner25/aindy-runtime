@@ -22,6 +22,10 @@ from sqlalchemy import text
 from AINDY.config import settings
 from AINDY.core.execution_signal_helper import queue_memory_capture, queue_system_event
 emit_system_event = queue_system_event
+from AINDY.core.memory_capture_guard import (
+    RUNTIME_INTERNAL_TASK_NAMES,
+    memory_capture_suppressed,
+)
 from AINDY.core.observability_events import emit_observability_event
 from AINDY.platform_layer.event_trace_service import calculate_depth, detect_root_event, get_downstream_effects, link_event_to_memory
 from AINDY.core.system_event_service import emit_error_event
@@ -434,15 +438,32 @@ class MemoryCaptureEngine:
         Phase 2: use embedding similarity for fuzzy dedup.
         """
         try:
-            existing = self.db.execute(
-                text(
-                    "SELECT id FROM memory_nodes "
-                    "WHERE user_id = :uid "
-                    "AND content = :content "
-                    "LIMIT 1"
-                ),
-                {"uid": self.user_id, "content": content},
-            ).fetchone()
+            # RT-MEMTXN-LEAK-1 — `user_id = :uid` is never true when uid is NULL, so
+            # system/global captures (user_id IS NULL) were never deduplicated: the
+            # identical "execution.started from async" content was re-stored on every
+            # pass, which is what let the capture → job → capture cycle run unbounded.
+            # Branch instead of `IS NOT DISTINCT FROM` — that is unsupported on SQLite
+            # and would leave the NULL bind param untyped on PostgreSQL.
+            if self.user_id is None:
+                existing = self.db.execute(
+                    text(
+                        "SELECT id FROM memory_nodes "
+                        "WHERE user_id IS NULL "
+                        "AND content = :content "
+                        "LIMIT 1"
+                    ),
+                    {"content": content},
+                ).fetchone()
+            else:
+                existing = self.db.execute(
+                    text(
+                        "SELECT id FROM memory_nodes "
+                        "WHERE user_id = :uid "
+                        "AND content = :content "
+                        "LIMIT 1"
+                    ),
+                    {"uid": self.user_id, "content": content},
+                ).fetchone()
 
             if existing is None:
                 return False
@@ -553,6 +574,25 @@ def capture_system_event_as_memory(db, event) -> Optional[dict]:
         return None
 
     payload = getattr(event, "payload", {}) or {}
+
+    # RT-MEMTXN-LEAK-1 (third site) — do not capture the lifecycle events of the
+    # runtime's own memory-maintenance jobs. Every memory node enqueues an embedding
+    # job; that job emits EXECUTION_STARTED; capturing it creates another node, which
+    # enqueues another job. The cycle is synchronous and each level pins the session
+    # it opened, so it drains the connection pool (60 conns `idle in transaction`,
+    # ~42s login) rather than terminating. A "the embedding job started" memory has
+    # no recall value, so dropping it costs nothing and cuts the cycle at its origin.
+    if payload.get("task_name") in RUNTIME_INTERNAL_TASK_NAMES:
+        return None
+
+    # Backstop for any *other* capture → job → capture cycle: a job submitted by a
+    # capture is plumbing, and its own lifecycle events must not spawn a third level.
+    if memory_capture_suppressed():
+        logger.debug(
+            "[MemoryCapture] skipping %s — nested async submission (cycle guard)",
+            event_type,
+        )
+        return None
     user_id = getattr(event, "user_id", None)
     event_id = str(getattr(event, "id", ""))
     trace_id = getattr(event, "trace_id", None)

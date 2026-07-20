@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+### Fixed — RT-MEMTXN-LEAK-1 (part 3): the capture → job → capture cascade (root cause)
+
+1.10.0 and 1.10.1 each fixed a real transaction-hold bug, but sign-in was still ~42s. A
+`py-spy` stack dump against the live container showed why: an **unbounded synchronous
+recursion**, not a slow call holding a transaction.
+
+```
+submit_async_job                  ← opens its own SessionLocal()
+ └ emits EXECUTION_STARTED
+    └ capture_system_event_as_memory
+       └ MemoryNodeDAO.save       ← commit + refresh = the held SELECT
+          └ _enqueue_embedding    ← every new node needs an embedding
+             └ submit_async_job   ← recurses
+```
+
+Every memory node spawns an async job whose lifecycle event becomes another memory node. Each
+level holds the session it opened until the descent below returns, so depth is capped only by
+the connection pool — 60 connections each holding **one** `SELECT … FROM memory_nodes WHERE
+id = <uuid>` (the `save()` refresh), then a full `pool_timeout` wait for everything after.
+
+**Fixed on three axes:**
+
+- **Cycle cut at the origin** — the runtime's own memory-maintenance jobs
+  (`memory.generate_embedding`, `memory.embedding_sweep`) are no longer captured as memory.
+- **Depth bound** — new `AINDY/core/memory_capture_guard.py`; `submit_async_job` runs inside
+  `async_submit_scope()` and captures are suppressed at submission depth ≥ 2. The outermost
+  submission still captures (loop-closure signal preserved); `_execute_job` resets the depth at
+  the thread boundary so legitimately chained jobs are unaffected.
+- **Dedup repaired** — `_is_duplicate` used `WHERE user_id = :uid`, never true for `NULL`, so
+  the global nodes this cascade produced were never deduplicated despite identical content.
+
+Verified end-to-end on a live stack: **login 43.6s → 0.3s, 60 held connections → 0**, with
+`/auth/register` and `/auth/login` still returning 201/200.
+
+> **Rule:** a memory capture must never be able to enqueue work whose own lifecycle events are
+> capturable. Any capture → job → capture edge is a cycle.
+
 ## 1.10.1 — 2026-07-19
 
 Patch. No schema-contract change (stays `2026-07-12.4`).
