@@ -3287,6 +3287,55 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ---
 
+## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, vite major)
+
+**Status:** Open — deferred (dependency maintenance; each is a deliberate upgrade, not a
+drop-in bump). Surfaced during the 2026-07-18 dependabot triage.
+
+Two dependabot upgrades that cannot be taken as individual auto-bumps:
+
+- **OpenTelemetry 1.42.1 → 1.44.0 (grouped).** The otel packages are version-locked —
+  `AINDY/requirements.txt` pins `opentelemetry-sdk==1.42.1`, which hard-requires
+  `opentelemetry-api==1.42.1` — so bumping a single otel package yields `ResolutionImpossible`
+  in CI. Dependabot's per-package PRs (**#251** api, **#254** exporter-otlp-proto-grpc) were
+  **closed 2026-07-18** for this reason. Do it as ONE PR bumping the whole set together
+  (`opentelemetry-api`, `-sdk`, `-instrumentation`, `-instrumentation-asgi`,
+  `-instrumentation-fastapi`, `-exporter-otlp-proto-common`, `-exporter-otlp-proto-grpc`,
+  `-semantic-conventions`, `-proto`, `-util-http`) to the same 1.44.x line, then run
+  Integration Tests (the otel spans exercise the FastAPI/gRPC instrumentation). Consider a
+  dependabot `groups` config for `opentelemetry-*` so future bumps arrive as one PR.
+- **vite 6.x → 8.x (platform, major).** Dependabot PR **#255** (now `→ 8.1.x`) fails the
+  **Platform UI Build** check — a two-major jump with breaking changes. Left open; take it as
+  a deliberate UI upgrade with the build fix, not an auto-merge.
+
+**Reopen/resolve:** when the OTel line is bumped as a group, or the vite major is scheduled.
+
+---
+
+## NATIVE-CI-1 — Rust native scorer crate excluded from CI (green-but-unverified bumps)
+
+**Status:** Open — CI-coverage gap. Surfaced during the 2026-07-18 dependabot triage.
+
+The optional Rust pyo3 memory scorer (`AINDY/memory/native/memory_bridge_rs`, built via
+Maturin) is **not compiled or tested in CI** — no MSVC/cargo build job exists. So cargo
+dependency bumps to that crate pass all CI checks **green-but-unverified**: nothing in CI
+actually builds the crate. Two such dependabot PRs are **held open** pending a local build
+rather than merged on a misleading green:
+
+- **#252** `uuid` 1.23.4 → 1.23.5
+- **#250** `cc` 1.2.66 → 1.2.67
+
+Both are patch bumps (low risk), but "CI green" is not evidence for the native path. To
+verify: local MSVC toolchain build (`maturin build` / `cargo build` in the crate dir) + the
+scorer's own tests, then merge. Durable fix: add a native-crate build/test job to CI so cargo
+bumps are actually gated. The runtime falls back to the Python scorer when the native crate is
+absent, so this is a performance-path gap, not a correctness one.
+
+**Reopen/resolve:** when a native-crate CI build job is added, or when the held bumps are
+locally verified and merged.
+
+---
+
 ## ECOGAP-* — Ecosystem capability gaps (corrected lens)
 
 Derived from the 12-project ecosystem re-audit, re-judged against source-verified
