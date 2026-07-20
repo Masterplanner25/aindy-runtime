@@ -3287,6 +3287,89 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ---
 
+## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, vite major)
+
+**Status:** Open — deferred (dependency maintenance; each is a deliberate upgrade, not a
+drop-in bump). Surfaced during the 2026-07-18 dependabot triage.
+
+Two dependabot upgrades that cannot be taken as individual auto-bumps:
+
+- **OpenTelemetry 1.42.1 → 1.44.0 (grouped).** The otel packages are version-locked —
+  `AINDY/requirements.txt` pins `opentelemetry-sdk==1.42.1`, which hard-requires
+  `opentelemetry-api==1.42.1` — so bumping a single otel package yields `ResolutionImpossible`
+  in CI. Dependabot's per-package PRs (**#251** api, **#254** exporter-otlp-proto-grpc) were
+  **closed 2026-07-18** for this reason. Do it as ONE PR bumping the whole set together
+  (`opentelemetry-api`, `-sdk`, `-instrumentation`, `-instrumentation-asgi`,
+  `-instrumentation-fastapi`, `-exporter-otlp-proto-common`, `-exporter-otlp-proto-grpc`,
+  `-semantic-conventions`, `-proto`, `-util-http`) to the same 1.44.x line, then run
+  Integration Tests (the otel spans exercise the FastAPI/gRPC instrumentation). Consider a
+  dependabot `groups` config for `opentelemetry-*` so future bumps arrive as one PR.
+- **vite 6.x → 8.x (platform, major).** Dependabot PR **#255** (now `→ 8.1.x`) fails the
+  **Platform UI Build** check — a two-major jump with breaking changes. Left open; take it as
+  a deliberate UI upgrade with the build fix, not an auto-merge.
+
+**Reopen/resolve:** when the OTel line is bumped as a group, or the vite major is scheduled.
+
+---
+
+## NATIVE-CI-1 — Rust native scorer crate excluded from CI (green-but-unverified bumps)
+
+**Status:** Open — CI-coverage gap. Surfaced during the 2026-07-18 dependabot triage.
+
+The optional Rust pyo3 memory scorer (`AINDY/memory/native/memory_bridge_rs`, built via
+Maturin) is **not compiled or tested in CI** — no MSVC/cargo build job exists. So cargo
+dependency bumps to that crate pass all CI checks **green-but-unverified**: nothing in CI
+actually builds the crate. Two such dependabot PRs are **held open** pending a local build
+rather than merged on a misleading green:
+
+- **#252** `uuid` 1.23.4 → 1.23.5
+- **#250** `cc` 1.2.66 → 1.2.67
+
+Both are patch bumps (low risk), but "CI green" is not evidence for the native path. To
+verify: local MSVC toolchain build (`maturin build` / `cargo build` in the crate dir) + the
+scorer's own tests, then merge. Durable fix: add a native-crate build/test job to CI so cargo
+bumps are actually gated. The runtime falls back to the Python scorer when the native crate is
+absent, so this is a performance-path gap, not a correctness one.
+
+**Reopen/resolve:** when a native-crate CI build job is added, or when the held bumps are
+locally verified and merged.
+
+---
+
+## MEM-RECALL-N1-1 — `recall()` scoring loop issues 3 queries per candidate
+
+**Status:** Open — performance-only. Surfaced 2026-07-19 while verifying RT-MEMTXN-LEAK-1, and
+**explicitly not** the cause of that incident (recorded here so the two are not conflated).
+
+`MemoryNodeDAO.recall()` scores each candidate in a Python loop, and each iteration issues
+**three** queries (`AINDY/db/dao/memory_node_dao.py`):
+
+| Call | Site | Queries |
+|---|---|---|
+| `get_graph_connectivity_score(c["id"])` | `:680` | 2 — outbound + inbound `COUNT` on `memory_links` |
+| `_get_model_by_id(c["id"])` | `:705` | 1 — full-row `SELECT` on `memory_nodes` |
+
+Candidates are up to `limit * 3` from the semantic path plus `limit * 3` from the tag path, so a
+default `limit=5` recall can issue **45–90 queries**. (`get_success_rate` and
+`get_usage_frequency_score` are free — they read the already-loaded object.)
+
+**The re-fetch is pure waste.** `_get_model_by_id` re-reads a row the candidate query *already*
+selected in full, solely to reach `success_count`, `failure_count`, `usage_count`, and `weight` —
+four columns that `_node_to_dict` (`:52`) does not carry into the candidate dict. Adding them to
+that dict removes the per-candidate `memory_nodes` SELECT entirely, with no behavior change. The
+link counts can then be batched into one `GROUP BY` over the candidate ids.
+
+**Why it is not urgent.** Unlike RT-MEMTXN-LEAK-1, this runs on a *single* session with indexed
+lookups and no external call inside the loop — it lengthens one request, it does not drain the
+pool. App-side measurement after the cascade fix: a direct `recall()` scanned `memory_nodes` 18
+times while holding **1** connection (the `memory_links` counts do not appear in a `memory_nodes`
+scan counter, so the true query count is roughly triple that).
+
+**Reopen/resolve:** when recall latency matters, or when a candidate set grows past the current
+`limit * 3` bound.
+
+---
+
 ## ECOGAP-* — Ecosystem capability gaps (corrected lens)
 
 Derived from the 12-project ecosystem re-audit, re-judged against source-verified
