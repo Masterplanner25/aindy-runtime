@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.10.2 — 2026-07-19
+
+Patch. No schema-contract change (stays `2026-07-12.4`). Closes RT-MEMTXN-LEAK-1.
 
 ### Fixed — RT-MEMTXN-LEAK-1 (part 3): the capture → job → capture cascade (root cause)
 
