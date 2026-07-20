@@ -457,6 +457,38 @@ def submit_async_job(
     max_attempts: int = 1,
     execute_inline_in_test_mode: bool = True,
 ) -> str:
+    """
+    Submit an async job.
+
+    RT-MEMTXN-LEAK-1 — the body runs inside ``async_submit_scope()``. Submitting a
+    job emits EXECUTION_STARTED, which the memory capture engine turns into a memory
+    node, whose save enqueues an embedding job — another submission. Without the
+    scope that recursion is unbounded, and because each level holds the session it
+    opened below (``SessionLocal()`` closed only in ``finally``), it drains the
+    connection pool rather than blowing the stack. See ``memory_capture_guard``.
+    """
+    from AINDY.core.memory_capture_guard import async_submit_scope
+
+    with async_submit_scope():
+        return _submit_async_job_inner(
+            task_name=task_name,
+            payload=payload,
+            user_id=user_id,
+            source=source,
+            max_attempts=max_attempts,
+            execute_inline_in_test_mode=execute_inline_in_test_mode,
+        )
+
+
+def _submit_async_job_inner(
+    *,
+    task_name: str,
+    payload: dict[str, Any],
+    user_id: str | UUID | None,
+    source: str,
+    max_attempts: int = 1,
+    execute_inline_in_test_mode: bool = True,
+) -> str:
     JobLog = _job_log_model()
     if not _ASYNC_ACCEPTING:
         raise QueueSaturatedError(
@@ -1357,11 +1389,18 @@ def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]
 
 
 def _execute_job(log_id: str, task_name: str, payload: dict[str, Any]) -> None:
-    db = SessionLocal()
-    try:
-        _execute_job_inline(db, log_id, task_name, payload)
-    finally:
-        db.close()
+    # RT-MEMTXN-LEAK-1 — this is the thread/queue hand-off, so the synchronous
+    # submission chain that `async_submit_scope` bounds has ended here. Reset the
+    # depth (the worker thread inherited it via `copy_context()`) so a job that
+    # legitimately chains further work still has its lifecycle events captured.
+    from AINDY.core.memory_capture_guard import fresh_async_submit_depth
+
+    with fresh_async_submit_depth():
+        db = SessionLocal()
+        try:
+            _execute_job_inline(db, log_id, task_name, payload)
+        finally:
+            db.close()
 
 
 def _ensure_inline_log_terminal(db, log_id: str) -> None:
