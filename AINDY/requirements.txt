@@ -59,7 +59,7 @@ ecdsa==0.19.2
 cryptography==48.0.1
 passlib==1.7.4
 bcrypt==4.0.1
-slowapi==0.1.9
+slowapi==0.1.10
 pytest-cov==7.1.0
 ruff==0.15.22
 apscheduler==3.11.3
