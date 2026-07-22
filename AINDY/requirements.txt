@@ -25,7 +25,7 @@ maturin
 nltk==3.10.0
 numpy==2.4.6
 nodus-lang==4.1.0
-openai==2.44.0
+openai==2.46.0
 pendulum==3.2.0
 psycopg2==2.9.12
 pgvector==0.4.2
