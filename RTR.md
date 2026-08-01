@@ -82,8 +82,13 @@ Shipped 07-12 → 08-01, and absent from the pre-2026-07-31 snapshot:
 | APP-FR-6 item 1 | `POST /auth/password/change` shipped 07-31; items 2+3 open, blocked on FR-1 delivery |
 | DB-NODUS-BUDGET-1 | Verified + both fixes shipped 08-01; root-cause fix opt-in pending soak |
 
-## Unreleased
+## Release
 
-`CHANGELOG.md` has FR-6 item 1 and `memory prune-cascade-debris` under `## Unreleased`
-against `_version.py` 1.10.2 — a `1.11.0` is pending. See the release flow under
-PYPI-PUBLISH-1 in `CLAUDE.md`.
+**v1.11.0 prepared 2026-08-01** — FR-6 item 1 (`POST /auth/password/change`),
+`memory prune-cascade-debris`, the DB-NODUS-BUDGET-1 idle-cap raise, and the `mcp<2` cap.
+Minor rather than patch because of the new endpoint.
+
+Tag `v1.11.0` after the bump PR merges green — and note the full pipeline (Integration,
+Platform UI Build, Package Build, Install Smoke), not just the three required checks, must
+be green on the tagged commit. See the release flow under PYPI-PUBLISH-1 in `CLAUDE.md` and
+`docs/runtime/RELEASE_CHECKLIST.md`.
