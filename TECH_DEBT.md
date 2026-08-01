@@ -3173,6 +3173,20 @@ heartbeat (reactive crash-reaping + max-requests recycle cover it) and the sibli
 `runtime_callback_host.py` 10s callback subprocess (same tax, separate surface). See the
 A/B/C plan below.
 
+**CI now runs warm (2026-07-31).** Because the pool is opt-in, CI was still exercising the
+cold path this entry replaced. The Integration Tests job (the only tier that really spawns
+nodus workers) now sets `AINDY_NODUS_WARM_POOL=1` + `AINDY_NODUS_WARM_PREWARM=1`, so the
+shipped fix is what gets tested. The cold path is not abandoned — it remains the pool's
+fault fallback and is covered by `tests/unit/test_nodus_worker_pool.py`. **Standing
+gotcha:** pre-warm is explicitly non-blocking (background thread off the first
+`get_pool()`), so the *first* execution still races the one-time plugin load. Where a test
+holds a DB session open across that load, the 10s test-mode
+`idle_in_transaction_session_timeout` terminates the backend mid-run and surfaces as
+`server closed the connection unexpectedly` → `PendingRollbackError` (this reddened
+`test_agent_vm_parity.py` for weeks). That job therefore also sets
+`DB_IDLE_IN_TRANSACTION_TIMEOUT_MS=60000`; the knob only works because the test-mode branch
+in `database.py` now honors an explicitly-set value instead of hardcoding 10s.
+
 **Symptom (verified 2026-07-09, live Linux serve, app-profile).** A real agent run
 reached `executing` then failed with `"Nodus script exceeded 30000ms wall-clock
 timeout"` at 0/3 steps. The plan, planner, and app were all fine — the run died on

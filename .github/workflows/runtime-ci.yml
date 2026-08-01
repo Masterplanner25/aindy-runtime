@@ -250,6 +250,20 @@ jobs:
       AINDY_ENFORCE_SCHEMA: "false"
       AINDY_ASYNC_HEAVY_EXECUTION: "false"
       AINDY_ENABLE_BACKGROUND_TASKS: "false"
+      # NODUS-WARMPOOL-1 is the shipped fix for nodus worker cold-start; it is opt-in
+      # (default off), so CI was exercising the path it replaced. This is the only tier
+      # that really spawns nodus workers, so it is where the warm pool belongs. The
+      # cold path is not abandoned — it remains the pool's fault fallback and is covered
+      # by tests/unit/test_nodus_worker_pool.py.
+      AINDY_NODUS_WARM_POOL: "1"
+      AINDY_NODUS_WARM_PREWARM: "1"
+      # Pre-warm is explicitly non-blocking (a background thread off the first
+      # get_pool()), so the first execution still races the one-time plugin load while
+      # the parity tests hold a session open. That legitimately exceeds the 10s test
+      # default and Postgres terminates the backend mid-run — surfacing as
+      # `server closed the connection unexpectedly` then PendingRollbackError. 60s
+      # clears the load without disabling the guard.
+      DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: "60000"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
