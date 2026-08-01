@@ -281,11 +281,19 @@ class Settings(BaseSettings):
         ),
     )
     DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: int = Field(
-        default=30000,
+        default=60000,
         description=(
             "PostgreSQL idle_in_transaction_session_timeout in milliseconds. "
             "Closes sessions that hold a transaction open without issuing "
-            "queries. Default: 30000 (30 seconds)."
+            "queries. Default: 60000 (60 seconds). Set to 0 to disable. "
+            "DB-NODUS-BUDGET-1: this MUST exceed the maximum permitted nodus "
+            "execution — AINDY_NODUS_MAX_EXECUTION_MS (30s) + "
+            "AINDY_NODUS_BOOT_ALLOWANCE_MS (15s) = 45s — because the flow "
+            "runner's session is verifiably held idle-in-transaction for the "
+            "whole of node execution. At the previous 30s default a slow but "
+            "entirely in-budget nodus run had its connection terminated "
+            "mid-flight. tests/unit/test_db_nodus_budget_ordering.py enforces "
+            "the ordering; raise this if you raise either nodus budget."
         ),
     )
 

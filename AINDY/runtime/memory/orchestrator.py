@@ -34,13 +34,14 @@ class MemoryOrchestrator:
         max_tokens: int = 1200,
         metadata: Optional[dict] = None,
     ) -> MemoryContext:
+        read_db, owns_read_db = self._resolve_read_session(db)
         try:
             operation = operation_type or task_type or "generic"
             request = RecallRequest(query=query, user_id=user_id, task_type=operation, metadata=metadata)
             expanded_query = self.query_expander.expand(request)
             strategy = self.strategy_selector.select(request)
             request.metadata["diversity_factor"] = strategy.diversity_factor
-            self._inject_trace_context(request, db)
+            self._inject_trace_context(request, read_db)
 
             tags = request.metadata.get("tags") if request.metadata else None
             override_node_type = request.metadata.get("node_type") if request.metadata else None
@@ -56,7 +57,7 @@ class MemoryOrchestrator:
                 retrieval_limit = requested_limit
 
             candidates = self._recall_candidates(
-                db=db,
+                db=read_db,
                 user_id=user_id,
                 query=expanded_query,
                 tags=tags,
@@ -84,6 +85,54 @@ class MemoryOrchestrator:
         except Exception as exc:
             logger.warning("[MemoryOrchestrator] recall failed: %s", exc)
             return _empty_context()
+        finally:
+            if owns_read_db:
+                try:
+                    read_db.close()
+                except Exception as exc:  # never let cleanup mask the recall result
+                    logger.warning("[MemoryOrchestrator] read session close failed: %s", exc)
+
+    @staticmethod
+    def _resolve_read_session(db):
+        """Pick the session the (read-only) recall runs on. Returns (session, owns_it).
+
+        DB-NODUS-BUDGET-1: recall is read-only, but running it on the caller's session
+        leaves that session **inside a transaction** — verified against real Postgres,
+        where the flow runner's connection then sat idle-in-transaction for the entire
+        duration of node execution. A slow nodus run would exceed the DB idle cap and be
+        terminated mid-flight.
+
+        Rolling the caller's session back afterwards is NOT an option: RT-MEMTXN-LEAK-1
+        tried exactly that (`release_read_transaction`) and it broke
+        `test_agent_approve_idempotency`, because `session.dirty` cannot see Core
+        `db.execute(UPDATE)` or outer transactions — rolling back a request-shared session
+        mid-request discards in-flight state. So instead of ending the caller's
+        transaction, we never start one: the read gets its own short-lived session and
+        returns the connection immediately.
+
+        Opt-in (`AINDY_MEMORY_RECALL_OWN_SESSION`, default off) because this is a core
+        read path — a caller relying on seeing its own uncommitted writes through recall
+        would change behaviour. Any failure to obtain a session falls back to the caller's,
+        so this can never make recall unavailable.
+        """
+        import os
+
+        if os.getenv("AINDY_MEMORY_RECALL_OWN_SESSION", "").strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+        }:
+            return db, False
+        try:
+            from AINDY.db.database import SessionLocal
+
+            return SessionLocal(), True
+        except Exception as exc:
+            logger.warning(
+                "[MemoryOrchestrator] own-session recall unavailable, using caller's: %s",
+                exc,
+            )
+            return db, False
 
     def _recall_candidates(
         self,
