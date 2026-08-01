@@ -3383,8 +3383,15 @@ Two dependabot upgrades that cannot be taken as individual auto-bumps:
   (`opentelemetry-api`, `-sdk`, `-instrumentation`, `-instrumentation-asgi`,
   `-instrumentation-fastapi`, `-exporter-otlp-proto-common`, `-exporter-otlp-proto-grpc`,
   `-semantic-conventions`, `-proto`, `-util-http`) to the same 1.44.x line, then run
-  Integration Tests (the otel spans exercise the FastAPI/gRPC instrumentation). Consider a
-  dependabot `groups` config for `opentelemetry-*` so future bumps arrive as one PR.
+  Integration Tests (the otel spans exercise the FastAPI/gRPC instrumentation).
+  **Grouping shipped 2026-08-01:** `.github/dependabot.yml` now has an `opentelemetry`
+  group (`opentelemetry-*`) on the pip ecosystem, so future otel bumps arrive as **one**
+  PR — the only shape in which they can resolve. A third single-package PR (**#307**) was
+  closed 2026-08-01 after being rebased onto fixed `main` and still failing with
+  `ResolutionImpossible`, confirming it was the pin conflict and not that week's
+  mcp/nodus CI breakage. The pattern intentionally covers the instrumentation packages,
+  which run a separate version line (`-instrumentation-fastapi==0.63b1` against a
+  `1.42.1` core) but the same release train.
 - **vite 6.x → 8.x (platform, major).** Dependabot PR **#255** (now `→ 8.1.x`) fails the
   **Platform UI Build** check — a two-major jump with breaking changes. Left open; take it as
   a deliberate UI upgrade with the build fix, not an auto-merge.
