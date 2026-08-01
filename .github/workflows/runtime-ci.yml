@@ -126,7 +126,10 @@ jobs:
           python -m pip install -e .[test] --no-deps --no-build-isolation
 
       - name: Install MCP extra (ECOGAP-4 / G4b — exercises real nodus-mcp + mcp SDK)
-        run: python -m pip install "nodus-mcp>=0.1.1" "mcp>=1.0.0"
+        # `mcp<2` mirrors the `[mcp]` extra's cap — see MCP-SDK-2X-1 in TECH_DEBT.md.
+        # This step installs the two packages directly (not via the extra), so the cap
+        # has to be repeated here or CI silently resolves to an incompatible SDK.
+        run: python -m pip install "nodus-mcp>=0.1.1" "mcp>=1.0.0,<2"
 
       - name: Check schema contract version is current
         run: python scripts/check_schema_version.py
