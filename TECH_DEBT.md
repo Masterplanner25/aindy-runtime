@@ -3326,6 +3326,48 @@ Two dependabot upgrades that cannot be taken as individual auto-bumps:
 
 ---
 
+## MCP-SDK-2X-1 — `[mcp]` extra capped at `mcp<2`; nodus-mcp still targets the 1.x server API
+
+**Status:** Open — pinned workaround shipped 2026-07-31, upstream unblock pending. Surfaced
+when `mcp 2.0.0` was published and turned every CI run red.
+
+**What broke.** Both install sites specified `mcp>=1.0.0` with **no upper bound** — the
+`[mcp]` extra in `pyproject.toml` and, separately, the "Install MCP extra" step in
+`runtime-ci.yml` (which installs the two packages directly rather than via the extra, so the
+constraint had to be fixed in both places or CI would keep resolving past the cap). The day
+`mcp 2.0.0` released, both resolved to it and `Runtime Contracts` failed on
+`tests/unit/test_mcp_client_live.py::test_live_mcp_round_trip`:
+
+```
+AttributeError: 'Server' object has no attribute 'list_tools'
+  nodus_mcp_aindy/server.py:139  in NodusServer._setup_handlers
+```
+
+**Not a test bug.** `nodus-mcp 0.1.2` — still the latest release — is built against the 1.x
+low-level server API and registers handlers via the `@server.list_tools()` decorator, which
+mcp 2.0.0 removed. The failure is raised from `NodusServer.__init__`, so with mcp 2.0.0
+installed the extra is broken at server-construction time for real callers, not only under
+pytest. **Do not "fix" this by skipping the live test** — that would report green on a
+genuinely broken `pip install aindy-runtime[mcp]`.
+
+**Blast radius is confined to nodus-mcp.** `AINDY/platform_layer/mcp_client.py` and
+`mcp_server.py` import only `nodus_mcp_aindy` (`MCPClientAdapter`, `discover_tools`,
+`ToolRegistry`, `NodusServer`, `syscall_entry_to_tool`) and never touch the `mcp` SDK
+directly, so no runtime code needs porting — only the dependency needs to catch up.
+
+**Fix applied:** cap both sites at `"mcp>=1.0.0,<2"`. No code change.
+
+**To resolve:** when a `nodus-mcp` release targets the mcp 2.x server API, lift the cap in
+**both** `pyproject.toml` and `.github/workflows/runtime-ci.yml`, bump the `nodus-mcp` floor,
+and re-run the live round-trip test — it exercises the real wire end to end, so it is the
+check that proves the upgrade. `nodus-mcp` is out-of-tree (PyPI: 0.1.0/0.1.1/0.1.2), so this
+is an upstream dependency, not work in this repo.
+
+**Watch for:** dependabot re-proposing `mcp` 2.x. It should stay closed with a pointer here
+until the upstream release lands.
+
+---
+
 ## NATIVE-CI-1 — Rust native scorer crate excluded from CI (green-but-unverified bumps)
 
 **Status:** Open — CI-coverage gap. Surfaced during the 2026-07-18 dependabot triage.

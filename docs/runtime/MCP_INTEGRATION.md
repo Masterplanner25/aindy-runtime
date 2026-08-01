@@ -28,6 +28,12 @@ package; the runtime only wires it in.
    ```
    (`mcp` is pinned explicitly here because `nodus-mcp` treats the official SDK as
    optional and does not pull it in, but the SSE client transport requires it.)
+
+   > **The extra caps the SDK at `mcp<2`.** `nodus-mcp 0.1.2` is built against the 1.x
+   > low-level server API; under `mcp 2.0.0` constructing a server raises
+   > `AttributeError: 'Server' object has no attribute 'list_tools'`. If you install `mcp`
+   > yourself rather than through the extra, apply the same cap. See
+   > [TECH_DEBT MCP-SDK-2X-1](../../TECH_DEBT.md).
 2. Configure servers and turn it on:
    ```bash
    AINDY_MCP_CLIENT_ENABLED=true

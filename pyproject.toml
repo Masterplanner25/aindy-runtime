@@ -129,7 +129,13 @@ mcp = [
   # >=0.1.2 required for the server-side SSE transport (/messages/ mount, #7) and the
   # per-session auth_hook context (headers/session, #8) that MEB-3a multi-tenant uses.
   "nodus-mcp>=0.1.2",
-  "mcp>=1.0.0",
+  # Capped below 2.0.0 (MCP-SDK-2X-1): nodus-mcp 0.1.2 — the latest release — is built
+  # against the 1.x low-level server API and calls `Server.list_tools()`, which mcp 2.0.0
+  # removed. With mcp 2.0.0 installed, constructing a `NodusServer` raises
+  # `AttributeError: 'Server' object has no attribute 'list_tools'`, so the extra is
+  # broken at import-of-server time, not merely in tests. Lift the cap when a nodus-mcp
+  # release targets the 2.x API.
+  "mcp>=1.0.0,<2",
   # SSE server transport (aindy-runtime mcp-server --transport sse).
   "uvicorn>=0.30.0",
   "starlette>=0.37.0",
