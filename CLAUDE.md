@@ -624,6 +624,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
 | Syscall registry floor constant | `AINDY/kernel/syscall_registry.py` — `SYSCALL_REGISTRY_MIN_COUNT` |
 | Tech debt tracker | `TECH_DEBT.md` |
+| Roadmap reading aid (digest of `TECH_DEBT.md`; NOT the source of truth) | `RTR.md` |
 | Docker compose | `docker-compose.yml` |
 | Dockerfile | `Dockerfile` |
 | pgvector init script | `docker/init-pgvector.sql` |
