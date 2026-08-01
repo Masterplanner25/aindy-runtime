@@ -131,6 +131,12 @@ def rotate_signing_key(new_key: str) -> bool:
 
 # ── Password utilities ──────────────────────────────────────────────────────
 
+# Enforced on password *change* (`change_user_password`) only. `register_user` has
+# never applied a policy; adding one there would reject existing callers, so that
+# stays a separate decision.
+MIN_PASSWORD_LENGTH = 8
+
+
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
@@ -445,6 +451,58 @@ def authenticate_user(email: str, password: str, db: Session):
         )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
+    return user
+
+
+def bump_token_version(user) -> int:
+    """Invalidate every outstanding JWT for ``user`` by advancing its token version.
+
+    Wraps at 32767 because ``User.token_version`` is a SMALLINT. Callers commit.
+    """
+    user.token_version = (int(getattr(user, "token_version", 0)) + 1) % 32767
+    return user.token_version
+
+
+def change_user_password(
+    *,
+    user_id,
+    current_password: str,
+    new_password: str,
+    db: Session,
+):
+    """Rotate an authenticated user's own password (FR-6 item 1).
+
+    Verifies the current password, applies the minimum-length policy, writes the new
+    hash, and bumps ``token_version`` so every existing session — including the one
+    that made this call — is invalidated. Returns the user.
+
+    Raises 404 (no such user), 403 (disabled), 401 (wrong current password),
+    400 (too short, or unchanged).
+    """
+    from AINDY.db.models.user import User
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+    if not verify_password(current_password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"New password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
+    if verify_password(new_password, user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="New password must differ from the current password",
+        )
+
+    user.hashed_password = hash_password(new_password)
+    bump_token_version(user)
+    db.commit()
+    db.refresh(user)
     return user
 
 

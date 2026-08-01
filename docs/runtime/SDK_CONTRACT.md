@@ -49,6 +49,11 @@ unwrapped data.**
 
 `POST /auth/register` follows the same envelope shape.
 
+`POST /auth/password/change` (Bearer JWT required; `{"current_password", "new_password"}`)
+returns the **same** `{access_token, token_type}` payload inside that envelope. The change
+invalidates every prior session, so a client must replace its stored token with the returned
+one or the next request will 401.
+
 ---
 
 ## Watcher Endpoint Contract

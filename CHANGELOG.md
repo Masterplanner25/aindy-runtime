@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added — `POST /auth/password/change` (FR-6 item 1)
+
+Self-service password rotation for an authenticated user. Until now the entire auth surface
+was `register` / `login` / `logout` / `admin/invalidate-sessions` — a signed-in user could not
+change their own password, and the only way to set one was a direct `UPDATE users SET
+hashed_password` against Postgres.
+
+```http
+POST /auth/password/change
+Authorization: Bearer <jwt>
+
+{"current_password": "…", "new_password": "…"}
+```
+
+Bearer-JWT only (a platform API key has no password to rotate). Verifies the current password,
+enforces `MIN_PASSWORD_LENGTH` (8) and new-≠-current, then writes the new hash and **bumps
+`token_version`**, invalidating every session. A freshly-versioned token is returned in the
+same envelope shape as `/auth/login`, so the caller stays signed in while other sessions are
+cut and a client can reuse its existing token-store path.
+
+Neither password reaches `input_payload` or the emitted `auth.password.changed` event — both
+are trace-logged surfaces.
+
+The forgot/reset half of FR-6 is not included: it needs a token-delivery channel (email), which
+is FR-1 connector/egress work.
+
 ### Added — `aindy-runtime memory prune-cascade-debris`
 
 One-time cleanup for deployments that ran a version before the RT-MEMTXN-LEAK-1 fix (v1.10.2).
