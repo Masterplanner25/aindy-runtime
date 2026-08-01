@@ -3437,9 +3437,10 @@ until the upstream release lands.
 
 ## DB-NODUS-BUDGET-1 — nodus wall-clock budget (45s) outlives the DB idle cap (30s)
 
-**Status:** Open — **half verified, half open**. Surfaced 2026-07-31 while diagnosing the
-`test_agent_vm_parity` CI failures. Deliberately split below so the unverified half is not
-mistaken for a finding.
+**Status:** Open — **fully verified 2026-08-01, fix not yet chosen**. Surfaced 2026-07-31
+while diagnosing the `test_agent_vm_parity` CI failures; the previously-open half (is a
+transaction actually held across node execution?) was confirmed against real PostgreSQL —
+see below. Both halves now rest on measurement, not inference.
 
 ### Verified by reading the defaults — the two budgets are mis-ordered
 
@@ -3462,23 +3463,56 @@ commit silently re-opens a transaction. That is the exact RT-MEMTXN-LEAK-1 Part 
 already recorded in `CLAUDE.md`, and it makes "a transaction is open when the subprocess
 blocks" the easy accidental state rather than an unlikely one.
 
-### Open question — is a transaction actually open across the subprocess in production?
+### Open question — RESOLVED 2026-08-01: **yes, the transaction is held**
 
-**Not verified. Do not treat as a confirmed production bug until it is.**
-`idle_in_transaction_session_timeout` fires only when a session is inside a transaction
-*and* issuing no queries. Whether a real agent execution is in that state for >30s depends
-on the flow engine's commit cadence: `runner_steps.py` commits at lines 48/165/294/369, and
-`execute_node` (line 116) is where the nodus subprocess blocks. `_check_resources` performs
-no DB work on the can-run path, so the deciding factor is whether anything between the last
-commit and line 116 touches `run.*` (re-opening a transaction via `expire_on_commit`).
+The previously-open half is now **verified against real PostgreSQL**. A transaction IS open
+and idle on the flow runner's own session for the entire duration of node execution.
 
-**How to settle it** (recipe already proven by RT-MEMTXN-LEAK-1): run a deliberately slow
-nodus script against a real PG, sample `pg_stat_activity` **mid-run**, and check for
-`xact_age_s == idle_s` on the flow engine's connection. That signal alone is ambiguous —
-per the RT-MEMTXN-LEAK-1 notes it cannot distinguish "held across a slow call" from "held by
-a frame that never returned" — so pair it with
-`docker exec --privileged -u root <api> py-spy dump --pid 1`. A post-run sample proves
-nothing; the connection drains at completion.
+**Method.** A one-node flow registered through `PersistentFlowRunner`, whose node body
+sleeps — the faithful analogue of `nodus.execute`, because the runner is blocked inside
+`execute_node` either way and the session's transaction state does not depend on what the
+node body does. `pg_stat_activity` was sampled every 4s from a **separate** connection
+(never perturbing the session under test), filtered by `application_name` so only this
+engine's backends were visible. Production timeout settings, not test mode.
+
+**Result** — one backend, held for the whole 20s node:
+
+```
+mid-node t+4s    pid=291  idle in transaction  xact_age_s=4.12   idle_s=4.07
+mid-node t+8s    pid=291  idle in transaction  xact_age_s=8.19   idle_s=8.14
+mid-node t+12s   pid=291  idle in transaction  xact_age_s=12.52  idle_s=12.47
+mid-node t+16s   pid=291  idle in transaction  xact_age_s=16.57  idle_s=16.52
+mid-node t+21s   pid=291  idle in transaction  xact_age_s=20.60  idle_s=20.55
+    last_query: SELECT memory_nodes.id AS memory_nodes_id, memory_nodes.content AS mem…
+```
+
+`session.in_transaction()` was `True` at `execute_node` entry, and `xact_age_s == idle_s` on
+every sample — one statement, then held. The transaction is opened by a **`memory_nodes`
+SELECT** (the memory read on the node path), not by a `run.*` attribute touch as originally
+hypothesised; `expire_on_commit` is a compounding factor, not the trigger.
+
+**The xact age tracks the node duration exactly** (4.12 → 20.60 over a 20s sleep), which is
+what rules out the alternative explanation. An earlier 6s run showed three backends and was
+ambiguous — the two extra sessions were embedding jobs retrying against a deliberately
+invalid API key. Lengthening the node to 20s separated the two: a fixed ~4s retry artifact
+cannot track a 20s sleep.
+
+**Self-verifying detail:** the transaction survived **20.6s** idle. Had the probe been
+running under `settings.is_testing`, the 10s cap would have killed it. Surviving past 10s
+proves the 30s production cap was the one in force.
+
+**Therefore the ordering is live, not theoretical.** With 45s of permitted execution against
+a 30s idle cap, a nodus run that is slow but entirely in-budget has its connection
+terminated at 30s — surfacing as `server closed the connection unexpectedly` →
+`PendingRollbackError`, exactly the shape seen in CI under the 10s test cap.
+
+Probe: `scratchpad/dbnodus_probe.py` (kept out of the repo; re-runnable against
+`docker-compose.test.yml`'s `postgres-test`).
+
+**Not covered by this verification:** the probe drove `PersistentFlowRunner` directly with a
+sleeping node, not a real `nodus.execute` subprocess, and used a one-node flow. The step from
+"any node" to "the nodus node specifically" is small — transaction state is independent of
+the node body — but it is an inference, not a measurement.
 
 ### Why it has not bitten in practice
 
@@ -3492,10 +3526,23 @@ Integration Tests job goes **green** — so warm execution plus 60s of headroom 
 one-time plugin load on a real runner. That is a measurement of the *test* configuration
 only; it says nothing about the 45s-vs-30s ordering in production, which remains open.
 
-**If confirmed, candidate fixes** (do not pick until the question above is answered):
-order the defaults so the DB cap exceeds the execution budget; commit-then-detach before
-`execute_node` so no transaction spans the subprocess; or set `expire_on_commit=False` on
-`SessionLocal` so a post-commit attribute read stops silently re-opening one.
+**Candidate fixes** (confirmed — now a matter of choosing, not investigating):
+
+1. **Order the defaults** so the DB idle cap exceeds the maximum permitted execution
+   (`30s` script + `15s` boot = `45s`, so the cap must clear 45s). Smallest change, removes
+   the mis-ordering outright, but leaves a transaction open across the subprocess — it
+   raises the ceiling rather than removing the hold.
+2. **Commit-then-detach before `execute_node`** so no transaction spans node execution.
+   Addresses the cause. This is the RT-MEMTXN-LEAK-1 rule applied to the runner's own
+   session, and given the trigger is a `memory_nodes` SELECT, the fix likely belongs on the
+   memory-read path rather than in the runner.
+3. **`expire_on_commit=False` on `SessionLocal`** — removes the silent re-open on
+   post-commit attribute access. Compounding factor only; does not by itself close this,
+   since the observed trigger was an explicit SELECT.
+
+(1) and (2) are complementary: (1) is the cheap guard, (2) is the real fix. Note (2) touches
+a shared session, and RT-MEMTXN-LEAK-1 records that rolling back a request-shared session
+mid-request breaks in-flight state — so it needs care, not a reflexive `rollback()`.
 
 ---
 
