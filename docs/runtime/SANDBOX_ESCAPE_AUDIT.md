@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-07-13"
+last_verified: "2026-08-01"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -616,6 +616,50 @@ v1.10.1.
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v1.10.2` release commit.
+
+---
+
+### Entry 011 — 2026-08-01
+
+`sandbox-escape-linux.yml` release gate, fired automatically on the `v1.11.0` tag
+**Host OS:** Ubuntu (GitHub-hosted `ubuntu-latest`), native Linux kernel — Docker uses a native
+Linux-containers backend, not a Docker Desktop VM
+**Container image:** `python:3.11-alpine` (same image as Entries 002–010; exact digest recorded in
+the run artifact)
+**Test command:** `pytest -m sandbox_escape` (via workflow; `SANDBOX_ESCAPE_IMAGE=python:3.11-alpine`)
+**Commit:** `4e8f917` (release tag `v1.11.0`)
+**Operator:** CI (release gate, run 30713164605)
+
+**Results by category:**
+
+| Category | Tests | Pass | Fail | Skip | Notes |
+|---|---|---|---|---|---|
+| Filesystem escape | 3 | 3 | 0 | 0 | Read-only rootfs, read-only bind mount, scoped tmpfs all verified |
+| Network escape | 3 | 3 | 0 | 0 | TCP, UDP, kernel interface evidence all blocked (`--network none`) |
+| Process / pids | 2 | 2 | 0 | 0 | pids limit hit; cgroup `pids.max=10` — ran natively, **0 skips** |
+| Privilege escalation | 4 | 4 | 0 | 0 | CAP_NET_RAW, CAP_CHOWN removed; NoNewPrivs=1 in /proc; combined-controls check |
+| Host env leak | 2 | 2 | 0 | 0 | No production secrets present; PYTHONIOENCODING transmitted |
+| Path boundary | 3 | 3 | 0 | 0 | Canary not reachable; plugin root accessible; traversal contained |
+
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.31s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run 30713164605) — holds
+exact per-test durations and the image digest.
+
+**Platform notes:**
+Identical 17-vector result on the same native-Linux gate and image as Entries 002–010, for the
+`v1.11.0` release commit published to PyPI as `aindy-runtime==1.11.0`. v1.11.0 is a minor release
+(new public endpoint `POST /auth/password/change`, FR-6 item 1) that also raises the
+`DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` default above the nodus execution ceiling (DB-NODUS-BUDGET-1)
+and caps the optional `[mcp]` extra at `mcp<2` (MCP-SDK-2X-1).
+
+**None of those touch the sandbox runner or its controls.** The auth endpoint is an HTTP route, the
+timeout change is a DB connection parameter, and the mcp cap is an optional-extra version bound —
+no change to `sandbox_runner.py`, the OCI flags, or the capability set. Container-grade posture is
+therefore unchanged from v1.10.2, and this entry records that the gate re-verified it rather than
+assuming it.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v1.11.0` release commit.
 
 ---
 
