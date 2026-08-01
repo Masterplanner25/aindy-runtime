@@ -3370,8 +3370,9 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, vite major)
 
-**Status:** Open — deferred (dependency maintenance; each is a deliberate upgrade, not a
-drop-in bump). Surfaced during the 2026-07-18 dependabot triage.
+**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); the vite major
+remains. Dependency maintenance; each is a deliberate upgrade, not a drop-in bump. Surfaced
+during the 2026-07-18 dependabot triage.
 
 Two dependabot upgrades that cannot be taken as individual auto-bumps:
 
@@ -3383,8 +3384,38 @@ Two dependabot upgrades that cannot be taken as individual auto-bumps:
   (`opentelemetry-api`, `-sdk`, `-instrumentation`, `-instrumentation-asgi`,
   `-instrumentation-fastapi`, `-exporter-otlp-proto-common`, `-exporter-otlp-proto-grpc`,
   `-semantic-conventions`, `-proto`, `-util-http`) to the same 1.44.x line, then run
-  Integration Tests (the otel spans exercise the FastAPI/gRPC instrumentation). Consider a
-  dependabot `groups` config for `opentelemetry-*` so future bumps arrive as one PR.
+  Integration Tests (the otel spans exercise the FastAPI/gRPC instrumentation).
+  **Grouping shipped 2026-08-01:** `.github/dependabot.yml` now has an `opentelemetry`
+  group (`opentelemetry-*`) on the pip ecosystem, so future otel bumps arrive as **one**
+  PR — the only shape in which they can resolve. A third single-package PR (**#307**) was
+  closed 2026-08-01 after being rebased onto fixed `main` and still failing with
+  `ResolutionImpossible`, confirming it was the pin conflict and not that week's
+  mcp/nodus CI breakage. The pattern intentionally covers the instrumentation packages,
+  which run a separate version line (`-instrumentation-fastapi==0.63b1` against a
+  `1.42.1` core) but the same release train.
+
+  **OTel half RESOLVED 2026-08-01 — bumped to 1.44.0.** And a lesson worth keeping:
+  **grouping was necessary but not sufficient.** The first grouped PR dependabot produced
+  (**#325**, "bump the opentelemetry group with 4 updates") did put all four packages and
+  both files in one commit — and still failed, because dependabot resolved each package
+  independently and chose an internally inconsistent set:
+
+  ```
+  aindy-runtime 1.11.0 depends on opentelemetry-api==1.43.0
+  opentelemetry-sdk 1.44.0 depends on opentelemetry-api==1.44.0
+  ERROR: ResolutionImpossible
+  ```
+
+  It moved `sdk` to 1.44.0 but `api` only to 1.43.0. `opentelemetry-api` 1.44.0 *is*
+  published, so this was not an upstream gap — grouping controls **which PR** the bumps
+  arrive in, not **which versions** dependabot picks. Expect to hand-align the set.
+
+  The merged set is `api`/`sdk`/`exporter-otlp-proto-grpc` at **1.44.0** with
+  `instrumentation-fastapi` at **0.65b0** (the paired instrumentation release). The six
+  remaining otel packages are unpinned and resolve transitively. Verified by
+  `pip install --dry-run` before pushing — all ten resolve cleanly — then by Integration
+  Tests, which is the check that matters since the otel spans exercise the FastAPI/gRPC
+  instrumentation.
 - **vite 6.x → 8.x (platform, major).** Dependabot PR **#255** (now `→ 8.1.x`) fails the
   **Platform UI Build** check — a two-major jump with breaking changes. Left open; take it as
   a deliberate UI upgrade with the build fix, not an auto-merge.

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## 1.11.0 — 2026-08-01
+
+Minor, not patch: `POST /auth/password/change` is a new public endpoint.
+
+### Fixed — DB-NODUS-BUDGET-1: the DB idle cap now outlives the nodus execution ceiling
+
+`DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` default **30000 → 60000**. Verified against real
+PostgreSQL that the flow runner's session is held `idle in transaction` for the *entire*
+duration of node execution, while a nodus run may legitimately occupy 45s (30s script +
+15s boot allowance). At the old 30s default, a slow-but-in-budget nodus run had its
+connection terminated mid-flight — surfacing as `server closed the connection
+unexpectedly` → `PendingRollbackError`.
+
+**Operators who pin `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` explicitly should raise it above
+45s**, or above their own `AINDY_NODUS_MAX_EXECUTION_MS` + `AINDY_NODUS_BOOT_ALLOWANCE_MS`
+if those are customised. A unit test now derives the ceiling from those constants and
+fails if the cap stops clearing it.
+
+The root-cause fix — memory recall no longer opening a transaction on the caller's
+session — ships opt-in behind `AINDY_MEMORY_RECALL_OWN_SESSION` (default off) pending
+soak.
+
+### Fixed — MCP SDK capped at `mcp<2`
+
+`mcp 2.0.0` removed the 1.x low-level `Server.list_tools()` decorator that `nodus-mcp`
+0.1.2 is built on, so `pip install "aindy-runtime[mcp]"` resolved to an SDK that raises
+`AttributeError` at server construction. The `[mcp]` extra now specifies
+`mcp>=1.0.0,<2`. Lifted when a `nodus-mcp` release targets the 2.x API.
+
 ### Added — `POST /auth/password/change` (FR-6 item 1)
 
 Self-service password rotation for an authenticated user. Until now the entire auth surface
