@@ -3368,6 +3368,70 @@ until the upstream release lands.
 
 ---
 
+## DB-NODUS-BUDGET-1 — nodus wall-clock budget (45s) outlives the DB idle cap (30s)
+
+**Status:** Open — **half verified, half open**. Surfaced 2026-07-31 while diagnosing the
+`test_agent_vm_parity` CI failures. Deliberately split below so the unverified half is not
+mistaken for a finding.
+
+### Verified by reading the defaults — the two budgets are mis-ordered
+
+| Setting | Default | Source |
+|---|---|---|
+| Nodus script budget | 30s | `nodus_runtime_adapter.py:29` `_DEFAULT_MAX_EXECUTION_MS` |
+| Boot allowance (added on top) | 15s | `nodus_runtime_adapter.py:30` `_DEFAULT_BOOT_ALLOWANCE_MS` |
+| **Outer `subprocess.run(timeout=)`** | **45s** | script + boot (NODUS-WARMPOOL-1 Option A) |
+| **`idle_in_transaction_session_timeout`** (prod) | **30s** | `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS`, `config.py:283` |
+
+The runtime permits a nodus execution to occupy **45 seconds** of wall clock while Postgres
+terminates a connection sitting idle-in-transaction at **30**. A fully in-budget, entirely
+legal nodus run therefore has a 15-second window in which the DB can kill its connection
+out from under the flow engine. Whatever the outcome of the open question below, these two
+defaults should not be ordered this way.
+
+Compounding factor: `SessionLocal` (`database.py:77`) is constructed **without**
+`expire_on_commit=False`, so it defaults to `True` — touching any ORM attribute after a
+commit silently re-opens a transaction. That is the exact RT-MEMTXN-LEAK-1 Part 2 gotcha
+already recorded in `CLAUDE.md`, and it makes "a transaction is open when the subprocess
+blocks" the easy accidental state rather than an unlikely one.
+
+### Open question — is a transaction actually open across the subprocess in production?
+
+**Not verified. Do not treat as a confirmed production bug until it is.**
+`idle_in_transaction_session_timeout` fires only when a session is inside a transaction
+*and* issuing no queries. Whether a real agent execution is in that state for >30s depends
+on the flow engine's commit cadence: `runner_steps.py` commits at lines 48/165/294/369, and
+`execute_node` (line 116) is where the nodus subprocess blocks. `_check_resources` performs
+no DB work on the can-run path, so the deciding factor is whether anything between the last
+commit and line 116 touches `run.*` (re-opening a transaction via `expire_on_commit`).
+
+**How to settle it** (recipe already proven by RT-MEMTXN-LEAK-1): run a deliberately slow
+nodus script against a real PG, sample `pg_stat_activity` **mid-run**, and check for
+`xact_age_s == idle_s` on the flow engine's connection. That signal alone is ambiguous —
+per the RT-MEMTXN-LEAK-1 notes it cannot distinguish "held across a slow call" from "held by
+a frame that never returned" — so pair it with
+`docker exec --privileged -u root <api> py-spy dump --pid 1`. A post-run sample proves
+nothing; the connection drains at completion.
+
+### Why it has not bitten in practice
+
+Warm pool (NODUS-WARMPOOL-1, closed) makes typical executions far shorter than 30s, so this
+needs a genuinely slow script or a slow tool call to reach the cap. The CI symptom that
+exposed the arithmetic ran under the **10s** test cap, not 30s — see the CI notes in
+NODUS-WARMPOOL-1.
+
+**Measured 2026-08-01:** with the warm pool enabled and the cap raised to 60s (#315), the
+Integration Tests job goes **green** — so warm execution plus 60s of headroom clears the
+one-time plugin load on a real runner. That is a measurement of the *test* configuration
+only; it says nothing about the 45s-vs-30s ordering in production, which remains open.
+
+**If confirmed, candidate fixes** (do not pick until the question above is answered):
+order the defaults so the DB cap exceeds the execution budget; commit-then-detach before
+`execute_node` so no transaction spans the subprocess; or set `expire_on_commit=False` on
+`SessionLocal` so a post-commit attribute read stops silently re-opening one.
+
+---
+
 ## NATIVE-CI-1 — Rust native scorer crate excluded from CI (green-but-unverified bumps)
 
 **Status:** Open — CI-coverage gap. Surfaced during the 2026-07-18 dependabot triage.
@@ -4339,10 +4403,17 @@ CI job proves full execute-to-completion once the runtime bump ships.
   promotes an awaiting child to `approved` (execution proceeds via the normal
   approved path) or fails it — and un-hangs the waiting parent on reject
   (`delegation_rejected`). Default-off preserves today's fire-and-forget
-  `approved` dispatch. Tests: `test_delegation_hardening.py`. **Deferred:** (c)
-  token-scoped private memory (needs a `MemoryNodeModel` schema change — its own
-  follow-up PR); and wiring `respond_to_delegation` to an HTTP route / syscall
-  (it ships as an importable runtime primitive, record-first).
+  `approved` dispatch. Tests: `test_delegation_hardening.py`.
+- **(c) token-scoped private memory — SHIPPED 2026-07-12/13** (PR1 #245 helper
+  centralization, PR2 #246 `owner_run_id` + ContextVar chokepoint). This entry and the
+  `CLAUDE.md` prefix registry both said "deferred" until 2026-07-31; corrected after a
+  roadmap audit found the flag live in the source. Gated `AINDY_DELEGATION_PRIVATE_MEMORY`
+  (`config.py:342`, default off), enforced at `memory_persistence.py:136/174` with the
+  owner threaded from `execution.py:214`. Remaining work is soak-then-flip, not build.
+  **Delegate writes take the DEFERRED capture path, so `MemoryNodeDAO.save` — not the
+  syscall — is the write chokepoint.**
+- **Still deferred:** wiring `respond_to_delegation` to an HTTP route / syscall (it ships
+  as an importable runtime primitive, record-first).
 
 ### RTR-5 — Autonomous closed loop — **[BUILD], medium (split)**
 
