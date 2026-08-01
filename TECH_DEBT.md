@@ -288,6 +288,9 @@ current state. IDs mirror the app doc (FR-1..FR-4). App-side priority was
 FR-3 > FR-1 > FR-2 > FR-4; corrected runtime picture: the only fully net-new item is FR-1.
 **FR-1/FR-3/FR-4 shipped in v1.8.0; FR-2 pre-existing.** A fifth item (**FR-5**) surfaced
 2026-07-18 (native workflows couldn't reach app callables) — verified real; see below.
+A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — verified real;
+item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
+blocked on a token-delivery channel (FR-1). Next available: **FR-7**.
 
 ### FR-1 — Connector registration hook + capability-enforced outbound I/O
 
@@ -438,6 +441,70 @@ integration (`test_nodus_vm.py`). Key files: `AINDY/runtime/nodus_worker.py`
 `reasoning.evaluate` (under a) or a new app syscall (under b), behind
 `AINDY_REASONING_NODUS_NATIVE` (default off), normalizing `nodus_output_state` to the existing
 recommendation envelope; PG-tier integration test.
+
+### FR-6 — Self-service password management (NEW 2026-07-31)
+
+**App ref:** surfaced in the app-side KPI-dashboard walk (2026-07-31), sibling of that
+walk-log's first-admin-bootstrap finding. **Verified real** against the live OpenAPI on
+`aindy-runtime==1.10.2` and against source: the entire auth surface was four routes
+(`register`, `login`, `logout`, `admin/invalidate-sessions/{user_id}`). No forgot-password,
+no reset-token, and — the sharper gap — **no change-password**, so even a signed-in user
+could not rotate their own credential. The only way to set a password was a direct
+`UPDATE users SET hashed_password` against Postgres, which is what the app team had to do to
+restore admin access. Runtime-owned by construction: `/auth/*` is in the app's
+`RUNTIME_OWNED_PREFIXES`, and there is no `register_*` hook that lets an app add an auth route.
+
+The app filed this as three sliceable items. Item 1 has no delivery dependency and shipped
+alone; items 2+3 are one unit and are the open remainder.
+
+**Item 1 — `POST /auth/password/change`. ✅ SHIPPED 2026-07-31.** Authenticated, Bearer-JWT
+only (a platform API key has no password to rotate — the same guard `logout` applies).
+`change_user_password` in `AINDY/services/auth_service.py` verifies the current password,
+enforces `MIN_PASSWORD_LENGTH` (8) and new-≠-current, writes the new hash, and bumps
+`token_version` so every session is invalidated. Returns a freshly-versioned token in the
+**same shape as `/auth/login`** (inside the canonical envelope the ui-kit unwraps), so the
+caller stays signed in while other sessions are cut and a client reuses its existing
+token-store path. Neither password reaches `input_payload` or the emitted
+`auth.password.changed` event — both are trace-logged surfaces; there is a test asserting it.
+Extracted `bump_token_version()` (the `% 32767` SMALLINT wrap was duplicated at two existing
+call sites). Tests: `tests/unit/test_auth_password_change.py` (14 — service rejection matrix
++ real-HTTP route contract), route added to the must-stay-served list in
+`test_cross_repo_compatibility.py`. No schema change.
+
+**Note on scope:** `MIN_PASSWORD_LENGTH` is enforced on *change* only. `register_user` has
+never applied a password policy; adding one there would start rejecting existing callers, so
+it stays a separate decision — see the open item below.
+
+**Items 2+3 — `POST /auth/password/forgot` + `POST /auth/password/reset`. OPEN — follow-up.**
+Issue a time-boxed, single-use reset token for an email; consume it, set the new password,
+invalidate sessions. Both reuse `hash_password` / `verify_password` and the `token_version`
+bump item 1 already established, so the auth logic is the small half.
+
+**Why deferred rather than built with item 1 — the blocker is delivery, not auth.** A reset
+token is worthless unless it reaches the user, which needs an email channel. That is
+**FR-1** territory (`register_connector` + `authorized_external_call`), and it forces a
+design decision the runtime should not make unilaterally:
+- **(a)** the runtime sends the mail itself through an `email` connector — needs a
+  registered connector, a `CapabilityPolicy`, and secret-broker credentials, all of which are
+  currently vacuous-by-default; or
+- **(b)** the runtime returns the token and the **app** delivers it — smaller runtime
+  surface, but it puts a live credential-reset token in an HTTP response body, so it is only
+  safe behind an admin/service-authenticated caller, not the public forgot endpoint.
+
+**Also needs deciding before build:** token storage (new table vs. a signed stateless token
+carrying `user_id` + `token_version`, the latter self-invalidating and schema-free);
+single-use enforcement; TTL; and whether `/auth/password/forgot` must return 200 for unknown
+emails to avoid becoming an account-enumeration oracle (it should).
+
+**Open sub-item:** apply a password policy to `register_user` as well, so `MIN_PASSWORD_LENGTH`
+is not enforced on only one of the three paths that can set a password. Breaking for existing
+callers — needs a deliberate call, likely a major-version or flag-gated change.
+
+**Trigger to build:** the app wiring a "Forgot password?" flow, or FR-1 gaining a real
+registered email connector. **App-side adoption for item 1 (available now):** an in-app
+"Change password" control calling the endpoint — and it **must** store the returned token,
+since the change invalidates the caller's existing one (recorded in `UI_CONTRACT.md` /
+`SDK_CONTRACT.md`).
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 

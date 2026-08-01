@@ -160,6 +160,7 @@ This document describes the current runtime behavior of the FastAPI backend as i
   - `identity.created`
   - `auth.register.completed`
   - `auth.login.completed`
+  - `auth.password.changed` (payload carries the email only — never either password)
 - `POST /auth/register` also performs synchronous signup initialization before returning:
   - creates the user row
   - seeds the first identity memory node

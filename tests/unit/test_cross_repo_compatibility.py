@@ -361,6 +361,7 @@ _DOCUMENTED_RUNTIME_ROUTES = [
     # Auth
     ("POST", "/auth/login"),
     ("POST", "/auth/register"),
+    ("POST", "/auth/password/change"),
 ]
 
 

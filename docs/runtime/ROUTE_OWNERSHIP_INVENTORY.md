@@ -60,7 +60,7 @@ scheduler, flow engine, syscall registry, and worker state. Not extractable.
 
 ### `auth_router.py`
 Endpoints: `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`,
-`POST /auth/admin/invalidate-sessions/{user_id}`
+`POST /auth/password/change`, `POST /auth/admin/invalidate-sessions/{user_id}`
 
 Rationale: JWT issuance and session lifecycle are prerequisites for all authenticated
 routes. Every downstream repo (SDK, SPA, monolith) depends on these endpoints by
