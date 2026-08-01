@@ -620,6 +620,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Cross-repo compatibility policy | `docs/runtime/CROSS_REPO_COMPATIBILITY.md` |
 | Runtime → SDK contract | `docs/runtime/SDK_CONTRACT.md` |
 | Runtime → UI contract | `docs/runtime/UI_CONTRACT.md` |
+| Latest app-team handoff (v1.11.0) | `docs/runtime/APP_HANDOFF_v1.11.0.md` |
 | Release verification checklist | `docs/runtime/RELEASE_CHECKLIST.md` |
 | Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
 | Syscall registry floor constant | `AINDY/kernel/syscall_registry.py` — `SYSCALL_REGISTRY_MIN_COUNT` |
