@@ -3437,10 +3437,32 @@ until the upstream release lands.
 
 ## DB-NODUS-BUDGET-1 — nodus wall-clock budget (45s) outlives the DB idle cap (30s)
 
-**Status:** Open — **fully verified 2026-08-01, fix not yet chosen**. Surfaced 2026-07-31
-while diagnosing the `test_agent_vm_parity` CI failures; the previously-open half (is a
-transaction actually held across node execution?) was confirmed against real PostgreSQL —
-see below. Both halves now rest on measurement, not inference.
+**Status:** **Both fixes shipped 2026-08-01** — cheap guard active by default, root-cause
+fix opt-in pending soak. Surfaced 2026-07-31 while diagnosing the `test_agent_vm_parity` CI
+failures; verified against real PostgreSQL 2026-08-01 (see below). Both halves rest on
+measurement, not inference.
+
+**Fix 1 — the ordering guard (active).** `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` default
+**30000 → 60000**, which clears the 45s nodus ceiling with 15s of headroom.
+`tests/unit/test_db_nodus_budget_ordering.py` derives the ceiling from the adapter's own
+constants and fails if the cap stops clearing it — so raising either nodus budget without
+raising the cap breaks CI instead of production. This raises the ceiling; it does **not**
+stop the transaction being held.
+
+**Fix 2 — the root cause (opt-in, `AINDY_MEMORY_RECALL_OWN_SESSION`, default off).** The
+transaction is opened by a read-only `memory_nodes` SELECT running on the *caller's*
+session. `MemoryOrchestrator.get_context` now resolves a dedicated short-lived read session
+(`_resolve_read_session`) and closes it in `finally`, so no transaction is ever started on
+the caller's session and the connection returns immediately.
+
+**Why not just roll the caller's transaction back:** RT-MEMTXN-LEAK-1 already tried exactly
+that (`release_read_transaction`) and it broke `test_agent_approve_idempotency` — Session
+`.dirty` cannot see Core `db.execute(UPDATE)` or outer transactions, so rolling back a
+request-shared session mid-request discards in-flight state. Not starting a transaction is
+the only safe direction. Any failure to obtain a session falls back to the caller's, so
+recall can never become unavailable. Opt-in because a caller relying on seeing its own
+uncommitted writes through recall would change behaviour — **remaining work is soak, then
+flip the flag.**
 
 ### Verified by reading the defaults — the two budgets are mis-ordered
 
