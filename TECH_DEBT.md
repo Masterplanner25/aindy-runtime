@@ -1,5 +1,74 @@
 # Technical Debt
 
+## DECISIONS-2026-08-01 — open questions answered by the owner
+
+Seven questions had accumulated across the FR-6 build, the v1.11.0 release, and the dependabot
+triage. All answered 2026-08-01. Recorded here because they were made in conversation and would
+otherwise be lost; each links to the entry that owns the work.
+
+**Current phase context (matters for reading everything below):** the runtime is in a
+**testing** phase. Things get connected to it in order to exercise it, and that is where the
+app-side feature requests keep originating — they are a *symptom of the testing method*, not
+scope creep. Consequence: **flag soak happens in the apps-monolith, not here.** The runtime
+ships capabilities default-off; the app repo is where they get turned on and lived with.
+
+| # | Question | Decision | Owner entry |
+|---|---|---|---|
+| 1 | Semver for the breaking register change | **Follow semver — it gates a major.** Release not imminent. | this entry |
+| 2 | FR-6 email channel ownership | **Option 3 — hybrid** | `APP-FR-*` → FR-6 |
+| 3 | `/auth/register` 409 enumeration oracle | **Fix it** | `APP-FR-*` → FR-6 |
+| 4 | Cargo build job in CI | **Add it** | `NATIVE-CI-1` |
+| 5 | cryptography 48→49 (#302) | **Verify before merging** | `PACK-DEBT-2` |
+| 6 | UI major cluster + `@aindy/ui-kit` peer range | **Deferred** — same owner, different repo; decided from there | `DEP-UPGRADE-DEFERRED-1` |
+| 7 | Soak-and-flip the default-off flags | **Handled app-side** | see phase note above |
+
+### 1 — Semver: the register password floor gates a major
+
+`register_user` rejecting short passwords is a behavioural break to a public endpoint, so by
+semver it belongs in a **major**, not a minor. **Decision: follow semver as always.**
+
+This is load-bearing beyond convention. `runtime_compatibility.py:11` `_major_series()` computes
+`recommended_runtime_requirement` as `>={major}.0,<{major+1}.0`, so the runtime **actively tells
+consumers that anything inside the current major is safe**. Shipping the register change as
+1.12.0 would make that self-reported claim untrue.
+
+**Practical state:** the change is merged to `main` and sits under `## Unreleased`. **The next
+release must therefore be `2.0.0`** — or the change must be pulled before any 1.x release. No
+release is imminent, so there is time for other breaking work to ride along.
+
+**Cross-repo consequence to remember:** when 2.0.0 ships, `recommended_runtime_requirement` flips
+to `>=2.0,<3.0`, and the apps-monolith floor (`aindy-runtime>=1.11.0,<2.0`) will *exclude* it.
+The app team has to move their pin deliberately — this will not upgrade itself.
+
+### 2 — FR-6 email: hybrid
+
+Dispatch a registered `email` connector when one exists; otherwise fall back to runtime-owned
+SMTP config. Satisfies "the runtime sends it" without making a runtime auth flow depend on an
+app registering something, so password reset still works in a `platform-only` deployment.
+
+### 3 — `/auth/register` enumeration oracle: fix
+
+Guarding `/forgot` against enumeration while leaking the same fact on register is incoherent.
+Accepted that this changes a long-standing public response contract and can break clients that
+branch on 409.
+
+### 4 — Cargo CI job: add
+
+`NATIVE-CI-1` is the binding constraint on three standing PRs (#292 uuid, #296 serde, #306 cc)
+that re-accumulate monthly. A build job converts them from "needs a local MSVC build" into
+ordinary merges.
+
+### 5 — cryptography 48→49: verify first
+
+Green CI including `pip-audit` is the weakest form of evidence for a crypto major under an auth
+stack. Verify `python-jose` / `passlib` / `bcrypt` interop before merging #302.
+
+### 6 — UI cluster: deferred, decided from the other repo
+
+`@aindy/ui-kit` pins react-router 6, so its peer range must widen and publish before #312/#324
+can land. Same owner, different repo (`C:\dev\aindy-ui-kit`) — to be worked from there. Note
+**#324 supersedes #312** (7.18.2 vs 7.0.0); one should close when the cluster is taken up.
+
 ## RT-MEMTXN-LEAK-1 — memory reads held DB connections across the embedding API call
 
 **Status:** **FIXED in three parts.** Accepts app handoff `RT-MEMTXN-LEAK-1` (apps-monolith,
