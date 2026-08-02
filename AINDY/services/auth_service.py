@@ -131,9 +131,14 @@ def rotate_signing_key(new_key: str) -> bool:
 
 # ── Password utilities ──────────────────────────────────────────────────────
 
-# Enforced on password *change* (`change_user_password`) only. `register_user` has
-# never applied a policy; adding one there would reject existing callers, so that
-# stays a separate decision.
+# The floor for every path that sets a password: `register_user` and
+# `change_user_password`. Deliberately NOT configurable — a security floor an operator
+# can switch off is not a floor. Raising it is a code change.
+#
+# Applied to registration 2026-08-01 (previously change-only). This rejects *new*
+# registrations under the length; it does not invalidate any stored password, and login
+# is unaffected. The blast radius is a downstream registration form that permitted
+# shorter passwords, which now gets a 400.
 MIN_PASSWORD_LENGTH = 8
 
 
@@ -422,8 +427,23 @@ def get_optional_user(
 # ── DB-backed user operations ────────────────────────────────────────────────
 
 def register_user(email: str, password: str, username: str | None, db: Session):
-    """Create a new user in the database. Raises 409 if email already exists."""
+    """Create a new user in the database.
+
+    Raises 400 if the password is under ``MIN_PASSWORD_LENGTH``, 409 if the email is
+    already registered.
+
+    The length check runs **before** the email lookup: it needs no database round-trip,
+    and rejecting on the cheaper check first avoids doing a query for a request that
+    cannot succeed either way.
+    """
     from AINDY.db.models.user import User
+
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
+
     existing = db.query(User).filter(User.email == email).first()
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
