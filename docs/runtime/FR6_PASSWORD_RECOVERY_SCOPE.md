@@ -138,19 +138,34 @@ Only this phase closes decision 3, and only this phase is expensive.
 
 ---
 
-## Open questions for the owner
+## Answered by the owner (2026-08-02)
 
-1. **What should `/forgot` do when no email channel is configured?** Fail-closed (503, honest
-   but tells an attacker the deployment cannot reset) or still return 200 (uniform, but
-   silently drops a real user's request)? **Recommend 503 at the route level plus a startup
-   warning**, so a misconfigured deployment is loud to the operator rather than quiet to the
-   user.
-2. **Is Phase C in scope now, or later?** B closes the FR-6 ask and the app-side "Forgot
-   password?" flow. C additionally closes decision 3 but costs a migration, a breaking
-   register contract, and app coordination. They can ship separately — B does not depend on C.
-3. **Should `decode_access_token` require `purpose == "access"`?** The general fix for
-   Hazard 1's class. Recommended, but it is a token-format rollout with ordering constraints
-   and belongs in its own change.
+1. **`/forgot` with no email channel configured → 503, plus a startup warning.** A
+   misconfigured deployment should be loud to the operator rather than quiet to the user.
+   The enumeration argument for a uniform 200 does not apply here: 503 discloses a property
+   of the *deployment*, not of any account, and it is identical for every caller.
+2. **Phase C is in scope now** — sequence the phases if needed, but do not defer it. So the
+   register enumeration fix (decision 3) lands in this body of work, and the schema change
+   plus the breaking register contract ride the 2.0.0 window `main` is already committed to.
+3. **Yes to the `purpose` claim.** ✅ **SHIPPED separately** — `create_access_token` stamps
+   `purpose: "access"` and `decode_access_token` requires it, with a wrong-purpose token
+   returning the same generic 401 as a bad signature. Hazard 1's *class* is closed;
+   domain-separated signing keys remain the primary control for each non-access token type.
+   Note the upgrade cost, already in the CHANGELOG: pre-existing tokens lack the claim, so
+   every session ends at upgrade.
+
+### Sequencing with Phase C included
+
+A → B → C, in that order, and the order is forced rather than preferred:
+
+- **B needs A**, because there is nothing to send a reset token with.
+- **C needs A** for the same reason, and needs B's domain-separated-token helper, which the
+  verification token reuses with its own domain string.
+- **C is the only phase carrying a schema-contract bump + Alembic migration**, so keeping it
+  last means A and B can merge and soak while the migration is still being reviewed.
+- **C is the only phase needing app-side coordination** — register stops returning a token,
+  so the app's post-register auto-login has to become "check your email" in the same
+  release. Landing C last gives the app team the longest notice.
 
 ## Not in scope
 
