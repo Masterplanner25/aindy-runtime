@@ -1,5 +1,108 @@
 # Technical Debt
 
+## DECISIONS-2026-08-01 — open questions answered by the owner
+
+Seven questions had accumulated across the FR-6 build, the v1.11.0 release, and the dependabot
+triage. All answered 2026-08-01. Recorded here because they were made in conversation and would
+otherwise be lost; each links to the entry that owns the work.
+
+**Current phase context (matters for reading everything below):** the runtime is in a
+**testing** phase. Things get connected to it in order to exercise it, and that is where the
+app-side feature requests keep originating — they are a *symptom of the testing method*, not
+scope creep. Consequence: **flag soak happens in the apps-monolith, not here.** The runtime
+ships capabilities default-off; the app repo is where they get turned on and lived with.
+
+| # | Question | Decision | Owner entry |
+|---|---|---|---|
+| 1 | Semver for the breaking register change | **Follow semver — it gates a major.** Release not imminent. | this entry |
+| 2 | FR-6 email channel ownership | **Option 3 — hybrid** | `APP-FR-*` → FR-6 |
+| 3 | `/auth/register` 409 enumeration oracle | **Fix it** | `APP-FR-*` → FR-6 |
+| 4 | Cargo build job in CI | **Add it** | `NATIVE-CI-1` |
+| 5 | cryptography 48→49 (#302) | **Verify before merging** | `PACK-DEBT-2` |
+| 6 | UI major cluster + `@aindy/ui-kit` peer range | **Deferred** — same owner, different repo; decided from there | `DEP-UPGRADE-DEFERRED-1` |
+| 7 | Soak-and-flip the default-off flags | **Handled app-side** | see phase note above |
+
+### 1 — Semver: the register password floor gates a major
+
+`register_user` rejecting short passwords is a behavioural break to a public endpoint, so by
+semver it belongs in a **major**, not a minor. **Decision: follow semver as always.**
+
+This is load-bearing beyond convention. `runtime_compatibility.py:11` `_major_series()` computes
+`recommended_runtime_requirement` as `>={major}.0,<{major+1}.0`, so the runtime **actively tells
+consumers that anything inside the current major is safe**. Shipping the register change as
+1.12.0 would make that self-reported claim untrue.
+
+**Practical state:** the change is merged to `main` and sits under `## Unreleased`. **The next
+release must therefore be `2.0.0`** — or the change must be pulled before any 1.x release. No
+release is imminent, so there is time for other breaking work to ride along.
+
+**Cross-repo consequence to remember:** when 2.0.0 ships, `recommended_runtime_requirement` flips
+to `>=2.0,<3.0`, and the apps-monolith floor (`aindy-runtime>=1.11.0,<2.0`) will *exclude* it.
+The app team has to move their pin deliberately — this will not upgrade itself.
+
+### 2 — FR-6 email: hybrid
+
+Dispatch a registered `email` connector when one exists; otherwise fall back to runtime-owned
+SMTP config. Satisfies "the runtime sends it" without making a runtime auth flow depend on an
+app registering something, so password reset still works in a `platform-only` deployment.
+
+### 3 — `/auth/register` enumeration oracle: fix
+
+Guarding `/forgot` against enumeration while leaking the same fact on register is incoherent.
+Accepted that this changes a long-standing public response contract and can break clients that
+branch on 409.
+
+**⚠️ Scoping finding (2026-08-01, before any code): this CANNOT be fixed standalone. It is a
+dependent of decision 2 (FR-6 hybrid email), not independent work.**
+
+**Why.** `POST /auth/register` returns an **access token** on success. A duplicate email cannot
+be given a token — that would be account takeover — so the two responses *must* differ. No
+choice of status code or message closes the oracle while registration also authenticates the
+caller in the same request. Uniform-response hardening is impossible here, unlike `/forgot`,
+where "always 200" works precisely *because* `/forgot` returns nothing of value.
+
+**What an actual fix requires** — the standard non-enumerable registration shape:
+
+1. `/auth/register` always returns a neutral `202` ("check your email"), issuing **no** token;
+2. the token is issued only after the emailed verification link is followed;
+3. a duplicate email gets a *"someone tried to register with your address"* mail instead — same
+   neutral 202 to the caller.
+
+That is an **email-verification flow**, which needs the email channel decision 2 settles
+(hybrid) and does not yet exist. Verified 2026-08-01: the `User` model has no `is_verified`,
+`email_verified`, or `verification_token` — there is no verification concept in the runtime at
+all.
+
+**Rate limiting does not mitigate it.** Register is `10/minute`, but targeted enumeration
+("is `alice@corp.com` registered?") is a *single* request. Throttling only raises the cost of
+bulk sweeps, not the attack that matters.
+
+**Implementation note for whoever builds it — there is a second channel.** The duplicate-email
+path returns **before** `hash_password`, so it skips bcrypt and answers measurably faster. A
+status-code-only fix would leave that timing oracle intact. The fix must also equalise work on
+both paths (hash regardless, or defer the existence check until after hashing).
+
+**Sequencing consequence:** build decision 2 first and fold this into it. Attempting #3 alone
+can only produce cosmetic changes that leave the oracle open while appearing to close it —
+which is worse than the current honest 409.
+
+### 4 — Cargo CI job: add
+
+`NATIVE-CI-1` is the binding constraint on three standing PRs (#292 uuid, #296 serde, #306 cc)
+that re-accumulate monthly. A build job converts them from "needs a local MSVC build" into
+ordinary merges.
+
+### 5 — cryptography 48→49: verify first
+
+Green CI including `pip-audit` is the weakest form of evidence for a crypto major under an auth
+stack. Verify `python-jose` / `passlib` / `bcrypt` interop before merging #302.
+
+### 6 — UI cluster: deferred, decided from the other repo
+
+`@aindy/ui-kit` pins react-router 6, so its peer range must widen and publish before #312/#324
+can land. Same owner, different repo (`C:\dev\aindy-ui-kit`) — to be worked from there. Note
+**#324 supersedes #312** (7.18.2 vs 7.0.0); one should close when the cluster is taken up.
+
 ## RT-MEMTXN-LEAK-1 — memory reads held DB connections across the embedding API call
 
 **Status:** **FIXED in three parts.** Accepts app handoff `RT-MEMTXN-LEAK-1` (apps-monolith,
@@ -475,7 +578,8 @@ call sites). Tests: `tests/unit/test_auth_password_change.py` (14 — service re
 never applied a password policy; adding one there would start rejecting existing callers, so
 it stays a separate decision — see the open item below.
 
-**Items 2+3 — `POST /auth/password/forgot` + `POST /auth/password/reset`. OPEN — follow-up.**
+**Items 2+3 — `POST /auth/password/forgot` + `POST /auth/password/reset`. OPEN — delivery
+decision answered 2026-08-01, one structural question left (see below).**
 Issue a time-boxed, single-use reset token for an email; consume it, set the new password,
 invalidate sessions. Both reuse `hash_password` / `verify_password` and the `token_version`
 bump item 1 already established, so the auth logic is the small half.
@@ -491,17 +595,82 @@ design decision the runtime should not make unilaterally:
   surface, but it puts a live credential-reset token in an HTTP response body, so it is only
   safe behind an admin/service-authenticated caller, not the public forgot endpoint.
 
-**Also needs deciding before build:** token storage (new table vs. a signed stateless token
-carrying `user_id` + `token_version`, the latter self-invalidating and schema-free);
-single-use enforcement; TTL; and whether `/auth/password/forgot` must return 200 for unknown
-emails to avoid becoming an account-enumeration oracle (it should).
+### ✅ App team answered 2026-08-01 — **(a), the runtime sends it**
 
-**Open sub-item:** apply a password policy to `register_user` as well, so `MIN_PASSWORD_LENGTH`
-is not enforced on only one of the three paths that can set a password. Breaking for existing
-callers — needs a deliberate call, likely a major-version or flag-gated change.
+The delivery question is settled. Their reasoning, recorded so it is not re-litigated:
 
-**Trigger to build:** the app wiring a "Forgot password?" flow, or FR-1 gaining a real
-registered email connector. **App-side adoption for item 1 (available now):** an in-app
+- **(b) would not actually deliver FR-6.** The gap FR-6 exists to close is *a user who forgot
+  their password has no recovery path*. An endpoint a locked-out user cannot call does not close
+  it — we would ship (b), still lack the feature, and be left permanently guarding a
+  token-minting route.
+- **The email channel is wanted regardless** (order/payment notifications have the same
+  dependency), so under (a) the cost is paid once by the layer that owns egress policy.
+- **(b) moves the security boundary to the weaker side** — the token would cross a process
+  boundary into a layer that does not own auth.
+
+**Their positions on the sub-questions** (offered as defaults, explicitly ours to overrule):
+
+| Question | App position | Assessment |
+|---|---|---|
+| Token storage | Stateless signed token carrying `user_id` + `token_version` | **Agree.** Single-use falls out by construction — the reset bumps `token_version`, so a consumed token no longer verifies. No table, no migration, no cleanup job. |
+| Single-use | Falls out of the above | **Agree** — replay fails without a revocation list. |
+| TTL | 30–60 minutes | **Agree.** |
+| Unknown email on `/forgot` | Always 200 | **Agree** — matches our own read; otherwise it is an enumeration oracle. |
+| Rate limit | 3/minute per IP **and** per email | **Agree.** Stricter than `/change`'s 5/minute because `/forgot` is unauthenticated and is the cheapest endpoint to abuse for mail-bombing. |
+
+### ⚠️ Unresolved by that answer — who owns the email channel?
+
+**(a) is under-specified, and the gap is structural.** `register_connector` is a hook for *apps*
+to register into; **the runtime ships no `email` connector** (verified 2026-08-01: no connector is
+registered anywhere under `AINDY/`). So "the runtime sends it" currently has nothing to send with.
+
+Three shapes, and this is a runtime call:
+
+1. **Runtime ships its own minimal SMTP sender** (config-driven `AINDY_SMTP_*`), routed through
+   `authorized_external_call` so egress policy and secret-brokering still apply. Auth stays
+   self-contained; a `platform-only` deployment can reset passwords. Cost: the runtime owns a
+   mail channel it did not previously have.
+2. **Runtime dispatches an app-registered `email` connector**, with `/forgot` returning
+   503/disabled when none is registered. Cheapest, but **inverts the split** — a runtime-owned
+   auth flow would depend on an app registering something, and password reset would be
+   unavailable in any runtime-only deployment. That conflicts with the "runtime boots clean
+   without plugins" contract.
+3. **Hybrid** — dispatch a registered `email` connector if present, else fall back to built-in
+   SMTP config.
+
+**Recommend 1 or 3.** The app team's own argument for (a) — the token never leaves the runtime,
+and the layer owning egress pays the cost once — argues for the runtime owning the channel.
+Option 2 satisfies the letter of (a) while reintroducing the dependency they chose (a) to avoid.
+
+### ✅ Sub-item CLOSED 2026-08-01 — password policy applied to `register_user`
+
+`register_user` now rejects passwords under `MIN_PASSWORD_LENGTH` (8) with 400. Both paths that
+set a password share the one constant, and a test asserts `register_user` references it rather
+than a literal, so they cannot silently diverge into a strong path and a weak one.
+
+**Decision record.** The app team asked for it, arguing zero migration cost because their
+deployment has no production users. That argument does not generalise — this is a published PyPI
+package, so the change reaches every consumer — and the objection was raised. **Owner overruled
+it deliberately:** a security floor deferred indefinitely is not a floor, and downstream callers
+adjusting is an accepted cost. Shipped unflagged on that basis.
+
+**Blast radius, narrower than "breaking" suggests.** No stored password is invalidated and login
+is untouched; only *new* registrations under the length are rejected. The realistic casualty is a
+seeding/fixture/smoke script that drives `POST /auth/register` programmatically.
+
+**Not configurable, by design** — a floor an operator can switch off is not a floor.
+
+**Ordering note:** the length check runs *before* the duplicate-email lookup. It needs no DB
+round-trip, and it means a short-password request against a taken email returns 400 rather than
+409, so an invalid-password caller is not told whether the email exists.
+
+**Adjacent finding, NOT addressed:** `POST /auth/register` still returns **409 "Email already
+registered"** for a valid-password duplicate — an account-enumeration oracle on the registration
+path, the same class of issue both sides agreed `/forgot` must avoid by always returning 200.
+Fixing it changes a long-standing public response contract, so it needs its own decision.
+
+**Trigger to build:** resolve the email-channel ownership question above (1/2/3), then build.
+The auth half is small and fully specified now; delivery is the whole remaining risk. **App-side adoption for item 1 (available now):** an in-app
 "Change password" control calling the endpoint — and it **must** store the returned token,
 since the change invalidates the caller's existing one (recorded in `UI_CONTRACT.md` /
 `SDK_CONTRACT.md`).
@@ -3601,7 +3770,46 @@ mid-request breaks in-flight state — so it needs care, not a reflexive `rollba
 
 ## NATIVE-CI-1 — Rust native scorer crate excluded from CI (green-but-unverified bumps)
 
-**Status:** Open — CI-coverage gap. Surfaced during the 2026-07-18 dependabot triage.
+**Status:** **CLOSED 2026-08-02** — a `Native Crate Build (Rust)` job now compiles the crate on
+every PR. Surfaced during the 2026-07-18 dependabot triage; the gap below is the historical
+record.
+
+**What shipped.** A `native-crate` job in `runtime-ci.yml` runs
+`cargo build --locked --release` in the crate directory on `ubuntu-latest`. Decisions worth
+keeping:
+
+- **`--locked`** is the point for a dependency bump: it fails if `Cargo.lock` would need
+  changing, proving the lockfile committed in the PR is the one that actually builds, rather
+  than one cargo would silently repair.
+- **Build only, no `cargo test`.** The crate has no `#[test]`s, and pyo3's `extension-module`
+  feature omits libpython, so a test harness would fail to *link* rather than report anything
+  about the bump. Adding tests later means either dropping that feature for the test profile or
+  running them through maturin.
+- **Not path-filtered, on purpose.** If this is ever promoted to a required check, a `paths:`
+  filter would make it never report on PRs that don't touch the crate — and those PRs could
+  then never merge. Caching keeps the unconditional run cheap instead.
+- **Added to `runtime-ci.yml` rather than a new workflow file**, because a new workflow file
+  does not trigger on the PR that adds it, so it could not have been verified in the same PR.
+- **No toolchain action needed** — Rust and a C++ toolchain are preinstalled on
+  `ubuntu-latest`, so there is no extra pinned third-party SHA to maintain.
+- The job covers the **C++ half too**: `build.rs` compiles `memory_cpp/semantic.cpp` via the
+  `cc` crate, and `cc` is itself one of the packages dependabot bumps.
+
+**Remaining gap (deliberate):** this builds on **Linux**, not MSVC. The original entry framed
+the need as an MSVC build because the Windows dev box is where the crate is normally compiled.
+A Linux build catches API-breaking dependency changes — which is what cargo bumps risk — but
+would not catch an MSVC-only compilation problem. Adding a Windows matrix leg is the follow-up
+if that ever bites; `build.rs` already carries `/std:c++17` and `/O2` flags for MSVC.
+
+**Not yet a required status check.** Branch protection still requires only Runtime Lint,
+Runtime Docs Validation, and Runtime Contracts. Promoting this one is a separate call.
+
+**Unblocks:** #292 `uuid`, #296 `serde`, #306 `cc` — held open pending a manual local build, now
+gateable on CI.
+
+---
+
+**Historical record (the gap this closed):**
 
 The optional Rust pyo3 memory scorer (`AINDY/memory/native/memory_bridge_rs`, built via
 Maturin) is **not compiled or tested in CI** — no MSVC/cargo build job exists. So cargo
