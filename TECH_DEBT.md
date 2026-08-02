@@ -3770,7 +3770,46 @@ mid-request breaks in-flight state — so it needs care, not a reflexive `rollba
 
 ## NATIVE-CI-1 — Rust native scorer crate excluded from CI (green-but-unverified bumps)
 
-**Status:** Open — CI-coverage gap. Surfaced during the 2026-07-18 dependabot triage.
+**Status:** **CLOSED 2026-08-02** — a `Native Crate Build (Rust)` job now compiles the crate on
+every PR. Surfaced during the 2026-07-18 dependabot triage; the gap below is the historical
+record.
+
+**What shipped.** A `native-crate` job in `runtime-ci.yml` runs
+`cargo build --locked --release` in the crate directory on `ubuntu-latest`. Decisions worth
+keeping:
+
+- **`--locked`** is the point for a dependency bump: it fails if `Cargo.lock` would need
+  changing, proving the lockfile committed in the PR is the one that actually builds, rather
+  than one cargo would silently repair.
+- **Build only, no `cargo test`.** The crate has no `#[test]`s, and pyo3's `extension-module`
+  feature omits libpython, so a test harness would fail to *link* rather than report anything
+  about the bump. Adding tests later means either dropping that feature for the test profile or
+  running them through maturin.
+- **Not path-filtered, on purpose.** If this is ever promoted to a required check, a `paths:`
+  filter would make it never report on PRs that don't touch the crate — and those PRs could
+  then never merge. Caching keeps the unconditional run cheap instead.
+- **Added to `runtime-ci.yml` rather than a new workflow file**, because a new workflow file
+  does not trigger on the PR that adds it, so it could not have been verified in the same PR.
+- **No toolchain action needed** — Rust and a C++ toolchain are preinstalled on
+  `ubuntu-latest`, so there is no extra pinned third-party SHA to maintain.
+- The job covers the **C++ half too**: `build.rs` compiles `memory_cpp/semantic.cpp` via the
+  `cc` crate, and `cc` is itself one of the packages dependabot bumps.
+
+**Remaining gap (deliberate):** this builds on **Linux**, not MSVC. The original entry framed
+the need as an MSVC build because the Windows dev box is where the crate is normally compiled.
+A Linux build catches API-breaking dependency changes — which is what cargo bumps risk — but
+would not catch an MSVC-only compilation problem. Adding a Windows matrix leg is the follow-up
+if that ever bites; `build.rs` already carries `/std:c++17` and `/O2` flags for MSVC.
+
+**Not yet a required status check.** Branch protection still requires only Runtime Lint,
+Runtime Docs Validation, and Runtime Contracts. Promoting this one is a separate call.
+
+**Unblocks:** #292 `uuid`, #296 `serde`, #306 `cc` — held open pending a manual local build, now
+gateable on CI.
+
+---
+
+**Historical record (the gap this closed):**
 
 The optional Rust pyo3 memory scorer (`AINDY/memory/native/memory_bridge_rs`, built via
 Maturin) is **not compiled or tested in CI** — no MSVC/cargo build job exists. So cargo
