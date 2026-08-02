@@ -46,6 +46,11 @@ The platform SPA calls auth endpoints via `loginUser`, `registerUser`, and
 
 Removing either field breaks the login flow. Adding fields is safe.
 
+`POST /auth/password/change` (Bearer JWT; `{"current_password", "new_password"}`) returns the
+same envelope-wrapped `access_token`. A UI that wires a "Change password" control **must**
+store the returned token — the change invalidates every prior session, including the caller's,
+so keeping the old token logs the user out on their next request.
+
 ---
 
 ## ROUTES Table Invariants

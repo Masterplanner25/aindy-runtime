@@ -17,9 +17,9 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -35,9 +35,9 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -80,6 +80,56 @@ jobs:
           print(f"validated {len(list(docs_root.glob('*.md')))} runtime docs")
           PY
 
+  native-crate:
+    name: Native Crate Build (Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # NATIVE-CI-1. The pyo3 memory scorer had NO build anywhere in CI, so cargo
+    # bumps (uuid / serde / cc) reported green having never compiled the crate —
+    # "green" meant "the Python suite still passes", not "the native path builds".
+    # Three dependabot PRs sat blocked on a manual local build because of it.
+    #
+    # Deliberately NOT path-filtered. If this is ever promoted to a required status
+    # check, a `paths:` filter would make it never report on PRs that don't touch the
+    # crate, and those PRs could then never merge — the classic required-check-with-
+    # path-filter trap. Caching keeps the unconditional run cheap instead.
+    #
+    # Rust and a C++ toolchain are preinstalled on ubuntu-latest, so this needs no
+    # third-party toolchain action (and therefore no extra pinned SHA to maintain).
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            AINDY/memory/native/memory_bridge_rs/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('AINDY/memory/native/memory_bridge_rs/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Toolchain versions
+        run: |
+          cargo --version
+          rustc --version
+          c++ --version
+
+      - name: Build the native scorer
+        working-directory: AINDY/memory/native/memory_bridge_rs
+        # --locked fails the build if Cargo.lock would need changing. That is precisely
+        # the check a dependency bump needs: it proves the lockfile committed in the PR
+        # is the one that actually builds, rather than one pip/cargo would silently fix.
+        #
+        # Build only, no `cargo test`: the crate has no #[test]s, and pyo3's
+        # extension-module feature omits libpython, so a test harness would fail to
+        # LINK rather than tell us anything about the bump.
+        #
+        # build.rs also compiles memory_cpp/semantic.cpp through the `cc` crate, so this
+        # covers the C++ half too — and `cc` is one of the packages dependabot bumps.
+        run: cargo build --locked --release
+
   runtime-contracts:
     name: Runtime Contracts
     runs-on: ubuntu-latest
@@ -105,10 +155,10 @@ jobs:
       AINDY_BOOT_MODE: runtime-only
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -126,7 +176,10 @@ jobs:
           python -m pip install -e .[test] --no-deps --no-build-isolation
 
       - name: Install MCP extra (ECOGAP-4 / G4b — exercises real nodus-mcp + mcp SDK)
-        run: python -m pip install "nodus-mcp>=0.1.1" "mcp>=1.0.0"
+        # `mcp<2` mirrors the `[mcp]` extra's cap — see MCP-SDK-2X-1 in TECH_DEBT.md.
+        # This step installs the two packages directly (not via the extra), so the cap
+        # has to be repeated here or CI silently resolves to an incompatible SDK.
+        run: python -m pip install "nodus-mcp>=0.1.1" "mcp>=1.0.0,<2"
 
       - name: Check schema contract version is current
         run: python scripts/check_schema_version.py
@@ -250,12 +303,26 @@ jobs:
       AINDY_ENFORCE_SCHEMA: "false"
       AINDY_ASYNC_HEAVY_EXECUTION: "false"
       AINDY_ENABLE_BACKGROUND_TASKS: "false"
+      # NODUS-WARMPOOL-1 is the shipped fix for nodus worker cold-start; it is opt-in
+      # (default off), so CI was exercising the path it replaced. This is the only tier
+      # that really spawns nodus workers, so it is where the warm pool belongs. The
+      # cold path is not abandoned — it remains the pool's fault fallback and is covered
+      # by tests/unit/test_nodus_worker_pool.py.
+      AINDY_NODUS_WARM_POOL: "1"
+      AINDY_NODUS_WARM_PREWARM: "1"
+      # Pre-warm is explicitly non-blocking (a background thread off the first
+      # get_pool()), so the first execution still races the one-time plugin load while
+      # the parity tests hold a session open. That legitimately exceeds the 10s test
+      # default and Postgres terminates the backend mid-run — surfacing as
+      # `server closed the connection unexpectedly` then PendingRollbackError. 60s
+      # clears the load without disabling the guard.
+      DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: "60000"
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -326,9 +393,9 @@ jobs:
     needs: [lint]
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
           cache: "npm"
@@ -373,9 +440,9 @@ jobs:
       AINDY_API_KEY: ci-runtime-build-api-key
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -422,9 +489,9 @@ jobs:
       AINDY_BOOT_MODE: runtime-only
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 

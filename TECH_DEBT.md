@@ -1,5 +1,108 @@
 # Technical Debt
 
+## DECISIONS-2026-08-01 — open questions answered by the owner
+
+Seven questions had accumulated across the FR-6 build, the v1.11.0 release, and the dependabot
+triage. All answered 2026-08-01. Recorded here because they were made in conversation and would
+otherwise be lost; each links to the entry that owns the work.
+
+**Current phase context (matters for reading everything below):** the runtime is in a
+**testing** phase. Things get connected to it in order to exercise it, and that is where the
+app-side feature requests keep originating — they are a *symptom of the testing method*, not
+scope creep. Consequence: **flag soak happens in the apps-monolith, not here.** The runtime
+ships capabilities default-off; the app repo is where they get turned on and lived with.
+
+| # | Question | Decision | Owner entry |
+|---|---|---|---|
+| 1 | Semver for the breaking register change | **Follow semver — it gates a major.** Release not imminent. | this entry |
+| 2 | FR-6 email channel ownership | **Option 3 — hybrid** | `APP-FR-*` → FR-6 |
+| 3 | `/auth/register` 409 enumeration oracle | **Fix it** | `APP-FR-*` → FR-6 |
+| 4 | Cargo build job in CI | **Add it** | `NATIVE-CI-1` |
+| 5 | cryptography 48→49 (#302) | **Verify before merging** | `PACK-DEBT-2` |
+| 6 | UI major cluster + `@aindy/ui-kit` peer range | **Deferred** — same owner, different repo; decided from there | `DEP-UPGRADE-DEFERRED-1` |
+| 7 | Soak-and-flip the default-off flags | **Handled app-side** | see phase note above |
+
+### 1 — Semver: the register password floor gates a major
+
+`register_user` rejecting short passwords is a behavioural break to a public endpoint, so by
+semver it belongs in a **major**, not a minor. **Decision: follow semver as always.**
+
+This is load-bearing beyond convention. `runtime_compatibility.py:11` `_major_series()` computes
+`recommended_runtime_requirement` as `>={major}.0,<{major+1}.0`, so the runtime **actively tells
+consumers that anything inside the current major is safe**. Shipping the register change as
+1.12.0 would make that self-reported claim untrue.
+
+**Practical state:** the change is merged to `main` and sits under `## Unreleased`. **The next
+release must therefore be `2.0.0`** — or the change must be pulled before any 1.x release. No
+release is imminent, so there is time for other breaking work to ride along.
+
+**Cross-repo consequence to remember:** when 2.0.0 ships, `recommended_runtime_requirement` flips
+to `>=2.0,<3.0`, and the apps-monolith floor (`aindy-runtime>=1.11.0,<2.0`) will *exclude* it.
+The app team has to move their pin deliberately — this will not upgrade itself.
+
+### 2 — FR-6 email: hybrid
+
+Dispatch a registered `email` connector when one exists; otherwise fall back to runtime-owned
+SMTP config. Satisfies "the runtime sends it" without making a runtime auth flow depend on an
+app registering something, so password reset still works in a `platform-only` deployment.
+
+### 3 — `/auth/register` enumeration oracle: fix
+
+Guarding `/forgot` against enumeration while leaking the same fact on register is incoherent.
+Accepted that this changes a long-standing public response contract and can break clients that
+branch on 409.
+
+**⚠️ Scoping finding (2026-08-01, before any code): this CANNOT be fixed standalone. It is a
+dependent of decision 2 (FR-6 hybrid email), not independent work.**
+
+**Why.** `POST /auth/register` returns an **access token** on success. A duplicate email cannot
+be given a token — that would be account takeover — so the two responses *must* differ. No
+choice of status code or message closes the oracle while registration also authenticates the
+caller in the same request. Uniform-response hardening is impossible here, unlike `/forgot`,
+where "always 200" works precisely *because* `/forgot` returns nothing of value.
+
+**What an actual fix requires** — the standard non-enumerable registration shape:
+
+1. `/auth/register` always returns a neutral `202` ("check your email"), issuing **no** token;
+2. the token is issued only after the emailed verification link is followed;
+3. a duplicate email gets a *"someone tried to register with your address"* mail instead — same
+   neutral 202 to the caller.
+
+That is an **email-verification flow**, which needs the email channel decision 2 settles
+(hybrid) and does not yet exist. Verified 2026-08-01: the `User` model has no `is_verified`,
+`email_verified`, or `verification_token` — there is no verification concept in the runtime at
+all.
+
+**Rate limiting does not mitigate it.** Register is `10/minute`, but targeted enumeration
+("is `alice@corp.com` registered?") is a *single* request. Throttling only raises the cost of
+bulk sweeps, not the attack that matters.
+
+**Implementation note for whoever builds it — there is a second channel.** The duplicate-email
+path returns **before** `hash_password`, so it skips bcrypt and answers measurably faster. A
+status-code-only fix would leave that timing oracle intact. The fix must also equalise work on
+both paths (hash regardless, or defer the existence check until after hashing).
+
+**Sequencing consequence:** build decision 2 first and fold this into it. Attempting #3 alone
+can only produce cosmetic changes that leave the oracle open while appearing to close it —
+which is worse than the current honest 409.
+
+### 4 — Cargo CI job: add
+
+`NATIVE-CI-1` is the binding constraint on three standing PRs (#292 uuid, #296 serde, #306 cc)
+that re-accumulate monthly. A build job converts them from "needs a local MSVC build" into
+ordinary merges.
+
+### 5 — cryptography 48→49: verify first
+
+Green CI including `pip-audit` is the weakest form of evidence for a crypto major under an auth
+stack. Verify `python-jose` / `passlib` / `bcrypt` interop before merging #302.
+
+### 6 — UI cluster: deferred, decided from the other repo
+
+`@aindy/ui-kit` pins react-router 6, so its peer range must widen and publish before #312/#324
+can land. Same owner, different repo (`C:\dev\aindy-ui-kit`) — to be worked from there. Note
+**#324 supersedes #312** (7.18.2 vs 7.0.0); one should close when the cluster is taken up.
+
 ## RT-MEMTXN-LEAK-1 — memory reads held DB connections across the embedding API call
 
 **Status:** **FIXED in three parts.** Accepts app handoff `RT-MEMTXN-LEAK-1` (apps-monolith,
@@ -288,6 +391,9 @@ current state. IDs mirror the app doc (FR-1..FR-4). App-side priority was
 FR-3 > FR-1 > FR-2 > FR-4; corrected runtime picture: the only fully net-new item is FR-1.
 **FR-1/FR-3/FR-4 shipped in v1.8.0; FR-2 pre-existing.** A fifth item (**FR-5**) surfaced
 2026-07-18 (native workflows couldn't reach app callables) — verified real; see below.
+A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — verified real;
+item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
+blocked on a token-delivery channel (FR-1). Next available: **FR-7**.
 
 ### FR-1 — Connector registration hook + capability-enforced outbound I/O
 
@@ -438,6 +544,136 @@ integration (`test_nodus_vm.py`). Key files: `AINDY/runtime/nodus_worker.py`
 `reasoning.evaluate` (under a) or a new app syscall (under b), behind
 `AINDY_REASONING_NODUS_NATIVE` (default off), normalizing `nodus_output_state` to the existing
 recommendation envelope; PG-tier integration test.
+
+### FR-6 — Self-service password management (NEW 2026-07-31)
+
+**App ref:** surfaced in the app-side KPI-dashboard walk (2026-07-31), sibling of that
+walk-log's first-admin-bootstrap finding. **Verified real** against the live OpenAPI on
+`aindy-runtime==1.10.2` and against source: the entire auth surface was four routes
+(`register`, `login`, `logout`, `admin/invalidate-sessions/{user_id}`). No forgot-password,
+no reset-token, and — the sharper gap — **no change-password**, so even a signed-in user
+could not rotate their own credential. The only way to set a password was a direct
+`UPDATE users SET hashed_password` against Postgres, which is what the app team had to do to
+restore admin access. Runtime-owned by construction: `/auth/*` is in the app's
+`RUNTIME_OWNED_PREFIXES`, and there is no `register_*` hook that lets an app add an auth route.
+
+The app filed this as three sliceable items. Item 1 has no delivery dependency and shipped
+alone; items 2+3 are one unit and are the open remainder.
+
+**Item 1 — `POST /auth/password/change`. ✅ SHIPPED 2026-07-31.** Authenticated, Bearer-JWT
+only (a platform API key has no password to rotate — the same guard `logout` applies).
+`change_user_password` in `AINDY/services/auth_service.py` verifies the current password,
+enforces `MIN_PASSWORD_LENGTH` (8) and new-≠-current, writes the new hash, and bumps
+`token_version` so every session is invalidated. Returns a freshly-versioned token in the
+**same shape as `/auth/login`** (inside the canonical envelope the ui-kit unwraps), so the
+caller stays signed in while other sessions are cut and a client reuses its existing
+token-store path. Neither password reaches `input_payload` or the emitted
+`auth.password.changed` event — both are trace-logged surfaces; there is a test asserting it.
+Extracted `bump_token_version()` (the `% 32767` SMALLINT wrap was duplicated at two existing
+call sites). Tests: `tests/unit/test_auth_password_change.py` (14 — service rejection matrix
++ real-HTTP route contract), route added to the must-stay-served list in
+`test_cross_repo_compatibility.py`. No schema change.
+
+**Note on scope:** `MIN_PASSWORD_LENGTH` is enforced on *change* only. `register_user` has
+never applied a password policy; adding one there would start rejecting existing callers, so
+it stays a separate decision — see the open item below.
+
+**Items 2+3 — `POST /auth/password/forgot` + `POST /auth/password/reset`. OPEN — delivery
+decision answered 2026-08-01, one structural question left (see below).**
+Issue a time-boxed, single-use reset token for an email; consume it, set the new password,
+invalidate sessions. Both reuse `hash_password` / `verify_password` and the `token_version`
+bump item 1 already established, so the auth logic is the small half.
+
+**Why deferred rather than built with item 1 — the blocker is delivery, not auth.** A reset
+token is worthless unless it reaches the user, which needs an email channel. That is
+**FR-1** territory (`register_connector` + `authorized_external_call`), and it forces a
+design decision the runtime should not make unilaterally:
+- **(a)** the runtime sends the mail itself through an `email` connector — needs a
+  registered connector, a `CapabilityPolicy`, and secret-broker credentials, all of which are
+  currently vacuous-by-default; or
+- **(b)** the runtime returns the token and the **app** delivers it — smaller runtime
+  surface, but it puts a live credential-reset token in an HTTP response body, so it is only
+  safe behind an admin/service-authenticated caller, not the public forgot endpoint.
+
+### ✅ App team answered 2026-08-01 — **(a), the runtime sends it**
+
+The delivery question is settled. Their reasoning, recorded so it is not re-litigated:
+
+- **(b) would not actually deliver FR-6.** The gap FR-6 exists to close is *a user who forgot
+  their password has no recovery path*. An endpoint a locked-out user cannot call does not close
+  it — we would ship (b), still lack the feature, and be left permanently guarding a
+  token-minting route.
+- **The email channel is wanted regardless** (order/payment notifications have the same
+  dependency), so under (a) the cost is paid once by the layer that owns egress policy.
+- **(b) moves the security boundary to the weaker side** — the token would cross a process
+  boundary into a layer that does not own auth.
+
+**Their positions on the sub-questions** (offered as defaults, explicitly ours to overrule):
+
+| Question | App position | Assessment |
+|---|---|---|
+| Token storage | Stateless signed token carrying `user_id` + `token_version` | **Agree.** Single-use falls out by construction — the reset bumps `token_version`, so a consumed token no longer verifies. No table, no migration, no cleanup job. |
+| Single-use | Falls out of the above | **Agree** — replay fails without a revocation list. |
+| TTL | 30–60 minutes | **Agree.** |
+| Unknown email on `/forgot` | Always 200 | **Agree** — matches our own read; otherwise it is an enumeration oracle. |
+| Rate limit | 3/minute per IP **and** per email | **Agree.** Stricter than `/change`'s 5/minute because `/forgot` is unauthenticated and is the cheapest endpoint to abuse for mail-bombing. |
+
+### ⚠️ Unresolved by that answer — who owns the email channel?
+
+**(a) is under-specified, and the gap is structural.** `register_connector` is a hook for *apps*
+to register into; **the runtime ships no `email` connector** (verified 2026-08-01: no connector is
+registered anywhere under `AINDY/`). So "the runtime sends it" currently has nothing to send with.
+
+Three shapes, and this is a runtime call:
+
+1. **Runtime ships its own minimal SMTP sender** (config-driven `AINDY_SMTP_*`), routed through
+   `authorized_external_call` so egress policy and secret-brokering still apply. Auth stays
+   self-contained; a `platform-only` deployment can reset passwords. Cost: the runtime owns a
+   mail channel it did not previously have.
+2. **Runtime dispatches an app-registered `email` connector**, with `/forgot` returning
+   503/disabled when none is registered. Cheapest, but **inverts the split** — a runtime-owned
+   auth flow would depend on an app registering something, and password reset would be
+   unavailable in any runtime-only deployment. That conflicts with the "runtime boots clean
+   without plugins" contract.
+3. **Hybrid** — dispatch a registered `email` connector if present, else fall back to built-in
+   SMTP config.
+
+**Recommend 1 or 3.** The app team's own argument for (a) — the token never leaves the runtime,
+and the layer owning egress pays the cost once — argues for the runtime owning the channel.
+Option 2 satisfies the letter of (a) while reintroducing the dependency they chose (a) to avoid.
+
+### ✅ Sub-item CLOSED 2026-08-01 — password policy applied to `register_user`
+
+`register_user` now rejects passwords under `MIN_PASSWORD_LENGTH` (8) with 400. Both paths that
+set a password share the one constant, and a test asserts `register_user` references it rather
+than a literal, so they cannot silently diverge into a strong path and a weak one.
+
+**Decision record.** The app team asked for it, arguing zero migration cost because their
+deployment has no production users. That argument does not generalise — this is a published PyPI
+package, so the change reaches every consumer — and the objection was raised. **Owner overruled
+it deliberately:** a security floor deferred indefinitely is not a floor, and downstream callers
+adjusting is an accepted cost. Shipped unflagged on that basis.
+
+**Blast radius, narrower than "breaking" suggests.** No stored password is invalidated and login
+is untouched; only *new* registrations under the length are rejected. The realistic casualty is a
+seeding/fixture/smoke script that drives `POST /auth/register` programmatically.
+
+**Not configurable, by design** — a floor an operator can switch off is not a floor.
+
+**Ordering note:** the length check runs *before* the duplicate-email lookup. It needs no DB
+round-trip, and it means a short-password request against a taken email returns 400 rather than
+409, so an invalid-password caller is not told whether the email exists.
+
+**Adjacent finding, NOT addressed:** `POST /auth/register` still returns **409 "Email already
+registered"** for a valid-password duplicate — an account-enumeration oracle on the registration
+path, the same class of issue both sides agreed `/forgot` must avoid by always returning 200.
+Fixing it changes a long-standing public response contract, so it needs its own decision.
+
+**Trigger to build:** resolve the email-channel ownership question above (1/2/3), then build.
+The auth half is small and fully specified now; delivery is the whole remaining risk. **App-side adoption for item 1 (available now):** an in-app
+"Change password" control calling the endpoint — and it **must** store the returned token,
+since the change invalidates the caller's existing one (recorded in `UI_CONTRACT.md` /
+`SDK_CONTRACT.md`).
 
 ## AGENT-HARDEN-* — Agent-framework safety/resilience hardening
 
@@ -3173,6 +3409,20 @@ heartbeat (reactive crash-reaping + max-requests recycle cover it) and the sibli
 `runtime_callback_host.py` 10s callback subprocess (same tax, separate surface). See the
 A/B/C plan below.
 
+**CI now runs warm (2026-07-31).** Because the pool is opt-in, CI was still exercising the
+cold path this entry replaced. The Integration Tests job (the only tier that really spawns
+nodus workers) now sets `AINDY_NODUS_WARM_POOL=1` + `AINDY_NODUS_WARM_PREWARM=1`, so the
+shipped fix is what gets tested. The cold path is not abandoned — it remains the pool's
+fault fallback and is covered by `tests/unit/test_nodus_worker_pool.py`. **Standing
+gotcha:** pre-warm is explicitly non-blocking (background thread off the first
+`get_pool()`), so the *first* execution still races the one-time plugin load. Where a test
+holds a DB session open across that load, the 10s test-mode
+`idle_in_transaction_session_timeout` terminates the backend mid-run and surfaces as
+`server closed the connection unexpectedly` → `PendingRollbackError` (this reddened
+`test_agent_vm_parity.py` for weeks). That job therefore also sets
+`DB_IDLE_IN_TRANSACTION_TIMEOUT_MS=60000`; the knob only works because the test-mode branch
+in `database.py` now honors an explicitly-set value instead of hardcoding 10s.
+
 **Symptom (verified 2026-07-09, live Linux serve, app-profile).** A real agent run
 reached `executing` then failed with `"Nodus script exceeded 30000ms wall-clock
 timeout"` at 0/3 steps. The plan, planner, and app were all fine — the run died on
@@ -3289,8 +3539,9 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, vite major)
 
-**Status:** Open — deferred (dependency maintenance; each is a deliberate upgrade, not a
-drop-in bump). Surfaced during the 2026-07-18 dependabot triage.
+**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); the vite major
+remains. Dependency maintenance; each is a deliberate upgrade, not a drop-in bump. Surfaced
+during the 2026-07-18 dependabot triage.
 
 Two dependabot upgrades that cannot be taken as individual auto-bumps:
 
@@ -3302,8 +3553,38 @@ Two dependabot upgrades that cannot be taken as individual auto-bumps:
   (`opentelemetry-api`, `-sdk`, `-instrumentation`, `-instrumentation-asgi`,
   `-instrumentation-fastapi`, `-exporter-otlp-proto-common`, `-exporter-otlp-proto-grpc`,
   `-semantic-conventions`, `-proto`, `-util-http`) to the same 1.44.x line, then run
-  Integration Tests (the otel spans exercise the FastAPI/gRPC instrumentation). Consider a
-  dependabot `groups` config for `opentelemetry-*` so future bumps arrive as one PR.
+  Integration Tests (the otel spans exercise the FastAPI/gRPC instrumentation).
+  **Grouping shipped 2026-08-01:** `.github/dependabot.yml` now has an `opentelemetry`
+  group (`opentelemetry-*`) on the pip ecosystem, so future otel bumps arrive as **one**
+  PR — the only shape in which they can resolve. A third single-package PR (**#307**) was
+  closed 2026-08-01 after being rebased onto fixed `main` and still failing with
+  `ResolutionImpossible`, confirming it was the pin conflict and not that week's
+  mcp/nodus CI breakage. The pattern intentionally covers the instrumentation packages,
+  which run a separate version line (`-instrumentation-fastapi==0.63b1` against a
+  `1.42.1` core) but the same release train.
+
+  **OTel half RESOLVED 2026-08-01 — bumped to 1.44.0.** And a lesson worth keeping:
+  **grouping was necessary but not sufficient.** The first grouped PR dependabot produced
+  (**#325**, "bump the opentelemetry group with 4 updates") did put all four packages and
+  both files in one commit — and still failed, because dependabot resolved each package
+  independently and chose an internally inconsistent set:
+
+  ```
+  aindy-runtime 1.11.0 depends on opentelemetry-api==1.43.0
+  opentelemetry-sdk 1.44.0 depends on opentelemetry-api==1.44.0
+  ERROR: ResolutionImpossible
+  ```
+
+  It moved `sdk` to 1.44.0 but `api` only to 1.43.0. `opentelemetry-api` 1.44.0 *is*
+  published, so this was not an upstream gap — grouping controls **which PR** the bumps
+  arrive in, not **which versions** dependabot picks. Expect to hand-align the set.
+
+  The merged set is `api`/`sdk`/`exporter-otlp-proto-grpc` at **1.44.0** with
+  `instrumentation-fastapi` at **0.65b0** (the paired instrumentation release). The six
+  remaining otel packages are unpinned and resolve transitively. Verified by
+  `pip install --dry-run` before pushing — all ten resolve cleanly — then by Integration
+  Tests, which is the check that matters since the otel spans exercise the FastAPI/gRPC
+  instrumentation.
 - **vite 6.x → 8.x (platform, major).** Dependabot PR **#255** (now `→ 8.1.x`) fails the
   **Platform UI Build** check — a two-major jump with breaking changes. Left open; take it as
   a deliberate UI upgrade with the build fix, not an auto-merge.
@@ -3312,9 +3593,223 @@ Two dependabot upgrades that cannot be taken as individual auto-bumps:
 
 ---
 
+## MCP-SDK-2X-1 — `[mcp]` extra capped at `mcp<2`; nodus-mcp still targets the 1.x server API
+
+**Status:** Open — pinned workaround shipped 2026-07-31, upstream unblock pending. Surfaced
+when `mcp 2.0.0` was published and turned every CI run red.
+
+**What broke.** Both install sites specified `mcp>=1.0.0` with **no upper bound** — the
+`[mcp]` extra in `pyproject.toml` and, separately, the "Install MCP extra" step in
+`runtime-ci.yml` (which installs the two packages directly rather than via the extra, so the
+constraint had to be fixed in both places or CI would keep resolving past the cap). The day
+`mcp 2.0.0` released, both resolved to it and `Runtime Contracts` failed on
+`tests/unit/test_mcp_client_live.py::test_live_mcp_round_trip`:
+
+```
+AttributeError: 'Server' object has no attribute 'list_tools'
+  nodus_mcp_aindy/server.py:139  in NodusServer._setup_handlers
+```
+
+**Not a test bug.** `nodus-mcp 0.1.2` — still the latest release — is built against the 1.x
+low-level server API and registers handlers via the `@server.list_tools()` decorator, which
+mcp 2.0.0 removed. The failure is raised from `NodusServer.__init__`, so with mcp 2.0.0
+installed the extra is broken at server-construction time for real callers, not only under
+pytest. **Do not "fix" this by skipping the live test** — that would report green on a
+genuinely broken `pip install aindy-runtime[mcp]`.
+
+**Blast radius is confined to nodus-mcp.** `AINDY/platform_layer/mcp_client.py` and
+`mcp_server.py` import only `nodus_mcp_aindy` (`MCPClientAdapter`, `discover_tools`,
+`ToolRegistry`, `NodusServer`, `syscall_entry_to_tool`) and never touch the `mcp` SDK
+directly, so no runtime code needs porting — only the dependency needs to catch up.
+
+**Fix applied:** cap both sites at `"mcp>=1.0.0,<2"`. No code change.
+
+**To resolve:** when a `nodus-mcp` release targets the mcp 2.x server API, lift the cap in
+**both** `pyproject.toml` and `.github/workflows/runtime-ci.yml`, bump the `nodus-mcp` floor,
+and re-run the live round-trip test — it exercises the real wire end to end, so it is the
+check that proves the upgrade. `nodus-mcp` is out-of-tree (PyPI: 0.1.0/0.1.1/0.1.2), so this
+is an upstream dependency, not work in this repo.
+
+**Watch for:** dependabot re-proposing `mcp` 2.x. It should stay closed with a pointer here
+until the upstream release lands.
+
+---
+
+## DB-NODUS-BUDGET-1 — nodus wall-clock budget (45s) outlives the DB idle cap (30s)
+
+**Status:** **Both fixes shipped 2026-08-01** — cheap guard active by default, root-cause
+fix opt-in pending soak. Surfaced 2026-07-31 while diagnosing the `test_agent_vm_parity` CI
+failures; verified against real PostgreSQL 2026-08-01 (see below). Both halves rest on
+measurement, not inference.
+
+**Fix 1 — the ordering guard (active).** `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` default
+**30000 → 60000**, which clears the 45s nodus ceiling with 15s of headroom.
+`tests/unit/test_db_nodus_budget_ordering.py` derives the ceiling from the adapter's own
+constants and fails if the cap stops clearing it — so raising either nodus budget without
+raising the cap breaks CI instead of production. This raises the ceiling; it does **not**
+stop the transaction being held.
+
+**Fix 2 — the root cause (opt-in, `AINDY_MEMORY_RECALL_OWN_SESSION`, default off).** The
+transaction is opened by a read-only `memory_nodes` SELECT running on the *caller's*
+session. `MemoryOrchestrator.get_context` now resolves a dedicated short-lived read session
+(`_resolve_read_session`) and closes it in `finally`, so no transaction is ever started on
+the caller's session and the connection returns immediately.
+
+**Why not just roll the caller's transaction back:** RT-MEMTXN-LEAK-1 already tried exactly
+that (`release_read_transaction`) and it broke `test_agent_approve_idempotency` — Session
+`.dirty` cannot see Core `db.execute(UPDATE)` or outer transactions, so rolling back a
+request-shared session mid-request discards in-flight state. Not starting a transaction is
+the only safe direction. Any failure to obtain a session falls back to the caller's, so
+recall can never become unavailable. Opt-in because a caller relying on seeing its own
+uncommitted writes through recall would change behaviour — **remaining work is soak, then
+flip the flag.**
+
+### Verified by reading the defaults — the two budgets are mis-ordered
+
+| Setting | Default | Source |
+|---|---|---|
+| Nodus script budget | 30s | `nodus_runtime_adapter.py:29` `_DEFAULT_MAX_EXECUTION_MS` |
+| Boot allowance (added on top) | 15s | `nodus_runtime_adapter.py:30` `_DEFAULT_BOOT_ALLOWANCE_MS` |
+| **Outer `subprocess.run(timeout=)`** | **45s** | script + boot (NODUS-WARMPOOL-1 Option A) |
+| **`idle_in_transaction_session_timeout`** (prod) | **30s** | `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS`, `config.py:283` |
+
+The runtime permits a nodus execution to occupy **45 seconds** of wall clock while Postgres
+terminates a connection sitting idle-in-transaction at **30**. A fully in-budget, entirely
+legal nodus run therefore has a 15-second window in which the DB can kill its connection
+out from under the flow engine. Whatever the outcome of the open question below, these two
+defaults should not be ordered this way.
+
+Compounding factor: `SessionLocal` (`database.py:77`) is constructed **without**
+`expire_on_commit=False`, so it defaults to `True` — touching any ORM attribute after a
+commit silently re-opens a transaction. That is the exact RT-MEMTXN-LEAK-1 Part 2 gotcha
+already recorded in `CLAUDE.md`, and it makes "a transaction is open when the subprocess
+blocks" the easy accidental state rather than an unlikely one.
+
+### Open question — RESOLVED 2026-08-01: **yes, the transaction is held**
+
+The previously-open half is now **verified against real PostgreSQL**. A transaction IS open
+and idle on the flow runner's own session for the entire duration of node execution.
+
+**Method.** A one-node flow registered through `PersistentFlowRunner`, whose node body
+sleeps — the faithful analogue of `nodus.execute`, because the runner is blocked inside
+`execute_node` either way and the session's transaction state does not depend on what the
+node body does. `pg_stat_activity` was sampled every 4s from a **separate** connection
+(never perturbing the session under test), filtered by `application_name` so only this
+engine's backends were visible. Production timeout settings, not test mode.
+
+**Result** — one backend, held for the whole 20s node:
+
+```
+mid-node t+4s    pid=291  idle in transaction  xact_age_s=4.12   idle_s=4.07
+mid-node t+8s    pid=291  idle in transaction  xact_age_s=8.19   idle_s=8.14
+mid-node t+12s   pid=291  idle in transaction  xact_age_s=12.52  idle_s=12.47
+mid-node t+16s   pid=291  idle in transaction  xact_age_s=16.57  idle_s=16.52
+mid-node t+21s   pid=291  idle in transaction  xact_age_s=20.60  idle_s=20.55
+    last_query: SELECT memory_nodes.id AS memory_nodes_id, memory_nodes.content AS mem…
+```
+
+`session.in_transaction()` was `True` at `execute_node` entry, and `xact_age_s == idle_s` on
+every sample — one statement, then held. The transaction is opened by a **`memory_nodes`
+SELECT** (the memory read on the node path), not by a `run.*` attribute touch as originally
+hypothesised; `expire_on_commit` is a compounding factor, not the trigger.
+
+**The xact age tracks the node duration exactly** (4.12 → 20.60 over a 20s sleep), which is
+what rules out the alternative explanation. An earlier 6s run showed three backends and was
+ambiguous — the two extra sessions were embedding jobs retrying against a deliberately
+invalid API key. Lengthening the node to 20s separated the two: a fixed ~4s retry artifact
+cannot track a 20s sleep.
+
+**Self-verifying detail:** the transaction survived **20.6s** idle. Had the probe been
+running under `settings.is_testing`, the 10s cap would have killed it. Surviving past 10s
+proves the 30s production cap was the one in force.
+
+**Therefore the ordering is live, not theoretical.** With 45s of permitted execution against
+a 30s idle cap, a nodus run that is slow but entirely in-budget has its connection
+terminated at 30s — surfacing as `server closed the connection unexpectedly` →
+`PendingRollbackError`, exactly the shape seen in CI under the 10s test cap.
+
+Probe: `scratchpad/dbnodus_probe.py` (kept out of the repo; re-runnable against
+`docker-compose.test.yml`'s `postgres-test`).
+
+**Not covered by this verification:** the probe drove `PersistentFlowRunner` directly with a
+sleeping node, not a real `nodus.execute` subprocess, and used a one-node flow. The step from
+"any node" to "the nodus node specifically" is small — transaction state is independent of
+the node body — but it is an inference, not a measurement.
+
+### Why it has not bitten in practice
+
+Warm pool (NODUS-WARMPOOL-1, closed) makes typical executions far shorter than 30s, so this
+needs a genuinely slow script or a slow tool call to reach the cap. The CI symptom that
+exposed the arithmetic ran under the **10s** test cap, not 30s — see the CI notes in
+NODUS-WARMPOOL-1.
+
+**Measured 2026-08-01:** with the warm pool enabled and the cap raised to 60s (#315), the
+Integration Tests job goes **green** — so warm execution plus 60s of headroom clears the
+one-time plugin load on a real runner. That is a measurement of the *test* configuration
+only; it says nothing about the 45s-vs-30s ordering in production, which remains open.
+
+**Candidate fixes** (confirmed — now a matter of choosing, not investigating):
+
+1. **Order the defaults** so the DB idle cap exceeds the maximum permitted execution
+   (`30s` script + `15s` boot = `45s`, so the cap must clear 45s). Smallest change, removes
+   the mis-ordering outright, but leaves a transaction open across the subprocess — it
+   raises the ceiling rather than removing the hold.
+2. **Commit-then-detach before `execute_node`** so no transaction spans node execution.
+   Addresses the cause. This is the RT-MEMTXN-LEAK-1 rule applied to the runner's own
+   session, and given the trigger is a `memory_nodes` SELECT, the fix likely belongs on the
+   memory-read path rather than in the runner.
+3. **`expire_on_commit=False` on `SessionLocal`** — removes the silent re-open on
+   post-commit attribute access. Compounding factor only; does not by itself close this,
+   since the observed trigger was an explicit SELECT.
+
+(1) and (2) are complementary: (1) is the cheap guard, (2) is the real fix. Note (2) touches
+a shared session, and RT-MEMTXN-LEAK-1 records that rolling back a request-shared session
+mid-request breaks in-flight state — so it needs care, not a reflexive `rollback()`.
+
+---
+
 ## NATIVE-CI-1 — Rust native scorer crate excluded from CI (green-but-unverified bumps)
 
-**Status:** Open — CI-coverage gap. Surfaced during the 2026-07-18 dependabot triage.
+**Status:** **CLOSED 2026-08-02** — a `Native Crate Build (Rust)` job now compiles the crate on
+every PR. Surfaced during the 2026-07-18 dependabot triage; the gap below is the historical
+record.
+
+**What shipped.** A `native-crate` job in `runtime-ci.yml` runs
+`cargo build --locked --release` in the crate directory on `ubuntu-latest`. Decisions worth
+keeping:
+
+- **`--locked`** is the point for a dependency bump: it fails if `Cargo.lock` would need
+  changing, proving the lockfile committed in the PR is the one that actually builds, rather
+  than one cargo would silently repair.
+- **Build only, no `cargo test`.** The crate has no `#[test]`s, and pyo3's `extension-module`
+  feature omits libpython, so a test harness would fail to *link* rather than report anything
+  about the bump. Adding tests later means either dropping that feature for the test profile or
+  running them through maturin.
+- **Not path-filtered, on purpose.** If this is ever promoted to a required check, a `paths:`
+  filter would make it never report on PRs that don't touch the crate — and those PRs could
+  then never merge. Caching keeps the unconditional run cheap instead.
+- **Added to `runtime-ci.yml` rather than a new workflow file**, because a new workflow file
+  does not trigger on the PR that adds it, so it could not have been verified in the same PR.
+- **No toolchain action needed** — Rust and a C++ toolchain are preinstalled on
+  `ubuntu-latest`, so there is no extra pinned third-party SHA to maintain.
+- The job covers the **C++ half too**: `build.rs` compiles `memory_cpp/semantic.cpp` via the
+  `cc` crate, and `cc` is itself one of the packages dependabot bumps.
+
+**Remaining gap (deliberate):** this builds on **Linux**, not MSVC. The original entry framed
+the need as an MSVC build because the Windows dev box is where the crate is normally compiled.
+A Linux build catches API-breaking dependency changes — which is what cargo bumps risk — but
+would not catch an MSVC-only compilation problem. Adding a Windows matrix leg is the follow-up
+if that ever bites; `build.rs` already carries `/std:c++17` and `/O2` flags for MSVC.
+
+**Not yet a required status check.** Branch protection still requires only Runtime Lint,
+Runtime Docs Validation, and Runtime Contracts. Promoting this one is a separate call.
+
+**Unblocks:** #292 `uuid`, #296 `serde`, #306 `cc` — held open pending a manual local build, now
+gateable on CI.
+
+---
+
+**Historical record (the gap this closed):**
 
 The optional Rust pyo3 memory scorer (`AINDY/memory/native/memory_bridge_rs`, built via
 Maturin) is **not compiled or tested in CI** — no MSVC/cargo build job exists. So cargo
@@ -4283,10 +4778,17 @@ CI job proves full execute-to-completion once the runtime bump ships.
   promotes an awaiting child to `approved` (execution proceeds via the normal
   approved path) or fails it — and un-hangs the waiting parent on reject
   (`delegation_rejected`). Default-off preserves today's fire-and-forget
-  `approved` dispatch. Tests: `test_delegation_hardening.py`. **Deferred:** (c)
-  token-scoped private memory (needs a `MemoryNodeModel` schema change — its own
-  follow-up PR); and wiring `respond_to_delegation` to an HTTP route / syscall
-  (it ships as an importable runtime primitive, record-first).
+  `approved` dispatch. Tests: `test_delegation_hardening.py`.
+- **(c) token-scoped private memory — SHIPPED 2026-07-12/13** (PR1 #245 helper
+  centralization, PR2 #246 `owner_run_id` + ContextVar chokepoint). This entry and the
+  `CLAUDE.md` prefix registry both said "deferred" until 2026-07-31; corrected after a
+  roadmap audit found the flag live in the source. Gated `AINDY_DELEGATION_PRIVATE_MEMORY`
+  (`config.py:342`, default off), enforced at `memory_persistence.py:136/174` with the
+  owner threaded from `execution.py:214`. Remaining work is soak-then-flip, not build.
+  **Delegate writes take the DEFERRED capture path, so `MemoryNodeDAO.save` — not the
+  syscall — is the write chokepoint.**
+- **Still deferred:** wiring `respond_to_delegation` to an HTTP route / syscall (it ships
+  as an importable runtime primitive, record-first).
 
 ### RTR-5 — Autonomous closed loop — **[BUILD], medium (split)**
 

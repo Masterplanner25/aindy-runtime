@@ -10,6 +10,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool, StaticPool
 import logging
+import os
 import threading
 import time
 
@@ -25,6 +26,29 @@ DATABASE_URL = settings.DATABASE_URL
 # Runtime models are imported by ``AINDY.db.model_registry``. App models are
 # added later by app bootstrap callbacks against the same metadata object.
 Base = declarative_base()
+
+# Test connections cap statement time and idle-in-transaction time so a hung query,
+# or a transaction held open across a slow call, fails fast instead of wedging the
+# suite. 10s remains the default; an *explicitly set* env var wins, because some
+# tiers legitimately exceed it — the integration suite holds a session open across a
+# nodus worker's one-time plugin load.
+#
+# `settings.DB_*_TIMEOUT_MS` is deliberately NOT consulted here: its 30s default would
+# silently triple the cap for every test run. Only an explicit environment value
+# overrides, so the guard cannot be weakened by accident.
+_TEST_TIMEOUT_DEFAULT_MS = 10000
+
+
+def _test_timeout_ms(env_var: str) -> int:
+    """Resolve a test-mode Postgres timeout, falling back to the 10s default."""
+    raw = os.getenv(env_var, "").strip()
+    if not raw:
+        return _TEST_TIMEOUT_DEFAULT_MS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _TEST_TIMEOUT_DEFAULT_MS
+
 
 # Engine + Session Factory
 connect_args = {}
@@ -43,8 +67,9 @@ else:
     }
     if settings.is_testing:
         connect_args["options"] = (
-            "-c statement_timeout=10000 "
-            "-c idle_in_transaction_session_timeout=10000"
+            f"-c statement_timeout={_test_timeout_ms('DB_STATEMENT_TIMEOUT_MS')} "
+            "-c idle_in_transaction_session_timeout="
+            f"{_test_timeout_ms('DB_IDLE_IN_TRANSACTION_TIMEOUT_MS')}"
         )
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args, **pool_kwargs)
@@ -68,8 +93,14 @@ def set_utc(dbapi_connection, connection_record):
             return
         cursor.execute("SET TIME ZONE 'UTC';")
         if settings.is_testing:
-            cursor.execute("SET statement_timeout = '10s';")
-            cursor.execute("SET idle_in_transaction_session_timeout = '10s';")
+            cursor.execute(
+                f"SET statement_timeout = "
+                f"'{_test_timeout_ms('DB_STATEMENT_TIMEOUT_MS')}ms';"
+            )
+            cursor.execute(
+                f"SET idle_in_transaction_session_timeout = "
+                f"'{_test_timeout_ms('DB_IDLE_IN_TRANSACTION_TIMEOUT_MS')}ms';"
+            )
         else:
             if settings.DB_STATEMENT_TIMEOUT_MS > 0:
                 cursor.execute(

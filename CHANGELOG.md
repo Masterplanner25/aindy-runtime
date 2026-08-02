@@ -2,6 +2,85 @@
 
 ## Unreleased
 
+### Changed — `POST /auth/register` now enforces a minimum password length ⚠️
+
+`register_user` rejects passwords under `MIN_PASSWORD_LENGTH` (8) with **400**. Previously the
+floor guarded `POST /auth/password/change` only, which meant that of the paths able to set a
+password, the one an *unauthenticated* caller reaches was the unguarded one. A floor applied to
+one path is not a floor.
+
+**This is a deliberate tightening on a published package, and it can break a caller.** What it
+does **not** do:
+
+- it does **not** invalidate any stored password — existing users are unaffected;
+- it does **not** change `POST /auth/login` in any way.
+
+The only affected caller is a registration flow that previously permitted passwords shorter
+than 8 characters; those requests now return 400 instead of 201. If you drive registration
+programmatically (seeding, fixtures, smoke tests), check the passwords those use.
+
+The check runs before the duplicate-email lookup, so a request that is both short-password and
+duplicate-email returns 400 rather than 409 — which also avoids confirming an email is
+registered to a caller who supplied an invalid password.
+
+`MIN_PASSWORD_LENGTH` is deliberately not configurable: a security floor an operator can switch
+off is not a floor.
+
+## 1.11.0 — 2026-08-01
+
+Minor, not patch: `POST /auth/password/change` is a new public endpoint.
+
+### Fixed — DB-NODUS-BUDGET-1: the DB idle cap now outlives the nodus execution ceiling
+
+`DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` default **30000 → 60000**. Verified against real
+PostgreSQL that the flow runner's session is held `idle in transaction` for the *entire*
+duration of node execution, while a nodus run may legitimately occupy 45s (30s script +
+15s boot allowance). At the old 30s default, a slow-but-in-budget nodus run had its
+connection terminated mid-flight — surfacing as `server closed the connection
+unexpectedly` → `PendingRollbackError`.
+
+**Operators who pin `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` explicitly should raise it above
+45s**, or above their own `AINDY_NODUS_MAX_EXECUTION_MS` + `AINDY_NODUS_BOOT_ALLOWANCE_MS`
+if those are customised. A unit test now derives the ceiling from those constants and
+fails if the cap stops clearing it.
+
+The root-cause fix — memory recall no longer opening a transaction on the caller's
+session — ships opt-in behind `AINDY_MEMORY_RECALL_OWN_SESSION` (default off) pending
+soak.
+
+### Fixed — MCP SDK capped at `mcp<2`
+
+`mcp 2.0.0` removed the 1.x low-level `Server.list_tools()` decorator that `nodus-mcp`
+0.1.2 is built on, so `pip install "aindy-runtime[mcp]"` resolved to an SDK that raises
+`AttributeError` at server construction. The `[mcp]` extra now specifies
+`mcp>=1.0.0,<2`. Lifted when a `nodus-mcp` release targets the 2.x API.
+
+### Added — `POST /auth/password/change` (FR-6 item 1)
+
+Self-service password rotation for an authenticated user. Until now the entire auth surface
+was `register` / `login` / `logout` / `admin/invalidate-sessions` — a signed-in user could not
+change their own password, and the only way to set one was a direct `UPDATE users SET
+hashed_password` against Postgres.
+
+```http
+POST /auth/password/change
+Authorization: Bearer <jwt>
+
+{"current_password": "…", "new_password": "…"}
+```
+
+Bearer-JWT only (a platform API key has no password to rotate). Verifies the current password,
+enforces `MIN_PASSWORD_LENGTH` (8) and new-≠-current, then writes the new hash and **bumps
+`token_version`**, invalidating every session. A freshly-versioned token is returned in the
+same envelope shape as `/auth/login`, so the caller stays signed in while other sessions are
+cut and a client can reuse its existing token-store path.
+
+Neither password reaches `input_payload` or the emitted `auth.password.changed` event — both
+are trace-logged surfaces.
+
+The forgot/reset half of FR-6 is not included: it needs a token-delivery channel (email), which
+is FR-1 connector/egress work.
+
 ### Added — `aindy-runtime memory prune-cascade-debris`
 
 One-time cleanup for deployments that ran a version before the RT-MEMTXN-LEAK-1 fix (v1.10.2).

@@ -131,6 +131,17 @@ def rotate_signing_key(new_key: str) -> bool:
 
 # ── Password utilities ──────────────────────────────────────────────────────
 
+# The floor for every path that sets a password: `register_user` and
+# `change_user_password`. Deliberately NOT configurable — a security floor an operator
+# can switch off is not a floor. Raising it is a code change.
+#
+# Applied to registration 2026-08-01 (previously change-only). This rejects *new*
+# registrations under the length; it does not invalidate any stored password, and login
+# is unaffected. The blast radius is a downstream registration form that permitted
+# shorter passwords, which now gets a 400.
+MIN_PASSWORD_LENGTH = 8
+
+
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
@@ -416,8 +427,23 @@ def get_optional_user(
 # ── DB-backed user operations ────────────────────────────────────────────────
 
 def register_user(email: str, password: str, username: str | None, db: Session):
-    """Create a new user in the database. Raises 409 if email already exists."""
+    """Create a new user in the database.
+
+    Raises 400 if the password is under ``MIN_PASSWORD_LENGTH``, 409 if the email is
+    already registered.
+
+    The length check runs **before** the email lookup: it needs no database round-trip,
+    and rejecting on the cheaper check first avoids doing a query for a request that
+    cannot succeed either way.
+    """
     from AINDY.db.models.user import User
+
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
+
     existing = db.query(User).filter(User.email == email).first()
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -445,6 +471,58 @@ def authenticate_user(email: str, password: str, db: Session):
         )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
+    return user
+
+
+def bump_token_version(user) -> int:
+    """Invalidate every outstanding JWT for ``user`` by advancing its token version.
+
+    Wraps at 32767 because ``User.token_version`` is a SMALLINT. Callers commit.
+    """
+    user.token_version = (int(getattr(user, "token_version", 0)) + 1) % 32767
+    return user.token_version
+
+
+def change_user_password(
+    *,
+    user_id,
+    current_password: str,
+    new_password: str,
+    db: Session,
+):
+    """Rotate an authenticated user's own password (FR-6 item 1).
+
+    Verifies the current password, applies the minimum-length policy, writes the new
+    hash, and bumps ``token_version`` so every existing session — including the one
+    that made this call — is invalidated. Returns the user.
+
+    Raises 404 (no such user), 403 (disabled), 401 (wrong current password),
+    400 (too short, or unchanged).
+    """
+    from AINDY.db.models.user import User
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+    if not verify_password(current_password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"New password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
+    if verify_password(new_password, user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="New password must differ from the current password",
+        )
+
+    user.hashed_password = hash_password(new_password)
+    bump_token_version(user)
+    db.commit()
+    db.refresh(user)
     return user
 
 
