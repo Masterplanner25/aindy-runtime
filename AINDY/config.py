@@ -175,6 +175,20 @@ class Settings(BaseSettings):
     # Flow: register via POST /auth/register first, then set this var and restart.
     # The same effect is available post-deploy via: aindy-runtime auth promote-admin <email>
     AINDY_BOOTSTRAP_ADMIN_EMAIL: str | None = None
+
+    # --- Outbound email (FR-6 Phase A) ---
+    # Fallback route for runtime-sent mail (password reset, address verification) when no
+    # `email` connector is registered. A registered connector takes precedence; these are
+    # only consulted in its absence. Both HOST and FROM are required for the route to be
+    # considered configured — a host with no sender address cannot send.
+    # AINDY_SMTP_PASSWORD is consulted only if the secret broker has no `SMTP_PASSWORD`.
+    AINDY_SMTP_HOST: str = ""
+    AINDY_SMTP_PORT: int = 587
+    AINDY_SMTP_USER: str = ""
+    AINDY_SMTP_PASSWORD: str = ""
+    AINDY_SMTP_FROM: str = ""
+    AINDY_SMTP_STARTTLS: bool = True
+
     STRIPE_SECRET_KEY: str | None = None
     STRIPE_WEBHOOK_SECRET: str | None = None
 
