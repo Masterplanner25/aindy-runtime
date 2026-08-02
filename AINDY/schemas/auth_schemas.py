@@ -32,3 +32,8 @@ class ResetPasswordRequest(BaseModel):
     """FR-6 item 3."""
     token: str
     new_password: str
+
+
+class VerifyEmailRequest(BaseModel):
+    """FR-6 Phase C — consume an address-verification token."""
+    token: str

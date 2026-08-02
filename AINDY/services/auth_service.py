@@ -182,6 +182,84 @@ def create_access_token(
     return jwt.encode(to_encode, _get_signing_key(), algorithm=ALGORITHM)
 
 
+# ── Email-verification tokens (FR-6 Phase C) ─────────────────────────
+
+#: Separate domain from the reset token, not just a different purpose claim. Reusing the
+#: reset domain would make a verification link redeemable as a password reset and vice
+#: versa — two flows with different authority, one credential.
+EMAIL_VERIFY_DOMAIN = b"aindy-email-verify-v1"
+EMAIL_VERIFY_PURPOSE = "email_verify"
+
+
+def _verify_signing_key() -> str:
+    return _derive_domain_key(signing_key(), EMAIL_VERIFY_DOMAIN)
+
+
+def _verify_verification_keys() -> list[str]:
+    return [_derive_domain_key(k, EMAIL_VERIFY_DOMAIN) for k in verification_keys()]
+
+
+def create_email_verification_token(user, *, ttl_hours: int | None = None) -> str:
+    """Mint an address-verification token.
+
+    Deliberately does NOT pin ``token_version``: unlike a reset token, this one must
+    survive ordinary account activity between registering and clicking the link. Logging in
+    elsewhere, or an admin invalidating sessions, should not silently void a verification
+    email. Single-use comes from ``is_verified`` instead — a consumed token finds the
+    account already verified.
+    """
+    ttl = int(
+        ttl_hours
+        if ttl_hours is not None
+        else getattr(settings, "AINDY_EMAIL_VERIFY_TTL_HOURS", 48)
+    )
+    payload = {
+        "sub": str(user.id),
+        "purpose": EMAIL_VERIFY_PURPOSE,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=ttl),
+    }
+    return jwt.encode(payload, _verify_signing_key(), algorithm=ALGORITHM)
+
+
+def verify_email_token(token: str) -> dict:
+    """Return the claims of a valid verification token, or raise a generic 400."""
+    generic = HTTPException(status_code=400, detail="Invalid or expired verification token")
+    for key in _verify_verification_keys():
+        try:
+            payload = jwt.decode(token, key, algorithms=[ALGORITHM])
+        except JWTError:
+            continue
+        if payload.get("purpose") != EMAIL_VERIFY_PURPOSE:
+            raise generic
+        return payload
+    raise generic
+
+
+def confirm_email_verification(*, token: str, db: Session):
+    """Consume a verification token and mark the address confirmed. Returns the user.
+
+    Idempotent on an already-verified account: re-following a link the user already used
+    succeeds rather than erroring, because the user-visible outcome is identical and an
+    error would only be confusing.
+    """
+    from AINDY.db.models.user import User
+
+    claims = verify_email_token(token)
+    user_uuid = parse_user_id(claims.get("sub"))
+    user = db.query(User).filter(User.id == user_uuid).first() if user_uuid else None
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+
+    if not user.is_verified:
+        user.is_verified = True
+        user.verified_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(user)
+    return user
+
+
 # ── Password-reset tokens (FR-6 Phase B) ────────────────────────────────────
 
 #: Domain string mixed into the signing key for password-reset tokens.
@@ -613,6 +691,15 @@ def authenticate_user(email: str, password: str, db: Session):
         )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
+    if getattr(settings, "AINDY_REQUIRE_VERIFIED_LOGIN", False) and not getattr(
+        user, "is_verified", True
+    ):
+        # Opt-in (FR-6 Phase C). Checked AFTER the password so it cannot be used to
+        # discover which addresses exist or are verified without valid credentials.
+        raise HTTPException(
+            status_code=403,
+            detail="Email address not verified. Check your inbox for the verification link.",
+        )
     return user
 
 
