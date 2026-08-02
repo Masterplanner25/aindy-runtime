@@ -518,6 +518,32 @@ Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + C
 
 ---
 
+## Current phase + standing decisions (2026-08-01)
+
+**Phase: runtime testing.** Things get connected to the runtime in order to exercise it — which
+is why app-side feature requests keep arriving; they are a symptom of the testing method, not
+scope creep. **Consequence: flag soak happens in `aindy-apps-monolith`, not here.** The runtime
+ships capabilities default-off; the app repo turns them on and lives with them. Don't plan soak
+work in this repo.
+
+**★ THE NEXT RELEASE MUST BE `2.0.0`.** `main` carries a merged, unreleased breaking change —
+`register_user` now rejects passwords under `MIN_PASSWORD_LENGTH`. Semver is followed as a rule
+here, and this is load-bearing rather than ceremonial: `runtime_compatibility.py:11`
+`_major_series()` advertises `recommended_runtime_requirement` as `>={major}.0,<{major+1}.0`, so
+releasing that change as 1.12.0 would make the runtime's own self-reported compatibility claim
+false. Either ship 2.0.0 or pull the change first. **Cross-repo:** on 2.0.0 the advertised
+requirement flips to `>=2.0,<3.0` and the apps-monolith floor (`>=1.11.0,<2.0`) excludes it — the
+app team must move that pin deliberately.
+
+**Other standing decisions** (full record: `TECH_DEBT.md` → `DECISIONS-2026-08-01`):
+FR-6 email delivery = **hybrid** (registered `email` connector if present, else runtime SMTP);
+`/auth/register`'s 409-on-duplicate **enumeration oracle is to be fixed**; **add a cargo build
+job** (NATIVE-CI-1, blocks #292/#296/#306); **verify** `python-jose`/`passlib` interop before
+merging cryptography 48→49 (#302); the UI major cluster is **deferred and decided from
+`C:\dev\aindy-ui-kit`** (its react-router 6 peer pin blocks #312/#324 — and #324 supersedes #312).
+
+---
+
 ## TECH_DEBT.md — prefix registry
 
 Open items only; closed entries are in TECH_DEBT.md. Do not reuse numbers within a prefix.
