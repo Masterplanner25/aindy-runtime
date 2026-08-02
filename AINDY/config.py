@@ -189,6 +189,17 @@ class Settings(BaseSettings):
     AINDY_SMTP_FROM: str = ""
     AINDY_SMTP_STARTTLS: bool = True
 
+    # Password-reset token lifetime (FR-6 Phase B). Long enough to survive a slow mail
+    # hop, short enough that a leaked inbox is not an indefinite backdoor. The token is
+    # single-use regardless — consuming it bumps token_version, so a replay fails.
+    AINDY_PASSWORD_RESET_TTL_MINUTES: int = 30
+
+    # Where the emailed reset link points. `{token}` is substituted. Left empty, the mail
+    # carries the bare token instead, which is usable against the API directly — correct
+    # for a headless deployment, and it means a missing setting degrades rather than
+    # producing a broken link.
+    AINDY_PASSWORD_RESET_URL_TEMPLATE: str = ""
+
     STRIPE_SECRET_KEY: str | None = None
     STRIPE_WEBHOOK_SECRET: str | None = None
 
