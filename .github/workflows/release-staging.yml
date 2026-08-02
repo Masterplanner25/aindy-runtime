@@ -61,7 +61,7 @@ jobs:
           assert pyproject["project"]["name"] == "aindy-runtime"
           metadata = runtime_repo_compatibility_metadata()
           assert metadata["runtime_package"]["version"] == __version__
-          assert metadata["apps_repo_contract"]["recommended_runtime_requirement"] == ">=1.0,<2.0"
+          assert metadata["apps_repo_contract"]["recommended_runtime_requirement"] == ">=2.0,<3.0"
           print({"runtime_version": __version__, "compatibility": metadata["apps_repo_contract"]})
           PY
 
