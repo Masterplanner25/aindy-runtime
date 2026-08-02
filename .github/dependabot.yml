@@ -10,6 +10,22 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    groups:
+      # DEP-UPGRADE-DEFERRED-1: the OpenTelemetry packages are version-locked —
+      # opentelemetry-sdk==X hard-requires opentelemetry-api==X — so a single-package
+      # bump can never resolve. Three PRs died proving it (#251, #254, #307), each
+      # failing with:
+      #     Collecting opentelemetry-api==1.42.1 (from aindy-runtime==1.10.2)
+      #     ERROR: ResolutionImpossible
+      # Grouping is not noise reduction here; it is the only shape in which an otel
+      # bump can merge at all.
+      #
+      # The pattern deliberately covers the instrumentation packages too, which track
+      # a SEPARATE version line (opentelemetry-instrumentation-fastapi==0.63b1 against
+      # a 1.42.1 core). Different numbers, same release train — they must move together.
+      opentelemetry:
+        patterns:
+          - "opentelemetry-*"
 
   # GitHub Actions — keeps pinned action SHAs up to date.
   - package-ecosystem: "github-actions"
@@ -28,6 +44,17 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 5
+    groups:
+      # react and react-dom are released in lockstep and are expected to match at
+      # runtime. Ungrouped they arrive as two PRs for one upgrade (#309 + #311 were
+      # both 19.2.7 -> 19.2.8), and merging one leaves the pair briefly mismatched.
+      # Exact names, not "react*" — that would swallow react-router-dom, which is on
+      # its own release train and currently blocked upstream on an @aindy/ui-kit peer
+      # range (see #312).
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
 
   # Cargo — optional Rust native memory scorer (pyo3, …).
   - package-ecosystem: "cargo"
