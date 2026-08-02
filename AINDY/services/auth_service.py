@@ -152,6 +152,19 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # ── JWT utilities ───────────────────────────────────────────────────────────
 
+# Every token this service mints declares what it is for, and every token it accepts
+# is checked against that. Before this existed, `decode_access_token` accepted ANY
+# HS256 token verifying against a KeyRing secret and examined nothing else — so any
+# other token type signed with the same key (a password-reset token carrying `sub`
+# and `tv`, say) was silently a valid bearer access token for that user.
+#
+# FR-6 keeps the primary control at a lower level — non-access tokens are signed with
+# a domain-separated derived key, so they cannot verify here at all. This claim is
+# defence in depth: it makes the "wrong token type" failure explicit rather than
+# relying on every future token type remembering to derive its own key.
+ACCESS_TOKEN_PURPOSE = "access"
+
+
 def create_access_token(
     data: dict,
     expires_delta: Optional[timedelta] = None,
@@ -159,6 +172,7 @@ def create_access_token(
 ) -> str:
     to_encode = data.copy()
     to_encode["tv"] = token_version
+    to_encode["purpose"] = ACCESS_TOKEN_PURPOSE
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
@@ -185,13 +199,31 @@ def _resolve_username(*, email: str, username: str | None, db: Session) -> str:
 
 
 def decode_access_token(token: str) -> dict:
+    """Decode and validate an **access** token.
+
+    Rejects a structurally valid, correctly-signed token that was minted for some other
+    purpose. Without this the only question asked was "does the signature verify?", which
+    made every token type sharing the signing key interchangeable with a session.
+
+    Note the deliberate response shape: a wrong-purpose token gets the *same* generic 401
+    as a bad signature. Telling a caller "this is a valid password-reset token, just not
+    usable here" would confirm both that the token is genuine and which account it belongs
+    to.
+    """
     last_exc = None
     for key in _key_ring.verify_keys():
         try:
             payload = jwt.decode(token, key, algorithms=[ALGORITHM])
-            return payload
         except JWTError as exc:
             last_exc = exc
+            continue
+        if payload.get("purpose") != ACCESS_TOKEN_PURPOSE:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return payload
     raise HTTPException(
         status_code=401,
         detail="Invalid or expired token",

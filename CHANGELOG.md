@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Changed — access tokens now declare a `purpose`, and it is enforced ⚠️ invalidates existing sessions
+
+`decode_access_token` previously asked exactly one question — does the signature verify
+against a `KeyRing` secret — and examined nothing else. Any other token type signed with the
+same key was therefore silently a **valid bearer access token**. This surfaced while scoping
+FR-6: a password-reset token carrying `sub` and `tv` is everything the auth path needs, so an
+emailed reset link would have *been* a session.
+
+`create_access_token` now stamps `purpose: "access"`, and `decode_access_token` requires it.
+
+**⚠️ Every token issued before this upgrade lacks the claim and will be rejected — all
+existing sessions are invalidated and users must log in again.** Tokens expire after 24h
+anyway; this brings that forward to the moment of upgrade. Nothing else about the token
+format changes.
+
+A wrong-purpose token returns the **same generic 401** as a bad signature, deliberately:
+distinguishing them would confirm both that the token is genuine and which account it
+belongs to.
+
+This is defence in depth, not FR-6's primary control — non-access tokens will be signed with
+a domain-separated derived key and cannot verify here at all. The claim makes "wrong token
+type" an explicit failure rather than something every future token type must remember to
+prevent on its own.
+
 ### Changed — `POST /auth/register` now enforces a minimum password length ⚠️
 
 `register_user` rejects passwords under `MIN_PASSWORD_LENGTH` (8) with **400**. Previously the
