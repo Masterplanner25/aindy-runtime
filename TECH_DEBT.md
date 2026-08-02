@@ -52,6 +52,40 @@ Guarding `/forgot` against enumeration while leaking the same fact on register i
 Accepted that this changes a long-standing public response contract and can break clients that
 branch on 409.
 
+**⚠️ Scoping finding (2026-08-01, before any code): this CANNOT be fixed standalone. It is a
+dependent of decision 2 (FR-6 hybrid email), not independent work.**
+
+**Why.** `POST /auth/register` returns an **access token** on success. A duplicate email cannot
+be given a token — that would be account takeover — so the two responses *must* differ. No
+choice of status code or message closes the oracle while registration also authenticates the
+caller in the same request. Uniform-response hardening is impossible here, unlike `/forgot`,
+where "always 200" works precisely *because* `/forgot` returns nothing of value.
+
+**What an actual fix requires** — the standard non-enumerable registration shape:
+
+1. `/auth/register` always returns a neutral `202` ("check your email"), issuing **no** token;
+2. the token is issued only after the emailed verification link is followed;
+3. a duplicate email gets a *"someone tried to register with your address"* mail instead — same
+   neutral 202 to the caller.
+
+That is an **email-verification flow**, which needs the email channel decision 2 settles
+(hybrid) and does not yet exist. Verified 2026-08-01: the `User` model has no `is_verified`,
+`email_verified`, or `verification_token` — there is no verification concept in the runtime at
+all.
+
+**Rate limiting does not mitigate it.** Register is `10/minute`, but targeted enumeration
+("is `alice@corp.com` registered?") is a *single* request. Throttling only raises the cost of
+bulk sweeps, not the attack that matters.
+
+**Implementation note for whoever builds it — there is a second channel.** The duplicate-email
+path returns **before** `hash_password`, so it skips bcrypt and answers measurably faster. A
+status-code-only fix would leave that timing oracle intact. The fix must also equalise work on
+both paths (hash regardless, or defer the existence check until after hashing).
+
+**Sequencing consequence:** build decision 2 first and fold this into it. Attempting #3 alone
+can only produce cosmetic changes that leave the oracle open while appearing to close it —
+which is worse than the current honest 409.
+
 ### 4 — Cargo CI job: add
 
 `NATIVE-CI-1` is the binding constraint on three standing PRs (#292 uuid, #296 serde, #306 cc)

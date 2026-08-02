@@ -537,7 +537,7 @@ app team must move that pin deliberately.
 
 **Other standing decisions** (full record: `TECH_DEBT.md` → `DECISIONS-2026-08-01`):
 FR-6 email delivery = **hybrid** (registered `email` connector if present, else runtime SMTP);
-`/auth/register`'s 409-on-duplicate **enumeration oracle is to be fixed**; **add a cargo build
+`/auth/register`'s 409-on-duplicate **enumeration oracle is to be fixed — but it is NOT standalone work: it is a dependent of the FR-6 email decision.** Register returns an access token on success and a duplicate cannot be given one, so the responses must differ; no status/message choice closes the oracle while registration also authenticates. A real fix is the standard shape — always neutral `202`, token only after an emailed verification link, duplicate gets a *"someone tried to register"* mail — i.e. an email-verification flow that does not exist (no `is_verified`/`verification_token` on `User`). Rate limiting is irrelevant (targeted enumeration is one request). **Second channel to remember:** the duplicate path returns *before* `hash_password`, so it skips bcrypt and is measurably faster — a status-code-only fix leaves that timing oracle intact. **Build FR-6 first and fold this in;** #3 alone can only look fixed. Also: **add a cargo build
 job** (NATIVE-CI-1, blocks #292/#296/#306); **verify** `python-jose`/`passlib` interop before
 merging cryptography 48→49 (#302); the UI major cluster is **deferred and decided from
 `C:\dev\aindy-ui-kit`** (its react-router 6 peer pin blocks #312/#324 — and #324 supersedes #312).
