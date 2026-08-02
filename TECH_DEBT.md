@@ -475,7 +475,8 @@ call sites). Tests: `tests/unit/test_auth_password_change.py` (14 — service re
 never applied a password policy; adding one there would start rejecting existing callers, so
 it stays a separate decision — see the open item below.
 
-**Items 2+3 — `POST /auth/password/forgot` + `POST /auth/password/reset`. OPEN — follow-up.**
+**Items 2+3 — `POST /auth/password/forgot` + `POST /auth/password/reset`. OPEN — delivery
+decision answered 2026-08-01, one structural question left (see below).**
 Issue a time-boxed, single-use reset token for an email; consume it, set the new password,
 invalidate sessions. Both reuse `hash_password` / `verify_password` and the `token_version`
 bump item 1 already established, so the auth logic is the small half.
@@ -491,17 +492,82 @@ design decision the runtime should not make unilaterally:
   surface, but it puts a live credential-reset token in an HTTP response body, so it is only
   safe behind an admin/service-authenticated caller, not the public forgot endpoint.
 
-**Also needs deciding before build:** token storage (new table vs. a signed stateless token
-carrying `user_id` + `token_version`, the latter self-invalidating and schema-free);
-single-use enforcement; TTL; and whether `/auth/password/forgot` must return 200 for unknown
-emails to avoid becoming an account-enumeration oracle (it should).
+### ✅ App team answered 2026-08-01 — **(a), the runtime sends it**
 
-**Open sub-item:** apply a password policy to `register_user` as well, so `MIN_PASSWORD_LENGTH`
-is not enforced on only one of the three paths that can set a password. Breaking for existing
-callers — needs a deliberate call, likely a major-version or flag-gated change.
+The delivery question is settled. Their reasoning, recorded so it is not re-litigated:
 
-**Trigger to build:** the app wiring a "Forgot password?" flow, or FR-1 gaining a real
-registered email connector. **App-side adoption for item 1 (available now):** an in-app
+- **(b) would not actually deliver FR-6.** The gap FR-6 exists to close is *a user who forgot
+  their password has no recovery path*. An endpoint a locked-out user cannot call does not close
+  it — we would ship (b), still lack the feature, and be left permanently guarding a
+  token-minting route.
+- **The email channel is wanted regardless** (order/payment notifications have the same
+  dependency), so under (a) the cost is paid once by the layer that owns egress policy.
+- **(b) moves the security boundary to the weaker side** — the token would cross a process
+  boundary into a layer that does not own auth.
+
+**Their positions on the sub-questions** (offered as defaults, explicitly ours to overrule):
+
+| Question | App position | Assessment |
+|---|---|---|
+| Token storage | Stateless signed token carrying `user_id` + `token_version` | **Agree.** Single-use falls out by construction — the reset bumps `token_version`, so a consumed token no longer verifies. No table, no migration, no cleanup job. |
+| Single-use | Falls out of the above | **Agree** — replay fails without a revocation list. |
+| TTL | 30–60 minutes | **Agree.** |
+| Unknown email on `/forgot` | Always 200 | **Agree** — matches our own read; otherwise it is an enumeration oracle. |
+| Rate limit | 3/minute per IP **and** per email | **Agree.** Stricter than `/change`'s 5/minute because `/forgot` is unauthenticated and is the cheapest endpoint to abuse for mail-bombing. |
+
+### ⚠️ Unresolved by that answer — who owns the email channel?
+
+**(a) is under-specified, and the gap is structural.** `register_connector` is a hook for *apps*
+to register into; **the runtime ships no `email` connector** (verified 2026-08-01: no connector is
+registered anywhere under `AINDY/`). So "the runtime sends it" currently has nothing to send with.
+
+Three shapes, and this is a runtime call:
+
+1. **Runtime ships its own minimal SMTP sender** (config-driven `AINDY_SMTP_*`), routed through
+   `authorized_external_call` so egress policy and secret-brokering still apply. Auth stays
+   self-contained; a `platform-only` deployment can reset passwords. Cost: the runtime owns a
+   mail channel it did not previously have.
+2. **Runtime dispatches an app-registered `email` connector**, with `/forgot` returning
+   503/disabled when none is registered. Cheapest, but **inverts the split** — a runtime-owned
+   auth flow would depend on an app registering something, and password reset would be
+   unavailable in any runtime-only deployment. That conflicts with the "runtime boots clean
+   without plugins" contract.
+3. **Hybrid** — dispatch a registered `email` connector if present, else fall back to built-in
+   SMTP config.
+
+**Recommend 1 or 3.** The app team's own argument for (a) — the token never leaves the runtime,
+and the layer owning egress pays the cost once — argues for the runtime owning the channel.
+Option 2 satisfies the letter of (a) while reintroducing the dependency they chose (a) to avoid.
+
+### ✅ Sub-item CLOSED 2026-08-01 — password policy applied to `register_user`
+
+`register_user` now rejects passwords under `MIN_PASSWORD_LENGTH` (8) with 400. Both paths that
+set a password share the one constant, and a test asserts `register_user` references it rather
+than a literal, so they cannot silently diverge into a strong path and a weak one.
+
+**Decision record.** The app team asked for it, arguing zero migration cost because their
+deployment has no production users. That argument does not generalise — this is a published PyPI
+package, so the change reaches every consumer — and the objection was raised. **Owner overruled
+it deliberately:** a security floor deferred indefinitely is not a floor, and downstream callers
+adjusting is an accepted cost. Shipped unflagged on that basis.
+
+**Blast radius, narrower than "breaking" suggests.** No stored password is invalidated and login
+is untouched; only *new* registrations under the length are rejected. The realistic casualty is a
+seeding/fixture/smoke script that drives `POST /auth/register` programmatically.
+
+**Not configurable, by design** — a floor an operator can switch off is not a floor.
+
+**Ordering note:** the length check runs *before* the duplicate-email lookup. It needs no DB
+round-trip, and it means a short-password request against a taken email returns 400 rather than
+409, so an invalid-password caller is not told whether the email exists.
+
+**Adjacent finding, NOT addressed:** `POST /auth/register` still returns **409 "Email already
+registered"** for a valid-password duplicate — an account-enumeration oracle on the registration
+path, the same class of issue both sides agreed `/forgot` must avoid by always returning 200.
+Fixing it changes a long-standing public response contract, so it needs its own decision.
+
+**Trigger to build:** resolve the email-channel ownership question above (1/2/3), then build.
+The auth half is small and fully specified now; delivery is the whole remaining risk. **App-side adoption for item 1 (available now):** an in-app
 "Change password" control calling the endpoint — and it **must** store the returned token,
 since the change invalidates the caller's existing one (recorded in `UI_CONTRACT.md` /
 `SDK_CONTRACT.md`).
