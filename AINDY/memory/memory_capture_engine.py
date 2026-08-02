@@ -165,6 +165,55 @@ def _forced_capture_suppressed(policy, score: float) -> bool:
         return False
 
 
+#: How much a policy-declared significance is worth as an impact floor.
+#:
+#: MEM-IMPACT-IGNORES-SIGNIFICANCE-1. `calculate_impact_score` is purely graph-derived —
+#: `len(downstream) + trace_depth*0.75 + failure_bonus` — and `get_relevant_memories` orders
+#: **purely by impact_score DESC**. So the one quality signal an app controls, the
+#: policy-declared significance, had no path into what comes back. A deliberate
+#: `decision` node declared significance 1.0 stored impact 0.0 and was never recalled,
+#: while any runtime-captured failure started at 1.5.
+#:
+#: 2.5 places a fully-significant domain memory above the 1.5 failure floor while leaving a
+#: genuinely well-connected failure (high downstream count) ranked above it. Tunable because
+#: the right balance is deployment-specific.
+SIGNIFICANCE_IMPACT_WEIGHT = 2.5
+
+
+def significance_impact_floor(event_type: str) -> float:
+    """Impact floor implied by an event type's DECLARED memory policy.
+
+    Deliberately reads the *policy* significance rather than the computed per-capture score.
+    The computed score folds in `context["significance"]`, and
+    `capture_system_event_as_memory` passes 1.0 for every forced system capture — so scoring
+    off it would lift exactly the noise this exists to rank below, and give apps no lever at
+    all. The policy is the thing an app declares and therefore the thing it should control.
+    """
+    try:
+        policy = get_memory_policy(event_type) or {}
+    except Exception:
+        return 0.0
+    if not policy:
+        # No declared policy means no declared importance. Graph-derived impact stands
+        # alone, exactly as before.
+        return 0.0
+    return max(0.0, _policy_base_significance(policy, default=0.0) * SIGNIFICANCE_IMPACT_WEIGHT)
+
+
+def blend_impact_with_significance(graph_impact: float, event_type: str) -> float:
+    """Graph-derived impact, floored by declared significance.
+
+    A floor rather than a sum: adding would inflate already-high system failures (which
+    carry both a large downstream count and a failure bonus) by the same amount it lifts a
+    domain decision, preserving the ordering this is meant to fix.
+    """
+    try:
+        graph = max(0.0, float(graph_impact or 0.0))
+    except (TypeError, ValueError):
+        graph = 0.0
+    return round(max(graph, significance_impact_floor(event_type)), 4)
+
+
 class MemoryCaptureEngine:
     def __init__(self, db, user_id: str, agent_namespace: str = "user"):
         self.db = db
@@ -310,7 +359,13 @@ class MemoryCaptureEngine:
                 source_event_id=causal_context["source_event_id"],
                 root_event_id=causal_context["root_event_id"],
                 causal_depth=causal_context["causal_depth"],
-                impact_score=causal_context["impact_score"],
+                # MEM-IMPACT-IGNORES-SIGNIFICANCE-1: floor the graph-derived impact with the
+                # declared significance, so a domain that says a memory matters can actually
+                # cause it to be recalled. Previously this was graph-only, and 0.0 whenever
+                # there was no source event — which is every direct queue_memory_capture call.
+                impact_score=blend_impact_with_significance(
+                    causal_context["impact_score"], event_type
+                ),
                 memory_type=causal_context["memory_type"],
             )
 
