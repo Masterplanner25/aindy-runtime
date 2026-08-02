@@ -539,16 +539,32 @@ Three shapes, and this is a runtime call:
 and the layer owning egress pays the cost once — argues for the runtime owning the channel.
 Option 2 satisfies the letter of (a) while reintroducing the dependency they chose (a) to avoid.
 
-### Open sub-item — password policy on `register_user`
+### ✅ Sub-item CLOSED 2026-08-01 — password policy applied to `register_user`
 
-The app team **wants it**, noting their deployment has no production user base so the migration
-cost is zero for them.
+`register_user` now rejects passwords under `MIN_PASSWORD_LENGTH` (8) with 400. Both paths that
+set a password share the one constant, and a test asserts `register_user` references it rather
+than a literal, so they cannot silently diverge into a strong path and a weak one.
 
-**That reasoning does not generalise, and the difference matters.** `aindy-runtime` is a published
-PyPI package (v1.11.0); a min-length on `register_user` would apply to **every** consumer, not
-only the apps-monolith. Their zero-cost claim is true for their deployment and unknown for
-others. So: still a deliberate call — flag-gated (default off) or held for a major — rather than
-"free because our repo is empty".
+**Decision record.** The app team asked for it, arguing zero migration cost because their
+deployment has no production users. That argument does not generalise — this is a published PyPI
+package, so the change reaches every consumer — and the objection was raised. **Owner overruled
+it deliberately:** a security floor deferred indefinitely is not a floor, and downstream callers
+adjusting is an accepted cost. Shipped unflagged on that basis.
+
+**Blast radius, narrower than "breaking" suggests.** No stored password is invalidated and login
+is untouched; only *new* registrations under the length are rejected. The realistic casualty is a
+seeding/fixture/smoke script that drives `POST /auth/register` programmatically.
+
+**Not configurable, by design** — a floor an operator can switch off is not a floor.
+
+**Ordering note:** the length check runs *before* the duplicate-email lookup. It needs no DB
+round-trip, and it means a short-password request against a taken email returns 400 rather than
+409, so an invalid-password caller is not told whether the email exists.
+
+**Adjacent finding, NOT addressed:** `POST /auth/register` still returns **409 "Email already
+registered"** for a valid-password duplicate — an account-enumeration oracle on the registration
+path, the same class of issue both sides agreed `/forgot` must avoid by always returning 200.
+Fixing it changes a long-standing public response contract, so it needs its own decision.
 
 **Trigger to build:** resolve the email-channel ownership question above (1/2/3), then build.
 The auth half is small and fully specified now; delivery is the whole remaining risk. **App-side adoption for item 1 (available now):** an in-app
