@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### Security — plaintext passwords were being written to the execution record ⚠️
+
+`POST /auth/register` and `POST /auth/login` passed `body.model_dump()` as the pipeline's
+`input_payload`, which is **persisted on the ExecutionUnit**. Both request bodies carry the
+plaintext password, so every registration and every login wrote the user's raw password into
+the execution record, where it was also exposed to anything reading trace data.
+
+Both now pass only the non-secret fields. **Pre-existing, not introduced by this release** —
+found while changing the register route for FR-6 Phase C. Operators who retain execution
+records should consider them to contain plaintext credentials for any period before this
+release, and purge or rotate accordingly.
+
+### Changed — `POST /auth/register` returns 202 with no token ⚠️ breaking
+
+FR-6 Phase C. Registration no longer authenticates the caller. It returns a neutral **202**
+and sends a verification link; the access token is issued by the new
+`POST /auth/verify-email` once the address is confirmed.
+
+**This is what closes the account-enumeration oracle.** The previous 409-on-duplicate could
+not be fixed while registration also returned a token, because a duplicate cannot be handed
+one — some difference was unavoidable. Now a new address and an already-registered address
+produce an **identical** 202: the new one gets a verification mail, the existing one gets a
+*"someone tried to register with your address"* notice, and the caller cannot tell which was
+sent. The duplicate path also performs equivalent work, so timing does not leak what the
+response hides — including under a concurrent-registration race, which is caught and folded
+into the same uniform response rather than surfacing as a 409.
+
+**App-side change required:** any client that auto-logs-in from the register response must
+switch to a "check your email" flow. There is no token to read anymore.
+
+### Added — `POST /auth/verify-email`
+
+Consumes an address-verification token and issues the access token. Idempotent — following
+an already-used link succeeds rather than erroring. Verification tokens use their own
+signing domain, distinct from both access and password-reset tokens, so none of the three is
+redeemable as another.
+
+### Added — `users.is_verified` / `users.verified_at` (schema `2026-08-02`, Alembic `0014`)
+
+**Existing accounts are backfilled to verified.** They predate verification and were never
+given a chance to confirm; leaving them unverified would retroactively mark the entire
+current user base unverified and, with login gating enabled, lock all of them out.
+
+### Added — `AINDY_REQUIRE_VERIFIED_LOGIN` (default off)
+
+Refuses login for an unverified address. **Off by default deliberately** — the enumeration
+fix does not depend on it, and enabling it is a lockout risk. The check runs *after* the
+password so it cannot itself become an oracle. New settings: `AINDY_EMAIL_VERIFY_TTL_HOURS`
+(48), `AINDY_EMAIL_VERIFY_URL_TEMPLATE`.
+
 ### Added — password recovery: `POST /auth/password/forgot` + `POST /auth/password/reset`
 
 FR-6 items 2+3. A user who forgets their password now has a recovery path; previously the

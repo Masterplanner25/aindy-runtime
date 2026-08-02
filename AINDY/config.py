@@ -200,6 +200,19 @@ class Settings(BaseSettings):
     # producing a broken link.
     AINDY_PASSWORD_RESET_URL_TEMPLATE: str = ""
 
+    # Address-verification token lifetime (FR-6 Phase C). Hours, not minutes: a person may
+    # not open their mail promptly, and unlike a reset token this one is not a credential
+    # for changing anything — it only confirms the address.
+    AINDY_EMAIL_VERIFY_TTL_HOURS: int = 48
+    AINDY_EMAIL_VERIFY_URL_TEMPLATE: str = ""
+
+    # Refuse login for an unverified address. Default OFF deliberately: turning it on is a
+    # lockout risk for any deployment whose users registered before verification existed,
+    # and the enumeration fix does NOT depend on it — register returns no token either way,
+    # so a duplicate registration reveals nothing regardless. Enable once your users are
+    # verified.
+    AINDY_REQUIRE_VERIFIED_LOGIN: bool = False
+
     STRIPE_SECRET_KEY: str | None = None
     STRIPE_WEBHOOK_SECRET: str | None = None
 
