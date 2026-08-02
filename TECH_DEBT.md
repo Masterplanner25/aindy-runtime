@@ -1516,6 +1516,37 @@ Implemented:
   High: 14 days, Medium: next minor, Low: next major), exemption process, and
   accepted-findings register.
 
+### Scoping note — what actually consumes `cryptography` (added 2026-08-02)
+
+Recorded so the next `cryptography` major is a ten-minute question rather than an
+open-ended worry. Established while verifying 48→49 (#302), which was held deliberately
+because green CI is the weakest form of evidence for a crypto major under an auth stack.
+
+**There is exactly one direct consumer:** `AINDY/platform_layer/extension_signing.py` —
+Ed25519 signed plugin bundles (AGENT-HARDEN-10). That is the whole surface.
+
+Two things that look like consumers and are not:
+
+- **JWT does not touch it.** `auth_service.ALGORITHM = "HS256"` — HMAC via `hashlib`.
+  python-jose's HS256 path never reaches `cryptography`. So "auth-adjacent major"
+  overstates the risk: the exposure is plugin-bundle signing, not login.
+- **passlib/bcrypt is a separate package** (`bcrypt==4.0.1`), not a `cryptography`
+  consumer.
+
+**Method that settled it** (reusable): an isolated venv at the candidate version with
+`python-jose` / `passlib` / `bcrypt`, exercising the Ed25519 path **call-for-call as
+`extension_signing.py` uses it** — including the raw-bytes serialization round-trip, which
+is the part a major release could plausibly move. Then the **negative** paths: tampered
+digest rejected, untrusted key rejected, wrong JWT secret rejected. A green round-trip alone
+proves nothing — a `verify` that silently accepts anything would pass it.
+
+Note also that a bump touching `AINDY/requirements.txt` is installed by `Runtime Contracts`,
+so the full unit suite already runs against the candidate version. The targeted checks exist
+to cover the negative paths that suite does not assert.
+
+**If `extension_signing.py` gains a second `cryptography` import, or JWT moves off HS256 to
+an asymmetric algorithm, this scoping is stale and must be re-derived.**
+
 ---
 
 ## PACK-DEBT-3 — No mypy Baseline
