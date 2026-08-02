@@ -6,6 +6,8 @@ Provides:
 - API key validation (service-to-service auth)
 - Password hashing utilities
 """
+import hashlib
+import hmac
 import os
 import signal
 import threading
@@ -131,9 +133,14 @@ def rotate_signing_key(new_key: str) -> bool:
 
 # ── Password utilities ──────────────────────────────────────────────────────
 
-# Enforced on password *change* (`change_user_password`) only. `register_user` has
-# never applied a policy; adding one there would reject existing callers, so that
-# stays a separate decision.
+# The floor for every path that sets a password: `register_user` and
+# `change_user_password`. Deliberately NOT configurable — a security floor an operator
+# can switch off is not a floor. Raising it is a code change.
+#
+# Applied to registration 2026-08-01 (previously change-only). This rejects *new*
+# registrations under the length; it does not invalidate any stored password, and login
+# is unaffected. The blast radius is a downstream registration form that permitted
+# shorter passwords, which now gets a 400.
 MIN_PASSWORD_LENGTH = 8
 
 
@@ -147,6 +154,19 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # ── JWT utilities ───────────────────────────────────────────────────────────
 
+# Every token this service mints declares what it is for, and every token it accepts
+# is checked against that. Before this existed, `decode_access_token` accepted ANY
+# HS256 token verifying against a KeyRing secret and examined nothing else — so any
+# other token type signed with the same key (a password-reset token carrying `sub`
+# and `tv`, say) was silently a valid bearer access token for that user.
+#
+# FR-6 keeps the primary control at a lower level — non-access tokens are signed with
+# a domain-separated derived key, so they cannot verify here at all. This claim is
+# defence in depth: it makes the "wrong token type" failure explicit rather than
+# relying on every future token type remembering to derive its own key.
+ACCESS_TOKEN_PURPOSE = "access"
+
+
 def create_access_token(
     data: dict,
     expires_delta: Optional[timedelta] = None,
@@ -154,11 +174,198 @@ def create_access_token(
 ) -> str:
     to_encode = data.copy()
     to_encode["tv"] = token_version
+    to_encode["purpose"] = ACCESS_TOKEN_PURPOSE
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, _get_signing_key(), algorithm=ALGORITHM)
+
+
+# ── Email-verification tokens (FR-6 Phase C) ─────────────────────────
+
+#: Separate domain from the reset token, not just a different purpose claim. Reusing the
+#: reset domain would make a verification link redeemable as a password reset and vice
+#: versa — two flows with different authority, one credential.
+EMAIL_VERIFY_DOMAIN = b"aindy-email-verify-v1"
+EMAIL_VERIFY_PURPOSE = "email_verify"
+
+
+def _verify_signing_key() -> str:
+    return _derive_domain_key(signing_key(), EMAIL_VERIFY_DOMAIN)
+
+
+def _verify_verification_keys() -> list[str]:
+    return [_derive_domain_key(k, EMAIL_VERIFY_DOMAIN) for k in verification_keys()]
+
+
+def create_email_verification_token(user, *, ttl_hours: int | None = None) -> str:
+    """Mint an address-verification token.
+
+    Deliberately does NOT pin ``token_version``: unlike a reset token, this one must
+    survive ordinary account activity between registering and clicking the link. Logging in
+    elsewhere, or an admin invalidating sessions, should not silently void a verification
+    email. Single-use comes from ``is_verified`` instead — a consumed token finds the
+    account already verified.
+    """
+    ttl = int(
+        ttl_hours
+        if ttl_hours is not None
+        else getattr(settings, "AINDY_EMAIL_VERIFY_TTL_HOURS", 48)
+    )
+    payload = {
+        "sub": str(user.id),
+        "purpose": EMAIL_VERIFY_PURPOSE,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=ttl),
+    }
+    return jwt.encode(payload, _verify_signing_key(), algorithm=ALGORITHM)
+
+
+def verify_email_token(token: str) -> dict:
+    """Return the claims of a valid verification token, or raise a generic 400."""
+    generic = HTTPException(status_code=400, detail="Invalid or expired verification token")
+    for key in _verify_verification_keys():
+        try:
+            payload = jwt.decode(token, key, algorithms=[ALGORITHM])
+        except JWTError:
+            continue
+        if payload.get("purpose") != EMAIL_VERIFY_PURPOSE:
+            raise generic
+        return payload
+    raise generic
+
+
+def confirm_email_verification(*, token: str, db: Session):
+    """Consume a verification token and mark the address confirmed. Returns the user.
+
+    Idempotent on an already-verified account: re-following a link the user already used
+    succeeds rather than erroring, because the user-visible outcome is identical and an
+    error would only be confusing.
+    """
+    from AINDY.db.models.user import User
+
+    claims = verify_email_token(token)
+    user_uuid = parse_user_id(claims.get("sub"))
+    user = db.query(User).filter(User.id == user_uuid).first() if user_uuid else None
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+
+    if not user.is_verified:
+        user.is_verified = True
+        user.verified_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(user)
+    return user
+
+
+# ── Password-reset tokens (FR-6 Phase B) ────────────────────────────────────
+
+#: Domain string mixed into the signing key for password-reset tokens.
+#:
+#: This is the PRIMARY control against token confusion, not the ``purpose`` claim.
+#: ``decode_access_token`` verifies against the raw KeyRing secret, so a reset token
+#: signed with that secret would be a structurally valid access token — it carries
+#: ``sub`` and ``tv``, which is everything ``_resolve_authenticated_jwt_user`` needs.
+#: Deriving a separate key means a reset token cannot verify there at all, regardless of
+#: what any future code does or forgets to check.
+#:
+#: Versioned so the derivation can be changed without silently accepting old tokens.
+PASSWORD_RESET_DOMAIN = b"aindy-password-reset-v1"
+PASSWORD_RESET_PURPOSE = "password_reset"
+
+
+def _derive_domain_key(secret: str, domain: bytes) -> str:
+    return hmac.new(secret.encode("utf-8"), domain, hashlib.sha256).hexdigest()
+
+
+def _reset_signing_key() -> str:
+    return _derive_domain_key(signing_key(), PASSWORD_RESET_DOMAIN)
+
+
+def _reset_verification_keys() -> list[str]:
+    """Derived from every key the access path would accept, so reset tokens survive a
+    signing-key rotation exactly as long as access tokens do — no separate grace window
+    to reason about."""
+    return [_derive_domain_key(k, PASSWORD_RESET_DOMAIN) for k in verification_keys()]
+
+
+def create_password_reset_token(user, *, ttl_minutes: int | None = None) -> str:
+    """Mint a single-use, time-boxed password-reset token.
+
+    Single-use is structural rather than bookkept: the token pins ``tv`` to the user's
+    current ``token_version``, and consuming it bumps that version. A replay then fails the
+    version comparison. No table, no revocation list, no cleanup job.
+    """
+    ttl = int(
+        ttl_minutes
+        if ttl_minutes is not None
+        else getattr(settings, "AINDY_PASSWORD_RESET_TTL_MINUTES", 30)
+    )
+    payload = {
+        "sub": str(user.id),
+        "tv": int(getattr(user, "token_version", 0)),
+        "purpose": PASSWORD_RESET_PURPOSE,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=ttl),
+    }
+    return jwt.encode(payload, _reset_signing_key(), algorithm=ALGORITHM)
+
+
+def verify_password_reset_token(token: str) -> dict:
+    """Return the claims of a valid reset token, or raise 400.
+
+    Every rejection — bad signature, wrong purpose, expired, already used — returns the
+    same message. A caller holding a token should not learn *why* it failed, since
+    "expired" versus "already used" versus "not a reset token" all disclose account state.
+    """
+    generic = HTTPException(status_code=400, detail="Invalid or expired reset token")
+    for key in _reset_verification_keys():
+        try:
+            payload = jwt.decode(token, key, algorithms=[ALGORITHM])
+        except JWTError:
+            continue
+        if payload.get("purpose") != PASSWORD_RESET_PURPOSE:
+            raise generic
+        return payload
+    raise generic
+
+
+def reset_password_with_token(*, token: str, new_password: str, db: Session):
+    """Consume a reset token and set the new password. Returns the user.
+
+    Applies the same floor as every other password-setting path, and bumps
+    ``token_version`` — which both invalidates every existing session and burns this token.
+    """
+    from AINDY.db.models.user import User
+
+    claims = verify_password_reset_token(token)
+
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
+
+    user_uuid = parse_user_id(claims.get("sub"))
+    user = db.query(User).filter(User.id == user_uuid).first() if user_uuid else None
+    if not user:
+        # Same generic error: a token naming a deleted user must not be distinguishable
+        # from a forged one.
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+
+    if int(claims.get("tv", -1)) != int(getattr(user, "token_version", 0)):
+        # The version moved since the token was minted: it has already been used, or the
+        # user logged out / changed their password / was force-invalidated meanwhile.
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    user.hashed_password = hash_password(new_password)
+    bump_token_version(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def _normalize_username_candidate(value: str | None) -> str:
@@ -180,13 +387,31 @@ def _resolve_username(*, email: str, username: str | None, db: Session) -> str:
 
 
 def decode_access_token(token: str) -> dict:
+    """Decode and validate an **access** token.
+
+    Rejects a structurally valid, correctly-signed token that was minted for some other
+    purpose. Without this the only question asked was "does the signature verify?", which
+    made every token type sharing the signing key interchangeable with a session.
+
+    Note the deliberate response shape: a wrong-purpose token gets the *same* generic 401
+    as a bad signature. Telling a caller "this is a valid password-reset token, just not
+    usable here" would confirm both that the token is genuine and which account it belongs
+    to.
+    """
     last_exc = None
     for key in _key_ring.verify_keys():
         try:
             payload = jwt.decode(token, key, algorithms=[ALGORITHM])
-            return payload
         except JWTError as exc:
             last_exc = exc
+            continue
+        if payload.get("purpose") != ACCESS_TOKEN_PURPOSE:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return payload
     raise HTTPException(
         status_code=401,
         detail="Invalid or expired token",
@@ -422,8 +647,23 @@ def get_optional_user(
 # ── DB-backed user operations ────────────────────────────────────────────────
 
 def register_user(email: str, password: str, username: str | None, db: Session):
-    """Create a new user in the database. Raises 409 if email already exists."""
+    """Create a new user in the database.
+
+    Raises 400 if the password is under ``MIN_PASSWORD_LENGTH``, 409 if the email is
+    already registered.
+
+    The length check runs **before** the email lookup: it needs no database round-trip,
+    and rejecting on the cheaper check first avoids doing a query for a request that
+    cannot succeed either way.
+    """
     from AINDY.db.models.user import User
+
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
+
     existing = db.query(User).filter(User.email == email).first()
     if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -451,6 +691,15 @@ def authenticate_user(email: str, password: str, db: Session):
         )
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is disabled")
+    if getattr(settings, "AINDY_REQUIRE_VERIFIED_LOGIN", False) and not getattr(
+        user, "is_verified", True
+    ):
+        # Opt-in (FR-6 Phase C). Checked AFTER the password so it cannot be used to
+        # discover which addresses exist or are verified without valid credentials.
+        raise HTTPException(
+            status_code=403,
+            detail="Email address not verified. Check your inbox for the verification link.",
+        )
     return user
 
 

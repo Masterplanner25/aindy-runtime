@@ -169,8 +169,8 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
         },
         "apps_repo_contract": {
             "declaration_format": "pep440",
-            "recommended_runtime_requirement": ">=1.0,<2.0",
-            "compatible_runtime_major": "1",
+            "recommended_runtime_requirement": ">=2.0,<3.0",
+            "compatible_runtime_major": "2",
             "compatible_api_major": "1",
             "policy": (
                 "The apps repo must declare a normal Python dependency range on "

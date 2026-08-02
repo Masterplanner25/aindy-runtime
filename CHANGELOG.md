@@ -2,6 +2,179 @@
 
 ## Unreleased
 
+## 2.0.0 — 2026-08-02
+
+**Major, and the breaking changes are concentrated in auth.** Every one is a deliberate
+security tightening; none is a rename or a refactor. Read the upgrade notes below before
+deploying.
+
+### Upgrade notes — what breaks
+
+| Change | Who it affects |
+|---|---|
+| `POST /auth/register` returns **202 with no token** | Any client that auto-logs-in from the register response. It must become a "check your email" flow. |
+| Access tokens require a `purpose` claim | **All existing sessions end at upgrade.** Users log in again. |
+| `POST /auth/register` enforces `MIN_PASSWORD_LENGTH` (8) | Registration flows and seeding/smoke scripts that used shorter passwords. Stored passwords are unaffected; login is unchanged. |
+| `recommended_runtime_requirement` now reports `>=2.0,<3.0` | Consumers pinned `>=1.x,<2.0` will **not** pick this up. Move the pin deliberately. |
+| Schema `2026-08-02`, Alembic `0014` | Run migrations. Existing accounts are backfilled to verified, so nobody is locked out. |
+| `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` default `30000` → `60000` (from 1.11.0) | Only deployments that **pin** it — they keep the old value and therefore the bug. Raise above 45s. |
+
+### Fixed — memory capture: four defects that made recall return the wrong things (FR-7)
+
+Reported from a live 1,799-node corpus where recall returned four copies of one already-fixed
+bug, two feedback counters, and two content-free labels — nothing a strategy could act on. All
+four verified in source before fixing.
+
+- **MEM-IMPACT-IGNORES-SIGNIFICANCE-1** — `get_relevant_memories` (the path feeding the
+  Infinity loop) orders **purely by `impact_score DESC`**, and `impact_score` was purely
+  graph-derived with no significance term, defaulting to `0.0` without a source event. A
+  deliberate `decision` declared `significance: 1.0` scored 0.00 and was never recalled, while
+  any captured failure started at 1.5. Impact is now **floored** by the declared policy
+  significance — a floor rather than a sum, so a well-connected failure still outranks a
+  declared decision but a bare one no longer does. No schema change: `significance` is not a
+  column, so it is folded in at write time.
+- **MEM-POLICY-KEY-1** — `validate_memory_policy` required `significance`/`base_score` while
+  the engine read only `default_significance`, so a policy that *passed validation* had no
+  effect and every declared significance fell back to 0.4. The engine now reads the validator's
+  keys, with the old key kept as a fallback.
+- **MEM-DEDUP-TRACEID-1** — dedup compared raw content, but messages embed the occurrence's
+  trace id, so one recurring failure produced N rows and never deduplicated. Now compared on a
+  normalised form (identifiers stripped, numbers deliberately kept) over a bounded window.
+- **MEM-FORCE-UNGATED-1** — `force=True` skipped the significance gate entirely, so apps could
+  not suppress the auto-captured system events at all. An **explicit** policy
+  `min_significance` is now honoured for forced captures; a missing key still means force wins.
+
+
+### Security — plaintext passwords were being written to the execution record ⚠️
+
+`POST /auth/register` and `POST /auth/login` passed `body.model_dump()` as the pipeline's
+`input_payload`, which is **persisted on the ExecutionUnit**. Both request bodies carry the
+plaintext password, so every registration and every login wrote the user's raw password into
+the execution record, where it was also exposed to anything reading trace data.
+
+Both now pass only the non-secret fields. **Pre-existing, not introduced by this release** —
+found while changing the register route for FR-6 Phase C. Operators who retain execution
+records should consider them to contain plaintext credentials for any period before this
+release, and purge or rotate accordingly.
+
+### Changed — `POST /auth/register` returns 202 with no token ⚠️ breaking
+
+FR-6 Phase C. Registration no longer authenticates the caller. It returns a neutral **202**
+and sends a verification link; the access token is issued by the new
+`POST /auth/verify-email` once the address is confirmed.
+
+**This is what closes the account-enumeration oracle.** The previous 409-on-duplicate could
+not be fixed while registration also returned a token, because a duplicate cannot be handed
+one — some difference was unavoidable. Now a new address and an already-registered address
+produce an **identical** 202: the new one gets a verification mail, the existing one gets a
+*"someone tried to register with your address"* notice, and the caller cannot tell which was
+sent. The duplicate path also performs equivalent work, so timing does not leak what the
+response hides — including under a concurrent-registration race, which is caught and folded
+into the same uniform response rather than surfacing as a 409.
+
+**App-side change required:** any client that auto-logs-in from the register response must
+switch to a "check your email" flow. There is no token to read anymore.
+
+### Added — `POST /auth/verify-email`
+
+Consumes an address-verification token and issues the access token. Idempotent — following
+an already-used link succeeds rather than erroring. Verification tokens use their own
+signing domain, distinct from both access and password-reset tokens, so none of the three is
+redeemable as another.
+
+### Added — `users.is_verified` / `users.verified_at` (schema `2026-08-02`, Alembic `0014`)
+
+**Existing accounts are backfilled to verified.** They predate verification and were never
+given a chance to confirm; leaving them unverified would retroactively mark the entire
+current user base unverified and, with login gating enabled, lock all of them out.
+
+### Added — `AINDY_REQUIRE_VERIFIED_LOGIN` (default off)
+
+Refuses login for an unverified address. **Off by default deliberately** — the enumeration
+fix does not depend on it, and enabling it is a lockout risk. The check runs *after* the
+password so it cannot itself become an oracle. New settings: `AINDY_EMAIL_VERIFY_TTL_HOURS`
+(48), `AINDY_EMAIL_VERIFY_URL_TEMPLATE`.
+
+### Added — password recovery: `POST /auth/password/forgot` + `POST /auth/password/reset`
+
+FR-6 items 2+3. A user who forgets their password now has a recovery path; previously the
+only route back into an account was a direct `UPDATE users SET hashed_password` against
+Postgres.
+
+**Delivery is hybrid.** A registered `email` connector is used when one exists, otherwise
+runtime-owned SMTP (`AINDY_SMTP_*`). Both go through the same `outbound.email` capability.
+
+**`/forgot` always returns 200** for a well-formed request, whether or not the email is
+registered — anything else is an account-enumeration oracle. The miss path performs
+equivalent work so response *timing* does not leak the answer either.
+
+**`/forgot` returns 503 when no email channel is configured.** That discloses a property of
+the deployment, identical for every caller, and reveals nothing about any account — so the
+uniform-response rule does not apply. A startup warning reports the same thing at boot.
+
+**Rate limited 3/min per IP *and* per email.** Per-IP alone lets a distributed caller pound
+one inbox; per-email alone lets one host sweep many addresses. Fails open, so a counter
+outage cannot lock users out of recovery.
+
+**Tokens are stateless and single-use by construction.** A reset token pins the user's
+`token_version`; consuming it bumps that version, so a replay fails the comparison. No
+table, no revocation list, no cleanup job — and any other version movement (logout, password
+change, admin invalidation) burns outstanding tokens too.
+
+**Reset tokens are signed with a domain-separated key** derived from the active signing key,
+so a reset token cannot verify as an access token — it carries `sub` and `tv`, which would
+otherwise make the emailed link a working session. The separation holds both directions and
+survives signing-key rotation. New settings: `AINDY_PASSWORD_RESET_TTL_MINUTES` (30),
+`AINDY_PASSWORD_RESET_URL_TEMPLATE`.
+
+### Changed — access tokens now declare a `purpose`, and it is enforced ⚠️ invalidates existing sessions
+
+`decode_access_token` previously asked exactly one question — does the signature verify
+against a `KeyRing` secret — and examined nothing else. Any other token type signed with the
+same key was therefore silently a **valid bearer access token**. This surfaced while scoping
+FR-6: a password-reset token carrying `sub` and `tv` is everything the auth path needs, so an
+emailed reset link would have *been* a session.
+
+`create_access_token` now stamps `purpose: "access"`, and `decode_access_token` requires it.
+
+**⚠️ Every token issued before this upgrade lacks the claim and will be rejected — all
+existing sessions are invalidated and users must log in again.** Tokens expire after 24h
+anyway; this brings that forward to the moment of upgrade. Nothing else about the token
+format changes.
+
+A wrong-purpose token returns the **same generic 401** as a bad signature, deliberately:
+distinguishing them would confirm both that the token is genuine and which account it
+belongs to.
+
+This is defence in depth, not FR-6's primary control — non-access tokens will be signed with
+a domain-separated derived key and cannot verify here at all. The claim makes "wrong token
+type" an explicit failure rather than something every future token type must remember to
+prevent on its own.
+
+### Changed — `POST /auth/register` now enforces a minimum password length ⚠️
+
+`register_user` rejects passwords under `MIN_PASSWORD_LENGTH` (8) with **400**. Previously the
+floor guarded `POST /auth/password/change` only, which meant that of the paths able to set a
+password, the one an *unauthenticated* caller reaches was the unguarded one. A floor applied to
+one path is not a floor.
+
+**This is a deliberate tightening on a published package, and it can break a caller.** What it
+does **not** do:
+
+- it does **not** invalidate any stored password — existing users are unaffected;
+- it does **not** change `POST /auth/login` in any way.
+
+The only affected caller is a registration flow that previously permitted passwords shorter
+than 8 characters; those requests now return 400 instead of 201. If you drive registration
+programmatically (seeding, fixtures, smoke tests), check the passwords those use.
+
+The check runs before the duplicate-email lookup, so a request that is both short-password and
+duplicate-email returns 400 rather than 409 — which also avoids confirming an email is
+registered to a caller who supplied an invalid password.
+
+`MIN_PASSWORD_LENGTH` is deliberately not configurable: a security floor an operator can switch
+off is not a floor.
+
 ## 1.11.0 — 2026-08-01
 
 Minor, not patch: `POST /auth/password/change` is a new public endpoint.

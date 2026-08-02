@@ -175,6 +175,44 @@ class Settings(BaseSettings):
     # Flow: register via POST /auth/register first, then set this var and restart.
     # The same effect is available post-deploy via: aindy-runtime auth promote-admin <email>
     AINDY_BOOTSTRAP_ADMIN_EMAIL: str | None = None
+
+    # --- Outbound email (FR-6 Phase A) ---
+    # Fallback route for runtime-sent mail (password reset, address verification) when no
+    # `email` connector is registered. A registered connector takes precedence; these are
+    # only consulted in its absence. Both HOST and FROM are required for the route to be
+    # considered configured — a host with no sender address cannot send.
+    # AINDY_SMTP_PASSWORD is consulted only if the secret broker has no `SMTP_PASSWORD`.
+    AINDY_SMTP_HOST: str = ""
+    AINDY_SMTP_PORT: int = 587
+    AINDY_SMTP_USER: str = ""
+    AINDY_SMTP_PASSWORD: str = ""
+    AINDY_SMTP_FROM: str = ""
+    AINDY_SMTP_STARTTLS: bool = True
+
+    # Password-reset token lifetime (FR-6 Phase B). Long enough to survive a slow mail
+    # hop, short enough that a leaked inbox is not an indefinite backdoor. The token is
+    # single-use regardless — consuming it bumps token_version, so a replay fails.
+    AINDY_PASSWORD_RESET_TTL_MINUTES: int = 30
+
+    # Where the emailed reset link points. `{token}` is substituted. Left empty, the mail
+    # carries the bare token instead, which is usable against the API directly — correct
+    # for a headless deployment, and it means a missing setting degrades rather than
+    # producing a broken link.
+    AINDY_PASSWORD_RESET_URL_TEMPLATE: str = ""
+
+    # Address-verification token lifetime (FR-6 Phase C). Hours, not minutes: a person may
+    # not open their mail promptly, and unlike a reset token this one is not a credential
+    # for changing anything — it only confirms the address.
+    AINDY_EMAIL_VERIFY_TTL_HOURS: int = 48
+    AINDY_EMAIL_VERIFY_URL_TEMPLATE: str = ""
+
+    # Refuse login for an unverified address. Default OFF deliberately: turning it on is a
+    # lockout risk for any deployment whose users registered before verification existed,
+    # and the enumeration fix does NOT depend on it — register returns no token either way,
+    # so a duplicate registration reveals nothing regardless. Enable once your users are
+    # verified.
+    AINDY_REQUIRE_VERIFIED_LOGIN: bool = False
+
     STRIPE_SECRET_KEY: str | None = None
     STRIPE_WEBHOOK_SECRET: str | None = None
 

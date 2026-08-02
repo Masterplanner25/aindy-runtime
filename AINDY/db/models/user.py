@@ -22,5 +22,12 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
     token_version = Column(Integer, default=0, nullable=False, server_default="0")
+    # FR-6 Phase C. New registrations start unverified (Python-side default False) and are
+    # verified by following an emailed link. Note the deliberate asymmetry with the
+    # migration, which backfills EXISTING rows to true: those accounts predate verification
+    # and were never given a chance to confirm, so grandfathering them is the only option
+    # that does not retroactively lock out every current user.
+    is_verified = Column(Boolean, default=False, nullable=False, server_default="false")
+    verified_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     api_keys = relationship("PlatformAPIKey", back_populates="user", cascade="all, delete-orphan")

@@ -14,6 +14,7 @@ No manual memory calls needed in v5+.
 from __future__ import annotations
 
 import logging
+import re
 import os
 import uuid
 from typing import Optional
@@ -62,6 +63,16 @@ class _EventSignificanceView(dict):
 
 EVENT_SIGNIFICANCE: dict[str, float] = _EventSignificanceView()
 
+# MEM-FORCE-UNGATED-1 note. EXECUTION_STARTED stays in this set deliberately.
+#
+# The obvious fix for the 1,076 identical "execution.started from async" nodes was to drop
+# it here — but RT-MEMTXN-LEAK-1 deliberately PRESERVED capture of this event for ordinary
+# jobs so INFINITY-RUNTIME-1 loop-closure signal survives (only runtime-internal
+# maintenance tasks were cut). Removing it would silently undo that.
+#
+# So the suppression lever moved instead: an app policy that explicitly declares
+# `min_significance` is now honoured even for force=True captures. See
+# `_forced_capture_suppressed`.
 AUTO_MEMORY_EVENT_TYPES = {
     SystemEventTypes.EXECUTION_COMPLETED,
     SystemEventTypes.EXECUTION_STARTED,
@@ -84,6 +95,123 @@ def calculate_impact_score(db, event_id: str) -> float:
     event_type = getattr(event, "type", "") if event else ""
     failure_bonus = 1.5 if "failed" in str(event_type).lower() or event_type == "capability.denied" else 0.5
     return round(len(downstream) + (trace_depth * 0.75) + failure_bonus, 4)
+
+
+def _policy_base_significance(capture_rule, default: float = 0.4) -> float:
+    """Base significance from a memory policy, honouring every accepted key.
+
+    Order matters: `significance` and `base_score` are what `validate_memory_policy`
+    demands, so they win. `default_significance` is read last for policies written against
+    the engine's previous behaviour.
+    """
+    if not isinstance(capture_rule, dict):
+        return default
+    for key in ("significance", "base_score", "default_significance"):
+        value = capture_rule.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "[memory] policy key %r is not numeric (%r) — using %.2f", key, value, default
+            )
+            return default
+    return default
+
+
+_DEDUP_UUID_RE = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
+_DEDUP_LONGHEX_RE = re.compile(r"\b[0-9a-fA-F]{16,}\b")
+_DEDUP_WS_RE = re.compile(r"\s+")
+
+
+def normalize_for_dedup(content: str) -> str:
+    """Content with volatile identifiers removed, for duplicate comparison only.
+
+    MEM-DEDUP-TRACEID-1. Dedup compared raw content, but captured messages embed the
+    trace/run id of the occurrence — so N occurrences of ONE recurring failure produced N
+    distinct contents and never deduplicated. On a real corpus that put four copies of a
+    single (already-fixed) bug into a recall budget of eight.
+
+    Only identifiers are stripped: UUIDs and long hex runs. Numbers are deliberately left
+    alone — "latency 5417ms" and "latency 12ms" are genuinely different observations, and
+    collapsing them would erase signal rather than noise. The normalised form is used for
+    comparison only; the stored content keeps its identifiers.
+    """
+    if not content:
+        return ""
+    normalized = _DEDUP_UUID_RE.sub("<id>", str(content))
+    normalized = _DEDUP_LONGHEX_RE.sub("<id>", normalized)
+    return _DEDUP_WS_RE.sub(" ", normalized).strip().lower()
+
+
+def _forced_capture_suppressed(policy, score: float) -> bool:
+    """Whether an EXPLICIT policy threshold should suppress a forced capture.
+
+    Only an explicitly declared `min_significance` counts. A missing key is not "0.0, so
+    keep everything" — it means the deployment never expressed an opinion, and force should
+    continue to win there exactly as it did before.
+    """
+    if not isinstance(policy, dict):
+        return False
+    declared = policy.get("min_significance")
+    if declared is None:
+        return False
+    try:
+        return float(score) < float(declared)
+    except (TypeError, ValueError):
+        return False
+
+
+#: How much a policy-declared significance is worth as an impact floor.
+#:
+#: MEM-IMPACT-IGNORES-SIGNIFICANCE-1. `calculate_impact_score` is purely graph-derived —
+#: `len(downstream) + trace_depth*0.75 + failure_bonus` — and `get_relevant_memories` orders
+#: **purely by impact_score DESC**. So the one quality signal an app controls, the
+#: policy-declared significance, had no path into what comes back. A deliberate
+#: `decision` node declared significance 1.0 stored impact 0.0 and was never recalled,
+#: while any runtime-captured failure started at 1.5.
+#:
+#: 2.5 places a fully-significant domain memory above the 1.5 failure floor while leaving a
+#: genuinely well-connected failure (high downstream count) ranked above it. Tunable because
+#: the right balance is deployment-specific.
+SIGNIFICANCE_IMPACT_WEIGHT = 2.5
+
+
+def significance_impact_floor(event_type: str) -> float:
+    """Impact floor implied by an event type's DECLARED memory policy.
+
+    Deliberately reads the *policy* significance rather than the computed per-capture score.
+    The computed score folds in `context["significance"]`, and
+    `capture_system_event_as_memory` passes 1.0 for every forced system capture — so scoring
+    off it would lift exactly the noise this exists to rank below, and give apps no lever at
+    all. The policy is the thing an app declares and therefore the thing it should control.
+    """
+    try:
+        policy = get_memory_policy(event_type) or {}
+    except Exception:
+        return 0.0
+    if not policy:
+        # No declared policy means no declared importance. Graph-derived impact stands
+        # alone, exactly as before.
+        return 0.0
+    return max(0.0, _policy_base_significance(policy, default=0.0) * SIGNIFICANCE_IMPACT_WEIGHT)
+
+
+def blend_impact_with_significance(graph_impact: float, event_type: str) -> float:
+    """Graph-derived impact, floored by declared significance.
+
+    A floor rather than a sum: adding would inflate already-high system failures (which
+    carry both a large downstream count and a failure bonus) by the same amount it lifts a
+    domain decision, preserving the ordering this is meant to fix.
+    """
+    try:
+        graph = max(0.0, float(graph_impact or 0.0))
+    except (TypeError, ValueError):
+        graph = 0.0
+    return round(max(graph, significance_impact_floor(event_type)), 4)
 
 
 class MemoryCaptureEngine:
@@ -159,6 +287,23 @@ class MemoryCaptureEngine:
 
             policy = get_memory_policy(event_type) or {}
             min_significance = float(policy.get("min_significance", 0.0)) if isinstance(policy, dict) else 0.0
+            # MEM-FORCE-UNGATED-1. `force=True` skipped this gate entirely, so the eight
+            # auto-captured system events could neither be scored out nor suppressed by an
+            # app policy — the app team could not turn them off from their side at all.
+            #
+            # An app that has gone to the trouble of declaring `min_significance` for an
+            # event type has stated an intent; honour it even when the capture is forced.
+            # Absent an explicit declaration, force still wins, so nothing changes for
+            # deployments that never wrote a policy.
+            if force and _forced_capture_suppressed(policy, score):
+                logger.debug(
+                    "Event %s forced but suppressed by an explicit policy min_significance "
+                    "(%.2f > %.2f)",
+                    event_type,
+                    min_significance,
+                    score,
+                )
+                return None
             if not force and score < min_significance:
                 logger.debug(
                     "Event %s below significance threshold (%.2f) — not stored",
@@ -214,7 +359,13 @@ class MemoryCaptureEngine:
                 source_event_id=causal_context["source_event_id"],
                 root_event_id=causal_context["root_event_id"],
                 causal_depth=causal_context["causal_depth"],
-                impact_score=causal_context["impact_score"],
+                # MEM-IMPACT-IGNORES-SIGNIFICANCE-1: floor the graph-derived impact with the
+                # declared significance, so a domain that says a memory matters can actually
+                # cause it to be recalled. Previously this was graph-only, and 0.0 whenever
+                # there was no source event — which is every direct queue_memory_capture call.
+                impact_score=blend_impact_with_significance(
+                    causal_context["impact_score"], event_type
+                ),
                 memory_type=causal_context["memory_type"],
             )
 
@@ -404,7 +555,13 @@ class MemoryCaptureEngine:
         capture_rule = get_memory_policy(event_type) or {}
         base = get_memory_significance_rule(event_type)
         if base is None:
-            base = float(capture_rule.get("default_significance", 0.4)) if isinstance(capture_rule, dict) else 0.4
+            # MEM-POLICY-KEY-1. `validate_memory_policy` REQUIRES `significance` or
+            # `base_score`, but this read only ever looked at `default_significance` — so a
+            # policy that satisfied the validator had no effect on the score and every
+            # declared significance silently fell back to 0.4. Read the validator's keys
+            # first; keep `default_significance` as a trailing fallback so any policy
+            # written against the old (undocumented) behaviour keeps working.
+            base = _policy_base_significance(capture_rule)
 
         # Modifier 1: content richness
         content_score = min(1.0, len(content) / 500)
@@ -430,6 +587,42 @@ class MemoryCaptureEngine:
         )
 
         return min(1.0, final)
+
+    _DEDUP_WINDOW = 50
+
+    def _normalized_duplicate(self, content: str):
+        """Look for a recent node whose *normalised* content matches. Bounded by design."""
+        normalized = normalize_for_dedup(content)
+        if not normalized:
+            return None
+        try:
+            if self.user_id is None:
+                rows = self.db.execute(
+                    text(
+                        "SELECT id, content FROM memory_nodes "
+                        "WHERE user_id IS NULL ORDER BY created_at DESC LIMIT :lim"
+                    ),
+                    {"lim": self._DEDUP_WINDOW},
+                ).fetchall()
+            else:
+                rows = self.db.execute(
+                    text(
+                        "SELECT id, content FROM memory_nodes "
+                        "WHERE user_id = :uid ORDER BY created_at DESC LIMIT :lim"
+                    ),
+                    {"uid": self.user_id, "lim": self._DEDUP_WINDOW},
+                ).fetchall()
+        except Exception as exc:
+            logger.debug("[memory] normalized dedup lookup failed: %s", exc)
+            return None
+
+        for row in rows or []:
+            try:
+                if normalize_for_dedup(row[1]) == normalized:
+                    return row
+            except Exception:
+                continue
+        return None
 
     def _is_duplicate(self, content: str) -> bool:
         """
@@ -464,6 +657,18 @@ class MemoryCaptureEngine:
                     ),
                     {"uid": self.user_id, "content": content},
                 ).fetchone()
+
+            # MEM-DEDUP-TRACEID-1. Exact match above catches identical captures cheaply and
+            # index-friendly. It does NOT catch the case that actually mattered: a recurring
+            # failure whose message embeds the trace id of the occurrence, which produced N
+            # distinct contents for one underlying event and consumed half the recall budget.
+            #
+            # Normalising in SQL would need `regexp_replace`, which is PostgreSQL-only and
+            # would break the SQLite unit tier — the same dialect trap RT-MEMTXN-LEAK-1 hit
+            # with `IS NOT DISTINCT FROM`. So compare in Python over a BOUNDED recent
+            # window instead: dialect-agnostic, and capped so this can never become a scan.
+            if existing is None:
+                existing = self._normalized_duplicate(content)
 
             if existing is None:
                 return False

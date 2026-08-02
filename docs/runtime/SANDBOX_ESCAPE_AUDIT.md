@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-08-01"
+last_verified: "2026-08-02"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -660,6 +660,54 @@ assuming it.
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v1.11.0` release commit.
+
+---
+
+### Entry 012 — 2026-08-02
+
+`sandbox-escape-linux.yml` release gate, fired automatically on the `v2.0.0` tag
+**Host OS:** Ubuntu (GitHub-hosted `ubuntu-latest`), native Linux kernel — Docker uses a native
+Linux-containers backend, not a Docker Desktop VM
+**Container image:** `python:3.11-alpine` (same image as Entries 002–011; exact digest recorded in
+the run artifact)
+**Test command:** `pytest -m sandbox_escape` (via workflow; `SANDBOX_ESCAPE_IMAGE=python:3.11-alpine`)
+**Commit:** `bd8f352` (release tag `v2.0.0`)
+**Operator:** CI (release gate, run 30769596562)
+
+**Results by category:**
+
+| Category | Tests | Pass | Fail | Skip | Notes |
+|---|---|---|---|---|---|
+| Filesystem escape | 3 | 3 | 0 | 0 | Read-only rootfs, read-only bind mount, scoped tmpfs all verified |
+| Network escape | 3 | 3 | 0 | 0 | TCP, UDP, kernel interface evidence all blocked (`--network none`) |
+| Process / pids | 2 | 2 | 0 | 0 | pids limit hit; cgroup `pids.max=10` — ran natively, **0 skips** |
+| Privilege escalation | 4 | 4 | 0 | 0 | CAP_NET_RAW, CAP_CHOWN removed; NoNewPrivs=1 in /proc; combined-controls check |
+| Host env leak | 2 | 2 | 0 | 0 | No production secrets present; PYTHONIOENCODING transmitted |
+| Path boundary | 3 | 3 | 0 | 0 | Canary not reachable; plugin root accessible; traversal contained |
+
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.32s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run 30769596562) — holds
+exact per-test durations and the image digest.
+
+**Platform notes:**
+Identical 17-vector result on the same native-Linux gate and image as Entries 002–011, for the
+`v2.0.0` release commit published to PyPI as `aindy-runtime==2.0.0`.
+
+**v2.0.0 is the first MAJOR release covered by this log**, so the "no change to the sandbox"
+claim deserves more than the usual sentence. The release is a breaking one, but the breaks are
+confined to auth and memory: registration returns 202 without a token, access tokens require a
+`purpose` claim, `MIN_PASSWORD_LENGTH` applies to registration, plus the FR-6 recovery endpoints,
+the FR-7 memory-capture fixes, and a fix for plaintext passwords reaching `input_payload`.
+
+**None of that touches the sandbox boundary.** No change to `sandbox_runner.py`, the OCI flags,
+the capability set, or the container image. The one addition adjacent to execution is the new
+`Native Crate Build (Rust)` CI job, which compiles the optional memory scorer — it does not run
+inside the sandbox and does not alter how extension code is confined. So this entry records that
+the gate **re-verified** the container-grade posture across a major version boundary, rather than
+the release having changed anything about it.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.0.0` release commit.
 
 ---
 

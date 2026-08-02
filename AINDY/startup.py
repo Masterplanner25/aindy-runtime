@@ -891,6 +891,16 @@ def _init_mongodb() -> None:
         logger.warning("MongoDB init failed â€” social features degraded: %s", exc)
 
 
+def _report_email_channel() -> None:
+    """Log which outbound-email route is live (FR-6 Phase A). Never fatal."""
+    try:
+        from AINDY.platform_layer.email_channel import log_email_channel_status
+
+        log_email_channel_status()
+    except Exception as exc:
+        logger.warning("[startup] Could not determine outbound email channel: %s", exc)
+
+
 def _bootstrap_admin_email() -> None:
     """Grant is_admin to the user matching AINDY_BOOTSTRAP_ADMIN_EMAIL (grant-only, idempotent)."""
     email = settings.AINDY_BOOTSTRAP_ADMIN_EMAIL
@@ -1666,6 +1676,10 @@ async def lifespan(app: FastAPI):
     _bootstrap_admin_email()
     # Phase 5.6: seed system agent definitions (idempotent upsert by namespace).
     _bootstrap_system_agents()
+    # Phase 5.7: report the outbound-email route (FR-6). Warn-only — an operator should
+    # learn at boot that runtime-sent mail is unconfigured, rather than when a locked-out
+    # user's password reset fails closed.
+    _report_email_channel()
     # Phase 6: bootstrap development API key state.
     _bootstrap_dev_api_key()
     # Phase 7: start background services and determine background role.

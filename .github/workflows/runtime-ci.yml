@@ -80,6 +80,56 @@ jobs:
           print(f"validated {len(list(docs_root.glob('*.md')))} runtime docs")
           PY
 
+  native-crate:
+    name: Native Crate Build (Rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # NATIVE-CI-1. The pyo3 memory scorer had NO build anywhere in CI, so cargo
+    # bumps (uuid / serde / cc) reported green having never compiled the crate —
+    # "green" meant "the Python suite still passes", not "the native path builds".
+    # Three dependabot PRs sat blocked on a manual local build because of it.
+    #
+    # Deliberately NOT path-filtered. If this is ever promoted to a required status
+    # check, a `paths:` filter would make it never report on PRs that don't touch the
+    # crate, and those PRs could then never merge — the classic required-check-with-
+    # path-filter trap. Caching keeps the unconditional run cheap instead.
+    #
+    # Rust and a C++ toolchain are preinstalled on ubuntu-latest, so this needs no
+    # third-party toolchain action (and therefore no extra pinned SHA to maintain).
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            AINDY/memory/native/memory_bridge_rs/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('AINDY/memory/native/memory_bridge_rs/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Toolchain versions
+        run: |
+          cargo --version
+          rustc --version
+          c++ --version
+
+      - name: Build the native scorer
+        working-directory: AINDY/memory/native/memory_bridge_rs
+        # --locked fails the build if Cargo.lock would need changing. That is precisely
+        # the check a dependency bump needs: it proves the lockfile committed in the PR
+        # is the one that actually builds, rather than one pip/cargo would silently fix.
+        #
+        # Build only, no `cargo test`: the crate has no #[test]s, and pyo3's
+        # extension-module feature omits libpython, so a test harness would fail to
+        # LINK rather than tell us anything about the bump.
+        #
+        # build.rs also compiles memory_cpp/semantic.cpp through the `cc` crate, so this
+        # covers the C++ half too — and `cc` is one of the packages dependabot bumps.
+        run: cargo build --locked --release
+
   runtime-contracts:
     name: Runtime Contracts
     runs-on: ubuntu-latest
@@ -180,7 +230,7 @@ jobs:
           assert runtime['app_plugins_loaded'] is False
           assert runtime['app_plugin_count'] == 0
           assert compatibility['runtime_package']['name'] == 'aindy-runtime'
-          assert compatibility['apps_repo_contract']['recommended_runtime_requirement'] == '>=1.0,<2.0'
+          assert compatibility['apps_repo_contract']['recommended_runtime_requirement'] == '>=2.0,<3.0'
           print(payload)
           PY
 
