@@ -20,8 +20,10 @@ from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.platform_layer.user_ids import parse_user_id
 from AINDY.schemas.auth_schemas import (
     ChangePasswordRequest,
+    ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     TokenResponse,
 )
 from AINDY.services.auth_service import (
@@ -29,9 +31,11 @@ from AINDY.services.auth_service import (
     bump_token_version,
     change_user_password,
     create_access_token,
+    create_password_reset_token,
     get_current_user,
     register_user,
     require_admin_principal,
+    reset_password_with_token,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -207,6 +211,145 @@ def change_password(
         route_name="auth.password.change",
         handler=handler,
         user_id=str(current_user["sub"]),
+        metadata={"db": db},
+    )
+
+
+def _forgot_rate_limited(email: str, request: Request) -> bool:
+    """Per-IP AND per-email fixed-window limit (3/min each).
+
+    `/forgot` is unauthenticated, so it is the cheapest endpoint to abuse for
+    mail-bombing. Limiting per IP alone lets a distributed caller pound one inbox;
+    limiting per email alone lets one host sweep many addresses. Both are needed.
+
+    Rides `ResourceManager.rate_limit_hit` (Redis fixed-window, in-memory fallback) so the
+    limit holds across instances. It fails open on a backend hiccup, which is the right
+    trade here: a counter outage must not lock legitimate users out of recovery.
+    """
+    try:
+        from AINDY.kernel.resource_manager import get_resource_manager
+
+        rm = get_resource_manager()
+        client = getattr(getattr(request, "client", None), "host", "") or "unknown"
+        _, ip_over = rm.rate_limit_hit(f"auth:forgot:ip:{client}", limit=3, window_secs=60)
+        _, email_over = rm.rate_limit_hit(
+            f"auth:forgot:email:{email.strip().lower()}", limit=3, window_secs=60
+        )
+        return bool(ip_over or email_over)
+    except Exception:
+        return False
+
+
+def _send_reset_email(user, db) -> None:
+    from AINDY.config import settings
+    from AINDY.platform_layer.email_channel import send_email
+
+    token = create_password_reset_token(user)
+    template = getattr(settings, "AINDY_PASSWORD_RESET_URL_TEMPLATE", "") or ""
+    link = template.replace("{token}", token) if template else token
+    send_email(
+        to=user.email,
+        subject="Reset your password",
+        body="\n".join(
+            [
+                "A password reset was requested for your account.",
+                "",
+                link,
+                "",
+                "If you did not request this, you can ignore this message — your "
+                "password has not changed.",
+            ]
+        ),
+        db=db,
+        user_id=str(user.id),
+    )
+
+
+@router.post("/password/forgot", status_code=200)
+@limiter.limit("10/minute")
+def forgot_password(
+    body: ForgotPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Begin password recovery (FR-6 item 2).
+
+    **Always 200 for a well-formed request**, whether or not the email is registered.
+    Anything else is an account-enumeration oracle — the same rule the runtime applies to
+    itself elsewhere.
+
+    **503 when no email channel is configured.** That discloses a property of the
+    *deployment*, identical for every caller, and reveals nothing about any account — so
+    the uniform-response rule does not apply. Failing closed and loudly beats accepting a
+    request the runtime cannot fulfil.
+    """
+    def handler(ctx):
+        from AINDY.db.models.user import User
+        from AINDY.platform_layer.email_channel import email_channel_status
+        from AINDY.services.auth_service import hash_password
+
+        status = email_channel_status()
+        if not status["available"]:
+            raise HTTPException(
+                status_code=503,
+                detail="Password reset is unavailable: no email channel is configured",
+            )
+
+        email = (body.email or "").strip()
+        if _forgot_rate_limited(email, request):
+            raise HTTPException(status_code=429, detail="Too many requests")
+
+        user = db.query(User).filter(User.email == email).first()
+        if user and user.is_active:
+            _send_reset_email(user, db)
+        else:
+            # Timing equalisation. Returning immediately here would leak the answer as
+            # loudly as a status code would: the hit path mints a token and makes a
+            # network call, so the miss path must not be visibly cheaper. A bcrypt hash
+            # is the closest same-order work already available.
+            hash_password("no-such-account-equalisation")
+
+        return {"status": "ok"}
+
+    return execute_with_pipeline_sync(
+        request=request,
+        route_name="auth.password.forgot",
+        handler=handler,
+        metadata={"db": db},
+    )
+
+
+@router.post("/password/reset", status_code=200)
+@limiter.limit("10/minute")
+def reset_password(
+    body: ResetPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Complete password recovery (FR-6 item 3).
+
+    Consuming the token bumps ``token_version``, which invalidates every session **and**
+    burns the token — single-use falls out of the design rather than being bookkept.
+    Unlike `/password/change`, no new token is returned: the caller is not proven to be
+    the session holder, so they log in afresh.
+    """
+    def handler(ctx):
+        user = reset_password_with_token(
+            token=body.token, new_password=body.new_password, db=db
+        )
+        emit_system_event(
+            db=db,
+            event_type="auth.password.reset",
+            user_id=user.id,
+            payload={"email": user.email},
+            required=True,
+        )
+        return {"status": "password_reset"}
+
+    return execute_with_pipeline_sync(
+        request=request,
+        route_name="auth.password.reset",
+        handler=handler,
         metadata={"db": db},
     )
 

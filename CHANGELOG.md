@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Added — password recovery: `POST /auth/password/forgot` + `POST /auth/password/reset`
+
+FR-6 items 2+3. A user who forgets their password now has a recovery path; previously the
+only route back into an account was a direct `UPDATE users SET hashed_password` against
+Postgres.
+
+**Delivery is hybrid.** A registered `email` connector is used when one exists, otherwise
+runtime-owned SMTP (`AINDY_SMTP_*`). Both go through the same `outbound.email` capability.
+
+**`/forgot` always returns 200** for a well-formed request, whether or not the email is
+registered — anything else is an account-enumeration oracle. The miss path performs
+equivalent work so response *timing* does not leak the answer either.
+
+**`/forgot` returns 503 when no email channel is configured.** That discloses a property of
+the deployment, identical for every caller, and reveals nothing about any account — so the
+uniform-response rule does not apply. A startup warning reports the same thing at boot.
+
+**Rate limited 3/min per IP *and* per email.** Per-IP alone lets a distributed caller pound
+one inbox; per-email alone lets one host sweep many addresses. Fails open, so a counter
+outage cannot lock users out of recovery.
+
+**Tokens are stateless and single-use by construction.** A reset token pins the user's
+`token_version`; consuming it bumps that version, so a replay fails the comparison. No
+table, no revocation list, no cleanup job — and any other version movement (logout, password
+change, admin invalidation) burns outstanding tokens too.
+
+**Reset tokens are signed with a domain-separated key** derived from the active signing key,
+so a reset token cannot verify as an access token — it carries `sub` and `tv`, which would
+otherwise make the emailed link a working session. The separation holds both directions and
+survives signing-key rotation. New settings: `AINDY_PASSWORD_RESET_TTL_MINUTES` (30),
+`AINDY_PASSWORD_RESET_URL_TEMPLATE`.
+
 ### Changed — access tokens now declare a `purpose`, and it is enforced ⚠️ invalidates existing sessions
 
 `decode_access_token` previously asked exactly one question — does the signature verify

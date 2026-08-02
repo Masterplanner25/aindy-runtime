@@ -6,6 +6,8 @@ Provides:
 - API key validation (service-to-service auth)
 - Password hashing utilities
 """
+import hashlib
+import hmac
 import os
 import signal
 import threading
@@ -178,6 +180,114 @@ def create_access_token(
     )
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, _get_signing_key(), algorithm=ALGORITHM)
+
+
+# ── Password-reset tokens (FR-6 Phase B) ────────────────────────────────────
+
+#: Domain string mixed into the signing key for password-reset tokens.
+#:
+#: This is the PRIMARY control against token confusion, not the ``purpose`` claim.
+#: ``decode_access_token`` verifies against the raw KeyRing secret, so a reset token
+#: signed with that secret would be a structurally valid access token — it carries
+#: ``sub`` and ``tv``, which is everything ``_resolve_authenticated_jwt_user`` needs.
+#: Deriving a separate key means a reset token cannot verify there at all, regardless of
+#: what any future code does or forgets to check.
+#:
+#: Versioned so the derivation can be changed without silently accepting old tokens.
+PASSWORD_RESET_DOMAIN = b"aindy-password-reset-v1"
+PASSWORD_RESET_PURPOSE = "password_reset"
+
+
+def _derive_domain_key(secret: str, domain: bytes) -> str:
+    return hmac.new(secret.encode("utf-8"), domain, hashlib.sha256).hexdigest()
+
+
+def _reset_signing_key() -> str:
+    return _derive_domain_key(signing_key(), PASSWORD_RESET_DOMAIN)
+
+
+def _reset_verification_keys() -> list[str]:
+    """Derived from every key the access path would accept, so reset tokens survive a
+    signing-key rotation exactly as long as access tokens do — no separate grace window
+    to reason about."""
+    return [_derive_domain_key(k, PASSWORD_RESET_DOMAIN) for k in verification_keys()]
+
+
+def create_password_reset_token(user, *, ttl_minutes: int | None = None) -> str:
+    """Mint a single-use, time-boxed password-reset token.
+
+    Single-use is structural rather than bookkept: the token pins ``tv`` to the user's
+    current ``token_version``, and consuming it bumps that version. A replay then fails the
+    version comparison. No table, no revocation list, no cleanup job.
+    """
+    ttl = int(
+        ttl_minutes
+        if ttl_minutes is not None
+        else getattr(settings, "AINDY_PASSWORD_RESET_TTL_MINUTES", 30)
+    )
+    payload = {
+        "sub": str(user.id),
+        "tv": int(getattr(user, "token_version", 0)),
+        "purpose": PASSWORD_RESET_PURPOSE,
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=ttl),
+    }
+    return jwt.encode(payload, _reset_signing_key(), algorithm=ALGORITHM)
+
+
+def verify_password_reset_token(token: str) -> dict:
+    """Return the claims of a valid reset token, or raise 400.
+
+    Every rejection — bad signature, wrong purpose, expired, already used — returns the
+    same message. A caller holding a token should not learn *why* it failed, since
+    "expired" versus "already used" versus "not a reset token" all disclose account state.
+    """
+    generic = HTTPException(status_code=400, detail="Invalid or expired reset token")
+    for key in _reset_verification_keys():
+        try:
+            payload = jwt.decode(token, key, algorithms=[ALGORITHM])
+        except JWTError:
+            continue
+        if payload.get("purpose") != PASSWORD_RESET_PURPOSE:
+            raise generic
+        return payload
+    raise generic
+
+
+def reset_password_with_token(*, token: str, new_password: str, db: Session):
+    """Consume a reset token and set the new password. Returns the user.
+
+    Applies the same floor as every other password-setting path, and bumps
+    ``token_version`` — which both invalidates every existing session and burns this token.
+    """
+    from AINDY.db.models.user import User
+
+    claims = verify_password_reset_token(token)
+
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
+
+    user_uuid = parse_user_id(claims.get("sub"))
+    user = db.query(User).filter(User.id == user_uuid).first() if user_uuid else None
+    if not user:
+        # Same generic error: a token naming a deleted user must not be distinguishable
+        # from a forged one.
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+
+    if int(claims.get("tv", -1)) != int(getattr(user, "token_version", 0)):
+        # The version moved since the token was minted: it has already been used, or the
+        # user logged out / changed their password / was force-invalidated meanwhile.
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    user.hashed_password = hash_password(new_password)
+    bump_token_version(user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def _normalize_username_candidate(value: str | None) -> str:
