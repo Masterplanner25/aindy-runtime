@@ -230,7 +230,7 @@ jobs:
           assert runtime['app_plugins_loaded'] is False
           assert runtime['app_plugin_count'] == 0
           assert compatibility['runtime_package']['name'] == 'aindy-runtime'
-          assert compatibility['apps_repo_contract']['recommended_runtime_requirement'] == '>=1.0,<2.0'
+          assert compatibility['apps_repo_contract']['recommended_runtime_requirement'] == '>=2.0,<3.0'
           print(payload)
           PY
 

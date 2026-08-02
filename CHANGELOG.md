@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+## 2.0.0 — 2026-08-02
+
+**Major, and the breaking changes are concentrated in auth.** Every one is a deliberate
+security tightening; none is a rename or a refactor. Read the upgrade notes below before
+deploying.
+
+### Upgrade notes — what breaks
+
+| Change | Who it affects |
+|---|---|
+| `POST /auth/register` returns **202 with no token** | Any client that auto-logs-in from the register response. It must become a "check your email" flow. |
+| Access tokens require a `purpose` claim | **All existing sessions end at upgrade.** Users log in again. |
+| `POST /auth/register` enforces `MIN_PASSWORD_LENGTH` (8) | Registration flows and seeding/smoke scripts that used shorter passwords. Stored passwords are unaffected; login is unchanged. |
+| `recommended_runtime_requirement` now reports `>=2.0,<3.0` | Consumers pinned `>=1.x,<2.0` will **not** pick this up. Move the pin deliberately. |
+| Schema `2026-08-02`, Alembic `0014` | Run migrations. Existing accounts are backfilled to verified, so nobody is locked out. |
+| `DB_IDLE_IN_TRANSACTION_TIMEOUT_MS` default `30000` → `60000` (from 1.11.0) | Only deployments that **pin** it — they keep the old value and therefore the bug. Raise above 45s. |
+
+### Fixed — memory capture: four defects that made recall return the wrong things (FR-7)
+
+Reported from a live 1,799-node corpus where recall returned four copies of one already-fixed
+bug, two feedback counters, and two content-free labels — nothing a strategy could act on. All
+four verified in source before fixing.
+
+- **MEM-IMPACT-IGNORES-SIGNIFICANCE-1** — `get_relevant_memories` (the path feeding the
+  Infinity loop) orders **purely by `impact_score DESC`**, and `impact_score` was purely
+  graph-derived with no significance term, defaulting to `0.0` without a source event. A
+  deliberate `decision` declared `significance: 1.0` scored 0.00 and was never recalled, while
+  any captured failure started at 1.5. Impact is now **floored** by the declared policy
+  significance — a floor rather than a sum, so a well-connected failure still outranks a
+  declared decision but a bare one no longer does. No schema change: `significance` is not a
+  column, so it is folded in at write time.
+- **MEM-POLICY-KEY-1** — `validate_memory_policy` required `significance`/`base_score` while
+  the engine read only `default_significance`, so a policy that *passed validation* had no
+  effect and every declared significance fell back to 0.4. The engine now reads the validator's
+  keys, with the old key kept as a fallback.
+- **MEM-DEDUP-TRACEID-1** — dedup compared raw content, but messages embed the occurrence's
+  trace id, so one recurring failure produced N rows and never deduplicated. Now compared on a
+  normalised form (identifiers stripped, numbers deliberately kept) over a bounded window.
+- **MEM-FORCE-UNGATED-1** — `force=True` skipped the significance gate entirely, so apps could
+  not suppress the auto-captured system events at all. An **explicit** policy
+  `min_significance` is now honoured for forced captures; a missing key still means force wins.
+
+
 ### Security — plaintext passwords were being written to the execution record ⚠️
 
 `POST /auth/register` and `POST /auth/login` passed `body.model_dump()` as the pipeline's

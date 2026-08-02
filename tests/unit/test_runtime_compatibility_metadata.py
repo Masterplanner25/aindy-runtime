@@ -18,6 +18,6 @@ def test_runtime_repo_compatibility_metadata_matches_runtime_versions():
         "version": runtime_package_version,
     }
     assert metadata["apps_repo_contract"]["declaration_format"] == "pep440"
-    assert metadata["apps_repo_contract"]["recommended_runtime_requirement"] == ">=1.0,<2.0"
+    assert metadata["apps_repo_contract"]["recommended_runtime_requirement"] == ">=2.0,<3.0"
     assert metadata["apps_repo_contract"]["compatible_runtime_major"] == runtime_package_version.split(".")[0]
     assert metadata["apps_repo_contract"]["compatible_api_major"] == settings.API_VERSION.split(".")[0]
