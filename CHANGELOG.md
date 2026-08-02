@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Changed — `POST /auth/register` now enforces a minimum password length ⚠️
+
+`register_user` rejects passwords under `MIN_PASSWORD_LENGTH` (8) with **400**. Previously the
+floor guarded `POST /auth/password/change` only, which meant that of the paths able to set a
+password, the one an *unauthenticated* caller reaches was the unguarded one. A floor applied to
+one path is not a floor.
+
+**This is a deliberate tightening on a published package, and it can break a caller.** What it
+does **not** do:
+
+- it does **not** invalidate any stored password — existing users are unaffected;
+- it does **not** change `POST /auth/login` in any way.
+
+The only affected caller is a registration flow that previously permitted passwords shorter
+than 8 characters; those requests now return 400 instead of 201. If you drive registration
+programmatically (seeding, fixtures, smoke tests), check the passwords those use.
+
+The check runs before the duplicate-email lookup, so a request that is both short-password and
+duplicate-email returns 400 rather than 409 — which also avoids confirming an email is
+registered to a caller who supplied an invalid password.
+
+`MIN_PASSWORD_LENGTH` is deliberately not configurable: a security floor an operator can switch
+off is not a floor.
+
 ## 1.11.0 — 2026-08-01
 
 Minor, not patch: `POST /auth/password/change` is a new public endpoint.
