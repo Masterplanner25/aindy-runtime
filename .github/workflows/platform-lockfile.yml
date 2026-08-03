@@ -1,0 +1,156 @@
+name: Platform Lockfile
+
+# LOCKFILE-PLATFORM-1 — resolve platform/package-lock.json on Linux.
+#
+# Why this exists: `Platform UI Build` runs `npm ci` on ubuntu-latest, and a lockfile
+# generated on Windows cannot always satisfy it. Packages with platform-specific native
+# bindings (vite 8's rolldown, tailwind 4's oxide) pull `@napi-rs/wasm-runtime`, whose
+# `@emnapi/*` deps are *transitive* deps of packages that never install on Windows. npm
+# prunes that subtree, so the lock is complete on the dev machine and CI rejects it with
+# `Missing: @emnapi/runtime@... from lock file`.
+#
+# That is not fixable from the dev machine — `npm install`, `--package-lock-only`, a
+# from-scratch regenerate, and npm's `--os/--cpu/--libc` targeting all produce the same
+# incomplete tree. The lock has to be resolved on the platform `npm ci` actually runs on.
+#
+# Manual by design (`workflow_dispatch`): it is a tool you reach for when a dependency
+# bump touches platform/package.json, not a gate. `npm ci` in Platform UI Build is
+# already the gate. Note a dispatch-only workflow must exist on the DEFAULT branch
+# before it can be run against any other ref.
+#
+# Linux is authoritative here. A Linux-resolved lock could in principle omit a
+# win32-only transitive dep, which would break `npm ci` on Windows — but local dev uses
+# `npm install`, which self-repairs, while CI uses `npm ci`, which does not. CI wins.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch to resolve the lockfile on (blank = the ref this was dispatched from)"
+        required: false
+        type: string
+      push:
+        description: "Commit the regenerated lockfile back to that branch (otherwise: artifact only)"
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  resolve:
+    name: Resolve Platform Lockfile (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write # only exercised when `push` is true
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          # A push needs real history, and the diff output is more useful with it.
+          fetch-depth: 0
+
+      # Deliberately no `cache: npm`. The cache key is derived from the lockfile, which
+      # is the thing being regenerated — a hit would restore a tree resolved against the
+      # lock we are trying to replace.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      - name: Report versions
+        run: |
+          echo "node $(node --version)"
+          echo "npm  $(npm --version)"
+
+      - name: Resolve lockfile
+        working-directory: platform
+        # Incremental, not from-scratch: keeping the existing lock means npm adds the
+        # entries Windows pruned and leaves every other transitive pin alone, so the
+        # diff stays reviewable. Deleting the lock first would re-resolve the whole tree
+        # and bury the fix in unrelated version churn.
+        run: npm install --no-audit --no-fund
+
+      - name: Show what changed
+        working-directory: platform
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "LOCK_CHANGED=false" >> "$GITHUB_ENV"
+            echo "Lockfile already resolves cleanly on Linux — no change."
+          else
+            echo "LOCK_CHANGED=true" >> "$GITHUB_ENV"
+            git diff --stat -- package-lock.json
+            echo
+            echo "Packages added (present after resolution, absent before):"
+            # `|| true` because grep exits 1 on no match, and this step runs under `bash -e`.
+            added="$(git diff -U0 -- package-lock.json \
+              | grep -E '^\+ +"node_modules/' \
+              | sed -E 's/^\+ +"(.*)": \{/  \1/' || true)"
+            if [ -n "$added" ]; then
+              echo "$added"
+            else
+              echo "  (none — versions changed but no packages were added)"
+            fi
+          fi
+
+      # The whole point. `npm install` silently repairs a mismatch, so a passing
+      # `npm install` proves nothing about `npm ci`. Only a clean-tree `npm ci` does —
+      # this is the check that was skipped when #345 first went out broken.
+      - name: Verify with npm ci on a clean tree
+        working-directory: platform
+        run: |
+          rm -rf node_modules
+          npm ci
+
+      - name: Verify the UI still builds
+        working-directory: platform
+        run: npm run build
+
+      - name: Verify dist artifacts
+        run: |
+          test -f AINDY/platform/dist/index.html
+          test -d AINDY/platform/dist/assets
+          echo "Platform UI build OK — $(du -sh AINDY/platform/dist | cut -f1) total"
+
+      - name: Upload resolved lockfile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: platform-package-lock
+          path: platform/package-lock.json
+          if-no-files-found: error
+
+      - name: Commit lockfile back to the branch
+        if: ${{ inputs.push && env.LOCK_CHANGED == 'true' }}
+        env:
+          TARGET_REF: ${{ inputs.ref || github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add platform/package-lock.json
+          # Message body kept at column 0 — YAML block scalars preserve relative
+          # indentation, so indenting these lines would indent the commit message.
+          git commit -F - <<'MSG'
+          build(platform): resolve package-lock.json on Linux
+
+          Regenerated by the Platform Lockfile workflow. See LOCKFILE-PLATFORM-1 in
+          TECH_DEBT.md - a Windows-resolved lock prunes the transitive deps of packages
+          that do not install there, which Linux `npm ci` then rejects.
+
+          Verified with a clean-tree `npm ci` plus `npm run build`.
+          MSG
+          git push origin "HEAD:${TARGET_REF}"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Platform lockfile — Linux resolution"
+            echo
+            echo "- Ref: \`${{ inputs.ref || github.ref_name }}\`"
+            echo "- Lockfile changed: \`${LOCK_CHANGED:-unknown}\`"
+            if [ "${{ inputs.push }}" = "true" ]; then
+              echo "- Pushed back to the branch: \`${LOCK_CHANGED:-unknown}\`"
+            else
+              echo "- Artifact only — download \`platform-package-lock\` and commit it."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
