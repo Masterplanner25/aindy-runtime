@@ -1,6 +1,14 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind v4 replaces the three @tailwind directives with a single import. */
+@import "tailwindcss";
+
+/* v4 is CSS-first and would otherwise ignore tailwind.config.js entirely. @config keeps
+   the existing JS config authoritative: the theme.extend colour mappings
+   (hsl(var(--background)) and friends, consumed all over the SPA and the ui-kit), the
+   darkMode: ["class"] strategy, and the content globs — including the one scanning
+   @aindy/ui-kit's dist, without which every class used only inside the kit is purged.
+   Porting those into @theme is a separate change; folding it in here would mix a
+   dependency upgrade with a rewrite of the design tokens. */
+@config "../tailwind.config.js";
 
 @layer base {
   :root {
