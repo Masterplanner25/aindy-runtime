@@ -3673,10 +3673,38 @@ platform variants as **explicit optional dependencies**, so npm records every on
 packages, which is exactly what gets pruned. So "does the lock contain the other platforms'
 packages?" is not sufficient — the question is whether their *transitive* deps are there too.
 
-**Fix (option B, not yet built):** a CI job that runs `npm install` on `ubuntu-latest` and
-uploads `package-lock.json` as an artifact to commit. That is the only way to produce a lock
-resolved on the platform `npm ci` actually runs on. It is a **prerequisite** for the UI unit
-and will be needed again for every future rolldown/oxide bump.
+**Fix — SHIPPED 2026-08-02: `.github/workflows/platform-lockfile.yml`** (`Platform
+Lockfile` → job `Resolve Platform Lockfile (Linux)`). Resolves the lock on `ubuntu-latest`,
+which is the only way to get a lock resolved on the platform `npm ci` actually runs on. It
+will be needed again for every future rolldown/oxide bump, so it is a standing tool, not a
+one-off.
+
+**How to use it** (Actions → *Platform Lockfile* → Run workflow):
+
+- `ref` — the branch to resolve on, e.g. a dependabot branch. Blank = the dispatch ref.
+- `push` — commit the lock back to that branch. Default **off**: it uploads a
+  `platform-package-lock` artifact for you to commit yourself.
+
+**Design notes worth not relitigating:**
+
+- **`workflow_dispatch` only.** It is a tool, not a gate — `npm ci` in `Platform UI Build`
+  is already the gate, and running `npm install` on every PR would burn minutes to
+  regenerate a file that is almost always correct. Consequence: a dispatch-only workflow
+  must be **on the default branch** before it can be run against any other ref, so this
+  had to merge first and could not be exercised on its own PR.
+- **Incremental (`npm install`), not from-scratch.** Keeping the existing lock means npm
+  adds only the entries Windows pruned and leaves every other transitive pin alone, so the
+  diff stays reviewable. Deleting the lock first re-resolves the whole tree and buries the
+  actual fix in unrelated version churn.
+- **No `cache: npm`.** setup-node derives the cache key from the lockfile — the very file
+  being regenerated — so a hit would restore a tree resolved against the lock we are
+  replacing.
+- **Verification is the point:** after resolving, it does `rm -rf node_modules && npm ci`
+  and then `npm run build`. Without the clean-tree `npm ci` the job would reproduce the
+  exact mistake it exists to prevent (see the process rule above).
+- **Linux is authoritative.** A Linux-resolved lock could in principle omit a win32-only
+  transitive dep and break `npm ci` on Windows. Accepted: local dev runs `npm install`,
+  which self-repairs; CI runs `npm ci`, which does not.
 
 **Process rule this exposed:** verify a lockfile change with **`npm ci`**, never `npm
 install` + `npm run build`. `npm install` silently repairs a mismatch; `npm ci` fails on it.
