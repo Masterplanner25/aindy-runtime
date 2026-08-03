@@ -3568,11 +3568,11 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ---
 
-## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, vite major)
+## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, UI major unit)
 
-**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); the vite major
-remains. Dependency maintenance; each is a deliberate upgrade, not a drop-in bump. Surfaced
-during the 2026-07-18 dependabot triage.
+**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); the UI major unit
+remains, now blocked on `LOCKFILE-PLATFORM-1`. Dependency maintenance; each is a deliberate
+upgrade, not a drop-in bump. Surfaced during the 2026-07-18 dependabot triage.
 
 Two dependabot upgrades that cannot be taken as individual auto-bumps:
 
@@ -3616,11 +3616,72 @@ Two dependabot upgrades that cannot be taken as individual auto-bumps:
   `pip install --dry-run` before pushing — all ten resolve cleanly — then by Integration
   Tests, which is the check that matters since the otel spans exercise the FastAPI/gRPC
   instrumentation.
-- **vite 6.x → 8.x (platform, major).** Dependabot PR **#255** (now `→ 8.1.x`) fails the
-  **Platform UI Build** check — a two-major jump with breaking changes. Left open; take it as
-  a deliberate UI upgrade with the build fix, not an auto-merge.
+- **The UI major unit: vite 6→8 (#298), `@vitejs/plugin-react` 4→6 (#308), tailwind 3→4
+  (#310).** Previously filed as "a two-major jump with breaking changes" — **that diagnosis
+  was wrong**, corrected 2026-08-02 after attempting the upgrade. See
+  `LOCKFILE-PLATFORM-1` below; the blocker is the lockfile, not the code.
 
-**Reopen/resolve:** when the OTel line is bumped as a group, or the vite major is scheduled.
+  These three are **one unit, not three bumps**: `@vitejs/plugin-react@6` declares
+  `vite: ^8.0.0` as a peer, so it cannot be taken without vite 8, and both vite 8
+  (rolldown) and tailwind 4 (oxide) carry the same native-binding problem.
+
+  react-router 6→7 was originally lumped in with them and **has since landed alone**
+  (#345) — it introduces no native bindings. Its actual blocker was
+  `@aindy/ui-kit`'s `react-router-dom: ^6.0.0` peer pin, fixed in ui-kit 2.0.0.
+
+**Reopen/resolve:** when the OTel line is bumped as a group, or the UI unit is scheduled —
+which requires `LOCKFILE-PLATFORM-1` first.
+
+---
+
+## LOCKFILE-PLATFORM-1 — a Windows-generated lockfile cannot satisfy Linux `npm ci`
+
+**Status:** Open — blocks the UI major unit (#298 / #308 / #310). Found 2026-08-02 while
+attempting that upgrade.
+
+**The failure.** `Platform UI Build` runs `npm ci`, which rejected the branch with:
+
+```
+npm error `npm ci` can only install packages when your package.json and
+npm error package-lock.json are in sync.
+npm error Missing: @emnapi/runtime@1.11.3 from lock file
+```
+
+while local `npm install` reported "up to date" and `npm run build` passed.
+
+**Cause.** vite 8 replaces esbuild/rollup with **rolldown**; tailwind 4 introduces the
+**oxide** engine. Both ship platform-specific native bindings, and both pull
+`@napi-rs/wasm-runtime`, whose `@emnapi/*` deps are **transitive deps of packages that never
+install on Windows**. npm prunes that subtree, never validates it, and emits a lockfile that
+is complete for this platform and incomplete for CI's.
+
+**Not fixable from a Windows machine.** All of these produce the same incomplete tree:
+
+- `npm install`
+- `npm install --package-lock-only`
+- deleting `package-lock.json` and regenerating from scratch
+- `npm install --os=linux --cpu=x64 --libc=glibc` (npm 11 platform targeting)
+
+Running a Linux container **over the mounted working directory** is actively worse — npm
+reconciles against the Windows `node_modules` present in the mount and produces a lock with
+*only* win32 bindings. Any container attempt must copy `package.json` to a clean directory
+inside the container.
+
+**Why esbuild does not have this problem** — the useful diagnostic: esbuild declares its 26
+platform variants as **explicit optional dependencies**, so npm records every one, including
+`@esbuild/linux-x64`. rolldown and oxide hide theirs as *transitive* deps of platform
+packages, which is exactly what gets pruned. So "does the lock contain the other platforms'
+packages?" is not sufficient — the question is whether their *transitive* deps are there too.
+
+**Fix (option B, not yet built):** a CI job that runs `npm install` on `ubuntu-latest` and
+uploads `package-lock.json` as an artifact to commit. That is the only way to produce a lock
+resolved on the platform `npm ci` actually runs on. It is a **prerequisite** for the UI unit
+and will be needed again for every future rolldown/oxide bump.
+
+**Process rule this exposed:** verify a lockfile change with **`npm ci`**, never `npm
+install` + `npm run build`. `npm install` silently repairs a mismatch; `npm ci` fails on it.
+On a machine whose platform differs from CI's, only the second proves anything — and a build
+will keep passing off a populated `node_modules` long after the lockfile has gone bad.
 
 ---
 
