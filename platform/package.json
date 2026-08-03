@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@aindy/ui-kit": "^1.0.6",
+    "@aindy/ui-kit": "^2.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.2.8",
     "react-router-dom": "^6.30.4",
