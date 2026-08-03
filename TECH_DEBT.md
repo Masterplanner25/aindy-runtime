@@ -3706,6 +3706,34 @@ one-off.
   transitive dep and break `npm ci` on Windows. Accepted: local dev runs `npm install`,
   which self-repairs; CI runs `npm ci`, which does not.
 
+**Smoke-verified on `main` 2026-08-03** (run `30815998362`, dispatched right after the
+workflow merged, since dispatch-only workflows cannot run on their own PR): green end to
+end — resolve → clean-tree `npm ci` → `npm run build` → dist verify → artifact.
+
+**Expect a benign `"peer": true` diff — do not chase it.** That run reported
+`LOCK_CHANGED=true` on an untouched `main`, and the entire diff was **16 lines, all of them
+`"peer": true` flags** (plus the paired `license` lines that gain/lose a trailing comma).
+Zero packages added or removed, zero version changes. The cause is an npm-major skew, not
+the platform:
+
+| | node | npm | writes `"peer": true` |
+|---|---|---|---|
+| dev machine | 24.13.0 | 11.6.2 | yes |
+| all four workflows | 20 | 10.8.2 | no |
+
+So any lock written locally will always show this churn when resolved in CI. **The resolver
+is on the right side of it** — it pins `node-version: "20"`, matching `Platform UI Build`,
+which is the job whose `npm ci` actually gates merges. Consequence to know before using
+`push: true`: it will commit a peer-flag-only change even when nothing real moved. Harmless,
+but it means "the lockfile changed" is not by itself evidence that anything meaningful did —
+read the *"Packages added"* output, which is there for exactly this reason and correctly
+printed `(none — versions changed but no packages were added)`.
+
+**Adjacent, unfixed:** the dev machine runs node 24 / npm 11 against CI's node 20 / npm 10.
+That skew is an independent source of lockfile divergence and would be worth closing with a
+`.nvmrc` (there is none) plus a node bump across the four workflows — but bumping the node
+version under a required check is a deliberate change, not a drive-by.
+
 **Process rule this exposed:** verify a lockfile change with **`npm ci`**, never `npm
 install` + `npm run build`. `npm install` silently repairs a mismatch; `npm ci` fails on it.
 On a machine whose platform differs from CI's, only the second proves anything — and a build
