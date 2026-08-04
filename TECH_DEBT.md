@@ -18,8 +18,8 @@ ships capabilities default-off; the app repo is where they get turned on and liv
 | 2 | FR-6 email channel ownership | **Option 3 — hybrid** | `APP-FR-*` → FR-6 |
 | 3 | `/auth/register` 409 enumeration oracle | **Fix it** | `APP-FR-*` → FR-6 |
 | 4 | Cargo build job in CI | **Add it** | `NATIVE-CI-1` |
-| 5 | cryptography 48→49 (#302) | **Verify before merging** | `PACK-DEBT-2` |
-| 6 | UI major cluster + `@aindy/ui-kit` peer range | **Deferred** — same owner, different repo; decided from there | `DEP-UPGRADE-DEFERRED-1` |
+| 5 | cryptography 48→49 (#302) | **Verify before merging** — done; now at **50.0.0** for CVE-2026-69247 | `PACK-DEBT-2` |
+| 6 | UI major cluster + `@aindy/ui-kit` peer range | **Deferred** — resolved 2026-08-03: ui-kit 2.0.0 widened the peer, cluster landed (#345, #349) | `DEP-UPGRADE-DEFERRED-1` |
 | 7 | Soak-and-flip the default-off flags | **Handled app-side** | see phase note above |
 
 ### 1 — Semver: the register password floor gates a major
@@ -92,10 +92,22 @@ which is worse than the current honest 409.
 that re-accumulate monthly. A build job converts them from "needs a local MSVC build" into
 ordinary merges.
 
-### 5 — cryptography 48→49: verify first
+### 5 — cryptography 48→49: verify first — *superseded 2026-08-04, now at 50.0.0*
 
 Green CI including `pip-audit` is the weakest form of evidence for a crypto major under an auth
 stack. Verify `python-jose` / `passlib` / `bcrypt` interop before merging #302.
+
+**Update:** 49.0.0 landed, and then **CVE-2026-69247 / GHSA-g6cj-pr64-35w5** was disclosed
+against it — a Bleichenbacher oracle in `pkcs7_decrypt_der/pem/smime`, introduced in 44.0.0,
+fixed in **50.0.0**. Bumped to 50.0.0 rather than exempted: an exemption is for findings with
+no fix released (which is what all four existing `--ignore-vuln` entries are), not for one
+patched upstream. **Not reachable here** — the only `cryptography` consumer in the tree is
+`platform_layer/extension_signing.py`, which uses Ed25519 signing and `serialization`; there
+is no PKCS7 or S/MIME call anywhere under `AINDY/`, and JWT signing is HS256. The interop
+condition above still applied and was checked the same way: `pip install --dry-run` with
+`python-jose[cryptography]` and `passlib[bcrypt]` resolves with cryptography 50.0.0 as the
+only change, and the auth suites in `Runtime Contracts` + `Integration Tests` exercise the
+actual sign/verify paths.
 
 ### 6 — UI cluster: deferred, decided from the other repo
 
