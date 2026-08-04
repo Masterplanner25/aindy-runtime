@@ -3628,28 +3628,49 @@ Two dependabot upgrades that cannot be taken as individual auto-bumps:
   `pip install --dry-run` before pushing — all ten resolve cleanly — then by Integration
   Tests, which is the check that matters since the otel spans exercise the FastAPI/gRPC
   instrumentation.
-- **The UI major unit: vite 6→8 (#298), `@vitejs/plugin-react` 4→6 (#308), tailwind 3→4
-  (#310).** Previously filed as "a two-major jump with breaking changes" — **that diagnosis
-  was wrong**, corrected 2026-08-02 after attempting the upgrade. See
-  `LOCKFILE-PLATFORM-1` below; the blocker is the lockfile, not the code.
+- **The UI major unit — CLOSED 2026-08-03 (#349):** vite 6→8, `@vitejs/plugin-react` 4→6,
+  tailwind 3→4, landed as one commit; #298 / #308 / #310 auto-closed. It was filed as "a
+  two-major jump with breaking changes" and **that diagnosis was wrong** — the blocker was
+  `LOCKFILE-PLATFORM-1`, and once the resolver existed the code side went green first try.
+  The three could not be split: `@vitejs/plugin-react@6` peers on `vite: ^8.0.0`.
 
-  These three are **one unit, not three bumps**: `@vitejs/plugin-react@6` declares
-  `vite: ^8.0.0` as a peer, so it cannot be taken without vite 8, and both vite 8
-  (rolldown) and tailwind 4 (oxide) carry the same native-binding problem.
+  Tailwind 4 specifics are in the commit, but two are worth having here: `@config
+  "../tailwind.config.js"` is load-bearing (v4 is CSS-first and otherwise ignores
+  `tailwind.config.js` entirely — theme colours, `darkMode: ["class"]`, and the content
+  glob scanning `@aindy/ui-kit/dist`, without which every kit-only class is purged), and
+  **no border-colour shim was needed** despite v4 changing the default from `gray-200` to
+  `currentColor` against 237 bare `border` uses, because `platform.css` already carries the
+  shadcn `* { @apply border-border }` base rule.
 
-  react-router 6→7 was originally lumped in with them and **has since landed alone**
-  (#345) — it introduces no native bindings. Its actual blocker was
-  `@aindy/ui-kit`'s `react-router-dom: ^6.0.0` peer pin, fixed in ui-kit 2.0.0.
+  react-router 6→7 was originally lumped in with them and **landed alone** (#345) — no
+  native bindings. Its actual blocker was `@aindy/ui-kit`'s `react-router-dom: ^6.0.0` peer
+  pin, fixed in ui-kit 2.0.0.
 
-**Reopen/resolve:** when the OTel line is bumped as a group, or the UI unit is scheduled —
-which requires `LOCKFILE-PLATFORM-1` first.
+- **react-router 7→8 — deferred, and the security alert on it is dismissed.** Dependabot
+  alert **#17** (high, `react-router >= 7.12.0, < 8.3.0`, *"RSC Mode CSRF Bypass Allows
+  Action Execution Before 400 Response"*) fired on `main` when #345 landed. **Dismissed
+  2026-08-03 as `not_used`** — the advisory says outright that it *"only affects your
+  application if you are using the unstable RSC APIs"*, and the platform is a client-side
+  SPA: `BrowserRouter`, `Routes`, `Outlet`, `Navigate`, `NavLink`, `useNavigate`,
+  `useLocation`, no SSR, no server handler. Grepping `platform/src` **and** the
+  `@aindy/ui-kit` source for `unstable_`, `react-router/rsc`, `createCallServer` and
+  `RSCHydratedRouter` returns zero hits on either side.
+
+  The reason this is deferred rather than patched: the fix is **react-router 8**, another
+  major, and `@aindy/ui-kit@2.0.0` peers on `^6.0.0 || ^7.0.0` — so taking it needs a
+  ui-kit release first. That is the same cross-repo peer trap #345 spent two PRs escaping,
+  and it would be paid for a vulnerability we do not have. **Re-assess** when react-router 8
+  is scheduled on its own merits, or immediately if the SPA ever adopts RSC or SSR.
+
+**Reopen/resolve:** when the OTel line is bumped as a group. The UI unit is done.
 
 ---
 
 ## LOCKFILE-PLATFORM-1 — a Windows-generated lockfile cannot satisfy Linux `npm ci`
 
-**Status:** Open — blocks the UI major unit (#298 / #308 / #310). Found 2026-08-02 while
-attempting that upgrade.
+**Status:** Open — the workflow ships and the UI unit it blocked has landed (#349, closing
+#298 / #308 / #310). Stays open because the underlying npm behaviour is permanent: every
+future rolldown/oxide bump needs the same treatment. Found 2026-08-02.
 
 **The failure.** `Platform UI Build` runs `npm ci`, which rejected the branch with:
 
@@ -3661,11 +3682,30 @@ npm error Missing: @emnapi/runtime@1.11.3 from lock file
 
 while local `npm install` reported "up to date" and `npm run build` passed.
 
-**Cause.** vite 8 replaces esbuild/rollup with **rolldown**; tailwind 4 introduces the
-**oxide** engine. Both ship platform-specific native bindings, and both pull
-`@napi-rs/wasm-runtime`, whose `@emnapi/*` deps are **transitive deps of packages that never
-install on Windows**. npm prunes that subtree, never validates it, and emits a lockfile that
-is complete for this platform and incomplete for CI's.
+**Cause** — *corrected 2026-08-03 after reading the resolved lock; the first write-up said
+"transitive deps that npm prunes", which is the right shape but the wrong mechanism.*
+
+vite 8 replaces esbuild/rollup with **rolldown**; tailwind 4 introduces the **oxide**
+engine. Both ship platform-specific native bindings. The missing `@emnapi/*` packages are
+**`bundleDependencies` of `@tailwindcss/oxide-wasm32-wasi`** — itself `optional` and
+`cpu: ["wasm32"]`:
+
+```json
+"node_modules/@tailwindcss/oxide-wasm32-wasi": {
+  "cpu": ["wasm32"], "optional": true,
+  "bundleDependencies": [
+    "@napi-rs/wasm-runtime", "@emnapi/core", "@emnapi/runtime",
+    "@tybys/wasm-util", "@emnapi/wasi-threads", "tslib"
+  ],
+  "dependencies": { "@emnapi/runtime": "^1.11.1", ... }
+}
+```
+
+So they are bundled inside that tarball rather than resolved as ordinary transitive deps.
+A machine that never installs the `wasm32-wasi` variant never walks into that subtree, and
+the lock it writes omits entries the resolving platform demands. The observable failure and
+the fix are unchanged — **only the reason is different**, and it matters because the fix
+follows from it: this is not something a flag or a cleaner regenerate can reach.
 
 **Not fixable from a Windows machine.** All of these produce the same incomplete tree:
 
@@ -3716,7 +3756,21 @@ one-off.
   exact mistake it exists to prevent (see the process rule above).
 - **Linux is authoritative.** A Linux-resolved lock could in principle omit a win32-only
   transitive dep and break `npm ci` on Windows. Accepted: local dev runs `npm install`,
-  which self-repairs; CI runs `npm ci`, which does not.
+  which self-repairs; CI runs `npm ci`, which does not. **Measured 2026-08-03 and the
+  caveat does not bite for these packages:** `npm ci` on Windows against the
+  Linux-resolved lock succeeds (112 packages, exit 0, lockfile untouched). rolldown and
+  oxide declare all their platform bindings as *explicit optional* deps the way esbuild
+  does, so the Linux resolution records the win32 variants too. The asymmetry is real in
+  principle but unobserved here; local dev is unaffected.
+
+**First real use, 2026-08-03 — the UI major unit (#349).** Dispatched at
+`deps/ui-toolchain-major` with `push: true` (run `30817776715`): resolved, verified with a
+clean-tree `npm ci`, built, and committed the lock back. It added **35 packages a
+Windows-resolved lock never records** — the whole `@rolldown/binding-*` set (15 platforms),
+the whole `@tailwindcss/oxide-*` set (12), plus `@tailwindcss/node`, `@tailwindcss/postcss`,
+`enhanced-resolve`, `detect-libc`, `@oxc-project/types`, `@standard-schema/*`. Net
+`+937 / −2181` lines. The PR then passed `Platform UI Build` on the first attempt, which is
+what the whole exercise was for.
 
 **Smoke-verified on `main` 2026-08-03** (run `30815998362`, dispatched right after the
 workflow merged, since dispatch-only workflows cannot run on their own PR): green end to
