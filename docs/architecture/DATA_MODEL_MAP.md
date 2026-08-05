@@ -1,6 +1,6 @@
 ---
 title: "Data Model Map"
-last_verified: "2026-06-28"
+last_verified: "2026-08-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -166,6 +166,8 @@ here.
 - `is_active`: Boolean, nullable=False, default=True
 - `is_admin`: Boolean, nullable=False, default=False
 - `token_version`: Integer, nullable=False, default=0, server_default="0"
+- `is_verified`: Boolean, nullable=False, default=False, server_default="false", `info={"reconcile_backfill": "true"}`
+- `verified_at`: DateTime(timezone=True), nullable=True, `info={"reconcile_backfill": "COALESCE(created_at, now())"}`
 - `created_at`: DateTime(timezone=True), nullable: not explicitly set, server_default=func.now()
 - Primary key: `id`
 - Unique constraints: `email` (unique=True), `username` (unique=True)
@@ -177,7 +179,16 @@ here.
 - Purpose: Stores authenticated platform users. Created by `register_user()` in
   `AINDY/services/auth_service.py`. Password is stored as a bcrypt hash;
   plaintext is never persisted. `is_admin` is grant-only (see admin-bootstrap
-  constraint); `token_version` backs JWT invalidation.
+  constraint); `token_version` backs JWT invalidation — and is also what makes a
+  password-reset token single-use, since consuming one bumps the version.
+- **`reconcile_backfill` on the verification columns (FR-8).** `server_default` governs
+  rows written *afterwards*; an account created before verification existed was never
+  given a chance to confirm. Alembic `0014` grandfathers those rows, but the `alembic/`
+  tree is not shipped in the wheel, so a wheel install would otherwise leave every
+  pre-existing account unverified — a latent lockout the moment
+  `AINDY_REQUIRE_VERIFIED_LOGIN` is enabled. The `info` declaration makes
+  `bootstrap-schema --reconcile` apply the same backfill on every install shape.
+  See `schema_contract._render_backfill_sql`.
 
 ### `AINDY/db/models/user_identity.py`
 
@@ -221,13 +232,23 @@ canonical in source and cataloged by category in
 (§"Runtime-Owned Models"):
 
 - **Platform access:** `api_key` (`platform_api_keys`).
-- **Agent runtime persistence:** `agent_registry`, `agent_run`, `agent_event`.
+- **Agent runtime persistence:** `agent_registry`, `agent_run`, `agent_event`,
+  `agent_step` (`agent_steps`), `agent_trust_settings`,
+  `agent_capability_mapping` (`agent_capability_mappings`).
 - **Execution, waits, scheduler:** `execution_unit`, `flow_run`,
   `waiting_flow_run`, `job_log`, `event_edge`, `effect_record` (idempotency
-  gate), `nodus_scheduled_job`.
-- **Observability / system state:** `system_event`, `system_state_snapshot`.
+  gate), `effect_reversal` (`effect_reversals` — append-only compensation ledger
+  behind `sys.v1.agent.undo`, AGENT-HARDEN-3), `flow_history` (append-only
+  per-run event fold backing durable continuation), `nodus_scheduled_job`,
+  `nodus_workflow` (`nodus_workflows` — registered `.nd` workflow source, RTR-1).
+- **Observability / system state:** `system_event`, `system_state_snapshot`,
+  `event_outcome` (`event_outcomes`).
 - **Dynamic platform state:** `capability`, `dynamic_flow`, `dynamic_node`,
   `webhook_subscription`.
+
+As of 2026-08-05 the runtime owns **36 tables** in `Base.metadata`. This list is
+maintained by hand; to re-derive it, enumerate `Base.metadata.tables` after importing
+`AINDY.db.model_registry` and `AINDY.memory.memory_persistence`.
 
 The Memory Bridge models (`memory_nodes`, `memory_links`) are detailed in §5.
 
@@ -280,12 +301,29 @@ monolith tree. It tracks state in `alembic_version_runtime` (not the monolith's
 `alembic_version`) and bootstraps blank databases from packaged ORM metadata via
 `AINDY/db/schema_contract.py`.
 
-**Runtime Alembic chain** (`alembic/versions/`):
+**Runtime Alembic chain** (`alembic/versions/`) — head is **`0014`**:
 - `0001_runtime_baseline` — runtime-owned baseline.
 - `0002_idempotency_constraints` — idempotency / EffectRecord constraints.
 - `0003_effect_records` — `effect_records` table (idempotency gate).
 - `0004_effect_records_completed_at_index` — `completed_at` index for TTL cleanup.
 - `0005_execution_units_wall_time_ms` — `execution_units.wall_time_ms` column.
+- `0006_nodus_workflows` — `nodus_workflows` table (RTR-1 registered `.nd` workflows).
+- `0007_agent_runs_wait_state` — agent-run wait state columns.
+- `0008_effect_reversals` — `effect_reversals` compensation ledger (AGENT-HARDEN-3).
+- `0009_drop_nodus_trace_events` — drops the dead `NodusTraceEvent` trace path (RTR-1).
+- `0010_agent_runs_flow_run_id_index` — `ix_agent_runs_flow_run_id` (RTR-3).
+- `0011_effect_records_attribution_columns` — EffectRecord attribution (MEB program).
+- `0012_flow_history_sequence_number` — `flow_history` sequence number (durable continuation).
+- `0013_nodus_scheduled_job_misfire_policy` — per-job misfire policy (ECOGAP-5a).
+- `0014_users_email_verification` — `users.is_verified` / `verified_at`, plus the
+  grandfathering backfill for accounts predating verification.
+
+> **The head revision is also a packaged constant.** `RUNTIME_ALEMBIC_HEAD_REVISION` in
+> `AINDY/db/alembic_head.py` must be bumped alongside any new revision — the `alembic/`
+> scripts directory lives at the repo root and is **not** shipped in the wheel
+> (`packages.find` is `AINDY*`), so `aindy-runtime bootstrap-schema` cannot read the head
+> from the scripts at install time. `tests/unit/test_runtime_alembic_head.py` fails if the
+> constant drifts from the actual head.
 
 All runtime migrations are idempotent (`IF NOT EXISTS` / `IF EXISTS` guards) and
 table-existence-guarded for blank-database safety (ALEMBIC-FRESH-DB-1).
@@ -331,6 +369,11 @@ Defined in `AINDY/memory/memory_persistence.py` (relocated from
 - `is_shared`: Boolean, nullable=False, default=False
 - `visibility`: String(16), nullable=False, default="private", index=True
 - `user_id`: UUID, ForeignKey("users.id"), nullable=True, index=True
+- `owner_run_id`: UUID, nullable=True, index=True — delegation-scoped private memory (RTR-4c).
+  NULL means the node is visible on the normal paths (every pre-existing node). A non-NULL
+  value scopes the node to one agent run; enforcement is gated behind
+  `AINDY_DELEGATION_PRIVATE_MEMORY` (default off). No FK — the referenced run may be
+  reaped independently.
 - `source_event_id`: UUID, ForeignKey("system_events.id"), nullable=True, index=True
 - `root_event_id`: UUID, ForeignKey("system_events.id"), nullable=True, index=True
 - `causal_depth`: Integer, nullable=False, default=0
@@ -355,8 +398,9 @@ Defined in `AINDY/memory/memory_persistence.py` (relocated from
 - Indexes
 - `ix_memory_nodes_tags_gin` on `tags` using GIN
 - column indexes on `source_agent`, `visibility`, `memory_type`,
-  `embedding_pending`, `embedding_status`, `user_id`, `source_event_id`,
-  `root_event_id`, `path`, `namespace`, `addr_type`, `parent_path`
+  `embedding_pending`, `embedding_status`, `user_id`, `owner_run_id`,
+  `source_event_id`, `root_event_id`, `path`, `namespace`, `addr_type`,
+  `parent_path`
 - Unique constraints: Not explicitly defined in current implementation.
 - Foreign keys: `user_id -> users.id`, `source_event_id -> system_events.id`, `root_event_id -> system_events.id`
 - Node type enforcement (ORM `before_insert` / `before_update` listener):
