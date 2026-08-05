@@ -46,7 +46,10 @@ def test_unavailable_when_nothing_configured():
         s = ec.email_channel_status()
     assert s["available"] is False
     assert s["route"] is None
-    assert "not configured" in s["detail"] or "no 'email' connector" in s["detail"]
+    assert (
+        "not configured" in s["detail"]
+        or "no 'transactional_email' connector" in s["detail"]
+    )
 
 
 def test_smtp_alone_is_available(monkeypatch):
@@ -97,7 +100,8 @@ def test_send_uses_the_connector_when_registered():
     ):
         out = _send()
     assert out["success"] is True and out["route"] == "connector"
-    assert dispatch.call_args[0][0] == "email"
+    # FR-9: the runtime dispatches its own reserved type, never the apps' "email".
+    assert dispatch.call_args[0][0] == "transactional_email"
 
 
 def test_send_falls_back_to_smtp_when_no_connector(monkeypatch):
