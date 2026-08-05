@@ -16,7 +16,11 @@ const p = { target: API_DEV_TARGET, changeOrigin: true };
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { "@": resolve(__dirname, "src") },
+    // `import.meta.dirname` rather than `__dirname`: vite 8 warns that `__dirname` is
+    // unsupported by `configLoader: 'native'`, slated to become the default in a future
+    // major. Needs Node >= 20.11; CI pins node 20.x and this builds on 24 locally.
+    // Not `new URL(...).pathname` — that yields a leading-slash '/C:/...' on Windows.
+    alias: { "@": resolve(import.meta.dirname, "src") },
   },
   define: {
     __APP_VERSION__: JSON.stringify(process.env.npm_package_version ?? "0.0.0"),
