@@ -2,6 +2,107 @@
 
 ## Unreleased
 
+## 2.0.1 — 2026-08-05
+
+**Patch. No breaking changes — this fixes the 2.0.0 upgrade path itself.**
+
+Every defect below was found by the first team to deploy 2.0.0 to a live stack, and each one
+is invisible from a source checkout *and* from CI. If you are on 2.0.0, you are exposed to
+all three regardless of whether you have noticed yet.
+
+### Correction to the 2.0.0 upgrade notes
+
+The 2.0.0 table said *"Run migrations. Existing accounts are backfilled to verified, so nobody
+is locked out."* **That was true only for a source checkout.** Alembic `0014` performs the
+backfill, and the `alembic/` tree is not shipped in the wheel — so a wheel or Docker
+deployment never ran it, and every pre-existing account came back **unverified**. Fixed below;
+`--reconcile` now performs the backfill itself, on every install shape.
+
+If you upgraded to 2.0.0 on a wheel install, check before enabling
+`AINDY_REQUIRE_VERIFIED_LOGIN`:
+
+```sql
+SELECT is_verified, count(*) FROM users GROUP BY 1;
+```
+
+Upgrading to 2.0.1 does **not** retroactively repair an already-reconciled table — the
+backfill runs when the column is first added. If those rows are already `false`, grandfather
+them yourself before turning the flag on:
+
+```sql
+UPDATE users SET is_verified = true, verified_at = COALESCE(verified_at, created_at, now())
+ WHERE is_verified = false AND created_at < '<the timestamp you upgraded to 2.0.0>';
+```
+
+### Fixed — the container could crash-loop on an empty environment variable (FR-10)
+
+The idiomatic Compose default for an optional variable renders as an **empty string**, not an
+absent one: `AINDY_REQUIRE_VERIFIED_LOGIN: "${AINDY_REQUIRE_VERIFIED_LOGIN:-}"`. To pydantic
+that is an unparseable bool, and because `settings = Settings()` runs at **module import**,
+the process died before serving — a restart loop, not a config warning. 27 restarts in the
+reporting deployment.
+
+`env_ignore_empty=True` now makes an empty value mean "unset", falling back to the field
+default. **28 typed `bool` settings were exposed to this**, so it was a class of outage rather
+than one unlucky variable; the regression test sweeps all of them.
+
+### Fixed — `--reconcile` now grandfathers rows that predate a new column (FR-8)
+
+`server_default` decides what a column holds for rows written *afterwards*; that is not always
+right for rows that already exist. Columns may now declare
+`info={"reconcile_backfill": "<sql expression>"}`, and `bootstrap-schema --reconcile` applies
+it immediately after adding the column. `users.is_verified` and `users.verified_at` declare it,
+so the grandfathering guarantee now holds on wheel installs, not just source checkouts.
+
+### Fixed — an app `email` connector could silently swallow all auth mail (FR-9)
+
+2.0.0 dispatched runtime transactional mail to the **`email`** connector type — the same type
+apps register for user-authored automations — in a different, undocumented action shape.
+Registering one silently opted an app into carrying password-reset and verification mail.
+Combined with the deliberate no-SMTP-fallback rule, a shape mismatch meant `/auth/register`
+returned `202` while **no account could complete signup**, with a single WARNING as the only
+evidence.
+
+Runtime mail now uses a reserved **`transactional_email`** type, so an app's `email` connector
+cannot intercept it. The action shape is published in `docs/runtime/CONNECTOR_CONTRACT.md`
+§5a, and a connector failure now logs at **ERROR** stating plainly that auth mail is not being
+delivered.
+
+**Action required only if you registered an `email` connector to handle runtime mail:**
+re-register it as `transactional_email`. Otherwise runtime SMTP (`AINDY_SMTP_*`) carries it —
+which is the FR-6 hybrid working as intended.
+
+### Security
+
+- **`cryptography` 49.0.0 → 50.0.0** — CVE-2026-69247 / GHSA-g6cj-pr64-35w5, a Bleichenbacher
+  oracle in `pkcs7_decrypt_der/_pem/_smime`. **Not reachable in this codebase** (the only
+  consumer is Ed25519 extension signing; there is no PKCS7 or S/MIME call, and JWT signing is
+  HS256), but patched rather than exempted since a fix exists upstream.
+- The `pip-audit` CI job could not name its own findings — a `bash -e` interaction killed the
+  step before its reporting block ran, so every failure printed only `exit code 1`. Repaired.
+
+### Platform UI
+
+**This is the first release whose wheel ships the Tailwind 4 SPA.** vite 6→8, `@vitejs/plugin-react`
+4→6 and tailwindcss 3→4 landed as one unit (plugin-react 6 peer-locks to vite ^8), plus
+react-router 6→7 and `@aindy/ui-kit` 2.0.0. Verified in a browser, not only by a green build:
+Tailwind 4 can compile cleanly while emitting the wrong rules.
+
+### Other
+
+- Node 20 → 24 across all CI workflows, plus a repo-root `.nvmrc`. **Node 20 reached
+  end-of-life 2026-04-30**, so CI had been building on an unsupported runtime.
+- New `Platform Lockfile` workflow resolves `platform/package-lock.json` on Linux — a
+  Windows-generated lock cannot satisfy Linux `npm ci` for packages with native bindings.
+- Dependency bumps: fastapi 0.141.1, uvicorn 0.52.0, pytest 9.1.1, certifi, tqdm.
+
+### Schema
+
+`SCHEMA_CONTRACT_VERSION` `2026-08-02` → **`2026-08-05`**. **No DDL changed** — the bump is
+mechanical, because `orm_hash` is a content hash of every file under `AINDY/db/models/` and
+FR-8 added a declaration to two columns. Alembic head remains `0014`. If you assert on the
+contract version, update the expected value; if you diff schemas, expect no difference.
+
 ## 2.0.0 — 2026-08-02
 
 **Major, and the breaking changes are concentrated in auth.** Every one is a deliberate
