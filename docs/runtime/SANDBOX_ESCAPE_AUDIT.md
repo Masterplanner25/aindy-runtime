@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-08-02"
+last_verified: "2026-08-05"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -708,6 +708,60 @@ the release having changed anything about it.
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v2.0.0` release commit.
+
+---
+
+### Entry 013 — 2026-08-05
+
+`sandbox-escape-linux.yml` release gate, fired automatically on the `v2.0.1` tag
+**Host OS:** Ubuntu (GitHub-hosted `ubuntu-latest`), native Linux kernel — Docker uses a native
+Linux-containers backend, not a Docker Desktop VM
+**Container image:** `python:3.11-alpine` (same image as Entries 002–012; exact digest recorded in
+the run artifact)
+**Test command:** `pytest -m sandbox_escape` (via workflow; `SANDBOX_ESCAPE_IMAGE=python:3.11-alpine`)
+**Commit:** `8b149d5` (release tag `v2.0.1`)
+**Operator:** CI (release gate, run 31041619455)
+
+**Results by category:**
+
+| Category | Tests | Pass | Fail | Skip | Notes |
+|---|---|---|---|---|---|
+| Filesystem escape | 3 | 3 | 0 | 0 | Read-only rootfs, read-only bind mount, scoped tmpfs all verified |
+| Network escape | 3 | 3 | 0 | 0 | TCP, UDP, kernel interface evidence all blocked (`--network none`) |
+| Process / pids | 2 | 2 | 0 | 0 | pids limit hit; cgroup `pids.max=10` — ran natively, **0 skips** |
+| Privilege escalation | 4 | 4 | 0 | 0 | CAP_NET_RAW, CAP_CHOWN removed; NoNewPrivs=1 in /proc; combined-controls check |
+| Host env leak | 2 | 2 | 0 | 0 | No production secrets present; PYTHONIOENCODING transmitted |
+| Path boundary | 3 | 3 | 0 | 0 | Canary not reachable; plugin root accessible; traversal contained |
+
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.23s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run 31041619455) — holds
+exact per-test durations and the image digest.
+
+**Platform notes:**
+Identical 17-vector result on the same native-Linux gate and image as Entries 002–012, for the
+`v2.0.1` release commit published to PyPI as `aindy-runtime==2.0.1`.
+
+**v2.0.1 is a patch that fixes the 2.0.0 upgrade path, and none of it touches the sandbox
+boundary.** The three defects are an empty-environment-variable crash loop at module import
+(FR-10), a schema reconcile that failed to grandfather rows predating a new column (FR-8), and a
+connector-type collision that let an app's `email` handler swallow runtime transactional mail
+(FR-9). No change to `sandbox_runner.py`, the OCI flags, the capability set, or the container
+image.
+
+Two release changes are adjacent enough to name explicitly rather than leave to inference:
+
+- **`cryptography` 49.0.0 → 50.0.0** (CVE-2026-69247, a Bleichenbacher oracle in PKCS7
+  decryption). It is a dependency of the *extension-signing* path, not of the sandbox. The gate
+  run confirms the shipped tree resolves `cryptography-50.0.0`, so the patched version is what
+  the certified artifact carries.
+- **The Platform UI toolchain major** (vite 8 / tailwind 4). Build-time only; nothing from that
+  chain executes inside a sandboxed container.
+
+So this entry records that the gate **re-verified** the container-grade posture for the patch
+release, rather than the release having changed anything about it.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.0.1` release commit.
 
 ---
 
