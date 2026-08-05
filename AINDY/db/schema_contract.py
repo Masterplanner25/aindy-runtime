@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
@@ -18,9 +19,11 @@ from AINDY.db.database import Base
 import AINDY.db.model_registry  # noqa: F401
 import AINDY.memory.memory_persistence  # noqa: F401
 
+logger = logging.getLogger(__name__)
+
 _RUNTIME_MODEL_PREFIXES = ("AINDY.db.models.",)
 _RUNTIME_MODEL_MODULES = {"AINDY.memory.memory_persistence"}
-SCHEMA_CONTRACT_VERSION = "2026-08-02"
+SCHEMA_CONTRACT_VERSION = "2026-08-05"
 SCHEMA_INSPECT_MODULE = "python -m AINDY.db.schema_ops inspect --format json"
 
 SCHEMA_STATE_BLANK_DATABASE = "blank_database"
@@ -525,6 +528,39 @@ def _render_add_column_sql(bind: Engine | Connection, table, column) -> str:
     return f"ALTER TABLE {table_name} ADD COLUMN {compiled}"
 
 
+#: Key a model column may set in ``Column.info`` to declare what PRE-EXISTING rows should
+#: hold when this column is first added to a table that already has data. See
+#: ``_render_backfill_sql`` for why this exists at all.
+RECONCILE_BACKFILL_KEY = "reconcile_backfill"
+
+
+def _render_backfill_sql(bind: Engine | Connection, table, column) -> str | None:
+    """SQL to grandfather rows that predate a freshly-added column, or None.
+
+    FR-8. ``server_default`` decides what a column holds for rows written *afterwards*; it
+    is not always the right answer for rows that already exist. ``users.is_verified``
+    defaults to false because new accounts are unverified, but an account created before
+    verification existed was never given a chance to confirm — leaving it false silently
+    arms a lockout the moment an operator enables ``AINDY_REQUIRE_VERIFIED_LOGIN``.
+
+    Alembic ``0014`` encodes that distinction, but the ``alembic/`` tree lives at the repo
+    root and is **not shipped in the wheel** (``packages.find`` is ``AINDY*``), so a
+    wheel-based deployment — the only shape Docker uses — never runs it. It reconciles from
+    packaged metadata instead, which applies ``server_default`` and nothing else. The
+    guarantee the model comment makes was therefore true only for a source checkout.
+
+    Declaring the intent on the column keeps it beside the prose that explains it and makes
+    it hold on every install shape. No ``WHERE`` clause is needed: the column did not exist
+    a moment ago, so every row now present predates it by construction.
+    """
+    expression = (column.info or {}).get(RECONCILE_BACKFILL_KEY)
+    if not expression:
+        return None
+    table_name = bind.dialect.identifier_preparer.format_table(table)
+    column_name = bind.dialect.identifier_preparer.format_column(column)
+    return f"UPDATE {table_name} SET {column_name} = {expression}"
+
+
 def reconcile_runtime_schema(bind: Engine | Connection | Session) -> SchemaReport:
     resolved = _resolve_bind(bind)
     report = inspect_runtime_schema(resolved)
@@ -588,6 +624,16 @@ def reconcile_runtime_schema(bind: Engine | Connection | Session) -> SchemaRepor
                 continue
             sql = _render_add_column_sql(resolved, table, expected_column)
             _execute_ddl(resolved, sql)
+            backfill = _render_backfill_sql(resolved, table, expected_column)
+            if backfill is not None:
+                # Immediately after the ADD COLUMN, so no row can be written between the
+                # two and wrongly inherit the grandfathered value.
+                _execute_ddl(resolved, backfill)
+                logger.info(
+                    "[schema] backfilled pre-existing rows: %s.%s",
+                    table.name,
+                    expected_column.name,
+                )
 
     validated = inspect_runtime_schema(resolved)
     return SchemaReport(
