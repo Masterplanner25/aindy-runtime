@@ -15,7 +15,10 @@ Operable via a built-in platform UI and a REST API backed by the `aindy-sdk`.
 - **Memory system** — persistent `MemoryNode` storage with pgvector embeddings, hybrid retrieval, and memory traces
 - **Syscall contract** — single `SyscallDispatcher` entry point with schema validation, idempotency gates, and tenant isolation
 - **Platform UI** — operator dashboard for flows, agents, scheduler, and observability (served at `/platform`)
-- **Plugin registry** — mount routers, flows, jobs, syscalls, and event handlers from external Python packages at boot time
+- **Plugin registry** — mount routers, flows, jobs, syscalls, connectors, and event handlers from external Python packages at boot time
+- **Self-service auth** — password change, forgot/reset over a signed single-use token, and email verification, with uniform responses so no endpoint becomes an account-enumeration oracle
+- **Outbound connectors** — `register_connector` plus a capability-enforced egress boundary: recipient/domain allow-lists, per-capability rate limits, and just-in-time secrets from a broker rather than app config
+- **MCP interop** — call external MCP tools from agent runs, and expose runtime syscalls to external MCP clients via `aindy-runtime mcp-server` (opt-in, `[mcp]` extra)
 - **Nodus script execution** — embedded execution service for the Nodus DSL (`.nodus` / `.nd`), with memory builtins and WAIT/RESUME propagation back into the flow engine
 - **Distributed operation** — Redis-backed distributed job queue, lease-based leadership election for background schedulers, and orphan-run recovery watchdogs
 - **Effect compensation** — append-only effect-reversal ledger with `sys.v1.agent.undo` to walk back a run's recorded side effects, plus `sys.v1.agent.simulate` for zero-side-effect rehearsal against virtual tools
@@ -81,10 +84,11 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml \
 Once `curl http://localhost:8000/ready` returns `{"status": "ok"}`, create your first account and API key:
 
 ```bash
-# Register
+# Register. Returns 202 with NO token — registration does not log you in.
+# Passwords must be at least 8 characters.
 curl -s -X POST http://localhost:8000/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"email": "you@example.com", "password": "yourpassword", "display_name": "You"}' \
+  -d '{"email": "you@example.com", "password": "yourpassword", "username": "you"}' \
   | python -m json.tool
 
 # Log in — copy access_token from the response
@@ -93,16 +97,37 @@ curl -s -X POST http://localhost:8000/auth/login \
   -d '{"email": "you@example.com", "password": "yourpassword"}' \
   | python -m json.tool
 
-# Promote yourself to admin (needed to create Platform API keys)
+# Promote yourself to admin (needed to create Platform API keys).
+# For a compose deployment the CLI lives in the container, not on the host:
+#   docker compose exec api aindy-runtime auth promote-admin you@example.com
 aindy-runtime auth promote-admin you@example.com
 
-# Create a Platform API key (save the 'key' field — shown only once)
+# Create a Platform API key (save the 'key' field — shown only once).
+# Unknown scopes are rejected with 422 — see the table below for the full set.
 curl -s -X POST http://localhost:8000/platform/keys \
   -H "Authorization: Bearer <your-jwt>" \
   -H "Content-Type: application/json" \
-  -d '{"name": "my-app", "scopes": ["memory.read", "memory.write", "flow.run", "event.emit"]}' \
+  -d '{"name": "my-app", "scopes": ["memory.read", "memory.write", "flow.execute", "event.emit"]}' \
   | python -m json.tool
 ```
+
+**API key scopes** — the complete set. Anything else is a `422`:
+
+| Scope | Grants |
+|---|---|
+| `flow.read` / `flow.execute` | Read flow definitions and runs / dispatch `sys.v1.flow.run` |
+| `memory.read` / `memory.write` / `memory.delete` | Recall, write, and hard-delete memory nodes — delete is **not** implied by write |
+| `agent.run` | Create and execute agent runs |
+| `execution.read` | Read execution units, metrics, and observability surfaces |
+| `event.emit` | Emit events through the syscall contract |
+| `webhook.manage` | Manage webhook subscriptions |
+| `platform.admin` | Full platform administration |
+
+> **Registration returns `202` and no token.** It does not log you in. If an email
+> channel is configured it sends a verification link. This is deliberate: a response
+> that differed between "created" and "already exists" would be an account-enumeration
+> oracle. Log in separately for a token. Verification is not required to log in unless
+> you set `AINDY_REQUIRE_VERIFIED_LOGIN=true`.
 
 Then install the SDK and make your first call:
 
@@ -148,8 +173,8 @@ implementation, not a required dependency.
 **Reference implementation:** [`aindy-apps-monolith`](https://github.com/Masterplanner25/aindy-apps-monolith)
 contains 16 working domain apps built on this pattern. The canonical how-to doc is
 [`docs/architecture/PLUGIN_REGISTRY_PATTERN.md`](https://github.com/Masterplanner25/aindy-apps-monolith/blob/main/docs/architecture/PLUGIN_REGISTRY_PATTERN.md)
-— it covers all 18 registration categories, boot-order dependency declarations, and a
-step-by-step guide for adding a new domain app.
+— it covers every registration category the registry exposes, boot-order dependency
+declarations, and a step-by-step guide for adding a new domain app.
 
 > **Trust posture note:** option 3 is a trusted-internal mechanism. It does not sandbox
 > extension code. Do not use it to load untrusted third-party packages.
@@ -279,9 +304,16 @@ Once the server confirms a clean startup you can unset the flag.
 ### Docker Compose
 
 ```bash
-docker compose pull          # fetch the new image
-docker compose up -d         # recreate containers with zero-downtime rolling update
+# The api service builds locally (`build: .`) rather than pulling a published image,
+# so `docker compose pull` has nothing to fetch. Rebuild instead:
+docker compose build --no-cache api    # picks up the aindy-runtime pin in the Dockerfile
+docker compose up -d                   # recreate containers
 ```
+
+The Dockerfile installs a pinned `aindy-runtime==X.Y.Z` from PyPI, so bump that pin to the
+version you want before rebuilding. **The Platform UI ships inside that wheel** as package
+data rather than being built by the Dockerfile, so a container serves the UI belonging to
+the pinned version — not your working tree.
 
 If the release bumps the schema, set the reconcile flag in `AINDY/.env` before
 restarting, then remove it after the first clean boot.
