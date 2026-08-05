@@ -405,7 +405,57 @@ FR-3 > FR-1 > FR-2 > FR-4; corrected runtime picture: the only fully net-new ite
 2026-07-18 (native workflows couldn't reach app callables) — verified real; see below.
 A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — verified real;
 item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
-blocked on a token-delivery channel (FR-1). Next available: **FR-7**.
+blocked on a token-delivery channel (FR-1). **FR-7** (memory recall defects) shipped in
+v2.0.0. **FR-8, FR-9 and FR-10 arrived 2026-08-03 and shipped 2026-08-05 — see below; all
+three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** Next available: **FR-11**.
+
+### FR-8/9/10 — the 2.0.0 upgrade trio (SHIPPED 2026-08-05)
+
+Filed 2026-08-03 by the app team while upgrading a live deployment to `aindy-runtime==2.0.0`
+— i.e. found *because* they were the first to run the release we had just cut, on the install
+shape we do not exercise ourselves. **All three verified against source before building; all
+three premises held.** They sat untracked for two days, which is the argument for this entry
+existing at all.
+
+The common thread is worth more than the individual fixes: **each one is invisible from a
+source checkout and from CI.** A wheel install has no `alembic/` tree; a Compose file writes
+empty strings where a shell writes nothing; an app registering a connector type is a shape we
+never see in our own tests. Our green board did not and could not have caught any of them.
+
+| | Defect | Fix | PR |
+|---|---|---|---|
+| **FR-10** | `AINDY_REQUIRE_VERIFIED_LOGIN: "${VAR:-}"` renders as `""`; pydantic rejects it as a bool and `settings = Settings()` runs at **module import**, so the container restart-loops before serving (27 restarts). | `env_ignore_empty=True` on `model_config` — empty means unset. | #360 |
+| **FR-8** | Alembic `0014` grandfathers pre-existing accounts to verified; `alembic/` is **not in the wheel**, and `reconcile_runtime_schema` is purely structural, so wheel installs left every account unverified. Latent lockout the moment an operator believes our upgrade notes and enables the flag. | Columns declare `info={"reconcile_backfill": "<sql>"}`; reconcile issues the `UPDATE` right after the `ADD COLUMN`. | #361 |
+| **FR-9** | Runtime transactional mail dispatched to the `email` connector type — the same type apps register for automations — in a different, undocumented action shape. Combined with the (correct) no-fallback rule: `/auth/register` returns 202 and **no account can complete signup**. | Reserved `transactional_email` type; shape published in `CONNECTOR_CONTRACT.md` §5a; failure logs at ERROR. | #362 |
+
+**Three findings from the work, each of which would otherwise be rediscovered painfully:**
+
+- **SQLAlchemy renders `server_default="false"` as `DEFAULT 'false'`** — a *quoted string
+  literal*. Postgres casts it to boolean false on a BOOLEAN column; **sqlite stores the four
+  characters and reads back truthy**. A sqlite test asserting boolean semantics here is
+  testing type affinity, not your code. FR-8's end-to-end test uses a text column for exactly
+  this reason.
+- **Alembic `0014`'s re-run guard does not do what its comment claims.**
+  `WHERE ... created_at < now()` evaluates `now()` at *execution* time, so on a re-run it
+  matches every row rather than only those predating the first run. Low practical risk
+  (alembic will not re-run an applied revision) but the comment overstates the protection.
+  Not edited — changing a shipped migration is its own risk.
+- **`send_email`'s "never raises" guarantee is inherited, not enforced.** It holds only
+  because `dispatch_connector` normalises handler exceptions. A test that mocks the
+  dispatcher therefore proves nothing about it; FR-9's test registers a genuinely broken
+  handler and drives the real path.
+
+**Not taken, deliberately:** FR-8 asks 2–4 (ship the alembic tree in the wheel; document the
+wheel-vs-source difference; refuse a security-relevant NOT NULL column on a populated table)
+— all are unnecessary once the guarantee simply holds everywhere, which is ask 1. FR-9 ask 4
+(dry-run probe at registration) — separating the types removes the failure it would catch,
+and dispatching a synthetic action into a handler at boot has its own side-effect risk.
+FR-10 asks 2–3 (better error text; document which settings are typed fields) — ask 1 makes
+the process survive, which was the outage; the rest is polish if the message still confuses.
+
+**Release:** all three are upgrade-path defects for the *current* published version, so they
+want to ship together as **2.0.1** rather than wait for the next feature release. Held
+pending owner go-ahead.
 
 ### FR-1 — Connector registration hook + capability-enforced outbound I/O
 
