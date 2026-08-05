@@ -450,6 +450,21 @@ class Settings(BaseSettings):
         env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
+        # FR-10. An unset-with-default Compose variable renders as an EMPTY STRING, not an
+        # absent one: `AINDY_REQUIRE_VERIFIED_LOGIN: "${AINDY_REQUIRE_VERIFIED_LOGIN:-}"`.
+        # To an operator that reads as "leave it off"; to pydantic it is an unparseable
+        # bool, and because `settings = Settings()` runs at MODULE IMPORT, the process dies
+        # before serving -- a crash loop, not a config warning. 28 typed bool fields are
+        # exposed to this, so it is a class of outage rather than one unlucky variable.
+        #
+        # `env_ignore_empty` makes an empty env var mean "unset", falling back to the field
+        # default -- which is what every operator already assumes `${VAR:-}` does.
+        #
+        # Safe for the non-bool fields: every setting whose default is already "" is
+        # unaffected, and MONGO_URL (default None, set to "" by CI and by compose) is only
+        # ever consumed through falsy checks, with `ensure_mongo_url` normalising via
+        # `(v or "").strip()`. Verified by diffing resolved Settings both ways.
+        env_ignore_empty=True,
     )
 
     # --- Validators ---
