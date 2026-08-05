@@ -271,9 +271,31 @@ The local source lives at `C:\dev\aindy-ui-kit\src\`. The installed package in
 `dist/index.cjs`) — no source files. Editing the source repo has no effect on the
 running bundle until you rebuild and replace it.
 
-**Docker build is self-contained.** The Dockerfile `ui-builder` stage runs `npm ci`
-and `npm run build` from the registry-pinned `@aindy/ui-kit`. A fresh
-`docker compose build --no-cache` from a clean clone requires no prior local UI build.
+**Docker does NOT build the SPA — it installs it, prebuilt, from PyPI.** *(Corrected
+2026-08-05. This section previously described a `node:20-alpine` `ui-builder` stage running
+`npm ci` + `npm run build`; that stage was **deleted 2026-06-15** in `0a427a6` when the
+image switched to installing the published wheel, and the doc was never updated.)*
+
+The Dockerfile has two stages, both `python:3.11-slim`, and no node at all. The builder does:
+
+```dockerfile
+RUN pip install --prefix=/install "aindy-runtime==2.0.0"
+```
+
+The SPA rides along inside that wheel as package data — `pyproject.toml` declares
+`[tool.setuptools.package-data] "AINDY" = [..., "platform/dist/**"]` with
+`include-package-data = true`. So `docker compose build` still needs no local UI build, but
+for a different reason than the old text gave, and with a **consequence that text hid**:
+
+> **A UI change does not reach any container until a release is cut AND the Dockerfile pin
+> is bumped.** The image ships whatever `AINDY/platform/dist` was packaged into the pinned
+> version. This is exactly why a running container served `assets/index-CmX9Wucu.css`
+> (tailwind 3) while the working tree had `index-C9NdGPSF.css` (tailwind 4) — not a caching
+> bug, the designed behaviour. Verify UI work against `npm run dev`, and treat the container
+> as showing the last *released* UI.
+
+The `dist/` that gets packaged is CI's own — `Runtime Package Build` runs after
+`Platform UI Build` in `runtime-ci.yml` — so the wheel never carries a locally-built bundle.
 
 **Local dev loop when ui-kit source changes:**
 1. Edit source in `C:\dev\aindy-ui-kit\src\`
