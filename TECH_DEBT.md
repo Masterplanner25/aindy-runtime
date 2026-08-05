@@ -3785,20 +3785,30 @@ the platform:
 | | node | npm | writes `"peer": true` |
 |---|---|---|---|
 | dev machine | 24.13.0 | 11.6.2 | yes |
-| all four workflows | 20 | 10.8.2 | no |
+| all four workflows *(until 2026-08-05)* | 20 | 10.8.2 | no |
 
-So any lock written locally will always show this churn when resolved in CI. **The resolver
-is on the right side of it** — it pins `node-version: "20"`, matching `Platform UI Build`,
-which is the job whose `npm ci` actually gates merges. Consequence to know before using
-`push: true`: it will commit a peer-flag-only change even when nothing real moved. Harmless,
-but it means "the lockfile changed" is not by itself evidence that anything meaningful did —
-read the *"Packages added"* output, which is there for exactly this reason and correctly
-printed `(none — versions changed but no packages were added)`.
+So any lock written locally showed this churn when resolved in CI. **The resolver was on the
+right side of it** — it pinned the same node as `Platform UI Build`, the job whose `npm ci`
+actually gates merges. Consequence, still true whenever the two ends differ: `push: true`
+will commit a metadata-only change when nothing real moved, so *"the lockfile changed"* is
+not by itself evidence that anything meaningful did. Read the *"Packages added"* output,
+which exists for exactly this reason and correctly printed
+`(none — versions changed but no packages were added)`.
 
-**Adjacent, unfixed:** the dev machine runs node 24 / npm 11 against CI's node 20 / npm 10.
-That skew is an independent source of lockfile divergence and would be worth closing with a
-`.nvmrc` (there is none) plus a node bump across the four workflows — but bumping the node
-version under a required check is a deliberate change, not a drive-by.
+**Skew CLOSED 2026-08-05: all four workflows moved to node 24, plus a repo-root `.nvmrc`.**
+Both ends now run node 24 / npm 11, so local and CI resolve identically and the peer-flag
+churn stops. The bump was overdue for a second and sharper reason found while scoping it —
+**node 20 reached end-of-life on 2026-04-30** (per `nodejs/Release/schedule.json`), so CI had
+been building on an unsupported runtime for three months:
+
+```
+v20: EOL 2026-04-30      v22: EOL 2027-04-30      v24: EOL 2028-04-30
+```
+
+24 over 22 deliberately: 22 is the conservative pick but leaves the dev-vs-CI mismatch in
+place, which was the actual problem. `.nvmrc` is the guard — it keeps a future `nvm use`
+from silently re-opening the gap. Note `platform/package.json` still declares no `engines`
+field; adding one would make the floor enforceable at install time rather than advisory.
 
 **Process rule this exposed:** verify a lockfile change with **`npm ci`**, never `npm
 install` + `npm run build`. `npm install` silently repairs a mismatch; `npm ci` fails on it.
