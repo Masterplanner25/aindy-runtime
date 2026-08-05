@@ -37,7 +37,23 @@ from AINDY.config import settings
 logger = logging.getLogger(__name__)
 
 EMAIL_CAPABILITY = "outbound.email"
-CONNECTOR_TYPE = "email"
+#: The connector type runtime-owned transactional mail dispatches to.
+#:
+#: FR-9. This was ``"email"`` in 2.0.0, and that collided with the type apps register for
+#: user-authored automations (``register_connector("email", ...)``). Registering one
+#: silently opted an app into handling the runtime's password-reset and verification mail
+#: too, in a *different* action shape, with no signal at registration time that it had
+#: happened. Combined with the deliberate no-SMTP-fallback rule, an app-side shape mismatch
+#: became "no account can complete signup": ``/auth/register`` returned 202, the connector
+#: raised KeyError on a field it did not expect, and the only evidence anywhere was one
+#: WARNING line.
+#:
+#: The two senders share nothing but the word "email" — one is user-configured per-action
+#: egress, the other is auth-critical runtime mail — so they now have separate types. An
+#: app that genuinely wants to carry transactional mail opts in explicitly by registering
+#: this type; otherwise the runtime's own SMTP carries it, which is the hybrid the FR-6
+#: decision called for.
+CONNECTOR_TYPE = "transactional_email"
 
 #: Secret name consulted through the broker before falling back to configured settings.
 SMTP_PASSWORD_SECRET = "SMTP_PASSWORD"
@@ -158,8 +174,15 @@ def send_email(
         result = dispatch_connector(CONNECTOR_TYPE, action, user_id=user_id, db=db)
         ok = bool(result.get("success"))
         if not ok:
-            logger.warning(
-                "[email] registered connector failed (no SMTP fallback by design): %s",
+            # FR-9 ask 3: this is auth-critical. A failure here means password resets and
+            # verification mail are not being delivered while every endpoint still reports
+            # success, so it is an error, not a warning, and it names the registered type
+            # so the cause is not a log-grepping exercise.
+            logger.error(
+                "[email] registered '%s' connector FAILED and there is no SMTP fallback by "
+                "design — transactional mail (verification, password reset) is NOT being "
+                "delivered: %s",
+                CONNECTOR_TYPE,
                 result.get("error"),
             )
         return {"success": ok, "route": "connector", "error": result.get("error")}

@@ -1,7 +1,7 @@
 ---
 title: "Connector Registration + Authorized Outbound Contract (FR-1)"
 api_version: "1.0"
-last_verified: "2026-07-17"
+last_verified: "2026-08-05"
 status: current
 owner: "platform-team"
 ---
@@ -106,6 +106,33 @@ point that replaces app-side raw `urllib`. It routes through `authorized_externa
 | Unknown connector | `{"success": False, "result": None, "error": "connector 'x' is not registered"}` |
 | Policy/rate denial | `{"success": False, "result": None, "error": …, "denied": True}` |
 | Handler exception | `{"success": False, "result": None, "error": <str(exc)>}` |
+
+## 5a. Reserved type: `transactional_email` (runtime-owned mail)
+
+**`transactional_email` is dispatched by the runtime itself, not by an app.** It carries
+password-reset and email-verification mail (FR-6). An app does not need to register it —
+if nothing is registered, the runtime's own SMTP (`AINDY_SMTP_*`) carries the mail. Register
+it only to take delivery over deliberately.
+
+**This type is separate from `email` on purpose (FR-9).** In 2.0.0 the runtime dispatched
+transactional mail to `email`, the same type apps register for user-authored automations.
+Registering one silently opted an app into carrying auth-critical mail in a shape it had
+never been told about, and because a registered-connector failure deliberately does **not**
+fall back to SMTP, a shape mismatch meant `/auth/register` returned `202` while no
+verification mail could ever be sent. Registration looked healthy; no account could complete
+signup. The two senders share nothing but the word "email", so they now have separate types.
+
+If you do register it, this is the action shape — stable, and the only shape dispatched:
+
+```python
+{"type": "send", "to": "<recipient>", "subject": "<subject>", "body": "<plain text>"}
+```
+
+Branch on `action["type"]`; treat any unrecognised value as unhandled rather than assuming
+`send`. Return the normal handler envelope. **A failure is final** — the runtime logs it at
+ERROR and does not retry or fall back, because silently rerouting mail to a channel the
+operator did not choose, exactly when the chosen one is broken, is worse than not sending.
+If you cannot deliver reliably, do not register this type; leave it to runtime SMTP.
 
 ## 6. App-side adoption (the contract this satisfies)
 
