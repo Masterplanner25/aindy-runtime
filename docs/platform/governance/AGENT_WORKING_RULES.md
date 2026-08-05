@@ -1,6 +1,6 @@
 ---
 title: "Agent Working Rules"
-last_verified: "2026-06-27"
+last_verified: "2026-08-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -8,6 +8,15 @@ owner: "platform-team"
 # Agent Working Rules
 
 This document defines enforceable collaboration boundaries for AI agents operating in this repository. It is directive and governance-focused.
+
+> **How this is reached.** [`CLAUDE.md`](../../../CLAUDE.md) is the authoritative
+> agent-instruction surface and links here from its header; `CODEX.md` is a pointer to
+> `CLAUDE.md`. That chain is load-bearing — until 2026-08-05 nothing referenced this file,
+> so a document calling itself directive was in practice read by no one. If you restructure
+> the agent-instruction docs, keep a path from `CLAUDE.md` to here.
+>
+> Division of labour: `CLAUDE.md` records what is *true* about the codebase (invariants,
+> protocols, hazards). This file records what you are *permitted to do* to it.
 
 > **Post-split note (2026-06-27):** Relocated into `aindy-runtime` from the
 > pre-split monolith archive. File paths have been updated for the
@@ -17,10 +26,10 @@ This document defines enforceable collaboration boundaries for AI agents operati
 > is [`docs/platform/governance/INVARIANTS.md`](./INVARIANTS.md) in this repo
 > and the app-domain half lives in aindy-apps-monolith. `DATA_MODEL_MAP.md` is
 > now relocated (runtime-scoped, Tier-2 surgery — `docs/architecture/DATA_MODEL_MAP.md`).
-> A couple of other governance docs referenced below (`SYSTEM_SPEC.md`,
-> `GOVERNANCE_INDEX.md`) were not part of this migration pass and are not yet
-> present in either split repo; references to them are retained as historical
-> pointers. The rules themselves are repo-agnostic and remain normative.
+> Two governance docs referenced below were not part of this migration pass.
+> Re-checked 2026-08-05: `SYSTEM_SPEC.md` exists in **neither** repo and its references
+> are historical only; `GOVERNANCE_INDEX.md` does **not** exist here but does exist in
+> aindy-apps-monolith at `docs/GOVERNANCE_INDEX.md`, so references to it mean that file. The rules themselves are repo-agnostic and remain normative.
 
 ## 1. Scope of Authority
 

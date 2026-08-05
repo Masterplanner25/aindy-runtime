@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**This file is the authoritative agent-instruction surface for this repo.** Two companions:
+
+- **[`docs/platform/governance/AGENT_WORKING_RULES.md`](docs/platform/governance/AGENT_WORKING_RULES.md)**
+  — the *collaboration* boundaries: what an agent may change without approval, what requires
+  sign-off, and how to behave at a boundary it cannot resolve. This file covers what is true
+  about the codebase; that one covers what you are permitted to do to it. **Read it before
+  making a change whose blast radius you are unsure of.**
+- **[`CODEX.md`](CODEX.md)** — a pointer to this file, not a parallel copy. It used to be a
+  hand-maintained duplicate and drifted badly; do not reintroduce content there.
+
 ---
 
 ## Commands
