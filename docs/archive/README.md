@@ -5,7 +5,7 @@ here should be treated as describing the current system — each entry records w
 the date it was written. For current state, start at [`../../README.md`](../../README.md),
 [`../../CLAUDE.md`](../../CLAUDE.md), and [`../../TECH_DEBT.md`](../../TECH_DEBT.md).
 
-Archived 2026-08-05 from the repository root. Each had **zero inbound references** from any
+Archived 2026-08-05 from the repository root and from `docs/runtime/`. Each had **zero inbound references** from any
 tracked file — read by nothing, maintained by no one, sitting alongside living documents.
 
 Two of them (`AINDY_ORIENTATION.md`, `RUNTIME_SIGNOFF.md`) were previously **gitignored** and
@@ -18,6 +18,36 @@ audit trail is complete for everyone rather than for one workstation.
 | [`AINDY_RUNTIME_MATURITY.md`](AINDY_RUNTIME_MATURITY.md) | 2026-06-04 | A maturity rubric evaluating the runtime as an OS-like platform. Linked *out* to the 90-day checklist; nothing linked *in*. | `AINDY_RUNTIME_90_DAY_CHECKLIST.md` (still at root, still maintained) |
 | [`AINDY_ORIENTATION.md`](AINDY_ORIENTATION.md) | 2026-05-23 | A full re-orientation pass over the runtime and the apps boundary, written just after the repo split. Was gitignored until 2026-08-05; nothing tracked ever cited it. | `README.md` and `docs/runtime/RUNTIME_MODULE_MAP.md` for current structure |
 | [`RUNTIME_SIGNOFF.md`](RUNTIME_SIGNOFF.md) | 2026-05-17 | The extraction sign-off for the runtime/apps split — records the smoke check passing at 17 tests. Cited only by `AINDY_ORIENTATION.md`, which was itself uncited. | superseded by CI; `Runtime Contracts` is the live equivalent |
+
+## From `docs/runtime/` — archived 2026-08-05
+
+Nine documents, each with **zero inbound references** from any tracked file. Seven share a
+single date, 2026-06-06: one audit session whose output was written into the reference
+docset rather than alongside it. They diluted 93 living documents down to 84.
+
+| Document | Written | What it was |
+|---|---|---|
+| [`AUTH_SYSTEM_AUDIT.md`](AUTH_SYSTEM_AUDIT.md) | 2026-06-06 | Point-in-time audit of the auth surface — predates the 2.0.0 auth rework entirely (purpose claim, 202 register, recovery routes) |
+| [`PLATFORM_PURITY_AUDIT.md`](PLATFORM_PURITY_AUDIT.md) | 2026-06-06 | Runtime/app boundary purity check |
+| [`PLATFORM_READINESS_AUDIT.md`](PLATFORM_READINESS_AUDIT.md) | 2026-06-06 | Readiness assessment |
+| [`REAL_USER_REALITY_AUDIT.md`](REAL_USER_REALITY_AUDIT.md) | 2026-06-06 | End-user reality check |
+| [`SYSTEM_CAPABILITY_AUDIT.md`](SYSTEM_CAPABILITY_AUDIT.md) | 2026-06-06 | Capability inventory |
+| [`SYSTEM_INTEGRITY_AUDIT.md`](SYSTEM_INTEGRITY_AUDIT.md) | 2026-06-06 | Integrity assessment |
+| [`SYSTEM_LIMIT_LEVERAGE_AUDIT.md`](SYSTEM_LIMIT_LEVERAGE_AUDIT.md) | 2026-06-06 | Limits and leverage analysis |
+| [`RUNTIME_DOCSET_STATUS_AUDIT.md`](RUNTIME_DOCSET_STATUS_AUDIT.md) | 2026-05-31 | Status audit of the docset itself |
+| [`FR6_PASSWORD_RECOVERY_SCOPE.md`](FR6_PASSWORD_RECOVERY_SCOPE.md) | 2026-08-02 | Build scope for FR-6 password recovery — **the work shipped in 2.0.0**, so this is a completed plan |
+
+**On the FR-6 scope doc specifically.** It carried two real design findings, so it was
+checked rather than assumed disposable — both survive outside it:
+
+- *A reset token would otherwise be a valid access token.* The mitigation is
+  domain-separated signing keys, not merely a `purpose` claim. Recorded in `CHANGELOG.md`,
+  in `docs/platform/governance/INVARIANTS.md` §(21), and load-bearing in the source itself
+  (`PASSWORD_RESET_DOMAIN`, `_derive_domain_key` in `auth_service.py`).
+- *The duplicate-registration timing side channel.* Recorded in `TECH_DEBT.md` and
+  `CLAUDE.md`.
+
+Nothing unique was lost. For current behaviour read the source and `INVARIANTS.md`, not this.
 
 ## Why these four and not the others
 
