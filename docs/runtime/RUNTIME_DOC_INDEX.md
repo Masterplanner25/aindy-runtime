@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Runtime Doc Index
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This is the starting index for the `docs/runtime` docset.
 
 Its purpose is to help readers find the right runtime document quickly and avoid starting from the wrong layer of the docset.

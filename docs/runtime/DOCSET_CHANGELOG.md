@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 # Docset Changelog
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This file records notable changes to the runtime docset structure and governance layer.
 
 It is intentionally short.
