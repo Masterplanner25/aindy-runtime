@@ -23,12 +23,17 @@ Three tutorials. Each takes under 10 minutes and ends with something running.
 
 **Prerequisites for all three:**
 
+> **Import path note.** The SDK is the separate `aindy-sdk` distribution, imported as
+> `aindy_sdk`. Examples in these tutorials previously used `AINDY.sdk.aindy_sdk`, a path from
+> before the SDK was split out of the runtime package — that module does not exist, so every
+> Python example failed at its import line. Corrected 2026-08-05.
+
 ```bash
 # Server running (runtime repo entry point)
 aindy-runtime serve          # or: uvicorn AINDY.runtime_only:app --reload
 
-# SDK available
-pip install -e path/to/sdk
+# SDK available — published to PyPI; the local editable install predates that
+pip install aindy-sdk
 
 # API key in your environment
 export AINDY_API_KEY="aindy_your_key"

@@ -24,7 +24,7 @@ Create `tutorial_01.py`:
 
 ```python
 import os
-from AINDY.sdk.aindy_sdk import AINDYClient
+from aindy_sdk import AINDYClient
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
@@ -146,7 +146,7 @@ A.I.N.D.Y. needs the flow to exist before you can run it. Add this block — it'
 
 ```python
 import json
-from AINDY.sdk.aindy_sdk import AINDYError
+from aindy_sdk import AINDYError
 
 print("Registering analysis flow...")
 
@@ -303,7 +303,7 @@ Done. The memory-driven loop is working.
 
 ```python
 import os
-from AINDY.sdk.aindy_sdk import AINDYClient, AINDYError
+from aindy_sdk import AINDYClient, AINDYError
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
