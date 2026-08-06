@@ -1,6 +1,6 @@
 ---
 title: "Error Handling Policy (runtime-owned)"
-last_verified: "2026-07-17"
+last_verified: "2026-08-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -24,10 +24,22 @@ explicitly marked.
 ## 1. HTTP Error Classification (4xx vs 5xx)
 
 ### A. Runtime Implementation
-- Exceptions are handled per-route; there is no centralized runtime error formatter, so an
-  unhandled exception propagates to FastAPI and returns a default 500.
-- `AINDY/routes/db_verify_router.py`: minimal explicit error handling (no broad
-  `try/except`); relies on FastAPI default behavior on failure.
+- **There is a centralized error formatter.** `AINDY/exception_handlers.py`
+  `register_exception_handlers(app)` is called unconditionally at `AINDY/main.py:81`, and
+  registers nine handlers including a catch-all `app.add_exception_handler(Exception, ...)`.
+  Runtime-only mode is covered too: `AINDY/runtime_only.py` serves the same `AINDY.main:app`
+  object. *(Corrected 2026-08-05 — this section previously said no such formatter existed and
+  that unhandled exceptions returned FastAPI defaults. Both were false.)*
+- Typed handlers map infrastructure failures to deliberate status codes rather than a generic
+  500: `QueueSaturatedError`, `MongoUnavailableError`, `CircuitOpenError`,
+  `SATimeoutError` (pool exhaustion), `SAOperationalError` (database unavailable),
+  `RequestValidationError`, `RateLimitExceeded`, and `HTTPException`.
+- Individual routes may still handle their own errors; `AINDY/routes/db_verify_router.py`
+  carries no broad `try/except` and relies on the app-level handlers above.
+- `SyscallDispatcher.dispatch()` (`AINDY/kernel/syscall_dispatcher.py`) additionally wraps
+  every handler in a uniform `{status, data, trace_id, duration_ms, error}` envelope, with
+  explicit typed re-raises (e.g. `SyscallContractViolation`) placed *before* its
+  belt-and-suspenders `except Exception`.
 - `SyscallDispatcher.dispatch()` (`AINDY/kernel/syscall_dispatcher.py`) is the exception:
   it wraps every handler in a uniform `{status, data, trace_id, duration_ms, error}`
   envelope, with explicit typed re-raises (e.g. `SyscallContractViolation`) placed *before*
@@ -82,9 +94,15 @@ explicitly marked.
 - Logging is configured in `AINDY/config.py`; `_build_log_handler` guards file-handler setup
   with `except OSError` so a read-only subprocess cwd (site-packages) never crashes logging.
 - `AINDY/main.py` logs requests and responses in middleware.
-- Structured logging is not centralized; runtime modules use the stdlib `logging` module
-  (not `print`) for operational and error messages.
-- Stack-trace exposure in API responses is not explicitly controlled at the code level.
+- **Structured logging is centralized.** `AINDY/platform_layer/log_config.py`
+  `configure_logging()` sets up the root logger, defaulting to JSON output in production
+  (`LOG_FORMAT=json` forces it in any environment). Runtime modules use the stdlib `logging`
+  module, never `print`.
+- **Stack-trace exposure is controlled.** `unhandled_exception_handler` logs the exception
+  server-side, then returns a fixed
+  `{"error": "internal_error", "message": "Internal server error", "details": null}` —
+  the exception text never reaches the client. *(Corrected 2026-08-05: this section
+  previously said neither was controlled at the code level.)*
 
 ### B. Policy Rules
 - Severity levels:
@@ -97,7 +115,8 @@ explicitly marked.
 
 ## 5. Error Response Contract
 
-Policy requirement for API errors (even if not fully implemented):
+Required shape for API errors — **implemented and enforced app-wide** by the handlers in
+`AINDY/exception_handlers.py`:
 
 ```json
 {
@@ -107,17 +126,37 @@ Policy requirement for API errors (even if not fully implemented):
 }
 ```
 
-- The syscall envelope (`{status, data, trace_id, duration_ms, error}`) satisfies this for
-  the dispatch surface; unhandled route exceptions still return FastAPI defaults (no
-  centralized formatter — see Known Gaps).
+Observed live against a running server (unauthenticated request to a protected route):
+
+```json
+{"error": "http_error", "message": "Authentication required", "details": null}
+```
+
+- Every registered handler emits this shape, including the catch-all for otherwise-unhandled
+  exceptions. A route that raises without its own `try/except` still produces the contract.
+- The syscall envelope (`{status, data, trace_id, duration_ms, error}`) is a *different*,
+  richer shape covering the dispatch surface. Both are intentional: the envelope carries
+  execution metadata a caller needs (trace id, duration), the error contract is the HTTP
+  boundary. Do not collapse one into the other.
 
 ## 6. Known Gaps (runtime-scoped)
-- Inconsistent error handling across `AINDY/routes/*`: no centralized error-response
-  formatter, so unhandled exceptions return FastAPI defaults rather than the §5 contract.
-- No centralized error response formatter for HTTP routes (the syscall envelope covers only
-  the dispatch surface).
-- Structured logging is not centralized; no stack-trace suppression is enforced in
-  production API responses at the code level.
+
+**All three previously-listed gaps are closed** (verified against source 2026-08-05). They
+are retained here, struck through, because a "Known Gaps" list that silently loses entries
+is indistinguishable from one that was never re-checked — and because a reader who saw the
+old list might otherwise set out to fix something already fixed.
+
+- ~~Inconsistent error handling across `AINDY/routes/*`: no centralized error-response
+  formatter, so unhandled exceptions return FastAPI defaults rather than the §5 contract.~~
+  **Closed** — `register_exception_handlers` at `AINDY/main.py:81`, catch-all included.
+- ~~No centralized error response formatter for HTTP routes.~~ **Closed** — same mechanism;
+  see §5 for the live-observed output.
+- ~~Structured logging is not centralized; no stack-trace suppression is enforced.~~
+  **Closed on both counts** — `log_config.configure_logging()` (JSON by default in
+  production) and `unhandled_exception_handler`'s fixed generic response body.
+
+No runtime-scoped gaps are currently open in this area. If you find one, add it here rather
+than to a commit message.
 
 ## App-owned implementation (aindy-apps-monolith)
 
