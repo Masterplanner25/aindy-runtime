@@ -129,7 +129,7 @@ Create `tutorial_02.py`:
 ```python
 import os
 import time
-from AINDY.sdk.aindy_sdk import AINDYClient
+from aindy_sdk import AINDYClient
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
@@ -309,14 +309,19 @@ execution-causality graph:
 > table and its `GET /platform/nodus/trace/{trace_id}` reader were **removed**
 > (RTR-1 close) — they duplicated, at finer grain, what `SystemEvent` +
 > `EventEdge` already record. Use the causal execution graph instead:
-> `GET /observability/execution_graph/{trace_id}` (handler
+> `GET /platform/observability/execution_graph/{trace_id}
+
+> **Path note (corrected 2026-08-05).** This is mounted under `/platform`. The bare
+> `/observability/...` form these tutorials previously used returns 404 on a default
+> deployment — the root-level mount only exists when `AINDY_ENABLE_LEGACY_SURFACE=true`
+> (see `AINDY/routes/__init__.py`), which is off by default.` (handler
 > `AINDY/routes/observability_router.py`). The path segment is the run's
 > `trace_id`; `run_id` is used here only because the SDK surfaces the same
 > identifier under both keys.
 
 ```python
 print("\nExecution graph:")
-graph = client.get(f"/observability/execution_graph/{run_id}")
+graph = client.get(f"/platform/observability/execution_graph/{run_id}")
 for event in graph.get("events", []):
     etype  = event.get("event_type", "?")
     source = event.get("source", "?")
@@ -344,7 +349,7 @@ The trace shows exactly where the script paused and when it resumed — with the
 
 ```python
 import os, time
-from AINDY.sdk.aindy_sdk import AINDYClient
+from aindy_sdk import AINDYClient
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),

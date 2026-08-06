@@ -127,7 +127,7 @@ Always verify the script runs correctly before scheduling it. Create `tutorial_0
 
 ```python
 import os, json
-from AINDY.sdk.aindy_sdk import AINDYClient
+from aindy_sdk import AINDYClient
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
@@ -358,7 +358,7 @@ print("Updated: now runs at 09:00 and 18:00.")
 
 ```python
 import os
-from AINDY.sdk.aindy_sdk import AINDYClient
+from aindy_sdk import AINDYClient
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
