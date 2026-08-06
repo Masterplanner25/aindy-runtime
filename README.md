@@ -1,10 +1,16 @@
 # aindy-runtime
 
-`aindy-runtime` is a self-hostable AI agent execution runtime. It provides the
-infrastructure layer for building and operating AI-powered systems: a syscall-based
-execution contract, a DAG flow engine, persistent vector memory, structured agent runs
-with approval gates, and an extensible plugin architecture for mounting domain-specific
-app layers.
+**Install one platform with the infrastructure AI agents need to do real work: durable
+workflows, a capability-gated agent runtime with human approvals, persistent vector memory,
+scheduling, APIs, and observability — self-hosted, on your own database.**
+
+The runtime is the substrate; your domain logic mounts on top as a plugin package or over
+the HTTP SDK. A bare install gives you the execution layer and the operator surfaces, not a
+finished application — see [Building apps on aindy-runtime](#building-apps-on-aindy-runtime).
+
+Concretely: a syscall-based execution contract, a DAG flow engine, persistent vector memory,
+structured agent runs with approval gates, and an extensible plugin architecture for mounting
+domain-specific app layers.
 
 Deployable in minutes via Docker Compose. Extensible via a Python plugin registry.
 Operable via a built-in platform UI and a REST API backed by the `aindy-sdk`.
