@@ -10,11 +10,11 @@ dist/
 *.egg-info/
 .env
 AINDY/.env
-ISOLATION_MODEL_PLAN.md
-AINDY_ORIENTATION.md
-IDEMPOTENCY_AUDIT.md
-RUNTIME_SIGNOFF.md
-C2_SANDBOX_AUDIT.md
+# The five design/audit docs formerly listed here are now committed (2026-08-05).
+# They were cited from tracked source -- effect_record.py, alembic 0002/0003, and
+# sandbox_runner.py all name them -- so excluding them left those citations pointing at
+# files no clone contained. `Idempotency convo.txt` stays out: it is a raw transcript,
+# not a document.
 Idempotency convo.txt
 logs/
 test_c2_verification/
