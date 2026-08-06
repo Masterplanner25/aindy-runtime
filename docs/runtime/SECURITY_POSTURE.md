@@ -1,14 +1,11 @@
 ---
 title: "Security Posture"
-last_verified: "2026-05-31"
+last_verified: "2026-08-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
-﻿# Security Posture
-
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
+# Security Posture
 
 This document defines the actual security posture of `aindy-runtime` as it exists today and the security claims the repo is justified in making.
 
@@ -123,6 +120,28 @@ These are claims the runtime is reasonably justified in making.
 - The runtime has a documented trust model rather than an implied one.
 - The runtime is suitable for trusted internal deployments.
 
+**Added 2026-08-05.** Four controls shipped after this document was first written and are
+absent from the original text. Each is defensible because it is *tested*, not merely present:
+
+- **Container-backed extension sandbox, escape-tested.** `ContainerizedOciSandboxRunner`
+  carries a `container-grade-sandbox` tier certified on **native Linux**, verified by a
+  17-vector escape suite (`pytest -m sandbox_escape`) covering filesystem escape, network
+  escape, pid limits, privilege escalation, host env leak and path boundaries. Results are
+  recorded per release in an append-only log, `SANDBOX_ESCAPE_AUDIT.md`, and the suite runs
+  as a release gate on every version tag. This is a **separate execution path** from
+  in-process extensions — see the sharpened distinction under "Not Fully Solved" below.
+- **Signed extension bundles.** Ed25519 detached signatures with a trust registry and a
+  CycloneDX-lite SBOM (`platform_layer/extension_signing.py`). The production profile can
+  refuse unsigned or untrusted bundles; enforcement for external third-party artifacts is
+  gated by `AINDY_REQUIRE_SIGNED_PLUGINS`.
+- **Brokered secrets.** `platform_layer/secret_broker.py` resolves credentials
+  just-in-time under a capability scope, with env/file/Vault/chain backends. Secrets are
+  consumed in-tool and never transit the trace-logged syscall envelope.
+- **Declarative capability policy.** `agents/capability_policy.py` supports per-capability
+  recipient and domain allow-lists plus rate limits, enforced in `execute_tool`. It is
+  **vacuous until a policy is registered** — do not claim it as an active control on a
+  deployment that has registered none.
+
 ### Claims That Need Narrow Wording
 - “Secure extension platform”
 - “Isolated plugin runtime”
@@ -135,7 +154,13 @@ These may only be used with qualifiers, if at all.
 - “Safe for arbitrary third-party extensions”
 - “Safe by default for hostile in-process code”
 - “Strong zero-trust plugin isolation”
-- “Equivalent to a hardened runtime sandbox”
+
+*Removed from this list 2026-08-05:* “Equivalent to a hardened runtime sandbox”. Blanket
+avoidance is no longer accurate — for the **containerized** path the claim is supported by a
+17-vector escape suite and a per-release audit log. It remains unsupportable for the
+in-process path. State the path, and state the platform: the certification is for native
+Linux, and macOS/Docker-Desktop backends are covered separately in
+`MACOS_CONTAINER_POLICY.md`.
 
 ---
 
@@ -159,9 +184,22 @@ These include:
 These areas should be treated as partially solved, out of scope, or requiring stronger boundaries than currently exist.
 
 ### 1. Hostile In-Process Extension Isolation
-This is the largest current limitation.
+This is the largest current limitation, and it remains true.
 
-If extension code runs in-process, tenant and capability checks alone do not prove strong code isolation.
+If extension code runs **in-process** — the `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS` path —
+tenant and capability checks alone do not prove strong code isolation. That path is a
+trusted-code mechanism. It is not a sandbox and must not be described as one.
+
+**The distinction this document originally lacked:** the runtime has *two* extension
+execution paths, and this limitation applies to only one of them.
+
+| Path | Isolation | Claimable as |
+|---|---|---|
+| In-process (`AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS`) | none — same process, same interpreter | trusted internal code only |
+| Containerized (`ContainerizedOciSandboxRunner`) | OCI container, `--network none`, dropped capabilities, read-only rootfs, pid limits | container-grade, escape-tested on native Linux |
+
+Conflating them in either direction is the error to avoid: do not claim the in-process path
+is sandboxed, and do not deny the container path the posture its escape suite demonstrates.
 
 ### 2. Marketplace-Grade Third-Party Execution
 A generalized external extension ecosystem requires stronger default isolation, reviewability, and abuse resistance than the runtime currently claims.
