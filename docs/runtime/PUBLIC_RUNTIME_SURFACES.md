@@ -1,6 +1,6 @@
 ---
 title: "Public Runtime Surfaces"
-last_verified: "2026-06-03"
+last_verified: "2026-08-06"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -87,15 +87,23 @@ actively used by SDK and platform UI, and unlikely to break. Their HTTP shape
 is not formally frozen — callers should prefer `aindy-sdk` wrappers over
 direct HTTP reliance.
 
-- `/apps/agent/*`
-  Agent creation, approval, execution, and run-status surfaces. Mounted at
-  `prefix=/apps` via `agent_router` (`prefix=/agent`).
 - `/apps/memory/*`
   Memory read, write, search, and trace surfaces. Mounted at `prefix=/apps`
   via `memory_router` (`prefix=/memory`).
 - `/apps/coordination/*`
   Multi-agent coordination surfaces. Mounted at `prefix=/apps` via
   `coordination_router` (`prefix=/coordination`).
+
+> **`/apps/agent/*` was listed here and is not runtime-owned** — corrected 2026-08-06.
+> `APP_ROUTERS` in `AINDY/routes/__init__.py` contains exactly `memory_router` and
+> `coordination_router`; the file's own comment records that `agent_router` **moved to the
+> plugin layer**. A bare runtime does not serve `/apps/agent/*` at all — a plugin bootstrap
+> such as `aindy-apps-monolith` must be mounted for those routes to exist, which is what
+> `README.md` says under *Building apps on aindy-runtime*. Listing them here granted a
+> runtime stability tier to routes the runtime does not ship.
+>
+> They still appear on any plugin-loaded deployment (verified: `/apps/agent/run` answers
+> there), so the mistake is invisible unless you boot the runtime alone.
 
 ## Experimental HTTP Surfaces
 
@@ -153,6 +161,33 @@ Representative experimental entries today:
 - `sys.v1.memory.trace`
 - `sys.v1.agent.count_runs`
 - `sys.v2.memory.read`
+
+> ### ⚠️ Two sources of truth for "stable", and they disagree
+>
+> Recorded 2026-08-06. This is a **code-level inconsistency**, not a documentation error —
+> the lists above are faithful to the registry flag, and `CROSS_REPO_COMPATIBILITY.md` /
+> `SDK_CONTRACT.md` are faithful to the other source. Each doc is internally correct, which
+> is precisely why the conflict survived: cross-checking one against another finds
+> disagreement and no obvious arbiter.
+>
+> | Source | What it is | Count |
+> |---|---|---|
+> | `SyscallEntry.stable` | what `GET /platform/syscalls` advertises to every caller | 15 |
+> | `_STABLE_SYSCALLS` in `tests/unit/test_cross_repo_compatibility.py` | the CI-enforced no-rename-before-major contract | 13 |
+>
+> They agree on 11 of 17. The six that differ:
+>
+> - **In the contract, flagged experimental:** `sys.v1.memory.tree`, `sys.v1.memory.trace`.
+>   An SDK author who honours the `stable` field — as this document instructs — will avoid
+>   depending on them, while CI promises they will not be renamed.
+> - **Flagged stable, absent from the contract:** `sys.v1.agent.cancel`,
+>   `sys.v1.agent.simulate`, `sys.v1.agent.undo`, `sys.v1.execution.get`. These advertise
+>   stability to every caller with no CI check guarding the name.
+>
+> **Not resolved here, deliberately.** Reconciling them is a code change — either set the
+> four `stable` flags' entries into `_STABLE_SYSCALLS`, or correct the flags — and which way
+> it should go is a product decision about what has actually been promised. Until then, treat
+> `_STABLE_SYSCALLS` as the stronger guarantee: it is the one with a test behind it.
 
 ## Extension Registration Surfaces
 
