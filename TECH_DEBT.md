@@ -407,7 +407,7 @@ A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — ver
 item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
 blocked on a token-delivery channel (FR-1). **FR-7** (memory recall defects) shipped in
 v2.0.0. **FR-8, FR-9 and FR-10 arrived 2026-08-03 and shipped 2026-08-05 — see below; all
-three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** Next available: **FR-11**.
+three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. Next available: **FR-14**.
 
 ### FR-8/9/10 — the 2.0.0 upgrade trio (SHIPPED 2026-08-05)
 
@@ -456,6 +456,120 @@ the process survive, which was the outage; the rest is polish if the message sti
 **Release:** all three are upgrade-path defects for the *current* published version, so they
 want to ship together as **2.0.1** rather than wait for the next feature release. Held
 pending owner go-ahead.
+
+### FR-11/12/13 — filed 2026-08-06, verified against source, not yet built
+
+Received in the app-team handoff dated 2026-08-06. **All three premises verified before
+filing**; corrections noted where the reported mechanism differs from the code.
+
+---
+
+#### FR-11 — `invoke_runtime_callback` has a 10s non-configurable budget 🟢 hardening
+
+The app team filed this explicitly as *not a defect*: it self-resolved, does not reproduce
+warm (0 timeouts in the following 6 minutes, 19,370 autonomy decisions recorded), and was a
+cold-start artifact on a container that took ~285s to become responsive. They note they nearly
+shipped circuit breakers across three apps before checking whether it reproduced. Worth
+preserving that restraint in the record.
+
+**Verified true:**
+- `runtime_callback_host.py:43` — `timeout_seconds: float = 10.0`, a parameter default.
+- Neither call site in `registry.py` (lines 433, 442) passes a timeout.
+- No env or settings override exists — `grep` for a timeout key in `config.py` finds nothing.
+  A deployment on a slow host has no lever.
+- It is invoked from scheduled jobs, so a failure repeats on an interval, and repeats hardest
+  exactly when the host is slowest. Self-amplifying.
+
+**One reported mechanism is inaccurate.** The handoff says the payload carries
+`bootstrap_register`, so *"the subprocess re-runs app bootstrap — 16 apps here."* In source,
+`registry.py:410` sets `bootstrap_register` only when
+`module_name == "AINDY.platform_layer.runtime_agent_defaults"`, and the worker uses it to call
+that one module's `register()`. It is not a 16-app bootstrap. The real per-call cost is a fresh
+Python subprocess doing `importlib.import_module(module_name)` on an app module, which pulls
+that module's transitive import graph — expensive for the same reason, by a different route.
+The ask is unaffected; the reasoning should be stated correctly.
+
+**Ask (their framing, all small, none urgent):** make the timeout configurable (precedent:
+`AINDY_NODUS_MAX_EXECUTION_MS` / `AINDY_NODUS_BOOT_ALLOWANCE_MS` exist for exactly this class
+of problem); avoid re-importing per call where the callback does not need the full graph; back
+off after N consecutive failures so a cold start cannot be amplified by the scheduler; log the
+first occurrence at WARNING with elapsed time rather than a traceback per tick.
+
+Related: `_maybe_wrap_runtime_callback` subprocess hazards are already documented in CLAUDE.md,
+and `PLANNER-SUBPROC-1` is the closed case of the same subprocess being unable to see live
+in-process state.
+
+---
+
+#### FR-12 — no way to register an agent; the roster is hardcoded 🔴 net-new
+
+**Verified true, and the live data confirms the sharper half:**
+- `AINDY/startup.py:937` — `_SYSTEM_AGENTS` is a hardcoded list of exactly 7 specs (ARM,
+  Genesis, Nodus, SYLVA, Platform, Runtime, Memory), upserted by `memory_namespace`.
+- There is **no `register_agent`**. The registry exposes 8 `register_agent_*` hooks —
+  `register_agent_tool`, `_planner_backend`, `_planner_context`, `_run_tools`,
+  `_completion_hook`, `_event`, `_ranking_strategy`, `_capabilities` — every one registers
+  behaviour attached to an agent, none registers an *identity*.
+- Live on the app stack: `agents` holds 7 rows, all `agent_type='system'`, and
+  **`count(owner_user_id) = 0`**. The per-user half of the schema has never been exercised, as
+  reported.
+
+So the table is shaped for a general registry (`owner_user_id`, `memory_namespace`,
+`agent_capability_mappings` keyed by `agent_type`) and the only ways to add a row are a runtime
+code change or a raw `INSERT`.
+
+**Ask:** a `register_agent(...)` platform hook (or an authenticated route/syscall for
+user-owned agents); honour `owner_user_id` on read so one user cannot enumerate another's;
+keep the idempotent-upsert semantics `_bootstrap_system_agents` already uses; reserve the seven
+system namespaces against app registration.
+
+**Their related observation, also verified:** `AGENT_USER = "user"` exists in
+`AINDY/db/models/agent.py` and is excluded from `_SYSTEM_AGENTS`, so no row is ever created for
+the user's own agent.
+
+---
+
+#### FR-13 — `agents` has no metadata field 🟡 small, additive
+
+**Verified true.** `AINDY/db/models/agent.py` declares exactly eight columns: `id`, `name`,
+`agent_type`, `description`, `owner_user_id`, `is_active`, `memory_namespace`, `created_at`.
+No JSONB, and no `updated_at`.
+
+The motivating shape is that the identity should be the **role**
+(`development.main-runtime`) with the vendor client as swappable metadata, so switching
+provider does not look like a brand-new agent with no history. The durable half already works
+— `id` and `memory_namespace` are provider-independent — but the swappable half has nowhere
+structured to live, and encoding `provider=codex;workspace=...` into `description` is the kind
+of thing that works until something needs to query it.
+
+**Ask:** add `metadata JSONB` (nullable) and `updated_at`; expose both on whatever FR-12's
+registration surface becomes, so re-registering with a new provider updates rather than
+duplicating.
+
+**Cost note for whoever builds it:** this touches `AINDY/db/models/`, so it triggers the
+schema-contract protocol (bump `SCHEMA_CONTRACT_VERSION`, regenerate the baseline, update the
+two frozen assertions) **and** wants an Alembic revision plus a
+`RUNTIME_ALEMBIC_HEAD_REVISION` bump. Additive and nullable, so no backfill and no
+`reconcile_backfill` declaration needed — unlike FR-8.
+
+---
+
+#### Also from this handoff: FR-8, FR-9, FR-10 confirmed closed by the app team
+
+All three verified app-side on 2.0.1 and marked ✅ in their doc. FR-8 specifically: their
+database needed no repair, **0** pre-existing accounts unverified, because the 12 grandfathered
+by hand in their PR #190 are all `true`.
+
+**Their FR-7 status is stale — flag on next contact.** The handoff still lists FR-7 as 🔴
+net-new, but all four defects were fixed in 2.0.0 and are present in source:
+`_policy_base_significance` (MEM-POLICY-KEY-1), `normalize_for_dedup` (MEM-DEDUP-TRACEID-1),
+`_forced_capture_suppressed` (MEM-FORCE-UNGATED-1), and `blend_impact_with_significance` /
+`SIGNIFICANCE_IMPACT_WEIGHT` (MEM-IMPACT-IGNORES-SIGNIFICANCE-1). They are running 2.0.1, so
+the fixes are in their deployment; only the doc is behind.
+
+Next available: **FR-14**.
+
+---
 
 ### FR-1 — Connector registration hook + capability-enforced outbound I/O
 
