@@ -1,6 +1,6 @@
 ---
 title: "Agent Runtime"
-last_verified: "2026-05-20"
+last_verified: "2026-08-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -165,18 +165,38 @@ Important boundary:
 
 ## 3. Public API Surface
 
-All public functions are in `AINDY/agents/agent_runtime.py`. Functions prefixed
-`_` are private — do not call them from outside this module.
+*(Corrected 2026-08-05 — the table below previously used `*_agent_run` names that do not
+exist on this surface.)*
+
+There are **two** layers, and conflating them is the usual mistake:
+
+**1. The execution package — `AINDY/agents/agent_runtime/`.** A package, not a module;
+`AINDY/agents/agent_runtime.py` is a seven-line `__path__` shim so both import forms work.
+Its `__all__` declares 15 public names:
 
 | Function | Description |
 |---|---|
-| `create_agent_run(user_id, goal, db)` | Generate plan, persist AgentRun with PENDING status |
-| `approve_agent_run(run_id, db)` | Validate plan, mint capability tokens, transition to APPROVED |
-| `reject_agent_run(run_id, reason, db)` | Persist rejection reason, transition to REJECTED |
-| `execute_agent_run(run_id, db)` | Execute the approved plan through NodusAgentAdapter |
-| `recover_agent_run(run_id, db)` | Restart a STUCK run from the last completed step |
-| `replay_agent_run(run_id, db)` | Create a new run from a prior run's plan |
-| `run_to_dict(run)` | Serialize an AgentRun to dict for API responses |
+| `create_run(...)` | Generate plan, persist an `AgentRun` in `pending_approval` |
+| `approve_run(...)` | Validate plan, mint the capability token, CAS to `approved` |
+| `reject_run(...)` | Terminate a run that was never approved |
+| `execute_run(...)` | Execute the approved plan |
+| `replay_run(...)` | Create a new run from a prior run's plan |
+| `run_to_dict(run)` | Serialize an `AgentRun` for API responses |
+| `get_run_events(...)` | Fetch the run's persisted event stream |
+| `generate_plan(...)` | Planner entry point |
+| `to_execution_response(...)` | Shape a run into the execution envelope |
+
+Plus `chat_completion`, `emit_error_event`, `perform_external_call`, `LOCAL_AGENT_ID`,
+`PLANNER_SYSTEM_PROMPT`, `logger`.
+
+`run_to_dict` is the canonical serializer and **is** the public name — it is an alias of
+`_run_to_dict` (`presentation.py:54`). Use `run_to_dict`; do not reach for the underscore
+form.
+
+**2. The route-facing API — `AINDY/agents/runtime_api.py`.** Keyword-only wrappers the HTTP
+layer calls: `create_agent_run_runtime`, `approve_agent_run_runtime`,
+`reject_agent_run_runtime`, `recover_agent_run_runtime`, `replay_agent_run_runtime`.
+Recovery lives **only** here — the execution package exposes no recover function.
 
 `run_to_dict` is the canonical serializer for `AgentRun` objects. It is used by
 `AINDY/routes/agent_router.py` and `automation_flows.py`. Do not call `_run_to_dict` directly
@@ -189,13 +209,19 @@ All public functions are in `AINDY/agents/agent_runtime.py`. Functions prefixed
 Each approved run receives a scoped `CapabilityToken` listing the tools it is
 allowed to call. Enforcement happens at two points:
 
-1. **Before flow execution** — `capability_service.validate_run_scope()` checks
-   that the plan's required tools are all within the approved token.
-2. **Before each tool call** — `capability_service.check_tool_permission()` is
-   called inside each node function before the tool executes.
+*(Corrected 2026-08-05: the three symbols this section previously named —
+`validate_run_scope`, `check_tool_permission`, `CapabilityViolation` — do not exist.)*
 
-A tool call that fails either check raises `CapabilityViolation`. This is
-treated as a non-retryable `FAILURE` step — the run halts immediately.
+1. **Plan-level** — `capability_service.get_plan_required_capabilities()` resolves what the
+   plan needs; `validate_token()` / `check_execution_capability()` verify the run's token.
+2. **Per tool call** — `AINDY/agents/tool_registry.py` `execute_tool` calls
+   `capability_service.check_tool_capability(token, run_id, user_id, tool_name)` before the
+   tool runs.
+
+**The check returns a dict, it does not raise.** `check_tool_capability` yields
+`{"ok": bool, "error": ...}`, and `execute_tool` converts a false `ok` into a failed tool
+result. There is no `CapabilityViolation` exception class anywhere in the tree — code that
+catches one is catching nothing.
 
 The capability token is stored on the `AgentRun` record and does not change
 after approval. Modifying the token post-approval is not permitted.
@@ -266,17 +292,37 @@ self-amplifying behavior inside the existing in-process runtime.
 
 ## 7. AgentRun State Machine
 
+*(Rewritten 2026-08-05. The previous diagram named `PENDING`, `RUNNING`, `REJECTED` and
+`STUCK`; the enum has none of those. It also omitted five states that exist.)*
+
+The authoritative enum is `AgentRunStatus` in `AINDY/kernel/condition_codes.py` — **ten**
+states:
+
 ```
-PENDING → APPROVED → RUNNING → COMPLETED
-                             → FAILED
-       → REJECTED
-RUNNING → STUCK  (detected at startup or via /recover endpoint)
-STUCK   → RUNNING (via recover)
-COMPLETED → (new PENDING via replay)
+pending_approval → approved → executing → completed
+                                        → failed
+                                        → verify_failed
+                            → awaiting_delegation → delegated
+                 → executing → waiting → executing        (event WAIT/RESUME)
+any non-terminal → cancelled                              (sys.v1.agent.cancel)
+completed        → (new pending_approval via replay)
 ```
 
-The only terminal states are `COMPLETED`, `FAILED`, and `REJECTED`. Runs in
-these states cannot be transitioned further — create a new run or replay.
+| State | Notes |
+|---|---|
+| `pending_approval` | initial; the approve CAS fires only from here |
+| `approved` | token minted; execution dispatched to a background thread |
+| `awaiting_delegation` / `delegated` | multi-agent handshake (RTR-4, opt-in) |
+| `executing` | running |
+| `waiting` | suspended on an event wait |
+| `completed` / `failed` | ordinary terminal outcomes |
+| `cancelled` | operator-driven terminal state, `sys.v1.agent.cancel` (AGENT-HARDEN-1) |
+| `verify_failed` | plan completed but the verifier rejected the result; triggers effect rollback (AGENT-HARDEN-6) |
+
+**Terminal states are `completed`, `failed`, `cancelled`, `verify_failed`** — classify with
+`is_agent_terminal()` / `AGENT_TERMINAL_STATUSES` rather than comparing literals. RTR-3 exists
+because a hardcoded `status != "executing"` guard silently no-op'd recovery for runs parked in
+any other non-terminal state.
 
 ---
 
