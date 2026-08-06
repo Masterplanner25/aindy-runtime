@@ -1,6 +1,6 @@
 ---
 title: "Invariants (runtime-owned)"
-last_verified: "2026-06-27"
+last_verified: "2026-08-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -180,9 +180,26 @@ in the app-owned invariants doc, not here.
   are rejected with HTTP 401 before the route body runs.
 - Enforcement: `AINDY/services/auth_service.py: get_current_user` — `HTTPBearer` extracts the
   token, `decode_access_token()` verifies the HS256 signature and expiry against `SECRET_KEY`,
-  raising `HTTPException(401)` on failure. Injected via router-level
+  raising `HTTPException(401)` on failure. `get_current_user` also accepts an
+  `X-Platform-Key` header as an alternative to a Bearer JWT. Injected via router-level
   `dependencies=[Depends(get_current_user)]`.
-- Public exceptions: auth routes (`POST /auth/login`, `POST /auth/register`) and health routes.
+- **A valid signature is not sufficient (2.0.0).** `decode_access_token` additionally requires
+  `purpose == "access"`; a correctly-signed token minted for another purpose — password
+  reset, email verification — is rejected. It returns the *same generic 401* as a bad
+  signature, deliberately, so the failure does not tell an attacker which condition failed.
+  This is defence in depth: the primary control is that each token class is signed with a
+  domain-separated key.
+- Public exceptions — **the auth surface grew from 2 routes to 7 in 2.0.0**; a locked-out
+  user must be able to reach the recovery routes without a token:
+
+  | Route | Auth |
+  |---|---|
+  | `POST /auth/register`, `/login` | public |
+  | `POST /auth/password/forgot`, `/password/reset`, `/verify-email` | public — by necessity |
+  | `POST /auth/logout`, `/password/change` | Bearer JWT (`get_current_user`) |
+  | `POST /auth/admin/invalidate-sessions/{user_id}` | admin (`require_admin_principal`) |
+
+  Health routes remain public.
 - Violation: unauthenticated access to protected endpoints.
 - Type: Application-enforced.
 

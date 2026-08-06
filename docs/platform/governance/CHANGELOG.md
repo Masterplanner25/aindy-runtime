@@ -1,8 +1,8 @@
 ---
-title: "Changelog"
-last_verified: "2026-06-27"
+title: "Changelog (historical — pre-split monolith)"
+last_verified: "2026-08-05"
 api_version: "1.0"
-status: current
+status: outdated
 owner: "platform-team"
 ---
 # Changelog
@@ -18,14 +18,26 @@ The format is based on the "Keep a Changelog" style and follows semantic-style v
 > `kernel/...`) describe module locations **as they were at the time of each
 > change** — they are an audit trail and have intentionally **not** been
 > rewritten for the split. Some referenced modules are now app-owned and live
-> in the **aindy-apps-monolith** repo. For current runtime change history,
-> prefer `docs/runtime/DOCSET_CHANGELOG.md` and the release docs.
+> in the **aindy-apps-monolith** repo.
+>
+> **This file is frozen. Do not add entries to it.** Its last substantive entry is dated
+> 2026-04-09, before the split.
+>
+> - **Runtime release history → [`../../../CHANGELOG.md`](../../../CHANGELOG.md)** at the
+>   repository root. That is the live, per-version changelog (currently through 2.0.1).
+> - Docset *structure* changes → `docs/runtime/DOCSET_CHANGELOG.md`.
+>
+> *(Corrected 2026-08-05: this note previously sent readers to `DOCSET_CHANGELOG.md` for
+> "current runtime change history". That file records changes to the documentation set, not
+> to the runtime, so the pointer skipped past the actual release changelog.)*
 
 ---
 
-# [Unreleased]
+# [Unreleased] — historical, closed
 
-Changes that have been implemented but are not yet part of a tagged release.
+> Retained as written. This heading refers to work unreleased **as of the pre-split
+> monolith**, not to anything pending now. Nothing here is awaiting release, and nothing new
+> belongs under it — see the frozen-file note above.
 
 ## Syscall Convergence Refactor — 2026-04-09
 
