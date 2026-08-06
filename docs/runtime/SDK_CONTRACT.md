@@ -1,6 +1,6 @@
 ---
 title: "Runtime → SDK Contract"
-last_verified: "2026-07-05"
+last_verified: "2026-08-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -109,16 +109,36 @@ next major version:
 |---|---|
 | `sys.v1.memory.read` | `memory.read` |
 | `sys.v1.memory.write` | `memory.write` |
+| `sys.v1.memory.delete` | `memory.delete` |
 | `sys.v1.memory.search` | `memory.read` |
 | `sys.v1.memory.tree` | `memory.read` |
 | `sys.v1.memory.trace` | `memory.read` |
 | `sys.v1.flow.run` | `flow.run` |
+| `sys.v1.flow.execute_intent` | `flow.execute` |
 | `sys.v1.event.emit` | `event.emit` |
 | `sys.v1.nodus.execute` | `nodus.execute` |
 | `sys.v1.job.submit` | `job.submit` |
-| `sys.v1.flow.execute_intent` | `flow.run` |
-| `sys.v1.execution.get` | `execution.read` |
+| `sys.v1.agent.execute` | `agent.execute` |
 | `sys.v1.observability.support_metrics` | `execution.read` |
+
+Verified against the registry 2026-08-05. Three corrections, all of which would have
+misled an integrator:
+
+- **`sys.v1.flow.execute_intent` requires `flow.execute`, not `flow.run`.** The table said
+  `flow.run`, so a caller granted exactly what the doc specified would have been denied.
+- **`sys.v1.memory.delete` and `sys.v1.agent.execute` were missing.** Both are in the
+  enforced stable set, so both carry the same no-rename-before-major guarantee — an
+  integrator had no way to know that from this document.
+- **`sys.v1.execution.get` was listed here but is not in the enforced stable set.** It is a
+  real, registered syscall (capability `execution.read`) and remains documented in
+  `SYSCALL_REFERENCE.md`; it simply does not carry the stability guarantee this table
+  confers. Listing it here promised something CI does not enforce, which is the worse
+  direction for a contract to be wrong in.
+
+**The authoritative list is `_STABLE_SYSCALLS` in
+`tests/unit/test_cross_repo_compatibility.py`** — it is CI-enforced, so it cannot drift from
+the registry silently. This table is a human-readable copy of it; when they disagree, the
+test wins. Keep them in step when adding a stable syscall.
 
 Experimental syscalls (`stable=False`) may change between minor releases.
 

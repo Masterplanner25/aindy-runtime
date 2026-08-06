@@ -1,12 +1,24 @@
 ---
 title: "Syscall Reference"
 api_version: "1.0"
-last_verified: "2026-07-05"
+last_verified: "2026-08-05"
 status: current
 owner: "platform-team"
 ---
 
 # Syscall Reference
+
+> **Capability is not the same thing as an API-key scope.** Every entry below lists the
+> **capability** the dispatcher enforces (`SyscallContext.capabilities`). A Platform API key
+> instead carries **scopes** (`flow.execute`, `memory.read`, …), and
+> `/platform/syscall` derives the grant from the requested syscall's own capability against a
+> governed scope map — see `_resolve_dispatch_capabilities` in `platform_ops_router.py`.
+> The two names coincide for most syscalls and deliberately differ for some: `sys.v1.flow.run`
+> requires capability `flow.run` but is granted by the **`flow.execute`** scope. Do not assume
+> a capability name is a valid scope; the scope list is in `AINDY/auth/api_key_auth.py` and in
+> the README.
+>
+> Capability values below are generated from the registry, not hand-maintained.
 
 Quick reference for all syscalls registered in `SYSCALL_REGISTRY`. All calls return the
 standard response envelope:
@@ -44,6 +56,8 @@ The live list of registered syscalls (with stability flags) is also available at
 
 Recall memory nodes for the calling user. Combines semantic search and MAS path lookup.
 
+**Capability:** `memory.read`
+
 **Stability:** stable
 
 **Payload (all optional):**
@@ -63,6 +77,8 @@ Recall memory nodes for the calling user. Combines semantic search and MAS path 
 ### `sys.v1.memory.write`
 
 Persist a new memory node for the calling user.
+
+**Capability:** `memory.write`
 
 **Stability:** stable
 
@@ -109,6 +125,8 @@ node's history, trace memberships, causal edges, and links. **Irreversible.**
 
 Semantic search over the user's memory nodes.
 
+**Capability:** `memory.read`
+
 **Stability:** stable
 
 **Payload:**
@@ -126,6 +144,8 @@ Semantic search over the user's memory nodes.
 ### `sys.v1.memory.list`
 
 List nodes at a MAS path, one level or recursive.
+
+**Capability:** `memory.read`
 
 **Stability:** stable
 
@@ -146,6 +166,8 @@ List nodes at a MAS path, one level or recursive.
 
 Return a hierarchical tree of nodes under a path.
 
+**Capability:** `memory.read`
+
 **Stability:** stable
 
 **Payload:**
@@ -163,6 +185,8 @@ Return a hierarchical tree of nodes under a path.
 
 Follow the causal chain from a node at a path.
 
+**Capability:** `memory.read`
+
 **Stability:** stable
 
 **Payload:**
@@ -179,6 +203,8 @@ Follow the causal chain from a node at a path.
 ### `sys.v2.memory.read`
 
 Enhanced recall with structured field filters. Extends v1.
+
+**Capability:** `memory.read`
 
 **Stability:** stable
 
@@ -198,6 +224,8 @@ Enhanced recall with structured field filters. Extends v1.
 
 Execute a registered flow by name.
 
+**Capability:** `flow.run`
+
 **Stability:** stable
 
 **Payload:**
@@ -216,6 +244,8 @@ Execute a registered flow by name.
 
 Top-level intent execution with strategy selection.
 
+**Capability:** `flow.execute`
+
 **Stability:** stable
 
 **Payload:**
@@ -233,6 +263,8 @@ Top-level intent execution with strategy selection.
 ### `sys.v1.nodus.execute`
 
 Execute a Nodus script via flow-backed orchestration.
+
+**Capability:** `nodus.execute`
 
 **Stability:** stable
 
@@ -257,6 +289,8 @@ Execute a Nodus script via flow-backed orchestration.
 
 Emit a `SystemEvent` on the A.I.N.D.Y. event bus.
 
+**Capability:** `event.emit`
+
 **Stability:** stable
 
 **Payload:**
@@ -275,6 +309,8 @@ Emit a `SystemEvent` on the A.I.N.D.Y. event bus.
 ### `sys.v1.job.submit`
 
 Submit a named async job to the automation pipeline.
+
+**Capability:** `job.submit`
 
 **Stability:** stable
 
@@ -296,6 +332,8 @@ Submit a named async job to the automation pipeline.
 ### `sys.v1.agent.execute`
 
 Execute an approved `AgentRun` via the deterministic runtime.
+
+**Capability:** `agent.execute`
 
 **Stability:** stable
 
@@ -389,6 +427,8 @@ freshly minted preview token for the plan.
 
 Count `AgentRun` rows for a user.
 
+**Capability:** `agent.read`
+
 **Stability:** experimental
 
 **Payload:**
@@ -404,6 +444,8 @@ Count `AgentRun` rows for a user.
 ### `sys.v1.agent.list_recent_durations`
 
 List recent `AgentRun` timing fields for duration calculations.
+
+**Capability:** `agent.read`
 
 **Stability:** experimental
 
@@ -421,6 +463,8 @@ List recent `AgentRun` timing fields for duration calculations.
 
 List recent `AgentRun` rows for a user as plain dicts.
 
+**Capability:** `agent.read`
+
 **Stability:** experimental
 
 **Payload:**
@@ -436,6 +480,8 @@ List recent `AgentRun` rows for a user as plain dicts.
 ### `sys.v1.agent.ensure_initial_run`
 
 Find or create the initial signup `AgentRun` sentinel for a user.
+
+**Capability:** `agent.write`
 
 **Stability:** experimental
 
