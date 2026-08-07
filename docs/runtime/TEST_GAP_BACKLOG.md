@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 # Test Gap Backlog
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document turns `INVARIANT_TEST_MAPPING.md` into a concrete backlog of runtime test gaps.
 
 Its purpose is to make the next testing moves actionable instead of leaving them as generic coverage observations.

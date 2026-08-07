@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Invariant To Test Mapping
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document maps the runtime invariants in `EXECUTION_INVARIANTS.md` to the current test tree in `tests/`.
 
 Its purpose is to show:

@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 # Test Gap Work Items
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document turns `TEST_GAP_BACKLOG.md` into issue-style work items that can be copied into a tracker.
 
 Its purpose is to make the test-gap backlog easy to execute as concrete work rather than as an abstract testing wish list.

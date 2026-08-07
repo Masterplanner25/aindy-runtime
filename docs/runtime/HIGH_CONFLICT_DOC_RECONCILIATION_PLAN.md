@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# High-Conflict Doc Reconciliation Plan
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document gives a concrete reconciliation plan for the three older runtime docs currently in the highest conflict with the newer governing runtime docs:
 
 - `ARCHITECTURE.md`

@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Change Impact Matrix
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document classifies changes to `aindy-runtime` by impact level and required review depth.
 
 Its purpose is to make change risk explicit before release rather than inferred afterward.

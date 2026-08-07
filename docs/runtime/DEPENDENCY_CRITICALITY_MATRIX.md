@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Dependency Criticality Matrix
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document classifies the major dependencies of `aindy-runtime` by operational criticality.
 
 Its purpose is to make dependency expectations explicit across deployment profiles, health/readiness behavior, degraded-mode handling, and operator response.

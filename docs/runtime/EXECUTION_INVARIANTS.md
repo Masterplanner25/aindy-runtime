@@ -1,6 +1,6 @@
 ---
 title: "Execution Invariants"
-last_verified: "2026-06-03"
+last_verified: "2026-08-06"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -322,8 +322,8 @@ Syscall dispatch must preserve capability, tenant, and schema enforcement before
 **Enforcement Path**
 - `AINDY/kernel/syscall_dispatcher.py::_dispatch()`
 - `AINDY/kernel/syscall_dispatcher.py::_validate_runtime_owned_call_metadata()`
-- `AINDY/kernel/syscall_dispatcher.py::_resolve_effect_record()`
-- `AINDY/kernel/syscall_dispatcher.py::_complete_effect_record()`
+- `AINDY/kernel/effect_ledger.py::resolve_effect_record()` — re-exported into `syscall_dispatcher` as `_resolve_effect_record`
+- `AINDY/kernel/effect_ledger.py::complete_effect_record()` — re-exported into `syscall_dispatcher` as `_complete_effect_record`
 - `AINDY/kernel/resource_manager.py`
 
 **Tests**
