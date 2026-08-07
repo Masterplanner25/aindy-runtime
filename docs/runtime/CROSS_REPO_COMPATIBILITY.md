@@ -1,6 +1,6 @@
 ---
 title: "Cross-Repo Compatibility"
-last_verified: "2026-06-04"
+last_verified: "2026-08-05"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -47,7 +47,7 @@ These obligations apply to every release regardless of risk class.
 
 Consumers: `aindy-sdk` version checks, platform SPA `bootIdentity` / `PlatformHomeRedirect`.
 
-**Test:** `tests/unit/test_cross_repo_compatibility.py::test_api_version_envelope_shape_stable`
+**Test:** `tests/unit/test_cross_repo_compatibility.py::test_api_version_envelope_shape_stable_sdk`
 
 ### 2. Stable Syscall Names
 
@@ -58,18 +58,31 @@ major version bump. Current stable syscalls (`stable=True`):
 |---|---|
 | `sys.v1.memory.read` | `memory.read` |
 | `sys.v1.memory.write` | `memory.write` |
+| `sys.v1.memory.delete` | `memory.delete` |
 | `sys.v1.memory.search` | `memory.read` |
 | `sys.v1.memory.tree` | `memory.read` |
 | `sys.v1.memory.trace` | `memory.read` |
 | `sys.v1.flow.run` | `flow.run` |
+| `sys.v1.flow.execute_intent` | `flow.execute` |
 | `sys.v1.event.emit` | `event.emit` |
 | `sys.v1.nodus.execute` | `nodus.execute` |
 | `sys.v1.job.submit` | `job.submit` |
-| `sys.v1.flow.execute_intent` | `flow.run` |
+| `sys.v1.agent.execute` | `agent.execute` |
+| `sys.v1.observability.support_metrics` | `execution.read` |
+
+*Corrected 2026-08-05: three syscalls were missing (`memory.delete`, `agent.execute`,
+`observability.support_metrics`) and `flow.execute_intent` was listed as `flow.run` — its
+capability is `flow.execute`, so a caller granted what this table specified would have been
+denied. The same error existed in `SDK_CONTRACT.md`; both are now corrected.*
+
+> **`_STABLE_SYSCALLS` in the test below is authoritative.** It is CI-enforced, so it cannot
+> drift from the registry silently. This table is a human-readable copy; when they disagree,
+> the test wins. Note also that **capability is not an API-key scope** — `sys.v1.flow.run`
+> requires capability `flow.run` but is granted by the `flow.execute` *scope*.
 
 Consumers: `aindy-sdk` syscall dispatch, `aindy-apps` flow definitions.
 
-**Test:** `tests/unit/test_cross_repo_compatibility.py::test_stable_syscall_names_present`
+**Test:** `tests/unit/test_cross_repo_compatibility.py::test_stable_syscall_names_present_sdk`
 
 ### 3. Watcher Endpoint Path
 
@@ -78,16 +91,28 @@ API-key authentication. These paths are hardcoded in `aindy-sdk`'s watcher clien
 
 Consumers: `aindy-sdk`.
 
-**Test:** `tests/unit/test_cross_repo_compatibility.py::test_watcher_endpoint_registered`
+**Test:** `tests/unit/test_cross_repo_compatibility.py::test_watcher_endpoint_registered_sdk`
 
 ### 4. Auth Envelope Shape
 
-`POST /auth/login` and `POST /auth/register` must return an envelope that unwraps to
-an object with at least `access_token` and `is_admin` fields. The ui-kit `loginUser`,
-`registerUser`, and `bootIdentity` functions call `.then(unwrapEnvelope)` and
-destructure the result.
+**Corrected 2026-08-05 — this section asserted a guarantee that 2.0.0 deliberately broke.**
+It required `POST /auth/register` to return `access_token`. It does not, and must not.
 
-Consumers: `aindy-ui-kit` auth API (`src/api/auth.js`).
+| Endpoint | Contract |
+|---|---|
+| `POST /auth/login` | Returns an envelope unwrapping to an object with at least `access_token` and `is_admin`. **Unchanged.** |
+| `POST /auth/register` | Returns **HTTP 202** with `{"status": "verification_sent"}` and **no token**, whether or not the address already exists. A consumer must not destructure `access_token` from it. |
+
+The register change is a *security* contract, not an oversight: a response that differed
+between "created" and "already exists" — including by carrying a token in one case — is an
+account-enumeration oracle. Restoring a token here would reopen it.
+
+All three of `loginUser`, `registerUser` and `bootIdentity` still call
+`.then(unwrapEnvelope)`; that part of the original text stands. `@aindy/ui-kit` 2.0.0 already
+adapted `register()` to treat a missing token as the verification-sent path rather than an
+error — **the consumer moved before this document did.**
+
+Consumers: `aindy-ui-kit` auth API (`src/api/auth.js`), `AuthContext.register()`.
 
 ### 5. Health/Ready HTTP Semantics
 
