@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Incident Classification
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document defines how to classify incidents involving `aindy-runtime`.
 
 Its purpose is to make incident severity, response urgency, and communication posture more consistent with runtime reality.

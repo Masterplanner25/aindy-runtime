@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Runtime Doc Alignment Audit
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document audits older runtime docs against the newer governing docs created in this session.
 
 Its purpose is to identify where the existing docset is already aligned, where it is only partially aligned, and where it now conflicts with the narrower runtime maturity posture.
