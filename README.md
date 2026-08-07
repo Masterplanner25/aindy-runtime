@@ -508,7 +508,10 @@ same head.
 
 ## Docs
 
-Runtime-owned documentation lives under `docs/runtime/`.
+Runtime-owned documentation lives under `docs/runtime/`. Start with
+[`docs/runtime/QUICKSTART.md`](docs/runtime/QUICKSTART.md), then
+[`docs/runtime/RUNTIME_DOC_INDEX.md`](docs/runtime/RUNTIME_DOC_INDEX.md) to find the right
+document by reader type.
 
 Release staging guidance lives in `docs/runtime/RELEASE_STAGING.md`.
 

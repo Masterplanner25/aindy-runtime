@@ -15,7 +15,11 @@ Its purpose is to help readers find the right runtime document quickly and avoid
 
 ## Read This First
 
-If you are new to the runtime docset, start here:
+**Getting the runtime running:** [`QUICKSTART.md`](QUICKSTART.md). It was not listed here or in
+the README until 2026-08-06, so it was effectively unfindable — a quickstart nobody links to is
+wasted, not obsolete.
+
+If you are new to the runtime *docset*, start here:
 
 1. `RUNTIME_DOCSET_GOVERNANCE.md`
 2. `RUNTIME_BOUNDARY.md`
