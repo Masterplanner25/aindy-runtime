@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Runtime Docset Governance
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document defines how to interpret the `docs/runtime` docset when documents differ in age, scope, or claim strength.
 
 Its purpose is to prevent broader or older docs from silently overriding narrower, newer runtime-governance documents.

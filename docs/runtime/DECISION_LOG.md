@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Decision Log
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document records high-value runtime decisions that should remain visible across refactors, releases, and cross-repo coordination.
 
 Its purpose is to reduce repeated re-litigation of core runtime decisions and to preserve the reasoning behind important boundaries and claims.

@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Runtime Release Gates
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document defines the minimum release gates that `aindy-runtime` should satisfy before a release is considered safe to ship.
 
 Its purpose is to turn runtime maturity expectations into explicit ship criteria.

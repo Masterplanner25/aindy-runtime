@@ -7,8 +7,6 @@ owner: "platform-team"
 ---
 ﻿# Runtime Test Strategy
 
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
 This document defines the testing strategy that should support `aindy-runtime` as a trusted-internal runtime platform.
 
 Its purpose is to connect runtime maturity claims to concrete test classes.
