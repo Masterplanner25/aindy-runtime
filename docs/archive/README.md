@@ -49,6 +49,35 @@ checked rather than assumed disposable — both survive outside it:
 
 Nothing unique was lost. For current behaviour read the source and `INVARIANTS.md`, not this.
 
+## Second `docs/runtime/` pass — archived 2026-08-06
+
+Four more, found by a sharper test than the first pass used: **inbound references that are
+not index listings**. An index cites everything, so a citation from one is not evidence a
+document is used.
+
+| Document | Written | Why |
+|---|---|---|
+| [`EXECUTION_AUDIT.md`](EXECUTION_AUDIT.md) | 2026-05-17 | The oldest document in the docset. Its **only** referrer was `RUNTIME_DOCSET_STATUS_AUDIT.md` — which is itself archived, so it was cited only by something nobody reads. |
+| [`USER_WALKTHROUGH_LOG.md`](USER_WALKTHROUGH_LOG.md) | 2026-06-12 | An operator onboarding issue *log* — point-in-time by nature. Its only citation is the CHANGELOG entry announcing its creation, not a live pointer. |
+| [`KERNEL_CAPABILITY_AUDIT.md`](KERNEL_CAPABILITY_AUDIT.md) | 2026-06-12 | Same shape: a CHANGELOG announcement plus an index listing, nothing substantive. |
+| [`APP_HANDOFF_v1.11.0.md`](APP_HANDOFF_v1.11.0.md) | 2026-08-01 | Superseded — referenced only by `APP_HANDOFF_v2.0.0.md`. Versioned handoffs are audit trail; the current one stays in `docs/runtime/`. |
+
+### Two that were checked and deliberately kept
+
+- **`C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`** — nearly archived on the strength of a CLAUDE.md
+  line claiming C3 was closed. It is not: `TECH_DEBT.md` records an open remaining gap
+  (strong-sandbox is Linux-only) and calls this document live preparation *"so either track
+  can start the day a trigger lands"*. That CLAUDE.md line was wrong and is corrected in the
+  same change.
+- **`QUICKSTART.md`** — inbound references are the wrong signal for an entry-point document;
+  people find it by name, not by link. Checking it surfaced a genuine problem in the other
+  direction: nothing linked to it at all. Now linked from `README.md` and the doc index.
+
+**Method note.** The first pass asked "does anything reference this?". The second asked "does
+anything *with an opinion* reference this?" — excluding indexes, and treating a CHANGELOG
+entry that merely announces a file's creation as historical rather than a live pointer. That
+distinction is what separated these four from the 80 that stayed.
+
 ## Why these four and not the others
 
 Three documents of the same vintage stayed at the repository root, because something still
