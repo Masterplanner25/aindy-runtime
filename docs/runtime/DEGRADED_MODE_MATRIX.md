@@ -1,14 +1,11 @@
 ---
 title: "Degraded Mode Matrix"
-last_verified: "2026-05-31"
+last_verified: "2026-08-06"
 api_version: "1.0"
 status: current
 owner: "platform-team"
 ---
-﻿# Degraded Mode Matrix
-
-> Authored by Codex during non coding session. Needs review before repo commit and push.
-
+# Degraded Mode Matrix
 
 This document defines how `aindy-runtime` should behave when critical or supporting dependencies are missing, unhealthy, partially initialized, or otherwise degraded.
 
@@ -95,6 +92,72 @@ That distinction must stay explicit.
 | Worker heartbeat absent in distributed API profile | `degraded` or `unhealthy` | `not_ready` for distributed assumptions | limited metadata, diagnostics | distributed execution claims | Health and readiness should reflect profile dependency |
 | Sandbox/trust posture weaker than claimed | `degraded` | `not_ready` if claim affects supported mode | diagnostics | any mode relying on stronger isolation assumptions | Security degradation is operational degradation |
 | Partial dependency outage with safe documented fallback | `degraded` | may remain ready if fallback preserves supported guarantees | explicitly documented safe subset | full feature set | Fallback must be documented, not implied |
+
+---
+
+## Canonical Condition Vocabulary
+
+*Added 2026-08-06.* The matrix above describes conditions in prose. The runtime emits them as
+**enum values**, and those enums are CI-enforced as an operator-facing contract —
+`test_runtime_condition_codes_stable_operator`, `test_readiness_blocker_codes_stable_operator`,
+`test_condition_classifications_stable_operator` in
+`tests/unit/test_cross_repo_compatibility.py`. Until now this document named none of them, so an
+operator could not map a row here to what actually appears in a health payload.
+
+All three live in `AINDY/kernel/condition_codes.py`.
+
+**`ConditionClassification`** — the safe/unsafe axis this matrix's "Safe To Continue" and
+"Unsafe / Reduced" columns describe informally:
+`safe_degraded` · `unsafe_degraded` · `startup_fatal`
+
+**`ReadinessBlockerCode`** — what blocks `/ready`:
+`startup_incomplete` · `postgres` · `schema` · `redis` · `queue` · `event_bus` · `worker` ·
+`scheduler` · `plugin_hosts` · `plugin_sandbox_attestation`
+
+**`RuntimeConditionCode`** — the degraded conditions themselves. Mapped to the matrix rows:
+
+| Condition code | Matrix row |
+|---|---|
+| `dynamic_registry_restore_failed` | Registry restore pending |
+| `dynamic_registry_restore_incomplete` | Registry restore incomplete |
+| `redis_single_instance_mode` | Redis unavailable, event bus optional |
+| `event_bus_local_only` | Redis unavailable, event bus optional |
+| `event_bus_subscriber_unavailable` | Event bus subscriber unavailable |
+| `distributed_worker_unavailable` | Worker heartbeat absent in distributed profile |
+| `mongo_optional_unavailable` | Mongo unavailable when optional |
+| `mongo_required_unavailable` | Mongo unavailable when required |
+| `wait_eus_rehydration_failed` | WAIT rehydration failure |
+| `flow_run_rehydration_failed` | Flow-run rehydration failure |
+| `external_python_override_enabled` | Sandbox/trust posture weaker than claimed |
+| **`agent_run_rehydration_failed`** | **no row — see below** |
+| **`event_bus_rehydration_drain_failed`** | **no row — see below** |
+| **`queue_backend_fallback`** | **no row — see below** |
+
+### Three conditions the matrix does not cover
+
+11 of the 14 emitted conditions have a row. These three do not, and each is the kind of thing
+this document exists to make explicit:
+
+- **`agent_run_rehydration_failed`** — the matrix covers WAIT and flow-run rehydration failure
+  but not agent-run. Given `AgentRunStatus` has ten states and RTR-3 exists because recovery
+  silently no-op'd for runs parked outside `executing`, this is the most consequential omission
+  of the three.
+- **`event_bus_rehydration_drain_failed`** — distinct from
+  `event_bus_subscriber_unavailable`: the subscriber came up, the drain did not complete, so
+  waits may be stranded without the bus looking unavailable.
+- **`queue_backend_fallback`** — a distributed profile silently running on a fallback queue is
+  exactly the "should not silently downgrade" case the Redis rows already argue against.
+
+Adding rows is a judgement call about intended posture per condition, so they are flagged rather
+than invented here.
+
+### Note on the status vocabulary
+
+Checked 2026-08-06: the four statuses this document uses — `healthy`, `degraded`, `not_ready`,
+`unhealthy` — are all real values the health router emits (`healthy` at `health_router.py:172`,
+`179`, `546`; `not_ready` with a `reason` such as `restore_pending` at `:634`). `PublicHealthStatus`
+separately defines `ok`/`degraded`/`unhealthy` for the public envelope. Both vocabularies are in
+use and neither is wrong; do not "unify" them without checking which surface each belongs to.
 
 ---
 
