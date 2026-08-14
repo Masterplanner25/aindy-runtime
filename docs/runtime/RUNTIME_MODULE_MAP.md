@@ -9,6 +9,13 @@ owner: "platform-team"
 
 This document tags every directory and flat module in `AINDY/` as one of:
 
+> **Partial re-verification 2026-08-13.** Three sections described directories that have
+> since been removed (`AINDY/domain/`, `AINDY/modules/`, `AINDY/Tools/authorship/`) — in each
+> case the map recommended removal and the removal happened. Those are annotated in place.
+> `AINDY/grep.bat`, `AINDY/scripts/nodus/`, `AINDY/apscheduler/` and `AINDY/watcher/` were
+> spot-checked and still exist. The rest of the inventory has **not** been re-verified against
+> the tree — see TECH_DEBT `DOCS-STALE-1`.
+
 - **CORE RUNTIME** — directly required for execution correctness, syscall dispatch,
   flow execution, wait/resume, tenant/capability enforcement, startup ordering,
   or readiness truth. Removing it would break a runtime guarantee, not a convenience.
@@ -442,7 +449,13 @@ for the platform SPA ownership clarification.
 
 **Tag: LEGACY SPILLOVER → EXTRACTION CANDIDATE (empty)**
 
-Both directories are empty stubs. No Python modules, no `__init__.py` detected.
+> **Resolved — verified 2026-08-13: both directories no longer exist.** The recommendation
+> below was carried out. The section is kept because `EXECUTION_CONTRACT.md` still refers to
+> `domain.task_services`, `domain.genesis_ai`, `domain.masterplan_factory` and
+> `modules.deepseek.*`; all of those are `aindy-apps-monolith`, and this is where that is
+> recorded.
+
+Both directories were empty stubs. No Python modules, no `__init__.py` detected.
 These should be removed — they carry zero runtime value and create confusion
 about planned-but-nonexistent surfaces.
 
@@ -451,6 +464,8 @@ about planned-but-nonexistent surfaces.
 ## AINDY/Tools/authorship/
 
 **Tag: LEGACY SPILLOVER**
+
+> **Resolved — verified 2026-08-13: `AINDY/Tools/authorship/` no longer exists.**
 
 Developer authorship tooling committed into the runtime package directory.
 This is not runtime infrastructure and should not be in the installed wheel.
