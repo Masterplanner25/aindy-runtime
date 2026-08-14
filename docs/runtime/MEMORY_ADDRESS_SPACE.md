@@ -110,7 +110,9 @@ derive_legacy_path(node_dict) -> "/memory/{user_id}/_legacy/{memory_type}/{node_
 
 ## 5. Database Columns
 
-Added to `MemoryNodeModel` in `memory/memory_persistence.py` (migration `g5h6i7j8k9l0`):
+Added to `MemoryNodeModel` in `AINDY/memory/memory_persistence.py`. All four are present
+in the model as documented (verified 2026-08-13). There is **no migration** — the table is
+create_all-managed through the schema contract:
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -243,6 +245,6 @@ MAS path methods are exposed as syscalls:
 | `memory/memory_address_space.py` | All path utilities: normalize, parse, build, generate, derive_legacy, wildcard helpers, tree ops |
 | `memory/memory_persistence.py` | `MemoryNodeModel` with 4 new path columns |
 | `db/dao/memory_node_dao.py` | 6 new path DAO methods |
-| `alembic/versions/g5h6i7j8k9l0_add_memory_address_space_columns.py` | Migration adding path columns + indexes |
+| *(no migration)* | The four path columns are **create_all-managed via the schema contract**, not Alembic-tracked — `memory_nodes` is deliberately absent from `env.py`'s `_RUNTIME_TABLES` allowlist. *Corrected 2026-08-13: this row cited `alembic/versions/g5h6i7j8k9l0_...py`, which never existed.* |
 | `routes/platform_router.py` | 3 MAS API endpoints |
-| `tests/unit/test_memory_address_space.py` | 61 tests (Groups A–K) |
+| *(none)* | No MAS test suite exists. *Corrected 2026-08-13 — the row previously claimed `tests/unit/test_memory_address_space.py`, 61 tests.* |

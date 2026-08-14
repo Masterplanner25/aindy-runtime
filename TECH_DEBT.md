@@ -4719,6 +4719,88 @@ both residuals resolved (see Status above).**
 
 ---
 
+## DOCS-STALE-1 — seven docs carry a `last_verified` that predates the repository
+
+**Status:** Open — verification debt, not content debt. Filed 2026-08-13 from a
+correctness audit of all 80 files in `docs/runtime/`.
+
+**Finding.** Seven documents declare a `last_verified` date **earlier than this repo's first
+commit** (`0d5d382 Initial runtime repo extraction`, 2026-05-17). The frontmatter asserts
+verification against a codebase that did not yet exist. Four of them have exactly **one**
+commit in this repo — the extraction itself — so nothing has been checked against runtime
+source since they arrived from the monolith.
+
+| Document | `last_verified` | Commits here | Lines |
+|---|---|---|---|
+| `RETRY_POLICY.md` | 2026-04-18 | 2 | 226 |
+| `MEMORY_ADDRESS_SPACE.md` | 2026-04-19 | 1 | 248 |
+| `MEMORY_BRIDGE.md` | 2026-04-19 | 1 | 460 |
+| `OS_ISOLATION_LAYER.md` | 2026-04-22 | 1 | 297 |
+| `NATIVE_MEMORY_BRIDGE.md` | 2026-04-25 | 1 | 405 |
+| `EXECUTION_CONTRACT.md` | 2026-05-02 | 2 | 626 |
+| `RUNTIME_DOCSET_BOUNDARY.md` | 2026-05-10 | 1 | 95 |
+
+**Why this is filed rather than fixed.** The audit could repair every citation mechanically
+(done — see the docset changelog), but it cannot certify 2,357 lines of behavioural prose.
+Bumping `last_verified` without reading the code would make the field *worse* than leaving it
+visibly stale: a wrong date that looks current is unfalsifiable, a wrong date that predates the
+repo is self-evidently a flag.
+
+**The frontmatter check does not catch this.** `Runtime Docs Validation` asserts the five keys
+are *present*. It does not assert `last_verified` is a plausible date, and nothing compares it
+to the file's own git history. A one-line check — `last_verified >= 2026-05-17` — would have
+caught all seven at the commit that introduced them.
+
+**What the audit already proved is right.** Spot-checking cleared the most suspicious claim:
+`MEMORY_ADDRESS_SPACE.md`'s four path columns (`path`, `namespace`, `addr_type`, `parent_path`)
+**are** present on `MemoryNodeModel` exactly as documented. So these are not fiction — they are
+unverified, and at least one is materially accurate. Treat the list as a reading queue, not a
+deletion queue.
+
+**Close trigger:** each document read against source once, `last_verified` bumped to that date.
+Cheap per document; there are seven.
+
+---
+
+## DOCS-COVERAGE-CLAIM-1 — docs claimed test suites that never existed
+
+**Status:** Corrected in the docs 2026-08-13; **the coverage gap it exposed is open.**
+
+**Finding.** Six documents cited **eight** test files by path, several with precise counts
+(*"61 tests (Groups A–K)"*, *"26 tests"*, *"64 versioning/ABI tests (Groups A–J)"*). Checked
+against the complete history of both `aindy-runtime` and `aindy-apps-monolith`: **none of the
+eight has ever existed.** Not moved, not renamed — never created.
+
+| Cited path | Named in |
+|---|---|
+| `tests/unit/test_memory_address_space.py` | `MEMORY_ADDRESS_SPACE.md` |
+| `tests/system/test_memory_loop_e2e.py` | `MEMORY_BRIDGE.md` |
+| `tests/integration/test_memory_bridge.py` | `NATIVE_MEMORY_BRIDGE.md` |
+| `tests/integration/test_memory_native_scorer.py` | `NATIVE_MEMORY_BRIDGE.md` |
+| `tests/unit/test_os_layer.py` | `OS_ISOLATION_LAYER.md` |
+| `tests/unit/test_event_bus.py` | `OS_ISOLATION_LAYER.md` |
+| `tests/unit/test_syscall_dispatcher.py` | `SYSCALL_SYSTEM.md` |
+| `tests/unit/test_syscall_versioning.py` | `SYSCALL_SYSTEM.md` |
+
+`tests/system/` is not even a directory in this repo.
+
+**The sharpest one.** `NATIVE_MEMORY_BRIDGE.md` introduced two of them under the heading
+*"Focused tests that exist in this repository"*, and reproduced a CI job running both. No file
+under `tests/` references `memory_bridge_rs` at all. This agrees with **NATIVE-CI-1**, which
+records the crate has no Rust tests either — so the native scorer has **no behavioural
+coverage in either language**, while the doc asserted a working pytest suite.
+
+**Docs corrected, not quietly deleted.** Each claim was replaced with a dated note naming what
+it used to say. A silent deletion would erase the evidence that the coverage was believed to
+exist — which is the part worth remembering.
+
+**Real remaining gap (this is the open half):** MAS path addressing, the OS isolation layer,
+the distributed event bus, and the native scorer each have no dedicated suite. Overlaps
+**ECOGAP-6** (execution-path coverage) — do not double-track the execution paths; the four
+areas above are the increment.
+
+---
+
 ## RTR-* — Runtime Roadmap (Nodus-first execution & runtime primitives)
 
 **Status:** Open — roadmap (not classic debt). Priorities per item below.

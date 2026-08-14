@@ -27,7 +27,7 @@ breaking change for the platform SPA.
 
 **Stable values:** `"runtime-only"`, `"full"`.
 
-**Test:** `tests/unit/test_cross_repo_compatibility.py::test_boot_mode_field_in_version_metadata`
+**Test:** `tests/unit/test_cross_repo_compatibility.py::test_boot_mode_field_in_version_metadata_ui`
 
 ---
 
@@ -65,7 +65,7 @@ the target path must:
 **Enforced by:** `FEATURE_FLAGS` gates in `platform/src/api/_routes.js` — NavLinks
 for unserved routes must be gated by a `false` flag.
 
-**Test:** `tests/unit/test_cross_repo_compatibility.py::test_served_platform_routes_match_expected_prefixes`
+**Test:** `tests/unit/test_cross_repo_compatibility.py::test_served_platform_routes_match_expected_prefixes_ui`
 
 **Current flag state:**
 

@@ -425,7 +425,7 @@ Event delivery that participates in resume behavior must be either durable enoug
 - `AINDY/kernel/event_bus.py::publish()`
 - `AINDY/kernel/event_bus.py::start_subscriber()`
 - `AINDY/startup.py::_start_event_bus()`
-- `AINDY/docs/runtime/DEPLOYMENT_PROFILES.md`
+- `docs/runtime/DEPLOYMENT_PROFILES.md`
 
 **Tests**
 - [ ] Add event-delivery tests by deployment profile here

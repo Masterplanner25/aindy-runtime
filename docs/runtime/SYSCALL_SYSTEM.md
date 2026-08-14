@@ -524,5 +524,4 @@ Response:
 | `kernel/syscall_dispatcher.py` | `SyscallDispatcher`, `get_dispatcher`, `SyscallContext`, `child_context`, `_TRACE_ID_CTX`, `_EU_ID_CTX`, context builder helpers |
 | `kernel/syscall_handlers.py` | Domain-handler compatibility facade; `register_all_domain_handlers()` |
 | `routes/platform_router.py` | `GET /platform/syscalls` introspection endpoint; `POST /platform/syscall` dispatch |
-| `tests/unit/test_syscall_versioning.py` | 64 versioning/ABI tests (Groups A–J) |
-| `tests/unit/test_syscall_dispatcher.py` | Dispatcher unit tests |
+| `tests/unit/test_syscall_contract.py`, `tests/unit/test_syscall_dispatch_contract.py`, `tests/api/test_platform_syscall_contract.py` | The real syscall suites. *Corrected 2026-08-13:* this table previously claimed `test_syscall_versioning.py` (64 tests) and `test_syscall_dispatcher.py`; neither has ever existed. |

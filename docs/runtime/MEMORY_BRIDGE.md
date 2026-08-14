@@ -151,7 +151,9 @@ Current implementation note:
 * `runtime/memory_loop.py` wraps recall -> execute -> capture -> feedback (pluggable executor).
 * `runtime/memory/memory_learning.py` updates per-execution success_rate and low-value flags to adapt recall quality.
 * `runtime/memory/memory_metrics.py` + `runtime/memory/metrics_store.py` compute and persist memory impact metrics.
-* `tests/system/test_memory_loop_e2e.py` validates the full loop (execution -> memory -> recall -> improved execution).
+* *(2026-08-13)* This line claimed `tests/system/test_memory_loop_e2e.py` validates the full
+  loop. That file has never existed in either repo, and `tests/system/` is not a directory
+  in this one. End-to-end loop coverage is unestablished.
 * `services/memory_capture_engine.py` can now auto-capture high-impact `SystemEvent` outcomes into causal memory records and link them back into RippleTrace.
 
 ---

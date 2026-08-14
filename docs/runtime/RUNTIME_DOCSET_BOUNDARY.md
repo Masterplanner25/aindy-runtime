@@ -7,6 +7,10 @@ owner: "platform-team"
 ---
 # Runtime Docset Boundary
 
+> **Paths below are in `aindy-apps-monolith`, not this repo.** They were written as
+> relative links, which resolve nowhere here — corrected 2026-08-13 to plain paths so the
+> boundary this document defines is visible in the citation itself.
+
 This document defines the documentation boundary between the extracted
 `aindy-runtime` and `aindy-apps-monolith` repos.
 
@@ -47,9 +51,9 @@ Runtime-repo rule:
 These docs describe app-domain features, enrichment behavior, or monolith-only
 user-facing capabilities.
 
-- [../apps/APPS_MONOLITH_REPO_SHAPE.md](../apps/APPS_MONOLITH_REPO_SHAPE.md)
-- [../apps/CLIENT_OWNERSHIP.md](../apps/CLIENT_OWNERSHIP.md)
-- [../apps/AGENTICS.md](../apps/AGENTICS.md)
+- `apps/APPS_MONOLITH_REPO_SHAPE.md`
+- `apps/CLIENT_OWNERSHIP.md`
+- `apps/AGENTICS.md`
 - `docs/apps/*` domain guides such as analytics, freelancing, rippletrace, and
   other app feature docs
 - app route and app service behavior currently cataloged under monolith-facing
@@ -65,10 +69,10 @@ These docs still span both runtime and app concerns and should either remain
 duplicated intentionally or be split later into runtime-owned and app-owned
 companions.
 
-- [../architecture/BOOT_PROFILES.md](../architecture/BOOT_PROFILES.md)
-- [../architecture/ARCHITECTURE_MAP.md](../architecture/ARCHITECTURE_MAP.md)
-- [../architecture/PLUGIN_REGISTRY_PATTERN.md](../architecture/PLUGIN_REGISTRY_PATTERN.md)
-- [../platform/interfaces/API_CONTRACTS.md](../platform/interfaces/API_CONTRACTS.md)
+- `architecture/BOOT_PROFILES.md`
+- `architecture/ARCHITECTURE_MAP.md`
+- `architecture/PLUGIN_REGISTRY_PATTERN.md`
+- `platform/interfaces/API_CONTRACTS.md`
 
 Split guidance:
 - `BOOT_PROFILES.md` is shared until both repos have their own startup docs;

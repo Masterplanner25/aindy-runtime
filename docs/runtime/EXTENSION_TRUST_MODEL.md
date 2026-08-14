@@ -12,11 +12,11 @@ This document defines the runtime extension trust and ownership boundary as it
 exists today.
 
 The versioned extension ABI policy is documented separately in
-[EXTENSION_ABI.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_ABI.md).
+[EXTENSION_ABI.md](EXTENSION_ABI.md).
 The explicit capability model is documented separately in
-[EXTENSION_CAPABILITIES.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_CAPABILITIES.md).
+[EXTENSION_CAPABILITIES.md](EXTENSION_CAPABILITIES.md).
 The provenance and integrity contract is documented separately in
-[EXTENSION_PROVENANCE.md](/abs/path/C:/dev/aindy-runtime/docs/runtime/EXTENSION_PROVENANCE.md).
+[EXTENSION_PROVENANCE.md](EXTENSION_PROVENANCE.md).
 
 ## Important Limitation
 
@@ -78,12 +78,12 @@ The following surfaces execute as trusted Tier 1 kernel code in the main
 interpreter:
 
 - manifest bootstrap modules loaded by
-  [AINDY/platform_layer/registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/registry.py)
+  [AINDY/platform_layer/registry.py](../../AINDY/platform_layer/registry.py)
   when `owner_class` is `runtime-built-in` or `first-party-app`
 - manifest declarative extension entries loaded by the same registry for
   external onboarding without Python bootstrap execution
 - runtime-built-in dynamic plugin nodes loaded by
-  [AINDY/platform_layer/node_registry.py](/abs/path/C:/dev/aindy-runtime/AINDY/platform_layer/node_registry.py)
+  [AINDY/platform_layer/node_registry.py](../../AINDY/platform_layer/node_registry.py)
   when `owner_class` is `runtime-built-in`
 
 Properties of Tier 1 kernel code:

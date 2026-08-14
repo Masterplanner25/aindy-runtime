@@ -293,5 +293,4 @@ The EU callback registered by `rehydrate_waiting_eus()` includes an ownership gu
 | `core/flow_run_rehydration.py` | Startup rehydration of FlowRun WAIT callbacks |
 | `core/wait_rehydration.py` | Startup rehydration of EU WAIT callbacks |
 | `routes/platform_router.py` | `GET /platform/tenants/{id}/usage` |
-| `tests/unit/test_os_layer.py` | OS isolation + capacity event tests |
-| `tests/unit/test_event_bus.py` | Distributed event bus tests (26 tests) |
+| *(none)* | *Corrected 2026-08-13:* this table claimed `tests/unit/test_os_layer.py` and `tests/unit/test_event_bus.py` (26 tests). Neither has ever existed. The only event-bus unit test is `tests/unit/test_event_bus_redis_url.py`, which covers URL parsing alone. |
