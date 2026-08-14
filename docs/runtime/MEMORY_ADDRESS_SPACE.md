@@ -1,6 +1,6 @@
 ---
 title: "Memory Address Space (MAS)"
-last_verified: "2026-04-19"
+last_verified: "2026-08-13"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -8,6 +8,21 @@ owner: "platform-team"
 # Memory Address Space (MAS)
 
 The Memory Address Space transforms `MemoryNode` from a flat, tag/semantic-only store into a filesystem-like, path-addressable namespace. Every node can be located by a deterministic hierarchical path in addition to its UUID.
+
+> **Verified against source 2026-08-13** (DOCS-STALE-1).
+>
+> **The API inventory is sound.** Every constant, all 16 path functions and all 6 DAO methods
+> exist with the documented names and defaults — §§1–6 need no correction, and the four database
+> columns in §5 are present exactly as described.
+>
+> **Everything describing *behaviour* had drifted.** §7 documents a helper with no callers; §8's
+> write-path rules get the fallback namespace wrong (`general`, not `_legacy`); §9's endpoints
+> moved file, and two of the three return **different response keys** than documented, with two
+> wrong default limits and a wrong depth cap; §10 mis-states three of five syscall handler
+> mappings and omits two syscalls entirely.
+>
+> All corrected in place and marked. **If you integrated against §8, §9 or §10 as written,
+> re-read them** — those are the sections a caller would have coded against.
 
 ---
 
@@ -168,6 +183,10 @@ flat = flatten_tree(tree)  # depth-first ordered list
 
 `build_tree` assembles a nested tree from a flat list of node dicts. Each node's `parent_path` determines its position.
 
+> **`flatten_tree` has zero callers** — verified 2026-08-13, nothing in `AINDY/` invokes it. It is
+> defined and exported but unused. The `GET /platform/memory/tree` endpoint does *not* call it,
+> which is why §9's promised `flat` response key does not exist.
+
 ---
 
 ## 8. Write Path Integration
@@ -178,63 +197,121 @@ When writing via `sys.v1.memory.write`, the path is extracted from the payload o
 path_from_write_payload(payload, tenant_id) -> (full_path, namespace, addr_type)
 ```
 
-Rules (in priority order):
-1. If `payload["path"]` is set and valid → use it directly.
-2. If `payload["namespace"]` + `payload["addr_type"]` are set → generate with `generate_node_path`.
-3. If only `namespace` is set → generate with addr_type from `payload.get("node_type", "node")`.
-4. Fallback → `_legacy` namespace with addr_type from `node_type`.
+Rules (in priority order), **corrected 2026-08-13** against
+`memory_address_space.py:262`:
+
+1. If `payload["path"]` is set → `normalize_path` + `validate_tenant_path` (raises on a
+   cross-tenant path), then `parse_path`.
+   - If the parsed path **already carries a `node_id`** → used as-is.
+   - If it does **not** → a new node_id is generated under the parsed namespace/addr_type.
+     *The old rule 1 said "use it directly", which is only half true — a path without a node_id
+     is a prefix, and the write lands at a freshly generated child of it.*
+2. Otherwise `namespace = payload["namespace"] or "general"` and
+   `addr_type = payload["addr_type"] or node_type`, then `generate_node_path`.
+
+`node_type` itself defaults to **`"general"`**, not `"node"`.
+
+> **The old rule 4 was wrong in a way worth calling out.** It said the fallback namespace is
+> **`_legacy`**. It is **`general`**. `LEGACY_NAMESPACE` is used only by `derive_legacy_path`
+> (§4) to synthesise a read-side path for pre-MAS rows — nothing ever *writes* into `_legacy`.
+> Anyone who read this section and went looking for un-namespaced writes under
+> `/memory/{tenant}/_legacy/**` would find nothing; they are under `/memory/{tenant}/general/**`.
+
+There is no separate rule for "only namespace set" — rule 2 covers it, because each field falls
+back independently.
 
 ---
 
 ## 9. API Endpoints
 
-All in `routes/platform_router.py`, prefix `/platform`.
+> **Corrected 2026-08-13.** This section said *"All in `routes/platform_router.py`"*. They are
+> in **`AINDY/routes/platform/platform_ops_router.py`** (`:117`, `:137`, `:157`), registered under
+> the `/platform` prefix via `PLATFORM_ROUTERS`. Response shapes, defaults and the depth cap were
+> also wrong — every correction below is against that file.
 
-### `GET /platform/memory`
+All three are in `AINDY/routes/platform/platform_ops_router.py`, served under prefix `/platform`.
 
-Hybrid list — supports path expressions, tag filtering, and text search.
+**Shared by all three**, and previously undocumented:
+- rate limited **60/minute**
+- require the `Scopes.MEMORY_READ` API-key scope (`enforce_api_key_scope`)
+- the supplied `path` is put through `normalize_path` then `validate_tenant_path`, so a
+  cross-tenant path raises rather than returning another tenant's nodes
+
+### `GET /platform/memory` — `list_memory_path`
+
+Hybrid list — supports path expressions, tag filtering, and text search. Delegates to
+`MemoryNodeDAO.query_path`.
 
 Query params:
-- `path` — MAS path expression (exact, `/*`, or `/**`)
+- `path` — **required** (was documented as optional; it has no default)
 - `query` — free-text search
 - `tags` — comma-separated tag filter
-- `limit` — max results (default 20)
+- `limit` — max results, default **50** *(was documented as 20)*
 
-Response: `{ "nodes": [...], "count": int, "path": str|null }`
+Response: `{ "nodes": [...], "count": int, "path": str }` ✔ as documented
 
-### `GET /platform/memory/tree`
+### `GET /platform/memory/tree` — `memory_tree`
 
-Hierarchical tree from a path prefix.
+Hierarchical tree from a path prefix. Exact paths are walked directly; wildcards go through
+`wildcard_prefix`.
 
 Query params:
-- `path` — required; prefix to walk (treated as `/**` if no wildcard)
-- `limit` — max nodes to include (default 100)
+- `path` — required; prefix to walk
+- `limit` — max nodes, default **200** *(was documented as 100)*
 
-Response: `{ "tree": {...}, "flat": [...], "count": int, "root": str }`
+Response: `{ "tree": {...}, "node_count": int, "path": str }`
 
-### `GET /platform/memory/trace`
+> *Three of the four documented keys were wrong.* The old text promised
+> `{ "tree", "flat", "count", "root" }`. There is **no `flat`** — `flatten_tree` exists in the
+> module (§7) but this endpoint does not call it; `count` is **`node_count`**; `root` is **`path`**.
+
+### `GET /platform/memory/trace` — `memory_trace`
 
 Causal chain — follows `source_event_id` links backward from an exact node path.
 
 Query params:
 - `path` — required; exact path to a single node
-- `depth` — how many hops to follow (default 5, max 10)
+- `depth` — hops to follow, default 5, capped at **20** via `min(depth, 20)` *(was documented as
+  max 10)*
 
-Response: `{ "chain": [...], "count": int, "root_path": str }`
+Response: `{ "chain": [...], "depth": int, "path": str }`
+
+> *Two of three keys were wrong:* `count` is **`depth`** (the realised chain length, not the
+> requested one) and `root_path` is **`path`**. Undocumented: an empty chain returns **404**
+> `{"error": "No node found at path"}`, not an empty list.
 
 ---
 
 ## 10. Syscall Integration
 
-MAS path methods are exposed as syscalls:
+MAS path methods are exposed as syscalls. All carry capability **`memory.read`** except
+`write` (`memory.write`) and `delete` (a dedicated **`memory.delete`** capability that
+`memory.write` does **not** grant — see MEM-DELETE-1).
 
-| Syscall | Method | Description |
-|---------|--------|-------------|
-| `sys.v1.memory.read` | `query_path` | Hybrid read; accepts `path` param |
-| `sys.v1.memory.write` | `save_at_path` | Write with path; auto-generates if omitted |
-| `sys.v1.memory.list` | `list_path` | One-level listing of a path |
-| `sys.v1.memory.tree` | `build_tree(walk_path(...))` | Full tree from path prefix |
-| `sys.v1.memory.trace` | `causal_trace` | Causal chain from node path |
+| Syscall | Actually calls | Capability | `stable=` | Notes |
+|---|---|---|---|---|
+| `sys.v1.memory.read` | `query_path` **only when `path` is supplied**, else `dao.recall` | `memory.read` | ✔ | *Corrected:* the fallback to tag/semantic recall was undocumented |
+| `sys.v1.memory.write` | `path_from_write_payload` → **`dao.save`** | `memory.write` | ✔ | *Corrected:* **not** `save_at_path`. That DAO method exists (§6) but no syscall uses it |
+| `sys.v1.memory.list` | **`query_path`** | `memory.read` | ✘ | *Corrected:* **not** `list_path`, despite the name |
+| `sys.v1.memory.tree` | `build_tree(walk_path(...))` | `memory.read` | ✘ | ✔ as documented |
+| `sys.v1.memory.trace` | `causal_trace` | `memory.read` | ✘ | ✔ as documented |
+| `sys.v1.memory.search` | semantic search | `memory.read` | — | **Missing from this table** |
+| `sys.v1.memory.delete` | hard delete, cascade | **`memory.delete`** | — | **Missing** — shipped 2026-07-11, irreversible, tenant-scoped |
+
+### Stability: the two MAS syscalls disagree with themselves
+
+`sys.v1.memory.tree` and `sys.v1.memory.trace` are registered **`stable=False`**
+(`syscall_registry.py:1487`, `:1501`), so `GET /platform/syscalls` advertises them as
+experimental. Both are also in **`_STABLE_SYSCALLS`** in
+`tests/unit/test_cross_repo_compatibility.py`, the CI-enforced cross-repo contract where
+renaming or removing an entry is a **MAJOR** version bump.
+
+Two sources of truth, opposite answers, on exactly the two syscalls this document exists to
+describe. `sys.v1.memory.list` is consistent — `stable=False` and absent from the contract.
+
+Recorded, not resolved: reconciling them is a code change, and which direction is correct is a
+product decision about what has actually been promised to consumers. Part of the wider
+stable-flag conflict noted in `PUBLIC_RUNTIME_SURFACES.md` and `SYSCALL_REFERENCE.md`.
 
 ---
 
@@ -242,9 +319,10 @@ MAS path methods are exposed as syscalls:
 
 | File | Role |
 |------|------|
-| `memory/memory_address_space.py` | All path utilities: normalize, parse, build, generate, derive_legacy, wildcard helpers, tree ops |
-| `memory/memory_persistence.py` | `MemoryNodeModel` with 4 new path columns |
-| `db/dao/memory_node_dao.py` | 6 new path DAO methods |
+| `AINDY/memory/memory_address_space.py` | All path utilities: normalize, parse, build, generate, derive_legacy, wildcard helpers, tree ops. **16 functions + 3 constants, all verified present 2026-08-13** |
+| `AINDY/memory/memory_persistence.py` | `MemoryNodeModel` with 4 path columns — verified present |
+| `AINDY/db/dao/memory_node_dao.py` | 6 path DAO methods (`:1591`–`:1724`) — all verified present with the documented signatures |
 | *(no migration)* | The four path columns are **create_all-managed via the schema contract**, not Alembic-tracked — `memory_nodes` is deliberately absent from `env.py`'s `_RUNTIME_TABLES` allowlist. *Corrected 2026-08-13: this row cited `alembic/versions/g5h6i7j8k9l0_...py`, which never existed.* |
-| `routes/platform_router.py` | 3 MAS API endpoints |
+| `AINDY/routes/platform/platform_ops_router.py` | 3 MAS API endpoints. *Corrected 2026-08-13: this row said `routes/platform_router.py`.* |
+| `AINDY/kernel/syscall_registry.py` | 5 MAS-aware syscall handlers + registrations |
 | *(none)* | No MAS test suite exists. *Corrected 2026-08-13 — the row previously claimed `tests/unit/test_memory_address_space.py`, 61 tests.* |
