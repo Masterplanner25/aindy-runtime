@@ -4730,15 +4730,49 @@ verification against a codebase that did not yet exist. Four of them have exactl
 commit in this repo — the extraction itself — so nothing has been checked against runtime
 source since they arrived from the monolith.
 
-| Document | `last_verified` | Commits here | Lines |
-|---|---|---|---|
-| `RETRY_POLICY.md` | 2026-04-18 | 2 | 226 |
-| `MEMORY_ADDRESS_SPACE.md` | 2026-04-19 | 1 | 248 |
-| `MEMORY_BRIDGE.md` | 2026-04-19 | 1 | 460 |
-| `OS_ISOLATION_LAYER.md` | 2026-04-22 | 1 | 297 |
-| `NATIVE_MEMORY_BRIDGE.md` | 2026-04-25 | 1 | 405 |
-| `EXECUTION_CONTRACT.md` | 2026-05-02 | 2 | 626 |
-| `RUNTIME_DOCSET_BOUNDARY.md` | 2026-05-10 | 1 | 95 |
+| Document | `last_verified` | Commits here | Lines | State |
+|---|---|---|---|---|
+| `RETRY_POLICY.md` | ~~2026-04-18~~ **2026-08-13** | 2 | 226 | **✔ verified** |
+| `EXECUTION_CONTRACT.md` | ~~2026-05-02~~ **2026-08-13** | 2 | 626 | **✔ verified** |
+| `MEMORY_ADDRESS_SPACE.md` | 2026-04-19 | 1 | 248 | pending |
+| `MEMORY_BRIDGE.md` | 2026-04-19 | 1 | 460 | pending |
+| `OS_ISOLATION_LAYER.md` | 2026-04-22 | 1 | 297 | pending |
+| `NATIVE_MEMORY_BRIDGE.md` | 2026-04-25 | 1 | 405 | pending |
+| `RUNTIME_DOCSET_BOUNDARY.md` | 2026-05-10 | 1 | 95 | pending |
+
+**Progress 2026-08-13 — 2 of 7 read against source.** Both were materially wrong, in different
+ways, and neither was wrong in the way the staleness signal predicted:
+
+- **`RETRY_POLICY.md`** — structure held; two things did not. The `RetryPolicy` dataclass gained
+  a fifth field, `execution_guarantee`, which is load-bearing (the same name appears on
+  `SyscallEntry` and on tool-registry entries, and `syscall_dispatcher.py:470` reads it for the
+  EXACTLY_ONCE gate). And its **Backoff** section reached a true conclusion from an inverted
+  premise: it said all six constants have `backoff_ms=0`, so nothing sleeps. Four of six carry
+  200–500ms with exponential backoff and jitter — *and nothing sleeps anyway*, because
+  `_sleep_before_retry` has zero callers outside the module and its only consumers,
+  `execute_with_retry` / `_execute_with_retry`, are themselves uncalled. **`backoff_ms` and
+  `exponential_backoff` are declared, persisted into `ExecutionUnit.extra`, and never applied.**
+  The old doc's advice — "update the relevant policy constant" to add backoff — was a no-op.
+  *Side finding, code not doc:* `is_retryable_error`'s docstring says "Current system does not
+  use this"; three call sites do. Flagged, not edited.
+
+- **`EXECUTION_CONTRACT.md`** — a pre-split *design target*, not a description of the runtime.
+  `ExecutionRequest` / `ExecutionRunner` / `ExecutionRecord` / `ExecutionOrchestrator` do not
+  exist under any name; three of its five canonical events are not in `SystemEventTypes`; the
+  Task/Genesis/ARM subsystems it contracts are app-owned (`AINDY/domain/`, `AINDY/modules/` are
+  gone); and the enforcement it claims — `tools/execution_contract_linter.py`,
+  `.github/workflows/lint.yml`, `.pre-commit-config.yaml` — has **none** of those three files
+  here. Two claims were actively inverted: `/apps/agent/*` is plugin-owned, not runtime-owned
+  (same error `PUBLIC_RUNTIME_SURFACES.md` fixed on 2026-08-06 — `AINDY/routes/agent_router.py`
+  is a deprecated reference file whose docstring says so), and "register returns a usable JWT
+  immediately" is the exact behaviour **2.0.0 removed** (`status_code=202`, no token).
+  Annotated in place rather than rewritten — the aspiration is worth keeping as a record; a
+  banner now says which parts are real.
+
+**Lesson for the remaining five.** Staleness did not predict the failure mode. `RETRY_POLICY`
+was structurally sound with a load-bearing inversion buried in one section; `EXECUTION_CONTRACT`
+was wholesale aspirational. Reading is the only way to tell, which is why this was filed rather
+than bulk-dated.
 
 **Why this is filed rather than fixed.** The audit could repair every citation mechanically
 (done — see the docset changelog), but it cannot certify 2,357 lines of behavioural prose.

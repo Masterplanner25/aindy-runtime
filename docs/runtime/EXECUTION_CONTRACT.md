@@ -1,6 +1,6 @@
 ---
 title: "Execution Contract"
-last_verified: "2026-05-02"
+last_verified: "2026-08-13"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -8,6 +8,34 @@ owner: "platform-team"
 # Execution Contract
 
 ## Purpose
+
+> ## Read this first — verified against source 2026-08-13
+>
+> **This is a design target written before the repo split, and most of what it describes is not
+> in this repository.** It was imported wholesale by `0d5d382 Initial runtime repo extraction`
+> (2026-05-17) with a `last_verified` of 2026-05-02 — a date that predates this repo's existence.
+> It is kept because the five-stage shape is still the intended model and the *aspiration* is a
+> useful record. It is **not** a description of the runtime as built.
+>
+> Concretely, checked against source:
+>
+> | Claim | Reality |
+> |---|---|
+> | `ExecutionRequest`, `ExecutionRunner`, `ExecutionRecord`, `ExecutionOrchestrator` | **None exist**, under those names or any other. The built equivalents are `ExecutionPipeline` (`core/execution_pipeline/pipeline.py`) and `ExecutionUnit` (the DB row). |
+> | `EXECUTION_ACCEPTED`, `EXECUTION_PERSISTED`, `EXECUTION_ORCHESTRATED` | **Not emitted.** `SystemEventTypes` defines `execution.started`, `execution.completed`, `execution.failed`, `execution.waiting`, `execution.step.completed` — and that enum is frozen-hash tested, so it is the authority. |
+> | Task, Genesis, ARM subsystems | **Not in this repo.** `AINDY/domain/` and `AINDY/modules/` do not exist; `domain.task_services`, `domain.genesis_ai`, `domain.masterplan_factory`, `modules.deepseek.*` are all `aindy-apps-monolith`. |
+> | *"Compile-time enforcement now exists via `tools/execution_contract_linter.py`, `.github/workflows/lint.yml`, `.pre-commit-config.yaml`"* | **None of the three exists here.** See the Status note. |
+> | The `/apps/agent` ownership paragraph | **Inverted.** See §Agent. |
+> | *"successful register returns a usable JWT immediately"* | **Reversed by 2.0.0.** See §Identity Boot Activation. |
+>
+> What *is* real and load-bearing: the `Input -> Execution -> Persist -> Orchestrator ->
+> Observability` shape; `core/execution_helper.py::execute_with_pipeline`; the outbound
+> `external.call.*` event sequence; and the two Related Contracts at the foot of this file.
+>
+> For what the runtime actually guarantees today, read `EXECUTION_INVARIANTS.md` — that document
+> is source-verified and is the one to trust on conflict.
+
+---
 
 This document defines the single canonical execution contract for all user-driven and system-driven execution in A.I.N.Y.D.
 
@@ -43,9 +71,25 @@ Current behavior:
 
 - Closest subsystem to a canonical contract
 - Has explicit run records, approval, step persistence, lifecycle events, and canonical runtime entry through `nodus_execution_service`
-- The `/apps/agent/*` HTTP surface is runtime-owned in `AINDY/routes/agent_router.py`
-- Route behavior no longer depends on app-owned flow wrappers for create/list/get/approve/reject/recover/replay/tools/trust/events/steps exposure
-- `apps/agent/routes/agent_router.py` is only a transitional compatibility re-export and is not an ownership surface
+> **Corrected 2026-08-13 — these three lines had ownership exactly backwards.**
+>
+> `/apps/agent/*` is **not** runtime-owned. `APP_ROUTERS` in `AINDY/routes/__init__.py` contains
+> only `memory_router` and `coordination_router`; that file's own comment records that
+> `agent_router` **moved to the plugin layer**. `AINDY/routes/agent_router.py` still exists, but
+> its module docstring opens *"Deprecated: agent HTTP surface — now plugin-owned … retained for
+> reference only. Do not import the router from here."*
+>
+> And it is `apps/agent/routes/agent_router.py` in `aindy-apps-monolith` — called here "only a
+> transitional compatibility re-export" — that is **the canonical implementation**, registered
+> via `register_router()` at bootstrap.
+>
+> A bare runtime does not serve `/apps/agent/*` at all. The routes answer on any plugin-loaded
+> deployment, which is why the error stayed invisible. Same correction as
+> `PUBLIC_RUNTIME_SURFACES.md` (2026-08-06).
+
+- The agent *runtime* — `agents/agent_runtime/`, `runtime/nodus_execution_service.py` — is
+  runtime-owned; the HTTP surface in front of it is not
+- The canonical executor entrypoint above (`execute_agent_run_via_nodus()`) is real and correct
 
 ### Task
 
@@ -259,12 +303,24 @@ Required observability outputs:
 Canonical event sequence:
 
 ```text
-EXECUTION_ACCEPTED
-EXECUTION_STARTED
-EXECUTION_PERSISTED
-EXECUTION_ORCHESTRATED
-EXECUTION_COMPLETED
+EXECUTION_ACCEPTED       ← aspirational; not defined in SystemEventTypes
+EXECUTION_STARTED        ← real: "execution.started"
+EXECUTION_PERSISTED      ← aspirational; not defined
+EXECUTION_ORCHESTRATED   ← aspirational; not defined
+EXECUTION_COMPLETED      ← real: "execution.completed"
 ```
+
+*Verified 2026-08-13.* `AINDY/core/system_event_types.py` defines five execution events:
+`execution.started`, `execution.completed`, `execution.failed`, `execution.waiting`,
+`execution.step.completed`. Two of the five names above exist; three do not.
+
+The enum is covered by a **frozen-hash baseline** (`tests/baselines/system_event_contract.json`),
+so adding any of the missing three is a contract change requiring the baseline to be regenerated
+in lockstep — not a free edit.
+
+Note also `execution.waiting`, absent from both sequences below despite Invariant 5 listing
+`waiting` as a terminal state. WAIT/RESUME is a first-class runtime path, not an omission in the
+implementation.
 
 Failure sequence:
 
@@ -280,6 +336,10 @@ Required outbound event sequence:
 external.call.started
 external.call.completed
 ```
+
+*Verified real 2026-08-13* — emitted by `platform_layer/external_call_service.py`
+(`:79`, `:101`, `:122`), the FR-1 outbound boundary. This is the one part of the observability
+section that is fully implemented.
 
 Required outbound failure sequence:
 
@@ -558,13 +618,38 @@ It is:
 If a path does not satisfy all five stages, it is legacy and should be refactored until it does.
 
 Status note:
-- Route-level normalization improved materially after introduction of `core/execution_pipeline.py` and `core/execution_helper.py`.
+> **Corrected 2026-08-13.** `core/execution_pipeline.py` is a **package**, not a module —
+> `core/execution_pipeline/pipeline.py`. More importantly, **none of the three enforcement
+> artefacts named below exists in this repository**: no `tools/execution_contract_linter.py`,
+> no `.github/workflows/lint.yml`, no `.pre-commit-config.yaml`. Linting here is `Runtime Lint`
+> (ruff) in `runtime-ci.yml`, which enforces style, not this contract.
+>
+> So the sentence *"Compile-time enforcement now exists"* is false for `aindy-runtime`. If the
+> linter exists at all it is app-side; nothing in this repo checks that routes enter through
+> `execute_with_pipeline`. The four bullets below describe the monolith at the time of writing.
+
+- Route-level normalization improved materially after introduction of `core/execution_pipeline/` and `core/execution_helper.py` (`execute_with_pipeline` — real, still the entry helper).
 - That change unifies request-scoped trace creation, best-effort lifecycle event emission, and response passthrough on several legacy route groups without yet introducing a single persisted `ExecutionRecord` model.
 - Compile-time enforcement now exists via `tools/execution_contract_linter.py`, plus `.github/workflows/lint.yml` and `.pre-commit-config.yaml`.
 - The linter currently enforces direct route entry through `execute_with_pipeline(...)` / `execute_with_pipeline_sync(...)` and flags direct memory/event execution patterns outside the pipeline.
 - The repo is not yet fully clean under that rule set; the linter is the enforcement mechanism and the current violation list is a migration backlog, not proof of full convergence.
 
 ## Identity Boot Activation
+
+> **Corrected 2026-08-13 — this whole section describes an app surface, and its central auth
+> claim was reversed by the 2.0.0 breaking change.**
+>
+> `GET /apps/identity/boot` is not served by the runtime, and neither `identity.boot` nor
+> `identity.created` is a `SystemEventTypes` value — there are zero references to either in
+> `AINDY/`. The runtime's equivalent is `bootIdentity` against the platform version/boot-mode
+> surface (see `UI_CONTRACT.md`), which is a different thing.
+>
+> The claim below that *"successful register returns a usable JWT immediately; no second auth
+> call is required"* is **the exact behaviour 2.0.0 removed**. `POST /auth/register` is now
+> `status_code=202` and its docstring reads *"Returns 202 with no token, identically for a new
+> and an already-registered address"* — deliberate, to close the enumeration oracle. A client
+> written against the paragraph below will break at upgrade; that is the documented breaking
+> change, not a defect.
 
 Authentication is not the whole activation path anymore.
 
