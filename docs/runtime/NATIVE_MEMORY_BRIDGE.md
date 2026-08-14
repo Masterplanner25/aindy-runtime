@@ -313,14 +313,17 @@ assert abs(score - 0.0) < 1e-6, f"Expected 0.0, got {score}"
 print("Native bridge OK")
 ```
 
-Focused tests that exist in this repository:
-
-```bash
-pytest tests/integration/test_memory_native_scorer.py -q
-pytest tests/integration/test_memory_bridge.py -q
-```
-
-`tests/integration/test_memory_bridge.py` skips the Rust-extension section when `memory_bridge_rs` is not compiled.
+> **Corrected 2026-08-13.** This section read *"Focused tests that exist in this
+> repository"* and named `tests/integration/test_memory_native_scorer.py` and
+> `tests/integration/test_memory_bridge.py`. **Neither has ever existed** in this repo or in
+> `aindy-apps-monolith`, and no file under `tests/` references `memory_bridge_rs` at all.
+>
+> This is consistent with `TECH_DEBT.md` **NATIVE-CI-1**, which records that the crate has no
+> Rust tests either. The snippet above is the only executable check for the native path today.
+>
+> What CI *does* run, since NATIVE-CI-1 closed 2026-08-02, is `Native Crate Build (Rust)` in
+> `.github/workflows/runtime-ci.yml` — `cargo build --locked --release`. It proves the crate
+> compiles against the committed `Cargo.lock`; it asserts nothing about scoring behaviour.
 
 ---
 
@@ -379,7 +382,9 @@ The current GitHub Actions workflow in `.github/workflows/ci.yml` does not insta
 
 That means test environments rely on the Python fallback because the native module is unavailable, not because CI explicitly disables `USE_NATIVE_SCORER`.
 
-If native coverage is needed in CI, add a dedicated job that installs Rust and builds the extension before running the native bridge tests.
+If native *behavioural* coverage is needed in CI — the build job added by NATIVE-CI-1 does
+not provide it — a dedicated job would install Rust, build the extension, and run tests that
+**would first have to be written**; the files below are illustrative names, not existing paths.
 
 Example:
 

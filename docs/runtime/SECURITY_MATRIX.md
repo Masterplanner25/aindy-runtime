@@ -25,7 +25,10 @@ main interpreter with ambient authority. There is no runtime capability mediatio
 after registration. The trust model relies on operator control of the deployment.
 
 **Enforcement paths:**
-- `AINDY/platform_layer/extension_trust_model.py` — tier classification at load time
+- `AINDY/platform_layer/extension_policy.py` — tier classification at load time
+  (`OWNER_FIRST_PARTY_APP`, `trust_class`). *Corrected 2026-08-13: this line previously
+  cited `extension_trust_model.py`, which does not exist — the name of the document
+  `EXTENSION_TRUST_MODEL.md` had been written as if it were a module.*
 - `AINDY/platform_layer/registry.py` — registration-time capability gates for Tier 1
   (these are registration *gates*, not execution-time confinement)
 - `AINDY/kernel/syscall_dispatcher.py` — all Tier 1 code reaches syscall via

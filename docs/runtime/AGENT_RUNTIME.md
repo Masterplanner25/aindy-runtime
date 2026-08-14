@@ -12,7 +12,7 @@ This document describes the agent runtime subsystem in `AINDY/agents/`. It
 covers the execution contract, public API surface, capability enforcement model,
 recovery behavior, and runtime-owned orchestration guardrails. For the app-layer Agentics feature (gap analysis,
 completion roadmap, Nodus integration plan) see
-[docs/apps/AGENTICS.md](../apps/AGENTICS.md).
+`docs/apps/AGENTICS.md` in **`aindy-apps-monolith`** (that repo, not this one).
 
 Repository ownership:
 
@@ -230,7 +230,7 @@ after approval. Modifying the token post-approval is not permitted.
 
 ## 5. Per-Step Retry Policy
 
-The runtime uses `AINDY/runtime/RETRY_POLICY.md` for all retry decisions.
+The runtime uses [`RETRY_POLICY.md`](RETRY_POLICY.md) for all retry decisions.
 The agent-specific rules are:
 
 - **Transient failures** (network timeout, downstream 5xx): retry up to 3 times
@@ -410,7 +410,7 @@ So today:
 - platform full operation is not yet independent from app-owned components
 - runtime must not import plugins directly
 
-See [PLUGIN_REGISTRY_PATTERN.md](../architecture/PLUGIN_REGISTRY_PATTERN.md)
+See `docs/architecture/PLUGIN_REGISTRY_PATTERN.md` in **`aindy-apps-monolith`**
 for the registration model and
-[CROSS_DOMAIN_COUPLING.md](../architecture/CROSS_DOMAIN_COUPLING.md) for the
+`docs/architecture/CROSS_DOMAIN_COUPLING.md` (same repo) for the
 coupling rules that apply to the Infinity Loop post-execution integration.
