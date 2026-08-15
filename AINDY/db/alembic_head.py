@@ -22,7 +22,7 @@ from sqlalchemy.engine import Engine
 RUNTIME_ALEMBIC_VERSION_TABLE = "alembic_version_runtime"
 
 # The current head of the runtime migration chain (alembic/versions/0001..NNNN).
-RUNTIME_ALEMBIC_HEAD_REVISION = "0015"
+RUNTIME_ALEMBIC_HEAD_REVISION = "0016"
 
 
 def stamp_runtime_alembic_head(

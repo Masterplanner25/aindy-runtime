@@ -277,7 +277,21 @@ def memory_agents_list_node(state, context):
 
         db = context.get("db")
         user_id = normalize_uuid(context.get("user_id"))
-        agents = db.query(Agent).filter(Agent.is_active.is_(True)).all()
+        # Owner-scoped (FR-12 remainder). This listed every active agent to every
+        # caller, which was harmless only while `owner_user_id` was NULL on all seven
+        # rows. Now that users can own agents, an unscoped read hands one user the
+        # names, descriptions and metadata of another's. Un-owned rows stay visible:
+        # they are the shared system + app-registered roster.
+        from sqlalchemy import or_
+
+        agents = (
+            db.query(Agent)
+            .filter(
+                Agent.is_active.is_(True),
+                or_(Agent.owner_user_id.is_(None), Agent.owner_user_id == user_id),
+            )
+            .all()
+        )
         result_list = []
         for agent in agents:
             node_count = db.query(MemoryNodeModel).filter(MemoryNodeModel.source_agent == agent.memory_namespace, MemoryNodeModel.user_id == user_id).count()
