@@ -476,7 +476,9 @@ variants, in the order they were found, because the next one will be a seventh:
 1. **Claimed and absent** — six docs cited eight test files, several with counts, that had never
    existed (`DOCS-COVERAGE-CLAIM-1`).
 2. **Exists, not collected** — 268 unit tests in 24 unmarked files run in no job
-   (`CI-MARKER-1`, still open).
+   (`CI-MARKER-1`, **closed 2026-08-15**: marked, *and* `tests/unit/conftest.py` now makes the
+   marker the default so a new file cannot repeat it. The variant stays on this list — the
+   failure mode is "a test exists and no job selects it", and only `tests/unit` is now immune).
 3. **Collected, skipped** — the native suite skipped in CI because nothing built the crate; a
    skip reads as green. Fixed with `AINDY_REQUIRE_NATIVE_BRIDGE=1`, under which a *skip becomes
    a failure*.
@@ -497,8 +499,12 @@ variants, in the order they were found, because the next one will be a seventh:
   tests fail. This is cheap and it is the only check that a test asserts anything: a first-draft
   wire suite scored 4/7, because the absence-assertion passed with the wire broken. **A test
   asserting an absence needs a liveness control** or it is vacuous by construction.
-- **A new test file must carry `pytestmark = pytest.mark.runtime_only`** or CI never runs it.
-  Nothing applies it automatically.
+- **A new test file must be selected by some job.** Under `tests/unit/` this is now automatic —
+  `tests/unit/conftest.py` applies `runtime_only` to every item that does not already carry it
+  or a marker handing it to another job (CI-MARKER-1) — so write `pytestmark` for readability,
+  not for safety. **Everywhere else the old rule still bites:** nothing marks a file outside
+  `tests/unit/`, and `pytest.integration.ini` only reaches `tests/integration`. Adding a test
+  directory means giving it a job, or its tests run nowhere.
 - **When a test can legitimately skip, make skipping loud where it must not happen** — an
   env-gated assertion that fails in CI beats a silent skip.
 
