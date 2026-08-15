@@ -531,9 +531,57 @@ in-process state.
 
 ---
 
-#### FR-12 — no way to register an agent; the roster is hardcoded 🔴 net-new
+#### FR-12 — no way to register an agent; the roster is hardcoded — **SHIPPED 2026-08-15**
 
-**Verified true, and the live data confirms the sharper half:**
+**Status: SHIPPED (2026-08-15).** `registry.register_agent(...)` — the identity hook — plus
+owner-scoped reads, reserved system namespaces, and a startup upsert. No schema change (FR-13
+already added the `metadata` column this uses).
+
+**★ Correction: the filed premise was wrong.** This entry said *"the only ways to add a row are
+a runtime code change or a raw `INSERT`"*. Checked before building on it:
+**`POST /platform/admin/agents/register` already existed** in `admin_router.py`, is mounted at
+`/platform`, is runtime-owned (confirmed against `APP_ROUTERS`, not by file location — the
+`DOCS-STALE-1` lesson), admin-authenticated, and idempotent on `memory_namespace`. What was
+genuinely missing is narrower and sharper than "no way to register":
+
+| Filed as | Actually |
+|---|---|
+| no way to add a row | an admin route existed; **no *platform hook*** for an app to declare an identity at plugin-load |
+| `count(owner_user_id) = 0` unexplained | **no path ever wrote `owner_user_id`** — the admin route does not accept it, so the column could not be populated |
+| reads unscoped | true |
+| — | **system namespaces unreserved**, so the admin route's idempotent-*update* branch silently rewrote platform rows |
+
+**That last one is a defect this work found and fixed.** `POST …/agents/register` with
+`memory_namespace: "runtime"` took the *update* branch and rewrote the platform's own Runtime
+agent — name, type, description — for anyone with admin. The next boot would **not** repair it,
+because `_bootstrap_system_agents` only `INSERT`s when the row is absent. Both the hook and the
+route now reject the seven reserved namespaces from one shared `SYSTEM_AGENTS` set (a test pins
+that they share it, since two guards reading two lists would drift).
+
+**★ A shipping bug caught by its own test.** `INPROC_CAP_REGISTER_AGENT` was declared but not
+added to `_ALL_INPROC_EXTENSION_CAPABILITIES`. Because
+`_require_in_process_extension_capability` raises `PermissionError` for any capability outside
+the caller's allowed set — and that set is derived from `_ALL_` — the hook would have been
+**denied in exactly the plugin-load context it exists for**. Fixed; the test that caught it
+stays.
+
+**Design note:** registration is *declarative*. `register_agent` records a spec and touches no
+database, because plugin load happens long before a session exists;
+`startup._apply_registered_agents()` then upserts by `memory_namespace` — the durable identity
+and the tag on every memory node the agent writes. Unlike the system seed it also *updates* an
+existing row, so an app changing its display name or metadata between boots needs no manual DB
+edit, and nothing about the agent's memory history moves.
+
+**Deferred deliberately:** the authenticated user-facing route/syscall for user-owned agents.
+The hook is the runtime-owned mechanism ("runtime owns the mechanism, app owns policy"); a
+user-facing surface carries auth and tenant-isolation weight that deserves its own review.
+
+**Still open, flagged not fixed:** `DELETE /platform/admin/agents/{namespace}` has no
+reservation guard, so an admin can deactivate a platform system agent. It is consequential —
+`flow_definitions_memory` filters `is_active`, and the boot seed never repairs the flag — but
+whether an admin *should* be able to is a policy question, not an obvious bug.
+
+**Original filing follows. Verified true, and the live data confirms the sharper half:**
 - `AINDY/startup.py:937` — `_SYSTEM_AGENTS` is a hardcoded list of exactly 7 specs (ARM,
   Genesis, Nodus, SYLVA, Platform, Runtime, Memory), upserted by `memory_namespace`.
 - There is **no `register_agent`**. The registry exposes 8 `register_agent_*` hooks —

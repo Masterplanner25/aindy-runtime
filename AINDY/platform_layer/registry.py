@@ -96,6 +96,7 @@ _legacy_root_routers: list[Any] = []
 _syscalls: dict[str, Handler] = {}
 _jobs: dict[str, Handler] = {}
 _connectors: dict[str, dict[str, Any]] = {}
+_agents: dict[str, dict[str, Any]] = {}
 _flows: list[Handler] = []
 _flow_result_keys: dict[str, str] = {}
 _flow_result_extractors: dict[str, Handler] = {}
@@ -161,6 +162,7 @@ INPROC_CAP_REGISTER_ROOT_ROUTER = "registry.register_root_router"
 INPROC_CAP_REGISTER_LEGACY_ROOT_ROUTER = "registry.register_legacy_root_router"
 INPROC_CAP_REGISTER_JOB = "registry.register_job"
 INPROC_CAP_REGISTER_CONNECTOR = "registry.register_connector"
+INPROC_CAP_REGISTER_AGENT = "registry.register_agent"
 INPROC_CAP_REGISTER_FLOW = "registry.register_flow"
 INPROC_CAP_REGISTER_FLOW_RESULT = "registry.register_flow_result"
 INPROC_CAP_REGISTER_FLOW_PLAN = "registry.register_flow_plan"
@@ -202,6 +204,7 @@ _ALL_INPROC_EXTENSION_CAPABILITIES = {
     INPROC_CAP_REGISTER_LEGACY_ROOT_ROUTER,
     INPROC_CAP_REGISTER_JOB,
     INPROC_CAP_REGISTER_CONNECTOR,
+    INPROC_CAP_REGISTER_AGENT,
     INPROC_CAP_REGISTER_FLOW,
     INPROC_CAP_REGISTER_FLOW_RESULT,
     INPROC_CAP_REGISTER_FLOW_PLAN,
@@ -552,6 +555,97 @@ def get_connector(connector_type: str) -> dict[str, Any] | None:
 
 def iter_connectors() -> Iterable[tuple[str, dict[str, Any]]]:
     return tuple(_connectors.items())
+
+
+def register_agent(
+    name: str,
+    memory_namespace: str,
+    *,
+    agent_type: str = "custom",
+    description: str | None = None,
+    owner_user_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Register an agent **identity** (APP-FR-* FR-12).
+
+    The registry already exposed eight ``register_agent_*`` hooks — ``_tool``,
+    ``_planner_backend``, ``_planner_context``, ``_run_tools``, ``_completion_hook``,
+    ``_event``, ``_ranking_strategy``, ``_capabilities`` — and every one registers
+    *behaviour attached to* an agent. None registered the agent itself, so the roster was
+    whatever ``startup._bootstrap_system_agents`` hardcoded.
+
+    Registration is declarative: this records a spec, and
+    ``apply_registered_agents(db)`` upserts it at startup with the same
+    idempotent-by-``memory_namespace`` semantics the system seed already used. Calling
+    this at plugin-load time is safe — it touches no database.
+
+    ``memory_namespace`` is the durable identity and the tag on every memory node the
+    agent writes, so it is the upsert key. The seven system namespaces are **reserved**
+    and rejected: without that, an app (or the admin route, which had the same hole)
+    could silently rewrite the platform's own Runtime or Memory agent row.
+
+    ``owner_user_id`` marks a user-owned agent. It was never written by any path before
+    this — which is why the live table had ``count(owner_user_id) = 0`` — and readers
+    must scope by it; see :func:`list_agent_specs_for_owner`.
+
+    ``metadata`` is the FR-13 JSONB bag: the durable identity is the *role*, the vendor
+    client is swappable detail that lives here.
+    """
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_AGENT)
+
+    key = str(memory_namespace or "").strip()
+    if not key:
+        raise ValueError("register_agent: memory_namespace is required")
+    if not str(name or "").strip():
+        raise ValueError("register_agent: name is required")
+
+    from AINDY.db.models.agent import SYSTEM_AGENTS as _RESERVED_NAMESPACES
+
+    if key in _RESERVED_NAMESPACES:
+        raise ValueError(
+            f"register_agent: memory_namespace {key!r} is reserved for a platform system "
+            f"agent and cannot be registered by an extension. Reserved: "
+            f"{sorted(_RESERVED_NAMESPACES)}"
+        )
+    if key in _agents and not overwrite:
+        raise ValueError(
+            f"agent {key!r} is already registered; pass overwrite=True to replace it"
+        )
+
+    spec = {
+        "name": str(name),
+        "memory_namespace": key,
+        "agent_type": str(agent_type or "custom"),
+        "description": str(description) if description else None,
+        "owner_user_id": str(owner_user_id) if owner_user_id else None,
+        "metadata": dict(metadata) if metadata else None,
+    }
+    _agents[key] = spec
+    return spec
+
+
+def get_agent_spec(memory_namespace: str) -> dict[str, Any] | None:
+    return _agents.get(str(memory_namespace))
+
+
+def iter_agent_specs() -> Iterable[tuple[str, dict[str, Any]]]:
+    return tuple(_agents.items())
+
+
+def list_agent_specs_for_owner(owner_user_id: str | None) -> list[dict[str, Any]]:
+    """Registered specs visible to *owner_user_id*.
+
+    Un-owned specs (``owner_user_id is None``) are shared and visible to everyone; an
+    owned spec is visible only to its owner. This is the read-scoping half of FR-12 —
+    without it one user can enumerate another's agents.
+    """
+    owner = str(owner_user_id) if owner_user_id else None
+    return [
+        dict(spec)
+        for spec in _agents.values()
+        if spec.get("owner_user_id") in (None, owner)
+    ]
 
 
 def register_flow(register_fn: Handler) -> Handler:

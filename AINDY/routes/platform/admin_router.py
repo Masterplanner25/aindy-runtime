@@ -94,7 +94,25 @@ def register_agent(
     db: Session = Depends(get_db),
     _admin: dict = Depends(require_admin_principal),
 ):
-    """Register a named agent definition. Idempotent on memory_namespace — updates if exists."""
+    """Register a named agent definition. Idempotent on memory_namespace — updates if exists.
+
+    FR-12: the seven platform system namespaces are reserved. Without this guard the
+    idempotent-update branch below silently rewrote the platform's own Runtime / Memory /
+    Nodus rows — name, type and description — for anyone with admin, and the next boot
+    would not repair it because ``_bootstrap_system_agents`` only *inserts* when the row
+    is absent. The same reservation is enforced in ``registry.register_agent``.
+    """
+    from AINDY.db.models.agent import SYSTEM_AGENTS
+
+    if body.memory_namespace in SYSTEM_AGENTS:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"memory_namespace {body.memory_namespace!r} is reserved for a platform "
+                f"system agent. Reserved: {sorted(SYSTEM_AGENTS)}"
+            ),
+        )
+
     existing = db.query(Agent).filter(Agent.memory_namespace == body.memory_namespace).first()
     if existing:
         existing.name = body.name

@@ -965,6 +965,69 @@ def _bootstrap_system_agents() -> None:
     except Exception as exc:
         logger.warning("[bootstrap] System agent seed failed (non-fatal): %s", exc)
 
+    _apply_registered_agents()
+
+
+def _apply_registered_agents() -> None:
+    """Upsert agent identities registered via ``registry.register_agent`` (FR-12).
+
+    Runs straight after the system seed and uses the same semantics: idempotent by
+    ``memory_namespace``, non-fatal on failure. The registration hook is declarative and
+    touches no database, so this is where a plugin's registered identity actually lands.
+
+    Unlike the system seed this also *updates* an existing row, because an app that
+    changes its agent's display name or metadata between boots should not need a manual
+    DB edit — and ``memory_namespace``, the durable identity, is the key being matched,
+    so nothing about the agent's memory history moves.
+    """
+    import uuid as _uuid
+
+    try:
+        from AINDY.db.models.agent import Agent
+        from AINDY.platform_layer.registry import iter_agent_specs
+
+        specs = iter_agent_specs()
+        if not specs:
+            return
+
+        db = SessionLocal()
+        try:
+            for namespace, spec in specs:
+                row = (
+                    db.query(Agent)
+                    .filter(Agent.memory_namespace == namespace)
+                    .first()
+                )
+                if row is None:
+                    db.add(Agent(
+                        id=str(_uuid.uuid4()),
+                        name=spec["name"],
+                        memory_namespace=namespace,
+                        agent_type=spec["agent_type"],
+                        description=spec["description"],
+                        owner_user_id=spec["owner_user_id"],
+                        agent_metadata=spec["metadata"],
+                        is_active=True,
+                    ))
+                    logger.info(
+                        "[bootstrap] Registered agent %r (namespace=%r, owner=%s).",
+                        spec["name"], namespace, spec["owner_user_id"] or "shared",
+                    )
+                else:
+                    row.name = spec["name"]
+                    row.agent_type = spec["agent_type"]
+                    row.description = spec["description"]
+                    if spec["owner_user_id"] is not None:
+                        row.owner_user_id = spec["owner_user_id"]
+                    if spec["metadata"] is not None:
+                        row.agent_metadata = spec["metadata"]
+                    row.is_active = True
+            db.commit()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("[bootstrap] Registered agent upsert failed (non-fatal): %s", exc)
+
 
 def _bootstrap_dev_api_key() -> None:
     if settings.ENV == "dev":
