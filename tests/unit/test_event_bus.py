@@ -8,20 +8,26 @@ received on instance B. Everything here runs without Redis: the publisher is dri
 through a fake client and the subscriber through `_handle_message` directly, which is
 the same entry point `_subscriber_loop` uses per message.
 
-The headline finding is `TestPublisherFailureLatch` — three consecutive publish
-failures disable the publisher **permanently** for the process, with no recovery when
-Redis returns.
+`TestPublisherSuspendAndRecover` covers what was the headline finding here
+(EVENTBUS-PUBLISH-LATCH-1, fixed 2026-08-15): three consecutive publish failures used
+to disable the publisher **permanently** for the process. Suspension is now a circuit
+breaker that re-probes and recovers on its own; those tests drive the recovery window
+with a frozen clock rather than sleeping.
 
 Marked `runtime_only` — without it CI collects nothing here (CI-MARKER-1).
 """
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from AINDY.kernel import event_bus as bus_module
+from AINDY.kernel import event_bus as eb
+from AINDY.kernel.circuit_breaker import CircuitState
+from AINDY.kernel.clock import frozen_at, utcnow
 from AINDY.kernel.event_bus import (
     _MAX_BUFFER_SIZE,
     EventBus,
@@ -38,7 +44,6 @@ def bus():
     instance = EventBus()
     instance._enabled = True
     instance._pub_client = None
-    instance._consecutive_failures = 0
     return instance
 
 
@@ -132,20 +137,33 @@ class TestPublish:
         bus.publish("evt")
         assert bus._pub_client is None
 
-    def test_success_clears_the_failure_counter(self, bus, fake_redis):
-        bus._consecutive_failures = 2
+    def test_success_clears_accumulated_failures(self, bus, fake_redis):
+        """Two failures then a success must leave the breaker closed with a clean
+        count, so an intermittent Redis never accumulates its way to suspension."""
+        broken = MagicMock()
+        broken.publish.side_effect = ConnectionError("down")
+        bus._get_pub_client = lambda: broken
         bus.publish("evt")
-        assert bus._consecutive_failures == 0
+        bus.publish("evt")
+        assert bus._publish_breaker.failure_count == 2
+
+        bus._get_pub_client = lambda: fake_redis
+        assert bus.publish("evt") is True
+        assert bus._publish_breaker.failure_count == 0
+        assert bus._publish_breaker.state is CircuitState.CLOSED
 
 
-class TestPublisherFailureLatch:
-    """Three consecutive failures set `_enabled = False` — and nothing ever sets it
-    back. The module docstring's "reconnects with exponential back-off" describes the
-    *subscriber* loop; the publisher has no recovery path at all.
+class TestPublisherSuspendAndRecover:
+    """EVENTBUS-PUBLISH-LATCH-1 — FIXED 2026-08-15.
 
-    In a multi-instance deployment a transient Redis blip therefore ends cross-instance
-    WAIT/RESUME propagation for the life of the process: flows waiting on other
-    instances are never resumed, which is precisely what this module exists to prevent.
+    Three consecutive failures used to set `_enabled = False` **permanently**: when
+    Redis came back, `publish` returned False from the top guard without ever
+    contacting it, so a transient blip ended cross-instance WAIT/RESUME propagation
+    for the life of the process. Suspension is now a circuit breaker that re-probes
+    after `_PUBLISH_RECOVERY_TIMEOUT_SECS` and closes on success.
+
+    The suspension itself is deliberate and still tested: without it, a dead Redis
+    adds a socket connect timeout to every `notify_event()`.
     """
 
     @staticmethod
@@ -155,35 +173,86 @@ class TestPublisherFailureLatch:
         bus._get_pub_client = lambda: client
         return client
 
-    def test_bus_survives_two_failures(self, bus):
+    @staticmethod
+    def _healthy(bus):
+        client = MagicMock()
+        bus._get_pub_client = lambda: client
+        return client
+
+    def test_two_failures_do_not_suspend(self, bus):
         self._breaking(bus)
         bus.publish("evt")
         bus.publish("evt")
+        assert bus._publish_breaker.state is CircuitState.CLOSED
+        assert bus._publish_breaker.failure_count == 2
+
+    def test_third_consecutive_failure_suspends_publishing(self, bus):
+        self._breaking(bus)
+        for _ in range(3):
+            bus.publish("evt")
+        assert bus._publish_breaker.state is CircuitState.OPEN
+        assert bus._is_publishing_suspended() is True
+
+    def test_suspension_never_touches_the_operator_config_flag(self, bus):
+        """The regression that made this permanent: runtime health was written into
+        `_enabled`, so an outage became indistinguishable from
+        `AINDY_EVENT_BUS_ENABLED=false` and could never be undone."""
+        self._breaking(bus)
+        for _ in range(3):
+            bus.publish("evt")
         assert bus._enabled is True
-        assert bus._consecutive_failures == 2
 
-    def test_third_consecutive_failure_disables_the_bus(self, bus):
-        self._breaking(bus)
-        for _ in range(3):
-            bus.publish("evt")
-        assert bus._enabled is False
-
-    def test_recovery_of_redis_does_not_re_enable_the_publisher(self, bus):
+    def test_while_suspended_redis_is_not_contacted(self, bus):
+        """The point of suspending: no socket timeout per notify_event()."""
         self._breaking(bus)
         for _ in range(3):
             bus.publish("evt")
 
-        healthy = MagicMock()
-        bus._get_pub_client = lambda: healthy
-
+        healthy = self._healthy(bus)
         assert bus.publish("evt") is False
-        assert healthy.publish.called is False, (
-            "the latch short-circuits before touching Redis — a recovered server is "
-            "never retried"
-        )
+        assert healthy.publish.called is False
 
-    def test_interleaved_success_prevents_the_latch(self, bus):
-        """The counter is *consecutive*, so an intermittent failure never latches."""
+    def test_publisher_recovers_after_the_window_when_redis_returns(self, bus):
+        """The actual fix. Previously this was impossible without a restart."""
+        self._breaking(bus)
+        for _ in range(3):
+            bus.publish("evt")
+        assert bus._is_publishing_suspended() is True
+
+        healthy = self._healthy(bus)
+        later = utcnow() + timedelta(seconds=eb._PUBLISH_RECOVERY_TIMEOUT_SECS + 1)
+        with frozen_at(later):
+            assert bus.publish("evt") is True
+
+        assert healthy.publish.called is True
+        assert bus._publish_breaker.state is CircuitState.CLOSED
+        assert bus._is_publishing_suspended() is False
+
+    def test_a_still_broken_redis_re_suspends_after_the_probe(self, bus):
+        """Half-open must fail closed, not flap open on every subsequent call."""
+        self._breaking(bus)
+        for _ in range(3):
+            bus.publish("evt")
+
+        later = utcnow() + timedelta(seconds=eb._PUBLISH_RECOVERY_TIMEOUT_SECS + 1)
+        with frozen_at(later):
+            assert bus.publish("evt") is False
+        assert bus._publish_breaker.state is CircuitState.OPEN
+
+    def test_no_recovery_before_the_window_elapses(self, bus):
+        self._breaking(bus)
+        for _ in range(3):
+            bus.publish("evt")
+
+        healthy = self._healthy(bus)
+        too_soon = utcnow() + timedelta(seconds=eb._PUBLISH_RECOVERY_TIMEOUT_SECS - 5)
+        with frozen_at(too_soon):
+            assert bus.publish("evt") is False
+        assert healthy.publish.called is False
+
+    def test_interleaved_success_never_suspends(self, bus):
+        """The count is *consecutive*, so an intermittent Redis never accumulates
+        its way to suspension."""
         broken = MagicMock()
         broken.publish.side_effect = ConnectionError("down")
         healthy = MagicMock()
@@ -192,7 +261,51 @@ class TestPublisherFailureLatch:
             bus._get_pub_client = (lambda: broken) if attempt % 2 == 0 else (lambda: healthy)
             bus.publish("evt")
 
+        assert bus._publish_breaker.state is CircuitState.CLOSED
         assert bus._enabled is True
+
+    def test_publish_still_never_raises_while_suspended(self, bus):
+        self._breaking(bus)
+        for _ in range(5):
+            assert bus.publish("evt") is False
+
+
+class TestStatusSurfacesSuspension:
+    """Previously nothing but a single WARNING revealed the state, and `get_status()`
+    reported a deliberately-enabled bus as `enabled: False`."""
+
+    def test_healthy_bus_reports_not_suspended(self, bus, fake_redis):
+        bus.publish("evt")
+        status = bus.get_status()
+        assert status["publish_suspended"] is False
+        assert status["publish_circuit_state"] == "closed"
+        assert status["publish_retry_after_secs"] == 0
+
+    def test_suspended_bus_reports_suspension_and_a_retry_window(self, bus):
+        client = MagicMock()
+        client.publish.side_effect = ConnectionError("down")
+        bus._get_pub_client = lambda: client
+        for _ in range(3):
+            bus.publish("evt")
+
+        status = bus.get_status()
+        assert status["publish_suspended"] is True
+        assert status["publish_circuit_state"] == "open"
+        assert status["publish_retry_after_secs"] == eb._PUBLISH_RECOVERY_TIMEOUT_SECS
+        assert status["enabled"] is True, "operator config must not read as disabled"
+
+    def test_suspended_publishing_is_not_reported_as_cross_instance(self, bus, monkeypatch):
+        """Even if Redis answers a ping, outbound events are not reaching other
+        instances while the circuit is open — the mode must say so."""
+        client = MagicMock()
+        client.publish.side_effect = ConnectionError("down")
+        bus._get_pub_client = lambda: client
+        for _ in range(3):
+            bus.publish("evt")
+
+        monkeypatch.setattr(bus, "_is_redis_connected", lambda: True)
+        monkeypatch.setattr(bus, "_is_subscriber_running", lambda: True)
+        assert bus._get_propagation_mode() == "local-only"
 
 
 # ── subscriber message handling ───────────────────────────────────────────────

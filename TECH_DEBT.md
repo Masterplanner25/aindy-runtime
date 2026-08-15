@@ -5441,8 +5441,17 @@ and Python will not import that, so a local build needs it copied to `memory_bri
 
 ## EVENTBUS-PUBLISH-LATCH-1 — three failed publishes disable cross-instance events permanently
 
-**Status:** Open — availability. Found 2026-08-14 writing the DOCS-COVERAGE-CLAIM-1 event-bus
-suite; verified by driving `EventBus.publish` through a failing then a healthy client.
+**Status: CLOSED (2026-08-15).** Suspension is now a `CircuitBreaker` that re-probes once after
+`AINDY_EVENT_BUS_PUBLISH_RECOVERY_SECS` (default 60) and closes on success. Found 2026-08-14
+writing the DOCS-COVERAGE-CLAIM-1 event-bus suite; verified by driving `EventBus.publish`
+through a failing then a healthy client.
+
+**The root cause was narrower than "no recovery": one field meant two things.** `self._enabled`
+was both the operator's kill switch (`AINDY_EVENT_BUS_ENABLED`) *and* the runtime give-up latch.
+Writing transient health into a config flag is what made the outage permanent (nothing owns
+un-setting an operator's choice) **and** invisible (`get_status()` reported a deliberately
+enabled bus as `enabled: false`, indistinguishable from someone having switched it off). The fix
+separates them: `_enabled` is config, never mutated at runtime; `_publish_breaker` is health.
 
 `EventBus.publish` counts consecutive failures and, on the third, sets `self._enabled = False`
 (`event_bus.py:192-198`). **Nothing ever sets it back.** When Redis returns, `publish` hits the
@@ -5467,12 +5476,40 @@ state except one WARNING at the moment it latches.
 reconnect loop; reconnects with exponential back-off (1 s → 30 s cap)" describes the
 *subscriber*. The publisher has no recovery path at all.
 
-**Fix options:** reset `_enabled` on a successful `_is_redis_connected()` probe; or replace the
-latch with a cooldown (retry after N seconds) so a blip degrades rather than terminates; or
-drop the latch and rely on the existing per-call failure logging. Note `_consecutive_failures`
-is already reset on success, so an *intermittent* failure never latches — it is specifically
-three in a row. Pinned by `TestPublisherFailureLatch`, including a test asserting the recovered
-client is never even contacted.
+**What shipped (2026-08-15).** The kernel already had the right primitive —
+`AINDY/kernel/circuit_breaker.py` with CLOSED/OPEN/HALF_OPEN, a recovery timeout and single-probe
+half-open — so `publish()` now wraps its one fallible operation in a
+`CircuitBreaker(name="event_bus_publish", failure_threshold=3, recovery_timeout_secs=60)` rather
+than hand-rolling a cooldown. It reads the clock through `kernel.clock.utcnow` (REPLAY-1), so the
+recovery window is testable with `frozen_at` instead of `sleep`.
+
+**Suspension was kept deliberately, not removed.** Dropping the latch outright was the third
+option considered and is wrong: with a dead Redis, every `notify_event()` would pay a socket
+connect timeout. The requirement was *suspend, then recover* — which is exactly a circuit
+breaker. `CircuitOpenError` short-circuits before any connection attempt, so the latency
+benefit is unchanged.
+
+**The state is now visible.** `get_status()` gained `publish_suspended`,
+`publish_circuit_state` and `publish_retry_after_secs`, and `_get_propagation_mode()` returns
+`local-only` while the circuit is open **even if Redis answers a ping** — outbound events are
+genuinely not reaching other instances, and reporting `cross-instance` there was part of what
+made the old state invisible. Both health consumers (`health_service.check_event_bus`,
+`health_router`) read via `.get()`, so the added keys are backward-compatible; `check_event_bus`
+passes the whole dict as `metadata`, so `/health/deep` now shows the suspension and its retry
+window. **Behaviour change worth knowing:** health reports the bus degraded during suspension
+rather than `ok` — correct, since it is not propagating, but it is a change in health output.
+
+**The docstring was fixed too**, since it was part of the trap: its "reconnects with exponential
+back-off" bullet describes the *subscriber*, and the publisher's absence of any recovery path
+was never stated. It now says so explicitly.
+
+**Tests:** `TestPublisherFailureLatch` → `TestPublisherSuspendAndRecover`. The two tests that
+pinned the *bug* (`test_third_consecutive_failure_disables_the_bus`,
+`test_recovery_of_redis_does_not_re_enable_the_publisher`) were rewritten, since they asserted
+the behaviour being fixed. New coverage: recovery after the window with a healthy Redis; re-open
+if still broken at the probe; no recovery before the window; the config flag is never touched;
+`publish` still never raises while suspended; plus `TestStatusSurfacesSuspension` for the
+operator-visible half.
 
 ---
 
