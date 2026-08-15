@@ -437,16 +437,34 @@ owner: "platform-team"
 
 `main` is protected. Direct pushes by anyone (including admin) are blocked — `enforce_admins: true`.
 
-**Required status checks (must pass before merge):**
-- `Runtime Lint` — ruff check
-- `Runtime Docs Validation` — frontmatter check on `docs/runtime/`
-- `Runtime Contracts` — unit tests, schema contract, smoke
+**★ ALL TEN checks are required as of 2026-08-14** (was four; `strict: true`, so a branch must
+also be up to date before merge). Previously only the first four gated — the other six ran on
+every PR and could be red without blocking, which is the same shape as the coverage problems
+in `DOCS-COVERAGE-CLAIM-1` / `CI-MARKER-1`: verification that exists but does not enforce.
 
-**Full CI pipeline** (required before version tag — see `docs/runtime/RELEASE_CHECKLIST.md`):
-- `Integration Tests (PostgreSQL + Redis)`
-- `Platform UI Build`
-- `Runtime Package Build`
-- `Install Smoke Test`
+| Check | Workflow | What it guards |
+|---|---|---|
+| `Runtime Lint` | `runtime-ci.yml` | ruff |
+| `Runtime Docs Validation` | `runtime-ci.yml` | `docs/runtime/` frontmatter + `last_verified` floor |
+| `Runtime Contracts` | `runtime-ci.yml` | `pytest tests -m runtime_only`, schema contract, **native crate build** |
+| `Native Crate Build (Rust)` | `runtime-ci.yml` | `cargo build --locked --release` (NATIVE-CI-1) |
+| `Integration Tests (PostgreSQL + Redis)` | `runtime-ci.yml` | `pytest -c pytest.integration.ini` on live PG + Redis |
+| `Platform UI Build` | `runtime-ci.yml` | `npm ci` + SPA build (LOCKFILE-PLATFORM-1) |
+| `Runtime Package Build` | `runtime-ci.yml` | sdist + wheel |
+| `Install Smoke Test` | `runtime-ci.yml` | wheel installs and imports |
+| `pip-audit (OSV)` | `security-audit.yml` | dependency CVEs |
+| `Boot Smoke — Linux / Python 3.11` | `smoke-postgres.yml` | published wheel boots against real PG |
+
+**Why all ten were safe to require** (the checks were verified, not assumed): none carries a
+`paths:` filter — the classic required-check trap, where a filtered check never reports on
+unrelated PRs and blocks them forever (the `Native Crate Build` comment already records this).
+None has a job-level `if:`. `Boot Smoke` guards its steps *individually*, so on a
+version-bump PR whose version is not yet on PyPI the job still runs and reports **green** rather
+than hanging pending — it degrades to a no-op instead of blocking the release PR.
+
+**Consequence to expect:** with `strict: true` and ten checks, every PR needs a rebase when
+`main` moves, and the slowest check (`Integration Tests`, ~6–7 min) sets merge latency. Combining
+several dependency bumps into one PR (as in #404) is now the normal move, not an optimization.
 
 ---
 
