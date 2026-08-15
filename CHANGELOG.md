@@ -2,6 +2,243 @@
 
 ## Unreleased
 
+**Shape: MINOR — `2.1.0`.** Everything below is additive. No signature, route or response
+contract was removed or narrowed, and `recommended_runtime_requirement` stays `>=2.0,<3.0`, so
+**no consumer pin has to move** — unlike the 2.0.0 cut.
+
+| | |
+|---|---|
+| Schema contract | `2026-08-15.1` |
+| Alembic head | **`0016`** (`0015_agents_metadata`, `0016_agents_owner_scoped_name`) |
+| Consumer pin | unchanged |
+
+**Two behaviour changes worth reading before upgrading**, both detailed below: `/health/deep`
+now reports the event bus **degraded** while publishing is suspended, where it previously
+reported it disabled; and several admin routes now return their real status codes (409/404)
+where they had been returning **500**.
+
+**The Dockerfile builder-stage pin is still `2.0.1`.** A container serves none of this until a
+release is cut *and* that pin is bumped in the same PR.
+
+---
+
+### Added — user-owned agents (`APP-FR-*` FR-12b, #421)
+
+- **`GET|POST /platform/agents`, `PATCH|DELETE /platform/agents/{slug}`,
+  `POST /platform/agents/{slug}/restore`** — the authenticated, non-admin half of the agent
+  registry. `agents.owner_user_id` has existed all along and, until now, was written by no path
+  at all (`count(owner_user_id) = 0` on live deployments).
+
+  This had been deferred as app-layer policy. It is not: ownership, per-owner name scoping and
+  owner-scoped reads are properties of the *table*, so every app wanting user-owned agents would
+  have rebuilt all three against a schema that fought them. What an app *does* with an agent
+  remains app policy.
+
+  Contract details callers need:
+
+  - **`memory_namespace` is derived, not accepted** — `u:<user_id>:<slug>`. Callers supply a
+    `slug` matching `^[a-z0-9][a-z0-9._-]{0,63}$`. A caller-chosen namespace would have to 409
+    on a row the caller cannot see, which is a cross-tenant existence oracle; deriving makes a
+    cross-user collision impossible rather than merely detected.
+  - **`agent_type` is forced to `custom`** and is not caller-settable —
+    `agent_capability_mappings` is keyed by it.
+  - **`POST` is not idempotent** (unlike the admin route): a repeated slug is `409`. An
+    idempotent update branch is exactly what silently rewrote platform rows before FR-12.
+  - **Another user's agent is `404`, never `403`** — a 403 confirms someone else holds the slug.
+  - A principal that does not resolve to a UUID user is `400`, never a silent
+    `owner_user_id = NULL` (which would create a *shared* agent).
+  - `slug`, and therefore `memory_namespace`, is immutable on `PATCH`: it is the tag already
+    written onto the agent's memory nodes.
+
+- **`POST /platform/admin/agents/{namespace}/restore`** — reactivates a deactivated agent
+  without a restart, and for a reserved system namespace also restores `name` / `agent_type` /
+  `description` from the platform spec.
+
+  This closes a gap that FR-12 *created*: `POST /admin/agents/register` was the only surface
+  whose update branch set `is_active = True`, so reserving the seven system namespaces
+  (correctly) removed the last route back for exactly the rows that matter most.
+
+### Added — `registry.register_agent(...)`, the agent **identity** hook (FR-12, #418)
+
+- The registry already exposed eight `register_agent_*` hooks and every one registers
+  *behaviour*; none registered the agent itself, so the roster was whatever
+  `startup._bootstrap_system_agents` hardcoded.
+- Declarative by design: it records a spec and touches no database, because plugin load happens
+  long before a session exists. `startup._apply_registered_agents()` upserts by
+  `memory_namespace` at boot, and *updates* an existing row so an app can change its display
+  name or metadata between boots without a manual edit.
+- The seven platform system namespaces are **reserved** and rejected, by both the hook and the
+  admin route, from one shared `SYSTEM_AGENTS` set.
+
+### Added — `agents.metadata` (JSONB) and `agents.updated_at` (FR-13, #417)
+
+- Alembic **`0015_agents_metadata`**. An agent's durable identity is its *role*; the vendor
+  client is swappable detail that previously had nowhere structured to live, so switching
+  provider looked like a brand-new agent with no history.
+- **The column is `metadata`; the ORM attribute is `Agent.agent_metadata`** — `metadata` is
+  reserved on a SQLAlchemy declarative class (`Base.metadata`). Raw SQL sees `metadata`.
+- **Purely additive, no backfill.** Both columns are nullable, so `NULL` already means "nothing
+  recorded" and every pre-existing row is correct as-is — deliberately unlike FR-8, and a test
+  asserts no `reconcile_backfill` marker was added so that reasoning survives an edit.
+
+### Added — configurable runtime-callback budget (FR-11, #413)
+
+- **`AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS`**, default **30s**. `invoke_runtime_callback` had a
+  hardcoded 10s budget that no call site could override and no env key exposed.
+- **Resolved at call time**, so it needs no restart and stays visible to behavioural tests (the
+  import-time env-read hazard). Non-positive or unparseable values warn and fall back.
+- Sized on measurement: ~3.85s median cold start on the *lightest* profile is only ~2.6x
+  headroom at 10s, while the sibling nodus subprocess budgets 15s for boot alone on top of a
+  30s script clock.
+
+### Added — event-bus publish recovery and visibility (#409)
+
+- **`AINDY_EVENT_BUS_PUBLISH_RECOVERY_SECS`**, default 60.
+- `get_status()` gains **`publish_suspended`**, **`publish_circuit_state`** and
+  **`publish_retry_after_secs`**.
+
+### Added — one loader for the native crate (#415)
+
+- **`AINDY/memory/native_bridge.py`** — `load_bridge()` / `search_paths()`. The two crate
+  consumers previously searched *different* directories; see the fix below.
+
+---
+
+### Changed — `agents.name` is unique per owner, not globally (#421)
+
+- Alembic **`0016_agents_owner_scoped_name`**. The old global `UNIQUE (name)` meant the first
+  user to register "Assistant" took that name from every other user in the deployment.
+- Replaced by two **partial** unique indexes: `UNIQUE (name) WHERE owner_user_id IS NULL` and
+  `UNIQUE (owner_user_id, name) WHERE owner_user_id IS NOT NULL`.
+- **A plain `UNIQUE (owner_user_id, name)` would not be equivalent** — SQL treats NULLs as
+  distinct, so every shared row (all system agents, every app-registered identity) would escape
+  the constraint and two rows named "Runtime" would both be accepted.
+- **Only widens what is accepted**, so there is nothing to backfill. `memory_namespace` is
+  untouched and stays globally unique: it is the tag on every memory node the agent writes.
+- Verified against real PostgreSQL on nine properties, including blank-database safety
+  (`ALEMBIC-FRESH-DB-1`), idempotent re-run, and an idempotent downgrade that restores the old
+  constraint.
+
+### Changed — `/health/deep` reports the event bus **degraded** while publishing is suspended (#409)
+
+- Previously it reported the bus *disabled* in that state, because one field meant two things.
+  `_get_propagation_mode()` now returns `local-only` while the breaker is open **even if Redis
+  pings OK** — events genuinely are not propagating.
+
+### Changed — `TenantContext.capability_scope` is now a `tuple` (#411)
+
+- The dataclass is `frozen=True` and documented "Immutable", but `frozen` does not deep-freeze:
+  while the field was a `list`, `ctx.capability_scope.append("admin.everything")` succeeded and
+  `assert_capability` then passed.
+- Builders normalise any iterable. `in` / `len` / iteration / `has_capability` are unchanged —
+  only mutation now raises `AttributeError`. No known exploit path existed; it was a weak
+  invariant, not a live breach.
+
+---
+
+### Fixed — deliberate `HTTPException`s from unmanaged routes returned **500** (`ROUTE-GUARD-1`, #421)
+
+- `enforce_registered_route_execution` wraps every registered route. Its **success** path always
+  asked two questions — did this request enter the execution pipeline, and *was it required to*
+  — while its **failure** path asked only the first. Routes registered deliberately outside the
+  contract (`admin_router`, the new `agents_router`, `automation_router`, all plain DB-query
+  handlers) therefore turned every `raise HTTPException` into a contract violation.
+
+  | Call | Was | Now |
+  |---|---|---|
+  | `POST /platform/admin/agents/register` with a reserved namespace | **500** | `409` |
+  | `DELETE /platform/admin/agents/{missing}` | **500** | `404` |
+
+  The first is FR-12's reserved-namespace guard, which blocked the write correctly and then
+  reported it as an internal error — and a client cannot tell "rejected" from "the server
+  broke" by a 500.
+
+### Fixed — reserved system namespaces on `POST /platform/admin/agents/register` (FR-12, #418)
+
+- Registering with `memory_namespace: "runtime"` took the route's *idempotent-update* branch and
+  silently rewrote the platform's own Runtime agent row — name, type and description — for
+  anyone with admin, with no repair at the next boot.
+
+### Fixed — `memory_agents_list_node` listed every active agent to every caller (#421)
+
+- Harmless only while every row was un-owned; a cross-user leak of names, descriptions and
+  metadata the moment users can own agents. Now scoped to `owner_user_id IS NULL OR = :caller`.
+
+### Fixed — the platform agent roster is repaired at boot, not only seeded (#421)
+
+- `_bootstrap_system_agents` claimed "idempotent upsert by memory_namespace" and was
+  insert-only, so a drifted system row was never repaired. Boot now restores `name` /
+  `agent_type` / `description` from the spec and logs when it does.
+- **`is_active` is deliberately not repaired**: deactivating a system agent is a supported
+  operator action, and silently re-enabling it on the next restart would undo that action
+  without telling anyone. Boot logs a WARNING naming the restore endpoint instead.
+- The roster itself is now a single `SYSTEM_AGENT_SPECS` declaration and the reserved-namespace
+  set is derived from it, where the two were previously maintained separately.
+
+### Fixed — a suspended event bus never recovered (`EVENTBUS-PUBLISH-LATCH-1`, #409)
+
+- Three consecutive failed publishes set `self._enabled = False` and **nothing ever set it
+  back**, so a *transient* Redis blip ended cross-instance WAIT/RESUME for the life of the
+  process — only a restart cured it.
+- Root cause was one field meaning two things: `_enabled` was both the operator kill switch and
+  the runtime give-up latch. They are now separate — `_enabled` is config and is never mutated
+  at runtime; a `CircuitBreaker` carries health (threshold 3, half-open single probe).
+- **Suspension was kept on purpose**: dropping it would make every `notify_event()` pay a socket
+  connect timeout against a dead Redis. The requirement was *suspend then recover*.
+
+### Fixed — native and Python scorers disagreed for a negative `impact_score` (`NATIVE-PARITY-1`, #408)
+
+- Rust clamped `(impact/5.0).clamp(0.0, 1.0)`; Python used `min(1.0, impact/5.0)` — top bound
+  only. Measured +0.300 on a 0.420 score at `impact=-10`; now 0.0 across `-1e6 ... 25.0`.
+- **Latent, not live**: `MemoryNodeDAO.save()` writes `max(0.0, ...)` at the universal write
+  chokepoint, so no stored row could reach the divergent path. Fixed as defence in depth.
+
+### Fixed — the two native-crate consumers searched different directories (`NATIVE-DISCOVERY-1`, #415)
+
+- `native_scorer` looked in `target/release` + `target/debug`; `embedding_service.cosine_similarity`
+  looked in **`target/debug` only** — so on any `--release` build the C++ cosine kernel was
+  unreachable from the recall fallback while the scorer, in the same process, used it.
+- A second defect found while reproducing it: `sys.path.insert(0, ...)` in *priority* order puts
+  the lowest-priority path first, so the documented "release then debug" was inverted and a
+  stale debug build silently shadowed a fresh release one.
+- **Trip hazard now documented in the loader:** `cargo build` emits `libmemory_bridge_rs.so` /
+  `memory_bridge_rs.dll`, and Python imports neither. CI renames; a local build needs it by hand.
+
+### Fixed — `flatten_tree` dropped every intermediate node (`MAS-FLATTEN-1`, #416)
+
+- The root set was "every path minus every path that is some node's parent", which removes the
+  *parents*. A root is a node whose parent is not itself a node — the inverse. It now also
+  guarantees every node appears exactly once. Zero callers under `AINDY/` today, but the address
+  space doc presents it as usable, so it was fixed rather than deleted.
+
+### Fixed — `AINDY/kernel/__init__.py` was a byte-identical copy of `tenant_context.py` (`KERNEL-INIT-DUPLICATE-1`, #411)
+
+- Present since the initial extraction, so `from AINDY.kernel import TenantContext` and
+  `from AINDY.kernel.tenant_context import TenantContext` returned **two different class
+  objects** — `isinstance` silently `False` across them, for the class that *is* the tenant
+  isolation boundary.
+- Nothing had broken because nothing imported it: every call site here and in the app repo
+  imports a submodule. It is now a real package init re-exporting from the single definition.
+- All 337 `.py` files under `AINDY/` were hashed; no byte-identical duplicates remain.
+
+### Fixed — two SDK-dispatched syscalls sat outside the rename guard (`SYSCALL-STABILITY-1`, #401)
+
+- `sys.v1.memory.list` and `sys.v1.execution.get` could have been renamed with CI green,
+  breaking the SDK. `SYSCALL_REFERENCE.md` also claimed `stable` for four syscalls registered
+  `stable=False`.
+
+### Fixed — a failed runtime callback said nothing about why (#423)
+
+- A worker that died before replying wrote nothing to stdout; `json.loads(stdout or "{}")` made
+  that `{}`, `{}.get("ok")` was falsy, and the handler raised its default string. So *"the
+  subprocess never started"* and *"the callback returned `{ok: false}`"* produced **the same
+  message** — no exit code, no stderr, no callback name.
+- Empty stdout is now its own error naming the callback; every failure path reports
+  `exit=<code>` plus stderr when present; the timeout path stays distinct.
+- This is why `FLAKY-1` has resisted diagnosis, and the first natural traceback captured for it
+  **refuted** its recorded leading mechanism: the failure takes the `ok:false` branch, not the
+  timeout branch that had been assumed from a *forced* reproduction.
+
 ### Fixed — `AINDY_REDIS_URL` alias removed from the rate limiter (2026-08-14)
 
 - **`AINDY/platform_layer/rate_limiter.py`**: resolved `REDIS_URL or AINDY_REDIS_URL`; now
@@ -31,6 +268,45 @@
 
 - **`AINDY/core/distributed_queue.py`**: deleted an `if False:` block wrapping a bare tuple
   expression, left behind by a superseded log line (`# legacy log removed`). No behaviour change.
+
+---
+
+### Testing and CI
+
+- **`CI-MARKER-1` closed (#420) — a green PR did not mean `tests/unit` passed.** `Runtime
+  Contracts` runs `pytest tests -m runtime_only`, and nothing applied that marker
+  automatically, so a new unit file defaulted to running in **no job**. 268 tests across 24
+  files were in that state, including the regressions for FR-8/FR-9/FR-10, the defects that
+  forced 2.0.1. Those files are now marked, **and `tests/unit/conftest.py` makes the marker the
+  default** so it cannot recur. Collection went 1587 to 1855; coverage rose to 56.71%.
+- **Coverage for four subsystems that had none (#406, #414)** — memory address space, native
+  scorer, OS isolation layer and event bus, plus an end-to-end event-bus wire test against real
+  Redis. Writing them found five of the defects fixed above.
+- **`Runtime Docs Validation` now enforces `last_verified`** as a real date `>= 2026-05-17`
+  (#400); it previously checked key *presence* only, which is how seven docs carried a
+  `last_verified` earlier than the repository's first commit.
+- **The deep-health wiring test no longer asserts a timing property (#422)** — it asserted the
+  success-shaped keys *through* a 0.5s timeout, so it failed under load in a required check.
+  Split into a wiring assertion, a direct check of the payload contract, and a forced-timeout
+  test proving the endpoint degrades rather than hangs.
+- All **ten** status checks are now required on `main` (was four), so a branch must also be up
+  to date before merge.
+
+### Dependencies (#404)
+
+- `uvicorn` 0.52.1, `greenlet` 3.5.4, `pydantic-settings` 2.15.0, `alembic` 1.19.0,
+  `pyo3` 0.29.2, `cc` 1.4.1, `vite` 8.2.1, `postcss` 8.5.26 — combined into one PR because
+  `main` is `strict: true`.
+- **`pgvector` 0.4.2 to 0.5.0 deliberately held** and filed as `MEM-EXPAND-DEAD-1`: it is green,
+  but it would switch on `expand()`'s semantic-neighbour path, which returns `[]` on every call
+  today, in the same code path that previously caused connection-pool exhaustion.
+
+### Documentation
+
+- A large verification pass over the runtime docset (#365-#403): 28 unresolvable citations
+  repaired, nine unreferenced docs archived, and every doc read against source rather than
+  trusted. The recurring finding was **plugin-layer routes documented as runtime-owned** —
+  check `APP_ROUTERS` and the route ownership inventory, never file presence.
 
 ## 2.0.1 — 2026-08-05
 

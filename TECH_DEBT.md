@@ -695,9 +695,19 @@ exactly the rows that matter most. Split on purpose:
   remedy; `POST /platform/admin/agents/{namespace}/restore` is the repair and needs no restart,
   and for a reserved namespace it repairs the identity fields in the same call.
 
-**Policy still open, deliberately:** whether an admin should be able to deactivate a platform
-system agent at all. `DELETE` now returns a `warning` in the body saying what was done and that
-a restart will not undo it, so the consequence is visible either way.
+**★ Policy DECIDED 2026-08-15 (owner): an admin MAY deactivate a platform system agent.** It is
+a supported operator action, not an anomaly to be prevented, so no reserved-namespace guard is
+added to `DELETE` — and the reservation on `POST …/agents/register` is *not* precedent for one,
+because that guard exists to stop an idempotent-update branch silently rewriting platform rows,
+which is a different thing from an explicit, visible, reversible operator action.
+
+**The decision makes the boot behaviour more clearly right, not less.** Leaving `is_active`
+alone at boot was chosen when the policy was open, as the conservative option; now that
+deactivation is *sanctioned*, silently reversing it on the next restart would be actively wrong
+— a supported decision the platform undoes behind the operator's back. The boot WARNING stays,
+reworded to say the state is supported rather than anomalous, because it is still consequential
+and not otherwise visible (`flow_definitions_memory` filters `is_active`). `DELETE` returns a
+`warning` naming the restore endpoint.
 
 **Two defects found while building, both fixed here:**
 
@@ -6177,11 +6187,10 @@ per-execution-unit *confinement descriptor* as the primitive. Split it:
    `nodus_worker.py:327`. The VM already accepts these; the runtime simply never passed them.
    Three keyword arguments close the demonstrated hole, and the measurement above says nothing
    breaks. An interim single config escape hatch is cheaper than a descriptor if one is needed.
-2. **Later, when it is earned:** the descriptor. Its value is *variation* (different execution
-   units needing different confinement) and *evidence* (knowing the confinement was applied).
-   There is exactly one guest today and zero scripts needing variation, so a descriptor with one
-   implementation and one consumer would be speculative generality — and building it first
-   delays the fix that actually closes the hole.
+2. **Then the descriptor** (`EXEC-ENV-BIND-1`) — still second, because the three kwargs close a
+   demonstrated hole today and need no design, but **not** "when variation earns it". *That
+   reasoning was wrong and is corrected in `EXEC-ENV-BIND-1`: the descriptor's value is
+   accountability, not variation, and accountability does not wait for a second guest.*
 
 The architectural answer for a script that genuinely needs network is `call_tool`, which is
 mediated, not raw `http_get` from a guest. That is the whole point of the boundary.
@@ -6457,6 +6466,48 @@ execution unit. Everything it would resolve against exists.
 design problem:** `sandbox_runner_assurance_posture()` refuses to overclaim — `insecure_dev_subprocess`
 reports `ASSURANCE_CEILING_NO_ISOLATION_GUARANTEE`. The provider side already distinguishes a
 claim from evidence; the requesting side simply has no way to ask.
+
+**★ CORRECTION 2026-08-15 — the justification recorded here was wrong, on the axis rather than
+the conclusion.** This entry originally argued the descriptor should wait until *variation* earned
+it: one guest, zero scripts needing different confinement, therefore a type with one
+implementation and one consumer is speculative generality. Owner's counter-argument, and it
+defeats that reasoning: **the descriptor is not about variation, it is about who owns the residual
+risk and whether that ownership is provable.** Accountability needs a *stated requirement*, even
+when there is only one.
+
+The runtime's honest-posture defence — *"we never claimed OS isolation for Tier 1, so putting
+untrusted code there is the operator's call"* — is sound for **deployed code**, and it is what the
+Tiered Isolation Contract already says. But today that posture is **unfalsifiable per execution**:
+nothing records what confinement a given unit required, so *"was this the containment you asked
+for?"* has no answer for any individual run. The defence is a statement about the system, not
+evidence about the execution.
+
+| | Today | With the descriptor |
+|---|---|---|
+| Who picks the boundary | the runtime, implicitly, by which code path was invoked | the caller, explicitly |
+| Can the host refuse | no | yes — the `deployment_contract.py` refusal pattern |
+| Per-execution record | none | required vs applied vs evidence class |
+| *"You configured it that way"* | an assertion | a **provable** statement |
+
+**★ And it strengthens the posture without the runtime claiming enforcement it does not have.**
+The runtime claims **selection and refusal** — both enforceable in-process — while the host keeps
+enforcement. That is the split the provider side already honours:
+`sandbox_runner_assurance_posture()` refuses to overclaim (`insecure_dev_subprocess` reports
+`ASSURANCE_CEILING_NO_ISOLATION_GUARANTEE`). The descriptor gives the *requesting* side the same
+property, and turns `assurance_ceiling` from a report into a gate.
+
+**Consequence for priority:** still second to `GUEST-CONFINE-1` — three keyword arguments beat a
+schema change when a hole is already demonstrated — but its value is higher than "wait for a
+second guest" implied, and it should not be deferred indefinitely on YAGNI grounds. The
+accountability argument holds at n=1.
+
+**★ One limit of the honest-posture defence, worth keeping next to it:** it covers deployed code,
+not submitted content. A `.nd` script arriving through `POST /platform/nodus/run` is *data* from
+an authenticated session, not something the operator placed in a Tier-1 slot — so "you did that"
+does not transfer to the guest path. That is the reason `GUEST-CONFINE-1` stays P0 independently
+of this entry. The other limit is documentation: `SECURITY_MATRIX.md` and the README describe
+scope enforcement the code applies to 7 of 147 routes (`HTTP-SCOPE-GAP-1`), and an operator making
+a trust decision on that is misled by the runtime, not by their own configuration.
 
 **Proposed:** one declarative type, not five — `ExecutionEnvironmentSpec { filesystem, network,
 processes, cpu_ms/memory_mb/timeout_ms, secrets, persistence, min_assurance }` — attached to
