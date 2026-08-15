@@ -5193,7 +5193,7 @@ hiding (`NATIVE-PARITY-1`, `NATIVE-DISCOVERY-1`, `MAS-FLATTEN-1`, `EVENTBUS-PUBL
 | Area | Suite | Tests |
 |---|---|---|
 | MAS path addressing | `tests/unit/test_memory_address_space.py` | 84 |
-| Native scorer | `tests/unit/test_memory_native_scorer.py` | 73 (33 skip without a local crate build) |
+| Native scorer | `tests/unit/test_memory_native_scorer.py` | 75 (33 need the compiled extension; CI builds it — see below) |
 | OS isolation layer | `tests/unit/test_os_layer.py` | 46 |
 | Distributed event bus | `tests/unit/test_event_bus.py` | 44 |
 
@@ -5201,6 +5201,26 @@ hiding (`NATIVE-PARITY-1`, `NATIVE-DISCOVERY-1`, `MAS-FLATTEN-1`, `EVENTBUS-PUBL
 That marker rule is `CI-MARKER-1`, filed separately; it is *why* this gap stayed invisible, but
 it is a distinct problem — `CI-MARKER-1` is tests that exist and never run, this entry was tests
 never written. Fixing one does not fix the other.
+
+**★ The suites are made to actually run — a fourth variant of the same trap, closed.** 33 of the
+native tests (the kernel contract and the parity assertions that pin `NATIVE-PARITY-1`) need the
+compiled extension, and a skip reads as green. `Native Crate Build (Rust)` compiles the crate but
+never imports it, so on the first cut those 33 skipped in CI — coverage that existed, was
+collected, and still tested nothing. Fixed in two halves:
+
+1. `Runtime Contracts` now builds the crate itself and renames the artifact
+   (`cargo build --locked --release`, then `libmemory_bridge_rs.so` → `memory_bridge_rs.so`;
+   cargo emits a `lib`-prefixed cdylib that Python will not import — the Linux twin of the
+   `.dll`/`.pyd` mismatch in `NATIVE-DISCOVERY-1`). It shares the Rust job's cache key.
+2. The job sets `AINDY_REQUIRE_NATIVE_BRIDGE=1`, under which
+   `test_native_bridge_is_importable_when_ci_says_it_must_be` **fails** instead of skipping if
+   the extension is missing, plus a companion test that calls into it so an
+   importable-but-broken extension is caught too. Verified in all three states: unset → skips
+   (local dev unaffected); set + present → passes; set + artifact removed → two explicit
+   failures.
+
+Without (2), a future break in the build or the rename would silently delete the parity
+coverage while the job stayed green — which is the exact failure this whole entry is about.
 
 **Scope note, so this is not read as more than it is.** `test_os_layer.py` covers TenantContext
 (the isolation boundary) and ResourceManager (quota/concurrency); the SchedulerEngine

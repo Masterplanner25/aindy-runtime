@@ -14,14 +14,23 @@ Layering under test:
                 └─ memory_cpp/semantic.cpp   C++ kernel
 
 Most tests here need no native build — they cover the envelope, the fallback
-routing and the Python formula. The parity tests skip when the extension is not
-importable, which is the normal case in `Runtime Contracts` (CI builds the crate
-in a *separate* job, `Native Crate Build (Rust)`, and never imports it).
+routing and the Python formula. The kernel-contract and parity tests need the
+compiled extension and skip without it.
 
-**Building it locally** (Windows): `cargo build` in
-`AINDY/memory/native/memory_bridge_rs` emits `memory_bridge_rs.dll`; Python will
-not import that. Copy it to `memory_bridge_rs.pyd` in the same directory and the
-parity tests activate.
+**In CI they do not skip.** `Runtime Contracts` builds the crate, renames the
+artifact so it is importable, and sets `AINDY_REQUIRE_NATIVE_BRIDGE=1`. Under that
+flag `test_native_bridge_is_importable_when_ci_says_it_must_be` turns a missing
+extension into a **failure** rather than a skip — otherwise a broken build or rename
+would silently delete the NATIVE-PARITY-1 coverage while the job stayed green. That
+guard exists because this repo has now shipped three variants of the same trap: docs
+claiming suites that never existed (DOCS-COVERAGE-CLAIM-1), suites that existed but
+were never collected (CI-MARKER-1), and suites collected but skipped.
+
+**Building it locally**: `cargo build` in `AINDY/memory/native/memory_bridge_rs`
+emits `memory_bridge_rs.dll` on Windows and `libmemory_bridge_rs.so` on Linux;
+Python imports neither. Copy it alongside as `memory_bridge_rs.pyd` (Windows) or
+`memory_bridge_rs.so` (Linux) and the parity tests activate. Local runs leave
+`AINDY_REQUIRE_NATIVE_BRIDGE` unset, so skipping stays fine off CI.
 """
 from __future__ import annotations
 
@@ -68,8 +77,56 @@ def _try_import_bridge():
 BRIDGE = _try_import_bridge()
 requires_native = pytest.mark.skipif(
     BRIDGE is None,
-    reason="memory_bridge_rs not importable — build the crate and copy .dll to .pyd",
+    reason="memory_bridge_rs not importable — build the crate (see module docstring)",
 )
+
+
+def _require_native_requested() -> bool:
+    return os.getenv("AINDY_REQUIRE_NATIVE_BRIDGE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def test_native_bridge_is_importable_when_ci_says_it_must_be():
+    """Turn a silent skip into a red build.
+
+    Everything under `requires_native` — the kernel contract and, more importantly, the
+    engine-parity assertions that pin NATIVE-PARITY-1 — skips when the extension is not
+    importable. A skip reads as green, so if the CI build or the artifact rename ever
+    breaks, the parity coverage would vanish without anything going red. That is the
+    same shape as the two bugs this suite was written to close (docs claiming suites
+    that never existed; suites existing but never collected), so it gets an explicit
+    guard rather than trust.
+
+    `Runtime Contracts` sets `AINDY_REQUIRE_NATIVE_BRIDGE=1` after building the crate.
+    Local runs leave it unset and skip.
+    """
+    if not _require_native_requested():
+        pytest.skip("AINDY_REQUIRE_NATIVE_BRIDGE not set — local run, native is optional")
+
+    assert BRIDGE is not None, (
+        "AINDY_REQUIRE_NATIVE_BRIDGE is set but memory_bridge_rs is not importable, so "
+        "every native and parity test in this file silently skipped. Check the crate "
+        "build step and the artifact rename (cargo emits lib<name>.so on Linux and "
+        "<name>.dll on Windows; Python needs <name>.so / <name>.pyd)."
+    )
+
+
+def test_parity_tests_actually_ran_when_native_is_required():
+    """The companion check: the module is importable *and* usable.
+
+    An importable-but-broken extension (wrong ABI, missing symbol) would let the guard
+    above pass while every parity test errored or skipped. Calling the one function the
+    parity tests depend on proves the path end to end.
+    """
+    if not _require_native_requested():
+        pytest.skip("AINDY_REQUIRE_NATIVE_BRIDGE not set — local run, native is optional")
+
+    assert BRIDGE is not None
+    scores = BRIDGE.score_memory_nodes(
+        [0.5], [0.5], [0.5], [3.0], [0.1], [0.0], [0.0], [False]
+    )
+    assert isinstance(scores, list) and len(scores) == 1
 
 
 @pytest.fixture

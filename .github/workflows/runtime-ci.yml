@@ -182,6 +182,9 @@ jobs:
       AINDY_API_KEY: ci-runtime-api-key
       ALLOWED_ORIGINS: "http://localhost:3000"
       AINDY_BOOT_MODE: runtime-only
+      # The crate is built in this job (see the build step below), so a skipped native
+      # test here means something broke — fail instead of silently losing the coverage.
+      AINDY_REQUIRE_NATIVE_BRIDGE: "1"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -209,6 +212,40 @@ jobs:
         # This step installs the two packages directly (not via the extra), so the cap
         # has to be repeated here or CI silently resolves to an incompatible SDK.
         run: python -m pip install "nodus-mcp>=0.1.1" "mcp>=1.0.0,<2"
+
+      # ── Native scorer: build it HERE so its tests actually execute ──────────────
+      #
+      # `Native Crate Build (Rust)` compiles the crate but never imports it, so without
+      # this step every native and parity test in tests/unit/test_memory_native_scorer.py
+      # SKIPS — including the assertions that pin NATIVE-PARITY-1. A skip reads as green.
+      #
+      # That is the third time this repo has shipped coverage that wasn't: docs claiming
+      # suites that never existed (DOCS-COVERAGE-CLAIM-1), suites existing but never
+      # collected (CI-MARKER-1), and now suites collected but skipped. Hence
+      # AINDY_REQUIRE_NATIVE_BRIDGE below — if this build or the rename ever breaks, the
+      # suite goes RED rather than quietly losing the coverage.
+      #
+      # Cache key matches the Rust job's so the two share a warm target/ dir.
+      - name: Cache cargo registry and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            AINDY/memory/native/memory_bridge_rs/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('AINDY/memory/native/memory_bridge_rs/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build the native scorer and make it importable
+        working-directory: AINDY/memory/native/memory_bridge_rs
+        # cargo emits a cdylib named lib<crate>.so on Linux; Python's import machinery
+        # wants <crate>.so. The same mismatch exists on Windows (.dll vs .pyd) and is the
+        # reason a bare `cargo build` never yields an importable module — see
+        # NATIVE-DISCOVERY-1. Copy rather than move so the cached target/ stays valid.
+        run: |
+          cargo build --locked --release
+          cp target/release/libmemory_bridge_rs.so target/release/memory_bridge_rs.so
+          ls -l target/release/memory_bridge_rs.so
 
       - name: Check schema contract version is current
         run: python scripts/check_schema_version.py
