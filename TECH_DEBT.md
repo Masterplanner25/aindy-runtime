@@ -5281,6 +5281,81 @@ Expect the number to move and re-baseline deliberately rather than lowering the 
 
 ---
 
+## FLAKY-1 — `test_platform_only_startup` fails intermittently in a now-required check
+
+**Status:** Open — CI reliability. Measured 2026-08-14. **Pre-existing and not introduced by
+any current branch** — established by running the full `tests/unit/` suite six times across two
+worktrees, because a single baseline pointed at the wrong cause.
+
+| Tree | Runs | `test_platform_only_registers_runtime_agent_defaults` |
+|---|---|---|
+| `main` (clean worktree) | 2 | 1 fail / 1 pass |
+| feature branch | 4 | 2 fail / 2 pass |
+
+**≈50%, on both trees.** It passes 100% of the time in isolation. Two earlier readings of this
+same data were wrong and are recorded so the next person does not repeat them: two consecutive
+failures read as *deterministic* (a third run refuted it), and its correlation with a branch
+that added neighbouring test files read as *caused by them* (the second `main` baseline refuted
+it). **Do not conclude anything about this test from fewer than ~4 runs per tree.**
+
+**Why it matters now.** The test carries `pytest.mark.runtime_only`, so `Runtime Contracts` runs
+it — and as of 2026-08-14 all ten status checks are required on `main`. A ~50% test in a
+required check is a merge blocked at random, and the natural response ("just re-run CI") is
+exactly how a genuine regression gets waved through later.
+
+**Leading mechanism — the hardcoded subprocess budget (this is `APP-FR-*` FR-11).**
+`invoke_runtime_callback` (`runtime_callback_host.py:43`) spawns a **fresh subprocess per
+callback** with a hardcoded **10.0s** timeout and raises on overrun. Forcing that path
+reproduces a clean signature:
+
+```
+registry.py:433              _wrapped → invoke_runtime_callback
+runtime_callback_host.py:72  raise RuntimeError("runtime callback command timed out")
+```
+
+which propagates straight out of the trigger evaluator — i.e. through
+`assert evaluator({...})["decision"] == "execute"` (`test_platform_only_startup.py:229`), and
+before the `worker_pid != os.getpid()` assertion at `:241`. Under a 1,494-test suite the host is
+loaded and a cold-start subprocess importing the transitive graph can plausibly exceed 10s;
+alone it never does. That matches the observed pattern exactly (always passes in isolation,
+~50% in a full run).
+
+**Confidence: strongly indicated, NOT confirmed.** The signature above was produced by *forcing*
+a timeout, not captured from a natural failure — four attempts to catch one under `--tb=long`
+came back clean, the flake being ~50% and each run ~10 minutes. **To confirm:** loop
+`python -m pytest tests/unit/ -q --tb=long > cap.txt` until `cap.txt` names the test, then check
+whether the traceback is the `RuntimeError` above. If it is something else, this section is
+wrong and the mechanism is elsewhere.
+
+**One alternative already eliminated:** stale `_runtime_callback_invocations` leaking in from a
+prior test. The `platform_only_runtime` fixture snapshots and restores **57 registry globals**
+including `_runtime_callback_invocations`, plus `TOOL_REGISTRY` and `_SUGGESTION_PROVIDERS`. The
+fixture is thorough; leak-into-fixture is not the cause.
+
+**Blast radius is two files, not one.** `tests/unit/test_extension_ownership.py` asserts on the
+same subprocess boundary (15 `worker_pid` / `isolated-runtime-callback` assertions between the
+two). Both are `runtime_only`; both now gate every merge. It has not been observed flaking yet,
+but it is exposed to the identical race.
+
+**This reframes FR-11.** The app team filed the 10s budget as *hardening, not a defect*, on the
+grounds that it is "cold-start only, 0 recurrences warm". If the mechanism above holds, that is
+too generous: it is not a theoretical cold-start concern but an intermittent failure in a
+required check. FR-11's fix — make the budget configurable, and raise it — would close this too.
+
+**Fix options, in preference order:**
+
+1. **Make the budget configurable and raise it** (= FR-11). Fixes the class, not just the test.
+   Neither `registry.py` call site overrides the default and no env key exposes it today.
+2. Give these two test files a generous explicit timeout so a loaded host does not fail them,
+   independent of the production default.
+3. Retry the assertion. **Rejected** — it hides the very signal FR-11 needs, and a retry in a
+   required check trains people to ignore red.
+
+Do **not** "fix" this by removing the `runtime_only` marker. That is `CI-MARKER-1` in reverse:
+it would make the check green by making it not run.
+
+---
+
 ## RTR-* — Runtime Roadmap (Nodus-first execution & runtime primitives)
 
 **Status:** Open — roadmap (not classic debt). Priorities per item below.
