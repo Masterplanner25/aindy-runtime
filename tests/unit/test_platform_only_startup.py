@@ -44,6 +44,10 @@ _REGISTRY_STATE_EMPTY = {
     "_route_guards": {},
     "_execution_adapters": {},
     "_startup_hooks": [],
+    "_agents": {},
+    # `_connectors` was missing from this list before FR-12 — a pre-existing
+    # leak, since a connector registered by one test survived into the next.
+    "_connectors": {},
     "_agent_tools": {},
     "_agent_planner_contexts": {},
     "_agent_planner_backends": {},
