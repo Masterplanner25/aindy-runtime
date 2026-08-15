@@ -9,8 +9,9 @@ covered here; the WAIT/RESUME propagation half lives in `test_event_bus.py`.
 
 Two properties are asserted as they *currently are*, with the surprise named:
 
-* `TenantContext` is a frozen dataclass whose `capability_scope` list is still mutable
-  in place — the immutability guarantee is shallow (see TestFrozenIsShallow).
+* `TenantContext`'s immutability used to be shallow — `frozen=True` blocks attribute
+  rebinding but not in-place mutation of a `list` field (TENANT-FROZEN-SHALLOW-1, fixed
+  2026-08-15; the field is now a tuple). See TestImmutabilityIsDeep.
 * `ResourceManager.can_execute` returns `(True, None)` unconditionally under
   `settings.is_testing`, so quota enforcement is vacuous in the test environment and
   must be exercised with that flag patched off.
@@ -55,13 +56,20 @@ class TestBuildTenantContext:
         assert ctx.namespace == "tenant:org-9"
 
     def test_capability_scope_defaults_to_empty(self):
-        assert build_tenant_context("u1").capability_scope == []
+        assert build_tenant_context("u1").capability_scope == ()
 
     def test_capability_scope_is_copied_not_aliased(self):
         caps = ["memory.read"]
         ctx = build_tenant_context("u1", caps)
         caps.append("memory.write")
-        assert ctx.capability_scope == ["memory.read"]
+        assert ctx.capability_scope == ("memory.read",)
+
+    def test_any_iterable_is_accepted_and_stored_as_a_tuple(self):
+        """Callers pass lists today; the field is a tuple (TENANT-FROZEN-SHALLOW-1)."""
+        for supplied in (["a", "b"], ("a", "b"), iter(["a", "b"])):
+            ctx = build_tenant_context("u1", supplied)
+            assert ctx.capability_scope == ("a", "b")
+            assert isinstance(ctx.capability_scope, tuple)
 
     def test_non_string_ids_are_coerced(self):
         ctx = build_tenant_context(12345)
@@ -83,20 +91,20 @@ class TestTenantContextFromSyscallContext:
 
         ctx = tenant_context_from_syscall_context(FakeSyscallCtx())
         assert ctx.tenant_id == "u1"
-        assert ctx.capability_scope == ["memory.read", "memory.write"]
+        assert ctx.capability_scope == ("memory.read", "memory.write")
 
     def test_missing_capabilities_attribute_is_tolerated(self):
         class Bare:
             user_id = "u1"
 
-        assert tenant_context_from_syscall_context(Bare()).capability_scope == []
+        assert tenant_context_from_syscall_context(Bare()).capability_scope == ()
 
-    def test_none_capabilities_becomes_empty_list(self):
+    def test_none_capabilities_becomes_empty_scope(self):
         class NoneCaps:
             user_id = "u1"
             capabilities = None
 
-        assert tenant_context_from_syscall_context(NoneCaps()).capability_scope == []
+        assert tenant_context_from_syscall_context(NoneCaps()).capability_scope == ()
 
 
 # ── TenantContext: the isolation boundary ─────────────────────────────────────
@@ -181,10 +189,14 @@ class TestCapabilityGuard:
             build_tenant_context("t1").assert_capability("memory.read")
 
 
-class TestFrozenIsShallow:
-    """`TenantContext` is `frozen=True` and documented as "Immutable", but the
-    guarantee stops at attribute rebinding — the `capability_scope` list is still
-    mutable in place, so a capability can be added to a live security context."""
+class TestImmutabilityIsDeep:
+    """TENANT-FROZEN-SHALLOW-1 — FIXED 2026-08-15.
+
+    `frozen=True` blocks attribute *rebinding*; it does not deep-freeze. While
+    `capability_scope` was a `list`, a capability could be appended to a live
+    security context that the type documents as "Immutable" — and
+    `assert_capability` would then pass for it. The field is now a tuple.
+    """
 
     def test_attribute_rebinding_is_blocked(self):
         ctx = build_tenant_context("t1", ["memory.read"])
@@ -192,24 +204,78 @@ class TestFrozenIsShallow:
             ctx.tenant_id = "t2"
         assert "FrozenInstance" in type(excinfo.value).__name__
 
-    def test_capability_scope_can_still_be_mutated_in_place(self):
+    def test_capability_scope_cannot_be_mutated_in_place(self):
+        """The regression itself. Was: append succeeded and the guard then passed."""
         ctx = build_tenant_context("t1", ["memory.read"])
-        assert ctx.has_capability("admin.everything") is False
-
-        ctx.capability_scope.append("admin.everything")
-
-        assert ctx.has_capability("admin.everything") is True
-        ctx.assert_capability("admin.everything")  # the guard now passes
-
-    def test_freezing_the_scope_would_close_it(self):
-        """Documents the fix shape: a tuple field rejects in-place mutation."""
-        ctx = TenantContext(
-            tenant_id="t1", user_id="t1", namespace="tenant:t1",
-            capability_scope=("memory.read",),
-        )
         with pytest.raises(AttributeError):
             ctx.capability_scope.append("admin.everything")
-        assert ctx.has_capability("memory.read") is True
+        assert ctx.has_capability("admin.everything") is False
+        with pytest.raises(PermissionError):
+            ctx.assert_capability("admin.everything")
+
+    def test_the_field_is_a_tuple_not_a_list(self):
+        assert isinstance(build_tenant_context("t1", ["a"]).capability_scope, tuple)
+
+    def test_direct_construction_defaults_to_an_empty_tuple(self):
+        """Covers the dataclass default itself (`field(default_factory=tuple)`), not
+        just the builder — a context built without the helper must be frozen too."""
+        ctx = TenantContext(tenant_id="t1", user_id="t1", namespace="tenant:t1")
+        assert ctx.capability_scope == ()
+        with pytest.raises(AttributeError):
+            ctx.capability_scope.append("admin.everything")
+
+    def test_reading_the_scope_is_unchanged(self):
+        """`in`, `len` and iteration must still work — only mutation differs."""
+        ctx = build_tenant_context("t1", ["memory.read", "memory.write"])
+        assert "memory.read" in ctx.capability_scope
+        assert len(ctx.capability_scope) == 2
+        assert list(ctx.capability_scope) == ["memory.read", "memory.write"]
+        assert "caps=2" in repr(ctx)
+
+
+class TestKernelPackageExportsOneClass:
+    """`AINDY/kernel/__init__.py` was a byte-identical copy of `tenant_context.py`
+    (171 lines, present since the initial extraction), so the package root defined a
+    *second* `TenantContext`. `isinstance` across the two silently failed, and a fix
+    applied to one would not reach the other — which is exactly how it surfaced,
+    fixing TENANT-FROZEN-SHALLOW-1.
+    """
+
+    def test_package_root_and_submodule_yield_the_same_class(self):
+        from AINDY.kernel import TenantContext as FromPackage
+        from AINDY.kernel.tenant_context import TenantContext as FromModule
+
+        assert FromPackage is FromModule
+
+    def test_an_instance_is_recognised_through_either_import_path(self):
+        from AINDY.kernel import TenantContext as FromPackage
+        from AINDY.kernel.tenant_context import TenantContext as FromModule
+
+        ctx = build_tenant_context("t1")
+        assert isinstance(ctx, FromPackage)
+        assert isinstance(ctx, FromModule)
+
+    def test_the_package_root_no_longer_redefines_the_class(self):
+        """A re-export has no `class` statement of its own."""
+        import inspect
+
+        import AINDY.kernel as pkg
+
+        assert "class TenantContext" not in inspect.getsource(pkg)
+
+    def test_submodule_access_is_not_shadowed_by_the_re_export(self):
+        """The `AINDY.routes` hazard in CLAUDE.md: exporting a name that collides with
+        a submodule makes `from pkg import submodule` return the wrong object. None of
+        the exported names collide, so this must still be the module."""
+        from AINDY.kernel import tenant_context as maybe_module
+
+        assert inspect_is_module(maybe_module)
+
+
+def inspect_is_module(obj) -> bool:
+    import types
+
+    return isinstance(obj, types.ModuleType)
 
 
 def test_error_codes_are_distinct_constants():

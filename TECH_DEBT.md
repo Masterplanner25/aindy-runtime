@@ -5583,8 +5583,8 @@ is specifically the wire.
 
 ## TENANT-FROZEN-SHALLOW-1 — `TenantContext` is frozen but its capability list is not
 
-**Status:** Open — security-adjacent, no known exploit path. Found 2026-08-14 writing the
-DOCS-COVERAGE-CLAIM-1 OS-layer suite.
+**Status: CLOSED (2026-08-15).** `capability_scope` is now `tuple[str, ...]`; in-place mutation
+raises `AttributeError`. Found 2026-08-14 writing the DOCS-COVERAGE-CLAIM-1 OS-layer suite.
 
 `TenantContext` is a `@dataclass(frozen=True)` documented as an *"Immutable tenant isolation
 context"*. Rebinding an attribute raises `FrozenInstanceError` as expected — but
@@ -5605,16 +5605,70 @@ not aliasing from the caller — the exposure is any code holding the context af
 **No known exploit path today** — nothing in `AINDY/` mutates `capability_scope` — which is why
 this is recorded rather than treated as an incident. It is a weak invariant, not a live breach.
 
-**Fix:** declare the field as `tuple[str, ...]` and have `build_tenant_context` pass
-`tuple(...)`. `in` still works, `has_capability`/`assert_capability` are unchanged, and
-in-place mutation raises `AttributeError`. The suite pins both the current behaviour and the
-fixed shape (`test_freezing_the_scope_would_close_it`), so the change is a one-line field edit
-with the assertion already written.
+**What shipped (2026-08-15).** The field is `tuple[str, ...] = field(default_factory=tuple)`;
+`build_tenant_context` and `tenant_context_from_syscall_context` store `tuple(...)`. Reading is
+unchanged — `in`, `len()`, iteration, `has_capability`/`assert_capability` all behave as before;
+only mutation differs. Callers may still pass a list (or any iterable): the builders normalise.
 
-**Adjacent inconsistency worth knowing** (pinned, not a bug per se): `TenantContext`'s
+`TestFrozenIsShallow` became `TestImmutabilityIsDeep`: the test that asserted the mutation
+*succeeded* now asserts it raises **and** that `assert_capability` still refuses the capability
+afterwards, plus a direct-construction test covering the dataclass default rather than only the
+builder path.
+
+**★ The fix surfaced a second, worse defect — see `KERNEL-INIT-DUPLICATE-1` below.** Editing one
+copy of the class would have left another untouched.
+
+**Adjacent inconsistency, still open** (pinned by a test, not a bug per se): `TenantContext`'s
 `validate_memory_path` requires the trailing slash and so *rejects* the exact tenant root
 `/memory/t1`, while `memory_address_space.validate_tenant_path` *accepts* it. Two tenant guards
-give different answers for the same string.
+give different answers for the same string. Unchanged by this fix.
+
+---
+
+## KERNEL-INIT-DUPLICATE-1 — `AINDY/kernel/__init__.py` was a second copy of `tenant_context.py`
+
+**Status: CLOSED (2026-08-15).** Found while fixing `TENANT-FROZEN-SHALLOW-1`, by grepping for
+every consumer of `capability_scope` before changing its type — the results showed the same
+code at the same line numbers in two files.
+
+`AINDY/kernel/__init__.py` was a **byte-identical 171-line copy** of
+`AINDY/kernel/tenant_context.py`. `git log` shows one commit: `0d5d382 Initial runtime repo
+extraction`. It had been that way since the repo began and was never touched.
+
+**Why it is worse than dead weight.** A package `__init__` that *defines* a class means
+`from AINDY.kernel import TenantContext` and `from AINDY.kernel.tenant_context import
+TenantContext` return **two different class objects**:
+
+- `isinstance(ctx, TenantContext)` silently returns `False` across the two import paths — for a
+  class whose whole job is the tenant isolation boundary.
+- A fix applied to one does not reach the other. That is not hypothetical: the
+  `TENANT-FROZEN-SHALLOW-1` change would have left a second, still-mutable `capability_scope`
+  behind, in the copy a package-root import resolves to.
+
+**Why nothing had broken yet.** Nothing imported it. Every `from AINDY.kernel import X` in this
+repo *and* in `aindy-apps-monolith` imports a **submodule** (`syscall_registry`, `effect_ledger`,
+`event_bus`, `resource_manager`), which resolves the same either way. The duplicate class was
+simply never referenced — so this sat latent for the life of the repo.
+
+**Fix:** `__init__.py` is now a real package init that re-exports the five public names from the
+single definition, so the package-root path keeps working and resolves to the *same* object.
+Emptying the file was the alternative; re-exporting was chosen because it cannot break an
+unknown external caller.
+
+**Checked, not assumed:** re-exporting is safe from the `AINDY.routes` shadowing hazard recorded
+in CLAUDE.md — that bites when an exported *name* collides with a *submodule* name (`from
+AINDY.routes import health_router` yielding an `APIRouter` instead of the module). None of the
+five exported names collides with a submodule, and a test asserts `from AINDY.kernel import
+tenant_context` still yields the module.
+
+**Pinned by `TestKernelPackageExportsOneClass`:** the two import paths are the same object, an
+instance is recognised through both, the package root contains no `class TenantContext` of its
+own, and submodule access is not shadowed.
+
+**Swept, and it was the only one.** Since this was found by accident, all 337 `.py` files under
+`AINDY/` were hashed and compared: after the fix there are **no byte-identical non-empty
+duplicates** anywhere in the package. So the extraction produced exactly one such artefact, and
+the concern is closed rather than left as a suspicion.
 
 ---
 

@@ -50,13 +50,19 @@ class TenantContext:
         tenant_id:        The tenant's unique identifier (== user_id in A.I.N.D.Y.).
         user_id:          Authenticated user ID within the tenant.
         namespace:        Canonical tenant namespace prefix: "tenant:{tenant_id}".
-        capability_scope: Explicit list of granted capabilities for this context.
+        capability_scope: Granted capabilities for this context. A **tuple**, not a
+                          list: `frozen=True` prevents attribute rebinding but does
+                          not deep-freeze, so a list field could be appended to
+                          in place — adding a capability to a live security context
+                          that the type claims cannot change (TENANT-FROZEN-SHALLOW-1).
+                          `in`, `len()` and iteration are unchanged; only mutation
+                          differs, and it now raises AttributeError.
     """
 
     tenant_id: str
     user_id: str
     namespace: str
-    capability_scope: list[str] = field(default_factory=list)
+    capability_scope: tuple[str, ...] = field(default_factory=tuple)
 
     # ── Memory path enforcement ───────────────────────────────────────────────
 
@@ -140,7 +146,8 @@ def build_tenant_context(
 
     Args:
         user_id:          Authenticated user ID.
-        capability_scope: Granted capabilities. Defaults to [].
+        capability_scope: Granted capabilities. Any iterable; stored as a tuple.
+                          Defaults to ().
         tenant_id:        Explicit tenant override. Defaults to user_id.
 
     Returns:
@@ -152,7 +159,7 @@ def build_tenant_context(
         tenant_id=resolved_tenant,
         user_id=resolved_user,
         namespace=f"tenant:{resolved_tenant}",
-        capability_scope=list(capability_scope or []),
+        capability_scope=tuple(capability_scope or ()),
     )
 
 
@@ -167,5 +174,5 @@ def tenant_context_from_syscall_context(syscall_ctx) -> TenantContext:
     """
     return build_tenant_context(
         user_id=str(syscall_ctx.user_id or ""),
-        capability_scope=list(getattr(syscall_ctx, "capabilities", []) or []),
+        capability_scope=tuple(getattr(syscall_ctx, "capabilities", ()) or ()),
     )
