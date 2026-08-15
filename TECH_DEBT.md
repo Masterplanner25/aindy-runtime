@@ -5346,9 +5346,75 @@ class; `patch.object(settings, "is_testing", False)` raises `AttributeError`.
 
 ## CI-MARKER-1 — 268 unit tests run in no CI job; a green PR does not mean `tests/unit` passed
 
-**Status:** Open — CI configuration. Found 2026-08-14 while confirming whether two local test
+**Status: CLOSED (2026-08-15).** Found 2026-08-14 while confirming whether two local test
 failures were caused by the dependabot sweep (#404). They were not; the investigation surfaced
 this instead.
+
+**What shipped — both halves, because marking the 24 files alone leaves the footgun armed:**
+
+1. The 24 files carry `pytestmark = pytest.mark.runtime_only` explicitly. **Four of them never
+   imported `pytest` at all** — `test_background_leadership`, `test_capability_token_refresh`,
+   `test_nodus_tool_seam`, `test_reconcile_backfill` — which is its own evidence that nothing
+   had ever required them to behave like pytest files.
+2. **`tests/unit/conftest.py` makes the default safe.** A `pytest_collection_modifyitems` hook
+   applies `runtime_only` to every item collected from `tests/unit/` unless it already carries
+   it, or carries a marker handing it to a different job (`FOREIGN_JOB_MARKERS`:
+   `integration`, `sandbox_escape`, `redis`, `mongo`, `multi_instance`). Opting a unit test out
+   is still possible; it now takes a deliberate marker rather than an omission. The hook filters
+   by path, because a directory conftest's `modifyitems` receives the **whole session's** items.
+
+**Measured before and after:**
+
+| | Collected | Deselected |
+|---|---|---|
+| Before | 1587 / 1943 | 356 |
+| After | 1855 / 1943 | 88 |
+
+**+268, exactly the number this entry predicted.** The remaining 88 are `tests/integration` and
+`tests/sandbox`, which have their own jobs. Coverage went **up**, to 56.71% against the
+`--cov-fail-under=35` gate — so the re-baselining this entry warned about was not needed, but
+the number should still be raised deliberately at some point rather than left at 35.
+
+**★ The guard is mutation-checked 3/3, and it had to be, because the obvious way to test this
+is vacuous.** A test that imported `tests/unit/conftest.py` and called the hook with a fake item
+would keep passing after pytest stopped loading the hook at all — the "covers, asserts nothing"
+family. `tests/unit/test_ci_marker_default.py` instead spawns a **real pytest subprocess**
+against probe files generated on the spot:
+
+| Mutation | Fails |
+|---|---|
+| `item.add_marker(...)` removed | `test_unmarked_unit_file_is_collected` |
+| `FOREIGN_JOB_MARKERS` branch removed | `test_foreign_job_marker_opts_out` |
+| hook disabled **and** one file unmarked | `test_no_unit_test_escapes_the_marker` |
+
+The third asserts the complement — `pytest tests/unit -m "not runtime_only"` must collect
+nothing — which is the invariant this entry actually cares about.
+
+**★ Turning them on found exactly the failure predicted below**, and it is worth keeping as the
+shape to expect: `test_infinity_async_job_loop.py::test_async_context_lets_execution_events_past_contract_gate`
+asserts that an `execution.*` event raises when emitted **outside** a pipeline — and it
+*assumed* that precondition rather than arranging it. `pipeline_active` is a ContextVar an
+earlier test can leave set, so in a full-suite run the gate did not fire and it failed with
+`DID NOT RAISE`, while passing in isolation. Fixed by calling `set_pipeline_active(False)` up
+front, asserting the precondition, and resetting the token in a `finally` so the test no longer
+leaks the state it was itself a victim of. Reproduced deterministically with a throwaway probe
+file that sets `pipeline_active(True)` and never resets — with the fix the pair passes, without
+it the ordering failure appears on demand.
+
+**Still failing locally and expected to:** `test_runtime_packaging.py::test_runtime_build_artifacts_include_runtime_owned_assets`
+fails on `python -m build --no-isolation` locally and passes in CI. It *is* marked and always
+was; unrelated to this change.
+
+**Gotchas worth keeping:**
+
+- **`--collect-only -q` prints `<path>: <count>`, not node ids.** A first draft of the guard
+  asserted on a node id, found the probe collected correctly, and still failed.
+- **Exit code 5 is `EXIT_NOTESTSCOLLECTED`, not an error.** The complement test's collection
+  legitimately returns 5, so a naive `returncode == 0` assertion inverts it.
+
+---
+
+**Original filing follows.**
 
 **Mechanism — one missing marker makes a test file invisible.** `Runtime Contracts` is the only
 job in `runtime-ci.yml` that runs unit tests, and it runs:
