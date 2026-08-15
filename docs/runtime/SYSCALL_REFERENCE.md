@@ -1,7 +1,7 @@
 ---
 title: "Syscall Reference"
 api_version: "1.0"
-last_verified: "2026-08-05"
+last_verified: "2026-08-13"
 status: current
 owner: "platform-team"
 ---
@@ -49,6 +49,18 @@ The live list of registered syscalls (with stability flags) is also available at
 `GET /platform/syscalls` at runtime.
 
 ---
+
+> **Stability values corrected 2026-08-13.** Four entries below claimed `stable` while
+> `AINDY/kernel/syscall_registry.py` registers them `stable=False`:
+> `sys.v1.memory.list`, `sys.v1.memory.tree`, `sys.v1.memory.trace`, `sys.v2.memory.read`.
+> The registry is the source of truth — it is what `GET /platform/syscalls` returns and what
+> `aindy-apps-monolith`'s published `docs/api/API_REFERENCE.md` mirrors ("Status: experimental").
+> This document was the only one of the three that disagreed.
+>
+> **`stable` here means advertised maturity, not name permanence.** A syscall can be
+> experimental *and* protected against renaming: `memory.list`, `memory.tree` and
+> `memory.trace` are all three of experimental, dispatched by the shipped SDK, and covered by
+> the rename guard in `tests/unit/test_cross_repo_compatibility.py`.
 
 ## Domain: `memory`
 
@@ -147,7 +159,7 @@ List nodes at a MAS path, one level or recursive.
 
 **Capability:** `memory.read`
 
-**Stability:** stable
+**Stability:** experimental — *corrected 2026-08-13; this said `stable`.* Registered `stable=False` in `syscall_registry.py`, which is what `GET /platform/syscalls` advertises and what the apps API reference publishes.
 
 **Payload:**
 
@@ -168,7 +180,7 @@ Return a hierarchical tree of nodes under a path.
 
 **Capability:** `memory.read`
 
-**Stability:** stable
+**Stability:** experimental — *corrected 2026-08-13; this said `stable`.* Registered `stable=False` in `syscall_registry.py`, which is what `GET /platform/syscalls` advertises and what the apps API reference publishes.
 
 **Payload:**
 
@@ -187,7 +199,7 @@ Follow the causal chain from a node at a path.
 
 **Capability:** `memory.read`
 
-**Stability:** stable
+**Stability:** experimental — *corrected 2026-08-13; this said `stable`.* Registered `stable=False` in `syscall_registry.py`, which is what `GET /platform/syscalls` advertises and what the apps API reference publishes.
 
 **Payload:**
 
@@ -206,7 +218,7 @@ Enhanced recall with structured field filters. Extends v1.
 
 **Capability:** `memory.read`
 
-**Stability:** stable
+**Stability:** experimental — *corrected 2026-08-13; this said `stable`.* Registered `stable=False` in `syscall_registry.py`, which is what `GET /platform/syscalls` advertises and what the apps API reference publishes.
 
 **Payload:** All v1 keys, plus:
 
