@@ -139,24 +139,50 @@ def invoke_runtime_callback(
             f"(set {_CALLBACK_TIMEOUT_ENV} to raise the budget)"
         ) from exc
 
+    returncode = process.returncode
     stderr_excerpt = " | ".join(
         line.strip()
         for line in deque((stderr or "").splitlines(), maxlen=10)
         if line.strip()
     )
+
+    def _context() -> str:
+        """Everything known about the subprocess, for any failure below.
+
+        The exit code is the part that was missing and the part that matters most:
+        a worker killed before it could run — OOM, a Windows ``0xC0000142``
+        DLL-init failure under process pressure, a crashed interpreter — writes
+        nothing at all to either stream, and without the code there is no signal
+        left to read.
+        """
+        parts = [f"exit={returncode}"]
+        if stderr_excerpt:
+            parts.append(f"stderr={stderr_excerpt}")
+        return " | ".join(parts)
+
+    # An empty stdout is NOT a callback that returned nothing — it is a worker that
+    # never got as far as replying. Distinguished here because `json.loads("{}")`
+    # below would otherwise turn it into a well-formed response with `ok` absent,
+    # which then falls through to the generic "runtime callback failed" with no
+    # diagnostic content whatsoever. That collapse is why a runtime-callback flake
+    # could recur for months without anyone learning why it failed.
+    if not (stdout or "").strip():
+        raise RuntimeError(
+            f"runtime callback worker produced no output — the subprocess for "
+            f"{spec.get('module_name')}.{spec.get('function_name')} exited without "
+            f"replying | {_context()}"
+        )
+
     try:
-        response = json.loads(stdout or "{}")
+        response = json.loads(stdout)
     except Exception as exc:
         raise RuntimeError(
-            f"runtime callback worker returned invalid JSON: {exc}"
-            + (f" | stderr={stderr_excerpt}" if stderr_excerpt else "")
+            f"runtime callback worker returned invalid JSON: {exc} | {_context()}"
         ) from exc
 
     if not response.get("ok"):
         error = str(response.get("error") or "runtime callback failed")
-        if stderr_excerpt:
-            error += f" | stderr={stderr_excerpt}"
-        raise RuntimeError(error)
+        raise RuntimeError(f"{error} | {_context()}")
 
     response["execution_mode"] = RUNTIME_CALLBACK_EXECUTION_MODE
     response["protocol_version"] = RUNTIME_CALLBACK_PROTOCOL_VERSION

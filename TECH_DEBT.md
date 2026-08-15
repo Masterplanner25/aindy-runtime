@@ -5883,16 +5883,52 @@ visible, deliberate break rather than a surprise.
 
 ## FLAKY-1 — `test_platform_only_startup` fails intermittently in a now-required check
 
-**Status: Open — mitigation shipped 2026-08-15, NOT yet proven fixed.** The leading mechanism
-(FR-11's hardcoded 10s subprocess budget) is addressed: the budget is now
-`AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS`, default **30s**, ~8× the measured cold start instead of
-~2.6×. **Deliberately not closed.** The mechanism was never *confirmed* — the timeout signature
-was reproduced by forcing it, never captured from a natural failure — so raising the budget is a
-well-argued mitigation, not a demonstrated fix. Closing it needs the thing that has been missing
-all along: a run of `python -m pytest tests -m runtime_only -q --tb=long > cap.txt` (**never
-piped through `tail`**) that either catches the failure with a different traceback, or a
-sustained clean streak long enough to mean something against a ~50% base rate — call it 10+
-consecutive runs, since 4 clean runs in a row happen ~6% of the time by luck alone.
+**Status: Open — and the recorded leading mechanism is now REFUTED, not merely unconfirmed.**
+
+**★ First natural traceback captured 2026-08-15.** It is **not** the timeout branch:
+
+```
+>   assert evaluator({"trigger_type": "user", ...})["decision"] == "execute"
+tests\unit\test_platform_only_startup.py:233
+
+E   RuntimeError: runtime callback failed
+AINDY\platform_layer\runtime_callback_host.py:159
+```
+
+Line 159 is the `if not response.get("ok")` branch. The timeout branch raises a *different*,
+explicit message — `"runtime callback command timed out after Ns"` — and the natural failure does
+not carry it. The previous "strongly indicated" reading was produced by **forcing** a timeout and
+matching the shape, never by reading a real failure. That is the same error this file warns about
+under DOCS-COVERAGE-CLAIM-1: a plausible mechanism, confirmed only against itself.
+
+**Caveat, stated plainly:** the reproducing run was on a machine that had lost the ability to
+spawn processes — 43 failures in that run, Windows exit code `3221225794` (`0xC0000142`,
+`STATUS_DLL_INIT_FAILED`) from every subprocess-spawning test. So this establishes **which branch
+the failure takes**, not that every natural occurrence arrives by the same route. A clean run
+immediately afterwards (17m46s, healthy) passed with only the known local `test_runtime_packaging`
+failure.
+
+**★ The traceback's real value: it showed why this was never diagnosable.** That branch carried
+**no diagnostic content at all**. A worker that dies before replying writes nothing to stdout;
+`json.loads(stdout or "{}")` turns that into `{}`; `{}.get("ok")` is falsy; the handler raises its
+default string. So *"the subprocess never started"* and *"the callback returned `{ok: false}`"*
+produced **the same message** — no exit code, no stderr, no callback name. Three earlier natural
+failures were piped through `tail` and lost; the one that survived said nothing.
+
+Fixed in `runtime_callback_host.py`: empty stdout is its own error naming the callback, every
+failure path appends `exit=<code>` (and stderr when present), and the three modes are pinned
+mutually distinct by `tests/unit/test_runtime_callback_diagnostics.py` — mutation-checked, 4 of 8
+tests fail against the old collapsed path.
+
+**What closes this now:** the next natural occurrence will state the exit code and stream
+contents, which distinguishes *worker died* from *callback failed* from *timed out* directly.
+Until then the FR-11 budget raise (10s → configurable 30s, `AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS`)
+stands as a mitigation whose premise is now known to be wrong — **it may still help** (a slow
+worker and a dead worker are both subprocess fragility) but it should no longer be described as
+addressing the identified cause. A sustained clean streak (10+ consecutive `-m runtime_only`
+runs, since 4 in a row happen ~6% of the time by luck against a ~50% base rate) remains the
+alternative route, and **must be run on an otherwise idle machine** — see the process-exhaustion
+caveat above, which invalidated three attempts.
 
 Measured 2026-08-14. **Pre-existing and not introduced by any current branch** — established by running the full `tests/unit/` suite six times across two
 worktrees, because a single baseline pointed at the wrong cause.
