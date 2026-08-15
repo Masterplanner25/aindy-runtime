@@ -4253,6 +4253,66 @@ scan counter, so the true query count is roughly triple that).
 
 ---
 
+## MEM-EXPAND-DEAD-1 — `expand()`'s semantic half is a silent no-op; pgvector 0.5.0 would switch it on
+
+**Status:** Open — behavioural, latent. Found 2026-08-14 while reviewing dependabot #390
+(`pgvector 0.4.2 → 0.5.0`). The bump is **held** on this entry; #390 closed, not merged.
+
+**A type mismatch, not a logic error.** pgvector 0.4.2's SQLAlchemy column returns
+`numpy.ndarray`, and the guard every consumer passes through tests for `list`:
+
+```python
+# pgvector 0.4.2 — AINDY/memory/... via pgvector.Vector._from_db
+return cls.from_text(value).to_numpy().astype(np.float32)   # -> numpy.ndarray
+
+# AINDY/db/dao/memory_node_dao.py:126
+def _embedding_is_usable(embedding: list | None) -> bool:
+    if not isinstance(embedding, list) or not embedding:   # ndarray -> False
+        return False
+```
+
+Verified by execution, not inference:
+
+| Read type | `_embedding_is_usable` | Effect |
+|---|---|---|
+| `ndarray` (pgvector 0.4.2, current) | `False` | `find_similar` returns `[]` |
+| `list` (pgvector 0.5.0) | `True` | search actually runs |
+
+**Consequence today.** `expand()` (`:1395`) reads a stored embedding back and feeds it to
+`find_similar`, which fails the guard at `:417` and returns `[]`. So the **semantic-neighbour
+half of `expand()` returns nothing on every call and always has.** It is invisible because the
+skip logs at `debug` and the caller just receives an empty list. `include_similar` defaults to
+`True` in all four places it appears — `expand()` itself (`:1359`), `memory_router.py:117`,
+and `flow_definitions_memory.py:176` and `:247`.
+
+**Second, narrower bug on the same mismatch.** The python fallback at `:483` does
+`list(getattr(node, "embedding", None) or [])`; `ndarray or []` raises
+`ValueError: The truth value of an array with more than one element is ambiguous`. Only
+reachable when the pgvector branch throws, which is why it has not surfaced.
+
+**Why the bump is held rather than merged.** pgvector 0.5.0 fixes both by returning `list` —
+but that flips semantic expansion from "silently off" to "on, by default, everywhere", and
+`expand()` calls `find_similar` **per node**. Stacked on the existing per-candidate N+1 in
+`MEM-RECALL-N1-1`, that adds real query load to precisely the path that produced the
+connection-pool exhaustion in `RT-MEMTXN-LEAK-1`. Turning a dead feature on is a decision to
+take deliberately with the load understood, not a side effect of a dependency bump.
+
+**No test caught it** in either direction — consistent with `DOCS-COVERAGE-CLAIM-1` (the memory
+subsystem has no dedicated behavioural suite). Any fix should land with one.
+
+**Reopen/resolve:** when `MEM-RECALL-N1-1` is addressed, or when semantic expansion is wanted.
+Three routes, in the order they were weighed: (1) take the bump behind a default-off flag and
+soak, matching the repo's opt-in pattern; (2) widen `_embedding_is_usable` to accept any
+sequence — note this activates the path on 0.4.2 too, so it is not the *safe* option it looks
+like; (3) take the bump as-is once the load profile is known.
+
+**Unrelated observation from the same pass:** `numpy==2.4.6` is pinned directly in both
+`pyproject.toml` and `AINDY/requirements.txt`, but there is **no numpy usage anywhere under
+`AINDY/`** (zero hits for `import numpy`, `np.`, `.tolist()`, `.astype(`, `ndarray`). The pin
+appears vestigial — it is what made pgvector's "removed dependency on NumPy" a non-issue.
+
+---
+
 ## ECOGAP-* — Ecosystem capability gaps (corrected lens)
 
 Derived from the 12-project ecosystem re-audit, re-judged against source-verified
