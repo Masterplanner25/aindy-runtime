@@ -4734,13 +4734,13 @@ source since they arrived from the monolith.
 |---|---|---|---|---|
 | `RETRY_POLICY.md` | ~~2026-04-18~~ **2026-08-13** | 2 | 226 | **✔ verified** |
 | `EXECUTION_CONTRACT.md` | ~~2026-05-02~~ **2026-08-13** | 2 | 626 | **✔ verified** |
-| `MEMORY_ADDRESS_SPACE.md` | 2026-04-19 | 1 | 248 | pending |
+| `MEMORY_ADDRESS_SPACE.md` | ~~2026-04-19~~ **2026-08-13** | 1 | 248 | **✔ verified** |
 | `MEMORY_BRIDGE.md` | 2026-04-19 | 1 | 460 | pending |
 | `OS_ISOLATION_LAYER.md` | 2026-04-22 | 1 | 297 | pending |
 | `NATIVE_MEMORY_BRIDGE.md` | 2026-04-25 | 1 | 405 | pending |
 | `RUNTIME_DOCSET_BOUNDARY.md` | 2026-05-10 | 1 | 95 | pending |
 
-**Progress 2026-08-13 — 2 of 7 read against source.** Both were materially wrong, in different
+**Progress 2026-08-13 — 3 of 7 read against source.** Both were materially wrong, in different
 ways, and neither was wrong in the way the staleness signal predicted:
 
 - **`RETRY_POLICY.md`** — structure held; two things did not. The `RetryPolicy` dataclass gained
@@ -4769,10 +4769,39 @@ ways, and neither was wrong in the way the staleness signal predicted:
   Annotated in place rather than rewritten — the aspiration is worth keeping as a record; a
   banner now says which parts are real.
 
-**Lesson for the remaining five.** Staleness did not predict the failure mode. `RETRY_POLICY`
-was structurally sound with a load-bearing inversion buried in one section; `EXECUTION_CONTRACT`
-was wholesale aspirational. Reading is the only way to tell, which is why this was filed rather
-than bulk-dated.
+- **`MEMORY_ADDRESS_SPACE.md`** — the split is clean and instructive: **the API *inventory* was
+  perfect** (3 constants, 16 path functions, 6 DAO methods, 4 DB columns, all present with the
+  documented names and defaults), while **everything describing *behaviour* had drifted**. The
+  endpoints moved file (`routes/platform_router.py` → `routes/platform/platform_ops_router.py`);
+  `/memory/tree` returns `{tree, node_count, path}` where the doc promised
+  `{tree, flat, count, root}` — 3 of 4 keys wrong, and there is no `flat` because `flatten_tree`
+  has **zero callers**; `/memory/trace` returns `{chain, depth, path}` not
+  `{chain, count, root_path}`, caps depth at 20 not 10, and 404s on an empty chain. Two default
+  limits wrong (50 not 20, 200 not 100). The syscall table mis-stated 3 of 5 handlers —
+  `memory.write` calls `dao.save` **not** `save_at_path`, `memory.list` calls `query_path`
+  **not** `list_path`, and `memory.read` silently falls back to `dao.recall` when no path is
+  given — and omitted `memory.search` and `memory.delete` entirely. **Sharpest single error:**
+  §8 said an un-namespaced write lands in the `_legacy` namespace. It lands in `general`;
+  `_legacy` is read-side only, synthesised by `derive_legacy_path` for pre-MAS rows. Anyone
+  auditing `/memory/{tenant}/_legacy/**` for recent writes would have found an empty tree and
+  drawn the wrong conclusion.
+
+  **Also confirms one half of the stable-flag conflict with hard evidence:**
+  `sys.v1.memory.tree` and `sys.v1.memory.trace` are registered `stable=False`
+  (`syscall_registry.py:1487`, `:1501`) yet both sit in `_STABLE_SYSCALLS`, where
+  rename/removal is a MAJOR bump. `sys.v1.memory.list` is consistent (`stable=False`, absent from
+  the contract), which rules out "the whole list is stale" as an explanation.
+
+**Lesson for the remaining four.** Staleness did not predict the failure mode, and three reads
+have now produced three different ones: `RETRY_POLICY` was structurally sound with a load-bearing
+inversion buried in one section; `EXECUTION_CONTRACT` was wholesale aspirational;
+`MEMORY_ADDRESS_SPACE` had a perfect inventory wrapped around drifted behaviour. Nothing about
+the frontmatter date distinguishes those cases. Reading is the only way to tell, which is why
+this was filed rather than bulk-dated.
+
+**Pattern worth carrying forward:** in all three, the *names* of things survived and the
+*contracts* did not — response keys, defaults, caps, which function a handler actually calls.
+Check behaviour before inventory on the remaining four.
 
 **Why this is filed rather than fixed.** The audit could repair every citation mechanically
 (done — see the docset changelog), but it cannot certify 2,357 lines of behavioural prose.
