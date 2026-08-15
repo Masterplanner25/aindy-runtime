@@ -6427,6 +6427,37 @@ So the runtime owns a provider abstraction and a certification ladder, and has n
 which an execution unit can *request* anything from it. The provider half of the contract is
 built; the requesting half does not exist.
 
+**★ What the three unbound paths each lose, stated precisely** — the distinction matters because
+one of them *looks* contained and is not classified:
+
+1. **Agent tool execution** — handlers run in-process (`tool_registry.py`). No containment at all;
+   see `TOOL-SEAM-ISOLATION-1`.
+2. **Nodus script execution** — `nodus_runtime_adapter.py:278` calls `subprocess.run` directly
+   with its own budget logic. **It gets containment (a separate process, a time budget) but not
+   runner selection, not assurance classification, and not `_build_child_env` allowlisting.** So
+   it is the path most likely to be mistaken for sandboxed while carrying no assurance class at
+   all.
+3. **Flow node execution** — in-process.
+
+**★ And the scoping argument is the most valuable part of the proposal: ONE new type, not five.**
+The audit's own reasoning, verified against the code and worth preserving because it is what
+keeps this from becoming a framework:
+
+| Abstraction one might reach for | Why it is not needed |
+|---|---|
+| `IsolationProvider` | that is `SandboxRunner`, already an ABC with three implementations |
+| `ExecutionHost` | that is `sandbox_platform_capability_matrix()`, already per-OS |
+| `CapabilityGrant` | that is the capability token, already HMAC-signed and plan-bound |
+| `ResourceBudget` | that is `ResourceManager` + quota, already enforced per tenant |
+
+What is missing is **only the request record** — a declarative constraint attached to the
+execution unit. Everything it would resolve against exists.
+
+**Worth recording as a strength, since it is the reason this is a binding problem rather than a
+design problem:** `sandbox_runner_assurance_posture()` refuses to overclaim — `insecure_dev_subprocess`
+reports `ASSURANCE_CEILING_NO_ISOLATION_GUARANTEE`. The provider side already distinguishes a
+claim from evidence; the requesting side simply has no way to ask.
+
 **Proposed:** one declarative type, not five — `ExecutionEnvironmentSpec { filesystem, network,
 processes, cpu_ms/memory_mb/timeout_ms, secrets, persistence, min_assurance }` — attached to
 `ExecutionUnit` and resolved at `execution_gate.gate_and_dispatch` (`execution_gate.py:294`) via
@@ -6645,9 +6676,35 @@ or an internal execution context — carried into `SyscallContext.capabilities` 
 either route handlers dispatch through the syscall contract, or they take a `CallerAuthority`
 dependency gating them with the same vocabulary.
 
-**★ The sub-decision to make first, because everything else follows from it: should a JWT bypass
-scopes at all?** Today it does. That is a deliberate-looking choice with no recorded rationale,
-and it cannot be evaluated until it is stated.
+**★ DECIDED 2026-08-15 (owner): a JWT must NOT bypass scopes.** The current behaviour —
+`enforce_api_key_scope` gating API keys only, with the docstring stating *"JWT users carry full
+trust and are never gated by this check"* — is to be removed, so that one capability vocabulary
+governs every surface regardless of how the caller authenticated.
+
+**★ That decision has a hard prerequisite, and it must be settled before any code changes:
+a JWT carries no scopes today.** Verified — `create_access_token` encodes `tv` (token version),
+`purpose` and `exp` plus whatever the caller passes; there is no scopes claim anywhere in the
+token. API keys carry `api_key_scopes`; JWTs carry nothing comparable. So "stop bypassing"
+implemented literally would deny every session-authenticated request, including the platform
+SPA's own.
+
+Where a JWT's authority comes from is therefore the first design question, not the last:
+
+| Option | Token change | Existing sessions | Note |
+|---|---|---|---|
+| (a) Derive from the user row — `is_admin` ⇒ full set, otherwise a default set | none | keep working | No re-issue; the derivation is server-side and auditable |
+| (b) Add an explicit `scopes` claim at login | yes | **invalidated** | 2.0.0 already ended every session once for the `purpose` claim; doing it again needs a reason |
+| (c) (a) now, (b) later for finer grain | none now | keep working | Keeps the door open without paying for it twice |
+
+**Recommend (a), then (c) if per-user granularity is ever needed.** And roll it out so the
+derived scope set initially *matches today's effective privilege*, then narrows — flipping
+straight to a restrictive set would lock out the SPA before anyone learns which scopes it
+actually needs. The runtime's established pattern (ship the mechanism default-permissive, tighten
+after soak) applies exactly.
+
+**Sequencing note:** this decision makes the 7-of-147 coverage number the *smaller* half of the
+work. Extending scope checks to the remaining routes is mechanical; deciding and deriving JWT
+authority is the part that needs care.
 
 **Risk if omitted.** `SECURITY_MATRIX.md` and the README describe a scope model that the code
 enforces on 7 of 147 routes and not at all for session callers. Documentation that overstates
@@ -6738,6 +6795,97 @@ strong-VM providers enforce at the namespace, and the runtime reports which mech
 **Risk if omitted.** `capability_policy` domain allowlists read as controls in configuration and
 in audit output while being advisory in the default deployment profile — the gap between what an
 audit trail appears to prove and what was actually enforced.
+
+---
+
+## ROUTE-AST-UNWIRED-1 — the boot-time route proof exists and is never run against the application
+
+**Status: OPEN — P2 (documentation/assurance, not a live hole).** Found 2026-08-15 while
+verifying the *invariants* the three audits credit the runtime with, rather than their gaps.
+
+**The claim.** The substrate audit's strongest "already covered" item is that the runtime proves
+its execution-entry invariant *structurally*: `validate_registered_route_execution` walks every
+registered `APIRoute`, parses the endpoint's module with `ast`, builds a call graph, and raises
+`RouteExecutionViolation` if the endpoint cannot reach `execute_with_pipeline`. Its enforcement
+matrix records the route execution contract as a **Hard** boundary — *"(boot-time refusal)"* —
+and cites it as wired in `routing.py`.
+
+**Verified, and the claim does not hold.** `validate_registered_route_execution` has, repo-wide,
+exactly **three** references: its own definition, and two lines in
+`tests/unit/test_route_execution_guard.py`. **The application never calls it.** What
+`routing.py:87` calls is `enforce_registered_route_execution` — the *request-time wrapper*, a
+different function with a confusingly similar name.
+
+**And its single test call site is not a proof of the real app.** It appears in
+`test_helper_indirection_route_is_allowed_by_runtime_wrapper_even_if_ast_audit_is_stricter`,
+against a synthetic `FastAPI()` app, inside `pytest.raises(RouteExecutionViolation)` — i.e. the
+test exists to demonstrate that the AST audit is **stricter than the wrapper** and rejects a
+legitimate helper-indirection route the wrapper allows.
+
+**So this is not an oversight to simply fix.** The test name records the reason the validator is
+unwired: it produces false positives on helper indirection. The defect is the **claim**, not the
+absence — the runtime's real guarantee here is the request-time wrapper, which is genuine and
+which `ROUTE-GUARD-1` has just been corrected in, not a boot-time AST refusal.
+
+**★ This is the same family as `CI-MARKER-1`, `DOCS-COVERAGE-CLAIM-1` and the native-suite skip:
+verification that exists and does not run.** It is the eighth variant of the pattern the
+"trusting a green check" section of `CLAUDE.md` enumerates, and the first found in a *runtime*
+mechanism rather than a test one.
+
+**What to do, in preference order:**
+
+1. **Correct the claim** wherever the boot-time refusal is asserted — the enforcement matrix in
+   the audit, and any runtime doc that repeats it. Cheapest, and it is the actual defect.
+2. **Decide the validator's fate deliberately.** Either teach it about helper indirection and
+   wire it at boot (behind a flag first — it will reject routes that work today), or delete it
+   and keep the wrapper as the sole mechanism. Leaving a stricter, unrunnable twin next to the
+   real guard is what produced the false claim in the first place.
+
+**Do not "fix" this by wiring it as-is.** By its own test, it raises on a route that functions
+correctly, so wiring it unchanged would fail boot on a working application.
+
+---
+
+## AUDIT-INVARIANTS-VERIFIED-1 — sweep record: which claimed guarantees actually hold
+
+**Status: RECORD (2026-08-15), no action.** Three audits credit the runtime with a long list of
+invariants. The *gaps* were verified when each was filed; this entry records the sweep of the
+**guarantees**, because an overclaimed guarantee is worse than a known gap — it is the thing
+someone builds on.
+
+**Held, verified against source:**
+
+| Claimed invariant | Verified |
+|---|---|
+| `ExecutionUnit` distinguishes `waiting` from `resumed` | yes — both in the documented status machine |
+| Waiting state is rehydrated at startup | yes — `startup._rehydrate_waiting_state` |
+| `approve_run` is an atomic CAS from `pending_approval` | yes — `.where(… AgentRun.status == "pending_approval")` |
+| Capability tokens are HMAC-SHA256 with a rotation window | yes — `hmac` + `hashlib.sha256` + `verification_keys()` |
+| The effect ledger is used at **both** chokepoints | yes — `syscall_dispatcher.py:490` and `tool_registry.py:329` |
+| Quota fails closed in production, open in dev/test | yes — `_quota_backend_failure_may_fail_open()` returns `is_testing or is_dev` |
+| Background leadership: 60s lease TTL against a 20s heartbeat | yes — `LEASE_TTL_SECONDS` / `LEASE_HEARTBEAT_SECONDS` |
+| Trace/pipeline ContextVars are reset on the failure path too | yes — resets run in the pipeline's finalisation block |
+
+**Did NOT hold — two claims corrected:**
+
+1. **The boot-time route AST proof does not run.** Filed separately as `ROUTE-AST-UNWIRED-1`.
+2. **★ "Output validation is warn-only" is wrong, and the two audits contradict each other here.**
+   The Hermes map records it as a no-change finding — *"N5 — Output validation is warn-only.
+   Correct. … Failing closed on output would convert handler bugs into outages."* The substrate
+   audit says the opposite: *"aindy also validates output, and fails closed on `stable`
+   syscalls."* **Source settles it for the substrate audit.** In `syscall_dispatcher.py`, an
+   output-schema mismatch on a syscall with `entry.stable` logs `logger.error`, emits an error
+   event, completes the effect record as `failed`, and **returns an error envelope**; only
+   *experimental* syscalls get `logger.warning` and continue.
+
+   This matters beyond bookkeeping: N5 endorses a design that is not the current one. Anyone
+   reading it as a description of today's behaviour would be surprised by a stable syscall
+   failing closed on its own handler's output — which is precisely the outage mode N5 argues
+   against, and which the runtime has deliberately chosen for stable surfaces.
+
+**Method note for whoever repeats this:** verify the guarantees, not just the gaps. Both errors
+above were in "already covered" sections — the parts of an audit least likely to be re-checked,
+because a finding invites scrutiny and a reassurance does not.
 
 ---
 
