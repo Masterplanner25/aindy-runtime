@@ -1,6 +1,6 @@
 ---
 title: "Runtime Docset Governance"
-last_verified: "2026-05-31"
+last_verified: "2026-08-13"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -194,6 +194,26 @@ Prefer:
 - `PUBLIC_RUNTIME_SURFACES.md` interpreted through the newer stability docs
 
 Do not rely on older implementation-oriented docs as compatibility guarantees.
+
+---
+
+## Frontmatter `status` Vocabulary
+
+*Added 2026-08-13.* `Runtime Docs Validation` enforces that all five frontmatter keys are
+**present**; it does not constrain the value of `status`. Three values are in use, and this is
+the whole vocabulary — do not invent a fourth without adding it here:
+
+| Value | Meaning | Example |
+|---|---|---|
+| `current` | Live guidance. The default, and what a reader should assume. | most of `docs/runtime/` |
+| `outdated` | Retained as an audit trail; its claims describe a past state and must not be acted on. | `docs/platform/governance/CHANGELOG.md` (pre-split monolith) |
+| `complete` | A one-time **plan** whose work is finished. Any rules it states may still be in force; its task lists are history, not a queue. | `RUNTIME_DOCSET_BOUNDARY.md` |
+
+`complete` exists because neither of the other two fits a finished plan: the work is not
+*ongoing* (so not `current`) and the reasoning is not *wrong* (so not `outdated`). Reading a
+completed plan as a to-do list is the specific failure it prevents.
+
+Because CI does not validate the value, a typo here is silent. Keep the set small.
 
 ---
 

@@ -45,11 +45,20 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
           import sys
 
           required_frontmatter = {"title", "last_verified", "api_version", "status", "owner"}
           docs_root = Path("docs/runtime")
           missing = []
+
+          # DOCS-STALE-1 (closed 2026-08-13). Seven docs declared a last_verified EARLIER
+          # than this repo's first commit -- a verification claim about a codebase that did
+          # not yet exist. Four had only the extraction commit, so nothing in them had ever
+          # been checked against runtime source. This check was the named close trigger and
+          # could not be added while those seven were outstanding: it would have red-lined
+          # the build on the very docs that prompted it.
+          REPO_EPOCH = "2026-05-17"  # 0d5d382 Initial runtime repo extraction
 
           for path in sorted(docs_root.glob("*.md")):
               text = path.read_text(encoding="utf-8")
@@ -72,12 +81,32 @@ jobs:
               missing_keys = sorted(required_frontmatter - keys)
               if missing_keys:
                   missing.append(f"{path}: missing frontmatter keys {missing_keys}")
+                  continue
+
+              # last_verified must be a plausible ISO date at or after the repo epoch.
+              verified = ""
+              for line in frontmatter.splitlines():
+                  if line.strip().startswith("last_verified:"):
+                      verified = line.split(":", 1)[1].strip().strip('"').strip("'")
+                      break
+
+              if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", verified):
+                  missing.append(
+                      f"{path}: last_verified {verified!r} is not a YYYY-MM-DD date"
+                  )
+              elif verified < REPO_EPOCH:
+                  missing.append(
+                      f"{path}: last_verified {verified} predates the repo's first commit "
+                      f"({REPO_EPOCH}) -- it cannot describe this codebase. Read the doc "
+                      f"against source and set a real date; see TECH_DEBT DOCS-STALE-1."
+                  )
 
           if missing:
               print("\n".join(missing))
               sys.exit(1)
 
-          print(f"validated {len(list(docs_root.glob('*.md')))} runtime docs")
+          print(f"validated {len(list(docs_root.glob('*.md')))} runtime docs "
+                f"(frontmatter keys + last_verified >= {REPO_EPOCH})")
           PY
 
   native-crate:

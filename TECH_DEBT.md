@@ -4721,8 +4721,8 @@ both residuals resolved (see Status above).**
 
 ## DOCS-STALE-1 — seven docs carry a `last_verified` that predates the repository
 
-**Status:** Open — verification debt, not content debt. Filed 2026-08-13 from a
-correctness audit of all 80 files in `docs/runtime/`.
+**Status: CLOSED 2026-08-13.** All seven read against source. Filed and closed the same day
+from a correctness audit of all 80 files in `docs/runtime/`.
 
 **Finding.** Seven documents declare a `last_verified` date **earlier than this repo's first
 commit** (`0d5d382 Initial runtime repo extraction`, 2026-05-17). The frontmatter asserts
@@ -4738,9 +4738,9 @@ source since they arrived from the monolith.
 | `MEMORY_BRIDGE.md` | ~~2026-04-19~~ **2026-08-13** | 1 | 460 | **✔ verified** |
 | `OS_ISOLATION_LAYER.md` | ~~2026-04-22~~ **2026-08-13** | 1 | 297 | **✔ verified** |
 | `NATIVE_MEMORY_BRIDGE.md` | ~~2026-04-25~~ **2026-08-13** | 1 | 405 | **✔ verified** |
-| `RUNTIME_DOCSET_BOUNDARY.md` | 2026-05-10 | 1 | 95 | pending |
+| `RUNTIME_DOCSET_BOUNDARY.md` | ~~2026-05-10~~ **2026-08-13** | 1 | 95 | **✔ verified — `status: complete`** |
 
-**Progress 2026-08-13 — 6 of 7 read against source.** All but one were materially wrong, in different
+**CLOSED 2026-08-13 — 7 of 7 read against source.** All but one were materially wrong, in different
 ways, and none was wrong in the way the staleness signal predicted:
 
 - **`RETRY_POLICY.md`** — structure held; two things did not. The `RetryPolicy` dataclass gained
@@ -4904,15 +4904,54 @@ ways, and none was wrong in the way the staleness signal predicted:
   how the name legitimately survives (`GET /observability/rippletrace/status`). Recorded because a
   clean grep is a result too — the discipline is a check, not an edit quota.
 
-**Lesson for the last one.** Staleness did not predict the failure mode, and six reads
-have now produced six different ones: `RETRY_POLICY` was structurally sound with a load-bearing
+- **`RUNTIME_DOCSET_BOUNDARY.md`** — not stale, **finished**. A one-time migration plan written
+  2026-05-10 and executed by the extraction commit on 2026-05-17, still carrying
+  `status: current` and still written in future tense ("Move To …"), which reads as a queue of
+  pending work. All three sections verified done: 10/10 runtime docs present, app docs present
+  only in the monolith, and — the part that surprised — **"Shared Or Split Later" resolved by a
+  different mechanism than planned.** Instead of splitting each shared monolith doc, the runtime
+  grew its own companions under different names: `DEPLOYMENT_PROFILES` + `PROFILE_SUPPORT_MATRIX`
+  for `BOOT_PROFILES`; `ARCHITECTURE` + `RUNTIME_MODULE_MAP` for `ARCHITECTURE_MAP`; the four
+  `EXTENSION_*` docs for `PLUGIN_REGISTRY_PATTERN`; `PUBLIC_API_CONTRACT` +
+  `PUBLIC_RUNTIME_SURFACES` + `ROUTE_OWNERSHIP_INVENTORY` for `API_CONTRACTS`. Intent satisfied,
+  mechanism different — worth checking for before filing "still outstanding" work anywhere.
+
+  Now `status: complete`, a **new frontmatter value defined in `RUNTIME_DOCSET_GOVERNANCE.md`**
+  along with the other two (`current`, `outdated`), because neither fitted: the work is not
+  ongoing and the reasoning is not wrong. Note `Runtime Docs Validation` checks only that the key
+  is *present*, so the value is unvalidated and a typo would be silent — hence writing the
+  vocabulary down.
+
+  Its Current Boundary Notes were also wrong, in the sweep's signature way.
+
+---
+
+### The pattern this audit actually surfaced
+
+**Four separate documents mis-stated plugin-layer routes as runtime-owned**:
+`EXECUTION_CONTRACT.md` (`/apps/agent/*`), `MEMORY_BRIDGE.md` (`/apps/memory/metrics*`),
+`RUNTIME_DOCSET_BOUNDARY.md` (agent *and* watcher), and `PUBLIC_RUNTIME_SURFACES.md` (corrected
+2026-08-06, before this audit). That is not four coincidences — it is one mechanism:
+
+> **A router file left in `AINDY/routes/` but absent from `APP_ROUTERS` reads as runtime-owned
+> until you boot the runtime with no plugins.** `agent_router.py`, `memory_metrics_router.py` and
+> `memory_trace_router.py` are all still in the tree, unregistered. On any plugin-loaded
+> deployment the routes answer, so the mistake is invisible in normal use.
+
+`ROUTE_OWNERSHIP_INVENTORY.md` had the right answer the whole time. Docs that assert route
+ownership should be checked against `APP_ROUTERS` and that inventory, not against the presence of
+a file.
+
+**Lesson from the seven.** Staleness did not predict the failure mode; seven reads produced
+seven different ones: `RETRY_POLICY` was structurally sound with a load-bearing
 inversion buried in one section; `EXECUTION_CONTRACT` was wholesale aspirational;
 `MEMORY_ADDRESS_SPACE` had a perfect inventory wrapped around drifted behaviour;
 `OS_ISOLATION_LAYER` had sound architecture wrapped around a wrong data model, and was
 *pessimistic* in one section — the gap it warned about had been closed; and
 `NATIVE_MEMORY_BRIDGE` was **substantially correct**, wrong only about its own build inputs
 and about what CI does; and `MEMORY_BRIDGE` kept a correct *model* wrapped in a
-file-map where every `services/…` path was wrong. Nothing about
+file-map where every `services/…` path was wrong; and `RUNTIME_DOCSET_BOUNDARY` was not stale at all
+but *finished*, mislabelled as ongoing work. Nothing about
 the frontmatter date distinguishes those cases. Reading is the only way to tell, which is why
 this was filed rather than bulk-dated.
 
@@ -4939,8 +4978,12 @@ caught all seven at the commit that introduced them.
 unverified, and at least one is materially accurate. Treat the list as a reading queue, not a
 deletion queue.
 
-**Close trigger:** each document read against source once, `last_verified` bumped to that date.
-Cheap per document; there are seven.
+**Close trigger:** ~~each document read against source once, `last_verified` bumped to that
+date.~~ **MET 2026-08-13 — all seven done** (#395, #396, #397, #398, #399, and the boundary
+closure). The follow-on prevention — a `last_verified >= 2026-05-17` assertion in
+`Runtime Docs Validation` — is **still not implemented**, and is now cheap to add: no document
+violates it any more, so the check would go green on the commit that adds it. That was the
+blocker when this was filed.
 
 ---
 
