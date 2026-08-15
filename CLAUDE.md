@@ -175,6 +175,59 @@ doesn't exist, `CREATE INDEX ... ON missing_table` still raises `UndefinedTable`
 
 ---
 
+## ★ CHANGELOG protocol — write the entry in the PR that makes the change
+
+**A PR that changes behaviour, API surface, configuration, schema, or what CI proves adds its
+own `CHANGELOG.md` entry under `## Unreleased`, in the same PR.** Not at release time.
+
+**This is measured, not a style preference.** Every release window shows the same shape — the
+CHANGELOG is written in bursts at release time, so the file is stale for most of a cycle:
+
+| Window | Commits touching `CHANGELOG.md` |
+|---|---|
+| `v1.6.2..v1.7.0` | 10 of 33 |
+| `v1.7.0..v1.8.0` | 1 of 10 |
+| `v1.8.0..v1.9.0` | 1 of 5 |
+| `v1.9.0..v2.0.0` | 12 of 61 |
+| `v2.0.0..v2.0.1` | 1 of 24 |
+| `v2.0.1..main` (2026-08-15) | **1 of 50** |
+
+The last row is the one that forced this rule: `Unreleased` held **two entries from a single
+PR** while `main` carried two Alembic revisions, four new env vars / route groups, and two
+consumer-visible behaviour changes.
+
+**Why deferring costs more than it saves.** Reconstructing 50 commits later means writing from
+commit *subjects*, and the reasoning is not in the subject. "unique per owner" survives; *"a
+plain `UNIQUE (owner_user_id, name)` would not be equivalent, because SQL treats NULLs as
+distinct, so every shared row escapes it"* does not — it has to be re-derived by reading the
+migration, or it is silently lost. The entries worth having are exactly the ones that decay
+fastest.
+
+**It is also the upstream half of a rule already here.** `PYPI-PUBLISH-1` says a release must
+bump the Dockerfile pin **and** the CHANGELOG in one PR. That stays true — but it is a
+*verification* step, not the place to author 50 entries. At release, confirm `Unreleased` is
+complete and promote it to a version heading.
+
+**What needs an entry:** new or changed routes, syscalls, env vars, config defaults, response
+shapes, schema/migrations, behaviour changes (including "this used to return 500"), removed
+surfaces, dependency bumps with consumer impact, and **test/CI changes that alter what a green
+check means** (`CI-MARKER-1` changed which tests run at all — that belongs in the log).
+
+**What does not:** pure refactors with no observable change, doc-only edits, and tests that add
+coverage without changing what CI enforces. When unsure, write it — an over-documented change
+costs a paragraph; an undocumented behaviour change costs an operator an incident.
+
+**Format** — match the file. `### Added|Changed|Fixed|Removed — <short title> (#PR)`, then
+bullets that say what changed, and *why it was wrong* where that is not obvious. Call out
+anything an operator must read before upgrading at the top of `Unreleased`, not buried in a
+bullet.
+
+**Never rewrite a published entry.** Older entries are the audit trail of what was believed
+then. Correct them with a new dated entry that says what the earlier one over-reached on — as
+the `AINDY_REDIS_URL` entry does for its 2026-06-06 predecessor.
+
+---
+
 ## Scheduler job pattern (`scheduler_service.py`)
 
 Reference implementation: `_cleanup_stale_logs` and `_cleanup_expired_effect_records`.
