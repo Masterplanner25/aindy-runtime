@@ -164,6 +164,27 @@ def _route_exception_message(route: APIRoute, exc: Exception) -> str:
     )
 
 
+def _is_pipeline_bypass_on_error(request: Request | None) -> bool:
+    """Whether an endpoint exception counts as bypassing the execution pipeline.
+
+    ROUTE-GUARD-1. The success path (:func:`_assert_execution_context_entered`) has
+    always asked two questions: did the request enter the pipeline, and *was it required
+    to*. The failure path asked only the first, so any exception from a route registered
+    deliberately outside the contract became a ``RouteExecutionViolation`` — a 500.
+
+    Some routers are registered without ``require_execution_context`` on purpose:
+    ``admin_router``, ``agents_router`` and ``automation_router`` are plain DB-query
+    handlers, and routing.py says so at each call site. For those, an ``HTTPException``
+    is the endpoint's *answer*, not evidence that it skipped anything, and turning it
+    into a 500 both hides the real status and reports a violation that did not occur.
+    """
+    if request is None:
+        return False
+    if hasattr(request.state, "execution_context"):
+        return False
+    return bool(getattr(request.state, "execution_contract_required", False))
+
+
 def _wrap_route_call(route: APIRoute, endpoint):
     if inspect.iscoroutinefunction(endpoint):
 
@@ -178,7 +199,7 @@ def _wrap_route_call(route: APIRoute, endpoint):
             except Exception as exc:
                 if request is not None:
                     classify_execution_failure(request, exc)
-                if request is not None and not hasattr(request.state, "execution_context"):
+                if _is_pipeline_bypass_on_error(request):
                     raise RouteExecutionViolation(_route_exception_message(route, exc)) from exc
                 raise
             _assert_execution_context_entered(route, request)
@@ -197,7 +218,7 @@ def _wrap_route_call(route: APIRoute, endpoint):
         except Exception as exc:
             if request is not None:
                 classify_execution_failure(request, exc)
-            if request is not None and not hasattr(request.state, "execution_context"):
+            if _is_pipeline_bypass_on_error(request):
                 raise RouteExecutionViolation(_route_exception_message(route, exc)) from exc
             raise
         _assert_execution_context_entered(route, request)

@@ -572,14 +572,15 @@ and the tag on every memory node the agent writes. Unlike the system seed it als
 existing row, so an app changing its display name or metadata between boots needs no manual DB
 edit, and nothing about the agent's memory history moves.
 
-**Deferred deliberately:** the authenticated user-facing route/syscall for user-owned agents.
-The hook is the runtime-owned mechanism ("runtime owns the mechanism, app owns policy"); a
-user-facing surface carries auth and tenant-isolation weight that deserves its own review.
+**★ The deferred half SHIPPED 2026-08-15** — see `FR-12b` below. The deferral reasoning
+("app-layer policy") did not survive contact: ownership, per-owner name scoping and
+owner-scoped reads are properties of the *table*, so every app would have rebuilt all three
+against a schema that fought them.
 
-**Still open, flagged not fixed:** `DELETE /platform/admin/agents/{namespace}` has no
-reservation guard, so an admin can deactivate a platform system agent. It is consequential —
-`flow_definitions_memory` filters `is_active`, and the boot seed never repairs the flag — but
-whether an admin *should* be able to is a policy question, not an obvious bug.
+**★ The flagged `DELETE` gap is now recoverable (2026-08-15), and the policy is still open** —
+also `FR-12b`. `_bootstrap_system_agents` gained a repair path and
+`POST /admin/agents/{namespace}/restore` exists. Whether an admin *should* be able to
+deactivate a system agent remains undecided, deliberately.
 
 **Original filing follows. Verified true, and the live data confirms the sharper half:**
 - `AINDY/startup.py:937` — `_SYSTEM_AGENTS` is a hardcoded list of exactly 7 specs (ARM,
@@ -604,6 +605,179 @@ system namespaces against app registration.
 **Their related observation, also verified:** `AGENT_USER = "user"` exists in
 `AINDY/db/models/agent.py` and is excluded from `_SYSTEM_AGENTS`, so no row is ever created for
 the user's own agent.
+
+---
+
+#### FR-12b — user-owned agents, and a repair path for system agents — **SHIPPED 2026-08-15**
+
+**Status: SHIPPED (2026-08-15).** The two halves FR-12 left open, plus the schema constraint
+that made the first of them incoherent and a route-guard defect that made its error codes
+wrong. Alembic `0016_agents_owner_scoped_name`, schema contract `2026-08-15.1`,
+`RUNTIME_ALEMBIC_HEAD_REVISION` → `0016`.
+
+**★ The deferral reasoning was wrong, and it is worth recording why.** FR-12 deferred the
+user-facing surface as app-layer policy, on the "runtime owns the mechanism, app owns policy"
+split. But *ownership* is not policy — it is three properties of the table:
+`owner_user_id` semantics, per-owner name scoping, and owner-scoped reads. Every app wanting
+user-owned agents would have had to build all three, against a schema actively working against
+them, and each app would have got the enumeration boundary slightly differently. What an app
+*does* with an agent is still app policy; that half of the split holds.
+
+**`agents.name` is unique per owner, not globally.** The old global `UNIQUE` was inherited
+from a table that in practice held seven platform rows. It means the first user to register
+"Assistant" takes that name from every other user in the deployment, and the 409 telling them
+so reports on a row they cannot see. Replaced by two **partial** unique indexes:
+
+| Index | Predicate |
+|---|---|
+| `uq_agents_name_shared` | `UNIQUE (name) WHERE owner_user_id IS NULL` |
+| `uq_agents_owner_name` | `UNIQUE (owner_user_id, name) WHERE owner_user_id IS NOT NULL` |
+
+**★ A plain `UNIQUE (owner_user_id, name)` is NOT equivalent, and the difference is the whole
+point.** SQL treats NULLs as distinct inside a unique constraint, so every shared row — all
+seven system agents and every app-registered identity, all `owner_user_id IS NULL` — would
+escape it entirely, and two rows named "Runtime" would both be accepted. The partial pair keeps
+the old global guarantee exactly where it still applies. Verified on real PostgreSQL as
+property P6, which fails loudly under the naive constraint.
+
+`memory_namespace` is deliberately untouched and stays globally unique: it is
+`MemoryNodeModel.source_agent`, the tag on every memory node the agent writes, so one namespace
+must mean one agent process-wide.
+
+**Verified against real PostgreSQL** (throwaway database, nine properties), not just
+unit-tested:
+
+| Property | Result |
+|---|---|
+| Blank DB, no `agents` table (ALEMBIC-FRESH-DB-1) | skips cleanly |
+| Pre-migration, two owners share a name | rejected — i.e. the defect reproduces |
+| `upgrade()` on a populated table | rows preserved, both indexes present, `agents_name_key` gone |
+| Post-migration, two owners share a name | accepted |
+| One owner reuses their own name | rejected |
+| Two un-owned rows share a name | rejected (the NULL trap) |
+| `upgrade()` re-run | idempotent |
+| `downgrade()` | indexes dropped, constraint restored |
+| `downgrade()` re-run | idempotent |
+
+**The user-facing surface.** `/platform/agents` — `GET` (list), `POST` (create), `PATCH`
+(name/description/metadata), `DELETE` (soft), `POST …/restore`. Registered like `admin_router`,
+outside the execution contract, because these are plain DB-query handlers.
+
+- **The namespace is derived, not accepted** — `u:<user_id>:<slug>`. If users chose it
+  directly, a taken namespace would have to 409, and that 409 reports on a row the caller
+  cannot see: the same cross-tenant existence oracle tracked for `/auth/register`. Deriving
+  makes a cross-user collision **impossible by construction** rather than merely detected, so
+  every conflict a user can observe is with their own agent.
+- **`agent_type` is forced to `custom`.** `agent_capability_mappings` is keyed by it. Nothing
+  in the runtime grants capability from that column today, and a user-facing create route is
+  not where you want to discover that changed.
+- **Create is deliberately not idempotent**, unlike the admin route. An idempotent update
+  branch is precisely what silently rewrote platform rows before FR-12 reserved them.
+- **A foreign agent is 404, never 403.** A 403 confirms that someone else holds the slug.
+- **A principal with no resolvable user is refused (400)**, rather than falling through to
+  `owner_user_id = NULL` — which would create a *shared* agent, the one outcome an ownership
+  route must never produce by accident.
+- `slug` and therefore `memory_namespace` are immutable on PATCH: the namespace is already
+  written onto this agent's memory nodes, and changing it orphans exactly the history FR-13's
+  metadata bag exists to preserve.
+
+**The repair path.** `_bootstrap_system_agents` claimed "idempotent upsert by
+memory_namespace" in its docstring and was insert-only in its body, so a drifted platform row
+was never repaired. **Closing the FR-12 hole made this sharper, not milder:**
+`POST /admin/agents/register` was the only surface whose update branch set `is_active = True`,
+so reserving the seven system namespaces (correctly) removed the last accidental route back for
+exactly the rows that matter most. Split on purpose:
+
+- **Identity** (`name` / `agent_type` / `description`) is platform-owned, so boot restores it
+  from the spec and logs a WARNING naming the fields.
+- **`is_active` is NOT repaired at boot.** Silently re-enabling an agent an operator
+  deactivated trades a missing repair path for an unpredictable one. Boot warns and names the
+  remedy; `POST /platform/admin/agents/{namespace}/restore` is the repair and needs no restart,
+  and for a reserved namespace it repairs the identity fields in the same call.
+
+**Policy still open, deliberately:** whether an admin should be able to deactivate a platform
+system agent at all. `DELETE` now returns a `warning` in the body saying what was done and that
+a restart will not undo it, so the consequence is visible either way.
+
+**Two defects found while building, both fixed here:**
+
+1. **`memory_agents_list_node` listed every active agent to every caller.** Harmless while all
+   seven rows were un-owned — which is exactly why it survived — and a cross-user leak of
+   names, descriptions and metadata the moment users own agents. Now `owner_user_id IS NULL OR
+   = :caller`.
+2. **Two lists described one roster.** `SYSTEM_AGENTS` (what an app may not register) and
+   `startup._SYSTEM_AGENTS` (what the platform does register) were maintained separately with
+   nothing making them agree. Now one declaration, `SYSTEM_AGENT_SPECS` in
+   `AINDY/db/models/agent.py`, with the set derived from it and a test pinning the derivation.
+
+**Test-patching gotcha, the inverse of the scheduler-job rule:** `startup.py` binds
+`SessionLocal` at **module level** (line 56), so a test must patch `AINDY.startup.SessionLocal`.
+Patching `AINDY.db.database.SessionLocal` — correct for scheduler jobs, which import inside the
+function body — silently does nothing here: the seed runs against the real engine, logs
+`no such table: agents` as a *non-fatal* warning, and the test fails on its assertion rather
+than on the patch.
+
+**Also relaxed:** FR-13's `test_head_constant_matches` asserted `== "0015"`, which is really
+the claim "0015 is the newest migration that will ever exist" and turns red on any unrelated
+migration. Now `>= "0015"`. The constant-vs-scripts-dir check is authoritative and CI-enforced
+in `tests/unit/test_runtime_alembic_head.py`; this one only needs to know `0015` is reachable.
+
+---
+
+## ROUTE-GUARD-1 — an HTTPException from an unmanaged route reported as a 500
+
+**Status: FIXED (2026-08-15).** Found while building FR-12b, when a new route's deliberate
+`422` came back as `{"error": "internal_error"}`.
+
+`enforce_registered_route_execution` (`AINDY/core/route_execution_guard.py`) wraps **every**
+registered route. Its success path, `_assert_execution_context_entered`, always asked two
+questions: did this request enter the execution pipeline, and *was it required to*. Its failure
+path asked only the first:
+
+```python
+if request is not None and not hasattr(request.state, "execution_context"):
+    raise RouteExecutionViolation(...)
+```
+
+So any exception from a route registered deliberately **outside** the contract became a
+`RouteExecutionViolation` → 500. Three routers are registered that way on purpose —
+`admin_router`, the new `agents_router`, and `automation_router` — because they are plain
+DB-query handlers, and `routing.py` says so at each call site.
+
+**Measured, on `main` before the fix:**
+
+| Call | Intended | Actual |
+|---|---|---|
+| `POST /platform/admin/agents/register` with `memory_namespace: "runtime"` | 409 | **500** |
+| `DELETE /platform/admin/agents/does-not-exist` | 404 | **500** |
+
+**★ The first row is FR-12's reserved-namespace guard, shipped the day before this was found.**
+It refused the write correctly and then reported it as an internal error. The guard worked;
+only its answer was wrong — and a caller cannot tell "your request was rejected" from "the
+server broke" by a 500, which is the difference between retrying and not.
+
+**Why nothing caught it:** the FR-12 tests assert on `admin_router.py`'s **source text**
+(`assert "SYSTEM_AGENTS" in source`) rather than calling the route. Source assertions confirm
+the code was written; they cannot see what it returns. Same family as `DOCS-COVERAGE-CLAIM-1`
+and the absence-assertion in `EVENTBUS-COVERAGE-1`.
+
+**Fix:** the failure path now uses the same two-part question as the success path, extracted as
+`_is_pipeline_bypass_on_error`.
+
+**Regression coverage** (`tests/unit/test_route_guard_unmanaged_routes.py`) calls the real
+routes over HTTP, and carries a **liveness control in the opposite direction** —
+`TestManagedRoutesStillViolate` — because a "fix" that simply stopped raising would satisfy
+every other assertion in the file. It pins two routes of identical shape whose only difference
+is the `require_execution_context` dependency: managed still violates, unmanaged returns 418.
+The pre-existing `test_route_execution_guard.py` suite is unchanged and green.
+
+**Flagged, not fixed — `ADMIN-PROMOTE-UUID-1`:** `POST /platform/admin/users/{user_id}/promote`
+also 500s for a missing user, but for an unrelated reason. It passes the raw path string into
+`User.id == user_id`, and the SQLite UUID binding raises
+`AttributeError: 'str' object has no attribute 'hex'` before the 404 branch is reached. That is
+a genuine 500 — the route really did fail — and it is **confined to the SQLite test harness**,
+since psycopg2 casts the string on PostgreSQL. Fix is `normalize_uuid` with a 404 on a
+malformed id; deliberately not folded into a route-guard change.
 
 ---
 

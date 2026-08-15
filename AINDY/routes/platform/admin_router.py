@@ -144,11 +144,73 @@ def deactivate_agent(
     db: Session = Depends(get_db),
     _admin: dict = Depends(require_admin_principal),
 ):
-    """Deactivate an agent by namespace. Soft-delete only — preserves memory nodes."""
+    """Deactivate an agent by namespace. Soft-delete only — preserves memory nodes.
+
+    Deactivating a *platform system* agent is still permitted (that policy question is
+    open), but it is consequential: ``flow_definitions_memory`` filters on ``is_active``,
+    so the agent disappears from listings and memory routing. The response says so, and
+    ``POST /admin/agents/{namespace}/restore`` reverses it without a restart.
+    """
+    from AINDY.db.models.agent import SYSTEM_AGENTS
+
     agent = db.query(Agent).filter(Agent.memory_namespace == namespace).first()
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found.")
     agent.is_active = False
     db.commit()
     db.refresh(agent)
-    return {**_serialize_agent(agent), "deactivated": True}
+
+    payload = {**_serialize_agent(agent), "deactivated": True}
+    if namespace in SYSTEM_AGENTS:
+        payload["warning"] = (
+            f"{namespace!r} is a platform system agent. It is now excluded from agent "
+            f"listings and memory routing, and a restart does NOT re-enable it. "
+            f"Restore it with POST /platform/admin/agents/{namespace}/restore."
+        )
+    return payload
+
+
+@router.post("/admin/agents/{namespace}/restore", response_model=None)
+def restore_agent(
+    request: Request,
+    namespace: str,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin_principal),
+):
+    """Reactivate a deactivated agent, and repair a system agent's identity fields.
+
+    This is the repair path that was missing. Before it, a deactivated agent had no way
+    back through the API at all for the namespaces that matter most: the boot seed only
+    ever *inserted*, and ``POST /admin/agents/register`` — whose update branch does set
+    ``is_active = True`` — refuses reserved namespaces, so closing that hole (correctly)
+    also closed the only accidental route back for a system agent.
+
+    For a reserved namespace this also restores ``name`` / ``agent_type`` /
+    ``description`` from ``SYSTEM_AGENT_SPECS``, so one call fully repairs a row rather
+    than leaving it active-but-wrong until the next boot.
+    """
+    from AINDY.db.models.agent import SYSTEM_AGENTS, SYSTEM_AGENT_SPECS
+
+    agent = db.query(Agent).filter(Agent.memory_namespace == namespace).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+
+    was_active = bool(agent.is_active)
+    repaired: list[str] = []
+
+    if namespace in SYSTEM_AGENTS:
+        spec = next(s for s in SYSTEM_AGENT_SPECS if s["namespace"] == namespace)
+        for field in ("name", "agent_type", "description"):
+            if getattr(agent, field) != spec[field]:
+                setattr(agent, field, spec[field])
+                repaired.append(field)
+
+    agent.is_active = True
+    db.commit()
+    db.refresh(agent)
+    return {
+        **_serialize_agent(agent),
+        "restored": True,
+        "was_active": was_active,
+        "repaired_fields": repaired,
+    }

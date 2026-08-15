@@ -932,22 +932,38 @@ def _bootstrap_admin_email() -> None:
 
 
 def _bootstrap_system_agents() -> None:
-    """Seed built-in system agent definitions (idempotent upsert by memory_namespace)."""
+    """Seed **and repair** the platform's own agent rows, keyed by ``memory_namespace``.
+
+    This used to be insert-only while its docstring claimed "idempotent upsert", which
+    meant the platform roster had no repair path at all: once a system row drifted from
+    the spec, every subsequent boot walked past it. That is how a rewritten Runtime agent
+    row (the FR-12 defect, since fixed at the route) would have survived indefinitely.
+
+    Two kinds of drift, treated differently on purpose:
+
+    * **Identity** (``name`` / ``agent_type`` / ``description``) is platform-owned. These
+      rows describe the runtime's own components, so the spec in
+      ``SYSTEM_AGENT_SPECS`` is authoritative and boot restores it, logging when it has
+      to. Nothing legitimate renames them — the admin register route now refuses reserved
+      namespaces outright, so drift here means a raw ``UPDATE`` or an older build.
+
+    * **``is_active`` is NOT repaired.** Deactivating a system agent is a deliberate
+      operator action through ``DELETE /platform/admin/agents/{namespace}``, and silently
+      re-enabling it on the next restart would undo that action without telling anyone —
+      trading a missing repair path for an unpredictable one. Boot logs a WARNING naming
+      the row and the endpoint that restores it; the repair is
+      ``POST /platform/admin/agents/{namespace}/restore``, which needs no restart.
+
+    Whether an admin *should* be able to deactivate a system agent stays an open policy
+    question. This makes the consequence visible and recoverable either way.
+    """
     import uuid as _uuid
-    _SYSTEM_AGENTS = [
-        {"name": "ARM",      "namespace": "arm",      "agent_type": "system", "description": "Adaptive Reasoning Module — core reasoning and planning agent."},
-        {"name": "Genesis",  "namespace": "genesis",  "agent_type": "system", "description": "Genesis — world-building and initialization agent."},
-        {"name": "Nodus",    "namespace": "nodus",    "agent_type": "system", "description": "Nodus — script execution and flow orchestration agent."},
-        {"name": "SYLVA",    "namespace": "sylva",    "agent_type": "system", "description": "SYLVA — synthesis and language variant agent."},
-        {"name": "Platform", "namespace": "platform", "agent_type": "system", "description": "Platform agent — runtime platform operations."},
-        {"name": "Runtime",  "namespace": "runtime",  "agent_type": "system", "description": "Runtime agent — core execution environment."},
-        {"name": "Memory",   "namespace": "memory",   "agent_type": "system", "description": "Memory agent — memory ingestion and retrieval."},
-    ]
+
     try:
-        from AINDY.db.models.agent import Agent
+        from AINDY.db.models.agent import Agent, SYSTEM_AGENT_SPECS
         db = SessionLocal()
         try:
-            for spec in _SYSTEM_AGENTS:
+            for spec in SYSTEM_AGENT_SPECS:
                 row = db.query(Agent).filter(Agent.memory_namespace == spec["namespace"]).first()
                 if row is None:
                     db.add(Agent(
@@ -959,6 +975,35 @@ def _bootstrap_system_agents() -> None:
                         is_active=True,
                     ))
                     logger.info("[bootstrap] Seeded system agent %r (namespace=%r).", spec["name"], spec["namespace"])
+                    continue
+
+                drifted = [
+                    field for field, expected in (
+                        ("name", spec["name"]),
+                        ("agent_type", spec["agent_type"]),
+                        ("description", spec["description"]),
+                    )
+                    if getattr(row, field) != expected
+                ]
+                if drifted:
+                    row.name = spec["name"]
+                    row.agent_type = spec["agent_type"]
+                    row.description = spec["description"]
+                    logger.warning(
+                        "[bootstrap] Repaired system agent namespace=%r: %s did not match the "
+                        "platform spec and %s been restored.",
+                        spec["namespace"], ", ".join(drifted),
+                        "has" if len(drifted) == 1 else "have",
+                    )
+
+                if not row.is_active:
+                    logger.warning(
+                        "[bootstrap] System agent namespace=%r is DEACTIVATED. It is excluded "
+                        "from agent listings and memory routing until restored. Boot does not "
+                        "re-enable it, because that would silently undo an operator action; "
+                        "restore it with POST /platform/admin/agents/%s/restore.",
+                        spec["namespace"], spec["namespace"],
+                    )
             db.commit()
         finally:
             db.close()
