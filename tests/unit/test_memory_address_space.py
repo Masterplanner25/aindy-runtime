@@ -9,7 +9,8 @@ Three behaviours below are asserted as they *currently* are, with the surprise
 called out rather than smoothed over:
 
 * `build_tree` does not nest for real MAS data (see TestBuildTree).
-* `flatten_tree` drops a node that is the parent of another node (xfail, strict).
+* `flatten_tree` used to drop a node that is the parent of another node
+  (MAS-FLATTEN-1, fixed 2026-08-15; see TestFlattenTree).
 * `MAX_PATH_DEPTH` and `_SAFE_SEGMENT` are declared but never applied.
 
 Marked `runtime_only` deliberately — without it CI collects nothing here
@@ -417,6 +418,13 @@ class TestBuildTree:
 
 
 class TestFlattenTree:
+    """MAS-FLATTEN-1 — FIXED 2026-08-15.
+
+    The root set was "every path, minus every path that is some node's parent", which
+    removes the *parents* — so an intermediate node was never walked and vanished. A
+    root is a node whose parent is not itself a node, the inverse of what was written.
+    """
+
     def test_empty_tree(self):
         assert flatten_tree({}) == []
 
@@ -436,23 +444,76 @@ class TestFlattenTree:
         tree = build_tree(nodes)
         assert [n["id"] for n in flatten_tree(tree)] == ["a", "b"]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "MAS-FLATTEN-1: flatten_tree drops any node that is the parent of another "
-            "node. `roots` subtracts every path that is some node's parent, so an "
-            "intermediate node is never walked and vanishes from the output. Currently "
-            "harmless — flatten_tree has zero callers in AINDY/ — which is why this is "
-            "recorded as xfail rather than fixed here."
-        ),
-    )
-    def test_parent_node_must_not_be_dropped(self):
+    def test_a_parent_node_is_not_dropped(self):
+        """The regression itself. Was `xfail(strict=True)`; output was `['child']`."""
         nodes = [
             {"id": "parent", "path": "/memory/t1/entities/updated"},
             {"id": "child", "path": "/memory/t1/entities/updated/n1"},
         ]
         flat = flatten_tree(build_tree(nodes))
         assert {n["id"] for n in flat} == {"parent", "child"}
+
+    def test_parent_precedes_its_child(self):
+        """Depth-first, as the docstring and MEMORY_ADDRESS_SPACE.md §7 promise."""
+        nodes = [
+            {"id": "parent", "path": "/memory/t1/entities/updated"},
+            {"id": "child", "path": "/memory/t1/entities/updated/n1"},
+        ]
+        assert [n["id"] for n in flatten_tree(build_tree(nodes))] == ["parent", "child"]
+
+    def test_depth_first_across_three_levels(self):
+        nodes = [
+            {"id": "a", "path": "/memory/t/ns"},
+            {"id": "b", "path": "/memory/t/ns/ty"},
+            {"id": "c", "path": "/memory/t/ns/ty/id"},
+        ]
+        assert [n["id"] for n in flatten_tree(build_tree(nodes))] == ["a", "b", "c"]
+
+    def test_every_node_appears_exactly_once(self):
+        """Totality *and* no duplication — the walk is now visited-guarded, so a node
+        reachable by more than one route cannot be emitted twice."""
+        nodes = [
+            {"id": "root", "path": "/memory/t/ns"},
+            {"id": "mid", "path": "/memory/t/ns/ty"},
+            {"id": "leaf1", "path": "/memory/t/ns/ty/a"},
+            {"id": "leaf2", "path": "/memory/t/ns/ty/b"},
+        ]
+        ids = [n["id"] for n in flatten_tree(build_tree(nodes))]
+        assert sorted(ids) == ["leaf1", "leaf2", "mid", "root"]
+        assert len(ids) == len(set(ids))
+
+    def test_nodes_unreachable_from_any_root_are_still_returned(self):
+        """Totality guard against a hand-built tree.
+
+        `build_tree` only records a `children` entry when the parent path is itself a
+        node, so a partially-populated tree can hold nodes reachable from no root.
+        Silently dropping them is the very failure this entry is about, so they are
+        appended rather than lost.
+        """
+        tree = {
+            "/memory/t/ns": {"node": {"id": "root"}, "children": []},
+            "/memory/t/ns/ty": {"node": {"id": "orphaned"}, "children": []},
+        }
+        ids = [n["id"] for n in flatten_tree(tree)]
+        assert sorted(ids) == ["orphaned", "root"]
+
+    def test_multiple_independent_roots_are_all_walked(self):
+        nodes = [
+            {"id": "n1", "path": "/memory/t1/entities/updated/n1"},
+            {"id": "n2", "path": "/memory/t1/executions/completed/n2"},
+            {"id": "n3", "path": "/memory/t2/entities/updated/n3"},
+        ]
+        assert {n["id"] for n in flatten_tree(build_tree(nodes))} == {"n1", "n2", "n3"}
+
+    def test_flatten_returns_the_same_node_count_as_the_tree(self):
+        """The invariant that would have caught MAS-FLATTEN-1 in one line."""
+        for paths in (
+            ["/memory/t/ns/ty/a"],
+            ["/memory/t/ns", "/memory/t/ns/ty"],
+            ["/memory/t/ns", "/memory/t/ns/ty", "/memory/t/ns/ty/a", "/memory/t/ns/ty/b"],
+        ):
+            tree = build_tree([{"id": p, "path": p} for p in paths])
+            assert len(flatten_tree(tree)) == len(tree)
 
 
 # ── enrich_node_with_path ─────────────────────────────────────────────────────

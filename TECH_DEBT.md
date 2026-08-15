@@ -5761,7 +5761,7 @@ the concern is closed rather than left as a suspicion.
 
 ## MAS-FLATTEN-1 — `flatten_tree` drops any node that is a parent of another node
 
-**Status:** Open — currently unreachable (dead code). Found 2026-08-14 writing the MAS suite.
+**Status: CLOSED (2026-08-15).** Found 2026-08-14 writing the MAS suite.
 
 `flatten_tree` computes its roots as every path *minus* every path that is some other node's
 parent. An intermediate node is therefore never walked as a root, and because it is not a child
@@ -5772,9 +5772,26 @@ in : ['/memory/t1/entities/updated', '/memory/t1/entities/updated/n1']
 out: ['/memory/t1/entities/updated/n1']        # the parent node is gone
 ```
 
-**Not currently reachable:** `flatten_tree` has **zero callers** under `AINDY/`, which is why it
-is recorded rather than fixed. Pinned by an xfail(strict) test that flips to a pass when the
-roots computation is corrected.
+**Was not reachable:** `flatten_tree` has **zero callers** under `AINDY/` — re-verified
+2026-08-15, and none in `aindy-apps-monolith` either. That is why it was recorded rather than
+treated as urgent.
+
+**Fixed rather than deleted**, because `docs/runtime/MEMORY_ADDRESS_SPACE.md` §7 documents it as
+usable with a worked example: deleting a documented, exported helper is a larger call than
+correcting it, and an out-of-tree caller cannot be ruled out from here.
+
+**The fix:** a root is a node whose *parent is not itself a node* — the inverse of what was
+written. `flatten_tree` now also guarantees **every node appears exactly once**: the walk is
+visited-guarded (no duplicates), and anything unreachable from a root is appended rather than
+dropped. That totality guard matters because `build_tree` only records a `children` entry when
+the parent path is itself a node, so a hand-built or partially-populated tree can legitimately
+hold unreachable nodes — and silently dropping them is the very failure this entry is about.
+
+The `xfail(strict=True)` test flipped to `XPASS(strict)` on the fix — i.e. it failed the build
+until it was converted, which is what strict xfail is for. Replaced with plain assertions plus
+coverage for depth-first ordering across three levels, exactly-once, unreachable nodes, multiple
+independent roots, and **`len(flatten_tree(tree)) == len(tree)`** — the one-line invariant that
+would have caught the original bug.
 
 **Related, and this one *is* live:** `build_tree` — which backs `sys.v1.memory.tree` — never
 nests for canonical MAS data. MAS nodes are always 5-segment leaves, so a node's parent path is
