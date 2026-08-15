@@ -106,8 +106,9 @@ Everything that prevents invalid state transitions:
   must match the context tenant. Hard deny on mismatch.
 - **Resource quota**: `ResourceManager` enforces per-tenant concurrency
   (≤ 5 simultaneous executions), per-EU wall-clock time (≤ 300 s / 5 min,
-  configurable via `AINDY_QUOTA_CPU_MS`; note: the field is named `cpu_time_ms`
-  but measures monotonic wall-clock time including I/O wait), and syscall count
+  configurable via `AINDY_QUOTA_CPU_MS`; the column is `wall_time_ms` and measures
+  monotonic wall-clock time including I/O wait — only the *env var* keeps the
+  legacy `CPU` name, for operator compatibility), and syscall count
   (≤ 100). Fails closed in production when Redis is unavailable.
 - **Idempotency gate**: `EXACTLY_ONCE` handlers check `EffectRecord` before
   executing. Cached results are returned for completed actions. Live concurrent
