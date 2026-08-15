@@ -15,6 +15,8 @@ import pytest
 
 from AINDY.platform_layer import email_channel
 
+pytestmark = pytest.mark.runtime_only
+
 
 @pytest.fixture
 def registered(monkeypatch):

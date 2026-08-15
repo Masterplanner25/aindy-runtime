@@ -11,6 +11,7 @@ Alembic 0014 encodes that distinction, but the ``alembic/`` tree is not shipped 
 reconciles from packaged metadata instead. These tests pin the metadata path, which is the
 one that was silently wrong.
 """
+import pytest
 import sqlalchemy as sa
 
 from AINDY.db.models.user import User
@@ -19,6 +20,8 @@ from AINDY.db.schema_contract import (
     _render_add_column_sql,
     _render_backfill_sql,
 )
+
+pytestmark = pytest.mark.runtime_only
 
 
 # ---------------------------------------------------------------------------

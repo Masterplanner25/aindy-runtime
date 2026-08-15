@@ -18,6 +18,8 @@ import AINDY.db.model_registry  # noqa: F401  (populate metadata)
 from AINDY.platform_layer.extension_policy import OWNER_FIRST_PARTY_APP
 from AINDY.runtime import nodus_workflow_registry as nwr
 
+pytestmark = pytest.mark.runtime_only
+
 
 @pytest.fixture(autouse=True)
 def _clean_registry():

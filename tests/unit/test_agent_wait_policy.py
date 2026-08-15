@@ -15,6 +15,8 @@ from AINDY.agents.agent_runtime.planning import (
 )
 from AINDY.agents import runtime_api
 
+pytestmark = pytest.mark.runtime_only
+
 
 # --------------------------------------------------------------------------- #
 # apply_wait_policy — backend-aware WAIT reconciliation

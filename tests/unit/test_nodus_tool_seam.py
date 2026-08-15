@@ -10,9 +10,13 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
+import pytest
+
 from AINDY.runtime import nodus_worker as worker
 from AINDY.runtime import nodus_runtime_adapter as adapter_mod
 from AINDY.runtime.nodus_runtime_adapter import NodusExecutionContext, NodusRuntimeAdapter
+
+pytestmark = pytest.mark.runtime_only
 
 
 # --------------------------------------------------------------------------- #

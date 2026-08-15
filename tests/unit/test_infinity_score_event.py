@@ -14,6 +14,8 @@ import pytest
 from AINDY.core.execution_score import compute_execution_score, emit_execution_score
 from AINDY.core.system_event_types import SystemEventTypes
 
+pytestmark = pytest.mark.runtime_only
+
 
 @pytest.fixture
 def captured_events(monkeypatch):
