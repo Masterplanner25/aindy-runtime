@@ -146,10 +146,16 @@ def deactivate_agent(
 ):
     """Deactivate an agent by namespace. Soft-delete only — preserves memory nodes.
 
-    Deactivating a *platform system* agent is still permitted (that policy question is
-    open), but it is consequential: ``flow_definitions_memory`` filters on ``is_active``,
-    so the agent disappears from listings and memory routing. The response says so, and
-    ``POST /admin/agents/{namespace}/restore`` reverses it without a restart.
+    Deactivating a *platform system* agent is **permitted by decision (2026-08-15)**, not
+    merely unguarded. It stays consequential — ``flow_definitions_memory`` filters on
+    ``is_active``, so the agent disappears from listings and memory routing — so the
+    response carries a warning saying exactly that, and boot deliberately does not reverse
+    it. ``POST /admin/agents/{namespace}/restore`` is the way back, without a restart.
+
+    Do not add a reserved-namespace guard here. The reservation on
+    ``POST /admin/agents/register`` exists because its *update* branch silently rewrote
+    platform rows; deactivation is an explicit, visible, reversible operator action, which
+    is a different thing.
     """
     from AINDY.db.models.agent import SYSTEM_AGENTS
 
