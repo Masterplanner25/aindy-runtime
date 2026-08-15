@@ -5321,11 +5321,18 @@ alone it never does. That matches the observed pattern exactly (always passes in
 ~50% in a full run).
 
 **Confidence: strongly indicated, NOT confirmed.** The signature above was produced by *forcing*
-a timeout, not captured from a natural failure — four attempts to catch one under `--tb=long`
-came back clean, the flake being ~50% and each run ~10 minutes. **To confirm:** loop
-`python -m pytest tests/unit/ -q --tb=long > cap.txt` until `cap.txt` names the test, then check
-whether the traceback is the `RuntimeError` above. If it is something else, this section is
-wrong and the mechanism is elsewhere.
+a timeout, not captured from a natural failure.
+
+**Why no natural traceback exists yet — a process mistake worth not repeating.** All three
+observed failures happened in runs invoked as `pytest tests/unit/ -q ... | tail`, which
+discarded the traceback and kept only the summary line. By the time that was noticed and runs
+switched to `--tb=long` writing to a file, the flake did not recur: **2 capture attempts, both
+clean** (a third was killed). So the missing evidence is not a hard-to-reproduce failure — it is
+three failures whose output was thrown away. Full tally: **7 completed runs, 3 fail / 4 pass**.
+
+**To confirm:** loop `python -m pytest tests/unit/ -q --tb=long > cap.txt` — *never piped to
+`tail`* — until `cap.txt` names the test, then check whether the traceback is the `RuntimeError`
+above. If it is something else, this section is wrong and the mechanism is elsewhere.
 
 **One alternative already eliminated:** stale `_runtime_callback_invocations` leaking in from a
 prior test. The `platform_only_runtime` fixture snapshots and restores **57 registry globals**
