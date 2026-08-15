@@ -5327,8 +5327,26 @@ Expect the number to move and re-baseline deliberately rather than lowering the 
 
 ## NATIVE-PARITY-1 — the native and Python scorers disagree for a negative `impact_score`
 
-**Status:** Open — correctness. Found 2026-08-14 writing the DOCS-COVERAGE-CLAIM-1 native
-suite; verified against a locally-built crate, not inferred.
+**Status: CLOSED (2026-08-15).** `scorer.py` now clamps both ends
+(`min(1.0, max(0.0, impact / 5.0))`), matching the Rust engine. Verified against the real
+extension across `-1e6 … 25.0`: **delta 0.0 at every point**, where it had been +0.300 at
+`impact=-10`. Found 2026-08-14 writing the DOCS-COVERAGE-CLAIM-1 native suite; verified against
+a locally-built crate, not inferred.
+
+**★ Correction to this entry's original severity claim.** It closed with *"Reachable whenever a
+stored `impact_score` is negative"*. That was asserted without checking whether a negative can
+be stored — and it cannot, through the runtime's own path. `MemoryNodeDAO.save()` writes
+`impact_score=max(0.0, float(impact_score or 0.0))` (`memory_node_dao.py:209`, mirrored at
+`:725`), and `save()` is the universal write chokepoint. The producers are non-negative by
+construction too: `calculate_impact_score` sums counts and a positive bonus;
+`blend_impact_with_significance` floors its input at 0 then takes a `max` with a floor. So the
+divergence was **latent, not live** — real, but not reachable through any runtime write path.
+
+That does not make the fix unnecessary — two engines silently disagreeing is a hazard whichever
+inputs are currently possible, the column carries **no `CheckConstraint`**, and
+`_prepare_node` will score any dict handed to it (an app-supplied candidate need not have passed
+through `save()`). But the honest severity was *defense in depth*, not *live mis-ranking*, and
+the original wording overstated it.
 
 `AINDY/runtime/memory/scorer.py` runs whichever engine is available, and the two implement the
 same formula — except for the impact term:
@@ -5359,12 +5377,33 @@ A **0.30 delta on a 0.42 score is 71%** — easily enough to reorder a recall re
 the *same* recall on the *same* data ranks differently depending on whether the crate was
 built — and `USE_NATIVE_SCORER` silently changes ranking, not just speed.
 
-**Fix:** clamp the Python side (`min(1.0, max(0.0, impact / 5.0))`) or drop the Rust lower
-clamp. Clamping Python matches the Rust intent. Pinned by
-`TestEngineParity::test_engines_must_agree_on_negative_impact` (xfail, strict — flips to a pass
-when fixed) plus a non-xfail test asserting the divergence is *exactly* the un-clamped term, so
-a partial fix cannot pass silently. Reachable whenever a stored `impact_score` is negative;
-`_safe_float` passes negatives straight through.
+**What shipped (2026-08-15).** Python clamped rather than dropping the Rust lower clamp — the
+term is a *bonus*, so flooring at zero is the coherent reading, and `_normalize_usage` in the
+same function already floors its input the same way.
+
+- `runtime/memory/scorer.py:120` — `min(1.0, max(0.0, impact / 5.0))`.
+- `memory/memory_scoring_service.py:31` — **the same unclamped shape, one file over**, found
+  while fixing this. It has no native counterpart so there was no parity to break, but a
+  negative would still have turned a bonus into a penalty. Floored for consistency; behaviour
+  changes only for inputs that cannot currently occur.
+
+**Test changes.** The `xfail(strict=True)` parity test became a plain passing assertion
+(`test_engines_agree_on_negative_impact`), widened with `-1e6` since the error grew with
+`|impact|` — a regression shows first at the extreme. The old "divergence is exactly the
+un-clamped term" test was replaced by
+`test_negative_impact_contributes_exactly_zero_bonus`, which is strictly stronger: agreement
+alone could be agreement on a *wrong* value, so it asserts a negative impact scores identically
+to a zero impact — no bonus and no penalty.
+
+**★ Guarded where the native suite cannot reach.** The parity tests need the compiled extension
+and skip without it, so the clamp is *also* pinned by two native-independent tests in
+`TestPythonFormula` — `test_impact_bonus_floors_at_zero` and
+`test_impact_bonus_is_monotonic_across_the_sign_boundary`. Without those, the regression guard
+would exist only where the crate happens to be built, which is the `DOCS-COVERAGE-CLAIM-1`
+mistake in miniature.
+
+**No schema, migration or contract impact** — pure scoring arithmetic; `scripts/check_schema_version.py`
+leaves the baseline untouched.
 
 ---
 
