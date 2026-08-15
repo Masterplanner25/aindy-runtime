@@ -559,9 +559,40 @@ the user's own agent.
 
 ---
 
-#### FR-13 — `agents` has no metadata field 🟡 small, additive
+#### FR-13 — `agents` has no metadata field — **SHIPPED 2026-08-15**
 
-**Verified true.** `AINDY/db/models/agent.py` declares exactly eight columns: `id`, `name`,
+**Status: SHIPPED (2026-08-15).** `agents` gains a JSONB `metadata` column and an
+`updated_at` stamp. Alembic `0015_agents_metadata`, schema contract `2026-08-15`,
+`RUNTIME_ALEMBIC_HEAD_REVISION` → `0015`.
+
+**Column vs attribute.** The **column** is `metadata` — what the app asked for and what raw SQL
+sees. The **ORM attribute** is `Agent.agent_metadata`, because `metadata` is reserved on a
+SQLAlchemy declarative class (it is `Base.metadata`). Both halves are pinned by tests so neither
+drifts, and a test asserts *why* the rename exists rather than leaving it folklore.
+
+**Purely additive, so no backfill — deliberately unlike FR-8.** Both columns are nullable.
+"No metadata recorded" is exactly what `NULL` means, so every pre-existing row is already
+correctly represented and reading code must treat absent metadata as empty regardless of row
+age. That is why there is no `UPDATE` in the migration and no `info={"reconcile_backfill": …}`
+on the columns — the FR-8 mechanism exists for columns whose meaning *depends* on a backfill,
+and a test asserts none was added so that reasoning survives a future edit.
+
+**Verified against real Postgres**, not just unit-tested — five properties, each run against a
+throwaway `postgres:16-alpine`:
+
+| Property | Result |
+|---|---|
+| Blank DB, no `agents` table (ALEMBIC-FRESH-DB-1) | skips cleanly, no error |
+| Existing table with a row | both columns added, row preserved, `metadata` NULL |
+| Re-run of `upgrade()` | idempotent no-op (`NOTICE: … already exists, skipping`) |
+| JSONB genuinely queryable | `WHERE metadata->>'workspace'='w1'` returns the row |
+| `downgrade()` then re-run | drops both, and is itself idempotent |
+
+The blank-DB guard is the one that matters: `ADD COLUMN IF NOT EXISTS` alone is **not**
+sufficient, since `ALTER TABLE missing_table` still raises `UndefinedTable`, and in compose
+`alembic upgrade head` runs before the ORM `create_all` guard.
+
+**Original filing follows. Verified true.** `AINDY/db/models/agent.py` declares exactly eight columns: `id`, `name`,
 `agent_type`, `description`, `owner_user_id`, `is_active`, `memory_namespace`, `created_at`.
 No JSONB, and no `updated_at`.
 
