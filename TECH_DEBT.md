@@ -4737,10 +4737,10 @@ source since they arrived from the monolith.
 | `MEMORY_ADDRESS_SPACE.md` | ~~2026-04-19~~ **2026-08-13** | 1 | 248 | **✔ verified** |
 | `MEMORY_BRIDGE.md` | 2026-04-19 | 1 | 460 | pending |
 | `OS_ISOLATION_LAYER.md` | ~~2026-04-22~~ **2026-08-13** | 1 | 297 | **✔ verified** |
-| `NATIVE_MEMORY_BRIDGE.md` | 2026-04-25 | 1 | 405 | pending |
+| `NATIVE_MEMORY_BRIDGE.md` | ~~2026-04-25~~ **2026-08-13** | 1 | 405 | **✔ verified** |
 | `RUNTIME_DOCSET_BOUNDARY.md` | 2026-05-10 | 1 | 95 | pending |
 
-**Progress 2026-08-13 — 4 of 7 read against source.** All were materially wrong, in different
+**Progress 2026-08-13 — 5 of 7 read against source.** All but one were materially wrong, in different
 ways, and none was wrong in the way the staleness signal predicted:
 
 - **`RETRY_POLICY.md`** — structure held; two things did not. The `RetryPolicy` dataclass gained
@@ -4842,18 +4842,50 @@ ways, and none was wrong in the way the staleness signal predicted:
   text would over-provision against a limit that is already global. **Stale docs mis-state risk
   in both directions.**
 
-**Lesson for the remaining three.** Staleness did not predict the failure mode, and four reads
-have now produced four different ones: `RETRY_POLICY` was structurally sound with a load-bearing
+- **`NATIVE_MEMORY_BRIDGE.md`** — **the one that largely held up**, and worth recording as the
+  counter-example. The three-layer FFI architecture, the entire Python interface (`MemoryNode`,
+  `MemoryTrace`, both C++-backed functions), **every scoring coefficient** including the
+  `usage > 5.0` success-weight switch and `log1p(x)/log(101)` normalisation, the
+  `target/release`→`target/debug` module-discovery order, `rebuild_native.ps1`, and all six
+  failure modes with their exact log strings and fallback dict — all checked line by line, all
+  correct.
+
+  Three defects, all in the build-and-deploy half: **`pyo3` is `0.29`, not `0.19`** (ten minor
+  versions, several breaking API generations — CHANGELOG records the Bound-API migration, this
+  doc never got the memo); **"Rust 1.70+" is unsourced** (`Cargo.toml` declares no
+  `rust-version` and CI pins no toolchain, so the number came from nowhere and is almost
+  certainly too low for pyo3 0.29 — left unstated rather than swapping one guess for another,
+  with adding `rust-version` named as the fix); and the Deployment section still asserted **CI
+  does not build the crate**, naming `.github/workflows/ci.yml`, which does not exist. That
+  claim went obsolete when NATIVE-CI-1 closed 2026-08-02, and it **contradicted the note added
+  to this same file in #394** three paragraphs earlier.
+
+  The nuance kept: CI *compiles* the crate but never `maturin develop`s it, so the old
+  conclusion — Python tests run on the fallback — is still true, for a narrower reason. **A
+  build regression is now caught; a scoring regression still is not.**
+
+  **Grepping the docset again paid off**: `RTR.md` still described NATIVE-CI-1 as open
+  ("excluded from CI … need a local MSVC build") and still carried the *wrong* diagnosis for
+  DEP-UPGRADE-DEFERRED-1 ("vite 6→8 is a breaking UI major" — the real blocker was
+  `LOCKFILE-PLATFORM-1`, and the UI unit landed 2026-08-03). Both corrected; RTR's own
+  last-verified bumped. It self-describes as a digest that "goes stale fast", which is accurate
+  but not a licence to leave closed items marked open.
+
+**Lesson for the remaining two.** Staleness did not predict the failure mode, and five reads
+have now produced five different ones: `RETRY_POLICY` was structurally sound with a load-bearing
 inversion buried in one section; `EXECUTION_CONTRACT` was wholesale aspirational;
 `MEMORY_ADDRESS_SPACE` had a perfect inventory wrapped around drifted behaviour;
 `OS_ISOLATION_LAYER` had sound architecture wrapped around a wrong data model, and was
-*pessimistic* in one section — the gap it warned about had been closed. Nothing about
+*pessimistic* in one section — the gap it warned about had been closed; and
+`NATIVE_MEMORY_BRIDGE` was **substantially correct**, wrong only about its own build inputs
+and about what CI does. Nothing about
 the frontmatter date distinguishes those cases. Reading is the only way to tell, which is why
 this was filed rather than bulk-dated.
 
 **Pattern worth carrying forward:** in all three, the *names* of things survived and the
 *contracts* did not — response keys, defaults, caps, which function a handler actually calls.
-Check behaviour before inventory on the remaining three.
+Check behaviour before inventory on the remaining two — and check the doc's claims about
+*CI and tooling* hardest of all, since those move without anyone editing the doc.
 
 **Why this is filed rather than fixed.** The audit could repair every citation mechanically
 (done — see the docset changelog), but it cannot certify 2,357 lines of behavioural prose.

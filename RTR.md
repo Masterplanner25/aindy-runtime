@@ -1,6 +1,6 @@
 # RTR — Runtime Roadmap (reading aid)
 
-**Last verified: 2026-08-01.**
+**Last verified: 2026-08-13.**
 
 A digest of where the runtime's open work actually stands, so you don't have to read
 `TECH_DEBT.md` end to end to plan. **`TECH_DEBT.md` is the source of truth** — this file is a
@@ -44,9 +44,15 @@ highest value-per-effort work available.
 ## Dependency / CI debt
 
 - **DEP-UPGRADE-DEFERRED-1** — OTel must be bumped as one group (single-package PRs fail
-  `ResolutionImpossible`); vite 6→8 is a breaking UI major.
-- **NATIVE-CI-1** — the Rust pyo3 scorer is excluded from CI, so cargo bumps are
-  green-but-unverified and need a local MSVC build.
+  `ResolutionImpossible`), **and grouping alone is not enough** — dependabot resolves each
+  package independently, so hand-align the set and check with `pip install --dry-run`.
+  *(Corrected 2026-08-13: this entry also said "vite 6→8 is a breaking UI major". That
+  diagnosis was wrong — the UI major unit landed 2026-08-03 in #349 and went green first try;
+  the real blocker was `LOCKFILE-PLATFORM-1`, a platform-incomplete lockfile.)*
+- ~~**NATIVE-CI-1**~~ — **CLOSED 2026-08-02.** *(Corrected 2026-08-13: this said the scorer is
+  "excluded from CI … need a local MSVC build".)* `Native Crate Build (Rust)` runs
+  `cargo build --locked --release` on every PR and is a required check on `main`. Residual: it
+  builds on Linux, not MSVC, so an MSVC-only compile error would still slip through.
 - **MCP-SDK-2X-1** — `mcp` capped at `<2` in **two** places until nodus-mcp targets the 2.x
   server API.
 - **MEM-RECALL-N1-1** — `recall()`'s scoring loop is N+1. Performance only.
