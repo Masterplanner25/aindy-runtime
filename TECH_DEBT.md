@@ -5439,8 +5439,8 @@ leaves the baseline untouched.
 
 ## NATIVE-DISCOVERY-1 — the two crate consumers search different directories
 
-**Status:** Open — the native cosine kernel is unreachable from the recall path in any
-release-built environment. Found 2026-08-14 alongside NATIVE-PARITY-1.
+**Status: CLOSED (2026-08-15).** Both consumers now delegate to a single loader,
+`AINDY/memory/native_bridge.py`. Found 2026-08-14 alongside NATIVE-PARITY-1.
 
 Two modules load the same extension and disagree about where it lives:
 
@@ -5462,10 +5462,37 @@ importing the module, while `_load_bridge()` loaded it from the release path.
   indistinguishable from "not similar".
 - The `sys.path.insert(0, …)` runs on **every call**, not once at import.
 
-**Fix:** give both consumers one shared loader — `native_scorer._load_bridge()` already has the
-right shape (both profiles, cached). Note the crate builds to `memory_bridge_rs.dll` on Windows
-and Python will not import that, so a local build needs it copied to `memory_bridge_rs.pyd`
-(the suite's module docstring records this).
+**What shipped (2026-08-15).** `AINDY/memory/native_bridge.py` owns the search paths, the
+profile order and a once-per-process cache; `native_scorer._load_bridge()` and
+`embedding_service.cosine_similarity()` both delegate to it. It lives under `AINDY/memory/`
+because the crate does, and because `runtime/ → memory/` is the established import direction
+(four existing examples), not the reverse.
+
+**★ A second defect, found by reproducing it.** The plan said `native_scorer` "already has the
+right shape (both profiles, cached)" — so the new loader copied that shape, and the extension
+then resolved from `target/debug` **with a release build present**. The cause is in the original:
+
+```python
+for path in (release_path, debug_path):   # priority order
+    sys.path.insert(0, path)              # ...but each insert goes to the FRONT
+```
+
+`insert(0, …)` puts each entry ahead of the previous one, so iterating in priority order leaves
+the **lowest**-priority path first. `native_scorer`'s documented "release, then debug" was
+inverted in practice: a stale debug build silently shadowed a fresh release one. The shared
+loader iterates `reversed(search_paths())`, verified by loading from `release` with both
+profiles built, and pinned by `test_the_shared_loader_prefers_release_over_debug`.
+
+**The two smaller things are fixed too.** `except (ImportError, AttributeError, Exception)` — a
+plain `except Exception` in a costume — is now an explicit `except ValueError` for ragged input
+(deferring to `cosine_similarity_python`'s 0.0, which is *correct* here: the sole caller is the
+recall fallback, where a node re-embedded at a different dimension is genuinely incomparable,
+not a programming error) plus a logged catch-all for anything unexpected. And the
+`sys.path.insert(0, …)` no longer runs on every call — the loader caches.
+
+**Artifact naming is documented in the loader**, since it is the recurring trip hazard:
+`cargo build` emits `libmemory_bridge_rs.so` / `memory_bridge_rs.dll`, neither of which Python
+imports. `Runtime Contracts` renames in CI; a local build needs it done by hand.
 
 ---
 

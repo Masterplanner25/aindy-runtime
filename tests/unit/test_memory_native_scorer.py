@@ -38,6 +38,7 @@ import importlib
 import math
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -486,47 +487,103 @@ class TestNativeScoreVectorContract:
 
 
 class TestExtensionDiscovery:
-    """The two consumers of the crate do not look in the same places.
+    """NATIVE-DISCOVERY-1 — FIXED 2026-08-15.
 
-    `native_scorer._load_bridge` searches `target/release` then `target/debug`.
-    `embedding_service.cosine_similarity` searches only `target/debug` — so in a
-    release-built environment (what `Native Crate Build (Rust)` produces, and what
-    any real deployment would produce) the cosine kernel is silently unavailable to
-    the recall fallback path while the scorer uses it. One process, two different
-    answers about whether native is available.
+    The two consumers of the crate used to search different directories:
+    `native_scorer` looked in `target/release` then `target/debug`, while
+    `embedding_service` looked in `target/debug` **only**. CI and any deployment build
+    `--release`, so the C++ cosine kernel was unreachable from the recall fallback while
+    the scorer, in the same process, used it. Both now delegate to
+    `AINDY.memory.native_bridge`.
     """
 
-    def test_native_scorer_searches_both_profiles(self):
-        import inspect
-
-        source = inspect.getsource(native_scorer._load_bridge)
-        assert '"release"' in source and '"debug"' in source
-
-    def test_embedding_service_searches_debug_only(self):
+    def test_both_consumers_use_the_shared_loader(self):
         import inspect
 
         from AINDY.memory import embedding_service
 
-        source = inspect.getsource(embedding_service.cosine_similarity)
-        assert '"debug"' in source
-        assert '"release"' not in source, (
-            "embedding_service.cosine_similarity now looks in target/release too — "
-            "NATIVE-DISCOVERY-1 may be fixed; update this test and the debt entry."
+        scorer_src = inspect.getsource(native_scorer._load_bridge)
+        embed_src = inspect.getsource(embedding_service.cosine_similarity)
+
+        assert "native_bridge" in scorer_src or "load_bridge" in scorer_src
+        assert "load_bridge" in embed_src
+
+    def test_neither_consumer_hardcodes_a_profile_directory(self):
+        """The regression itself: a consumer that names its own profile has an
+        independent search policy again."""
+        import inspect
+
+        from AINDY.memory import embedding_service
+
+        for func in (native_scorer._load_bridge, embedding_service.cosine_similarity):
+            source = inspect.getsource(func)
+            assert '"debug"' not in source, f"{func.__name__} hardcodes a profile again"
+            assert '"release"' not in source, f"{func.__name__} hardcodes a profile again"
+
+    def test_the_shared_loader_prefers_release_over_debug(self):
+        """Priority order, and the trap that inverted it.
+
+        `sys.path.insert(0, ...)` puts each entry ahead of the previous one, so
+        iterating in priority order leaves the LAST path first. The previous loader did
+        exactly that (`for path in (release_path, debug_path): insert(0, path)`), so a
+        stale `debug` build silently shadowed a fresh `release` one — the opposite of
+        its own docstring.
+        """
+        from AINDY.memory import native_bridge
+
+        paths = native_bridge.search_paths()
+        assert paths[0].endswith("release")
+        assert paths[1].endswith("debug")
+
+        source = inspect_source(native_bridge.load_bridge)
+        assert "reversed(" in source, (
+            "load_bridge no longer inserts in reverse order, so the release/debug "
+            "priority is inverted again"
         )
 
-    def test_cosine_similarity_falls_back_silently_and_never_raises(self):
+    def test_search_paths_point_at_the_crate_target_dir(self):
+        from AINDY.memory import native_bridge
+
+        for path in native_bridge.search_paths():
+            assert path.replace("\\", "/").endswith(
+                ("memory_bridge_rs/target/release", "memory_bridge_rs/target/debug")
+            )
+
+    def test_cosine_similarity_never_raises(self):
         """Whatever the build state, the public helper must return a float."""
         from AINDY.memory.embedding_service import cosine_similarity
 
         assert isinstance(cosine_similarity([1.0, 0.0], [0.0, 1.0]), float)
 
-    def test_cosine_similarity_swallows_length_mismatch_instead_of_raising(self):
-        """The native kernel raises ValueError on ragged input; the wrapper's blanket
-        `except Exception` catches it and the Python fallback returns 0.0. So a real
-        programming error is indistinguishable from 'no similarity'."""
+    def test_ragged_input_returns_zero_rather_than_raising(self):
+        """The extension raises ValueError on mismatched lengths. The sole caller is
+        the recall fallback in MemoryNodeDAO, where a node re-embedded at a different
+        dimension is genuinely incomparable — not a programming error. 0.0 matches
+        `cosine_similarity_python`, and is now reached through an explicit
+        `except ValueError` rather than a blanket `except Exception`.
+        """
         from AINDY.memory.embedding_service import cosine_similarity
 
         assert cosine_similarity([1.0, 2.0], [1.0]) == 0.0
+
+    def test_unexpected_native_errors_are_logged_not_swallowed(self, caplog):
+        """Was `except (ImportError, AttributeError, Exception)` — i.e. plain
+        `except Exception`, silently. A genuine fault must leave a trace."""
+        import logging
+
+        from AINDY.memory import embedding_service
+
+        broken = type("Broken", (), {
+            "semantic_similarity": staticmethod(
+                lambda a, b: (_ for _ in ()).throw(RuntimeError("kernel exploded"))
+            )
+        })()
+        with patch.object(embedding_service, "load_bridge", lambda: broken):
+            with caplog.at_level(logging.WARNING):
+                result = embedding_service.cosine_similarity([1.0, 0.0], [0.0, 1.0])
+
+        assert result == 0.0
+        assert any("kernel exploded" in record.getMessage() for record in caplog.records)
 
     def test_python_fallback_matches_the_native_contract_on_the_basics(self):
         from AINDY.memory.embedding_service import cosine_similarity_python
@@ -549,6 +606,20 @@ class TestExtensionDiscovery:
             assert BRIDGE.semantic_similarity(a, b) == pytest.approx(
                 cosine_similarity_python(a, b), abs=1e-12
             )
+
+    @requires_native
+    def test_both_consumers_resolve_the_same_extension(self):
+        """The defect in one assertion: same process, same answer."""
+        from AINDY.memory.native_bridge import load_bridge
+
+        assert load_bridge() is not None
+        assert native_scorer._load_bridge() is load_bridge()
+
+
+def inspect_source(func) -> str:
+    import inspect
+
+    return inspect.getsource(func)
 
 
 # ── native ↔ Python parity ────────────────────────────────────────────────────
