@@ -70,7 +70,18 @@ def test_check_syscall_registry_status_incomplete_when_below_floor(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_deep_health_payload_includes_syscall_registry_check():
-    """_build_deep_health_payload must include syscall_registry in its checks dict."""
+    """_build_deep_health_payload must include syscall_registry in its checks dict.
+
+    Only the *wiring* is asserted here. `_build_deep_health_payload` runs each check
+    through `_run_deep_check(..., timeout=0.5)`, which is correct for a health endpoint
+    — it must never hang — but it means the value under this key is whatever the check
+    produced **or** `{"status": "error", "detail": "Timed out after 0.5s"}` when the
+    worker thread did not get scheduled in time. Asserting the success-shaped keys here
+    made this test assert a timing property it never intended to, and it failed in a
+    full-suite run under load with exactly that timeout payload.
+
+    The check's own contract is asserted directly below, where no timeout is involved.
+    """
     import asyncio
     from AINDY.routes.health_router import _build_deep_health_payload
 
@@ -78,10 +89,57 @@ def test_deep_health_payload_includes_syscall_registry_check():
 
     assert "checks" in payload
     assert "syscall_registry" in payload["checks"]
+    assert "status" in payload["checks"]["syscall_registry"]
+
+
+def test_syscall_registry_check_reports_count_and_minimum():
+    """The payload shape `/health/deep` publishes for syscall_registry.
+
+    Called directly rather than through `_build_deep_health_payload`, so it measures the
+    check and not the scheduler. This is stricter than what it replaces: it pins the
+    `ok`/`incomplete` branch against the real registry, which the timing-dependent
+    version could not do reliably.
+    """
+    from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY, SYSCALL_REGISTRY_MIN_COUNT
+    from AINDY.routes.health_router import _check_syscall_registry_status
+
+    sr = _check_syscall_registry_status()
+
+    assert sr["count"] == len(SYSCALL_REGISTRY)
+    assert sr["minimum_expected"] == SYSCALL_REGISTRY_MIN_COUNT
+    assert sr["status"] == ("ok" if sr["count"] >= sr["minimum_expected"] else "incomplete")
+
+
+def test_deep_health_reports_a_slow_check_instead_of_hanging(monkeypatch):
+    """A check that overruns its budget degrades to an error entry, it does not hang.
+
+    This is the behaviour that made the previous version of the wiring test flaky, so
+    it is now asserted on purpose rather than tripped over. Forcing the timeout is also
+    the liveness control for the relaxed assertion above: if `_build_deep_health_payload`
+    ever propagated the failure instead of degrading, both tests would still pass without
+    this one.
+    """
+    import asyncio
+    import importlib
+    import sys
+    import time
+
+    # `AINDY/routes/__init__.py` re-exports sub-router *objects* under their module
+    # names, so `from AINDY.routes import health_router` yields an APIRouter and
+    # monkeypatching an attribute on it raises AttributeError. Reach the real module.
+    health_router = sys.modules.get("AINDY.routes.health_router") or importlib.import_module(
+        "AINDY.routes.health_router"
+    )
+
+    monkeypatch.setattr(
+        health_router, "_check_syscall_registry_status", lambda: time.sleep(5)
+    )
+
+    payload = asyncio.run(health_router._build_deep_health_payload())
+
     sr = payload["checks"]["syscall_registry"]
-    assert "status" in sr
-    assert "count" in sr
-    assert "minimum_expected" in sr
+    assert sr["status"] == "error"
+    assert "Timed out" in sr["detail"]
 
 
 # ---------------------------------------------------------------------------
