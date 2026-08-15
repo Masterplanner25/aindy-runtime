@@ -4735,12 +4735,12 @@ source since they arrived from the monolith.
 | `RETRY_POLICY.md` | ~~2026-04-18~~ **2026-08-13** | 2 | 226 | **✔ verified** |
 | `EXECUTION_CONTRACT.md` | ~~2026-05-02~~ **2026-08-13** | 2 | 626 | **✔ verified** |
 | `MEMORY_ADDRESS_SPACE.md` | ~~2026-04-19~~ **2026-08-13** | 1 | 248 | **✔ verified** |
-| `MEMORY_BRIDGE.md` | 2026-04-19 | 1 | 460 | pending |
+| `MEMORY_BRIDGE.md` | ~~2026-04-19~~ **2026-08-13** | 1 | 460 | **✔ verified** |
 | `OS_ISOLATION_LAYER.md` | ~~2026-04-22~~ **2026-08-13** | 1 | 297 | **✔ verified** |
 | `NATIVE_MEMORY_BRIDGE.md` | ~~2026-04-25~~ **2026-08-13** | 1 | 405 | **✔ verified** |
 | `RUNTIME_DOCSET_BOUNDARY.md` | 2026-05-10 | 1 | 95 | pending |
 
-**Progress 2026-08-13 — 5 of 7 read against source.** All but one were materially wrong, in different
+**Progress 2026-08-13 — 6 of 7 read against source.** All but one were materially wrong, in different
 ways, and none was wrong in the way the staleness signal predicted:
 
 - **`RETRY_POLICY.md`** — structure held; two things did not. The `RetryPolicy` dataclass gained
@@ -4871,21 +4871,56 @@ ways, and none was wrong in the way the staleness signal predicted:
   last-verified bumped. It self-describes as a digest that "goes stale fast", which is accurate
   but not a licence to leave closed items marked open.
 
-**Lesson for the remaining two.** Staleness did not predict the failure mode, and five reads
-have now produced five different ones: `RETRY_POLICY` was structurally sound with a load-bearing
+- **`MEMORY_BRIDGE.md`** — the **model** survived; the **map** did not. Lifecycle, all five
+  storage tables, layering and phase framing all check out, and §7's "Partial" on Phase v1 is
+  *still honestly Partial*: both `MemoryNodeDAO` classes really do coexist
+  (`db/dao/memory_node_dao.py:32`, `memory/memory_persistence.py:239`) and the dead
+  `save_memory_node` is still at `:260`. A stale doc being **right about unfinished work** is
+  itself worth noting — the reflex to assume everything old is wrong is not safe either.
+
+  **Every `services/…` path in the file was wrong** — nine of them. `AINDY/services/` contains
+  exactly one module, `auth_service.py`. Seven relocate (`memory/`, `core/`, package dirs),
+  `memory_engine.py` was never built (the abstraction landed as `runtime/memory/native_scorer.py`
+  + `scorer.py` fallback), and `infinity_orchestrator.py` is app-owned
+  (`aindy-apps-monolith:apps/analytics/services/`).
+
+  **One open debt is actually closed, and the doc's own Next Step with it.** "Embedding generation
+  is synchronous on write path (latency risk)" is false — `MemoryNodeDAO.save` sets
+  `embedding_pending=True` and calls `_enqueue_embedding`, drained by `ingest_queue.py` →
+  `embedding_jobs.py`. Step 4 is done. Cross-referenced `RT-MEMTXN-LEAK-1`, because the async path
+  it moved to then developed its own failure mode (the capture → job → capture cascade) and anyone
+  reading "we made it async" should meet that immediately.
+
+  **`/memory/metrics*` is plugin-layer, and the prefix was wrong too** — it is
+  `GET /apps/memory/metrics`, owner `apps/memory/routes/memory_metrics_router.py`, extracted
+  2026-06-06. `ROUTE_OWNERSHIP_INVENTORY.md` **already recorded this**; MEMORY_BRIDGE simply never
+  learned it. Third instance of the same pattern after `/apps/agent/*` and `memory_metrics_router`
+  — a router file left in `AINDY/routes/` but absent from `APP_ROUTERS` reads as runtime-owned
+  until you boot the runtime alone.
+
+  **"RippleTrace" retired as a component name** (RTR-7 dissolved it into `EventEdge`), but the
+  grep-the-docset pass found **nothing to fix elsewhere**: `INVARIANTS.md` correctly scopes it as
+  an app-domain invariant, and `SYSCALL_SYSTEM.md` uses it for the observability *view*, which is
+  how the name legitimately survives (`GET /observability/rippletrace/status`). Recorded because a
+  clean grep is a result too — the discipline is a check, not an edit quota.
+
+**Lesson for the last one.** Staleness did not predict the failure mode, and six reads
+have now produced six different ones: `RETRY_POLICY` was structurally sound with a load-bearing
 inversion buried in one section; `EXECUTION_CONTRACT` was wholesale aspirational;
 `MEMORY_ADDRESS_SPACE` had a perfect inventory wrapped around drifted behaviour;
 `OS_ISOLATION_LAYER` had sound architecture wrapped around a wrong data model, and was
 *pessimistic* in one section — the gap it warned about had been closed; and
 `NATIVE_MEMORY_BRIDGE` was **substantially correct**, wrong only about its own build inputs
-and about what CI does. Nothing about
+and about what CI does; and `MEMORY_BRIDGE` kept a correct *model* wrapped in a
+file-map where every `services/…` path was wrong. Nothing about
 the frontmatter date distinguishes those cases. Reading is the only way to tell, which is why
 this was filed rather than bulk-dated.
 
 **Pattern worth carrying forward:** in all three, the *names* of things survived and the
 *contracts* did not — response keys, defaults, caps, which function a handler actually calls.
-Check behaviour before inventory on the remaining two — and check the doc's claims about
-*CI and tooling* hardest of all, since those move without anyone editing the doc.
+Check behaviour before inventory, and check claims about *CI, tooling and route ownership*
+hardest of all — those move without anyone editing the doc. Three docs have now mis-stated
+plugin-layer routes as runtime-owned; that is a pattern, not a coincidence.
 
 **Why this is filed rather than fixed.** The audit could repair every citation mechanically
 (done — see the docset changelog), but it cannot certify 2,357 lines of behavioural prose.
