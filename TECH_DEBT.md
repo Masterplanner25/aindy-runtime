@@ -5185,21 +5185,33 @@ the distributed event bus, and the native scorer each have no dedicated suite. O
 **ECOGAP-6** (execution-path coverage) — do not double-track the execution paths; the four
 areas above are the increment.
 
-**Progress 2026-08-14 — two of the four areas now have suites**, and writing them surfaced
-three defects the missing coverage had been hiding (`MAS-FLATTEN-1`, `NATIVE-PARITY-1`,
-`NATIVE-DISCOVERY-1`, all below):
+**★ COVERAGE HALF CLOSED 2026-08-14 — all four areas now have suites**, written at the exact
+paths the docs had cited. Writing them surfaced **five** defects the missing coverage had been
+hiding (`NATIVE-PARITY-1`, `NATIVE-DISCOVERY-1`, `MAS-FLATTEN-1`, `EVENTBUS-PUBLISH-LATCH-1`,
+`TENANT-FROZEN-SHALLOW-1`, all below):
 
 | Area | Suite | Tests |
 |---|---|---|
 | MAS path addressing | `tests/unit/test_memory_address_space.py` | 84 |
 | Native scorer | `tests/unit/test_memory_native_scorer.py` | 73 (33 skip without a local crate build) |
-| OS isolation layer | — | still open |
-| Distributed event bus | — | still open |
+| OS isolation layer | `tests/unit/test_os_layer.py` | 46 |
+| Distributed event bus | `tests/unit/test_event_bus.py` | 44 |
 
-Both suites are marked `runtime_only` — without which CI collects neither. That marker rule is
-`CI-MARKER-1`, filed separately; it is the reason this gap stayed invisible, but it is a
-distinct problem: `CI-MARKER-1` is tests that exist and never run, this entry is tests that
-were never written. Fixing one does not fix the other.
+**247 tests.** All four are marked `runtime_only` — without which CI collects none of them.
+That marker rule is `CI-MARKER-1`, filed separately; it is *why* this gap stayed invisible, but
+it is a distinct problem — `CI-MARKER-1` is tests that exist and never run, this entry was tests
+never written. Fixing one does not fix the other.
+
+**Scope note, so this is not read as more than it is.** `test_os_layer.py` covers TenantContext
+(the isolation boundary) and ResourceManager (quota/concurrency); the SchedulerEngine
+WAIT/RESUME half is covered through `test_event_bus.py` and existing ECOGAP-6 work, not
+re-tested here. Still open under ECOGAP-6, not this entry.
+
+**Gotcha found while writing it:** `ResourceManager.can_execute` returns `(True, None)`
+unconditionally when `settings.is_testing`, so quota enforcement is **vacuous in the test
+environment**. Any naive quota test passes without exercising a single counter. The suite
+patches `is_testing` off — and note it is a pydantic *property*, so it must be patched on the
+class; `patch.object(settings, "is_testing", False)` raises `AttributeError`.
 
 ---
 
@@ -5365,6 +5377,80 @@ importing the module, while `_load_bridge()` loaded it from the release path.
 right shape (both profiles, cached). Note the crate builds to `memory_bridge_rs.dll` on Windows
 and Python will not import that, so a local build needs it copied to `memory_bridge_rs.pyd`
 (the suite's module docstring records this).
+
+---
+
+## EVENTBUS-PUBLISH-LATCH-1 — three failed publishes disable cross-instance events permanently
+
+**Status:** Open — availability. Found 2026-08-14 writing the DOCS-COVERAGE-CLAIM-1 event-bus
+suite; verified by driving `EventBus.publish` through a failing then a healthy client.
+
+`EventBus.publish` counts consecutive failures and, on the third, sets `self._enabled = False`
+(`event_bus.py:192-198`). **Nothing ever sets it back.** When Redis returns, `publish` hits the
+`if not self._enabled: return False` guard at the top and returns without attempting a
+connection:
+
+```
+publish 1: False  enabled=True   failures=1
+publish 2: False  enabled=True   failures=2
+publish 3: False  enabled=False  failures=3
+Redis recovered → publish: False   (client.publish never called)
+```
+
+**Why it matters.** The bus exists so a flow that entered WAIT on instance A can be resumed by
+an event arriving on instance B. Once the publisher latches off, that propagation stops for the
+life of the process — so in a multi-instance deployment a *transient* Redis blip of three
+publishes silently produces exactly the failure the module was built to prevent: flows waiting
+on other instances are never resumed. The only cure is a restart, and nothing surfaces the
+state except one WARNING at the moment it latches.
+
+**The module docstring is misleading here** — "Subscriber thread crash: caught by the outer
+reconnect loop; reconnects with exponential back-off (1 s → 30 s cap)" describes the
+*subscriber*. The publisher has no recovery path at all.
+
+**Fix options:** reset `_enabled` on a successful `_is_redis_connected()` probe; or replace the
+latch with a cooldown (retry after N seconds) so a blip degrades rather than terminates; or
+drop the latch and rely on the existing per-call failure logging. Note `_consecutive_failures`
+is already reset on success, so an *intermittent* failure never latches — it is specifically
+three in a row. Pinned by `TestPublisherFailureLatch`, including a test asserting the recovered
+client is never even contacted.
+
+---
+
+## TENANT-FROZEN-SHALLOW-1 — `TenantContext` is frozen but its capability list is not
+
+**Status:** Open — security-adjacent, no known exploit path. Found 2026-08-14 writing the
+DOCS-COVERAGE-CLAIM-1 OS-layer suite.
+
+`TenantContext` is a `@dataclass(frozen=True)` documented as an *"Immutable tenant isolation
+context"*. Rebinding an attribute raises `FrozenInstanceError` as expected — but
+`capability_scope` is a `list`, and `frozen` does not deep-freeze:
+
+```python
+ctx = build_tenant_context("t1", ["memory.read"])
+ctx.has_capability("admin.everything")      # False
+ctx.capability_scope.append("admin.everything")
+ctx.has_capability("admin.everything")      # True
+ctx.assert_capability("admin.everything")   # passes
+```
+
+So a capability can be added to a live security context that the type claims cannot change.
+`build_tenant_context` does copy the caller's list (`list(capability_scope or [])`), so this is
+not aliasing from the caller — the exposure is any code holding the context afterwards.
+
+**No known exploit path today** — nothing in `AINDY/` mutates `capability_scope` — which is why
+this is recorded rather than treated as an incident. It is a weak invariant, not a live breach.
+
+**Fix:** declare the field as `tuple[str, ...]` and have `build_tenant_context` pass
+`tuple(...)`. `in` still works, `has_capability`/`assert_capability` are unchanged, and
+in-place mutation raises `AttributeError`. The suite pins both the current behaviour and the
+fixed shape (`test_freezing_the_scope_would_close_it`), so the change is a one-line field edit
+with the assertion already written.
+
+**Adjacent inconsistency worth knowing** (pinned, not a bug per se): `TenantContext`'s
+`validate_memory_path` requires the trailing slash and so *rejects* the exact tenant root
+`/memory/t1`, while `memory_address_space.validate_tenant_path` *accepts* it. Two tenant guards
+give different answers for the same string.
 
 ---
 
