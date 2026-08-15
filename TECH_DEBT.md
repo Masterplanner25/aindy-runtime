@@ -6121,6 +6121,205 @@ visible, deliberate break rather than a surprise.
 
 ---
 
+## GUEST-CONFINE-1 — the guest VM runs unconfined; effects on the primary execution path are not mediated
+
+**Status: OPEN — P0.** Filed 2026-08-15 from the substrate-boundary audit (F-1), **independently
+verified, and upgraded from the audit's own `[Strong inference]` to demonstrated.**
+
+**The gap.** Every agent run executes as a compiled Nodus workflow inside a `nodus_worker`
+subprocess. That subprocess builds the guest VM with
+`NodusRuntime(project_root=…)` (`AINDY/runtime/nodus_worker.py:327`) and passes **none** of the
+confinement arguments the VM accepts. The VM's defaults are permissive —
+`allow_subprocess=True`, `allow_network=True`, `allow_env=True`
+(`nodus/runtime/embedding.py`) — and `nodus/builtins/registry.py` registers the real
+`std:subprocess` / `std:http` modules **iff** the flag is truthy, substituting
+`_make_blocked_stub` otherwise. So a guest script reaches subprocess, network and the host
+environment **without passing the syscall dispatcher, the capability token, the effect ledger,
+the egress guard or the tool registry.**
+
+**★ Demonstrated, not inferred.** The audit stated it could not attempt this. Driving the
+runtime's own `nodus_worker.run_one()`:
+
+| Probe | Result |
+|---|---|
+| `env_get("PATH")` | returned the **real host PATH** |
+| `http_get("http://example.invalid/")` | real DNS resolution (`getaddrinfo failed`) — the live module, not a blocked stub |
+| `subprocess_shell("echo escaped > <path>")` | `exit_code: 0`, and **created a file on the host filesystem** |
+
+**Scope of that demonstration, stated precisely:** the worker was driven in-process, so this
+establishes that the *guest boundary* is open. It is **not** a demonstration of an
+unauthenticated remote path — `POST /platform/nodus/run`
+(`routes/platform/nodus_router.py:64`) requires `get_current_user` and is rate-limited
+`30/minute`, and it accepts an inline script body validated only by `_validate_nodus_source`.
+
+**Why the source validator does not help — and it is worse than the audit said.**
+`validate_nodus_source` (`AINDY/runtime/nodus_security.py`) blocks only Python-isms
+(`import X`, `from X import`, `__import__(`, `eval(`, `exec(`). The audit noted that
+`RESTRICTED_OPERATION_SUMMARY` — the dict naming `subprocess`, `socket`, `http://` — is never
+read by any check; confirmed, it appears only inside a returned summary dict. **Additionally,
+and not in the audit:** `validate_requested_operation_usage()`, the function that *does* gate
+operations against an allowlist, has **zero callers outside its own module**, and its allowlist
+`ALLOWED_OPERATION_CAPABILITIES` contains only memory operations (`recall`, `remember`,
+`share`, …) — so it could not have blocked subprocess or http even if it were wired.
+
+**★ Migration risk is far lower than the audit estimated — measured.** The audit says *"Any
+existing `.nd` script that uses `std:http` or `std:subprocess` breaks"* and recommends shipping
+default-off and log-only for one release. Searched both repositories: **no first-party Nodus
+script uses `subprocess_*`, `http_*`, `env_get` or imports `std:subprocess` / `std:http`.** The
+only matches anywhere are nodus's own stdlib module definitions inside a venv. Deny-by-default
+breaks nothing that exists today.
+
+**Recommended sequencing — deliberately different from the audit's.** The audit proposes a
+per-execution-unit *confinement descriptor* as the primitive. Split it:
+
+1. **Now, as a defect fix, not a new primitive:** pass `allow_subprocess=False`,
+   `allow_network=False`, `allow_env=False` (and an explicit `allowed_paths`) at
+   `nodus_worker.py:327`. The VM already accepts these; the runtime simply never passed them.
+   Three keyword arguments close the demonstrated hole, and the measurement above says nothing
+   breaks. An interim single config escape hatch is cheaper than a descriptor if one is needed.
+2. **Later, when it is earned:** the descriptor. Its value is *variation* (different execution
+   units needing different confinement) and *evidence* (knowing the confinement was applied).
+   There is exactly one guest today and zero scripts needing variation, so a descriptor with one
+   implementation and one consumer would be speculative generality — and building it first
+   delays the fix that actually closes the hole.
+
+The architectural answer for a script that genuinely needs network is `call_tool`, which is
+mediated, not raw `http_get` from a guest. That is the whole point of the boundary.
+
+**Related, same class, not fixed by the above:** the native `action tool "x"` construct lowers
+to nodus's built-in `__action_tool` stub with no capability enforcement and, per the runtime's
+own comment, "cannot be overridden" (`nodus_worker.py:113–117`). The sibling `std:sys` surface
+*was* closed this way (NODUS-SYS-SURFACE-1, by monkeypatching `call_syscall` to raise), so the
+precedent for closing this class of gap already exists in the same file.
+
+---
+
+## AUTHORITY-VALUE-1 — the syscall capability check reads a value the calling frame supplied
+
+**Status: OPEN — P1.** Filed 2026-08-15 from the substrate-boundary audit (F-2), verified.
+
+**Not a vulnerability, and should not be reported as one.** Every entry point has its own
+authorisation — HTTP auth and tenant isolation for routes, an explicit allowlist for MCP,
+`_require_runtime_capability` for extensions. The finding is architectural: **the syscall
+chokepoint is not an independent second gate**, because the value it checks is supplied by the
+frame being checked.
+
+**Verified:**
+
+- `SyscallContext.capabilities` is a `list[str]` on a dataclass any caller may construct
+  (`kernel/syscall_registry.py`).
+- The check is `if entry.capability not in context.capabilities`
+  (`syscall_dispatcher.py:385`) — faithful, but it cannot distinguish a claim derived from a
+  signed token from one the calling frame wrote a line earlier.
+- Self-granting paths: `capabilities=[capability or _infer_dispatch_capability(name)]`
+  (`syscall_dispatcher.py:794`), which derives `{domain}.read|write` from the syscall *name*;
+  `capabilities=["flow.run", "flow.execute"]` (`flow_engine/entrypoints.py:83`, literal);
+  `capabilities=["nodus.execute", "flow.run"]` (`nodus_execution_service.py:226`, literal).
+- `child_context()` falls back to `list(parent.capabilities)` — **inherits, never narrows.**
+- The tool chokepoint honours two authority models: `tool_registry.execute_tool` runs
+  `check_tool_capability` only `if execution_token is not None`, and
+  `extension_worker.py:344` calls it with `run_id=None, execution_token=None` — so the
+  extension path performs **no per-tool capability check**, gated only by the coarse
+  `CAP_TOOL_INVOKE`.
+
+**Identity-absent branches skip the boundary rather than denying.** `execute_intent`,
+`run_flow` and `run_nodus_script_via_flow` each contain `if not user_id:` → call a
+`_*_direct()` variant (`entrypoints.py:63`, `:128`; `nodus_execution_service.py:202`). They log
+the fact at **debug**, which is what makes the failure mode quiet rather than loud.
+
+**Proposed:** an `ExecutionAuthority` carried on `SyscallContext` in place of the bare list,
+verified by MAC rather than read as a field; `child_context` narrowing by default; non-agent
+callers issued a runtime-minted context authority at the entry point that already authorises
+them. The cryptography already exists in `capability_service`.
+
+**Assessment on sequencing:** agree with the direction, not with doing it first. It is a
+moderate refactor (roughly ten `SyscallContext` construction sites, three self-granting paths,
+one inference function) with no demonstrated exploit, whereas GUEST-CONFINE-1 has one. Do the
+three identity-absent branches as denials at the same time — a missing identity should fail the
+call, not skip the boundary.
+
+---
+
+## CANCEL-REACH-1 — cancellation is durable but never reaches an in-flight effect
+
+**Status: OPEN — P1.** Filed 2026-08-15 from the substrate-boundary audit (F-3), verified.
+
+`sys.v1.agent.cancel` (`kernel/syscall_registry.py:1005`) flips a non-terminal run to
+`cancelled` via an atomic CAS in a separate session, and the Nodus execution chain observes it
+**between segments** (`nodus_execution_service.py:769–782`, whose own comment says "before this
+segment's tools run … halts the chain between steps"). A tool already inside `entry["fn"](…)`
+— an HTTP call, a long query, a subprocess — runs to completion.
+
+**Verified:** `SyscallContext` carries exactly six fields — `execution_unit_id`, `user_id`,
+`capabilities`, `trace_id`, `memory_context`, `metadata`. There is **no cancellation object**,
+no signal threaded to `execute_tool`, and no timeout the effect itself can observe.
+
+**Proposed:** a cancellation observation point — `ctx.should_stop()` — checked at the two effect
+chokepoints immediately before the handler runs: `execute_tool` before `entry["fn"]`, and
+`_dispatch` before `entry.handler`. The same two lines the effect ledger already brackets.
+Cooperative, not preemptive, but at *effect* granularity rather than *segment* granularity.
+
+**★ Implementation constraint this repository has already paid for twice, and which the audit
+does not state.** `should_stop()` must **not** perform a DB round-trip per effect on the
+request-shared session. `RT-MEMTXN-LEAK-1` exhausted the connection pool by holding a
+transaction across a slow call on a shared session, and `MEM-RECALL-N1-1` is an N+1 in the same
+family. The predicate needs a cached value with a short TTL, refreshed at segment boundaries or
+via its own short-lived session — never an unbounded per-effect query, and never a `rollback()`
+on a shared session.
+
+**Assessment: agree, and this is the cheaper of the two proposed primitives.** The runtime ships
+a compensating-undo engine precisely because effects are hard to take back; a pre-effect check
+is strictly cheaper than compensation. Additive, no migration risk, and it only ever narrows
+what a cancelled run does.
+
+---
+
+## DISPATCH-ADMISSION-1 — no pre-effect interception seam at the dispatcher
+
+**Status: OPEN — P2, and deliberately not urgent.** Filed 2026-08-15 from the audit (F-4),
+verified: there is no hook, interception or callback anywhere in the body of
+`SyscallDispatcher.dispatch`, and `registry.register_event_handler` appends a handler and
+returns it — its return value is never consulted, so it cannot veto.
+
+Policy can be *declared* in advance (`CapabilityPolicy`: recipients, domains, rate) and events
+can be *observed* afterwards, but an operator cannot interpose a decision at the moment of
+dispatch.
+
+**Do not build a general hook system.** An interception seam is a place to run someone else's
+code inside the kernel process, and the Tiered Isolation Contract reserves that for Tier 1. A
+generic hook surface would quietly widen Tier 1 — which is why the audit itself rates this P2
+and says the absorption test only half-passes.
+
+**If built:** exactly one seam — a dispatch admission callback registered like a planner
+backend, one per deployment, Tier 1 only, returning allow / deny-with-reason, invoked after the
+capability check and before the effect-ledger claim, with denial producing the existing error
+envelope and a `capability.policy_denied` event so nothing new appears in the observability
+model.
+
+**Assessment: defer.** Risk if omitted is low — operators needing conditional policy today fork
+or wrap a tool. The cost is friction, not correctness. Revisit when a deployment actually asks.
+
+---
+
+## ISOLATION-DOC-STATUS-1 — `ISOLATION_MODEL_PLAN.md` contradicts itself about its own status
+
+**Status: OPEN — trivial, doc-only.** Filed 2026-08-15, verified.
+
+`ISOLATION_MODEL_PLAN.md` (repository **root**, not `docs/runtime/`) declares at line 6:
+
+> **Status:** Planning — no implementation has begun
+
+while line 148 of the same file says *"Scope B1 complete: unprivileged kernel-observable
+evidence is now collected via `/proc/<pid>/status` …"*, and `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and the nine-file escape suite all exist and are
+wired. `C2_SANDBOX_AUDIT.md` describes the same code as built.
+
+Source wins; the status line is stale. Note the file is at the repo root, so it is **not**
+covered by the `docs/runtime/` frontmatter and `last_verified` checks that `Runtime Docs
+Validation` enforces — which is why nothing caught it.
+
+---
+
 ## FLAKY-1 — `test_platform_only_startup` fails intermittently in a now-required check
 
 **Status: Open — and the recorded leading mechanism is now REFUTED, not merely unconfirmed.**
