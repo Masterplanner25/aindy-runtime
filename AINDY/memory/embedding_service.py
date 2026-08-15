@@ -17,6 +17,7 @@ import threading
 
 from AINDY.config import settings
 from AINDY.kernel.circuit_breaker import CircuitOpenError
+from AINDY.memory.native_bridge import load_bridge
 from AINDY.memory.embedding_providers import (
     DEFAULT_EMBEDDING_DIMENSIONS,
     DEFAULT_OPENAI_EMBEDDING_MODEL,
@@ -183,20 +184,37 @@ def cosine_similarity_python(a: list, b: list) -> float:
 
 
 def cosine_similarity(a: list, b: list) -> float:
+    """Cosine similarity via the C++ kernel when built, else pure Python.
+
+    NATIVE-DISCOVERY-1: this used to search ``target/debug`` only — while
+    ``native_scorer`` searched release *and* debug — so on any ``--release`` build
+    (what CI produces, and any deployment) the kernel was unreachable from here while
+    the scorer in the same process used it. Both now go through
+    ``memory.native_bridge``, which also caches the import instead of re-inserting a
+    ``sys.path`` entry on every call.
+
+    Returns ``0.0`` for mismatched lengths rather than raising: the sole caller is the
+    recall fallback in ``MemoryNodeDAO``, where a node re-embedded at a different
+    dimension is genuinely incomparable, not a programming error. That matches
+    ``cosine_similarity_python``.
     """
-    Cosine similarity using C++ kernel if available.
-    Falls back to pure Python.
-    """
+    bridge = load_bridge()
+    if bridge is None:
+        return cosine_similarity_python(a, b)
+
     try:
-        _debug_path = os.path.join(
-            os.path.dirname(__file__),
-            "native", "memory_bridge_rs", "target", "debug"
+        return bridge.semantic_similarity(a, b)
+    except ValueError:
+        # Ragged input — the extension's documented error. The Python implementation
+        # defines this as 0.0; defer to it rather than duplicating the rule.
+        return cosine_similarity_python(a, b)
+    except Exception as exc:
+        # Previously `except (ImportError, AttributeError, Exception)` — which is just
+        # `except Exception` and swallowed everything silently. Anything reaching here
+        # is unexpected, so say so before falling back.
+        logger.warning(
+            "[embedding] native semantic_similarity failed (%s) — using the Python "
+            "fallback", exc,
         )
-        _debug_path = os.path.abspath(_debug_path)
-        if _debug_path not in sys.path:
-            sys.path.insert(0, _debug_path)
-        import memory_bridge_rs as _mbr
-        return _mbr.semantic_similarity(a, b)
-    except (ImportError, AttributeError, Exception):
         return cosine_similarity_python(a, b)
 

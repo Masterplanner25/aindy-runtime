@@ -117,49 +117,29 @@ def _native_enabled() -> bool:
 
 
 def _load_bridge():
+    """Return the compiled extension, or None.
+
+    NATIVE-DISCOVERY-1: the search policy used to live here *and*, differently, in
+    `memory/embedding_service.py` (debug-only), so the two disagreed about whether the
+    native path was available in the same process. Both now delegate to
+    `AINDY.memory.native_bridge`, which owns the profile order and the once-per-process
+    cache. The module-level `_bridge` / `_load_attempted` here mirror that cache so the
+    stats and fallback bookkeeping below keep their existing meaning.
+    """
     global _bridge, _load_attempted
+
     if _bridge is not None:
         return _bridge
     if _load_attempted:
         return None
     _load_attempted = True
 
-    debug_path = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "memory",
-            "native",
-            "memory_bridge_rs",
-            "target",
-            "debug",
-        )
-    )
-    release_path = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "..",
-            "memory",
-            "native",
-            "memory_bridge_rs",
-            "target",
-            "release",
-        )
-    )
-    for path in (release_path, debug_path):
-        if os.path.isdir(path) and path not in sys.path:
-            sys.path.insert(0, path)
+    from AINDY.memory.native_bridge import load_bridge as _load_shared
 
-    try:
-        import memory_bridge_rs  # type: ignore
-
-        _bridge = memory_bridge_rs
-        return _bridge
-    except Exception as exc:
-        logger.info("[MemoryNativeScorer] native bridge unavailable: %s", exc)
-        return None
+    _bridge = _load_shared()
+    if _bridge is None:
+        logger.info("[MemoryNativeScorer] native bridge unavailable")
+    return _bridge
 
 
 def _elapsed_ms(started: float) -> float:
