@@ -16,6 +16,8 @@ from AINDY.platform_layer.deployment_contract import (
 )
 from AINDY.platform_layer import health_service
 
+pytestmark = pytest.mark.runtime_only
+
 
 class _HealthyBackend:
     degraded = False

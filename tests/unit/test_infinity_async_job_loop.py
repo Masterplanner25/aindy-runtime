@@ -13,6 +13,8 @@ from AINDY.config import settings
 from AINDY.core.system_event_types import SystemEventTypes
 from AINDY.platform_layer import async_job_service as ajs
 
+pytestmark = pytest.mark.runtime_only
+
 
 @pytest.fixture
 def captured_events(monkeypatch):

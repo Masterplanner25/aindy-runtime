@@ -5,6 +5,8 @@ import pytest
 import AINDY.kernel.syscall_dispatcher as syscall_dispatcher
 import AINDY.kernel.syscall_registry as syscall_registry
 
+pytestmark = pytest.mark.runtime_only
+
 
 @pytest.fixture
 def dispatcher():

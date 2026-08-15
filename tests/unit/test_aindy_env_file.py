@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.runtime_only
+
 
 # ---------------------------------------------------------------------------
 # _resolve_env_file — resolution logic

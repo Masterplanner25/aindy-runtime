@@ -17,6 +17,8 @@ from AINDY.platform_layer.scheduler_service import (
     _cleanup_expired_effect_records,
 )
 
+pytestmark = pytest.mark.runtime_only
+
 
 def _make_db(
     *,

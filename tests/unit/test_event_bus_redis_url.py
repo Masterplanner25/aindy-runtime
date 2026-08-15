@@ -6,6 +6,8 @@ The canonical variable is REDIS_URL. Tests below verify the REDIS_URL-only path.
 """
 import pytest
 
+pytestmark = pytest.mark.runtime_only
+
 
 # ---------------------------------------------------------------------------
 # resolve_event_bus_redis_url — REDIS_URL precedence
