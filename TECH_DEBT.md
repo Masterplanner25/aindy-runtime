@@ -5666,6 +5666,15 @@ it — and as of 2026-08-14 all ten status checks are required on `main`. A ~50%
 required check is a merge blocked at random, and the natural response ("just re-run CI") is
 exactly how a genuine regression gets waved through later.
 
+**★ Confirmed under the CI command itself (2026-08-15), which upgrades this.** The measurements
+above all came from `pytest tests/unit/`. A run of **`python -m pytest tests -m runtime_only -q`
+— byte-for-byte what `Runtime Contracts` executes** — reproduced the failure locally. An earlier
+guess that the marker-filtered collection might not hit the ordering is therefore **wrong**: it
+does. So this is not a local-convenience annoyance that CI happens to dodge; the required check
+will red-line at random, and the only reason it has not yet is the ~50% coin flip. (`Runtime
+Contracts` passed on the same commit in CI minutes later, which is exactly what a coin flip
+looks like and is why "it was green" is not evidence here.)
+
 **Leading mechanism — the hardcoded subprocess budget (this is `APP-FR-*` FR-11).**
 `invoke_runtime_callback` (`runtime_callback_host.py:43`) spawns a **fresh subprocess per
 callback** with a hardcoded **10.0s** timeout and raises on overrun. Forcing that path
