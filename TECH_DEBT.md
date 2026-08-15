@@ -4719,6 +4719,82 @@ both residuals resolved (see Status above).**
 
 ---
 
+## SYSCALL-STABILITY-1 — two SDK-called syscalls were outside the rename guard
+
+**Status: FIXED 2026-08-13** (guard holes + doc contradictions). One app-side finding filed
+below is **open and belongs to `aindy-apps-monolith`**.
+
+**Origin.** A docs pass flagged that `SyscallEntry.stable` and `_STABLE_SYSCALLS` "disagreed on
+6 of 17 syscalls". Checking what had actually been *promised* showed the premise was wrong:
+**they measure different things and may legitimately differ.**
+
+- `_STABLE_SYSCALLS` (`tests/unit/test_cross_repo_compatibility.py`) is a **rename/removal
+  guard** — its own comment says *"SDK depends on these syscall names not being renamed"*.
+- `SyscallEntry.stable` is **advertised maturity**, flowing to `GET /platform/syscalls` and into
+  `aindy-apps-monolith`'s published `docs/api/API_REFERENCE.md`.
+
+"Experimental shape, but we will not rename it out from under you" is coherent. `memory.list`,
+`memory.tree` and `memory.trace` are exactly that.
+
+### What was actually wrong
+
+**1. The rename guard had two holes (FIXED).** The shipped SDK dispatches nine syscalls; two
+were unguarded — `sys.v1.memory.list` (`client.memory.list()`) and `sys.v1.execution.get`
+(`client.execution.get()`). Renaming either would have passed CI and broken the SDK. Sharper:
+**`execution.get` has already failed live once for a neighbouring reason** — the SDK dispatched
+it before the runtime registered a handler, and the SDK's own unit tests stayed green *because
+they mock the dispatcher* (SDK CHANGELOG, 2026-07-05). Mocked-dispatcher tests structurally
+cannot catch a name break; this list is the only thing that can.
+
+**2. `SYSCALL_REFERENCE.md` contradicted the registry on four syscalls (FIXED).** It claimed
+`Stability: stable` for `memory.list`, `memory.tree`, `memory.trace` and `sys.v2.memory.read`,
+all registered `stable=False`. Three sources, and the runtime's own reference was the **only**
+one that disagreed — the monolith's published API reference already said "experimental".
+
+**3. `MEM-DELETE-1` named a consumer that does not exist (FIXED).** It claimed
+"SDK `client.memory.delete` is the consumer". `MemoryAPI` has no `delete`; `client.delete()` is
+a generic HTTP helper. The syscall stays guarded — it shipped as a public capability with its
+own scope — but nothing calls it.
+
+**4. The duplicate-registration guard had no test (FIXED).** Two tests added. See the retraction
+below for why that gap mattered.
+
+### Two claims from the audit, retracted
+
+Recording these because both were confidently wrong and the correction is the useful part.
+
+**"`register_syscall`'s docstring promises a guard that does not exist."** It does exist.
+`SYSCALL_REGISTRY` is a **custom mapping, not a dict** — the check is in
+`SyscallRegistry.__setitem__` (`syscall_registry.py:274`), which raises on a differing handler.
+Reading `register_syscall`'s body alone shows no guard, and that is where the audit stopped.
+**The error surfaced only because a test written to assert the wrong behaviour failed.** The
+guard had zero coverage, which is what let the misreading stand; it now has two tests.
+
+**"`stable=True` was inherited by default, never decided."** For three of the four named, it was
+decided and pinned: `test_syscall_execution_get.py` (the test is *named*
+`test_registered_stable_with_execution_read_capability`), `test_syscall_agent_cancel.py:84` and
+`test_agent_simulate.py:192` all assert `entry.stable is True`. Only `agent.undo` is unpinned,
+and it is a sibling of the other two. No change warranted.
+
+### Open, and app-owned — for `aindy-apps-monolith`
+
+`apps/automation/syscalls/syscall_handlers.py` defines **`register_all_domain_handlers` twice**
+(lines 824 and 864). Python binds the second, so the first — 11 registrations — is **dead code**.
+Three of those dead entries re-register `sys.v1.memory.list` / `.tree` / `.trace` with *different
+handlers and different capabilities* (`memory.list` / `memory.tree` / `memory.trace` instead of
+the runtime's `memory.read`).
+
+The live function is explicitly narrower (*"Register only automation-owned syscall handlers"*,
+9 entries), so the narrowing looks deliberate — but the superseded body was left in place rather
+than deleted. **Reviving or reordering it would raise `ValueError` at plugin load**, because the
+runtime registers those three names first and the `__setitem__` guard is fatal. Verified against
+the runtime they actually install (`aindy_runtime==2.0.1` in their venv), which registers all
+three.
+
+Not fixable from this repo. Report on next contact; the fix is deleting the shadowed function.
+
+---
+
 ## DOCS-STALE-1 — seven docs carry a `last_verified` that predates the repository
 
 **Status: CLOSED 2026-08-13.** All seven read against source. Filed and closed the same day

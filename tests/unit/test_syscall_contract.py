@@ -436,3 +436,61 @@ def test_flow_run_injects_extension_scope_into_initial_state(monkeypatch):
         "owner_class": "external-third-party",
         "operation": "flow.run",
     }
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-registration guard (added 2026-08-13)
+#
+# `SYSCALL_REGISTRY` is a custom mapping, not a dict: the guard lives in
+# `SyscallRegistry.__setitem__`, not in `register_syscall`. It had no test, which
+# is how an audit came to conclude — from reading `register_syscall`'s body alone
+# — that no guard existed. These lock the real behaviour down.
+# ---------------------------------------------------------------------------
+
+def test_reregistration_with_different_handler_raises():
+    """A second handler for a live name is fatal, not a silent overwrite.
+
+    This is what keeps a plugin from replacing a runtime syscall *and its
+    capability* — which would change what the dispatcher enforces for every
+    later caller.
+    """
+    from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY, register_syscall
+
+    name = "sys.v1.test.collision_probe"
+
+    def first(payload, context):
+        return {"who": "first"}
+
+    def second(payload, context):
+        return {"who": "second"}
+
+    try:
+        register_syscall(name, first, "test.cap", "first registration")
+
+        with pytest.raises(ValueError, match="already registered with a different handler"):
+            register_syscall(name, second, "other.cap", "second registration")
+
+        # The original survives intact — a failed re-registration must not
+        # partially apply.
+        entry = SYSCALL_REGISTRY[name]
+        assert entry.handler is first
+        assert entry.capability == "test.cap"
+    finally:
+        SYSCALL_REGISTRY.pop(name, None)
+
+
+def test_reregistration_with_same_handler_is_allowed():
+    """Idempotent re-registration must stay a no-op — plugin load can repeat."""
+    from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY, register_syscall
+
+    name = "sys.v1.test.idempotent_probe"
+
+    def only(payload, context):
+        return {}
+
+    try:
+        register_syscall(name, only, "test.cap", "first")
+        register_syscall(name, only, "test.cap", "again")  # must not raise
+        assert SYSCALL_REGISTRY[name].handler is only
+    finally:
+        SYSCALL_REGISTRY.pop(name, None)

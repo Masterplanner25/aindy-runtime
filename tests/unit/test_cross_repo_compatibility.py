@@ -26,15 +26,48 @@ pytestmark = pytest.mark.runtime_only
 
 # ---------------------------------------------------------------------------
 # Stable syscall names — SDK contract (sys.v1 stable entries)
+#
+# What this list is, and what it is NOT (clarified 2026-08-13):
+#
+#   IS      a rename/removal guard. Every name here is called by a shipped
+#           consumer; renaming or removing one is a MAJOR version bump.
+#   IS NOT  a maturity claim. That is `SyscallEntry.stable`, which flows to
+#           GET /platform/syscalls and into the published API reference.
+#
+# The two are independent and may legitimately disagree: "this API is
+# experimental, its shape may change — and we still will not rename it out from
+# under you" is a coherent promise. `sys.v1.memory.list/tree/trace` are exactly
+# that: advertised experimental, guarded against rename.
+#
+# Entries that are NOT SDK-called are app-consumed; each carries a comment
+# saying so. `sys.v1.memory.delete` is the exception — see its note.
 # ---------------------------------------------------------------------------
 
 _STABLE_SYSCALLS = [
     "sys.v1.memory.read",
     "sys.v1.memory.write",
+    # No SDK method dispatches this (aindy_sdk MemoryAPI has no delete; the
+    # `client.delete()` that exists is a generic HTTP DELETE helper). Guarded
+    # because MEM-DELETE-1 shipped it as a deliberate public capability with its
+    # own scope. Verified 2026-08-13.
     "sys.v1.memory.delete",
     "sys.v1.memory.search",
     "sys.v1.memory.tree",
     "sys.v1.memory.trace",
+    # Added 2026-08-13. Both are dispatched by the *shipped* SDK and were missing
+    # from this guard, so a rename would have passed CI and broken the SDK:
+    #   client.memory.list()   -> aindy_sdk/memory.py:149
+    #   client.execution.get() -> aindy_sdk/execution.py:57
+    # execution.get has already failed live once for a related reason — the SDK
+    # dispatched it before the runtime registered a handler, and the SDK's own
+    # unit tests stayed green because they mock the dispatcher (see the SDK
+    # CHANGELOG, 2026-07-05). Mocked-dispatcher tests cannot catch a name break;
+    # this list is the only thing that can.
+    # NOTE: membership here is a *rename/removal* guarantee, not a maturity claim.
+    # sys.v1.memory.list/tree/trace are advertised `stable=False` on purpose and
+    # that is not a contradiction — see the module docstring below.
+    "sys.v1.memory.list",
+    "sys.v1.execution.get",
     "sys.v1.flow.run",
     "sys.v1.event.emit",
     "sys.v1.nodus.execute",
