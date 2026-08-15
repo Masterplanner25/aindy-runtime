@@ -147,6 +147,22 @@ def test_async_context_lets_execution_events_past_contract_gate(monkeypatch):
         activate_async_execution_context,
         deactivate_async_execution_context,
     )
+    from AINDY.platform_layer.trace_context import (
+        is_pipeline_active,
+        reset_pipeline_active,
+        set_pipeline_active,
+    )
+
+    # The first assertion below needs to run *outside* a pipeline, and this test
+    # assumed that rather than arranging it. `pipeline_active` is a ContextVar that
+    # an earlier test can leave set — so in a full-suite run the gate did not fire
+    # and `pytest.raises(RuntimeError)` failed with DID NOT RAISE, while the file
+    # passed in isolation. That is why it was invisible: nothing under tests/unit
+    # ran in CI at all (CI-MARKER-1), and locally it only shows up under ordering.
+    #
+    # Establish the precondition explicitly, and restore whatever was there.
+    pipeline_token = set_pipeline_active(False)
+    assert not is_pipeline_active(), "precondition: this test must run outside a pipeline"
 
     monkeypatch.setattr(settings, "ENFORCE_EXECUTION_CONTRACT", True)
     monkeypatch.setattr(ses, "_persist_system_event", lambda **kw: _uuid.uuid4())
@@ -164,20 +180,23 @@ def test_async_context_lets_execution_events_past_contract_gate(monkeypatch):
 
     db = _DB()
 
-    # Outside pipeline/async context, the execution.* event is a contract violation.
-    with pytest.raises(RuntimeError):
-        ses.emit_system_event(
-            db=db, event_type=SystemEventTypes.EXECUTION_COMPLETED, required=True
-        )
-
-    # With the async context active (as the Gap-5 flag arranges), it persists.
-    token = activate_async_execution_context()
     try:
-        assert (
+        # Outside pipeline/async context, the execution.* event is a contract violation.
+        with pytest.raises(RuntimeError):
             ses.emit_system_event(
                 db=db, event_type=SystemEventTypes.EXECUTION_COMPLETED, required=True
             )
-            is not None
-        )
+
+        # With the async context active (as the Gap-5 flag arranges), it persists.
+        token = activate_async_execution_context()
+        try:
+            assert (
+                ses.emit_system_event(
+                    db=db, event_type=SystemEventTypes.EXECUTION_COMPLETED, required=True
+                )
+                is not None
+            )
+        finally:
+            deactivate_async_execution_context(token)
     finally:
-        deactivate_async_execution_context(token)
+        reset_pipeline_active(pipeline_token)
