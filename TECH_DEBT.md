@@ -5185,6 +5185,100 @@ the distributed event bus, and the native scorer each have no dedicated suite. O
 **ECOGAP-6** (execution-path coverage) — do not double-track the execution paths; the four
 areas above are the increment.
 
+**Related but distinct:** `CI-MARKER-1` (below) — tests that *do* exist but that CI never
+runs. That is a marker-hygiene bug; this entry is a genuine absence of tests. Fixing one does
+not fix the other.
+
+---
+
+## CI-MARKER-1 — 268 unit tests run in no CI job; a green PR does not mean `tests/unit` passed
+
+**Status:** Open — CI configuration. Found 2026-08-14 while confirming whether two local test
+failures were caused by the dependabot sweep (#404). They were not; the investigation surfaced
+this instead.
+
+**Mechanism — one missing marker makes a test file invisible.** `Runtime Contracts` is the only
+job in `runtime-ci.yml` that runs unit tests, and it runs:
+
+```yaml
+python -m pytest tests -m runtime_only -q --cov=AINDY --cov-fail-under=35
+```
+
+The marker is applied per-file as `pytestmark = pytest.mark.runtime_only`. **Nothing applies it
+automatically** — `pytest.ini` only *declares* the marker in `markers =`, and `tests/conftest.py`
+has no `pytest_collection_modifyitems` hook. So a new unit test file defaults to **not run**,
+and nothing about the PR looks different.
+
+The Integration job does not compensate: `pytest.integration.ini` sets
+`testpaths = tests/integration`, so it never reaches `tests/unit/` at all.
+
+**Measured, not estimated:**
+
+| | |
+|---|---|
+| `pytest tests -m runtime_only` (what CI runs) | **1230 collected, 349 deselected** of 1579 |
+| `tests/unit/` files carrying the marker | 122 of 146 |
+| **Unit tests in no CI job** | **268, across 24 files** |
+
+(The 349 − 268 remainder is `tests/integration` and `tests/sandbox`, which *do* have their own
+jobs — `pytest -c pytest.integration.ini` and `sandbox-escape-linux.yml`. The 268 are the
+genuinely uncovered set.)
+
+**The 24 files, by test count:**
+
+```
+23 test_nodus_workflow_registry     10 test_runtime_degraded_modes
+23 test_agent_vm_execution          10 test_background_leadership
+22 test_agent_plan_compiler          8 test_nodus_flow_compiler
+21 test_infinity_next_action         8 test_agent_runtime_guardrails
+21 test_deployment_profiles          7 test_nodus_tool_seam
+16 test_infinity_score_event         6 test_infinity_async_job_loop
+15 test_syscall_contract             6 test_empty_env_typed_settings
+15 test_agent_wait_policy            6 test_effect_record_cleanup
+12 test_clock                        5 test_transactional_email_isolation
+11 test_infinity_recall_event        5 test_reconcile_backfill
+                                     5 test_event_bus_redis_url
+                                     5 test_capability_token_refresh
+                                     4 test_infinity_support_metrics
+                                     4 test_aindy_env_file
+```
+
+**Why this is worse than a count suggests.** These are not peripheral files:
+
+- `test_syscall_contract.py` is the file **CLAUDE.md's own Commands section uses as its worked
+  example** (`pytest tests/unit/test_syscall_contract.py::test_name -v`).
+- `test_reconcile_backfill.py`, `test_empty_env_typed_settings.py`,
+  `test_transactional_email_isolation.py` are the regression tests for **FR-8 / FR-10 / FR-9** —
+  the three upgrade-path defects that forced the 2.0.1 release. The tests written so those
+  never recur are not executed.
+- `test_clock.py` (REPLAY-1), `test_background_leadership.py` (LEASE-1), all five
+  `test_infinity_*` (INFINITY-RUNTIME-1), `test_agent_vm_execution` / `test_nodus_*` (RTR-1),
+  `test_runtime_degraded_modes.py` (the DEGRADED_MODE matrix work).
+
+Each of those fixes can be reverted and CI stays green.
+
+**Fix.** Add `pytestmark = pytest.mark.runtime_only` to the 24 files, then make the default
+safe so this cannot recur — the durable half. Two options, in preference order:
+
+1. A `pytest_collection_modifyitems` hook in `tests/conftest.py` that auto-applies
+   `runtime_only` to everything under `tests/unit/` lacking an explicit marker. Removes the
+   footgun entirely; a new file is covered on creation.
+2. A CI assertion that `pytest tests/unit --collect-only -q` and
+   `pytest tests/unit -m runtime_only --collect-only -q` return equal counts — cheap, and fails
+   loudly on the next unmarked file.
+
+**Expect new failures when they start running.** Two are already known and are *pre-existing*,
+verified against a clean `main` worktree baseline, not caused by #404:
+`test_infinity_async_job_loop.py::test_async_context_lets_execution_events_past_contract_gate`
+passes in isolation but fails in a full-suite run (test-order pollution — compare the
+`pipeline_active` ContextVar leak noted under RTR-3/4/6/7), and
+`test_runtime_packaging.py::test_runtime_build_artifacts_include_runtime_owned_assets` fails
+locally on `python -m build --no-isolation` but passes in CI (it *is* marked). Marking the 24
+should therefore be done as its own PR, so any newly-surfaced red is attributable.
+
+**Note the `--cov-fail-under=35` interaction:** adding 268 tests changes measured coverage.
+Expect the number to move and re-baseline deliberately rather than lowering the gate.
+
 ---
 
 ## RTR-* — Runtime Roadmap (Nodus-first execution & runtime primitives)
