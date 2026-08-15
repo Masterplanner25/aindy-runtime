@@ -4905,9 +4905,34 @@ ways, and none was wrong in the way the staleness signal predicted:
   *"fully removed — all components now read `REDIS_URL` exclusively."* One component still reads
   it: `AINDY/platform_layer/rate_limiter.py:67` does
   `os.environ.get("REDIS_URL") or os.environ.get("AINDY_REDIS_URL")`. That is what makes the
-  DEPLOYMENT_TARGETS error *partial* rather than total — set only the old name and the rate
-  limiter finds Redis while the event bus and concurrency counters fall back to localhost. Either
-  drop the fallback or correct the claim; a half-honoured alias is the worst of both.
+  DEPLOYMENT_TARGETS error *partial* rather than total.
+
+  **RESOLVED 2026-08-14 — the alias is gone**, and investigating it corrected two claims made
+  above.
+
+  *Why it existed:* not a deliberate compatibility shim. `git log -L 67,67:` shows the line
+  **untouched since `0d5d382`, the extraction commit** — it predates the 2026-06-06
+  consolidation, whose diff touched only `event_bus.py`, `config.py`, `.env.example` plus
+  docs/tests. `rate_limiter.py` was never in scope, so it also never received the
+  `DeprecationWarning` `event_bus.py` got in the commit before. The CHANGELOG's **per-file list
+  was accurate**; only its summary clause — *"all components"* — over-reached, by exactly one
+  file.
+
+  *How bad:* **less than stated above.** "Set only the old name and the rate limiter finds Redis
+  while the rest falls back" is true only in a non-prod thread-mode deployment. In production or
+  under `EXECUTION_MODE=distributed`, a missing `REDIS_URL` **raises at queue init**
+  (`distributed_queue.py`, "Production requires RedisQueueBackend… Set REDIS_URL before
+  startup" / "EXECUTION_MODE=distributed requires REDIS_URL"), naming the right variable. The
+  dangerous case fails fast; it was never silent where it mattered.
+
+  Nothing depended on the alias — no test, compose file, or workflow — so removal was one line,
+  guarded by five new tests (`tests/unit/test_rate_limiter_redis_url.py`), verified by restoring
+  the alias and confirming the guard fails.
+
+  **Method note worth keeping:** the alias was invisible to every behavioural test because
+  `_redis_url` is resolved at *module import*. Nothing about the running limiter differs when it
+  is honoured, so only reading the source — or a reload-based test — can see it. That is how a
+  scoped cleanup leaves a reader behind and still looks complete.
 
   **One correction went the other way — the doc was pessimistic.** Its "Cross-Instance
   Limitation" said `can_execute()`/`mark_started()`/`mark_completed()` *"require Redis-backed

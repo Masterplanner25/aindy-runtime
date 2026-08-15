@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Fixed — `AINDY_REDIS_URL` alias removed from the rate limiter (2026-08-14)
+
+- **`AINDY/platform_layer/rate_limiter.py`**: resolved `REDIS_URL or AINDY_REDIS_URL`; now
+  reads `REDIS_URL` only. This was **the last reader of that alias in the tree**.
+
+  The alias was removed by `EVENTBUS-REDIS-URL-CONSOLIDATION-1` on 2026-06-06, but that change
+  was scoped to `event_bus.py`, `config.py` and `.env.example` — this module was never in it,
+  and had honoured the alias since the repo's first commit. It also never received the
+  `DeprecationWarning` `event_bus.py` got in the preceding change.
+
+  The 2026-06-06 entry's per-file list was accurate; only its summary — *"all components now
+  read `REDIS_URL` exclusively"* — over-reached, by exactly one file. That entry is left as
+  written: it is the audit trail of what was done then, not a claim to re-litigate now.
+
+  **Low blast radius, and not the silent misconfiguration it first appeared to be.** An operator
+  setting only `AINDY_REDIS_URL` in production or under `EXECUTION_MODE=distributed` already
+  fails fast at queue init with a `RuntimeError` naming `REDIS_URL`. The narrow window was a
+  non-prod thread-mode deployment, where a Redis-backed rate limiter could sit beside an
+  in-memory queue, a local-only event bus and in-process concurrency counters.
+
+- **`tests/unit/test_rate_limiter_redis_url.py`** (new): five tests pinning the resolution,
+  including that the alias does **not** resolve. Verified by restoring the alias and confirming
+  the guard fails. Also covers the empty-string case — Compose renders `${VAR:-}` as `""`, the
+  same shape as FR-10.
+
+### Removed — dead branch in the queue factory (2026-08-14)
+
+- **`AINDY/core/distributed_queue.py`**: deleted an `if False:` block wrapping a bare tuple
+  expression, left behind by a superseded log line (`# legacy log removed`). No behaviour change.
+
 ## 2.0.1 — 2026-08-05
 
 **Patch. No breaking changes — this fixes the 2.0.0 upgrade path itself.**

@@ -1142,9 +1142,6 @@ def get_queue(*, force_memory: bool = False) -> DistributedQueueBackend:
                 logger.info("[Queue] Redis backend - url=%s queue=%s", redis_url, queue_name)
             except Exception as exc:
                 _QUEUE_INSTANCE = _fallback_to_memory_backend(exc)
-            if False:
-                "[Queue] Redis backend — url=%s queue=%s", redis_url, queue_name
-            # legacy log removed
         else:
             from AINDY.config import resolve_execution_mode
 
