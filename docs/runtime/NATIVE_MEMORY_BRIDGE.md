@@ -1,6 +1,6 @@
 ---
 title: "Native Memory Bridge"
-last_verified: "2026-04-25"
+last_verified: "2026-08-13"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -8,6 +8,23 @@ owner: "platform-team"
 # Native Memory Bridge
 
 The native memory bridge is an optional C++/Rust/Python extension that accelerates memory scoring and semantic similarity computation. It is used by the memory retrieval pipeline when `USE_NATIVE_SCORER=true` (the default in `AINDY/config.py`) and the native module can be imported.
+
+> **Verified against source 2026-08-13** (DOCS-STALE-1). **This document held up better than any
+> other on that list.** The three-layer architecture, the full Python interface, every scoring
+> coefficient, the module-discovery paths, the build helper and all six failure modes were
+> checked line by line and are correct.
+>
+> Three things were not, all in the build-and-deploy half:
+>
+> - **`pyo3` is `0.29`, not `0.19`** — ten minor versions and several breaking API generations.
+> - **CI now builds the crate.** The Deployment section still said it does not, naming a
+>   workflow file that does not exist. `Native Crate Build (Rust)` has been a **required** check
+>   since NATIVE-CI-1 closed 2026-08-02, so the document contradicted itself three paragraphs
+>   after the note added in #394.
+> - **"Rust 1.70+" is unsourced** and almost certainly too low for `pyo3 0.29`.
+>
+> `AINDY/memory/native/memory_bridge_rs/BUILD.md` names this file as its canonical reference, so
+> it is a real downstream consumer of anything wrong here.
 
 ---
 
@@ -177,7 +194,9 @@ The fallback scorer lives in `AINDY/runtime/memory/scorer.py`.
 
 Runtime flow:
 
-1. `MemoryScorer._score_nodes()` calls `AINDY/runtime/memory/native_scorer.py::score_memory_nodes(...)`
+1. `MemoryScorer.score(...)` calls the **module-level** `_score_nodes(prepared_nodes)` in
+   `scorer.py:89` (*not* a method — corrected 2026-08-13), which calls
+   `AINDY/runtime/memory/native_scorer.py::score_memory_nodes(...)`
 2. The native scorer checks whether native scoring is enabled
 3. It lazily imports `memory_bridge_rs` from `target/release` or `target/debug`
 4. If the module is disabled, unavailable, or raises at runtime, it returns a fallback result
@@ -193,17 +212,42 @@ The native bridge is therefore optional at runtime. If it is not built, the scor
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Rust toolchain | 1.70+ | Compile Rust crate |
+| Rust toolchain | see note | Compile Rust crate |
 | cargo | bundled with Rust | Build system |
-| maturin | 1.x | Build Python extension from Rust |
-| C++ compiler | GCC/Clang/MSVC | Compile `semantic.cpp` via `cc` crate |
+| maturin | `>=1.0` (from the crate's `pyproject.toml`) | Build Python extension from Rust |
+| C++ compiler | GCC/Clang/MSVC | Compile `semantic.cpp` via the `cc` crate |
 | Python | 3.11+ | Target Python environment |
 
-Notes from the crate configuration:
+Crate configuration, read from `Cargo.toml` on 2026-08-13:
 
-- `pyo3 = 0.19`
-- crate type is `cdylib`
+- **`pyo3 = "0.29"`, features `["extension-module"]`** — *corrected: this said `0.19`.*
+  Ten minor versions apart, spanning several breaking pyo3 API generations, so the old figure was
+  not a rounding error.
+- also `serde 1.0` (`derive`), `uuid 1` (`v4`), `chrono 0.4` (`serde`); build-dependency `cc = "1"`
+- crate type is `cdylib`, lib name `memory_bridge_rs`
 - `build.rs` compiles `memory_cpp/semantic.cpp`
+- build backend is `maturin`, bindings `pyo3` (crate-local `pyproject.toml`)
+
+> **On the Rust version.** This table said **1.70+**. Nothing in the repo states a minimum:
+> `Cargo.toml` declares no `rust-version`, and the CI job relies on the Rust preinstalled on
+> `ubuntu-latest` rather than pinning a toolchain. Given `pyo3 0.29`, 1.70 is almost certainly
+> too low — but rather than substitute one unsourced number for another, the requirement is left
+> unstated. **Adding `rust-version` to `Cargo.toml` would make it checkable**, and `cargo build
+> --locked` in CI would then enforce it.
+
+### What CI builds
+
+`Native Crate Build (Rust)` in `.github/workflows/runtime-ci.yml` runs
+`cargo build --locked --release` on every PR and is a **required status check** on `main`
+(NATIVE-CI-1, closed 2026-08-02). `--locked` is the point: it proves the committed `Cargo.lock`
+is the one that builds.
+
+It runs on Linux only, and there is **no `cargo test`** — pyo3's `extension-module` omits
+libpython, so a test harness fails to *link*. The job proves the crate compiles; it asserts
+nothing about behaviour. See the Validation section.
+
+For a local quick-reference that defers to this document, see
+`AINDY/memory/native/memory_bridge_rs/BUILD.md`.
 
 ---
 
@@ -378,9 +422,20 @@ The Rust wrappers assert length equality before calling C++, but the FFI call it
 
 ### CI/CD
 
-The current GitHub Actions workflow in `.github/workflows/ci.yml` does not install Rust, `cargo`, or `maturin`, and it does not build `memory_bridge_rs`.
+> **Corrected 2026-08-13 — this paragraph was obsolete and named a file that does not exist.**
+> It read: *"The current GitHub Actions workflow in `.github/workflows/ci.yml` does not install
+> Rust, `cargo`, or `maturin`, and it does not build `memory_bridge_rs`."* There is no
+> `.github/workflows/ci.yml`; the workflow is `runtime-ci.yml`, and since NATIVE-CI-1 closed on
+> 2026-08-02 it **does** build the crate, as a required check. The statement also contradicted
+> the note added to the Validation section above.
 
-That means test environments rely on the Python fallback because the native module is unavailable, not because CI explicitly disables `USE_NATIVE_SCORER`.
+CI **compiles** the crate (`cargo build --locked --release`, Linux) but does not **install** it
+into the Python environment — no `maturin develop` step exists. So the conclusion below still
+holds, for a narrower reason than the old text gave:
+
+Python test environments run on the fallback scorer because `memory_bridge_rs` is never
+*installed* there, not because CI disables `USE_NATIVE_SCORER`. The distinction matters: a build
+regression is now caught, a **scoring** regression still is not.
 
 If native *behavioural* coverage is needed in CI — the build job added by NATIVE-CI-1 does
 not provide it — a dedicated job would install Rust, build the extension, and run tests that
@@ -399,8 +454,11 @@ native-scorer-test:
         python-version: "3.11"
     - run: pip install maturin pytest
     - run: maturin develop --manifest-path AINDY/memory/native/memory_bridge_rs/Cargo.toml --release
-    - run: pytest tests/integration/test_memory_native_scorer.py tests/integration/test_memory_bridge.py -q
+    - run: pytest tests/integration/test_memory_native_scorer.py -q   # ← does not exist yet
 ```
+
+Note the job would also need `maturin develop` (as above) rather than `cargo build` — installing
+the extension is exactly the step the current CI job omits.
 
 ### Production deployment
 
