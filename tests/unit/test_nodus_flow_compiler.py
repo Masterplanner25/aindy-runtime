@@ -11,6 +11,8 @@ import pytest
 
 from AINDY.runtime.nodus_flow_compiler import compile_nodus_flow, parse_nodus_workflow
 
+pytestmark = pytest.mark.runtime_only
+
 
 _LINEAR = '''workflow build {
   step fetch {

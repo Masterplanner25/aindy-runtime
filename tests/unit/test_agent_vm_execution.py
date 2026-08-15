@@ -11,6 +11,8 @@ from AINDY.db.database import Base
 import AINDY.db.model_registry  # noqa: F401  (populate metadata)
 from AINDY.runtime import nodus_execution_service as svc
 
+pytestmark = pytest.mark.runtime_only
+
 
 # --------------------------------------------------------------------------- #
 # reconstruct_agent_step_results — pure mapping

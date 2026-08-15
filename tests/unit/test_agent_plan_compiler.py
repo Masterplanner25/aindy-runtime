@@ -11,6 +11,8 @@ from AINDY.runtime.agent_plan_compiler import (
 )
 from AINDY.runtime.nodus_flow_compiler import compile_nodus_flow
 
+pytestmark = pytest.mark.runtime_only
+
 
 def test_single_step_plan():
     c = compile_agent_plan({"steps": [{"tool": "search", "args": {"q": "x"}}]})

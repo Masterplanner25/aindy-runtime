@@ -16,6 +16,8 @@ from AINDY.db.models import AgentRun
 from AINDY.db.models.job_log import JobLog
 from AINDY.platform_layer import async_job_service
 
+pytestmark = pytest.mark.runtime_only
+
 
 def _make_run(
     db_session,
