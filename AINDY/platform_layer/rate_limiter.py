@@ -64,7 +64,13 @@ def _identity_key(request: Request) -> str:
 
 
 _test_mode = os.environ.get("TEST_MODE", "false").lower() in ("1", "true", "yes")
-_redis_url = os.environ.get("REDIS_URL") or os.environ.get("AINDY_REDIS_URL")
+# REDIS_URL only. The ``AINDY_REDIS_URL`` alias was dropped here 2026-08-14 —
+# EVENTBUS-REDIS-URL-CONSOLIDATION-1 (2026-06-06) removed it from event_bus.py,
+# config.py and .env.example but never touched this module, so this line had
+# honoured it since the repo's first commit and was the last reader in the tree.
+# That made the CHANGELOG's "all components now read REDIS_URL exclusively"
+# false by exactly one file.
+_redis_url = os.environ.get("REDIS_URL")
 limiter = Limiter(
     key_func=_identity_key,
     default_limits=["300/minute"],
