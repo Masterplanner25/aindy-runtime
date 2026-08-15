@@ -254,7 +254,13 @@ deployment that introduces TLS termination.
 
 ## Release Notes Verification
 
-- [ ] CHANGELOG.md updated for this release
+- [ ] `## Unreleased` is **complete**, then promoted to the version heading.
+
+  Entries should already be there: per the CHANGELOG protocol in `CLAUDE.md`, each PR writes
+  its own entry when it lands. This step **verifies** that; it is not the place to author them.
+  If `Unreleased` looks thin, reconcile it against `git log vX.Y.Z..main --no-merges` **before
+  cutting** — measured 2026-08-15, only 1 of the 50 commits since `v2.0.1` had touched the
+  file, and every prior release window shows the same shape.
 - [ ] Breaking changes to stable surfaces are explicitly documented
 - [ ] Schema contract version bump is noted if any model changed
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
