@@ -488,6 +488,11 @@ variants, in the order they were found, because the next one will be a seventh:
    (`EVENTBUS-COVERAGE-1`).
 6. **Covers, asserts nothing** — a test asserting an *absence* passes when the wire is broken.
    Caught only by mutation.
+7. **★ Asserts the source, not the behaviour** — FR-12's route tests read `admin_router.py` as
+   *text* (`assert "SYSTEM_AGENTS" in source`) and never called the route. The guard worked and
+   answered **500 instead of 409** for a full day (`ROUTE-GUARD-1`), because a source assertion
+   can only confirm that code was written, never what it returns. Found by a *new* route's 422
+   coming back as `internal_error` — not by any of the tests covering the old one.
 
 **Rules that follow:**
 
@@ -502,6 +507,10 @@ variants, in the order they were found, because the next one will be a seventh:
   Nothing applies it automatically.
 - **When a test can legitimately skip, make skipping loud where it must not happen** — an
   env-gated assertion that fails in CI beats a silent skip.
+- **★ A route test must call the route.** Reading the handler's source proves the guard was
+  written, not that the caller receives its answer — and the status code *is* the contract:
+  a client cannot tell "rejected" from "the server broke" by a 500. Source assertions are fine
+  as a *supplement* (they catch a deleted guard cheaply); they are never the coverage.
 
 **Chasing a flaky test:** never pipe the run through `tail`. Three observed failures of
 `FLAKY-1` were run as `pytest ... -q | tail`, which discarded the traceback and kept the summary
