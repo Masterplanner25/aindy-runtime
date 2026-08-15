@@ -33,10 +33,21 @@ Fault tolerance
 ---------------
 - Redis unavailable: publish() returns False and logs a WARNING; local-only
   behaviour is preserved.  No exception propagates to the caller.
+- Publisher back-off (EVENTBUS-PUBLISH-LATCH-1): after 3 *consecutive* publish
+  failures a circuit breaker SUSPENDS publishing, so a dead Redis does not add a
+  socket timeout to every notify_event().  It re-probes once after
+  ``AINDY_EVENT_BUS_PUBLISH_RECOVERY_SECS`` and closes on success — suspension is
+  transient and needs no restart.  *This used to be permanent:* the code set
+  ``self._enabled = False`` for the life of the process, so a momentary blip ended
+  cross-instance WAIT/RESUME propagation until someone restarted the pod, which is
+  precisely the failure this module exists to prevent.  Note the bullet below has
+  always described the SUBSCRIBER; the publisher had no recovery path at all.
 - Subscriber thread crash: caught by the outer reconnect loop; reconnects
   with exponential back-off (1 s → 30 s cap).
 - ``AINDY_EVENT_BUS_ENABLED=false``: bus is completely disabled; system
-  behaves as before (single-instance mode).
+  behaves as before (single-instance mode).  This flag is operator configuration
+  only and is never flipped at runtime — check ``get_status()["publish_suspended"]``
+  to distinguish "switched off" from "backing off".
 
 Configuration (environment variables)
 --------------------------------------
@@ -44,6 +55,10 @@ Configuration (environment variables)
                            job queue, and event bus. (default: redis://localhost:6379/0)
   AINDY_EVENT_BUS_CHANNEL  Pub/sub channel name  (default: aindy:scheduler_events)
   AINDY_EVENT_BUS_ENABLED  "false" / "0" / "no" to disable (default: enabled)
+  AINDY_EVENT_BUS_PUBLISH_RECOVERY_SECS
+                           Seconds before a suspended publisher re-probes Redis
+                           (default: 60).  Read at import — see the module-import-time
+                           env-read hazard in CLAUDE.md.
 
 Usage
 -----
@@ -62,6 +77,8 @@ import os
 import socket
 import threading
 import time
+
+from AINDY.kernel.circuit_breaker import CircuitBreaker, CircuitOpenError, CircuitState
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +104,16 @@ _RECONNECT_BASE_DELAY: float = 1.0    # seconds before first reconnect attempt
 _RECONNECT_MAX_DELAY: float = 30.0   # cap for exponential back-off
 _MAX_BUFFER_SIZE: int = 1000         # max events to buffer before rehydration
 _STATUS_REDIS_TIMEOUT: float = 0.5
+
+# EVENTBUS-PUBLISH-LATCH-1. Consecutive publish failures suspend publishing so a dead
+# Redis does not add a connect-timeout to every notify_event(). It must SUSPEND, not
+# terminate: the previous code set `self._enabled = False` permanently, so a transient
+# blip ended cross-instance WAIT/RESUME for the life of the process. The breaker
+# re-probes once after the recovery window and closes on success.
+_PUBLISH_FAILURE_THRESHOLD: int = 3
+_PUBLISH_RECOVERY_TIMEOUT_SECS: int = int(
+    os.getenv("AINDY_EVENT_BUS_PUBLISH_RECOVERY_SECS", "60") or 60
+)
 
 
 def _get_instance_id() -> str:
@@ -127,13 +154,21 @@ class EventBus:
 
     def __init__(self) -> None:
         self._instance_id: str = _get_instance_id()
+        # Operator configuration ONLY — never mutated at runtime. EVENTBUS-PUBLISH-LATCH-1:
+        # this flag used to double as the "we gave up" latch, which is why a transient
+        # Redis outage was indistinguishable from `AINDY_EVENT_BUS_ENABLED=false` and
+        # why `get_status()` reported a deliberately-enabled bus as disabled.
         self._enabled: bool = ENABLED
         self._pub_lock = threading.Lock()
         self._pub_client = None          # lazy Redis client for publishing
         self._subscriber_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._consecutive_failures: int = 0
-        self._max_failures: int = 3      # disable after 3 consecutive failures
+        # Transient publish health, separate from the config flag above.
+        self._publish_breaker = CircuitBreaker(
+            name="event_bus_publish",
+            failure_threshold=_PUBLISH_FAILURE_THRESHOLD,
+            recovery_timeout_secs=_PUBLISH_RECOVERY_TIMEOUT_SECS,
+        )
         # Pre-rehydration buffer: events received before _waiting is populated
         self._pre_rehydration_buffer: list[tuple[str, str | None]] = []
         self._buffer_lock = threading.Lock()
@@ -179,33 +214,43 @@ class EventBus:
 
         with self._pub_lock:
             try:
-                client = self._get_pub_client()
-                client.publish(CHANNEL, payload)
+                self._publish_breaker.call(self._publish_payload, payload)
                 logger.debug(
                     "[EventBus] published event=%r corr=%r channel=%s",
                     event_type, correlation_id, CHANNEL,
                 )
-                self._consecutive_failures = 0
                 return True
+            except CircuitOpenError:
+                # Publishing is SUSPENDED, not abandoned: the breaker re-probes once
+                # after _PUBLISH_RECOVERY_TIMEOUT_SECS and closes on success. Skipping
+                # the connect attempt here is the point — it keeps a dead Redis from
+                # adding a socket timeout to every notify_event().
+                logger.debug(
+                    "[EventBus] publish suspended (circuit open, retry in <=%ss) event=%r",
+                    _PUBLISH_RECOVERY_TIMEOUT_SECS, event_type,
+                )
+                return False
             except Exception as exc:
-                self._consecutive_failures += 1
-                if self._consecutive_failures >= self._max_failures:
-                    self._enabled = False
+                logger.warning(
+                    "[EventBus] WAIT/RESUME event %r could NOT be propagated to other "
+                    "instances (Redis unavailable). Flows waiting on other instances "
+                    "will not be resumed. correlation_id=%s error=%s",
+                    event_type, correlation_id, exc,
+                )
+                if self._publish_breaker.state is CircuitState.OPEN:
                     logger.warning(
-                        "[EventBus] disabled after %d consecutive failures — Redis unavailable. "
-                        "Set AINDY_EVENT_BUS_ENABLED=false to suppress this.",
-                        self._consecutive_failures,
-                    )
-                else:
-                    logger.warning(
-                        "[EventBus] WAIT/RESUME event %r could NOT be propagated to other "
-                        "instances (Redis unavailable). Flows waiting on other instances "
-                        "will not be resumed. correlation_id=%s error=%s",
-                        event_type, correlation_id, exc,
+                        "[EventBus] publishing SUSPENDED after %d consecutive failures. "
+                        "Cross-instance WAIT/RESUME propagation is paused; one retry will "
+                        "be attempted in %ss. This is not permanent — no restart needed.",
+                        _PUBLISH_FAILURE_THRESHOLD, _PUBLISH_RECOVERY_TIMEOUT_SECS,
                     )
                 # Reset client so the next call gets a fresh connection.
                 self._pub_client = None
                 return False
+
+    def _publish_payload(self, payload: str) -> None:
+        """The single fallible operation the circuit breaker guards."""
+        self._get_pub_client().publish(CHANNEL, payload)
 
     def _is_subscriber_running(self) -> bool:
         thread = self._subscriber_thread
@@ -232,10 +277,19 @@ class EventBus:
         except Exception:
             return False
 
+    def _is_publishing_suspended(self) -> bool:
+        """True while the publish circuit is open (transient, self-clearing)."""
+        return self._publish_breaker.state is CircuitState.OPEN
+
     def _get_propagation_mode(self) -> str:
         """Return the current event propagation mode."""
         if not self._enabled:
             return "disabled"
+        # An open publish circuit means outbound events are not reaching other
+        # instances even if Redis answers a ping, so this must not report
+        # "cross-instance" — that was the state the old latch left invisible.
+        if self._is_publishing_suspended():
+            return "local-only"
         if self._is_redis_connected() and self._is_subscriber_running():
             return "cross-instance"
         return "local-only"
@@ -246,11 +300,20 @@ class EventBus:
             enabled = bool(self._enabled)
             subscriber_running = self._is_subscriber_running()
             redis_connected = self._is_redis_connected()
+            suspended = self._is_publishing_suspended()
             mode = self._get_propagation_mode()
             return {
                 "enabled": enabled,
                 "subscriber_running": subscriber_running,
                 "redis_connected": redis_connected,
+                # EVENTBUS-PUBLISH-LATCH-1: publish health is reported separately from
+                # `enabled` so an operator can tell "I turned it off" from "it is
+                # backing off after failures", and see that it will retry by itself.
+                "publish_suspended": suspended,
+                "publish_circuit_state": self._publish_breaker.state.value,
+                "publish_retry_after_secs": (
+                    _PUBLISH_RECOVERY_TIMEOUT_SECS if suspended else 0
+                ),
                 "mode": mode,
             }
         except Exception:
@@ -258,6 +321,9 @@ class EventBus:
                 "enabled": False,
                 "subscriber_running": False,
                 "redis_connected": False,
+                "publish_suspended": False,
+                "publish_circuit_state": "unknown",
+                "publish_retry_after_secs": 0,
                 "mode": "unknown",
             }
 
