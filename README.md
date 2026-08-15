@@ -1,24 +1,39 @@
 # aindy-runtime
 
-**Install one platform with the infrastructure AI agents need to do real work: durable
-workflows, a capability-gated agent runtime with human approvals, persistent vector memory,
-scheduling, APIs, and observability — self-hosted, on your own database.**
+**A self-hosted execution substrate for AI systems — the layer beneath your agents,
+workflows and applications, running on your own database.**
+
+**Work is durable.** A run suspends as a first-class lifecycle state, survives a restart,
+and resumes where it stopped — not replayed from the beginning.
+
+**Work is governed.** Approval does not merely permit a run; it *mints* a signed, scoped
+capability token bound to that run, that user and that plan. Tools are capability-gated,
+delegation can only narrow authority, and side effects pass a ledgered boundary you can
+make at-most-once.
+
+**And work accumulates.** Every execution records what it knew going in and what it
+produced going out, into an addressable memory space that is scored and fed back into the
+next decision — so the tenth run is not the first run again.
 
 The runtime is the substrate; your domain logic mounts on top as a plugin package or over
 the HTTP SDK. A bare install gives you the execution layer and the operator surfaces, not a
 finished application — see [Building apps on aindy-runtime](#building-apps-on-aindy-runtime).
 
-Concretely: a syscall-based execution contract, a DAG flow engine, persistent vector memory,
-structured agent runs with approval gates, and an extensible plugin architecture for mounting
-domain-specific app layers.
-
-Deployable in minutes via Docker Compose. Extensible via a Python plugin registry.
-Operable via a built-in platform UI and a REST API backed by the `aindy-sdk`.
+Deployable in minutes via Docker Compose. Extensible via a Python plugin registry. Operable
+via a built-in platform UI and a REST API backed by the `aindy-sdk`.
 
 **What it gives you:**
 - **Flow engine** — DAG-based execution with WAIT/RESUME semantics, priority scheduling, and dead-letter recovery
 - **Agent runtime** — structured goal → plan → approval → execute loop with capability tokens and trigger evaluation
-- **Memory system** — persistent `MemoryNode` storage with pgvector embeddings, hybrid retrieval, and memory traces
+- **Memory system** — not a retrieval library: memory is **addressable**
+  (`/memory/{tenant}/{namespace}/{type}/{id}`), **scored** on impact, usage and causal depth,
+  and **joined to execution** — each `ExecutionUnit` carries `memory_context_ids` and
+  `output_memory_ids`, so *what a run knew going in and produced going out* is answerable from
+  one row. Backed by pgvector, with an optional native scoring path (a Rust `cdylib` with a C++
+  semantic kernel) and a Python fallback pinned equal by parity tests
+- **Execution units** — a durable, quota-bounded unit of work with a real status machine
+  (`pending | executing | waiting | resumed | completed | failed`), where `waiting` and
+  `resumed` are distinct so an audit query can tell a fresh run from a resumption
 - **Syscall contract** — single `SyscallDispatcher` entry point with schema validation, idempotency gates, and tenant isolation
 - **Platform UI** — operator dashboard for flows, agents, scheduler, and observability (served at `/platform`)
 - **Plugin registry** — mount routers, flows, jobs, syscalls, connectors, and event handlers from external Python packages at boot time
@@ -31,6 +46,37 @@ Operable via a built-in platform UI and a REST API backed by the `aindy-sdk`.
 - **Sandbox certification** — Docker-backed extension sandbox with an escape-test suite, posture reporting (`aindy-runtime sandbox`), and an append-only audit log
 - **Webhooks** — subscription CRUD on the platform API for pushing runtime events to external endpoints
 - **Federated memory recall** — cross-agent recall via `POST /memory/federated/recall`, dispatched through the syscall contract
+
+### Why it is shaped this way
+
+The runtime was built as the execution layer beneath a closed-loop system — the **Infinity
+Algorithm**, whose support layer needs real behaviour observed, converted into signals, fed
+into scoring, and used to adjust what runs next:
+
+```
+observe → score → adjust → execute → observe
+```
+
+Building that pushed the loop's primitives *down into the runtime as generic mechanisms*,
+rather than leaving them in the application. They are ordinary runtime event types
+(`AINDY/core/system_event_types.py`) and a runtime-owned observation service, so any system
+mounted on the runtime inherits them without writing any of it:
+
+| Loop stage | Runtime primitive |
+|---|---|
+| observe | the watcher — `platform_layer/watcher_service.py`, `routes/watcher_router.py` |
+| recall | `recall.used` |
+| score | `score.computed` |
+| adjust | `next_action.chosen` |
+| execute | `next_action.dispatched` |
+
+The division is deliberate and holds for any consumer: **the application owns the formulas;
+the runtime owns the loop.** Scoring functions, KPI weighting and policy are domain logic and
+belong in your app. Observation, the signal path, the causal record, durable re-execution and
+the provenance that ties them together are substrate concerns.
+
+For the full statement of what the runtime is and what a consumer inherits — including where
+the claims stop — see [`docs/runtime/WHAT_THE_RUNTIME_IS.md`](docs/runtime/WHAT_THE_RUNTIME_IS.md).
 
 **Stability:** public surfaces declared under `docs/runtime/` are stable. Extension and
 orchestration surfaces marked experimental may change between minor versions. In-process
