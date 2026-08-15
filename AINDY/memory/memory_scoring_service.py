@@ -28,7 +28,12 @@ def score_memory(memory_node: dict[str, Any]) -> float:
     recency_score = _compute_recency(memory_node.get("created_at"))
     frequency_score = min(1.0, math.log1p(max(0.0, usage_count)) / math.log(11))
     signal_frequency_score = min(1.0, math.log1p(max(0.0, signal_frequency)) / math.log(11))
-    impact_component = min(1.0, impact_score / 5.0)
+    # Same unclamped-bonus shape as NATIVE-PARITY-1 (see runtime/memory/scorer.py).
+    # This function has no native counterpart so there is no parity to break, but a
+    # negative impact_score would still turn a *bonus* term into a penalty. Floored
+    # for consistency with the other scorer and with `frequency_score` below, which
+    # already guards its input with max(0.0, ...).
+    impact_component = min(1.0, max(0.0, impact_score / 5.0))
     type_weight = {
         "failure": 1.25,
         "outcome": 1.0,

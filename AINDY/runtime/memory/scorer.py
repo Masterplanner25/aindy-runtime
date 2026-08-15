@@ -117,7 +117,13 @@ def _score_node_python(prepared: dict) -> float:
     if usage_frequency and usage_frequency > 5:
         success_weight = 0.25
 
-    impact_bonus = min(1.0, prepared["impact_score"] / 5.0) * 0.15
+    # NATIVE-PARITY-1: clamp BOTH ends to match the Rust engine, which uses
+    # `(impact / 5.0).clamp(0.0, 1.0)` (memory_bridge_rs lib.rs:181). `min(1.0, x)`
+    # bounded only the top, so a negative impact_score produced a negative "bonus"
+    # here and 0.0 there — up to a 0.300 divergence on a ~0.420 score. Which engine
+    # runs is not a choice anyone makes (it is whichever happens to be importable),
+    # so the two must agree or ranking depends on build state.
+    impact_bonus = min(1.0, max(0.0, prepared["impact_score"] / 5.0)) * 0.15
 
     score = (
         prepared["similarity"] * 0.40

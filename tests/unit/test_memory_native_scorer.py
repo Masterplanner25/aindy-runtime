@@ -353,6 +353,27 @@ class TestPythonFormula:
             _score_node_python(_prepared(impact_score=500.0))
         )
 
+    @pytest.mark.parametrize("impact", [-0.001, -1.0, -5.0, -10.0, -1e6])
+    def test_impact_bonus_floors_at_zero(self, impact):
+        """NATIVE-PARITY-1 regression guard, native-independent.
+
+        The parity tests that caught this need the compiled extension, so they skip on
+        a machine without one. This asserts the same clamp against the Python engine
+        alone, so the fix stays guarded even where the native suite is unavailable.
+        """
+        assert _score_node_python(_prepared(impact_score=impact)) == pytest.approx(
+            _score_node_python(_prepared(impact_score=0.0)), abs=1e-12
+        )
+
+    def test_impact_bonus_is_monotonic_across_the_sign_boundary(self):
+        """A negative impact must never outscore a positive one — the shape the missing
+        lower clamp inverted."""
+        scores = [
+            _score_node_python(_prepared(impact_score=v))
+            for v in (-10.0, -1.0, 0.0, 1.0, 5.0, 50.0)
+        ]
+        assert scores == sorted(scores)
+
     def test_trace_bonus_is_added_verbatim(self):
         delta = _score_node_python(_prepared(trace_bonus=0.10)) - _score_node_python(_prepared())
         assert delta == pytest.approx(0.10)
@@ -587,29 +608,32 @@ class TestEngineParity:
         )
         assert native == pytest.approx([_score_node_python(n) for n in nodes], abs=1e-12)
 
-    @pytest.mark.parametrize("impact", [-0.5, -1.0, -5.0, -10.0])
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "NATIVE-PARITY-1: the engines disagree for a negative impact_score. Rust "
-            "clamps `(impact/5.0).clamp(0.0, 1.0)` (lib.rs:181); Python uses "
-            "`min(1.0, impact/5.0)` (scorer.py:120) with no lower bound, so the impact "
-            "term goes negative. Measured delta up to +0.300 on a ~0.420 score. Which "
-            "engine runs depends only on whether the extension is importable."
-        ),
-    )
-    def test_engines_must_agree_on_negative_impact(self, impact):
+    @pytest.mark.parametrize("impact", [-0.5, -1.0, -5.0, -10.0, -1e6])
+    def test_engines_agree_on_negative_impact(self, impact):
+        """NATIVE-PARITY-1 — FIXED 2026-08-15.
+
+        Was `xfail(strict=True)`. Rust clamps `(impact/5.0).clamp(0.0, 1.0)`
+        (lib.rs:181); Python used `min(1.0, impact/5.0)` (scorer.py:120), bounding
+        only the top, so the impact term went negative — up to a 0.300 divergence on a
+        ~0.420 score. `scorer.py` now clamps both ends. Kept parametrized (and widened
+        with a large magnitude) because the failure grew with |impact|, so a regression
+        would show first at the extreme.
+        """
         node = _prepared(impact_score=impact)
         assert self._native_score(node) == pytest.approx(_score_node_python(node), abs=1e-12)
 
-    def test_negative_impact_divergence_is_bounded_by_the_missing_clamp(self):
-        """Pins the *size* of NATIVE-PARITY-1 so a partial fix cannot pass silently.
+    @pytest.mark.parametrize("impact", [-0.5, -10.0, -1e6])
+    def test_negative_impact_contributes_exactly_zero_bonus(self, impact):
+        """The specific property the fix establishes, asserted against the engine that
+        was already right.
 
-        Runs without the xfail so the measured gap stays asserted: the whole
-        divergence is the un-clamped impact term, nothing else.
+        Stronger than "the two agree": both engines could agree on a *wrong* value. A
+        negative impact must contribute exactly the same as a zero impact — no bonus,
+        and no penalty either, since the term is a bonus.
         """
-        node = _prepared(impact_score=-10.0)
-        expected_gap = -min(1.0, node["impact_score"] / 5.0) * 0.15
-        assert self._native_score(node) - _score_node_python(node) == pytest.approx(
-            expected_gap, abs=1e-12
+        negative = self._native_score(_prepared(impact_score=impact))
+        zero = self._native_score(_prepared(impact_score=0.0))
+        assert negative == pytest.approx(zero, abs=1e-12)
+        assert _score_node_python(_prepared(impact_score=impact)) == pytest.approx(
+            _score_node_python(_prepared(impact_score=0.0)), abs=1e-12
         )
