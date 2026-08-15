@@ -4736,12 +4736,12 @@ source since they arrived from the monolith.
 | `EXECUTION_CONTRACT.md` | ~~2026-05-02~~ **2026-08-13** | 2 | 626 | **✔ verified** |
 | `MEMORY_ADDRESS_SPACE.md` | ~~2026-04-19~~ **2026-08-13** | 1 | 248 | **✔ verified** |
 | `MEMORY_BRIDGE.md` | 2026-04-19 | 1 | 460 | pending |
-| `OS_ISOLATION_LAYER.md` | 2026-04-22 | 1 | 297 | pending |
+| `OS_ISOLATION_LAYER.md` | ~~2026-04-22~~ **2026-08-13** | 1 | 297 | **✔ verified** |
 | `NATIVE_MEMORY_BRIDGE.md` | 2026-04-25 | 1 | 405 | pending |
 | `RUNTIME_DOCSET_BOUNDARY.md` | 2026-05-10 | 1 | 95 | pending |
 
-**Progress 2026-08-13 — 3 of 7 read against source.** Both were materially wrong, in different
-ways, and neither was wrong in the way the staleness signal predicted:
+**Progress 2026-08-13 — 4 of 7 read against source.** All were materially wrong, in different
+ways, and none was wrong in the way the staleness signal predicted:
 
 - **`RETRY_POLICY.md`** — structure held; two things did not. The `RetryPolicy` dataclass gained
   a fifth field, `execution_guarantee`, which is load-bearing (the same name appears on
@@ -4792,16 +4792,68 @@ ways, and neither was wrong in the way the staleness signal predicted:
   rename/removal is a MAJOR bump. `sys.v1.memory.list` is consistent (`stable=False`, absent from
   the contract), which rules out "the whole list is stale" as an explanation.
 
-**Lesson for the remaining four.** Staleness did not predict the failure mode, and three reads
-have now produced three different ones: `RETRY_POLICY` was structurally sound with a load-bearing
+- **`OS_ISOLATION_LAYER.md`** — architecture intact, *almost everything copyable* wrong. The
+  layering, non-fatal pattern, distributed broadcast and FlowRun atomic claim all hold. But:
+  **there is no `cpu_time_ms` column** — it is `wall_time_ms`, and the ceiling is
+  `MAX_WALL_TIME_MS` fed by an env var still named `AINDY_QUOTA_CPU_MS` "for operator
+  compatibility", so an I/O-blocked syscall burns quota as fast as a CPU-bound one.
+  `TenantContext` had 3 of 4 fields wrong, omitting `capability_scope`/`namespace` — the two
+  that make it an isolation primitive rather than a quota tag. `priority` is a `String(16)`, not
+  "1–10"; §§3/5 said integer while §4's table said `"high"|"normal"|"low"`, so **the document
+  contradicted itself** and §4 was right. §7's endpoint was in the wrong file, claimed a
+  `memory.read` scope it does not use, omitted that it is **self-only (403 on mismatch)**, and
+  showed six response keys of which **none** is real.
+
+  **Two failures are silent-into-a-plausible-default, the expensive kind.** §9's config table
+  named **`AINDY_REDIS_URL`**; nothing reads it — the variable is `REDIS_URL`, so an operator
+  setting the documented name gets the `redis://localhost:6379/0` fallback with no error. And §4
+  said WAIT is `sys("sys.v1.event.wait", ...)`; **no such syscall is registered** (only
+  `sys.v1.event.emit`) — WAIT is the Nodus `event.wait()` builtin raising `WorkerWaitSignal`.
+  That is the *same* error DOCS-BUCKET-A-1 residual 6 already fixed in
+  `docs/tutorials/02-event-driven-automation.md`; it survived here because the residual was
+  scoped to tutorials. **A corrected claim should be grepped across the whole docset, not fixed
+  only where it was found.**
+
+  A third silent failure sits in §3's own code sample: `rm.record_usage(eu, {"cpu_time_ms": 42})`.
+  `record_usage` reads `usage.get("wall_time_ms", 0)`, so the unrecognised key is **dropped and
+  zero recorded** — no error, a quota counter that simply never moves.
+
+  **Acting on that lesson immediately found two more sites**, both fixed in the same change:
+  `DEPLOYMENT_TARGETS.md` listed `AINDY_REDIS_URL` in its *required env vars* block, and
+  `FOUNDATIONAL_PATTERN.md` named the `cpu_time_ms` field (while, to its credit, correctly
+  explaining the wall-clock semantics that `OS_ISOLATION_LAYER.md` had wrong). The tutorials were
+  already correct.
+
+  **One code/CHANGELOG discrepancy surfaced en route — flagged, not edited.** The CHANGELOG entry
+  for `EVENTBUS-REDIS-URL-CONSOLIDATION-1` (2026-06-06) states the `AINDY_REDIS_URL` alias was
+  *"fully removed — all components now read `REDIS_URL` exclusively."* One component still reads
+  it: `AINDY/platform_layer/rate_limiter.py:67` does
+  `os.environ.get("REDIS_URL") or os.environ.get("AINDY_REDIS_URL")`. That is what makes the
+  DEPLOYMENT_TARGETS error *partial* rather than total — set only the old name and the rate
+  limiter finds Redis while the event bus and concurrency counters fall back to localhost. Either
+  drop the fallback or correct the claim; a half-honoured alias is the worst of both.
+
+  **One correction went the other way — the doc was pessimistic.** Its "Cross-Instance
+  Limitation" said `can_execute()`/`mark_started()`/`mark_completed()` *"require Redis-backed
+  atomic counters"* and to treat `MAX_CONCURRENT_PER_TENANT` as per-instance.
+  `RedisResourceBackend` now provides exactly that, switched on by the presence of `REDIS_URL`
+  (no separate flag), with Lua scripts for floor-at-zero decrement and set-if-greater peak
+  memory, plus key TTLs so a crashed instance cannot leak a slot. An operator following the old
+  text would over-provision against a limit that is already global. **Stale docs mis-state risk
+  in both directions.**
+
+**Lesson for the remaining three.** Staleness did not predict the failure mode, and four reads
+have now produced four different ones: `RETRY_POLICY` was structurally sound with a load-bearing
 inversion buried in one section; `EXECUTION_CONTRACT` was wholesale aspirational;
-`MEMORY_ADDRESS_SPACE` had a perfect inventory wrapped around drifted behaviour. Nothing about
+`MEMORY_ADDRESS_SPACE` had a perfect inventory wrapped around drifted behaviour;
+`OS_ISOLATION_LAYER` had sound architecture wrapped around a wrong data model, and was
+*pessimistic* in one section — the gap it warned about had been closed. Nothing about
 the frontmatter date distinguishes those cases. Reading is the only way to tell, which is why
 this was filed rather than bulk-dated.
 
 **Pattern worth carrying forward:** in all three, the *names* of things survived and the
 *contracts* did not — response keys, defaults, caps, which function a handler actually calls.
-Check behaviour before inventory on the remaining four.
+Check behaviour before inventory on the remaining three.
 
 **Why this is filed rather than fixed.** The audit could repair every citation mechanically
 (done — see the docset changelog), but it cannot certify 2,357 lines of behavioural prose.

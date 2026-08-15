@@ -68,8 +68,16 @@ The following pieces make cloud deployment viable today without code changes:
    SECRET_KEY=<64-char random>
    OPENAI_API_KEY=sk-...
    AINDY_BOOTSTRAP_ADMIN_EMAIL=operator@example.com
-   AINDY_REDIS_URL=redis://...   # or omit for single-instance (Redis optional)
+   REDIS_URL=redis://...   # or omit for single-instance (Redis optional)
    ```
+
+   > **Corrected 2026-08-13.** This block said `AINDY_REDIS_URL`. That alias was removed on
+   > 2026-06-06 (`EVENTBUS-REDIS-URL-CONSOLIDATION-1`) and the event bus, cache and
+   > `ResourceManager` all read **`REDIS_URL`** only. The failure mode is quiet and *partial*:
+   > `AINDY/platform_layer/rate_limiter.py:67` still honours the old name as a fallback, so an
+   > operator who sets only `AINDY_REDIS_URL` gets a working rate limiter while the event bus
+   > and per-tenant concurrency counters silently fall back to `redis://localhost:6379/0` — a
+   > half-distributed deployment that looks configured.
 
 4. **Alembic on startup** — `docker-compose.yml` already runs `alembic upgrade head`
    before the server starts. All cloud platforms that run Dockerfiles inherit this.
