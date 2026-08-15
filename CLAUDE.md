@@ -468,6 +468,49 @@ several dependency bumps into one PR (as in #404) is now the normal move, not an
 
 ---
 
+## ★ Trusting a green check — read this before citing CI as evidence
+
+Six separate times this repo has shipped something that *looked* covered and was not. The
+variants, in the order they were found, because the next one will be a seventh:
+
+1. **Claimed and absent** — six docs cited eight test files, several with counts, that had never
+   existed (`DOCS-COVERAGE-CLAIM-1`).
+2. **Exists, not collected** — 268 unit tests in 24 unmarked files run in no job
+   (`CI-MARKER-1`, still open).
+3. **Collected, skipped** — the native suite skipped in CI because nothing built the crate; a
+   skip reads as green. Fixed with `AINDY_REQUIRE_NATIVE_BRIDGE=1`, under which a *skip becomes
+   a failure*.
+4. **Runs, doesn't gate** — six checks ran on every PR and could be red without blocking. All
+   ten are now required.
+5. **Gates, doesn't cover** — `Integration Tests (PostgreSQL + Redis)` never executed
+   `EventBus.publish()`; every `notify_event` call passed `broadcast=False`
+   (`EVENTBUS-COVERAGE-1`).
+6. **Covers, asserts nothing** — a test asserting an *absence* passes when the wire is broken.
+   Caught only by mutation.
+
+**Rules that follow:**
+
+- **Before citing a check as evidence for a change, confirm it executes that code.** The job
+  name is not evidence. `Runtime Contracts` runs `pytest tests -m runtime_only`, *not*
+  `tests/unit/`; `pytest.integration.ini` sets `testpaths = tests/integration`.
+- **Mutation-test a new suite.** Break the thing it covers and confirm it fails, and how many
+  tests fail. This is cheap and it is the only check that a test asserts anything: a first-draft
+  wire suite scored 4/7, because the absence-assertion passed with the wire broken. **A test
+  asserting an absence needs a liveness control** or it is vacuous by construction.
+- **A new test file must carry `pytestmark = pytest.mark.runtime_only`** or CI never runs it.
+  Nothing applies it automatically.
+- **When a test can legitimately skip, make skipping loud where it must not happen** — an
+  env-gated assertion that fails in CI beats a silent skip.
+
+**Chasing a flaky test:** never pipe the run through `tail`. Three observed failures of
+`FLAKY-1` were run as `pytest ... -q | tail`, which discarded the traceback and kept the summary
+— the evidence was destroyed at the moment it was produced, three times. Write to a file. And do
+not conclude from small samples: that test produced **three** wrong readings (deterministic,
+branch-caused, confined to `tests/unit/`) before the fourth run refuted each. Against a ~50% base
+rate, four clean runs happen ~6% of the time by luck.
+
+---
+
 ## `pytest.mark.integration` — skip hazard for Docker-only tests
 
 `pytest.mark.integration` triggers a global conftest guard (`tests/conftest.py`) that **skips the entire test when `DATABASE_URL` is not a live PostgreSQL URL**. This fires even in the default dev environment where `DATABASE_URL=sqlite:///:memory:`.
@@ -581,14 +624,34 @@ scope creep. **Consequence: flag soak happens in `aindy-apps-monolith`, not here
 ships capabilities default-off; the app repo turns them on and lives with them. Don't plan soak
 work in this repo.
 
-**★ THE NEXT RELEASE MUST BE `2.0.0`.** `main` carries a merged, unreleased breaking change —
-`register_user` now rejects passwords under `MIN_PASSWORD_LENGTH`. Semver is followed as a rule
-here, and this is load-bearing rather than ceremonial: `runtime_compatibility.py:11`
-`_major_series()` advertises `recommended_runtime_requirement` as `>={major}.0,<{major+1}.0`, so
-releasing that change as 1.12.0 would make the runtime's own self-reported compatibility claim
-false. Either ship 2.0.0 or pull the change first. **Cross-repo:** on 2.0.0 the advertised
-requirement flips to `>=2.0,<3.0` and the apps-monolith floor (`>=1.11.0,<2.0`) excludes it — the
-app team must move that pin deliberately.
+**★ RELEASE STATE (verified 2026-08-15). `main` is 45 commits ahead of `v2.0.1` and carries an
+unreleased SCHEMA CHANGE.** *This replaces a directive that said "the next release must be
+2.0.0" — that shipped 2026-08-02, and 2.0.1 on 2026-08-05, so the section was instructing work
+already done. Corrected 2026-08-15.*
+
+What `main` now carries that `v2.0.1` does not:
+
+- **Schema contract `2026-08-15`, Alembic head `0015`** (`0015_agents_metadata`, FR-13). Additive
+  and nullable — no backfill, and `reconcile_runtime_schema` handles a wheel install where the
+  `alembic/` tree is absent. **The Dockerfile pin is still `2.0.1`**, so a container serves none
+  of this until a release is cut *and* the pin bumped.
+- **New API surface:** `registry.register_agent` (FR-12), `AINDY/memory/native_bridge.py`,
+  `AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS`, `AINDY_EVENT_BUS_PUBLISH_RECOVERY_SECS`.
+- **Seven defect fixes** — see the prefix registry: NATIVE-PARITY-1, EVENTBUS-PUBLISH-LATCH-1,
+  NATIVE-DISCOVERY-1, TENANT-FROZEN-SHALLOW-1, KERNEL-INIT-DUPLICATE-1, MAS-FLATTEN-1, plus the
+  reserved-namespace hole in `POST /platform/admin/agents/register`.
+- **All ten CI checks are now required** on `main` (was four).
+
+**Semver read: this is a MINOR — `2.1.0`.** Everything is additive; no signature, route or
+response contract was removed or narrowed. `recommended_runtime_requirement` stays `>=2.0,<3.0`
+(major unchanged), so **no consumer pin has to move** — unlike the 2.0.0 cut. The one behaviour
+change worth naming in release notes: `/health/deep` now reports the event bus **degraded**
+while publishing is suspended, where it previously reported the bus disabled.
+
+**Two things a release must not forget** (both bit us before): bump the Dockerfile builder-stage
+pin **and** the CHANGELOG in the same PR; and after the tag publishes, append the
+`SANDBOX_ESCAPE_AUDIT.md` entry for the gate run. `Boot Smoke` installs the pinned version from
+PyPI, so a bump PR skips-green until the tag exists.
 
 **Other standing decisions** (full record: `TECH_DEBT.md` → `DECISIONS-2026-08-01`):
 FR-6 email delivery = **hybrid** (registered `email` connector if present, else runtime SMTP);
@@ -725,6 +788,13 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Release verification checklist | `docs/runtime/RELEASE_CHECKLIST.md` |
 | Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
 | Syscall registry floor constant | `AINDY/kernel/syscall_registry.py` — `SYSCALL_REGISTRY_MIN_COUNT` |
+| Native crate loader (single search policy) | `AINDY/memory/native_bridge.py` — `load_bridge()`, `search_paths()` |
+| Agent identity hook (FR-12) | `AINDY/platform_layer/registry.py` — `register_agent`; applied in `startup.py` `_apply_registered_agents()` |
+| Agent admin routes (list / register / deactivate) | `AINDY/routes/platform/admin_router.py` — mounted at `/platform`, runtime-owned |
+| Runtime-callback subprocess budget (FR-11) | `AINDY/platform_layer/runtime_callback_host.py` — `resolve_callback_timeout_seconds()` |
+| Event-bus publish circuit breaker | `AINDY/kernel/event_bus.py` — `_publish_breaker`; state via `get_status()` |
+| MAS / native / OS-layer / event-bus suites | `tests/unit/test_memory_address_space.py`, `test_memory_native_scorer.py`, `test_os_layer.py`, `test_event_bus.py` |
+| Event-bus wire test (needs live Redis) | `tests/integration/test_event_bus_wire.py` — marked `redis`, **not** `integration` |
 | Tech debt tracker | `TECH_DEBT.md` |
 | Roadmap reading aid (digest of `TECH_DEBT.md`; NOT the source of truth) | `RTR.md` |
 | Docker compose | `docker-compose.yml` |
