@@ -5185,9 +5185,53 @@ the distributed event bus, and the native scorer each have no dedicated suite. O
 **ECOGAP-6** (execution-path coverage) — do not double-track the execution paths; the four
 areas above are the increment.
 
-**Related but distinct:** `CI-MARKER-1` (below) — tests that *do* exist but that CI never
-runs. That is a marker-hygiene bug; this entry is a genuine absence of tests. Fixing one does
-not fix the other.
+**★ COVERAGE HALF CLOSED 2026-08-14 — all four areas now have suites**, written at the exact
+paths the docs had cited. Writing them surfaced **five** defects the missing coverage had been
+hiding (`NATIVE-PARITY-1`, `NATIVE-DISCOVERY-1`, `MAS-FLATTEN-1`, `EVENTBUS-PUBLISH-LATCH-1`,
+`TENANT-FROZEN-SHALLOW-1`, all below):
+
+| Area | Suite | Tests |
+|---|---|---|
+| MAS path addressing | `tests/unit/test_memory_address_space.py` | 84 |
+| Native scorer | `tests/unit/test_memory_native_scorer.py` | 75 (33 need the compiled extension; CI builds it — see below) |
+| OS isolation layer | `tests/unit/test_os_layer.py` | 46 |
+| Distributed event bus | `tests/unit/test_event_bus.py` | 44 |
+
+**247 tests.** All four are marked `runtime_only` — without which CI collects none of them.
+That marker rule is `CI-MARKER-1`, filed separately; it is *why* this gap stayed invisible, but
+it is a distinct problem — `CI-MARKER-1` is tests that exist and never run, this entry was tests
+never written. Fixing one does not fix the other.
+
+**★ The suites are made to actually run — a fourth variant of the same trap, closed.** 33 of the
+native tests (the kernel contract and the parity assertions that pin `NATIVE-PARITY-1`) need the
+compiled extension, and a skip reads as green. `Native Crate Build (Rust)` compiles the crate but
+never imports it, so on the first cut those 33 skipped in CI — coverage that existed, was
+collected, and still tested nothing. Fixed in two halves:
+
+1. `Runtime Contracts` now builds the crate itself and renames the artifact
+   (`cargo build --locked --release`, then `libmemory_bridge_rs.so` → `memory_bridge_rs.so`;
+   cargo emits a `lib`-prefixed cdylib that Python will not import — the Linux twin of the
+   `.dll`/`.pyd` mismatch in `NATIVE-DISCOVERY-1`). It shares the Rust job's cache key.
+2. The job sets `AINDY_REQUIRE_NATIVE_BRIDGE=1`, under which
+   `test_native_bridge_is_importable_when_ci_says_it_must_be` **fails** instead of skipping if
+   the extension is missing, plus a companion test that calls into it so an
+   importable-but-broken extension is caught too. Verified in all three states: unset → skips
+   (local dev unaffected); set + present → passes; set + artifact removed → two explicit
+   failures.
+
+Without (2), a future break in the build or the rename would silently delete the parity
+coverage while the job stayed green — which is the exact failure this whole entry is about.
+
+**Scope note, so this is not read as more than it is.** `test_os_layer.py` covers TenantContext
+(the isolation boundary) and ResourceManager (quota/concurrency); the SchedulerEngine
+WAIT/RESUME half is covered through `test_event_bus.py` and existing ECOGAP-6 work, not
+re-tested here. Still open under ECOGAP-6, not this entry.
+
+**Gotcha found while writing it:** `ResourceManager.can_execute` returns `(True, None)`
+unconditionally when `settings.is_testing`, so quota enforcement is **vacuous in the test
+environment**. Any naive quota test passes without exercising a single counter. The suite
+patches `is_testing` off — and note it is a pydantic *property*, so it must be patched on the
+class; `patch.object(settings, "is_testing", False)` raises `AttributeError`.
 
 ---
 
@@ -5278,6 +5322,181 @@ should therefore be done as its own PR, so any newly-surfaced red is attributabl
 
 **Note the `--cov-fail-under=35` interaction:** adding 268 tests changes measured coverage.
 Expect the number to move and re-baseline deliberately rather than lowering the gate.
+---
+
+
+## NATIVE-PARITY-1 — the native and Python scorers disagree for a negative `impact_score`
+
+**Status:** Open — correctness. Found 2026-08-14 writing the DOCS-COVERAGE-CLAIM-1 native
+suite; verified against a locally-built crate, not inferred.
+
+`AINDY/runtime/memory/scorer.py` runs whichever engine is available, and the two implement the
+same formula — except for the impact term:
+
+```rust
+// lib.rs:181  (Rust)
+let impact_bonus = (impact_scores[idx] / 5.0).clamp(0.0, 1.0) * 0.15;
+```
+```python
+# scorer.py:120  (Python fallback)
+impact_bonus = min(1.0, prepared["impact_score"] / 5.0) * 0.15
+```
+
+`clamp(0.0, 1.0)` bounds **both** ends; `min(1.0, …)` bounds only the top. For a negative
+`impact_score` the Python term goes negative while Rust floors it at zero. Measured against the
+real extension:
+
+| `impact_score` | native | python | delta |
+|---|---|---|---|
+| −10.0 | 0.420038 | 0.120038 | **+0.300** |
+| −1.0 | 0.420038 | 0.390038 | +0.030 |
+| ≥ 0 | — | — | 0.000 |
+
+A **0.30 delta on a 0.42 score is 71%** — easily enough to reorder a recall result set.
+
+**Why this is more than a formula nit.** Which engine runs is not a decision anyone makes:
+`_load_bridge()` returns the extension if it happens to be importable and `None` otherwise. So
+the *same* recall on the *same* data ranks differently depending on whether the crate was
+built — and `USE_NATIVE_SCORER` silently changes ranking, not just speed.
+
+**Fix:** clamp the Python side (`min(1.0, max(0.0, impact / 5.0))`) or drop the Rust lower
+clamp. Clamping Python matches the Rust intent. Pinned by
+`TestEngineParity::test_engines_must_agree_on_negative_impact` (xfail, strict — flips to a pass
+when fixed) plus a non-xfail test asserting the divergence is *exactly* the un-clamped term, so
+a partial fix cannot pass silently. Reachable whenever a stored `impact_score` is negative;
+`_safe_float` passes negatives straight through.
+
+---
+
+## NATIVE-DISCOVERY-1 — the two crate consumers search different directories
+
+**Status:** Open — the native cosine kernel is unreachable from the recall path in any
+release-built environment. Found 2026-08-14 alongside NATIVE-PARITY-1.
+
+Two modules load the same extension and disagree about where it lives:
+
+| Consumer | Searches | Result with a `--release` build |
+|---|---|---|
+| `runtime/memory/native_scorer.py:127-153` | `target/release` **then** `target/debug` | finds it |
+| `memory/embedding_service.py:191-198` | `target/debug` **only** | never finds it |
+
+`Native Crate Build (Rust)` runs `cargo build --locked --release`, and any real deployment would
+build release too — so `cosine_similarity` silently uses the pure-Python fallback while
+`native_scorer`, in the *same process*, uses the C++ kernel. Verified locally: with only
+`target/release/memory_bridge_rs.pyd` present, `cosine_similarity` returned without ever
+importing the module, while `_load_bridge()` loaded it from the release path.
+
+**Two smaller things in the same function**, both pinned by tests:
+
+- `except (ImportError, AttributeError, Exception)` is just `except Exception`. It also swallows
+  the extension's `ValueError` on ragged input, so a genuine length-mismatch bug returns `0.0` —
+  indistinguishable from "not similar".
+- The `sys.path.insert(0, …)` runs on **every call**, not once at import.
+
+**Fix:** give both consumers one shared loader — `native_scorer._load_bridge()` already has the
+right shape (both profiles, cached). Note the crate builds to `memory_bridge_rs.dll` on Windows
+and Python will not import that, so a local build needs it copied to `memory_bridge_rs.pyd`
+(the suite's module docstring records this).
+
+---
+
+## EVENTBUS-PUBLISH-LATCH-1 — three failed publishes disable cross-instance events permanently
+
+**Status:** Open — availability. Found 2026-08-14 writing the DOCS-COVERAGE-CLAIM-1 event-bus
+suite; verified by driving `EventBus.publish` through a failing then a healthy client.
+
+`EventBus.publish` counts consecutive failures and, on the third, sets `self._enabled = False`
+(`event_bus.py:192-198`). **Nothing ever sets it back.** When Redis returns, `publish` hits the
+`if not self._enabled: return False` guard at the top and returns without attempting a
+connection:
+
+```
+publish 1: False  enabled=True   failures=1
+publish 2: False  enabled=True   failures=2
+publish 3: False  enabled=False  failures=3
+Redis recovered → publish: False   (client.publish never called)
+```
+
+**Why it matters.** The bus exists so a flow that entered WAIT on instance A can be resumed by
+an event arriving on instance B. Once the publisher latches off, that propagation stops for the
+life of the process — so in a multi-instance deployment a *transient* Redis blip of three
+publishes silently produces exactly the failure the module was built to prevent: flows waiting
+on other instances are never resumed. The only cure is a restart, and nothing surfaces the
+state except one WARNING at the moment it latches.
+
+**The module docstring is misleading here** — "Subscriber thread crash: caught by the outer
+reconnect loop; reconnects with exponential back-off (1 s → 30 s cap)" describes the
+*subscriber*. The publisher has no recovery path at all.
+
+**Fix options:** reset `_enabled` on a successful `_is_redis_connected()` probe; or replace the
+latch with a cooldown (retry after N seconds) so a blip degrades rather than terminates; or
+drop the latch and rely on the existing per-call failure logging. Note `_consecutive_failures`
+is already reset on success, so an *intermittent* failure never latches — it is specifically
+three in a row. Pinned by `TestPublisherFailureLatch`, including a test asserting the recovered
+client is never even contacted.
+
+---
+
+## TENANT-FROZEN-SHALLOW-1 — `TenantContext` is frozen but its capability list is not
+
+**Status:** Open — security-adjacent, no known exploit path. Found 2026-08-14 writing the
+DOCS-COVERAGE-CLAIM-1 OS-layer suite.
+
+`TenantContext` is a `@dataclass(frozen=True)` documented as an *"Immutable tenant isolation
+context"*. Rebinding an attribute raises `FrozenInstanceError` as expected — but
+`capability_scope` is a `list`, and `frozen` does not deep-freeze:
+
+```python
+ctx = build_tenant_context("t1", ["memory.read"])
+ctx.has_capability("admin.everything")      # False
+ctx.capability_scope.append("admin.everything")
+ctx.has_capability("admin.everything")      # True
+ctx.assert_capability("admin.everything")   # passes
+```
+
+So a capability can be added to a live security context that the type claims cannot change.
+`build_tenant_context` does copy the caller's list (`list(capability_scope or [])`), so this is
+not aliasing from the caller — the exposure is any code holding the context afterwards.
+
+**No known exploit path today** — nothing in `AINDY/` mutates `capability_scope` — which is why
+this is recorded rather than treated as an incident. It is a weak invariant, not a live breach.
+
+**Fix:** declare the field as `tuple[str, ...]` and have `build_tenant_context` pass
+`tuple(...)`. `in` still works, `has_capability`/`assert_capability` are unchanged, and
+in-place mutation raises `AttributeError`. The suite pins both the current behaviour and the
+fixed shape (`test_freezing_the_scope_would_close_it`), so the change is a one-line field edit
+with the assertion already written.
+
+**Adjacent inconsistency worth knowing** (pinned, not a bug per se): `TenantContext`'s
+`validate_memory_path` requires the trailing slash and so *rejects* the exact tenant root
+`/memory/t1`, while `memory_address_space.validate_tenant_path` *accepts* it. Two tenant guards
+give different answers for the same string.
+
+---
+
+## MAS-FLATTEN-1 — `flatten_tree` drops any node that is a parent of another node
+
+**Status:** Open — currently unreachable (dead code). Found 2026-08-14 writing the MAS suite.
+
+`flatten_tree` computes its roots as every path *minus* every path that is some other node's
+parent. An intermediate node is therefore never walked as a root, and because it is not a child
+of anything in the map either, it vanishes:
+
+```
+in : ['/memory/t1/entities/updated', '/memory/t1/entities/updated/n1']
+out: ['/memory/t1/entities/updated/n1']        # the parent node is gone
+```
+
+**Not currently reachable:** `flatten_tree` has **zero callers** under `AINDY/`, which is why it
+is recorded rather than fixed. Pinned by an xfail(strict) test that flips to a pass when the
+roots computation is corrected.
+
+**Related, and this one *is* live:** `build_tree` — which backs `sys.v1.memory.tree` — never
+nests for canonical MAS data. MAS nodes are always 5-segment leaves, so a node's parent path is
+never itself a node, the `parent in by_path` branch never fires, and every entry comes back with
+`children: []`. The "tree" endpoint returns a flat map by construction. Asserted in
+`TestBuildTree::test_real_mas_data_produces_no_nesting` so a change to real nesting is a
+visible, deliberate break rather than a surprise.
 
 ---
 
