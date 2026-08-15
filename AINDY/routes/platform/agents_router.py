@@ -105,6 +105,15 @@ def _caller_id(current_user: dict) -> str:
             status_code=400,
             detail="This endpoint requires a principal that resolves to a user account.",
         )
+    try:
+        # `owner_user_id` is a UUID column, so a non-UUID principal id would raise
+        # deep inside the query and surface as a 500. Fail here, with a reason.
+        uuid.UUID(str(user_id))
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(
+            status_code=400,
+            detail="This endpoint requires a principal whose user id is a UUID.",
+        )
     return str(user_id)
 
 

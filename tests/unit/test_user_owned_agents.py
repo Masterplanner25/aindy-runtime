@@ -254,6 +254,16 @@ class TestUserAgentRoutes:
         r = runtime_only_client.post("/platform/agents", json={"name": "X", "slug": "x"})
         assert r.status_code == 400
 
+    def test_non_uuid_principal_is_400_not_500(
+        self, runtime_only_app, runtime_only_client, mock_db
+    ):
+        """`owner_user_id` is a UUID column, so a non-UUID id would otherwise raise deep
+        inside the query and surface as an internal error with no usable reason."""
+        runtime_only_app.dependency_overrides[get_current_user] = lambda: {
+            "user_id": "not-a-uuid", "auth_type": "jwt"}
+        r = runtime_only_client.post("/platform/agents", json={"name": "X", "slug": "x"})
+        assert r.status_code == 400, r.text
+
 
 # ---------------------------------------------------------------------------
 # Owner-scoped read on the memory agent listing
