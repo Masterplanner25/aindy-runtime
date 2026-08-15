@@ -6232,6 +6232,26 @@ verified by MAC rather than read as a field; `child_context` narrowing by defaul
 callers issued a runtime-minted context authority at the entry point that already authorises
 them. The cryptography already exists in `capability_service`.
 
+**★ A second audit (Hermes, 2026-08-15) found the `child_context` half independently, framed it
+better, and it is worth separating from the rest of this entry: the runtime has ALREADY PROVED
+the invariant is computable — in the adjacent path.** `mint_token` computes a monotone-decreasing
+grant (`capability_service.py:481`: `allowed_capabilities = [c for c in allowed_capabilities if
+c in ceiling]`, and it drops tools whose capability falls outside the ceiling too). `child_context`
+does not. So this is not "we have not built attenuation" — it is *"we built it, then left the
+neighbouring path conventional"*, which is a much cheaper thing to fix and a much weaker thing to
+defend. Verified: both sides of the asymmetry are exactly as described.
+
+The fix is two lines and can ship independently of the rest of this entry:
+
+```python
+requested = set(capabilities) if capabilities is not None else set(parent.capabilities)
+capabilities = sorted(requested & set(parent.capabilities))
+```
+
+plus a test asserting no path can widen. **Take this first** — it converts the strongest security
+claim from "true in the main path" to "true by construction", and it does not wait on the larger
+`ExecutionAuthority` refactor.
+
 **Assessment on sequencing:** agree with the direction, not with doing it first. It is a
 moderate refactor (roughly ten `SyscallContext` construction sites, three self-granting paths,
 one inference function) with no demonstrated exploit, whereas GUEST-CONFINE-1 has one. Do the
@@ -6317,6 +6337,182 @@ wired. `C2_SANDBOX_AUDIT.md` describes the same code as built.
 Source wins; the status line is stale. Note the file is at the repo root, so it is **not**
 covered by the `docs/runtime/` frontmatter and `last_verified` checks that `Runtime Docs
 Validation` enforces — which is why nothing caught it.
+
+---
+
+## IDEM-11 — at-most-once is built, tested, and shipped disabled
+
+**Status: OPEN — P0.** Filed 2026-08-15 from the Hermes architectural map (G2), verified.
+Numbered `IDEM-11` per the registry's own rule rather than given a new prefix — this is the
+idempotency programme, continued.
+
+**The effect boundary requires three independent conditions to engage, and the first two both
+default off:**
+
+1. `_syscall_idempotency_enabled()` (`syscall_dispatcher.py:163`) returns `False` unless
+   `AINDY_SYSCALL_IDEMPOTENCY` is explicitly `1`/`true`/`yes`. Its own docstring says it:
+   *"MEB-1b global gate. When off (default), the syscall idempotency gate never fires."*
+2. The syscall must declare `execution_guarantee="EXACTLY_ONCE"`, and
+   `SyscallEntry.__init__` defaults to `"AT_LEAST_ONCE"` (`syscall_registry.py:193`).
+3. The run scope must pass `_gate_scope_engaged` (`syscall_dispatcher.py:478`).
+
+**★ Sharper than the audit stated — measured.** Of **27** registry entries, exactly **one**
+syscall declares `EXACTLY_ONCE`: **`sys.v1.memory.delete`** (`syscall_registry.py:1441`). So even
+with the environment flag turned on, the gate would deduplicate a single syscall. The mechanism
+is not merely default-off; it is almost entirely undeclared.
+
+**Why this matters more than a flag.** MEB/IDEM-10 closed the gate *at the mechanism level* and
+recorded the remainder as "soak then flip". This entry is that flip, plus the part the soak
+framing hides: flipping the flag alone changes almost nothing, because 26 of 27 syscalls never
+declared their semantics. In default configuration the runtime has the same duplicate-effect
+exposure as a system with no dedup at all — after paying the full cost of building, testing and
+documenting one.
+
+**Proposed — no new abstraction.** Make `execution_guarantee` a **required** argument to
+`register_syscall`, so every syscall author states the semantics rather than inheriting a silent
+default; default the global flag on in production profiles. The honest concurrency limitation
+(degrade-to-at-least-once under a live concurrent pending row, `effect_ledger.py:164`) stays
+documented; advisory locking remains a separate, later decision.
+
+**Migration risk is the real work.** Enabling dedup changes behaviour for any syscall that was
+accidentally relying on re-execution, so the audit of each syscall's declaration — not the flag —
+is the cost. Roll out per domain.
+
+---
+
+## EXEC-ENV-BIND-1 — an execution unit cannot declare the environment it needs
+
+**Status: OPEN — P1.** Filed 2026-08-15 from the Hermes architectural map (G1), verified.
+**Closely related to `GUEST-CONFINE-1`, and deliberately filed separately** — see the priority
+note below, which is the one place two independent audits disagree.
+
+**The gap, verified:**
+
+- `SandboxRunner` (a 10-method ABC with three implementations and a certification suite) is
+  reachable **only** from the Tier-2 plugin-host path. `create_sandbox_runner` and
+  `resolve_sandbox_runner_type` appear in exactly two modules — `plugin_host.py` (the extension
+  path) and `deployment_contract.py` (policy reporting). **Neither the agent tool path, the flow
+  path, nor the Nodus path touches them.**
+- `nodus_runtime_adapter.py:278` calls `subprocess.run` directly with its own budget logic. It
+  gets *containment* (a separate process, a time budget) but not a *selected, certified
+  environment*.
+- Agent tool handlers and flow nodes run in-process.
+- `ExecutionUnit` has 22 columns and **no** field expressing filesystem, network, CPU, memory,
+  secret or assurance constraints. Nor does `SyscallContext`.
+
+So the runtime owns a provider abstraction and a certification ladder, and has no vocabulary in
+which an execution unit can *request* anything from it. The provider half of the contract is
+built; the requesting half does not exist.
+
+**Proposed:** one declarative type, not five — `ExecutionEnvironmentSpec { filesystem, network,
+processes, cpu_ms/memory_mb/timeout_ms, secrets, persistence, min_assurance }` — attached to
+`ExecutionUnit` and resolved at `execution_gate.gate_and_dispatch` (`execution_gate.py:294`) via
+the existing `resolve_sandbox_runner_type` / `create_sandbox_runner`. Invariant: an execution
+unit runs only in an environment whose certified assurance class meets or exceeds its declared
+minimum; if none is available on this host, the unit does not run — the pattern
+`deployment_contract.py` already implements for deployment profiles.
+
+**★ Where the two audits disagree, and how the evidence resolves it.** Hermes rates this **P1**,
+reasoning *"no current escalation path, because the paths that lack environment binding are
+Tier-1 trusted by contract."* The earlier substrate audit rates the overlapping guest-VM case
+**P0**. **The P0 reading is the correct one for the guest path specifically, and it is settled by
+demonstration, not argument:** a guest Nodus script reached `subprocess_shell` and created a file
+on the host (see `GUEST-CONFINE-1`). The "Tier-1 trusted by contract" premise does not hold for
+guest *script content*, which is data submitted through
+`POST /platform/nodus/run`, not first-party code.
+
+The two are not in conflict once separated:
+
+| | Scope | Priority |
+|---|---|---|
+| `GUEST-CONFINE-1` | The guest VM specifically, where the hole is demonstrated | **P0** — fix with three kwargs |
+| `EXEC-ENV-BIND-1` | The general request vocabulary across all execution kinds | **P1** — the primitive, once earned |
+
+That ordering is also the cheaper one: the P0 is three keyword arguments; the P1 is a schema
+change plus a resolution path.
+
+---
+
+## QUEUE-DURABILITY-CLASS-1 — enqueued work can change durability class without the enqueuer knowing
+
+**Status: OPEN — P2, hardening.** Filed 2026-08-15 from the Hermes architectural map (G4),
+verified.
+
+`_fallback_to_memory_backend` (`core/distributed_queue.py:418`) swaps a durable Redis queue for
+`InMemoryQueueBackend`. `QueueJobPayload` has no field expressing a required durability, so a
+caller that enqueued work expecting it to survive a restart gets an identical success response
+either way.
+
+**★ The audit omits an existing control, which lowers the severity.** `AINDY_REQUIRE_REDIS`
+(`config.py:305`) makes the fallback raise instead of degrade, and the fallback path already
+classifies the condition `UNSAFE_DEGRADED` with `production_behavior="startup-fatal"` when
+`EXECUTION_MODE == "distributed"` — alongside a metric, a runtime condition and a warning log. So
+the degradation is deployment-visible and deployment-preventable; what is missing is only the
+*per-job* expression.
+
+**Proposed:** a `min_durability` field on `QueueJobPayload` (default durable) with enqueue
+failing rather than silently degrading — mirroring the quota path, which already fails closed in
+production.
+
+**Assessment: agree with the audit's own downgrade.** It says explicitly *"I'd fold it into the
+ownership contract rather than tracking it separately."* Given `AINDY_REQUIRE_REDIS` already
+exists, a per-job field partially duplicates a deployment-level control; do it with
+`ORCHESTRATOR-SPLIT-1` or not at all.
+
+---
+
+## ORCHESTRATOR-SPLIT-1 — three durable work stores, three recovery paths, no shared transaction
+
+**Status: OPEN — P2.** Filed 2026-08-15 from the Hermes architectural map (§8, P2-1), verified
+by inspection of the three subsystems.
+
+Durable work state lives in three places with three independent recovery mechanisms:
+
+1. **`runtime/flow_engine/`** — `PersistentFlowRunner`, node-granular, `FlowRun.current_node` +
+   JSON state, atomic `_claim_waiting_run`, `FlowHistory` per node. The primary runtime
+   orchestrator.
+2. **`core/distributed_queue` + `worker/`** — durable work items, leases, visibility timeouts,
+   DLQ. The dispatch fabric.
+3. **Nodus `orchestration/task_graph.py`** — declared `after` dependencies, coroutines, and its
+   own fsync'd JSON checkpoints under `.nodus/graphs/`.
+
+No shared transaction spans them, so there is no single authoritative answer to *"what work
+remains"* after a crash.
+
+**Proposed, either:** (a) make Nodus graph checkpoints write through a runtime-supplied
+effect/state store instead of `.nodus/graphs/*.json` — Nodus already exposes
+`runtime.set_effect_store(store)` for exactly this; or (b) publish an explicit ownership contract
+stating which engine owns which failure domain.
+
+**Assessment: (b) first.** The split may well be correct — three engines with three failure
+domains is a defensible design — but it is currently *undocumented*, which means it cannot be
+relied on or reviewed. Writing the contract is cheap, and it is the prerequisite for deciding
+whether (a) is worth doing. This is also the natural home for `QUEUE-DURABILITY-CLASS-1`.
+
+---
+
+## AUDIT-CORRELATION-1 — three joins the audit trail cannot make
+
+**Status: OPEN — P2.** Filed 2026-08-15 from the Hermes architectural map (§14), verified.
+
+Observability and auditability are otherwise the runtime's strongest properties — a parented
+causal event graph, an append-only effect and reversal ledger, execution provenance on the
+`ExecutionUnit`. Three correlations are missing, and each weakens after-the-fact reconstruction
+rather than correctness:
+
+1. **capability → event.** The authority that admitted a call is not persisted with it. A
+   `SYSCALL_EXECUTED` payload records the capability *string*, not the authority that produced
+   it. (`AUTHORITY-VALUE-1`'s `ExecutionAuthority` supplies this for free.)
+2. **environment → execution.** Sandbox attestation is not joined to the execution unit — which
+   is the same missing link `EXEC-ENV-BIND-1` describes from the requesting side.
+3. **`EffectRecord.action_id` → `SystemEvent`.** Verified: `EffectRecord` carries a
+   `ForeignKey("execution_units.id")` but none to `system_events`, so the join is by `trace_id`
+   convention rather than by constraint.
+
+**Assessment:** low urgency, but worth keeping on the list precisely because reconstruction is
+the property this runtime is strongest at — the gaps are small enough to be worth closing before
+they are load-bearing. (1) and (2) are byproducts of the two entries above; only (3) is
+standalone.
 
 ---
 
