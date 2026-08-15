@@ -13,6 +13,8 @@ covered by the production PostgreSQL deployment.
 from contextlib import contextmanager
 from datetime import timedelta
 
+import pytest
+
 from AINDY.db.database import utcnow
 from AINDY.platform_layer import leadership
 from AINDY.platform_layer.leadership import (
@@ -21,6 +23,8 @@ from AINDY.platform_layer.leadership import (
     release_lease,
     try_acquire_lease,
 )
+
+pytestmark = pytest.mark.runtime_only
 
 
 @contextmanager

@@ -13,6 +13,8 @@ from AINDY.platform_layer.deployment_contract import (
     set_api_runtime_condition,
 )
 
+pytestmark = pytest.mark.runtime_only
+
 
 class _DummyDb:
     def close(self) -> None:

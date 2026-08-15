@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
+
 from AINDY.agents.capability_service import (
     _now_utc,
     _token_hash,
@@ -10,6 +12,8 @@ from AINDY.agents.capability_service import (
     token_is_expired,
     validate_token,
 )
+
+pytestmark = pytest.mark.runtime_only
 
 
 def _token(*, expires_delta_hours: float, run_id="r1", user_id="u1"):
