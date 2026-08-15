@@ -17,6 +17,8 @@ import pytest
 
 from AINDY.config import Settings
 
+pytestmark = pytest.mark.runtime_only
+
 
 #: Bool settings the *test harness itself* needs in order to construct Settings at all —
 #: they gate the sqlite URL check and the Mongo reachability check. Emptying them would be

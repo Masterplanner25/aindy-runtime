@@ -148,12 +148,20 @@ class TestMigrationContract:
         assert re.search(r'^revision = "0015"', source, re.M)
         assert re.search(r'^down_revision = "0014"', source, re.M)
 
-    def test_head_constant_matches(self):
+    def test_head_constant_includes_this_migration(self):
         """The packaged constant `bootstrap-schema` stamps — the alembic/ tree is not in
-        the wheel, so this is the only head a wheel install can see."""
+        the wheel, so this is the only head a wheel install can see.
+
+        Asserted as ``>= "0015"``, not ``== "0015"``. What FR-13 needs is that a wheel
+        install stamps a head at or past this migration, so `0015` actually runs; pinning
+        equality instead asserts "0015 is the newest migration that will ever exist",
+        which is false the moment any later migration lands and makes an unrelated PR red.
+        That the constant matches the real scripts-dir head is checked authoritatively —
+        and CI-enforced — by `tests/unit/test_runtime_alembic_head.py`.
+        """
         from AINDY.db.alembic_head import RUNTIME_ALEMBIC_HEAD_REVISION
 
-        assert RUNTIME_ALEMBIC_HEAD_REVISION == "0015"
+        assert RUNTIME_ALEMBIC_HEAD_REVISION >= "0015"
 
     def test_ddl_is_wrapped_in_a_table_existence_guard(self, source):
         """ALEMBIC-FRESH-DB-1. In compose, `alembic upgrade head` runs *before* the ORM

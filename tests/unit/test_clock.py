@@ -21,6 +21,8 @@ import pytest
 
 from AINDY.kernel.clock import frozen_at, utcnow
 
+pytestmark = pytest.mark.runtime_only
+
 
 # ---------------------------------------------------------------------------
 # Core clock behaviour

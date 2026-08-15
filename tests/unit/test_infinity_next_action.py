@@ -13,6 +13,8 @@ import pytest
 from AINDY.core import next_action as na
 from AINDY.core.system_event_types import SystemEventTypes
 
+pytestmark = pytest.mark.runtime_only
+
 
 @pytest.fixture
 def captured_events(monkeypatch):

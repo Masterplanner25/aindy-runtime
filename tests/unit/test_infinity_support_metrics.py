@@ -15,7 +15,7 @@ import pytest
 from AINDY.core.system_event_types import SystemEventTypes
 from AINDY.platform_layer.support_metrics_service import _clamp_window, build_support_metrics
 
-pytestmark = pytest.mark.usefixtures("db_session")
+pytestmark = [pytest.mark.runtime_only, pytest.mark.usefixtures("db_session")]
 
 NOW = datetime.now(timezone.utc)
 
