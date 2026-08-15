@@ -6287,6 +6287,29 @@ family. The predicate needs a cached value with a short TTL, refreshed at segmen
 via its own short-lived session — never an unbounded per-effect query, and never a `rollback()`
 on a shared session.
 
+**★ A third audit (Codex, 2026-08-15) found this independently and added three things worth
+keeping:**
+
+1. **Quota has the same shape.** `check_quota` is consulted at dispatcher entry and at each flow
+   node, so a step that blows its wall-time budget mid-call is *reported afterwards*, never
+   preempted. A substrate that cannot reclaim an execution slot cannot enforce its own
+   concurrency limits — `MAX_CONCURRENT_PER_TENANT` is an accounting convention rather than a
+   guarantee unless a slot can be forcibly freed.
+2. **The hard-kill primitive already exists one layer over, and is unreachable from a tool call.**
+   Verified: `nodus_runtime_adapter.py:283` does `subprocess.run(timeout=…)`, and
+   `sandbox_runner.py:963/967` has a `terminate()` → `kill()` ladder. The runtime can hard-kill a
+   Nodus worker and a sandboxed plugin; it cannot hard-kill a tool it invoked in-process.
+3. **The consequence is concrete:** a hung tool holds a tenant concurrency slot *and* a DB session
+   indefinitely. `stuck_run_service` marks the **row** failed after a threshold; the **thread**
+   keeps running.
+
+**Its framing is better than a bare predicate:** an `ExecutionSlot` owning a cancellation token
+and a deadline, held by the runtime rather than by the executing code, whose `terminate()`
+*strength is a function of the isolation class* — in-process degrades to a cooperative flag and
+says so; subprocess/container/VM hard-kill. That makes this one design with
+`TOOL-SEAM-ISOLATION-1`, and two deliverables. The cooperative `should_stop()` below is the
+in-process half; it should be built knowing the other half is coming.
+
 **Assessment: agree, and this is the cheaper of the two proposed primitives.** The runtime ships
 a compensating-undo engine precisely because effects are hard to take back; a pre-effect check
 is strictly cheaper than compensation. Additive, no migration risk, and it only ever narrows
@@ -6412,7 +6435,23 @@ unit runs only in an environment whose certified assurance class meets or exceed
 minimum; if none is available on this host, the unit does not run — the pattern
 `deployment_contract.py` already implements for deployment profiles.
 
-**★ Where the two audits disagree, and how the evidence resolves it.** Hermes rates this **P1**,
+**★★ THREE INDEPENDENT AUDITS CONVERGED ON THIS ROOT, each naming a different boundary — which
+is itself the most useful result across all three.** The shared fact is one line:
+`create_sandbox_runner` is reachable only from `plugin_host.py`. What differs is which seam each
+audit noticed was missing it:
+
+| Audit | Boundary it named | Filed as |
+|---|---|---|
+| Claude Code | the **guest VM** — compiled agent plans run unconfined | `GUEST-CONFINE-1` (P0, demonstrated) |
+| Hermes | the **execution unit** — no vocabulary to request an environment | this entry (P1) |
+| Codex | the **tool seam** — `execute_tool` hands a live DB session to in-process code | `TOOL-SEAM-ISOLATION-1` (P0) |
+
+Three reviewers, three starting points, one mechanism attached to the quietest of the four
+boundaries it could serve. Treat that convergence as the signal: the fix is not three fixes, it
+is one provider re-homed and three call sites taught to ask for it. This entry is the *asking*
+half.
+
+**★ Where the audits disagree on priority, and how the evidence resolves it.** Hermes rates this **P1**,
 reasoning *"no current escalation path, because the paths that lack environment binding are
 Tier-1 trusted by contract."* The earlier substrate audit rates the overlapping guest-VM case
 **P0**. **The P0 reading is the correct one for the guest path specifically, and it is settled by
@@ -6513,6 +6552,192 @@ rather than correctness:
 the property this runtime is strongest at — the gaps are small enough to be worth closing before
 they are load-bearing. (1) and (2) are byproducts of the two entries above; only (3) is
 standalone.
+
+---
+
+## TOOL-SEAM-ISOLATION-1 — every authority check at the tool seam is advisory with respect to the code that runs next
+
+**Status: OPEN — P0.** Filed 2026-08-15 from the Codex comparative audit (G1), verified.
+Third of three convergent isolation findings — see `EXEC-ENV-BIND-1` for the convergence table.
+
+**The gap.** `execute_tool()` performs a full authority evaluation — token validity, granted
+tools, required capabilities, capability policy, rate limits, egress domains, secret scope — and
+then calls, verified at `agents/tool_registry.py:366`:
+
+```python
+with _egress_cm, capability_scope(_scoped_caps):
+    result = entry["fn"](args=args, user_id=user_id, db=db)
+```
+
+**In the runtime process, handing the tool the live database session.** Every preceding check is
+advisory with respect to what runs next: the tool can `import os`, read `os.environ`, open
+sockets on a fresh `threading.Thread` (which `egress_guard`'s own docstring names as an escape),
+or issue arbitrary SQL through the session it was given.
+
+**The provider that should be on the other side already exists** (`sandbox_runner.py`) and is
+reached only from `plugin_host.py`.
+
+**Why it belongs at runtime level.** Every application mounting a tool would otherwise re-solve
+containment itself, and the boundary must sit *below* the tool to mean anything. The audit's
+Codex citation is the crisp statement of the principle: *"`CODEX_SANDBOX*` env vars are hints,
+not controls."* The runtime currently has hints at the tool seam.
+
+**Proposed primitive.** Promote `SandboxRunner` from a plugin-host detail to a first-class
+isolation provider available at *any* effect seam, and let a registration declare what it needs:
+
+```python
+register_tool(..., isolation="in_process" | "subprocess" | "container" | "strong_vm")
+```
+
+`execute_tool` resolves the provider from the declaration and the deployment profile's
+`available_runner_types`, and **fails closed** when a tool demands containment the host cannot
+supply. **Default stays `in_process`, so nothing changes until opted in** — the same discipline
+every MEB/DUR flag in this repository already follows.
+
+**Invariant gained.** A tool's effective authority is bounded by its declared isolation class,
+not by the runtime process's ambient authority.
+
+**Risk if omitted.** The capability token's guarantee is only as strong as the honesty of the
+tool it authorises. `AINDY_TRUST_EXTERNAL_PYTHON_EXTENSIONS` is documented as trusted-code-only
+precisely because of this — which is the runtime already conceding the point in configuration.
+
+**Relationship to the other two:** same provider, different seam.
+`GUEST-CONFINE-1` (P0) is closable with three kwargs today and should not wait for this;
+`EXEC-ENV-BIND-1` (P1) is the general vocabulary this and the guest case would both consume.
+
+---
+
+## HTTP-SCOPE-GAP-1 — the capability model does not reach the runtime's own front door
+
+**Status: OPEN — P0.** Filed 2026-08-15 from the Codex comparative audit (G3), verified with
+exact counts.
+
+**Measured, and the audit's numbers were right:**
+
+| | Audit (2026-08-14) | Verified (2026-08-15) |
+|---|---|---|
+| `Depends(enforce_api_key_scope)` usages | 7 | **7** — 4 in `platform/flows_router.py`, 3 in `platform/platform_ops_router.py` |
+| Total route decorators under `AINDY/routes/` | 141 | **147** |
+
+The +6 is exactly the routes added since the audit (five `/platform/agents` routes plus
+`…/agents/{namespace}/restore`), so the drift is fully accounted for. **Seven of 147 route
+decorators carry a scope check.** Everything else — including the whole `/memory/*` surface —
+depends only on `get_current_user`, which is *identity*, not authority.
+
+**The check is additionally conditional.** `enforce_api_key_scope`'s own docstring says it:
+*"JWT users carry full trust and are never gated by this check"*, and the body confirms it —
+`if current_user.get("auth_type") == "api_key":` is the whole gate, so a session-authenticated
+caller skips it entirely. **An interactive JWT session is strictly more privileged than any API
+key.**
+
+**And the REST path can reach effects without the dispatcher at all.** Verified:
+`memory_router.py` contains **zero** references to `SyscallDispatcher` or `dispatch`, and
+`create_node`'s handler instantiates `MemoryNodeDAO(db)` and calls `dao.save(...)` directly. The
+capability vocabulary is never consulted on that path.
+
+**Why this is the sharpest of the three audits' findings.** The runtime *already has* the
+authority model; the gap is that its own front door does not use it. Compare
+`AUTHORITY-VALUE-1`, which is about the syscall chokepoint checking a caller-supplied value —
+this is about a large surface not reaching the chokepoint at all.
+
+**Proposed:** a `CallerAuthority` derived once at the edge — from JWT claims, platform-key scopes
+or an internal execution context — carried into `SyscallContext.capabilities` uniformly. Then
+either route handlers dispatch through the syscall contract, or they take a `CallerAuthority`
+dependency gating them with the same vocabulary.
+
+**★ The sub-decision to make first, because everything else follows from it: should a JWT bypass
+scopes at all?** Today it does. That is a deliberate-looking choice with no recorded rationale,
+and it cannot be evaluated until it is stated.
+
+**Risk if omitted.** `SECURITY_MATRIX.md` and the README describe a scope model that the code
+enforces on 7 of 147 routes and not at all for session callers. Documentation that overstates
+enforcement is a failure mode this repository already names — it is the whole subject of the
+"trusting a green check" section in `CLAUDE.md`, one layer up.
+
+---
+
+## FLOW-PARALLEL-1 — the flow engine has no fan-out, join, or barrier
+
+**Status: OPEN — P1.** Filed 2026-08-15 from the Codex comparative audit (G4), verified.
+
+`resolve_next_node()` (`flow_engine/node_executor.py:49`) returns exactly one successor or
+`None`, and the runner advances one node at a time; plan steps execute strictly sequentially.
+Three independent API calls in a plan take the **sum** of their latencies.
+
+**Why it belongs at runtime level.** Ordering, partial failure, and result determinism under
+concurrency are precisely the problems a substrate should solve once. Any application needing
+parallelism today must implement it *outside* the flow engine — losing `FlowHistory`, retry
+policy and quota accounting for the parallel branch, which are the guarantees the engine exists
+to provide.
+
+**Proposed primitive.** A `ParallelNodeGroup` in the flow graph —
+`edges[node] = ParallelGroup([n1, n2, n3], join="all" | "any" | "quorum(k)")` — with
+`FlowHistory` writing one row per branch under a shared `sequence_number` prefix, output patches
+merged in **declaration order rather than completion order**, branch failure resolved by the
+group's declared policy, and quota accounting summed across branches so
+`MAX_CONCURRENT_PER_TENANT` stays meaningful.
+
+**★ The load-bearing detail is determinism, not speed.** Merging in declaration order is what
+keeps a parallel run replayable, and replayability is the property this engine is built around.
+Concurrency and determinism are separable; the runtime should own both or neither.
+
+---
+
+## AUTHORITY-NEGOTIATION-1 — a capability denial has no bounded recovery path
+
+**Status: OPEN — P1.** Filed 2026-08-15 from the Codex comparative audit (G5), verified.
+
+A denied capability check terminates the step — `CAPABILITY_DENIED` is emitted at
+`nodus_adapter.py:188` and `nodus_execution_service.py:334`, and there is no path that asks
+*"this step was refused at the authority it requested; may it proceed at a lower one?"*
+
+Because approval is whole-plan, the only recovery today is a human re-approving an entirely new
+run, discarding the durable state the original accumulated.
+
+**Proposed primitive.** An authority-negotiation stage in the step lifecycle: on
+`CAPABILITY_DENIED`, consult a declared fallback — a reduced-scope variant of the same tool, a
+rehearsal via the existing virtual-tool path, or a human WAIT gate — attempt **at most once**,
+and record both attempts in `FlowHistory`.
+
+**★ The runtime has a better fallback available than the system that prompted this finding.**
+Codex's escalation path is attempt → approve → retry *outside* the sandbox, with a veto that
+downgrades rather than escalates. `sys.v1.agent.simulate` already provides a zero-side-effect
+rehearsal against virtual tools, which is a strictly safer fallback than re-running with more
+authority. The design constraint to keep from the comparison is the shape, not the mechanism:
+**bounded (exactly one retry), directional (downgrade only, never escalate), and recorded.**
+
+---
+
+## EGRESS-INPROC-1 — network policy is enforced in-process and documents its own bypasses
+
+**Status: OPEN — P2.** Filed 2026-08-15 from the Codex comparative audit (G6), verified.
+**This entry exists to re-home a mechanism, not to build one.**
+
+`egress_guard` wraps `socket.getaddrinfo`, `socket.socket.connect` and `connect_ex`, keyed on a
+contextvar allowlist, with IP-literal connects failing closed unless vouched for by an allowed
+resolution. It is careful work, it is **off by default** (`AINDY_EGRESS_ENFORCEMENT`), and its
+own docstring names both holes under the heading *"Honest limits"* — verified verbatim:
+
+* a tool resolving or connecting on a **thread that does not inherit the contextvar** escapes
+  the scope (raw `threading.Thread` does not copy context), and closing that in-process would
+  mean globally wrapping `threading.Thread`, *"intentionally not done; the sandbox path is the
+  real fix"*;
+* only the stdlib `socket` layer is wrapped, so a tool linking its own native resolver bypasses
+  both hooks.
+
+**★ Nothing here is a surprise to the code — the module already reaches the right conclusion**,
+naming the sandbox `--network none` + mediated-proxy path as the non-bypassable version. The
+finding is that policy and enforcement are in the same place when they should be split: the
+*decision* is a runtime capability concern, the *enforcement* is a host concern.
+
+**Proposed:** make the egress decision a property of the isolation provider from
+`TOOL-SEAM-ISOLATION-1` rather than of the calling thread. The in-process guard remains the
+`in_process` provider's best effort, with its honest limits intact, while container and
+strong-VM providers enforce at the namespace, and the runtime reports which mechanism is active.
+
+**Risk if omitted.** `capability_policy` domain allowlists read as controls in configuration and
+in audit output while being advisory in the default deployment profile — the gap between what an
+audit trail appears to prove and what was actually enforced.
 
 ---
 
