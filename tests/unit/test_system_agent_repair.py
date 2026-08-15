@@ -19,8 +19,10 @@ The split this file pins:
     operator deactivated trades a missing repair path for an unpredictable one. Boot
     warns; `POST /admin/agents/{namespace}/restore` is the repair, and needs no restart.
 
-Whether an admin *should* be able to deactivate a system agent stays a policy question.
-These tests fix the mechanism, not the policy.
+**Policy decided 2026-08-15: an admin MAY deactivate a platform system agent.** That is
+why boot must not re-enable it — a supported operator decision that a restart silently
+reverses is worse than no repair path at all. The tests below pin both halves of that:
+boot leaves `is_active` alone, and the restore endpoint is the way back.
 
 Marked `runtime_only` — without it CI collects nothing here (CI-MARKER-1).
 """
@@ -201,8 +203,8 @@ class TestRestoreEndpoint:
         ).status_code == 404
 
     def test_deactivating_a_system_agent_warns_in_the_response(self, runtime_only_client, mock_db):
-        """The policy stays open, but the caller is told what they just did and how to
-        undo it — a restart will not."""
+        """Permitted by decision, so the caller is told what they just did and how to undo
+        it — a restart will not."""
         _seed(mock_db, RUNTIME_SPEC)
 
         body = runtime_only_client.delete("/platform/admin/agents/runtime").json()

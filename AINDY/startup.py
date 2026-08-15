@@ -954,8 +954,12 @@ def _bootstrap_system_agents() -> None:
       the row and the endpoint that restores it; the repair is
       ``POST /platform/admin/agents/{namespace}/restore``, which needs no restart.
 
-    Whether an admin *should* be able to deactivate a system agent stays an open policy
-    question. This makes the consequence visible and recoverable either way.
+    **Policy decided 2026-08-15: an admin MAY deactivate a platform system agent.** It is a
+    supported operator action, not an anomaly to be prevented — which is precisely what
+    makes leaving ``is_active`` alone here the right call rather than a hedge. A supported
+    decision that a restart silently reverses would be worse than no repair path at all.
+    The WARNING stays because the state is consequential and not otherwise visible
+    (``flow_definitions_memory`` filters ``is_active``), not because it is wrong.
     """
     import uuid as _uuid
 
@@ -998,10 +1002,11 @@ def _bootstrap_system_agents() -> None:
 
                 if not row.is_active:
                     logger.warning(
-                        "[bootstrap] System agent namespace=%r is DEACTIVATED. It is excluded "
-                        "from agent listings and memory routing until restored. Boot does not "
-                        "re-enable it, because that would silently undo an operator action; "
-                        "restore it with POST /platform/admin/agents/%s/restore.",
+                        "[bootstrap] System agent namespace=%r is DEACTIVATED. This is a "
+                        "supported operator action, so boot leaves it alone rather than "
+                        "silently reversing it — but it is excluded from agent listings and "
+                        "memory routing while it stays this way. Restore it with "
+                        "POST /platform/admin/agents/%s/restore.",
                         spec["namespace"], spec["namespace"],
                     )
             db.commit()

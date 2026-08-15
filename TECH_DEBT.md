@@ -695,9 +695,19 @@ exactly the rows that matter most. Split on purpose:
   remedy; `POST /platform/admin/agents/{namespace}/restore` is the repair and needs no restart,
   and for a reserved namespace it repairs the identity fields in the same call.
 
-**Policy still open, deliberately:** whether an admin should be able to deactivate a platform
-system agent at all. `DELETE` now returns a `warning` in the body saying what was done and that
-a restart will not undo it, so the consequence is visible either way.
+**★ Policy DECIDED 2026-08-15 (owner): an admin MAY deactivate a platform system agent.** It is
+a supported operator action, not an anomaly to be prevented, so no reserved-namespace guard is
+added to `DELETE` — and the reservation on `POST …/agents/register` is *not* precedent for one,
+because that guard exists to stop an idempotent-update branch silently rewriting platform rows,
+which is a different thing from an explicit, visible, reversible operator action.
+
+**The decision makes the boot behaviour more clearly right, not less.** Leaving `is_active`
+alone at boot was chosen when the policy was open, as the conservative option; now that
+deactivation is *sanctioned*, silently reversing it on the next restart would be actively wrong
+— a supported decision the platform undoes behind the operator's back. The boot WARNING stays,
+reworded to say the state is supported rather than anomalous, because it is still consequential
+and not otherwise visible (`flow_definitions_memory` filters `is_active`). `DELETE` returns a
+`warning` naming the restore endpoint.
 
 **Two defects found while building, both fixed here:**
 
