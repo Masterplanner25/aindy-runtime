@@ -5185,9 +5185,21 @@ the distributed event bus, and the native scorer each have no dedicated suite. O
 **ECOGAP-6** (execution-path coverage) — do not double-track the execution paths; the four
 areas above are the increment.
 
-**Related but distinct:** `CI-MARKER-1` (below) — tests that *do* exist but that CI never
-runs. That is a marker-hygiene bug; this entry is a genuine absence of tests. Fixing one does
-not fix the other.
+**Progress 2026-08-14 — two of the four areas now have suites**, and writing them surfaced
+three defects the missing coverage had been hiding (`MAS-FLATTEN-1`, `NATIVE-PARITY-1`,
+`NATIVE-DISCOVERY-1`, all below):
+
+| Area | Suite | Tests |
+|---|---|---|
+| MAS path addressing | `tests/unit/test_memory_address_space.py` | 84 |
+| Native scorer | `tests/unit/test_memory_native_scorer.py` | 73 (33 skip without a local crate build) |
+| OS isolation layer | — | still open |
+| Distributed event bus | — | still open |
+
+Both suites are marked `runtime_only` — without which CI collects neither. That marker rule is
+`CI-MARKER-1`, filed separately; it is the reason this gap stayed invisible, but it is a
+distinct problem: `CI-MARKER-1` is tests that exist and never run, this entry is tests that
+were never written. Fixing one does not fix the other.
 
 ---
 
@@ -5278,6 +5290,107 @@ should therefore be done as its own PR, so any newly-surfaced red is attributabl
 
 **Note the `--cov-fail-under=35` interaction:** adding 268 tests changes measured coverage.
 Expect the number to move and re-baseline deliberately rather than lowering the gate.
+---
+
+
+## NATIVE-PARITY-1 — the native and Python scorers disagree for a negative `impact_score`
+
+**Status:** Open — correctness. Found 2026-08-14 writing the DOCS-COVERAGE-CLAIM-1 native
+suite; verified against a locally-built crate, not inferred.
+
+`AINDY/runtime/memory/scorer.py` runs whichever engine is available, and the two implement the
+same formula — except for the impact term:
+
+```rust
+// lib.rs:181  (Rust)
+let impact_bonus = (impact_scores[idx] / 5.0).clamp(0.0, 1.0) * 0.15;
+```
+```python
+# scorer.py:120  (Python fallback)
+impact_bonus = min(1.0, prepared["impact_score"] / 5.0) * 0.15
+```
+
+`clamp(0.0, 1.0)` bounds **both** ends; `min(1.0, …)` bounds only the top. For a negative
+`impact_score` the Python term goes negative while Rust floors it at zero. Measured against the
+real extension:
+
+| `impact_score` | native | python | delta |
+|---|---|---|---|
+| −10.0 | 0.420038 | 0.120038 | **+0.300** |
+| −1.0 | 0.420038 | 0.390038 | +0.030 |
+| ≥ 0 | — | — | 0.000 |
+
+A **0.30 delta on a 0.42 score is 71%** — easily enough to reorder a recall result set.
+
+**Why this is more than a formula nit.** Which engine runs is not a decision anyone makes:
+`_load_bridge()` returns the extension if it happens to be importable and `None` otherwise. So
+the *same* recall on the *same* data ranks differently depending on whether the crate was
+built — and `USE_NATIVE_SCORER` silently changes ranking, not just speed.
+
+**Fix:** clamp the Python side (`min(1.0, max(0.0, impact / 5.0))`) or drop the Rust lower
+clamp. Clamping Python matches the Rust intent. Pinned by
+`TestEngineParity::test_engines_must_agree_on_negative_impact` (xfail, strict — flips to a pass
+when fixed) plus a non-xfail test asserting the divergence is *exactly* the un-clamped term, so
+a partial fix cannot pass silently. Reachable whenever a stored `impact_score` is negative;
+`_safe_float` passes negatives straight through.
+
+---
+
+## NATIVE-DISCOVERY-1 — the two crate consumers search different directories
+
+**Status:** Open — the native cosine kernel is unreachable from the recall path in any
+release-built environment. Found 2026-08-14 alongside NATIVE-PARITY-1.
+
+Two modules load the same extension and disagree about where it lives:
+
+| Consumer | Searches | Result with a `--release` build |
+|---|---|---|
+| `runtime/memory/native_scorer.py:127-153` | `target/release` **then** `target/debug` | finds it |
+| `memory/embedding_service.py:191-198` | `target/debug` **only** | never finds it |
+
+`Native Crate Build (Rust)` runs `cargo build --locked --release`, and any real deployment would
+build release too — so `cosine_similarity` silently uses the pure-Python fallback while
+`native_scorer`, in the *same process*, uses the C++ kernel. Verified locally: with only
+`target/release/memory_bridge_rs.pyd` present, `cosine_similarity` returned without ever
+importing the module, while `_load_bridge()` loaded it from the release path.
+
+**Two smaller things in the same function**, both pinned by tests:
+
+- `except (ImportError, AttributeError, Exception)` is just `except Exception`. It also swallows
+  the extension's `ValueError` on ragged input, so a genuine length-mismatch bug returns `0.0` —
+  indistinguishable from "not similar".
+- The `sys.path.insert(0, …)` runs on **every call**, not once at import.
+
+**Fix:** give both consumers one shared loader — `native_scorer._load_bridge()` already has the
+right shape (both profiles, cached). Note the crate builds to `memory_bridge_rs.dll` on Windows
+and Python will not import that, so a local build needs it copied to `memory_bridge_rs.pyd`
+(the suite's module docstring records this).
+
+---
+
+## MAS-FLATTEN-1 — `flatten_tree` drops any node that is a parent of another node
+
+**Status:** Open — currently unreachable (dead code). Found 2026-08-14 writing the MAS suite.
+
+`flatten_tree` computes its roots as every path *minus* every path that is some other node's
+parent. An intermediate node is therefore never walked as a root, and because it is not a child
+of anything in the map either, it vanishes:
+
+```
+in : ['/memory/t1/entities/updated', '/memory/t1/entities/updated/n1']
+out: ['/memory/t1/entities/updated/n1']        # the parent node is gone
+```
+
+**Not currently reachable:** `flatten_tree` has **zero callers** under `AINDY/`, which is why it
+is recorded rather than fixed. Pinned by an xfail(strict) test that flips to a pass when the
+roots computation is corrected.
+
+**Related, and this one *is* live:** `build_tree` — which backs `sys.v1.memory.tree` — never
+nests for canonical MAS data. MAS nodes are always 5-segment leaves, so a node's parent path is
+never itself a node, the `parent in by_path` branch never fires, and every entry comes back with
+`children: []`. The "tree" endpoint returns a flat map by construction. Asserted in
+`TestBuildTree::test_real_mas_data_produces_no_nesting` so a change to real nesting is a
+visible, deliberate break rather than a surprise.
 
 ---
 
