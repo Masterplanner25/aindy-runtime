@@ -1,6 +1,6 @@
 ---
 title: "Memory Address Space (MAS)"
-last_verified: "2026-08-13"
+last_verified: "2026-08-15"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -183,9 +183,18 @@ flat = flatten_tree(tree)  # depth-first ordered list
 
 `build_tree` assembles a nested tree from a flat list of node dicts. Each node's `parent_path` determines its position.
 
-> **`flatten_tree` has zero callers** — verified 2026-08-13, nothing in `AINDY/` invokes it. It is
-> defined and exported but unused. The `GET /platform/memory/tree` endpoint does *not* call it,
-> which is why §9's promised `flat` response key does not exist.
+> **`flatten_tree` has zero callers** — re-verified 2026-08-15, nothing in `AINDY/` (or in
+> `aindy-apps-monolith`) invokes it. It is defined, documented and exported, but unused. The
+> `GET /platform/memory/tree` endpoint does *not* call it, which is why §9's promised `flat`
+> response key does not exist.
+>
+> **It was also wrong until 2026-08-15** (MAS-FLATTEN-1): the root set was computed as "every
+> path, minus every path that is some node's parent", which removes the *parents* — so any
+> intermediate node was never walked and silently vanished from the output. Fixed: a root is a
+> node whose parent is not itself a node. `flatten_tree` now guarantees **every node appears
+> exactly once**, with a totality guard for trees whose `children` links are incomplete. Having
+> zero callers is why this was recorded rather than treated as urgent — but it is documented
+> here as usable, so it was fixed rather than deleted.
 
 ---
 

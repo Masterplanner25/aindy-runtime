@@ -325,23 +325,48 @@ def build_tree(nodes: list[dict]) -> dict:
 
 
 def flatten_tree(tree: dict) -> list[dict]:
-    """Return nodes from a build_tree() result in depth-first order."""
+    """Return nodes from a ``build_tree()`` result in depth-first order.
+
+    Every node in *tree* appears exactly once.
+
+    MAS-FLATTEN-1: the root set was computed as "every path, minus every path that is
+    some node's parent" — which removes the *parents*, so an intermediate node was
+    never walked and silently vanished from the output::
+
+        in : ['/memory/t1/entities/updated', '/memory/t1/entities/updated/n1']
+        out: ['/memory/t1/entities/updated/n1']        # the parent was dropped
+
+    A root is a node whose *parent is not itself a node*, which is the inverse of what
+    was written.
+    """
     if not tree:
         return []
-    roots = set(tree.keys()) - {
-        parent_path_of(p) for p in tree if parent_path_of(p) in tree
-    }
-    result = []
+
+    roots = {path for path in tree if parent_path_of(path) not in tree}
+    result: list[dict] = []
+    visited: set[str] = set()
 
     def _walk(path: str) -> None:
+        if path in visited:
+            return
         entry = tree.get(path)
-        if entry:
-            result.append(entry["node"])
-            for child_path in entry.get("children", []):
-                _walk(child_path)
+        if entry is None:
+            return
+        visited.add(path)
+        result.append(entry["node"])
+        for child_path in entry.get("children", []):
+            _walk(child_path)
 
     for root in sorted(roots):
         _walk(root)
+
+    # Totality guard. `build_tree` only records a `children` entry when the parent path
+    # is itself a node, so a hand-built or partially-populated tree can hold nodes that
+    # are reachable from no root. Dropping them is the very failure above, so anything
+    # unvisited is appended in path order rather than lost.
+    for path in sorted(tree):
+        _walk(path)
+
     return result
 
 
