@@ -5513,6 +5513,74 @@ operator-visible half.
 
 ---
 
+## EVENTBUS-COVERAGE-1 — the pub/sub wire has never been exercised end to end
+
+**Status:** Open — test coverage. Found 2026-08-15 while fixing `EVENTBUS-PUBLISH-LATCH-1`,
+when the `Integration Tests (PostgreSQL + Redis)` check was about to be read as evidence for a
+change to `EventBus.publish()`. It is not evidence: it never runs that code.
+
+**Measured on `main`:**
+
+| | |
+|---|---|
+| Integration tests calling `EventBus.publish()` or `get_event_bus()` | **0** |
+| `notify_event(...)` calls in `tests/integration/` | 4, **all** `broadcast=False` |
+| Calls with `broadcast=True` (the production default, `waits.py:79`) | **0** |
+| Tests that call `start_subscriber()` anywhere in the repo | **0** |
+
+So three things are untested:
+
+1. **`publish()` against a real Redis.** The unit suite drives it through a `MagicMock` client.
+2. **`_subscriber_loop`** — the daemon thread. Nothing in the repo ever starts one; the unit
+   suite deliberately drives `_handle_message` directly, which is the same entry point *per
+   message* but skips the thread, the `pubsub.listen()` blocking read, and the reconnect
+   back-off.
+3. **The loop that is the module's entire reason to exist:** publish on instance A → Redis
+   pub/sub → subscriber on instance B → `_handle_message` → local `notify_event`.
+
+**What the multi-instance tests actually cover — worth not mis-reading.**
+`tests/integration/test_multi_instance_resume.py` *does* test genuine cross-instance resume, but
+through **`RedisWaitRegistry`** (shared Redis *state*), not the bus. It patches
+`event_bus.get_redis_client` and then calls `notify_event(..., broadcast=False)`, i.e. it
+simulates "instance B received the event" rather than propagating one. `broadcast=False` is a
+reasonable choice there — it keeps those tests deterministic by avoiding real pub/sub timing —
+but the side effect is that the publisher and subscriber have no end-to-end coverage anywhere.
+
+**Why it matters.** `EVENTBUS-PUBLISH-LATCH-1` — a publisher that permanently disabled
+cross-instance propagation after three transient failures — survived in `main` until it was
+found by *reading* the code. No test could have caught it, because no test runs the publisher.
+This is the same family as `DOCS-COVERAGE-CLAIM-1` (suites that never existed) and `CI-MARKER-1`
+(suites that never ran): a check whose name implies coverage it does not provide, and which now
+**gates every merge** since all ten checks became required.
+
+**The infrastructure already exists, so this is cheap.** The Integration job provisions a live
+`redis:7-alpine` service with `REDIS_URL=redis://localhost:6379`, and installs `fakeredis` for
+the `multi_instance` marker. A test needs only: two `EventBus` instances with distinct
+`_instance_id`s, `start_subscriber()` on B, `publish()` on A, and a bounded wait for B's
+`notify_event` to fire.
+
+**Write it carefully** — the pitfalls are known and each has bitten this repo before:
+
+- **Assert on an observable effect, not a sleep.** Poll for the effect with a deadline; a fixed
+  `sleep` is the classic flaky-test recipe, and `FLAKY-1` is already one required-check coin
+  flip too many.
+- **The own-instance filter will silently eat the message** if both buses derive the same
+  `_instance_id` — they will, since `_get_instance_id()` reads hostname/pid and
+  `TestInstanceIdentity::test_two_buses_in_one_process_share_an_identity` pins exactly that. Set
+  distinct ids explicitly or the test passes for the wrong reason.
+- **Rehydration gating.** `_handle_message` buffers instead of dispatching when
+  `engine.is_rehydrated()` is false, so a test that does not mark rehydration complete will see
+  zero dispatches and look like a propagation failure.
+- **Do not mark it `pytest.mark.integration`** unless it truly needs Postgres — that marker
+  triggers the conftest skip guard when `DATABASE_URL` is not live PG (see the marker hazard in
+  CLAUDE.md). This needs Redis, not a database.
+
+Overlaps `ECOGAP-6` (execution-path coverage) and the event-bus half of
+`DOCS-COVERAGE-CLAIM-1`, which closed the *unit* half — do not double-track; the increment here
+is specifically the wire.
+
+---
+
 ## TENANT-FROZEN-SHALLOW-1 — `TenantContext` is frozen but its capability list is not
 
 **Status:** Open — security-adjacent, no known exploit path. Found 2026-08-14 writing the
