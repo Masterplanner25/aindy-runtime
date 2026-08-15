@@ -5545,9 +5545,39 @@ operator-visible half.
 
 ## EVENTBUS-COVERAGE-1 — the pub/sub wire has never been exercised end to end
 
-**Status:** Open — test coverage. Found 2026-08-15 while fixing `EVENTBUS-PUBLISH-LATCH-1`,
-when the `Integration Tests (PostgreSQL + Redis)` check was about to be read as evidence for a
-change to `EventBus.publish()`. It is not evidence: it never runs that code.
+**Status: CLOSED (2026-08-15).** `tests/integration/test_event_bus_wire.py` — 7 tests driving
+`publish() → real Redis pub/sub → a live _subscriber_loop thread → _handle_message →
+notify_event`. Found 2026-08-15 while fixing `EVENTBUS-PUBLISH-LATCH-1`, when the
+`Integration Tests (PostgreSQL + Redis)` check was about to be read as evidence for a change to
+`EventBus.publish()`. It was not evidence: it never ran that code.
+
+**★ The suite was mutation-tested, because a passing test proves nothing on its own.** With
+`_publish_payload` mutated to silently drop every message, **5 of the 7 fail**. The first draft
+scored 4 — the own-instance-filter test asserts an *absence*, so a broken wire satisfied it
+trivially. It now runs a **liveness control** first (a different instance's event must be
+delivered to the same subscriber) so the absence assertion can only pass when the channel is
+demonstrably working. The two that still pass under mutation are the publisher-contract tests,
+which assert `publish()` reports success rather than that delivery occurred — correct, and
+deliberately so.
+
+**Placement and marker, per the pitfalls this entry recorded:**
+
+| Decision | Why |
+|---|---|
+| `tests/integration/` | needs a live Redis; the Integration job provisions `redis:7-alpine` |
+| marked `redis`, **not** `integration` | it needs Redis, not Postgres — `pytest.mark.integration` triggers the conftest skip guard when `DATABASE_URL` is not live PG |
+| skips only when `REDIS_URL` is **unset** | if the URL *is* configured (always, in CI) a connection failure is a **failure**, not a skip — otherwise the suite could silently stop covering the wire and still look green |
+
+Verified: 7 collected by `pytest -c pytest.integration.ini`, **0** collected by
+`pytest tests -m runtime_only` (so it does not slow the unit job), 7 clean skips with no
+`REDIS_URL`.
+
+**The two documented race pitfalls were both real and both handled.** Buses in one process share
+an `_instance_id` (hostname-derived), so each test sets an explicit distinct id or the
+own-instance filter eats every message; and Redis pub/sub has no persistence with no exposed
+readiness signal, so a message published before `SUBSCRIBE` lands is simply gone. Rather than
+sleep "long enough" first — the fixed-sleep pattern behind `FLAKY-1` — the helper **republishes
+inside the polling loop** until the effect is observed or a 10s deadline expires.
 
 **Measured on `main`:**
 
