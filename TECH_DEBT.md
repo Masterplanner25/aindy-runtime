@@ -464,9 +464,39 @@ filing**; corrections noted where the reported mechanism differs from the code.
 
 ---
 
-#### FR-11 — `invoke_runtime_callback` has a 10s non-configurable budget 🟢 hardening
+#### FR-11 — `invoke_runtime_callback` has a 10s non-configurable budget — **SHIPPED 2026-08-15**
 
-The app team filed this explicitly as *not a defect*: it self-resolved, does not reproduce
+**Status: SHIPPED (2026-08-15).** `AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS` (default **30s**, up
+from a hardcoded 10s), resolved **at call time** so it takes effect without a restart. The
+explicit `timeout_seconds=` parameter still wins when a caller passes one.
+
+**The default was sized on measurement, not taste:**
+
+| Evidence | Value |
+|---|---|
+| Measured cold start + work, runtime-only profile, idle host | **~3.85s median** (3 runs) |
+| Old budget | 10.0s — **~2.6× headroom on the lightest possible profile** |
+| Sibling subprocess boot allowance (`nodus_runtime_adapter._DEFAULT_BOOT_ALLOWANCE_MS`) | **15s for boot alone**, on top of a 30s script clock |
+| New default | 30s — ~8× the measured idle cost, still bounded |
+
+The second row is the sharp one: this callback's *entire* budget was smaller than what a
+comparable subprocess in the same repo is given merely to start.
+
+**★ Read at call time, deliberately.** A module-level constant would have been simpler and
+wrong: CLAUDE.md records import-time env reads as a recurring hazard here (FR-10's container
+crash-loop, `ResourceManager._get_backend()`, the rate limiter's Redis alias) precisely because
+they are invisible to behavioural tests. One `os.getenv` against a process spawn costs nothing,
+and `test_env_is_read_at_call_time_not_import_time` fails if it ever regresses — without needing
+a reload trick.
+
+**Also:** unparseable and non-positive values log a warning and fall back rather than raising
+(this runs on scheduled-job paths), and the timeout message now names the elapsed budget and the
+env key instead of a bare *"runtime callback command timed out"*.
+
+**Expected to mitigate `FLAKY-1`** — the ~50% failure in a required check whose leading
+hypothesis is exactly this budget. Not claimed as closed: see that entry.
+
+**Original filing follows.** The app team filed this explicitly as *not a defect*: it self-resolved, does not reproduce
 warm (0 timeouts in the following 6 minutes, 19,370 autonomy decisions recorded), and was a
 cold-start artifact on a container that took ~285s to become responsive. They note they nearly
 shipped circuit breakers across three apps before checking whether it reproduced. Worth
@@ -5700,8 +5730,18 @@ visible, deliberate break rather than a surprise.
 
 ## FLAKY-1 — `test_platform_only_startup` fails intermittently in a now-required check
 
-**Status:** Open — CI reliability. Measured 2026-08-14. **Pre-existing and not introduced by
-any current branch** — established by running the full `tests/unit/` suite six times across two
+**Status: Open — mitigation shipped 2026-08-15, NOT yet proven fixed.** The leading mechanism
+(FR-11's hardcoded 10s subprocess budget) is addressed: the budget is now
+`AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS`, default **30s**, ~8× the measured cold start instead of
+~2.6×. **Deliberately not closed.** The mechanism was never *confirmed* — the timeout signature
+was reproduced by forcing it, never captured from a natural failure — so raising the budget is a
+well-argued mitigation, not a demonstrated fix. Closing it needs the thing that has been missing
+all along: a run of `python -m pytest tests -m runtime_only -q --tb=long > cap.txt` (**never
+piped through `tail`**) that either catches the failure with a different traceback, or a
+sustained clean streak long enough to mean something against a ~50% base rate — call it 10+
+consecutive runs, since 4 clean runs in a row happen ~6% of the time by luck alone.
+
+Measured 2026-08-14. **Pre-existing and not introduced by any current branch** — established by running the full `tests/unit/` suite six times across two
 worktrees, because a single baseline pointed at the wrong cause.
 
 | Tree | Runs | `test_platform_only_registers_runtime_agent_defaults` |
