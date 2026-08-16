@@ -422,7 +422,14 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
             node_type=node_type,
             source=source,
             source_agent="syscall_dispatcher",
-            extra={"execution_unit_id": context.execution_unit_id},
+            # ROUTE-EFFECT-BYPASS-1 — merge the caller's `extra` rather than replacing it.
+            # This previously hard-set `{"execution_unit_id": ...}`, so any caller-supplied
+            # `extra` was silently dropped. That blocked routing `POST /memory/nodes` through
+            # this syscall: the route passes `extra=body.extra`, and a naive rewire would have
+            # been a silent data loss rather than a visible failure. The execution id still
+            # wins on a key collision — it is provenance, not caller data.
+            extra={**(payload.get("extra") or {}),
+                   "execution_unit_id": context.execution_unit_id},
             path=full_path,
             namespace=namespace,
             addr_type=addr_type,
