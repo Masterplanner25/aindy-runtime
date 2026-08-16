@@ -7023,7 +7023,35 @@ because a finding invites scrutiny and a reassurance does not.
 
 ## FLAKY-1 — `test_platform_only_startup` fails intermittently in a now-required check
 
-**Status: Open — pending confirmation on current `main`. Very likely fixed by FR-11.**
+**Status: CLOSED (2026-08-15) — fixed by FR-11's callback-budget raise. 15 healthy runs, zero
+reproductions.**
+
+| Tree | Runs | FLAKY-1 |
+|---|---|---|
+| `8c1d4ac` | 11 | 0 |
+| current `main` (post CI-MARKER-1, 1878 collected) | 4 | 0 |
+| **total** | **15** | **0** |
+
+Run durations 780–1222s throughout, so these are full runs rather than fast-fails. The only
+recurring failure across all 15 was `test_runtime_packaging`, the known local-only
+`python -m build --no-isolation` case that passes in CI. Against the measured ~50% base rate,
+15 clean runs is ≈0.003% by luck.
+
+**Both trees were required, and the second was the point.** The first 11 ran on `8c1d4ac`;
+`main` has since gained ~268 collected tests (`CI-MARKER-1`), and this failure was
+ordering-sensitive — so evidence from the older tree alone would not have supported closing.
+
+**The fix is FR-11**: `AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS`, default 30s, replacing a hardcoded
+10s budget that no call site could override. Sized on measurement — ~3.85s median cold start on
+the lightest profile is only ~2.6× headroom at 10s.
+
+**★ Kept below rather than deleted: three wrong readings of this test, in order.** Two
+consecutive failures read as *deterministic* (a third run refuted it); correlation with a branch
+adding neighbouring files read as *caused by them* (a second baseline refuted it); and a single
+captured traceback read as *refuting the timeout mechanism* (11 clean runs refuted it — the
+sample came from a machine that could not spawn processes at all). Each was a confident
+conclusion from a small sample, and the third was mine. The history is the useful part of this
+entry now that the flake itself is gone.
 
 **★★ CORRECTION 2026-08-15 (same day, later). This entry briefly said the leading mechanism was
 "REFUTED". That was an over-conclusion from a single sample, and the single worst sample
