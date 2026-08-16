@@ -6131,6 +6131,71 @@ visible, deliberate break rather than a surprise.
 
 ---
 
+## FR-14 — the blessed deploy primitive breaks on every additive runtime schema release
+
+**Status: OPEN — filed by the app team 2026-08-15 from the 2.1.0 upgrade, verified here, and one
+part of their write-up corrected in the runtime's favour and against it.**
+
+**What happened.** Their entrypoint runs `aindy-runtime bootstrap-schema` bare, under `set -e`.
+On 2.1.0 against an existing database it exits non-zero, because FR-13's additive
+`agents.metadata` / `agents.updated_at` are absent:
+
+```
+error: runtime-owned schema is not ready: Runtime-owned schema requires an explicit additive
+reconcile: Runtime table 'agents' is missing required column 'metadata'.
+```
+
+`set -e` turns that into an exit and `restart: unless-stopped` turns the exit into a **crash
+loop**. Their stack was down until reconciled by hand.
+
+**The refusal is correct.** `bootstrap-schema` deliberately will not alter tables without an
+explicit opt-in, which is the right default for a command that may be pointed at production. The
+finding is not "the guard is wrong."
+
+**The finding is that the runtime recommends the form that breaks.** `README.md:530` calls
+`aindy-runtime bootstrap-schema` the **"Blessed deploy primitive"** and shows it bare in the
+deploy snippet; `--reconcile` appears afterwards as an aside — *"Pass `--reconcile` to also apply
+additive column/index fixes if the runtime schema is out of date."* So the documented deploy
+entrypoint is guaranteed to fail on any release that adds a runtime column, which is exactly what
+a MINOR release is allowed to do.
+
+**★ Correction to their write-up, which makes the finding bigger rather than smaller.** Their
+option-B rationale reads: *"the runtime already self-migrates its own schema during `serve` — the
+real inconsistency is that `bootstrap-schema` is stricter than the command running immediately
+after it."* **Verified false.** `startup._enforce_schema_guard` reads
+`AINDY_SCHEMA_RECONCILE` (default `false`) and raises `RuntimeError` on
+`SCHEMA_STATE_UPGRADE_REQUIRED` exactly as the CLI does. There is no asymmetry to exploit —
+removing `bootstrap-schema` from an entrypoint **moves** the failure to `serve`, it does not
+remove it.
+
+So the real shape is worse than either write-up stated: **one behaviour, two gates, two different
+opt-in mechanisms** — a CLI flag (`--reconcile`) and an environment variable
+(`AINDY_SCHEMA_RECONCILE`) — and neither is on by default, while the README recommends the bare
+form.
+
+**Also worth recording: this is the second time an "additive, nothing to prepare" claim has been
+true about data and false about deployment.** FR-8 was the first — Alembic `0014` grandfathered
+pre-existing users, the `alembic/` tree is not in the wheel, so wheel installs never ran it. The
+recurring error is treating *data safety* as *deploy safety*. `APP_HANDOFF_v2.1.0.md` made
+exactly that conflation and has been corrected.
+
+**Options, none yet chosen (runtime side):**
+
+1. **Document the deploy form honestly** — make `--reconcile` the recommended deploy invocation
+   in the README, with the bare form named as the strict/audit variant. Cheapest, and it fixes
+   the specific trap.
+2. **Unify the two opt-ins** so the CLI flag and `AINDY_SCHEMA_RECONCILE` are one decision rather
+   than two, and a deployment cannot satisfy one and be refused by the other.
+3. **Emit the remedy in the error**, which the app team already did on their side — the message
+   names `--reconcile` but the crash-loop context scrolls it away.
+
+**What the app team decided on their side (recorded so we do not duplicate it):** an opt-in
+`AINDY_BOOTSTRAP_RECONCILE` env var on their entrypoint, default off, wired through compose —
+convenient behaviour available and non-default. They deliberately kept `restart: unless-stopped`,
+on the grounds that unattended reboot recovery is worth more than a faster failure signal.
+
+---
+
 ## GUEST-CONFINE-1 — the guest VM runs unconfined; effects on the primary execution path are not mediated
 
 **Status: OPEN — P0.** Filed 2026-08-15 from the substrate-boundary audit (F-1), **independently
@@ -6171,6 +6236,14 @@ and not in the audit:** `validate_requested_operation_usage()`, the function tha
 operations against an allowlist, has **zero callers outside its own module**, and its allowlist
 `ALLOWED_OPERATION_CAPABILITIES` contains only memory operations (`recall`, `remember`,
 `share`, …) — so it could not have blocked subprocess or http even if it were wired.
+
+**★ This is NOT a finding against the sandbox-escape gate, and the two must not be read against
+each other.** That suite certifies the **Tier-2 extension sandbox** — the
+`ContainerizedOciSandboxRunner` path reached through `plugin_host.py` — and it passes 17/17 on
+every release tag. The Nodus guest VM has never been inside its scope. So *"container-grade certified"* and
+*"the guest runs unconfined"* are both true simultaneously; the gap is that one provider is bound to one seam and
+not to the others. `SANDBOX_ESCAPE_AUDIT.md` Entry 014 carries the same table from the other
+direction, so a reader arriving from either document reaches the same conclusion.
 
 **★ Migration risk is far lower than the audit estimated — measured.** The audit says *"Any
 existing `.nd` script that uses `std:http` or `std:subprocess` breaks"* and recommends shipping
@@ -6658,6 +6731,14 @@ or issue arbitrary SQL through the session it was given.
 
 **The provider that should be on the other side already exists** (`sandbox_runner.py`) and is
 reached only from `plugin_host.py`.
+
+**★ This is NOT a finding against the sandbox-escape gate, and the two must not be read against
+each other.** That suite certifies the **Tier-2 extension sandbox** — the
+`ContainerizedOciSandboxRunner` path reached through `plugin_host.py` — and it passes 17/17 on
+every release tag. The in-process tool seam has never been inside its scope. So *"container-grade certified"* and
+*"every authority check at the tool seam is advisory"* are both true simultaneously; the gap is that one provider is bound to one seam and
+not to the others. `SANDBOX_ESCAPE_AUDIT.md` Entry 014 carries the same table from the other
+direction, so a reader arriving from either document reaches the same conclusion.
 
 **Why it belongs at runtime level.** Every application mounting a tool would otherwise re-solve
 containment itself, and the boundary must sit *below* the tool to mean anything. The audit's
