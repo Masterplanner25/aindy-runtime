@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+_Nothing yet._
+
+## 2.2.0 — 2026-08-16
+
+**Shape: MINOR — `2.2.0`.** No signature, route or response contract was removed or narrowed.
+`recommended_runtime_requirement` derives from the major, so it stays `>=2.0,<3.0` and **no
+consumer pin has to move**.
+
+| | |
+|---|---|
+| Schema contract | `2026-08-15.1` — **unchanged** |
+| Alembic head | `0016` — **unchanged**, no new revisions |
+| Consumer pin | unchanged |
+
+**No schema work on upgrade.** Nothing under `AINDY/db/models/` or `memory_persistence.py` was
+touched and no migration was added, so this release does not exercise the `bootstrap-schema`
+path that `FR-14` reports as broken for additive-column releases.
+
+### ★ Two things to read before upgrading
+
+**★ A guest Nodus script can no longer reach subprocess, network or host environment.**
+This is a confinement fix, so it is a *narrowing*: any `.nd` / `.nodus`
+script that called `subprocess_*`, `http_*` or `env_get` now fails with a `SandboxError`
+instead of succeeding. **Measured before shipping: no first-party script in `aindy-runtime`
+(8 scripts) or `aindy-apps-monolith` (2 scripts) uses any of them**, so this is expected to
+break nothing — but a third-party script that relied on the old behaviour will stop working,
+deliberately and loudly. Mediated egress (via `sys()` / `call_tool`) is unaffected.
+
+**★ The scheduler now runs wait firing on its own job and its own thread**, and emits a new
+`scheduler.queued` event per queued execution unit. Neither changes an API, but both change what
+an operator sees: expect one additional event type in `system_events` at roughly the volume of
+`execution.started`, and a second scheduler job in any dashboard that enumerates them. Turn the
+event off with `AINDY_SCHEDULER_QUEUE_EVENTS=false` if the volume is unwelcome.
+
+**Known-open and deliberately not in this release:** `FR-15` (a) — dispatch still runs INLINE by
+default, so work still queues behind a single 1s tick. This release makes that wait *visible*
+(`scheduler.queued`) and stops it starving timers and health checks (the wait-tick split), but
+does not remove it. Flipping `AINDY_ASYNC_HEAVY_EXECUTION` is the remaining step and wants soak.
+
 ### Fixed — a slow execution no longer stops parked flows from waking (`FR-15` (b), #443)
 
 Wait firing ran only as a prelude to dispatch, inside `schedule()`. Dispatch is INLINE by
@@ -87,14 +126,6 @@ now asserted rather than assumed.
 
 Mutation-checked: removing `allow_network=False` fails 3 tests including the whole-surface one,
 and the liveness control still passes.
-
-**★ Read before upgrading — a guest Nodus script can no longer reach subprocess, network or
-host environment.** This is a confinement fix, so it is a *narrowing*: any `.nd` / `.nodus`
-script that called `subprocess_*`, `http_*` or `env_get` now fails with a `SandboxError`
-instead of succeeding. **Measured before shipping: no first-party script in `aindy-runtime`
-(8 scripts) or `aindy-apps-monolith` (2 scripts) uses any of them**, so this is expected to
-break nothing — but a third-party script that relied on the old behaviour will stop working,
-deliberately and loudly. Mediated egress (via `sys()` / `call_tool`) is unaffected.
 
 ### Fixed — the guest VM ran unconfined (`GUEST-CONFINE-1`, P0, #438)
 
