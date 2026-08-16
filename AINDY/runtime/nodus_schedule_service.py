@@ -547,9 +547,25 @@ def _remove_from_scheduler(job_id: str) -> None:
         scheduler = get_scheduler()
         aps_id = f"{_JOB_ID_PREFIX}{job_id}"
         try:
+            from apscheduler.jobstores.base import JobLookupError
+        except Exception:  # pragma: no cover - apscheduler absent entirely
+            JobLookupError = ()  # type: ignore[assignment]
+
+        try:
             scheduler.remove_job(aps_id)
-        except Exception:
-            pass  # Job may already be gone
+        except JobLookupError:
+            # The only benign case, and the one the old bare `except Exception` claimed to be
+            # for. Everything else now surfaces.
+            logger.debug("[NodusSchedule] job %s already absent from the scheduler", aps_id)
+        except Exception as exc:
+            # Found by the shim audit: this used to be swallowed under a comment saying
+            # "Job may already be gone". An AttributeError from a renamed scheduler API — or
+            # from a test shim that never implemented `remove_job` — was indistinguishable
+            # from a job that was legitimately gone, so removal could be a silent no-op
+            # forever while every test passed.
+            logger.warning(
+                "[NodusSchedule] failed to remove job %s from the scheduler: %s", aps_id, exc
+            )
     except Exception:
         pass
 

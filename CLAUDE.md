@@ -550,6 +550,35 @@ rate, four clean runs happen ~6% of the time by luck.
 
 ---
 
+## ★ Vendored shims on `pythonpath` — untested by construction
+
+`pytest.ini` sets **`pythonpath = . AINDY`**, so `import apscheduler` resolves to the
+hand-written shim in **`AINDY/apscheduler/`** for *every test in this repo*, not to the
+installed package. **Anything the runtime calls that the shim does not implement is untested by
+construction** — and where the call sits inside a `try/except`, it fails *silently*: the test
+passes, production takes a different branch.
+
+This has now bitten three times:
+
+1. `executors.pool` missing → the dedicated-executor branch shipped unexercised (`FR-15` (b)).
+2. `events` + `add_listener` missing → the starvation listener shipped unexercised (`SYSMAX-5`).
+3. `remove_job` missing → `_remove_from_scheduler` swallowed an `AttributeError` under a comment
+   claiming it was for an already-deleted job. **Removal could have been a permanent no-op with
+   every test green.**
+
+**Rule: grow the shim to match the guard, never weaken the guard to match the shim.** A
+source-derived guard now exists (`tests/unit/test_apscheduler_shim_parity.py`) — it scans
+`AINDY/` for scheduler method calls and fails if the shim cannot express one, so a fourth
+instance is a CI failure rather than a discovery.
+
+**`nodus` is the other shadowed name.** `AINDY/nodus/` shares the installed package's name and
+`AINDY/nodus/runtime/embedding.py` shares the exact module path `GUEST-CONFINE-1`'s tests import
+`NodusRuntime` from. It currently resolves to the **installed** package (pinned by a test), and
+the collision is self-limiting only because that file is a re-export — a real definition there
+would turn a loud failure into a silent one.
+
+---
+
 ## `pytest.mark.integration` — skip hazard for Docker-only tests
 
 `pytest.mark.integration` triggers a conftest guard that **skips the entire test when `DATABASE_URL` is not a live PostgreSQL URL**. This fires even in the default dev environment where `DATABASE_URL=sqlite:///:memory:`.

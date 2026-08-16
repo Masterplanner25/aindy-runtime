@@ -73,6 +73,29 @@ class BackgroundScheduler:
         """
         self._listeners.append((callback, mask))
 
+    def get_job(self, job_id, jobstore=None):
+        """Return a job by id, or None — matching the real scheduler's contract.
+
+        Added by the shim audit: the runtime calls this (via a `callable(getattr(...))` guard
+        in `observability_router`), so without it the shim silently exercised only the
+        fallback path and the primary one shipped untested.
+        """
+        return next((job for job in self._jobs if job.id == job_id), None)
+
+    def remove_job(self, job_id, jobstore=None):
+        """Remove a job by id, raising JobLookupError when absent.
+
+        Raising the *same* type as the real scheduler matters: `_remove_from_scheduler`
+        catches it to mean "already gone". A shim that silently no-op'd would let a test pass
+        while production took a different branch.
+        """
+        from apscheduler.jobstores.base import JobLookupError
+
+        before = len(self._jobs)
+        self._jobs = [job for job in self._jobs if job.id != job_id]
+        if len(self._jobs) == before:
+            raise JobLookupError(job_id)
+
     def get_jobs(self):
         return list(self._jobs)
 
