@@ -25,10 +25,12 @@ from AINDY.db.models.job_log import JobLog
 from AINDY.platform_layer.registry import get_scheduled_jobs
 
 try:
+    from apscheduler.executors.pool import ThreadPoolExecutor as _APSThreadPoolExecutor
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
     from apscheduler.triggers.interval import IntervalTrigger
 except ImportError:  # pragma: no cover - optional dependency
+    _APSThreadPoolExecutor = None  # type: ignore[assignment]
     class _FallbackJob:
         def __init__(self, *, func, trigger, id, name, replace_existing):
             self.func = func
@@ -38,8 +40,9 @@ except ImportError:  # pragma: no cover - optional dependency
             self.replace_existing = replace_existing
 
     class BackgroundScheduler:  # type: ignore[no-redef]
-        def __init__(self, job_defaults=None):
+        def __init__(self, job_defaults=None, executors=None):
             self.job_defaults = job_defaults or {}
+            self.executors = executors or {}
             self.running = False
             self._jobs = []
 
@@ -139,12 +142,33 @@ def start() -> None:
         logger.warning("Scheduler already running â€” start() called twice")
         return
 
+    # FR-15 (b) — the wait tick gets its OWN executor, not just its own job.
+    #
+    # Splitting wait firing onto a separate job is necessary but NOT sufficient:
+    # `max_instances` is per-job, but the *thread pool* is shared, and this scheduler
+    # registers 16 jobs against APScheduler's default `ThreadPoolExecutor()` — which is
+    # **10 workers**, fewer than the number of jobs. Several of those jobs are DB-heavy and
+    # can block for up to `DB_POOL_TIMEOUT` (60s) when the pool is exhausted — the exact
+    # condition present during the incident that produced FR-15. A wait tick competing for
+    # one of ten shared workers is a probabilistic guarantee, not a real one.
+    #
+    # A dedicated single-thread executor makes it structural: nothing else can consume the
+    # thread that fires time-waits, so a parked flow wakes on its timer no matter what
+    # dispatch or any maintenance job is doing.
+    _executors = None
+    if _APSThreadPoolExecutor is not None:
+        _executors = {
+            "default": _APSThreadPoolExecutor(10),
+            "waits": _APSThreadPoolExecutor(1),
+        }
+
     _scheduler = BackgroundScheduler(
         job_defaults={
             "coalesce": True,        # Don't stack missed runs
             "max_instances": 1,      # One instance of each job at a time
             "misfire_grace_time": 60,  # 60s grace for missed scheduled runs
-        }
+        },
+        executors=_executors,
     )
 
     _register_system_jobs(_scheduler)
@@ -197,6 +221,23 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         replace_existing=True,
         coalesce=True,
         max_instances=1,
+    )
+
+    # FR-15 (b) — wait firing runs on its OWN job, not as a prelude to dispatch.
+    # ``max_instances`` is per-job, so a dispatch tick blocked inside a slow INLINE
+    # execution no longer stops parked flows from waking on their timers. Keeping these
+    # on one job made an unrelated busy flow able to hold a timer shut indefinitely.
+    scheduler.add_job(
+        _scheduler_wait_tick,
+        trigger=IntervalTrigger(seconds=1),
+        id="scheduler_wait_tick",
+        name="Scheduler wait tick",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        # Dedicated executor — see the comment in start(). Without this the job still
+        # competes for one of ten shared workers against 15 other jobs.
+        executor="waits",
     )
 
     scheduler.add_job(
@@ -353,16 +394,44 @@ def _should_run_stale_wait_cleanup() -> bool:
 
 
 def _scheduler_heartbeat_tick() -> None:
-    """Drive scheduler dispatch and amortized stale-wait cleanup."""
+    """Drive scheduler dispatch only.
+
+    FR-15 (b) — wait maintenance moved to ``_scheduler_wait_tick`` on its own job. This
+    tick can block for as long as a single INLINE execution takes (dispatch is INLINE by
+    default; see FR-15), and with ``max_instances=1`` a blocked tick means the next one is
+    skipped. Anything time-sensitive sharing this job inherits that stall, which is why
+    wait firing no longer does.
+    """
+    try:
+        from AINDY.kernel.scheduler_engine import get_scheduler_engine
+
+        # tick_waits=False: the dedicated wait job owns that now. Passing True here would
+        # reinstate the coupling this split exists to remove.
+        get_scheduler_engine().schedule(tick_waits=False)
+    except Exception as exc:
+        logger.warning("Scheduler heartbeat tick failed: %s", exc)
+
+
+def _scheduler_wait_tick() -> None:
+    """Fire due time-waits and run amortized stale-wait cleanup.
+
+    FR-15 (b) — deliberately a *separate* APScheduler job from dispatch. Both are
+    ``max_instances=1``, but that limit is per-job, so a dispatch tick blocked inside a
+    slow execution no longer prevents a parked flow from waking on its timer.
+
+    Concurrency with ``schedule()`` is safe by construction: ``tick_time_waits`` claims a
+    due wait by removing it from ``_waiting`` under the engine lock and fires it only after
+    releasing, so a wait cannot be fired twice.
+    """
     try:
         from AINDY.kernel.scheduler_engine import get_scheduler_engine
 
         engine = get_scheduler_engine()
-        engine.schedule()
+        engine.tick_waits()
         if _should_run_stale_wait_cleanup():
             engine.cleanup_stale_waits()
     except Exception as exc:
-        logger.warning("Scheduler heartbeat tick failed: %s", exc)
+        logger.warning("Scheduler wait tick failed: %s", exc)
 
 
 def _cleanup_stale_logs() -> None:

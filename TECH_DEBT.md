@@ -6581,6 +6581,8 @@ and the mechanism is version-independent.
 - **(c) Emit `execution.queued` + a queue-depth gauge.** Independent of (a)/(b), and the thing
   that turns the next occurrence into a one-line answer instead of a three-hour investigation.
 
+**★ (b) SHIPPED 2026-08-16 (#443).** Wait firing moved to its own `scheduler_wait_tick` job **and its own APScheduler executor** — the job split alone is probabilistic, because `max_instances` is per-job while the pool is shared (16 jobs, default pool of 10, several able to block 60s on `DB_POOL_TIMEOUT`). `schedule()` gained `tick_waits: bool = True`, default preserving historical behaviour. **The real severity was higher than filed: this was a correctness bug** — a flow parked on a timer stayed parked because an unrelated flow was executing, since `tick_time_waits` lived inside `schedule()`. Concurrency is safe by construction (claim-under-lock, fire-after-release), asserted with 8 concurrent tickers over 25 due waits.
+
 **★ (c) SHIPPED 2026-08-15 (#442).** `scheduler.queued` SystemEvent at enqueue (carrying
 `queue_depth`) + `aindy_scheduler_queue_wait_seconds` histogram at dispatch. Named
 **`scheduler.`, not the requested `execution.`** — the contract gate raises for `execution.*`

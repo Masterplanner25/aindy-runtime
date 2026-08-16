@@ -142,6 +142,27 @@ class SchedulerWaitMixin:
                 logger.debug("[Scheduler] event bus publish failed (non-fatal): %s", exc)
         return len(to_resume) + cross_resumed
 
+    def tick_waits(self) -> int:
+        """Run the time-sensitive wait maintenance: stale-wait recovery + time-wait firing.
+
+        FR-15 (b) — extracted from ``schedule()`` so it can be driven by its own scheduler
+        job. It used to run only as a prelude to dispatch, which meant **a slow execution
+        blocked flows from waking up**: dispatch runs INLINE by default and the driving
+        APScheduler job is ``max_instances=1``, so while one flow executed the next tick was
+        skipped entirely and no time-based wait fired. That is a correctness problem, not
+        just a latency one — a flow parked on a timer stayed parked because an *unrelated*
+        flow was busy.
+
+        Safe to call concurrently with ``schedule()``: ``tick_time_waits`` claims due waits
+        by deleting them from ``self._waiting`` **under the lock** and only fires them after
+        releasing it, so two callers cannot fire the same wait twice — whichever claims it
+        first wins and the other finds it gone.
+
+        Returns the number of waits fired.
+        """
+        self._check_stale_waits()
+        return self.tick_time_waits()
+
     def tick_time_waits(self) -> int:
         from datetime import datetime, timezone
         from AINDY.kernel.clock import utcnow

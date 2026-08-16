@@ -6,17 +6,39 @@ class ConflictingIdError(Exception):
 
 
 class _Job:
-    def __init__(self, *, func, trigger=None, id=None, name=None, replace_existing=False):
+    def __init__(
+        self,
+        *,
+        func,
+        trigger=None,
+        id=None,
+        name=None,
+        replace_existing=False,
+        executor="default",
+        max_instances=None,
+        coalesce=None,
+        **kwargs,
+    ):
         self.func = func
         self.trigger = trigger
         self.id = id
         self.name = name
         self.replace_existing = replace_existing
+        # FR-15 (b) — the shim used to swallow **kwargs, so NO test could assert a job's
+        # executor, max_instances or coalesce. Those are load-bearing here: `max_instances=1`
+        # is what makes a blocked tick skip the next one, and the wait tick's dedicated
+        # `executor` is what stops it being starved. Recording them makes the scheduler's
+        # job configuration testable at all.
+        self.executor = executor
+        self.max_instances = max_instances
+        self.coalesce = coalesce
+        self.kwargs = dict(kwargs)
 
 
 class BackgroundScheduler:
-    def __init__(self, job_defaults=None):
+    def __init__(self, job_defaults=None, executors=None):
         self.job_defaults = job_defaults or {}
+        self._executors = dict(executors or {})
         self.running = False
         self._jobs = []
 
@@ -38,6 +60,7 @@ class BackgroundScheduler:
                 id=id,
                 name=name,
                 replace_existing=replace_existing,
+                **kwargs,
             )
         )
 
