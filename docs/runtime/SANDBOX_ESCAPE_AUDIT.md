@@ -868,6 +868,45 @@ Two different boundaries, two different mechanisms, two different test suites.
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v2.2.0` release commit.
 
+### Entry 016 — 2026-08-16
+
+**Trigger:** `v2.3.0` release tag (`sandbox-escape-linux.yml`, run `31968265851`).
+**Commit:** `c911312fcd75950592f9af99d3173c959c619bf1`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`).
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.04s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `31968265851`).
+
+**Platform notes:**
+Seventeen-vector result on the same native-Linux gate as Entries 002–015, for the `v2.3.0`
+release commit.
+
+**Nothing in this release touches the certified boundary — verified, not assumed.**
+`git diff v2.2.0..v2.3.0` over `sandbox_runner.py`, `plugin_host.py`,
+`sandbox_certification.py` and `tests/sandbox/` is **empty**.
+
+**★ There IS dependency movement this time, and it is the one worth naming: `nodus-lang`
+4.1.0 → 4.2.0** — the only pin change in the release. It does not touch this gate's boundary
+(the Tier-2 OCI runner does not embed the Nodus VM), but it *does* touch the **guest** boundary
+that `GUEST-CONFINE-1` closed, because confinement is expressed as VM constructor arguments.
+
+That was checked before the bump landed rather than inferred from a green gate here: all three
+flags (`allow_subprocess`, `allow_network`, `allow_env`) are present on 4.2.0 with identical
+defaults, and **all 31 gated builtins are still refused**, verified against the real VM. Had
+one been renamed, the guest would run unconfined while this suite still reported 17/17 — the
+two boundaries are independent, and a green gate here would not have noticed.
+
+**The scope table, restated because it is the thing most likely to be collapsed:**
+
+| Boundary | Certified by this gate? | Status after `v2.3.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | `GUEST-CONFINE-1` closed; re-verified against nodus-lang 4.2.0 by `tests/unit/test_guest_confinement.py`, **not** by this suite |
+| In-process tool seam | **No** | `TOOL-SEAM-ISOLATION-1`, open, P0 |
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.3.0` release commit.
+
 ---
 
 *To add a new entry: run `pytest -m sandbox_escape -v`, note the summary line, and append
