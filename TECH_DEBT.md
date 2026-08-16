@@ -6507,11 +6507,134 @@ Validation` enforces — which is why nothing caught it.
 
 ---
 
+## IDEM-12 — `agent.undo` re-invokes every compensator when called twice
+
+**Status: OPEN — P2 (latent).** Filed 2026-08-15, found while doing the `IDEM-11` per-syscall
+audit rather than reported by any audit.
+
+**The gap.** `undo_run_effects` (`AINDY/core/effect_compensation.py`) selects the run's effects
+with `EffectRecord.status == "success"` and, for each, invokes the owning syscall's `compensate`
+hook. It **never marks a record as reversed**, and it **never consults `effect_reversals`** to
+see whether it has already run. So a second `sys.v1.agent.undo` on the same run re-selects the
+identical set and compensates all of it again — a double refund, a second reversing transfer —
+and writes a duplicate row to the append-only audit log for each.
+
+**Why it is not live.** **Zero compensators are registered** (verified 2026-08-15 across the
+whole tree: `compensate=` appears only in `register_syscall`'s own pass-through). Every effect
+therefore reports `irreversible` today, and the only present-day harm is duplicate audit rows.
+It becomes live the moment anyone registers the first compensator — which is precisely when
+someone is reasoning about correctness of reversal, not about re-entrancy.
+
+Same severity shape as `NATIVE-PARITY-1`: real and reachable by construction, currently
+unexploitable because of a property that nothing enforces and that a future change will remove.
+
+**Mitigation already shipped (not a fix).** `sys.v1.agent.undo` now declares
+`execution_guarantee="EXACTLY_ONCE"` (`IDEM-11`), so with the idempotency gate engaged a
+same-payload retry replays the cached summary instead of re-compensating. That is
+defense-in-depth and **does not close this**: the gate is default-off, and it keys on
+`(name, payload, scope)`, so it does not protect against a *deliberate* second undo, a
+different scope, or the flag being off.
+
+**The fix.** Make reversal re-entrant at its own layer, independent of the gate. Either mark the
+`EffectRecord` (a `reversed_at` column, so the `status == "success"` filter naturally excludes
+it) or filter the selection against existing `effect_reversals` rows with status `reversed`.
+Prefer the second first: it needs **no schema change**, and `effect_reversals` is already
+written on every attempt. Note that `irreversible` and `failed` rows must **not** suppress a
+retry — only `reversed` should, or a transient compensator failure would become permanent.
+
+**Do not close this by relying on the `IDEM-11` flag flip.** That would make correctness of
+reversal depend on an environment variable, which is the shape `IDEM-10` already paid for.
+
 ## IDEM-11 — at-most-once is built, tested, and shipped disabled
 
-**Status: OPEN — P0.** Filed 2026-08-15 from the Hermes architectural map (G2), verified.
-Numbered `IDEM-11` per the registry's own rule rather than given a new prefix — this is the
-idempotency programme, continued.
+**Status: OPEN — P0, audit half DONE (2026-08-15).** Filed 2026-08-15 from the Hermes
+architectural map (G2), verified. Numbered `IDEM-11` per the registry's own rule rather than
+given a new prefix — this is the idempotency programme, continued.
+
+The entry's own framing was *"the per-syscall audit is the real work, not the flag."* **That
+audit is now done and shipped; what remains is the flag flip after soak.** The original filing
+is preserved below; four corrections to it, all verified against source, come first.
+
+**★ Correction 1 — two of the filed numbers are wrong.** The registry holds **23** entries, not
+27 (`SYSCALL_REGISTRY_MIN_COUNT = 23`, and a live count agrees). And the single pre-existing
+`EXACTLY_ONCE` declaration was **`sys.v1.memory.write`**, not `sys.v1.memory.delete`.
+
+*This inverts the significance rather than merely fixing a name.* The filing's reading — "flipping
+the env flag alone would dedup a single syscall" — implied the flag was near-worthless, since
+`memory.delete` has **no callers at all** (recorded under `MEM-DELETE-1`). In fact the one guarded
+syscall is the runtime's **busiest write path**, on the memory-capture route that
+`RT-MEMTXN-LEAK-1` traced through every request. The flag was never inert; it was narrow and
+pointed at the highest-traffic non-idempotent call in the system.
+
+**★ Correction 2 — there is a fourth engagement path the filing omits.** `_durable`
+(`_durable_effects_active()`, DUR-2) engages the gate for **any** syscall, declaration-free and
+**independent of the master flag**. So a durable continuation already dedups everything. "Three
+conditions, the first two default off" describes the steady-state path only.
+
+**★ Correction 3 — `register_syscall` had no `execution_guarantee` parameter at all.** The filed
+fix says to make it *required* there. It could not be required, because it did not exist:
+`SyscallEntry.__init__` has always accepted it, `register_syscall` never forwarded it. Every
+syscall registered through that function — i.e. **every app/plugin syscall**, the FR-5b path —
+silently got `AT_LEAST_ONCE` **with no way to opt in**. The gate was unreachable for plugin
+syscalls *by construction*, not by configuration. Now forwarded and validated against a
+two-value set; a typo'd `"EXACTLY ONCE"` raises rather than silently downgrading, because a
+silent downgrade is indistinguishable from never having declared it.
+
+**★ Correction 4 — a hard prerequisite for the flip was missing, and it is the one that would
+have bitten.** The gate caches the handler's return in a **JSONB** column. The **tool** path
+(MEB-0, `tool_registry.py`) has always `json.dumps`-checked that result and degraded to caching
+nothing with a warning. Its **syscall** twin (MEB-1b) had no check and no `try` — so a handler
+returning a `UUID`/`datetime`/ORM object raised inside `complete_effect_record`'s commit, unwound
+to `dispatch()`'s belt-and-suspenders handler, and returned an **error envelope after the effect
+had already happened**: a successful side-effecting syscall reported to the caller as a failure,
+and only once the flag was on — i.e. **exactly when someone flips it**. Guard ported; behaviour
+now identical to the tool path. Same "one boundary hardened, its twin not" shape as
+`NATIVE-DISCOVERY-1` and `EVENTBUS-COVERAGE-1`.
+
+**The audit — all 23 classified, 1 → 7 declared.**
+
+*Non-idempotent, now `EXACTLY_ONCE` (7).* `memory.write` (pre-existing, duplicate node);
+`event.emit` (duplicate `SystemEvent` — not cosmetic, `INFINITY-RUNTIME-1` closes its loop on
+event counts); `flow.run` (`PersistentFlowRunner.start()` creates a new `FlowRun` every call);
+`flow.execute_intent` (re-selects a strategy, starts a second flow); `nodus.execute` (re-executes
+arbitrary guest script source — the widest blast radius); `job.submit` (duplicate `AutomationLog`
++ enqueue; return verified JSON-safe, `submit_async_job` is annotated `-> str`); `agent.undo`
+(below).
+
+*Idempotent, deliberately left `AT_LEAST_ONCE` (5 writes + 11 reads).* `agent.cancel` (CAS to a
+terminal status; terminal is a documented no-op), `agent.ensure_initial_run` (find-or-create by
+design), `agent.simulate` (overwrites one field, no status change, no real tools),
+`memory.delete` (delete-by-id converges), `agent.execute` (guarded by a `status == "approved"`
+precondition — `AGENT-APPROVE-001b` established that entry check as the correct guard). Reads are
+never declared: there is no effect to deduplicate and a declaration would put a ledger write on a
+hot read path.
+
+**★ Defect found by the audit — `agent.undo` double-compensates.** `undo_run_effects` selects
+`EffectRecord`s by `status == "success"` and **never marks them reversed**, nor consults
+`effect_reversals`. A second `sys.v1.agent.undo` therefore re-invokes **every** compensator — a
+double refund, a second reversing transfer — and writes duplicate audit rows. **LATENT, not live:
+zero compensators are registered today** (verified), so every effect currently reports
+`irreversible` and the only present-day harm is duplicate audit rows. It goes live the moment
+anyone registers one. Same severity shape as `NATIVE-PARITY-1`: real, reachable-by-construction,
+not currently exploitable. `EXACTLY_ONCE` is defense-in-depth here, **not the fix** — the durable
+fix is for `undo_run_effects` to skip already-reversed effects, tracked as **IDEM-12**.
+
+**Remaining work: flip the flag.** Default `AINDY_SYSCALL_IDEMPOTENCY` on in production, after
+soak. Per the standing decision (`CLAUDE.md` → current phase) that soak happens in
+`aindy-apps-monolith`, not here. The declarations shipped in this change are **inert** until the
+flip, so they carry no behaviour change on their own.
+
+**Regression guard:** `tests/unit/test_syscall_execution_guarantee.py` — 10 tests,
+`runtime_only`. Classification is asserted **per-name, not by count** (a count-only test passes
+on the wrong six). The degradation test drives the **real dispatcher** with all four gate
+conditions genuinely satisfied, and `test_gate_engages_at_all` is its **liveness control** — if
+any condition silently stopped holding, a broken guard would look identical to a guard that was
+never reached. Mutation-checked: removing the `json.dumps` check fails exactly the degradation
+test, on the assertion that the raw `UUID` reached the JSONB cache.
+
+---
+
+**Original finding, as filed (retained):**
 
 **The effect boundary requires three independent conditions to engage, and the first two both
 default off:**

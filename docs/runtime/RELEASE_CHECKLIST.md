@@ -1,6 +1,6 @@
 ---
 title: "Runtime Release Checklist"
-last_verified: "2026-07-08"
+last_verified: "2026-08-15"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -261,6 +261,16 @@ deployment that introduces TLS termination.
   If `Unreleased` looks thin, reconcile it against `git log vX.Y.Z..main --no-merges` **before
   cutting** — measured 2026-08-15, only 1 of the 50 commits since `v2.0.1` had touched the
   file, and every prior release window shows the same shape.
+- [ ] **On promotion, delete any sentence that describes what has *not yet* been done.**
+
+  Status notes are correct under `## Unreleased` and **false the moment it becomes a version
+  heading**, because the promotion PR is the one that resolves them. This is not hypothetical:
+  the `2.1.0` entry shipped saying *"The Dockerfile builder-stage pin is still `2.0.1`"* — in
+  the very commit that bumped it to `2.1.0`. Written in #425 where it was true; promoted
+  verbatim in #434 where it was not.
+
+  Sweep for "still", "not yet", "pending", "must be bumped before". **Write what a change *is*,
+  not what remains outstanding** — the first survives promotion, the second cannot.
 - [ ] Breaking changes to stable surfaces are explicitly documented
 - [ ] Schema contract version bump is noted if any model changed
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
