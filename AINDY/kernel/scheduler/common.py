@@ -69,6 +69,10 @@ class ScheduledItem:
     run_id: Optional[str] = None
     eu_type: str = "flow"
     enqueued_at_seq: int = field(default=0, compare=False)
+    #: FR-15 — monotonic timestamp set by ``enqueue()``. 0.0 means "never enqueued
+    #: through the normal path" (e.g. a retry item reconstructed by the dispatcher), and
+    #: callers must treat it as "unknown", never as "waited zero".
+    enqueued_at_monotonic: float = field(default=0.0, compare=False)
     retry_count: int = field(default=0, compare=False)
     max_retries: int = field(default=2, compare=False)
 

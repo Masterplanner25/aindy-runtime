@@ -41,6 +41,19 @@ scheduler_waiting_count = Gauge(
     registry=REGISTRY,
 )
 
+# FR-15 — time spent in the scheduler queue before dispatch. The depth gauge above says
+# how many are waiting; this says how long, which is the number that was missing when a
+# request took 177s to enter the pipeline. Buckets run to 5 minutes deliberately: the
+# observed pathological waits were 22s / 48s / 184s, so a default histogram topping out
+# around 10s would have put every interesting sample in +Inf and shown nothing.
+scheduler_queue_wait_seconds = Histogram(
+    "aindy_scheduler_queue_wait_seconds",
+    "Seconds an execution unit waited in the scheduler queue before dispatch",
+    ["priority"],  # high | normal | low
+    buckets=(0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
+    registry=REGISTRY,
+)
+
 # ── Nodus warm-worker pool (NODUS-WARMPOOL-1) ────────────────────────────────
 
 nodus_warm_pool_events_total = Counter(

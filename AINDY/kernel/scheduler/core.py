@@ -81,18 +81,41 @@ class SchedulerCoreMixin:
             logger.debug("[Scheduler] Redis wait unregister skipped for run=%s", run_id, exc_info=True)
 
     def enqueue(self, item: ScheduledItem) -> None:
+        import time as _time
+
         with self._lock:
             self._seq += 1
             item.enqueued_at_seq = self._seq
+            # FR-15 — monotonic, not wall clock: this is a duration measurement and must
+            # not be corrupted by an NTP step. Read under the lock so it cannot be
+            # attributed to the wrong queue position.
+            item.enqueued_at_monotonic = _time.monotonic()
             self._queues[item.priority].append(item)
             self._total_enqueued += 1
+            depth = sum(len(q) for q in self._queues.values())
             logger.debug(
-                "[Scheduler] enqueued eu=%s tenant=%s priority=%s seq=%d",
+                "[Scheduler] enqueued eu=%s tenant=%s priority=%s seq=%d depth=%d",
                 item.execution_unit_id,
                 item.tenant_id,
                 item.priority,
                 self._seq,
+                depth,
             )
+
+        # FR-15 — emitted OUTSIDE the lock, deliberately. This opens a DB session, and
+        # holding the scheduler lock across a database write would serialise every
+        # enqueue behind it — the same class of defect this signal exists to make
+        # visible. Best-effort; never raises into the enqueue path.
+        from AINDY.core.scheduler_queue_signal import emit_scheduler_queued
+
+        emit_scheduler_queued(
+            execution_unit_id=item.execution_unit_id,
+            tenant_id=item.tenant_id,
+            priority=item.priority,
+            eu_type=item.eu_type,
+            queue_depth=depth,
+            run_id=item.run_id,
+        )
 
     def dequeue_next(self) -> ScheduledItem | None:
         with self._lock:

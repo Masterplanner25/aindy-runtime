@@ -33,6 +33,17 @@ class SystemEventTypes:
     # RTR-5: runtime-driven autonomous execute-window lifecycle (started/completed).
     # Un-prefixed for the same reason as the ledger events above.
     AUTONOMY_WINDOW = "autonomy.window"
+    # FR-15: an execution unit entered the scheduler queue, carrying the depth it landed
+    # behind. Makes the window before `execution.started` visible in `system_events`
+    # rather than a silent gap — the app team measured 177s of that silence, inside which
+    # a queued request and a hung process are externally identical.
+    #
+    # ★ Named "scheduler.", NOT "execution.", and that is load-bearing rather than a
+    # preference: the execution-contract gate in system_event_service raises for any
+    # `execution.*` event emitted outside a pipeline, and the two hottest enqueue callers
+    # — the event-bus subscriber thread (cross_instance.py) and wait expiry (waits.py) —
+    # have no pipeline active. Same reason the ledger events above are un-prefixed.
+    SCHEDULER_QUEUED = "scheduler.queued"
 
     FLOW_NODE_STARTED = "flow.node.started"
     FLOW_WAITING = "flow.waiting"

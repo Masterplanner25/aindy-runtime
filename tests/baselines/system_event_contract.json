@@ -1,5 +1,5 @@
 {
-  "hash": "3389c3b67f800272",
+  "hash": "de04ce552504f784",
   "types": [
     "AINDY.core.system_event_types",
     "WAIT_TIMEOUT",
@@ -43,6 +43,7 @@
     "nodus.trace.step",
     "reasoning.signal",
     "recall.used",
+    "scheduler.queued",
     "score.computed",
     "startup.recovery.completed",
     "startup.recovery.failed",
