@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-08-15"
+last_verified: "2026-08-16"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -827,6 +827,46 @@ sit outside what a green gate here proves.
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v2.1.0` release commit.
+
+### Entry 015 — 2026-08-16
+
+**Trigger:** `v2.2.0` release tag (`sandbox-escape-linux.yml`, run `31935889083`).
+**Commit:** `c09b01f7458d57bb78117f6c5d47257f6fa33f11`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`).
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.19s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `31935889083`).
+
+**Platform notes:**
+Seventeen-vector result on the same native-Linux gate as Entries 002–014, for the `v2.2.0`
+release commit.
+
+**Nothing in this release touches the certified boundary — verified, not assumed.**
+`git diff v2.1.0..v2.2.0` over `sandbox_runner.py`, `plugin_host.py`, `sandbox_certification.py`
+and `tests/sandbox/` is **empty**. The only Dockerfile change is the builder-stage pin moving to
+`2.2.0`, and there is **no dependency movement at all** in this release — so unlike Entry 014
+there is not even a transitive bump to rule out.
+
+**★ This is the release that CLOSED `GUEST-CONFINE-1`, and that must not be read as this gate
+certifying it.** Entry 014 published a scope table listing the Nodus guest VM as out of scope
+with `GUEST-CONFINE-1` open at P0. That finding is now fixed — but **the fix is not the thing
+this gate tests, and the guest VM has still never been inside this gate's scope.**
+
+The distinction, stated so a future reader cannot collapse it:
+
+| Boundary | Certified by this gate? | Status after `v2.2.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17, container-grade | unchanged this release |
+| Nodus guest VM | **No** — out of scope, still | `GUEST-CONFINE-1` **CLOSED** — by VM confinement arguments (`allow_subprocess/network/env=False`), *not* by container isolation. Covered by `tests/unit/test_guest_confinement.py`, not by this suite. |
+| In-process tool seam | **No** — out of scope | `TOOL-SEAM-ISOLATION-1`, open, P0 |
+
+So: a green gate here says the **container-grade posture of the Tier-2 extension runner is
+unchanged**. It says nothing about the guest VM in either direction — it did not detect
+`GUEST-CONFINE-1` when that hole was open, and it does not verify the fix now that it is closed.
+Two different boundaries, two different mechanisms, two different test suites.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.2.0` release commit.
 
 ---
 
