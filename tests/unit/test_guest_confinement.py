@@ -127,6 +127,86 @@ def test_host_env_is_denied():
 
 
 # --------------------------------------------------------------------------------------
+# Whole-surface coverage — every builtin the three flags gate, not just the demonstrated three.
+# --------------------------------------------------------------------------------------
+
+
+def _gated_builtin_names() -> dict[str, list[str]]:
+    """Read the gated builtin names out of nodus's own registry source.
+
+    Derived rather than hardcoded so this does not rot when nodus adds a builtin: a new
+    `http_*` that the flag fails to cover shows up as a test failure instead of silently
+    widening the guest surface. The floor assertion below catches the opposite drift — names
+    silently disappearing from the gate.
+    """
+    import inspect
+    import re
+
+    import nodus.builtins.registry as registry
+
+    source = inspect.getsource(registry)
+    out: dict[str, list[str]] = {}
+    for flag in ("allow_subprocess", "allow_network", "allow_env"):
+        match = re.search(
+            rf'if getattr\(vm, "{flag}", True\):(.*?)'
+            r"(?=\n        if getattr|\n        from nodus|\Z)",
+            source,
+            re.S,
+        )
+        out[flag] = sorted(set(re.findall(r'"([a-z_0-9]+)"', match.group(1)))) if match else []
+    return out
+
+
+def _is_blocked(name: str) -> bool:
+    """True when calling `name` yields a sandbox refusal at *some* valid arity.
+
+    Arity matters and is the trap here: a bare `http_get()` returns an **arity** error, not a
+    `SandboxError`, which reads as "the guard is missing" when it is present. So try 1–3 args
+    and treat only a sandbox error as proof.
+    """
+    for argc in (1, 2, 3):
+        args = ", ".join(['"x"'] * argc)
+        result = _run(f'let r = {name}({args})\n')
+        error = str(result.get("error") or "")
+        if "sandbox" in error.lower():
+            return True
+        if "arity" in error.lower() or "argument" in error.lower():
+            continue
+        return False
+    return False
+
+
+def test_every_gated_builtin_is_actually_blocked():
+    """All of them, not just the three that were demonstrated."""
+    groups = _gated_builtin_names()
+    assert groups["allow_subprocess"], "could not read gated builtin names from nodus"
+
+    leaked = [
+        f"{flag}/{name}"
+        for flag, names in groups.items()
+        for name in names
+        if not _is_blocked(name)
+    ]
+    assert not leaked, f"these gated builtins are reachable from a guest script: {leaked}"
+
+
+def test_gated_builtin_surface_has_not_silently_shrunk():
+    """Floor check — measured 31 on nodus-lang 4.1.0 (7 subprocess / 18 network / 6 env).
+
+    Pins the number `NODUS_DEVELOPER_GUIDE.md` §1.1 publishes. A doc claim carrying a count
+    decays unless something asserts it (DOCS-COVERAGE-CLAIM-1), and a shrinking surface here
+    means the guest gained reach.
+    """
+    groups = _gated_builtin_names()
+    total = sum(len(v) for v in groups.values())
+
+    assert total >= 31, (
+        f"gated builtin surface shrank to {total} (was 31): "
+        f"{ {k: len(v) for k, v in groups.items()} } — a guest may have gained reach"
+    )
+
+
+# --------------------------------------------------------------------------------------
 # The flags must reach the VM the worker actually builds.
 # --------------------------------------------------------------------------------------
 

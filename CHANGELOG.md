@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Changed — guest confinement is now verified across the whole gated surface (`GUEST-CONFINE-1`, #440)
+
+`GUEST-CONFINE-1` shipped with three demonstrated blocks (`subprocess_shell`, `http_get`,
+`env_get`). Re-verifying it against the merged code showed the guard covers **31** builtins, and
+that all 31 are genuinely blocked on the real worker path — a stronger result than was claimed,
+now asserted rather than assumed.
+
+- `NODUS_DEVELOPER_GUIDE.md` §1.1 lists the real surface: **7 subprocess / 18 network / 6 env**.
+  The previous table named only `env_get` and trailed off, which understated it — it omitted
+  **`env_set`** and **`env_unset`** (host environment *writes*) and `subprocess_spawn`.
+- Two new tests. One derives the gated names from nodus's own registry and asserts each is
+  refused, so a future nodus builtin the flags fail to cover fails CI instead of silently
+  widening the guest surface. The other is a floor check on the count of 31, because a doc claim
+  carrying a number decays unless something asserts it (`DOCS-COVERAGE-CLAIM-1`).
+- **Documented trap:** arity. A bare `http_get()` returns an *arity* error, not a `SandboxError`
+  — which reads as "the guard is missing" when it is present. The tests probe arities 1–3 and
+  accept only a sandbox error as proof.
+
+Mutation-checked: removing `allow_network=False` fails 3 tests including the whole-surface one,
+and the liveness control still passes.
+
 **★ Read before upgrading — a guest Nodus script can no longer reach subprocess, network or
 host environment.** This is a confinement fix, so it is a *narrowing*: any `.nd` / `.nodus`
 script that called `subprocess_*`, `http_*` or `env_get` now fails with a `SandboxError`

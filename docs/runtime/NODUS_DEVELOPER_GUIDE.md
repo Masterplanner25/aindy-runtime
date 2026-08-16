@@ -34,11 +34,21 @@ A script is treated as **submitted content, not first-party code**, so the VM is
 three host capabilities denied. These builtins are registered as blocked stubs and any call fails
 with a `SandboxError` naming the flag:
 
-| Denied | Builtins affected | Flag |
-|---|---|---|
-| Subprocess execution | `subprocess_run`, `subprocess_shell`, … | `allow_subprocess=False` |
-| Network access | `http_get`, `http_post`, `http_request`, `http_stream`, `http_sse`, … | `allow_network=False` |
-| Host environment | `env_get`, … | `allow_env=False` |
+**31 builtins are denied in total** — every one verified blocked by driving the real worker
+(2026-08-15), not inferred from the flags:
+
+| Denied | Count | Builtins affected | Flag |
+|---|---|---|---|
+| Subprocess execution | 7 | `subprocess_run`, `subprocess_shell`, `subprocess_spawn`, `subprocess_spawn_shell`, `subprocess_shell_quote`, and the `_async` variants of run/shell | `allow_subprocess=False` |
+| Network access | 18 | `http_get`, `http_post`, `http_put`, `http_patch`, `http_delete`, `http_head`, `http_request`, `http_stream`, `http_sse`, `http_options_verb`, and the nine `_async` variants | `allow_network=False` |
+| Host environment | 6 | `env_get`, `env_has`, `env_list`, `env_list_keys`, **`env_set`**, **`env_unset`** | `allow_env=False` |
+
+Note the **writes** in the last two rows — `env_set` / `env_unset` mutate the host environment
+and `subprocess_spawn` starts a detached process. The earlier version of this table listed only
+`env_get` and trailed off in an ellipsis, which understated what is denied.
+
+**Checking whether a builtin is blocked?** Call it with its real arity. A bare `http_get()` returns
+an *arity* error, not a `SandboxError` — which looks like the guard is absent when it is not.
 
 Filesystem access is confined separately and was already: `allowed_paths` defaults to the working
 directory. Note the demonstrated escape that prompted this went *through subprocess*, which is not
