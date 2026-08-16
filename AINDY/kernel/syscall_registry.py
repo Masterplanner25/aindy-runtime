@@ -1523,6 +1523,10 @@ SYSCALL_REGISTRY["sys.v1.flow.run"] = SyscallEntry(
             "initial_state": {"type": "dict"},
         },
     },
+    # IDEM-11 — non-idempotent: PersistentFlowRunner.start() creates a NEW FlowRun on every
+    # call, so a retried step runs the flow twice. Return is {"flow_result": ...}; if that
+    # nests non-JSON-safe values the dispatcher warns and replay yields None (never fatal).
+    execution_guarantee="EXACTLY_ONCE",
 )
 SYSCALL_REGISTRY["sys.v1.event.emit"] = SyscallEntry(
     handler=_handle_event_emit,
@@ -1535,6 +1539,10 @@ SYSCALL_REGISTRY["sys.v1.event.emit"] = SyscallEntry(
             "payload": {"type": "dict"},
         },
     },
+    # IDEM-11 — non-idempotent: emit_system_event() writes a SystemEvent row, so a retry
+    # produces a DUPLICATE event. Duplicated events are not cosmetic here — INFINITY-RUNTIME-1
+    # closes its loop on event counts, so double-emission corrupts the signal it feeds.
+    execution_guarantee="EXACTLY_ONCE",
 )
 
 # ── v2 syscalls ───────────────────────────────────────────────────────────────
@@ -1583,6 +1591,9 @@ SYSCALL_REGISTRY["sys.v1.flow.execute_intent"] = SyscallEntry(
         "required": ["intent_result"],
         "properties": {"intent_result": {"type": "dict"}},
     },
+    # IDEM-11 — non-idempotent: _execute_intent_direct() selects a strategy and starts a flow,
+    # so a retry executes the intent a second time.
+    execution_guarantee="EXACTLY_ONCE",
 )
 SYSCALL_REGISTRY["sys.v1.nodus.execute"] = SyscallEntry(
     handler=_handle_nodus_execute,
@@ -1603,6 +1614,9 @@ SYSCALL_REGISTRY["sys.v1.nodus.execute"] = SyscallEntry(
         "required": ["nodus_result"],
         "properties": {"nodus_result": {"type": "dict"}},
     },
+    # IDEM-11 — non-idempotent, and the widest blast radius of the six: a retry re-executes
+    # arbitrary guest script source, repeating every effect that script performed.
+    execution_guarantee="EXACTLY_ONCE",
 )
 SYSCALL_REGISTRY["sys.v1.job.submit"] = SyscallEntry(
     handler=_handle_job_submit,
@@ -1625,6 +1639,10 @@ SYSCALL_REGISTRY["sys.v1.job.submit"] = SyscallEntry(
             "source": {"type": "string"},
         },
     },
+    # IDEM-11 — non-idempotent: submit_async_job() writes an AutomationLog and enqueues work,
+    # so a retry runs the job twice. Return is {"log_id": str, ...} — verified JSON-safe
+    # (submit_async_job is annotated -> str), so replay returns the original log id.
+    execution_guarantee="EXACTLY_ONCE",
 )
 SYSCALL_REGISTRY["sys.v1.agent.execute"] = SyscallEntry(
     handler=_handle_agent_execute,
@@ -1746,6 +1764,17 @@ SYSCALL_REGISTRY["sys.v1.agent.undo"] = SyscallEntry(
             "run_id": {"type": "string"},
         },
     },
+    # IDEM-11 — non-idempotent, and the sharpest of the six. undo_run_effects() selects
+    # EffectRecords by status == "success" and NEVER marks them reversed, nor consults
+    # effect_reversals. A second call therefore re-invokes every compensator — a double
+    # refund, a second reversing transfer — and writes duplicate audit rows.
+    #
+    # LATENT, not live: zero compensators are registered today (verified 2026-08-15), so
+    # every effect currently reports "irreversible" and the only present-day harm is
+    # duplicate audit rows. It becomes live the moment anyone registers a compensator.
+    # Declaring EXACTLY_ONCE is defense-in-depth, not the fix — the durable fix is for
+    # undo_run_effects to skip already-reversed effects, tracked in TECH_DEBT as IDEM-12.
+    execution_guarantee="EXACTLY_ONCE",
 )
 SYSCALL_REGISTRY["sys.v1.agent.simulate"] = SyscallEntry(
     handler=_handle_agent_simulate,
@@ -1810,6 +1839,10 @@ SYSCALL_REGISTRY["sys.v1.observability.support_metrics"] = SyscallEntry(
 )
 
 
+#: The only two values ``execution_guarantee`` may take. Mirrors ``RetryPolicy``'s contract.
+_VALID_EXECUTION_GUARANTEES: frozenset[str] = frozenset({"AT_LEAST_ONCE", "EXACTLY_ONCE"})
+
+
 def register_syscall(
     name: str,
     handler: Callable[[dict, SyscallContext], dict],
@@ -1822,6 +1855,7 @@ def register_syscall(
     deprecated_since: str | None = None,
     replacement: str | None = None,
     compensate: Callable[[dict, SyscallContext], dict | None] | None = None,
+    execution_guarantee: str = "AT_LEAST_ONCE",
 ) -> None:
     """Register a syscall at runtime.
 
@@ -1841,16 +1875,46 @@ def register_syscall(
         deprecated:       True causes the dispatcher to emit a warning.
         deprecated_since: Version string when deprecation was introduced.
         replacement:      Full name of the replacement syscall.
+        execution_guarantee: ``"AT_LEAST_ONCE"`` (default) or ``"EXACTLY_ONCE"``.
+
+            **IDEM-11 — this parameter did not exist until 2026-08-15.** ``SyscallEntry``
+            has always accepted it, but ``register_syscall`` never forwarded it, so every
+            syscall registered through this function — i.e. **every app/plugin syscall** —
+            silently got ``AT_LEAST_ONCE`` with no way to opt in. The idempotency gate was
+            therefore unreachable for plugin-registered syscalls by construction, not by
+            configuration.
+
+            Declare ``"EXACTLY_ONCE"`` when a retry with the same payload would produce a
+            *second* effect (a duplicate row, a second email, a second job). Leave the
+            default when the call is a read, or when repeating it converges on the same
+            state (delete-by-id, a CAS to a terminal status, find-or-create).
+
+            **The handler's return value must be JSON-serializable** — the gate caches it
+            in a JSONB column for replay. A non-serializable return is not fatal (the
+            dispatcher warns and caches nothing), but replay then yields ``None``.
+
+            Declaring this is inert unless the gate is engaged: ``AINDY_SYSCALL_IDEMPOTENCY``
+            must be on, or the run must be a durable continuation.
 
     Raises:
-        ValueError: If name does not start with ``"sys."`` or is already registered
-            with a different handler.
+        ValueError: If name does not start with ``"sys."``, is already registered
+            with a different handler, or ``execution_guarantee`` is not one of the two
+            accepted values.
     """
     if not name.startswith("sys."):
         raise ValueError(
             f"Syscall name must start with 'sys.', got: {name!r}"
         )
+    _guarantee = str(execution_guarantee or "").upper()
+    if _guarantee not in _VALID_EXECUTION_GUARANTEES:
+        # Fail loud rather than silently downgrading: a typo'd "EXACTLY ONCE" that quietly
+        # became AT_LEAST_ONCE would be indistinguishable from never having declared it.
+        raise ValueError(
+            f"register_syscall({name!r}): execution_guarantee must be one of "
+            f"{sorted(_VALID_EXECUTION_GUARANTEES)}, got {execution_guarantee!r}"
+        )
     SYSCALL_REGISTRY[name] = SyscallEntry(
+        execution_guarantee=_guarantee,
         handler=handler,
         capability=capability,
         description=description,

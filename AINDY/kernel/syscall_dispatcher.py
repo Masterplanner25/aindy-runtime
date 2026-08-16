@@ -52,6 +52,7 @@ Usage
 """
 from __future__ import annotations
 
+import json as _json
 import logging
 import os
 import time
@@ -645,8 +646,42 @@ class SyscallDispatcher:
                 )
 
         if _gate_db is not None and _gate_action_id is not None:
-            _complete_effect_record(_gate_db, _gate_action_id, "success", data)
-            _gate_db.close()
+            # IDEM-11 — the cached result lands in a JSONB column, so a handler returning a
+            # UUID / datetime / ORM object raises inside complete_effect_record's commit.
+            # This call sits outside every try in _dispatch(), so before this guard such a
+            # return unwound to dispatch()'s belt-and-suspenders handler and came back as an
+            # ERROR ENVELOPE — *after the effect had already happened*. The caller is told a
+            # side-effecting syscall failed when it succeeded, which is the same
+            # "cannot tell rejected from broke" confusion as ROUTE-GUARD-1, and it surfaces
+            # only once the flag is on: exactly when someone flips it.
+            #
+            # The tool path (MEB-0, tool_registry.py) already degraded gracefully here;
+            # MEB-1b's syscall twin never got the same guard. Same shape as every other
+            # "one boundary hardened, its twin not" finding in this repo — so the behaviour
+            # is deliberately kept identical to the tool path: cache nothing, warn, and let
+            # replay return None rather than failing a call whose effect already landed.
+            _gate_payload = data
+            try:
+                _json.dumps(data)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "[SyscallDispatcher] %s EXACTLY_ONCE result is not JSON-serializable; "
+                    "caching empty (replay will return None)",
+                    name,
+                )
+                _gate_payload = None
+            try:
+                _complete_effect_record(_gate_db, _gate_action_id, "success", _gate_payload)
+            except Exception as _finalize_exc:
+                # Degrade to AT_LEAST_ONCE: the handler already succeeded and its effect is
+                # real, so a ledger failure must never turn that into a caller-visible error.
+                logger.warning(
+                    "[SyscallDispatcher] %s effect finalize failed: %s", name, _finalize_exc
+                )
+            try:
+                _gate_db.close()
+            except Exception:  # pragma: no cover - defensive
+                logger.debug("[SyscallDispatcher] gate session close failed", exc_info=True)
             _gate_db = None
 
         # Step 4 â€" record syscall usage in ResourceManager (non-fatal)
