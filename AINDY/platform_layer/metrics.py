@@ -41,6 +41,20 @@ scheduler_waiting_count = Gauge(
     registry=REGISTRY,
 )
 
+# SYSMAX-5 — a job that could not run because the scheduler was saturated.
+#
+# APScheduler reports this as a per-job LOG LINE ("maximum number of running instances
+# reached") and nothing else. That is what the FR-15 incident printed once per starved second
+# while nobody could see it as a signal. Labelled by job id and reason so a starved *recovery*
+# job — the class whose value peaks exactly when the scheduler is saturated — is
+# distinguishable from a merely-skipped cleanup.
+scheduler_job_starved_total = Counter(
+    "aindy_scheduler_job_starved_total",
+    "Scheduler job runs skipped because the scheduler was saturated",
+    ["job_id", "reason"],  # reason: max_instances | missed
+    registry=REGISTRY,
+)
+
 # FR-15 — time spent in the scheduler queue before dispatch. The depth gauge above says
 # how many are waiting; this says how long, which is the number that was missing when a
 # request took 177s to enter the pipeline. Buckets run to 5 minutes deliberately: the

@@ -41,6 +41,7 @@ class BackgroundScheduler:
         self._executors = dict(executors or {})
         self.running = False
         self._jobs = []
+        self._listeners = []
 
     def add_job(self, func, trigger=None, id=None, name=None, replace_existing=False, **kwargs):
         if id is not None:
@@ -63,6 +64,14 @@ class BackgroundScheduler:
                 **kwargs,
             )
         )
+
+    def add_listener(self, callback, mask=None):
+        """SYSMAX-5 — record listeners so a test can fire one.
+
+        The real scheduler dispatches these itself; the shim only needs to prove the
+        runtime registered a callback and that the callback does the right thing.
+        """
+        self._listeners.append((callback, mask))
 
     def get_jobs(self):
         return list(self._jobs)

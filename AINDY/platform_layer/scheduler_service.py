@@ -131,6 +131,52 @@ def get_scheduler() -> BackgroundScheduler:
     return _scheduler
 
 
+#: SYSMAX-5 — jobs whose value PEAKS when the scheduler is saturated, so they must not queue
+#: behind ordinary cleanup. `queue_backend_reconnect` is the sharpest: if the queue backend is
+#: down *and* the pool is saturated, the job that would reconnect it cannot run.
+RECOVERY_EXECUTOR = "recovery"
+
+
+def _install_starvation_listener(scheduler) -> None:
+    """Count job runs skipped because the scheduler was saturated (SYSMAX-5).
+
+    APScheduler reports this only as a per-job log line — *"maximum number of running instances
+    reached"* — which is exactly what the FR-15 incident printed once per starved second while
+    nobody could see it as a signal. `EVENT_JOB_MAX_INSTANCES` means the previous run is still
+    going; `EVENT_JOB_MISSED` means the run time passed without a worker. Both are starvation,
+    and the distinction is worth a label because they have different causes.
+
+    Best-effort: a metrics failure must never prevent the scheduler from starting.
+    """
+    try:
+        from apscheduler.events import EVENT_JOB_MAX_INSTANCES, EVENT_JOB_MISSED
+    except Exception:  # pragma: no cover - the vendored test shim has no events module
+        logger.debug("[Scheduler] starvation listener unavailable (no apscheduler.events)")
+        return
+
+    reasons = {EVENT_JOB_MAX_INSTANCES: "max_instances", EVENT_JOB_MISSED: "missed"}
+
+    def _on_starved(event) -> None:
+        reason = reasons.get(getattr(event, "code", None), "unknown")
+        job_id = str(getattr(event, "job_id", "") or "unknown")
+        try:
+            from AINDY.platform_layer.metrics import scheduler_job_starved_total
+
+            scheduler_job_starved_total.labels(job_id=job_id, reason=reason).inc()
+        except Exception:  # pragma: no cover - observability must not break the scheduler
+            logger.debug("[Scheduler] starvation metric skipped", exc_info=True)
+        # Logged at WARNING deliberately: a starved *recovery* job means the runtime cannot
+        # clean up after the condition that starved it, which is worth waking someone for.
+        logger.warning(
+            "[Scheduler] job '%s' skipped a run (%s) — the scheduler is saturated", job_id, reason
+        )
+
+    try:
+        scheduler.add_listener(_on_starved, EVENT_JOB_MAX_INSTANCES | EVENT_JOB_MISSED)
+    except Exception:  # pragma: no cover - shim schedulers may not implement listeners
+        logger.debug("[Scheduler] could not register starvation listener", exc_info=True)
+
+
 def start() -> None:
     """
     Start the APScheduler background scheduler.
@@ -142,23 +188,35 @@ def start() -> None:
         logger.warning("Scheduler already running â€” start() called twice")
         return
 
-    # FR-15 (b) — the wait tick gets its OWN executor, not just its own job.
+    # FR-15 (b) + SYSMAX-5 — three lanes, sized against the DB pool rather than the job count.
     #
-    # Splitting wait firing onto a separate job is necessary but NOT sufficient:
-    # `max_instances` is per-job, but the *thread pool* is shared, and this scheduler
-    # registers 16 jobs against APScheduler's default `ThreadPoolExecutor()` — which is
-    # **10 workers**, fewer than the number of jobs. Several of those jobs are DB-heavy and
-    # can block for up to `DB_POOL_TIMEOUT` (60s) when the pool is exhausted — the exact
-    # condition present during the incident that produced FR-15. A wait tick competing for
-    # one of ten shared workers is a probabilistic guarantee, not a real one.
+    # `max_instances` is per-job, but the thread *pool* is shared. A job competing for one of
+    # ten shared workers has a probabilistic guarantee, not a real one — and two holders here
+    # are unbounded: `scheduler_heartbeat_tick` occupies a worker for the whole duration of an
+    # INLINE execution (~13 minutes in the FR-15 incident), and DB-heavy jobs can block for
+    # `DB_POOL_TIMEOUT` (60s) when the connection pool is exhausted. So the lanes below are
+    # about *isolation*, not capacity.
     #
-    # A dedicated single-thread executor makes it structural: nothing else can consume the
-    # thread that fires time-waits, so a parked flow wakes on its timer no matter what
-    # dispatch or any maintenance job is doing.
+    # ★ The instinct is to raise `default` until it exceeds the number of jobs. That is the
+    # wrong fix and would trade one exhaustion for a worse one: `DB_POOL_SIZE` (10) +
+    # `DB_MAX_OVERFLOW` (20) = **30 connections total, shared with request handling**. Twenty
+    # concurrent scheduler jobs each holding a session would leave ten for the API — which is
+    # precisely the shape RT-MEMTXN-LEAK-1 traced when a login took 42 seconds.
+    #
+    # The real defect was never the total; it was that a few unbounded holders could starve
+    # everything else. `scheduler_heartbeat_tick` holds a worker for the whole duration of an
+    # INLINE execution (~13 minutes in the FR-15 incident), and DB-heavy jobs can block for
+    # `DB_POOL_TIMEOUT` (60s). Dedicated lanes fix that structurally at +3 threads, where
+    # doubling `default` would not fix it at all — it would only raise the threshold.
+    #
+    #   default   (10)  ordinary maintenance and every app-registered job
+    #   recovery  (2)   jobs whose value PEAKS when the scheduler is saturated
+    #   waits     (1)   time-wait firing (FR-15 (b)) — a correctness guarantee
     _executors = None
     if _APSThreadPoolExecutor is not None:
         _executors = {
             "default": _APSThreadPoolExecutor(10),
+            "recovery": _APSThreadPoolExecutor(2),
             "waits": _APSThreadPoolExecutor(1),
         }
 
@@ -171,6 +229,7 @@ def start() -> None:
         executors=_executors,
     )
 
+    _install_starvation_listener(_scheduler)
     _register_system_jobs(_scheduler)
     _scheduler.start()
     logger.info("APScheduler started â€” daemon threads replaced")
@@ -270,6 +329,7 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         _process_deferred_async_jobs,
         trigger=IntervalTrigger(minutes=1),
         id="deferred_async_job_retry",
+        executor="recovery",  # SYSMAX-5
         name="Deferred async job retry",
         replace_existing=True,
     )
@@ -278,6 +338,7 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         _check_queue_backend_health,
         trigger=IntervalTrigger(seconds=60),
         id="queue_backend_reconnect",
+        executor="recovery",  # SYSMAX-5
         name="Queue backend reconnect",
         replace_existing=True,
         coalesce=True,
@@ -298,6 +359,7 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         _expire_timed_out_waits,
         trigger=IntervalTrigger(minutes=5),
         id="expire_timed_out_waits",
+        executor="recovery",  # SYSMAX-5
         name="Expire timed-out flow waits",
         replace_existing=True,
         coalesce=True,
@@ -308,6 +370,7 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         _expire_timed_out_wait_flows,
         trigger=IntervalTrigger(seconds=60),
         id="expire_timed_out_wait_flows",
+        executor="recovery",  # SYSMAX-5
         name="Expire timed-out WaitingFlowRun waits",
         replace_existing=True,
         coalesce=True,
@@ -318,6 +381,7 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         _recover_stuck_flow_runs,
         trigger=IntervalTrigger(minutes=5),
         id="recover_stuck_flow_runs",
+        executor="recovery",  # SYSMAX-5
         name="Recover stuck flow runs",
         replace_existing=True,
         coalesce=True,
@@ -338,6 +402,7 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         _recover_orphaned_approved_runs,
         trigger=IntervalTrigger(minutes=5),
         id="recover_orphaned_approved_runs",
+        executor="recovery",  # SYSMAX-5
         name="Recover orphaned approved agent runs",
         replace_existing=True,
         coalesce=True,
