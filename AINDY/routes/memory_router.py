@@ -31,6 +31,46 @@ def _flow_failure(result: dict) -> str:
     return ""
 
 
+def _dispatch_memory(name: str, payload: dict, *, db, current_user) -> dict:
+    """Dispatch a memory syscall for an HTTP caller (ROUTE-EFFECT-BYPASS-1).
+
+    Four routes in this module reached `MemoryNodeDAO` directly with the request's own session,
+    so the effect passed no capability check, no tenant-isolation check, no quota accounting and
+    no effect ledger. This routes them through the one chokepoint that applies all of those.
+
+    The request session is handed to the handler via `_db` so the write stays inside the
+    caller's transaction — the handler's own `_acquire_handler_db` honours it and skips
+    `close()`. Opening a second session here would put a concurrent connection on the same
+    request, which is the shape RT-MEMTXN-LEAK-1 traced to pool exhaustion.
+
+    Raises `HTTPException` on a non-success envelope so the route's error contract is a real
+    status code rather than a 200 carrying an error body.
+    """
+    from AINDY.kernel.syscall_dispatcher import (
+        SyscallContext,
+        get_dispatcher,
+        _infer_dispatch_capability,
+    )
+
+    user_id = str(current_user["sub"])
+    ctx = SyscallContext(
+        execution_unit_id="",
+        user_id=user_id,
+        # The capability the syscall itself declares, not a blanket grant — same
+        # least-privilege derivation the SDK dispatch surface uses (SDK-SYSCALL-GRANT-1).
+        capabilities=[_infer_dispatch_capability(name)],
+        trace_id="",
+        metadata={"_db": db},
+    )
+    envelope = get_dispatcher().dispatch(name, payload, ctx)
+    if envelope.get("status") != "success":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "memory_syscall_failed", "message": envelope.get("error") or name},
+        )
+    return envelope.get("data") or {}
+
+
 def _mem_run_flow(flow_name: str, payload: dict, db, user_id: str):
     """Run a memory flow and decode node HTTP errors."""
     from AINDY.runtime.flow_engine import run_flow
@@ -225,16 +265,25 @@ async def create_node(
 ):
     def handler(ctx):
         from fastapi.encoders import jsonable_encoder
-        from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
-        dao = MemoryNodeDAO(db)
-        node = dao.save(
-            content=body.content,
-            source=body.source,
-            tags=body.tags or [],
-            user_id=str(current_user["sub"]),
-            node_type=body.node_type,
-            extra=body.extra or {},
+
+        # ROUTE-EFFECT-BYPASS-1 — dispatch instead of calling the DAO directly. This route
+        # previously reached `MemoryNodeDAO.save` with the request's own session, so the write
+        # passed no capability check, no tenant-isolation check, no quota accounting and no
+        # effect ledger. Going through the dispatcher gains all four — and since the IDEM-11
+        # audit `sys.v1.memory.write` declares EXACTLY_ONCE, it gains at-most-once as well.
+        result = _dispatch_memory(
+            "sys.v1.memory.write",
+            {
+                "content": body.content,
+                "source": body.source,
+                "tags": body.tags or [],
+                "node_type": body.node_type,
+                "extra": body.extra or {},
+            },
+            db=db,
+            current_user=current_user,
         )
+        node = result.get("node")
         data = jsonable_encoder(node) if not isinstance(node, dict) else node
         data.setdefault(
             "execution_envelope",
@@ -463,15 +512,20 @@ async def recall_memories(
                 detail={"error": "query_or_tags_required", "message": "Provide at least one of: query, tags"},
             )
 
-        from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
-        dao = MemoryNodeDAO(db)
-        results = dao.recall(
-            query=body.query,
-            tags=body.tags,
-            limit=body.limit,
-            user_id=str(current_user["sub"]),
-            node_type=body.node_type,
-        )
+        # ROUTE-EFFECT-BYPASS-1 — dispatch instead of calling the DAO directly.
+        # `sys.v1.memory.read` takes the same four parameters and calls the same
+        # `dao.recall(...)`, so this is a mediation change, not a semantics change.
+        results = _dispatch_memory(
+            "sys.v1.memory.read",
+            {
+                "query": body.query,
+                "tags": body.tags,
+                "limit": body.limit,
+                "node_type": body.node_type,
+            },
+            db=db,
+            current_user=current_user,
+        ).get("nodes", [])
         return {
             "query": body.query,
             "tags": body.tags,
