@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Changed — `nodus-lang` 4.1.0 → 4.2.0 (`FR-16`, #451)
+
+`Requires-Dist: nodus-lang==4.1.0` is an **exact** pin, so an app cannot adopt a nodus release
+on its own: `pip install nodus-lang==4.2.0` succeeds and leaves the environment inconsistent
+with the runtime's declared requirement — worse than a clean refusal. Reproduced here, an
+editable install of this repo **downgraded 4.2.0 back to 4.1.0**.
+
+**The pin stays exact.** Hard-pinning a language runtime is defensible; what it creates is an
+obligation to bump promptly, which this does.
+
+Risk-probed before landing, and one check is new since the last bump:
+
+- **`GUEST-CONFINE-1`'s confinement depends on VM constructor arguments.** `allow_subprocess`,
+  `allow_network` and `allow_env` all survive with identical defaults, and **all 31 gated
+  builtins are still refused under 4.2.0** — verified against the real VM, because a silently
+  renamed argument would leave the guest unconfined while every test that mocks the VM passed.
+- The three long-standing fragile couplings survive (`syscall_runtime.call_syscall`,
+  `NodusRuntime._get_active_vm`, `register_function`), and `register_function` still refuses to
+  override a builtin — which `NODUS-SYS-SURFACE-1`'s fail-loud guard depends on.
+- **Its breaking change — "every error now reports the resolved absolute path" — does not affect
+  this repo:** nodus errors are forwarded, never parsed. Nothing matches on error text.
+
+No runtime code change. 4.2.0 fixes a resume path (`RESUME_TIMEOUT_MS`, store-lock scanning, and
+a sweeper adopting runs it did not create) that the app team runs under
+`AINDY_REASONING_NODUS_NATIVE`.
+
 ### ★ Changed — a JWT session is no longer exempt from scope checks (`HTTP-SCOPE-GAP-1`, #449)
 
 **Read before upgrading.** `enforce_api_key_scope` gated API-key callers only — its own

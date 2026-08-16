@@ -1,7 +1,7 @@
 ---
 title: "Nodus Developer Guide"
 api_version: "1.0"
-last_verified: "2026-08-15"
+last_verified: "2026-08-16"
 status: current
 owner: "platform-team"
 ---
@@ -13,7 +13,7 @@ runtime-injected context, every available built-in function, WAIT/RESUME semanti
 handling, and practical examples.
 
 For the full Nodus language syntax, types, and stdlib reference see the `nodus-lang` package
-documentation. A.I.N.D.Y. pins **nodus-lang == 4.1.0** (see §8).
+documentation. A.I.N.D.Y. pins **nodus-lang == 4.2.0** (see §8).
 
 ---
 
@@ -400,9 +400,31 @@ set_state("approved_by", approval["approver_id"])
 
 ## 8. Nodus version and upgrade notes
 
-A.I.N.D.Y. pins **nodus-lang == 4.1.0** (NODUS-UPGRADE-1). History: 4.0.3 (2026-06-11)
-→ 4.0.5 (2026-06-19) → 4.1.0 (2026-07-17), each a no-code-change bump. The 4.0.5 → 4.1.0
-bump was risk-probed before landing: the full nodus unit surface (worker/adapter/execution/
+A.I.N.D.Y. pins **nodus-lang == 4.2.0** (NODUS-UPGRADE-1). History: 4.0.3 (2026-06-11)
+→ 4.0.5 (2026-06-19) → 4.1.0 (2026-07-17) → 4.2.0 (2026-08-16), each a no-code-change bump.
+
+**4.1.0 → 4.2.0 (FR-16)** was risk-probed the same way, and one check is new since 4.1.0:
+`GUEST-CONFINE-1`'s confinement now depends on the VM constructor accepting
+`allow_subprocess` / `allow_network` / `allow_env`. **All three survive with identical
+defaults, and all 31 gated builtins are still refused under 4.2.0** — verified against the
+real VM, because a silently-renamed argument would leave the guest unconfined while every
+test that mocks the VM still passed. The three long-standing fragile couplings survive too,
+and `register_function` still refuses to override a builtin (which `NODUS-SYS-SURFACE-1`'s
+fail-loud guard depends on).
+
+**Its breaking change — "every error now reports the resolved absolute path" — does not affect
+this repo:** nodus errors are passed through, never parsed. `nodus_adapter.py` and
+`nodus_execution_service.py` only ever forward `result.get("error")`; nothing matches on error
+text or location.
+
+**★ The exact pin is why this needed a runtime release at all.** `Requires-Dist:
+nodus-lang==4.1.0` means an app cannot adopt a nodus release on its own — `pip install
+nodus-lang==4.2.0` succeeds and leaves the environment inconsistent with the runtime's declared
+requirement, which is worse than a clean refusal. Reproduced here: an editable install of this
+repo *downgraded* 4.2.0 back to 4.1.0. The pin stays exact deliberately (a language runtime is
+a defensible thing to pin hard), which makes bumping it promptly the runtime's obligation.
+
+The earlier 4.0.5 → 4.1.0 bump was risk-probed the same way: the full nodus unit surface (worker/adapter/execution/
 workflow-registry/**std-sys-guard**/tool-seam) passes identically, and the three
 version-fragile internal couplings the runtime depends on all survived —
 `nodus.services.syscall_runtime.call_syscall` (the NODUS-SYS-SURFACE-1 fail-loud monkeypatch
