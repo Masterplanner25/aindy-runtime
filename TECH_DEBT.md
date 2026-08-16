@@ -6942,9 +6942,38 @@ because a finding invites scrutiny and a reassurance does not.
 
 ## FLAKY-1 — `test_platform_only_startup` fails intermittently in a now-required check
 
-**Status: Open — and the recorded leading mechanism is now REFUTED, not merely unconfirmed.**
+**Status: Open — pending confirmation on current `main`. Very likely fixed by FR-11.**
 
-**★ First natural traceback captured 2026-08-15.** It is **not** the timeout branch:
+**★★ CORRECTION 2026-08-15 (same day, later). This entry briefly said the leading mechanism was
+"REFUTED". That was an over-conclusion from a single sample, and the single worst sample
+available — it is downgraded here rather than deleted, because being wrong about this test three
+times is the entry's own recurring theme.**
+
+**The evidence that changed it: 11 consecutive healthy full runs of
+`pytest tests -m runtime_only`, zero occurrences.** Run durations 780–1194s (i.e. real runs, not
+fast-fails); the only recurring failure was `test_runtime_packaging`, the known local-only
+`python -m build --no-isolation` case that passes in CI. Against the measured ~50% base rate,
+11 clean runs is ≈0.05% by luck.
+
+**How that reconciles with the traceback below.** The traceback came from a run on a machine that
+had lost the ability to spawn processes at all — 43 failures in that run, Windows exit code
+`3221225794` (`0xC0000142`, `STATUS_DLL_INIT_FAILED`) from every subprocess-spawning test. A
+worker that cannot start writes nothing to stdout, `json.loads(stdout or "{}")` makes that `{}`,
+and the handler raises from the `ok:false` branch. **So the most likely reading is that the
+captured failure was NOT FLAKY-1 — it was process exhaustion wearing FLAKY-1's clothes**, and the
+timeout mechanism FR-11 addressed was probably correct all along.
+
+**What remains before closing.** The 11 runs were on tree `8c1d4ac`. Current `main` has since
+gained ~268 additional collected tests (`CI-MARKER-1`), which changes both ordering and load —
+and this failure was ordering-sensitive. A short confirmation series on current `main` is the
+remaining step; do not close on the older tree's evidence alone.
+
+**What stands regardless:** the diagnosability fix in `runtime_callback_host.py`. It is what will
+let the *next* occurrence distinguish "worker died" from "callback failed" from "timed out"
+directly, instead of producing another round of inference from one sample. It was never evidence
+about *which* of those happened.
+
+**The traceback itself, kept as the record of what was seen** — it is **not** the timeout branch:
 
 ```
 >   assert evaluator({"trigger_type": "user", ...})["decision"] == "execute"
@@ -6960,12 +6989,10 @@ not carry it. The previous "strongly indicated" reading was produced by **forcin
 matching the shape, never by reading a real failure. That is the same error this file warns about
 under DOCS-COVERAGE-CLAIM-1: a plausible mechanism, confirmed only against itself.
 
-**Caveat, stated plainly:** the reproducing run was on a machine that had lost the ability to
-spawn processes — 43 failures in that run, Windows exit code `3221225794` (`0xC0000142`,
-`STATUS_DLL_INIT_FAILED`) from every subprocess-spawning test. So this establishes **which branch
-the failure takes**, not that every natural occurrence arrives by the same route. A clean run
-immediately afterwards (17m46s, healthy) passed with only the known local `test_runtime_packaging`
-failure.
+**Caveat, which turned out to be the whole story:** the reproducing run was on a machine that had
+lost the ability to spawn processes (see the correction above). The caveat was recorded at the
+time and then under-weighted in the headline — the lesson being that a caveat which invalidates a
+conclusion should change the conclusion, not sit beneath it.
 
 **★ The traceback's real value: it showed why this was never diagnosable.** That branch carried
 **no diagnostic content at all**. A worker that dies before replying writes nothing to stdout;
