@@ -116,9 +116,53 @@ def _call_scope_guard(scope: str, user_dict: dict) -> None:
     dep_fn(current_user=user_dict)
 
 
-def test_scope_guard_passes_jwt_user():
-    user = {"auth_type": "jwt", "is_admin": False, "sub": "user-1"}
+def test_scope_guard_passes_jwt_user_holding_the_scope():
+    """HTTP-SCOPE-GAP-1 — was `test_scope_guard_passes_jwt_user`, and it asserted the defect.
+
+    It previously passed a JWT dict with **no scopes at all** and required `flow.read` to be
+    allowed, encoding the old rule that *"JWT users carry full trust and are never gated"* —
+    which made a browser session strictly more privileged than any API key.
+
+    Kept rather than deleted, and rewritten to the new contract: a session passes a scope it
+    **holds**. `flow.read` is in the ordinary derived set, so the same route it was protecting
+    still works for the same user; only the reason changed from "JWT" to "grants".
+    """
+    from AINDY.auth.api_key_auth import derive_session_scopes
+
+    user = {
+        "auth_type": "jwt",
+        "is_admin": False,
+        "sub": "user-1",
+        "session_scopes": derive_session_scopes(is_admin=False),
+    }
     _call_scope_guard("flow.read", user)  # must not raise
+
+
+def test_scope_guard_rejects_jwt_user_without_the_scope():
+    """The other half of the same change — fail closed rather than trust the token type."""
+    from AINDY.auth.api_key_auth import derive_session_scopes
+
+    user = {
+        "auth_type": "jwt",
+        "is_admin": False,
+        "sub": "user-1",
+        "session_scopes": derive_session_scopes(is_admin=False),
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        _call_scope_guard("platform.admin", user)
+    assert exc_info.value.status_code == 403
+
+
+def test_scope_guard_rejects_jwt_user_carrying_no_grant():
+    """A principal with no `session_scopes` has no authority — deny, do not assume.
+
+    Real requests always carry a grant (seeded in `_resolve_authenticated_jwt_user` before its
+    degraded return paths), so this is the fail-closed behaviour for a hand-built or truncated
+    principal rather than a reachable state.
+    """
+    with pytest.raises(HTTPException) as exc_info:
+        _call_scope_guard("flow.read", {"auth_type": "jwt", "is_admin": False, "sub": "u"})
+    assert exc_info.value.status_code == 403
 
 
 def test_scope_guard_passes_api_key_with_required_scope():

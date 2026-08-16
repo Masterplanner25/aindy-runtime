@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### ★ Changed — a JWT session is no longer exempt from scope checks (`HTTP-SCOPE-GAP-1`, #449)
+
+**Read before upgrading.** `enforce_api_key_scope` gated API-key callers only — its own
+docstring read *"JWT users carry full trust and are never gated by this check"* — so **an
+interactive browser session was strictly more privileged than any API key**. It no longer is.
+
+- A JWT session now carries `session_scopes`, **derived from `User.is_admin` on every request**,
+  not from a token claim. Nothing is baked into the token, so **no session is invalidated by this
+  change** — unlike 2.0.0's `purpose` claim — and an admin grant or revocation takes effect on the
+  next call rather than the next login.
+- **Ordinary session:** `flow.read`, `flow.execute`, `memory.read`, `memory.write`, `agent.run`,
+  `execution.read`. **Admin adds:** `webhook.manage`, `platform.admin`.
+- **Neither set includes `memory.delete` or `event.emit`.** An API key can still be granted them
+  explicitly; a browser session cannot inherit them by virtue of being logged in.
+- Escape hatch: `AINDY_JWT_SCOPE_ENFORCEMENT=0` restores the old bypass. It is a hatch for an
+  incident, not an opt-in.
+
+**Why this ships enforcing rather than default-off**, unlike most boundary tightening here: the
+blast radius is *countable*. Only **7 of 147** route decorators enforce a scope at all, and the
+only three they require — `flow.read`, `flow.execute`, `memory.read` — are all in the ordinary
+set. **Every signed-in user still passes every currently-enforcing route.** That enumeration is
+pinned by a test that scans the source, so adding an enforcement an ordinary session cannot
+satisfy fails in CI rather than as a 403 in someone's browser.
+
+The scope surface comes from the app team's real call surface, not from our guess, and both of
+their stated constraints are honoured: admin keys on the **existing user-row flag** (one source of
+truth for "operator"), and nothing here tries to answer data ownership — `execution.read` still
+says *may I read executions*, not *whose*.
+
+`enforce_api_key_scope` keeps its name despite now covering both principal types: it appears at 7
+call sites and in the app team's notes, and renaming a security-relevant surface for cosmetics is
+churn.
+
+_Nothing yet._
 ### Added — `child_context` can no longer widen authority (`AUTHORITY-VALUE-1`, opt-in, #448)
 
 `child_context()` granted whatever `capabilities=[...]` it was handed, **whether or not the

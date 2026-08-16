@@ -432,6 +432,14 @@ def _resolve_authenticated_jwt_user(payload: dict, db: Session | None) -> dict:
     resolved = dict(payload)
     resolved["sub"] = str(user_uuid)
     resolved["user_id"] = str(user_uuid)
+    # HTTP-SCOPE-GAP-1 — seed the ordinary (non-admin) grant here, before the degraded
+    # return paths below. Two of them (no usable Session; a DB error under TEST_MODE) return
+    # `resolved` without ever reading the user row, and a principal with no `session_scopes`
+    # is now denied every scope — so seeding is what keeps those paths working at all.
+    # Non-admin is the safe seed: the admin extras are added only once the row confirms them.
+    from AINDY.auth.api_key_auth import derive_session_scopes
+
+    resolved["session_scopes"] = derive_session_scopes(is_admin=False)
 
     if db is None:
         raise HTTPException(
@@ -473,6 +481,11 @@ def _resolve_authenticated_jwt_user(payload: dict, db: Session | None) -> dict:
     resolved["email"] = user.email
     resolved["username"] = user.username
     resolved["is_admin"] = bool(getattr(user, "is_admin", False))
+    # Re-derive now that the row is known — this is the authoritative grant. Derived per
+    # request rather than read from a token claim, so an admin grant or revocation takes
+    # effect on the next call instead of at the next login, and no session has to be
+    # invalidated to change authority.
+    resolved["session_scopes"] = derive_session_scopes(is_admin=resolved["is_admin"])
     return resolved
 
 
@@ -559,11 +572,35 @@ def require_admin_principal(
     return current_user
 
 
+def _jwt_scope_enforcement_enabled() -> bool:
+    """HTTP-SCOPE-GAP-1 escape hatch. ON by default — this is a hatch, not an opt-in.
+
+    Default-on is deliberate and rests on an enumeration, not on optimism: only **7 of 147**
+    route decorators enforce a scope at all, and the only three scopes any of them require
+    (`flow.read`, `flow.execute`, `memory.read`) are in the ordinary session set. So every
+    signed-in user still passes every currently-enforcing route. The blast radius is countable
+    rather than hoped-for, which is why this does not ship default-off the way a genuinely
+    unmeasurable tightening would.
+
+    Resolved per call, never cached at import — the standing rule.
+    """
+    return os.getenv("AINDY_JWT_SCOPE_ENFORCEMENT", "1").strip().lower() not in {"0", "false", "no"}
+
+
 def enforce_api_key_scope(scope: str):
-    """FastAPI dependency factory: enforce a scope for API key callers; JWT users always pass.
+    """FastAPI dependency factory: enforce a scope for the caller, whoever they are.
 
     Uses the already-resolved current_user dict so no second DB lookup occurs.
-    JWT users carry full trust and are never gated by this check.
+
+    **HTTP-SCOPE-GAP-1 — JWT sessions are no longer exempt.** This check previously gated
+    API-key callers only; its own docstring read *"JWT users carry full trust and are never
+    gated by this check"*, which made an interactive browser session **strictly more
+    privileged than any API key**. A session now presents `session_scopes`, derived from the
+    user row (see `derive_session_scopes`).
+
+    The name is now narrower than the behaviour. It is kept because it appears at 7 call
+    sites and in the app team's own notes, and renaming it would churn a security-relevant
+    surface for cosmetics; `SCOPE-NAMING-1` tracks the rename if it is ever worth doing.
 
     Usage:
         @router.get("/platform/flows")
@@ -573,14 +610,22 @@ def enforce_api_key_scope(scope: str):
         ): ...
     """
     def _check(current_user: dict = Depends(get_current_user)) -> None:
+        from AINDY.auth.api_key_auth import Scopes
+
         if current_user.get("auth_type") == "api_key":
             scopes = set(current_user.get("api_key_scopes") or [])
-            from AINDY.auth.api_key_auth import Scopes
-            if scope not in scopes and Scopes.PLATFORM_ADMIN not in scopes:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"API key scope '{scope}' required. Granted: {sorted(scopes) or ['(none)']}",
-                )
+            principal = "API key"
+        elif _jwt_scope_enforcement_enabled():
+            scopes = set(current_user.get("session_scopes") or [])
+            principal = "Session"
+        else:
+            return
+
+        if scope not in scopes and Scopes.PLATFORM_ADMIN not in scopes:
+            raise HTTPException(
+                status_code=403,
+                detail=f"{principal} scope '{scope}' required. Granted: {sorted(scopes) or ['(none)']}",
+            )
     _check.__name__ = f"enforce_scope_{scope.replace('.', '_')}"
     return _check
 
