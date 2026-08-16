@@ -29,6 +29,26 @@ logger = logging.getLogger(__name__)
 VALID_MEMORY_TYPES = {"decision", "outcome", "failure", "insight"}
 
 
+class _CandidateScoringView:
+    """Read the four scoring columns off a candidate dict (MEM-RECALL-N1-1).
+
+    `get_success_rate` and `get_usage_frequency_score` only read `success_count`,
+    `failure_count` and `usage_count` as attributes — they never need a real ORM instance. This
+    lets the scoring loop use values the originating SELECT already returned instead of
+    re-fetching each row, without changing either helper's signature (both are public and
+    called elsewhere with real models).
+    """
+
+    __slots__ = ("success_count", "failure_count", "usage_count", "weight")
+
+    def __init__(self, candidate: dict) -> None:
+        self.success_count = int(candidate.get("success_count") or 0)
+        self.failure_count = int(candidate.get("failure_count") or 0)
+        self.usage_count = int(candidate.get("usage_count") or 0)
+        # Neutral prior when absent, matching the old `node_obj.weight or 1.0`.
+        self.weight = float(candidate.get("weight") or 1.0)
+
+
 class MemoryNodeDAO:
     """Canonical DAO for memory_nodes and memory_links tables."""
 
@@ -68,6 +88,18 @@ class MemoryNodeDAO:
             "embedding_pending": getattr(n, "embedding_pending", True),
             "embedding_status": getattr(n, "embedding_status", "pending"),
             "extra": n.extra,
+            # MEM-RECALL-N1-1 — carried so recall's scoring loop does not re-fetch the row it
+            # already read. These four are the ONLY reason `recall()` called `_get_model_by_id`
+            # per candidate; the originating SELECT had them and this dict dropped them.
+            #
+            # Three of them were already being written onto returned candidates by that loop,
+            # so they are not newly exposed — they are now present CONSISTENTLY, including when
+            # the re-fetch would have missed (a row deleted between the two queries silently
+            # left the counts unset). `weight` is newly present.
+            "success_count": getattr(n, "success_count", 0) or 0,
+            "failure_count": getattr(n, "failure_count", 0) or 0,
+            "usage_count": getattr(n, "usage_count", 0) or 0,
+            "weight": getattr(n, "weight", 1.0) or 1.0,
             "created_at": n.created_at.isoformat() if n.created_at else None,
             "updated_at": n.updated_at.isoformat() if n.updated_at else None,
             # MAS path fields
@@ -670,16 +702,23 @@ class MemoryNodeDAO:
         now = self._now_utc()
         scored = []
 
+        # MEM-RECALL-N1-1 — one grouped query pair for the whole candidate set instead of two
+        # COUNTs per candidate. Best-effort: connectivity is one signal of five, so a failure
+        # here degrades the ranking rather than failing the recall, matching the per-node
+        # behaviour it replaces.
+        try:
+            connectivity = self.get_graph_connectivity_scores([c["id"] for c in candidates])
+        except Exception:
+            logger.debug("[MemoryNodeDAO] batched connectivity failed; scoring without it",
+                         exc_info=True)
+            connectivity = {}
+
         for c in candidates:
             # Signal 1: Semantic similarity (from find_similar)
             semantic = c.get("semantic_score", 0.0)
 
             # Signal 2: Graph connectivity
-            graph_score = 0.0
-            try:
-                graph_score = self.get_graph_connectivity_score(c["id"])
-            except Exception:
-                graph_score = 0.0
+            graph_score = connectivity.get(str(c["id"]), 0.0)
 
             # Signal 3: Recency decay (half-life 30 days)
             recency_score = 0.5
@@ -702,14 +741,18 @@ class MemoryNodeDAO:
             success_rate = 0.5
             adaptive_weight = 1.0
             usage_freq = 0.0
-            node_obj = self._get_model_by_id(c["id"])
-            if node_obj:
-                success_rate = self.get_success_rate(node_obj)
-                adaptive_weight = node_obj.weight or 1.0
-                usage_freq = self.get_usage_frequency_score(node_obj)
-                c["success_count"] = node_obj.success_count or 0
-                c["failure_count"] = node_obj.failure_count or 0
-                c["usage_count"] = node_obj.usage_count or 0
+            # MEM-RECALL-N1-1 — read from the candidate dict rather than re-fetching the row.
+            # `_node_to_dict` now carries these four, which were the only reason this loop
+            # queried `memory_nodes` once per candidate. `get_success_rate` and
+            # `get_usage_frequency_score` read plain attributes, so a lightweight view of the
+            # same values satisfies them without a model instance.
+            _scoring = _CandidateScoringView(c)
+            success_rate = self.get_success_rate(_scoring)
+            adaptive_weight = _scoring.weight
+            usage_freq = self.get_usage_frequency_score(_scoring)
+            c["success_count"] = _scoring.success_count
+            c["failure_count"] = _scoring.failure_count
+            c["usage_count"] = _scoring.usage_count
 
             # Signal 5: Usage frequency
             usage_freq = usage_freq or 0.0
@@ -1194,6 +1237,50 @@ class MemoryNodeDAO:
 
         total_connections = outbound + inbound
         return min(1.0, total_connections / max(max_connections, 1))
+
+    def get_graph_connectivity_scores(
+        self,
+        node_ids: list,
+        max_connections: int = 20,
+    ) -> dict:
+        """Connectivity score for many nodes in two queries (MEM-RECALL-N1-1).
+
+        The per-node `get_graph_connectivity_score` runs two COUNTs, so scoring `limit * 3`
+        candidates cost 2N round-trips. This groups instead: one query for outbound edges, one
+        for inbound, over the whole candidate set.
+
+        Returns ``{node_id_str: score}``; ids absent from the link table score 0.0, matching the
+        per-node function rather than omitting them.
+        """
+        from sqlalchemy import func
+
+        scores = {str(n): 0.0 for n in node_ids}
+        uuids = []
+        for raw in node_ids:
+            try:
+                uuids.append(uuid.UUID(str(raw)))
+            except ValueError:
+                # Same contract as the per-node version: an unparseable id scores 0.0 rather
+                # than raising and losing the whole batch.
+                continue
+        if not uuids:
+            return scores
+
+        totals: dict = {}
+        for column in (MemoryLinkModel.source_node_id, MemoryLinkModel.target_node_id):
+            rows = (
+                self.db.query(column, func.count().label("n"))
+                .filter(column.in_(uuids))
+                .group_by(column)
+                .all()
+            )
+            for node_uuid, count in rows:
+                totals[str(node_uuid)] = totals.get(str(node_uuid), 0) + int(count)
+
+        cap = max(max_connections, 1)
+        for key, total in totals.items():
+            scores[key] = min(1.0, total / cap)
+        return scores
 
     def traverse(
         self,

@@ -3,7 +3,25 @@
 **Date:** 2026-05-23
 **Decision:** Tiered Isolation Contract (Tier 1: trusted operator /
   Tier 2: third-party extension)
-**Status:** Planning — no implementation has begun
+**Status:** **Implemented** — this plan's decision shipped; the document is retained as the
+*rationale* for the Tiered Isolation Contract, not as a forward plan.
+
+> ★ *Corrected 2026-08-16 (`ISOLATION-DOC-STATUS-1`). This line read "Planning — no
+> implementation has begun" while line 148 of this same file said "Scope B1 complete", and the
+> sandbox runners, plugin host, certification surface and the nine-file escape suite were all
+> built and wired — the suite has passed 17/17 on every release tag since (see
+> `docs/runtime/SANDBOX_ESCAPE_AUDIT.md`).*
+>
+> *Why it survived: this file lives at the **repository root**, outside `docs/runtime/`, so it
+> is not covered by the `Runtime Docs Validation` frontmatter and `last_verified` checks that
+> catch exactly this. A doc that contradicts itself 142 lines apart is the cheapest possible
+> version of the "claimed and absent" problem, and nothing was looking here.*
+
+**What is NOT implemented**, so this correction does not over-reach in the other direction:
+Tier-2 container-grade isolation is certified on **Linux only** — `C3` remains open, and both
+`STRONG_SANDBOX_SUPPORTED_HOST_PLATFORMS` and `HOSTILE_THIRD_PARTY_SUPPORTED_HOST_PLATFORMS`
+are still `(PLATFORM_LINUX,)`. The provider is also reachable from only one seam
+(`plugin_host.py`) — see `TOOL-SEAM-ISOLATION-1` and `EXEC-ENV-BIND-1`.
 
 ---
 
