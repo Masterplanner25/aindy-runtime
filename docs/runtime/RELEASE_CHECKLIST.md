@@ -254,6 +254,10 @@ deployment that introduces TLS termination.
 
 ## Release Notes Verification
 
+- [ ] **Fold in the changelog fragments first:** `python scripts/assemble_changelog.py`,
+  then `--check` to confirm none are stranded. Entries live in `changelog.d/` as one file
+  per PR (they cannot conflict); assembly is a release step, never a per-PR CI gate —
+  fragments are *supposed* to exist during development.
 - [ ] `## Unreleased` is **complete**, then promoted to the version heading.
 
   Entries should already be there: per the CHANGELOG protocol in `CLAUDE.md`, each PR writes

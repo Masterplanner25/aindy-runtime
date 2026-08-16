@@ -171,8 +171,11 @@ doesn't exist, `CREATE INDEX ... ON missing_table` still raises `UndefinedTable`
 
 ## ★ CHANGELOG protocol — write the entry in the PR that makes the change
 
-**A PR that changes behaviour, API surface, configuration, schema, or what CI proves adds its
-own `CHANGELOG.md` entry under `## Unreleased`, in the same PR.** Not at release time.
+**A PR that changes behaviour, API surface, configuration, schema, or what CI proves writes its own changelog entry in the same PR.** Not at release time.
+
+**★ Since 2026-08-16 the entry is a NEW FILE in `changelog.d/`, not an edit to `CHANGELOG.md`.** Create `changelog.d/<PR>-<slug>.md` containing exactly what you would have written under `## Unreleased`; prefix `00-` if an operator must read it before upgrading (those sort to the top). `python scripts/assemble_changelog.py` folds them in at release. **Do not hand-edit `## Unreleased`.**
+
+*Why the location moved: editing one shared section made every concurrent PR collide — three times in one afternoon (#449/#450/#451) — and the failure mode was worse than the annoyance. The reflexive "keep mine" resolution **silently reverted another PR's entry**, and a dropped changelog paragraph breaks no build. A new file cannot conflict with another new file. The rule below is unchanged; only where you put it moved.*
 
 **This is measured, not a style preference** — across six release windows the CHANGELOG was
 written in bursts at release time, worst case **1 of 50 commits** (`v2.0.1..main`), leaving the
