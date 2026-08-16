@@ -1,7 +1,7 @@
 ---
 title: "Syscall Reference"
 api_version: "1.0"
-last_verified: "2026-08-13"
+last_verified: "2026-08-16"
 status: current
 owner: "platform-team"
 ---
@@ -130,6 +130,42 @@ Hard-delete a memory node owned by the calling user.
 by another tenant, returns `{deleted: false, ...}` without error and without revealing
 whether the node exists. Hard delete — the database cascades (`ON DELETE CASCADE`) to the
 node's history, trace memberships, causal edges, and links. **Irreversible.**
+
+---
+
+### `sys.v1.memory.link`
+
+Link two memory nodes owned by the calling user.
+
+**Stability:** experimental — **not** in the SDK rename guard. The graph surface
+(`link` / `traverse` / `expand`) is still moving; treat the name as unpinned.
+
+**Capability:** `memory.link` (dedicated — a `memory.write`-scoped grant does **not** confer it).
+Writing a node and wiring the graph between nodes are different powers, the same reasoning that
+gives `memory.delete` its own capability.
+
+**Payload:**
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `source_id` | string | yes | UUID of the node the link starts from. |
+| `target_id` | string | yes | UUID of the node the link points to. |
+| `link_type` | string | no | Default: `"related"`. |
+| `weight` | float | no | Default: 0.5. |
+
+**Returns:** `{link: {...}}`
+
+**Semantics:** Tenant-scoped. Both endpoints are resolved against the caller's own nodes before
+the write, and a node belonging to another tenant is reported **identically to one that does not
+exist** — the call is not an existence oracle for other tenants' ids. Declared `EXACTLY_ONCE`:
+`create_link` inserts a row, so a retry would otherwise build a *second* edge between the same
+pair.
+
+> **★ Not reachable via `POST /platform/syscall`.** `memory.link` is deliberately absent from
+> the governed dispatch surface, so that route yields an empty grant and the dispatcher denies
+> the call. Use `POST /memory/links`. Publishing an experimental syscall to SDK callers is the
+> half that cannot be withdrawn; when it is published it will get a scope of its own rather than
+> riding on `memory.write`, which would undo the capability split at the scope layer.
 
 ---
 
@@ -565,6 +601,7 @@ the authorizing scopes below (or `platform.admin`, which bypasses the scope gate
 | `memory.read` | `sys.v1.memory.read` / `.search` / `.list` / `.tree` / `.trace` | `memory.read` **or** `memory.write` |
 | `memory.write` | `sys.v1.memory.write` | `memory.write` |
 | `memory.delete` | `sys.v1.memory.delete` | `memory.delete` (dedicated — **not** granted by `memory.write`) |
+| `memory.link` | `sys.v1.memory.link` | **none — off this surface.** No scope authorizes it here; the dispatch route denies it. Use `POST /memory/links`. |
 | `flow.run` | `sys.v1.flow.run` | `flow.execute` |
 | `event.emit` | `sys.v1.event.emit` | `event.emit` |
 | `execution.read` | `sys.v1.execution.get`, `sys.v1.observability.support_metrics` | `execution.read` |
