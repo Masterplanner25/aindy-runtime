@@ -7300,12 +7300,56 @@ authoritative on the normal one. That test was **rewritten, not deleted**: it ha
 the defect (a JWT with no scopes passing `flow.read`), and now asserts the same route still works
 for the same user for a different reason, plus the two fail-closed cases.
 
-**Still open, and it is the larger half:** **140 of 147 routes enforce nothing at all** — the
-scope model reaches the front door but not most of it. `memory_router.py` still has **zero**
-`SyscallDispatcher` references and `create_node` still calls `MemoryNodeDAO(db).save(...)`
-directly, so the REST path can still reach effects without the dispatcher. Widening enforcement
-route-by-route is the remaining work, and per the app team's request the release that enforces
-new scopes must **name them in the handoff**.
+**★ SECOND SLICE CLOSED 2026-08-16 (#462) — `memory_router.py` (item D).** All **22** routes
+under `/memory/*` now carry a gate. Reads take `memory.read` **or** `memory.write`; writes take
+`memory.write`; `/nodus/execute`, `/execute` and `/execute/complete` take **`flow.execute`**,
+because they compile and run caller-supplied workflow code — filing them under `memory.write`
+would make *"may I remember this"* and *"may I run this"* one permission.
+
+**Counted against the running app, not the source.** Walking a booted runtime-only app:
+**29 of 126 registered `APIRoute`s** now enforce a scope, up from 7. *(126 registered routes vs
+this entry's original 147 `@router.*` decorators is not drift — some handlers carry stacked
+decorators, and a few routers are app-profile-only. Both numbers are real; they count different
+things, so do not mix them in one ratio.)*
+
+- **★ The any-of form exists to stop one credential getting two answers.**
+  `_DISPATCH_CAPABILITY_SCOPES` authorizes `memory.read` with **either** `memory.read` or
+  `memory.write`, so a write-scoped key reads fine through `POST /platform/syscall`. A literal
+  `memory.read` gate on these routes would refuse that same key at the HTTP door.
+  `enforce_api_key_scope(scope, *alternatives)` now takes alternatives; existing single-scope
+  call sites are unchanged.
+- **★ The safety scan had gone blind the moment the any-of form appeared.**
+  `test_every_enforced_scope_is_held_by_an_ordinary_session` matched
+  `enforce_api_key_scope\(Scopes\.([A-Z_]+)\)` — a closing paren immediately after one argument
+  — so a two-argument, two-line call matched **nothing** and the test kept passing on a
+  shrinking sample. Replaced with a paren-balanced scan plus a liveness control
+  (`test_the_scan_sees_the_any_of_form`). This is variant 2 of the green-check catalogue inside
+  the guard that was supposed to prevent variant 2.
+- **The coverage test is route-derived, and the first draft of it was vacuous.** Scanning
+  `app.routes` for `/memory` paths found **zero** routes — FastAPI ≥ 0.137 stores
+  `include_router` results as a lazy `_IncludedRouter` instead of flattening — so "nothing
+  ungated" was true of an empty set. Only the `checked >= 20` floor caught it. It now walks
+  `_iter_api_routes` and keys ownership on the endpoint's **module**, so a route added tomorrow
+  without a gate fails this file.
+- **Blast radius, measured rather than assumed.** An ordinary session already derives all three
+  scopes, and a test drives the real routes to prove a signed-in user loses nothing. The only
+  exposed callers are platform API keys hitting `/memory/*` over HTTP; **no first-party caller
+  does** — the SDK's `client.memory.*` is `MemoryAPI(self.syscalls)`, i.e. `POST
+  /platform/syscall`, which was already gated, and no app-side source sends `X-Platform-Key`.
+- Mutation-checked 4/4: ungate `create_node` (3 fail), drop the read gate's write alternative
+  (3), file execution under `memory.write` (3), revert any-of to exact match (1).
+- One observable change beyond authorization: `POST /memory/execute/complete` has returned
+  **410 Gone** since completion moved inside `POST /memory/execute`; an unscoped caller now sees
+  **403** there instead, because authorization precedes the deprecation notice.
+
+**Still open, and it is the larger half:** **97 of 126 registered routes enforce nothing at
+all** — the
+scope model reaches the front door but not most of it. Widening enforcement router-by-router is
+the remaining work, and per the app team's request the release that enforces new scopes must
+**name them in the handoff**. *(The "`memory_router.py` still has zero `SyscallDispatcher`
+references" half of this paragraph is now stale twice over — `ROUTE-EFFECT-BYPASS-1` A–C rewired
+three of its four direct-DAO routes and this slice added the gates. What remains there is one
+route, `POST /nodes/search`, and it is tracked in that entry, not this one.)*
 
 
 **Status: OPEN — P0.** Filed 2026-08-15 from the Codex comparative audit (G3), verified with

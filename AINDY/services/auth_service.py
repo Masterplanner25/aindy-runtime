@@ -587,7 +587,7 @@ def _jwt_scope_enforcement_enabled() -> bool:
     return os.getenv("AINDY_JWT_SCOPE_ENFORCEMENT", "1").strip().lower() not in {"0", "false", "no"}
 
 
-def enforce_api_key_scope(scope: str):
+def enforce_api_key_scope(scope: str, *alternatives: str):
     """FastAPI dependency factory: enforce a scope for the caller, whoever they are.
 
     Uses the already-resolved current_user dict so no second DB lookup occurs.
@@ -598,9 +598,16 @@ def enforce_api_key_scope(scope: str):
     privileged than any API key**. A session now presents `session_scopes`, derived from the
     user row (see `derive_session_scopes`).
 
-    The name is now narrower than the behaviour. It is kept because it appears at 7 call
+    The name is now narrower than the behaviour. It is kept because it appears at many call
     sites and in the app team's own notes, and renaming it would churn a security-relevant
     surface for cosmetics; `SCOPE-NAMING-1` tracks the rename if it is ever worth doing.
+
+    **`alternatives` are ANY-of, not all-of.** Holding *any* listed scope satisfies the check.
+    This exists so a route gate can express the same implication the governed dispatch surface
+    already encodes — `_DISPATCH_CAPABILITY_SCOPES` authorizes `memory.read` with **either**
+    `memory.read` or `memory.write`, so a write-scoped key can read. Without any-of, that same
+    key would be allowed to read through `POST /platform/syscall` and refused on
+    `GET /memory/nodes/{id}`: two answers to one authority question, from one credential.
 
     Usage:
         @router.get("/platform/flows")
@@ -608,7 +615,12 @@ def enforce_api_key_scope(scope: str):
             current_user: dict = Depends(get_current_user),
             _: None = Depends(enforce_api_key_scope(Scopes.FLOW_READ)),
         ): ...
+
+        # any-of: a write grant implies read
+        _: None = Depends(enforce_api_key_scope(Scopes.MEMORY_READ, Scopes.MEMORY_WRITE))
     """
+    accepted = (scope, *alternatives)
+
     def _check(current_user: dict = Depends(get_current_user)) -> None:
         from AINDY.auth.api_key_auth import Scopes
 
@@ -621,12 +633,17 @@ def enforce_api_key_scope(scope: str):
         else:
             return
 
-        if scope not in scopes and Scopes.PLATFORM_ADMIN not in scopes:
+        if not scopes.intersection(accepted) and Scopes.PLATFORM_ADMIN not in scopes:
+            required = (
+                f"'{scope}'"
+                if not alternatives
+                else "one of " + str(sorted(accepted))
+            )
             raise HTTPException(
                 status_code=403,
-                detail=f"{principal} scope '{scope}' required. Granted: {sorted(scopes) or ['(none)']}",
+                detail=f"{principal} scope {required} required. Granted: {sorted(scopes) or ['(none)']}",
             )
-    _check.__name__ = f"enforce_scope_{scope.replace('.', '_')}"
+    _check.__name__ = "enforce_scope_" + "_or_".join(s.replace(".", "_") for s in accepted)
     return _check
 
 

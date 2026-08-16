@@ -10,10 +10,32 @@ from AINDY.core.execution_helper import execute_with_pipeline
 from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.runtime.nodus_security import NodusSecurityError
-from AINDY.services.auth_service import get_current_user
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 
 router = APIRouter(prefix="/memory", tags=["Memory"])
 logger = logging.getLogger(__name__)
+
+# ── HTTP-SCOPE-GAP-1 (item D) — scope gates for this router ───────────────────────────────
+#
+# Every route here previously depended on `get_current_user` alone: **identity, not authority**.
+# `grep -c enforce_api_key_scope` in this file was 0 while it reached memory writes, graph
+# edits and Nodus execution.
+#
+# Named aliases rather than inline `Depends(...)` so the enforcement is greppable as a set and
+# so a route cannot quietly acquire a *different* scope than its neighbours by copy-paste.
+#
+# ★ Read is `read OR write`, matching `_DISPATCH_CAPABILITY_SCOPES` exactly. A key holding only
+# `memory.write` can read through `POST /platform/syscall`; if these routes demanded a literal
+# `memory.read` the same credential would get two different answers to one authority question.
+_REQUIRE_MEMORY_READ = Depends(
+    enforce_api_key_scope(Scopes.MEMORY_READ, Scopes.MEMORY_WRITE)
+)
+_REQUIRE_MEMORY_WRITE = Depends(enforce_api_key_scope(Scopes.MEMORY_WRITE))
+# `/nodus/execute` and `/execute` compile and run caller-supplied workflow code. That is
+# materially more authority than storing a node, so it is gated on execution rather than on
+# memory. `flow.execute` is in the ordinary session set, so no interactive user loses access.
+_REQUIRE_EXECUTE = Depends(enforce_api_key_scope(Scopes.FLOW_EXECUTE))
 
 NodeType = Literal["decision", "outcome", "insight", "relationship"]
 
@@ -262,6 +284,7 @@ async def create_node(
     body: CreateNodeRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_WRITE,
 ):
     def handler(ctx):
         from fastapi.encoders import jsonable_encoder
@@ -315,6 +338,7 @@ async def get_node(
     node_id: str,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_node_get", {"node_id": node_id}, db, str(current_user["sub"]))
@@ -328,6 +352,7 @@ async def update_node(
     body: UpdateNodeRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_WRITE,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_node_update", {
@@ -344,6 +369,7 @@ async def get_node_history(
     limit: Optional[int] = 20,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_node_history", {"node_id": node_id, "limit": limit}, db, str(current_user["sub"]))
@@ -357,6 +383,7 @@ async def get_linked_nodes(
     direction: str = "both",
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_node_links", {"node_id": node_id, "direction": direction}, db, str(current_user["sub"]))
@@ -371,6 +398,7 @@ async def search_nodes_by_tags(
     limit: int = 50,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     user_id = str(current_user["sub"])
 
@@ -390,6 +418,7 @@ async def create_link(
     body: CreateLinkRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_WRITE,
 ):
     user_id = str(current_user["sub"])
 
@@ -450,6 +479,7 @@ async def traverse_from_node(
     min_strength: Optional[float] = 0.0,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_node_traverse", {
@@ -465,6 +495,7 @@ async def expand_nodes(
     body: ExpandRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_nodes_expand", {
@@ -480,6 +511,7 @@ async def search_similar_nodes(
     body: SimilaritySearchRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         from AINDY.memory.embedding_service import generate_query_embedding
@@ -514,6 +546,7 @@ async def recall_memories(
     body: RecallRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         if not body.query and not body.tags:
@@ -563,6 +596,7 @@ async def recall_v3(
     body: RecallV3Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_recall_v3", {
@@ -578,6 +612,7 @@ async def federated_recall(
     body: FederatedRecallRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_recall_federated", {
@@ -592,6 +627,7 @@ async def list_agents(
     request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_agents_list", {}, db, str(current_user["sub"]))
@@ -604,6 +640,7 @@ async def share_memory_node(
     node_id: str,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_WRITE,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_node_share", {"node_id": node_id}, db, str(current_user["sub"]))
@@ -618,6 +655,7 @@ async def recall_from_agent_endpoint(
     limit: Optional[int] = 5,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_agent_recall", {"namespace": namespace, "query": query, "limit": limit}, db, str(current_user["sub"]))
@@ -631,6 +669,7 @@ async def record_node_feedback(
     body: FeedbackRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_WRITE,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_node_feedback", {"node_id": node_id, "outcome": body.outcome}, db, str(current_user["sub"]))
@@ -643,6 +682,7 @@ async def get_node_performance(
     node_id: str,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_node_performance", {"node_id": node_id}, db, str(current_user["sub"]))
@@ -655,6 +695,7 @@ async def get_suggestions(
     body: SuggestRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         if not body.query and not body.tags:
@@ -675,6 +716,7 @@ async def execute_nodus_task(
     request: Request = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_EXECUTE,
 ):
     from AINDY.platform_layer.user_ids import require_user_id
     from AINDY.core.execution_dispatcher import async_heavy_execution_enabled
@@ -773,6 +815,7 @@ async def execute_with_memory(
     body: ExecutionLoopRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_EXECUTE,
 ):
     def handler(ctx):
         return _mem_run_flow("memory_execute_loop", {
@@ -789,6 +832,7 @@ async def complete_memory_loop(
     body: ExecutionCompleteRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
+    _scope: None = _REQUIRE_EXECUTE,
 ):
     def handler(ctx):
         raise HTTPException(
