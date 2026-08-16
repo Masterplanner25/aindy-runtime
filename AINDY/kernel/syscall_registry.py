@@ -443,6 +443,58 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
     return result
 
 
+def _handle_memory_link(payload: dict, context: SyscallContext) -> dict:
+    """sys.v1.memory.link — link two memory nodes owned by the caller.
+
+    Payload keys:
+        source_id (str)   — required; node the link starts from
+        target_id (str)   — required; node the link points to
+        link_type (str)   — default "related"
+        weight    (float) — default 0.5
+
+    ROUTE-EFFECT-BYPASS-1 (item C). `POST /memory/links` previously reached
+    ``MemoryNodeDAO.create_link`` directly, so building the memory graph passed no capability
+    check, no tenant-isolation check and no effect ledger.
+
+    ★ It carries its own ``memory.link`` capability rather than reusing ``memory.write``. A
+    syscall that adds mediation but no authority granularity is not worth the public surface —
+    and writing a *node* is a different power from wiring the graph between them. This follows
+    ``memory.delete``, which likewise holds a capability ``memory.write`` does not grant.
+
+    Both endpoints are resolved **tenant-scoped first**, so a caller cannot discover or link to
+    another tenant's node: a foreign id is indistinguishable from a missing one.
+    """
+    from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
+
+    source_id = str(payload.get("source_id") or "").strip()
+    target_id = str(payload.get("target_id") or "").strip()
+    if not source_id or not target_id:
+        raise ValueError("sys.v1.memory.link requires 'source_id' and 'target_id'")
+
+    link_type: str = payload.get("link_type") or "related"
+    weight: float = float(payload.get("weight") if payload.get("weight") is not None else 0.5)
+    user_id = str(context.user_id or "")
+
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        dao = MemoryNodeDAO(db)
+        # Tenant-scoped existence check before the write. `create_link` also rejects a missing
+        # node, but only as a generic ValueError — resolving here lets the caller distinguish
+        # "no such node" from "invalid link", which the HTTP route maps to 404 vs 422.
+        if dao.get_by_id(source_id, user_id=user_id) is None:
+            raise LookupError(f"source node {source_id!r} not found")
+        if dao.get_by_id(target_id, user_id=user_id) is None:
+            raise LookupError(f"target node {target_id!r} not found")
+
+        link = dao.create_link(source_id, target_id, link_type, weight, user_id=user_id)
+        result = {"link": link}
+    except Exception:
+        _finish_handler_write(db, owns_session=owns_session, success=False)
+        raise
+    _finish_handler_write(db, owns_session=owns_session, success=True)
+    return result
+
+
 def _handle_memory_delete(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.memory.delete — hard-delete a memory node owned by the caller.
 
@@ -1447,6 +1499,27 @@ SYSCALL_REGISTRY["sys.v1.memory.write"] = SyscallEntry(
     # cache it as JSONB for replay.
     execution_guarantee="EXACTLY_ONCE",
 )
+SYSCALL_REGISTRY["sys.v1.memory.link"] = SyscallEntry(
+    handler=_handle_memory_link,
+    capability="memory.link",
+    description="Link two memory nodes owned by the caller (tenant-scoped).",
+    input_schema={
+        "required": ["source_id", "target_id"],
+        "properties": {
+            "source_id": {"type": "string"},
+            "target_id": {"type": "string"},
+            "link_type": {"type": "string"},
+            "weight": {"type": "float"},
+        },
+    },
+    output_schema={"required": ["link"], "properties": {"link": {"type": "dict"}}},
+    # IDEM-11 — non-idempotent: create_link inserts a row, so a retry builds a SECOND edge
+    # between the same pair. Declaring EXACTLY_ONCE opts it into the at-most-once gate.
+    execution_guarantee="EXACTLY_ONCE",
+    # Experimental: the graph surface is still moving (traverse/expand are unstable too), so
+    # this is deliberately NOT added to the SDK rename guard yet.
+    stable=False,
+)
 SYSCALL_REGISTRY["sys.v1.memory.delete"] = SyscallEntry(
     handler=_handle_memory_delete,
     capability="memory.delete",
@@ -1950,6 +2023,6 @@ def get_registered_syscalls() -> list[str]:
 # Minimum number of syscalls expected after a complete boot (all static built-ins).
 # Any count below this floor means Phase 8 did not finish, or a registration was lost.
 # Add 1 per new static entry added to this file.  Do not lower this value.
-SYSCALL_REGISTRY_MIN_COUNT: int = 23
+SYSCALL_REGISTRY_MIN_COUNT: int = 24
 
 

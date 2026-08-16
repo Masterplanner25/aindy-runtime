@@ -174,8 +174,8 @@ def test_dispatch_helper_raises_rather_than_returning_an_error_body():
 def test_remaining_direct_dao_calls_are_the_expected_two():
     """Pins which routes still bypass, and therefore what is left to do.
 
-    `create_link` has **no syscall equivalent** (a build, not a rewire) and
-    `search_similar_nodes` calls `dao.find_similar` with `min_similarity`, which
+    `create_link` was rewired by item C (`sys.v1.memory.link`). Only
+    `search_similar_nodes` remains: it calls `dao.find_similar` with `min_similarity`, which
     `sys.v1.memory.search` neither accepts nor uses — it calls `dao.recall`. Rewiring that one
     would change search *semantics* under cover of a mediation fix.
 
@@ -184,8 +184,8 @@ def test_remaining_direct_dao_calls_are_the_expected_two():
     source = ROUTER.read_text(encoding="utf-8")
     direct = len(re.findall(r"MemoryNodeDAO\(db\)", source))
 
-    assert direct == 2, (
-        f"expected exactly 2 remaining direct-DAO routes (create_link, search_similar_nodes), "
+    assert direct == 1, (
+        f"expected exactly 1 remaining direct-DAO route (search_similar_nodes), "
         f"found {direct}. A drop means the remaining work landed; a rise means a new bypass."
     )
 

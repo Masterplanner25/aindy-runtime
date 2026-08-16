@@ -7468,7 +7468,8 @@ audit trail appears to prove and what was actually enforced.
 
 ## ROUTE-EFFECT-BYPASS-1 — four memory routes reach effects without the dispatcher
 
-**Status: OPEN — P1.** Scoped 2026-08-16 against `main`, split out of `HTTP-SCOPE-GAP-1` because
+**Status: OPEN — P1. A+B DONE (#460), C DONE (#461); D remains.** Scoped 2026-08-16 against
+`main`, split out of `HTTP-SCOPE-GAP-1` because
 the fix is different work: that entry is about *scope checks not reaching routes*; this is about
 *routes not reaching the chokepoint at all*. A scope decorator on a route that skips the
 dispatcher still leaves the effect unmediated.
@@ -7496,9 +7497,24 @@ check, no quota accounting, no at-most-once.
   enforcement, the effect ledger, tenant isolation *and* at-most-once in one move. This is
   strictly more valuable than it was before 2.3.0.
 - **B — the two reads → `memory.search` / `memory.read`.** Mechanical; both syscalls exist.
-- **C — `POST /links` is net-new.** No link syscall exists. Needs a registry entry, a capability
-  decision, a `SYSCALL_REGISTRY_MIN_COUNT` bump and a `_STABLE_SYSCALLS` call. A build, not a
-  rewire — do not bundle it with A/B.
+- **C — `POST /links` is net-new. DONE 2026-08-16 (#461).** `sys.v1.memory.link`, registry floor
+  23 → 24, `EXACTLY_ONCE` (a retry of `create_link` builds a *second* edge between the same
+  pair). **★ The capability decision was the whole point: it carries `memory.link`, which
+  `memory.write` does not grant.** A syscall adding a mediation hop and no authority granularity
+  would only relocate the same undifferentiated power behind a longer call path — writing a node
+  and wiring the graph between nodes are different powers, and `memory.delete` already set the
+  precedent. A test drives the dispatcher with a `memory.write`-only context and requires
+  refusal, so the split is a boundary and not a label. Tenant scoping moved into the syscall:
+  both endpoints resolve through a tenant-scoped `get_by_id`, and a foreign node is reported
+  **identically to a missing one** — distinguishing them would make the route an existence oracle
+  for other tenants' ids. Route status contract preserved (404 unresolvable / 422 refused, not
+  both collapsed to 400). **Not added to `_STABLE_SYSCALLS`, and deliberately absent from
+  `_DISPATCH_CAPABILITY_SCOPES`** — so SDK `/platform/syscall` callers get an empty grant and the
+  dispatcher denies it, while the HTTP route that already had the caller works. Publishing a
+  `stable=False` syscall to SDK callers is the half that cannot be withdrawn; two tests pin the
+  omission as a decision rather than an oversight. Adding it later needs a `Scopes.MEMORY_LINK`
+  of its own — mapping it onto `MEMORY_WRITE` would undo at the scope layer exactly the split the
+  capability makes above.
 - **D — scope enforcement on this router.** Belongs to `HTTP-SCOPE-GAP-1`'s remainder, and is
   independent of A–C.
 

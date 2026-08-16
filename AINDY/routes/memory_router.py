@@ -394,40 +394,50 @@ async def create_link(
     user_id = str(current_user["sub"])
 
     def handler(ctx):
-        from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
-        dao = MemoryNodeDAO(db)
-        source_node = dao.get_by_id(body.source_id, user_id=user_id)
-        target_node = dao.get_by_id(body.target_id, user_id=user_id)
-        if not source_node:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "memory_node_not_found", "message": "Source node not found"},
-            )
-        if not target_node:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": "memory_node_not_found", "message": "Target node not found"},
-            )
+        from fastapi.encoders import jsonable_encoder
+
+        # ROUTE-EFFECT-BYPASS-1 (C) — dispatch instead of reaching the DAO. Building the memory
+        # graph previously passed no capability check, no tenant-isolation check and no effect
+        # ledger. `sys.v1.memory.link` carries its own `memory.link` capability, so this is a
+        # real authority boundary rather than mediation for its own sake.
         try:
-            from fastapi.encoders import jsonable_encoder
-            link = dao.create_link(
-                body.source_id,
-                body.target_id,
-                body.link_type or "related",
-                body.weight or 0.5,
-                user_id=user_id,
+            result = _dispatch_memory(
+                "sys.v1.memory.link",
+                {
+                    "source_id": body.source_id,
+                    "target_id": body.target_id,
+                    "link_type": body.link_type or "related",
+                    "weight": body.weight if body.weight is not None else 0.5,
+                },
+                db=db,
+                current_user=current_user,
             )
-            data = jsonable_encoder(link) if not isinstance(link, dict) else link
-            data.setdefault("execution_envelope", to_envelope(
-                eu_id=None, trace_id=None, status="SUCCESS",
-                output=None, error=None, duration_ms=None, attempt_count=1,
-            ))
-            return data
-        except ValueError as exc:
+        except HTTPException as exc:
+            # The syscall reports a missing endpoint as LookupError and an invalid link as
+            # ValueError; both arrive as a failed envelope. Preserve the route's existing
+            # contract — 404 for a node that is not there (or not the caller's), 422 for a
+            # link the DAO refuses — rather than collapsing both to 400.
+            message = ""
+            detail = exc.detail
+            if isinstance(detail, dict):
+                message = str(detail.get("message") or "")
+            if "not found" in message:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error": "memory_node_not_found", "message": message},
+                ) from exc
             raise HTTPException(
                 status_code=422,
-                detail={"error": "invalid_memory_link", "message": str(exc)},
+                detail={"error": "invalid_memory_link", "message": message or str(detail)},
             ) from exc
+
+        link = result.get("link")
+        data = jsonable_encoder(link) if not isinstance(link, dict) else link
+        data.setdefault("execution_envelope", to_envelope(
+            eu_id=None, trace_id=None, status="SUCCESS",
+            output=None, error=None, duration_ms=None, attempt_count=1,
+        ))
+        return data
 
     return await _execute_memory(request, "memory.links.create", handler, db=db, current_user=current_user, input_payload=body.model_dump(), success_status_code=201)
 @router.get("/nodes/{node_id}/traverse")
