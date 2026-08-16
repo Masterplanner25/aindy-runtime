@@ -7466,6 +7466,57 @@ audit trail appears to prove and what was actually enforced.
 
 ---
 
+## ROUTE-EFFECT-BYPASS-1 — four memory routes reach effects without the dispatcher
+
+**Status: OPEN — P1.** Scoped 2026-08-16 against `main`, split out of `HTTP-SCOPE-GAP-1` because
+the fix is different work: that entry is about *scope checks not reaching routes*; this is about
+*routes not reaching the chokepoint at all*. A scope decorator on a route that skips the
+dispatcher still leaves the effect unmediated.
+
+**Measured, and smaller than `HTTP-SCOPE-GAP-1` implies.** That entry says `memory_router.py`
+has "zero `SyscallDispatcher` references", which is true and reads as if all 22 routes bypass.
+**18 of 22 go through `_mem_run_flow` → `run_flow` → the dispatcher.** Exactly four touch
+`MemoryNodeDAO` directly:
+
+| Route | Kind | Replacement syscall |
+|---|---|---|
+| `POST /nodes` (`create_node`) | **write** | `sys.v1.memory.write` — exists, **`EXACTLY_ONCE`** |
+| `POST /links` (`create_link`) | **write** | **none exists** |
+| `POST /nodes/search` | read | `sys.v1.memory.search` — exists |
+| `POST /recall` | read | `sys.v1.memory.read` — exists |
+
+**The bypass is double: `grep -c enforce_api_key_scope AINDY/routes/memory_router.py` is 0.** These
+four have neither a capability gate nor the dispatcher — no effect ledger, no tenant-isolation
+check, no quota accounting, no at-most-once.
+
+**Work, in cost order.**
+
+- **A — `POST /nodes` → `sys.v1.memory.write`.** Cheapest and highest value. Since the `IDEM-11`
+  audit the syscall declares **`EXACTLY_ONCE`**, so routing through it gains capability
+  enforcement, the effect ledger, tenant isolation *and* at-most-once in one move. This is
+  strictly more valuable than it was before 2.3.0.
+- **B — the two reads → `memory.search` / `memory.read`.** Mechanical; both syscalls exist.
+- **C — `POST /links` is net-new.** No link syscall exists. Needs a registry entry, a capability
+  decision, a `SYSCALL_REGISTRY_MIN_COUNT` bump and a `_STABLE_SYSCALLS` call. A build, not a
+  rewire — do not bundle it with A/B.
+- **D — scope enforcement on this router.** Belongs to `HTTP-SCOPE-GAP-1`'s remainder, and is
+  independent of A–C.
+
+**★ The "18 are mediated" half is weaker than it sounds.** `run_flow`
+(`flow_engine/entrypoints.py:124`) falls back to `_run_flow_direct` when `user_id` is absent —
+**absent identity SKIPS the boundary rather than denying it**, logged at `debug`. So those 18 are
+mediated only while identity is present. That is `AUTHORITY-VALUE-1`, and it partially undercuts
+the good news above; fixing it there fixes it here.
+
+**Relationship to the native-enforcement plan (`PLAN_native_enforcement_tier.md`, pinned at
+`d32bd5d`).** Same *shape* as its W4 — an effect reached without passing the mediating chokepoint
+— but vastly cheaper. W4's hard part is *"deciding what a tool receives instead of the live DB
+session — almost certainly a scoped syscall channel"*; **here that channel already exists and is
+registered.** No new execution plane, no Rust, no Linux dev loop. Two of that plan's premises have
+also moved since it was pinned: its §6 `GUEST-CONFINE-1` fix **shipped** (#438), and
+`memory.write` became `EXACTLY_ONCE`, which raises A's payoff specifically. Its §5 dev-loop
+constraint is unchanged and still gates the Rust work; nothing in A–D depends on it.
+
 ## ROUTE-AST-UNWIRED-1 — the boot-time route proof exists and is never run against the application
 
 **Status: OPEN — P2 (documentation/assurance, not a live hole).** Found 2026-08-15 while
