@@ -36,6 +36,37 @@ call sites and in the app team's notes, and renaming a security-relevant surface
 churn.
 
 _Nothing yet._
+### Changed — `bootstrap-schema` exits with branchable codes (`FR-14`, #450)
+
+Every not-ready state exited **1** — the same code as "DATABASE_URL is not set". A container
+entrypoint running the command bare under `set -e` could not tell *"re-run me with --reconcile"*
+from *"your config is broken"* from *"a human must migrate"*, so it exited, restarted, and left
+the reason only in a log. That took a live stack down on 2.1.0.
+
+**The refusal itself is unchanged.** No DDL is applied by default; that was never the ask.
+
+| Exit | Meaning | Safe to automate? |
+|---|---|---|
+| `0` | success | — |
+| `1` | configuration error (e.g. `DATABASE_URL` unset) | no — fix the environment |
+| `2` | database layer could not be imported | no — packaging problem |
+| **`3`** | **additive reconcile required** | **yes** — `--reconcile` adds, never drops |
+| `4` | offline migration required | no — `--reconcile` will not help |
+| `5` | manual repair required | no |
+
+`1` and `2` deliberately keep their meanings: the value of 3/4/5 is that they are *not* `1`, or
+an entrypoint would retry a broken environment forever. When a report indicates both, **`4` wins
+over `3`** — reporting `3` there would invite an entrypoint to auto-reconcile a database that
+needs a person.
+
+`bootstrap-schema --help` now states that a bare invocation under `set -e` is a crash loop in a
+container, and that the bare form is the right *interactive* shape.
+
+**Still open, and it is the half that prevents recurrence:** the upgrade path is never exercised
+against an *existing* database. CI builds a fresh one, where `create_all` produces the new columns
+and there is nothing to reconcile — so no green check can see this class of failure. The same
+blind spot hid `FR-8`.
+
 ### Added — `child_context` can no longer widen authority (`AUTHORITY-VALUE-1`, opt-in, #448)
 
 `child_context()` granted whatever `capabilities=[...]` it was handed, **whether or not the
