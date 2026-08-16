@@ -25,6 +25,13 @@ That is why the workflow ships with a **`negative-control` job** that injects sy
 exit 3. The control is the load-bearing half on any release without a schema change: if it ever
 passes silently, the upgrade-path job is decorative and should not be trusted.
 
-**Not yet a required check.** A new workflow file does not trigger on the PR that adds it, so its
-first real run is on `main` after merge. Promote it to required only once it has been observed
-running — and read the `negative-control` result, not just the overall green.
+**Not yet a required check.** Promote it only after reading a real run — and read the
+`negative-control` result, not just the overall green.
+
+*Correction, recorded because it contradicts a note elsewhere in this repo:* **this workflow DID
+run on the pull request that added it.** `CLAUDE.md`'s `NATIVE-CI-1` entry says a new workflow
+file does not trigger on its own PR; that holds for `push`-triggered workflows, but a
+`pull_request` trigger fires from the PR's merge ref and so does run. It failed on that first
+run — for two setup reasons of its own (a missing `CREATE EXTENSION vector`, and a one-shot PyPI
+lookup that hit a connection reset) — which is a better outcome than a first run that only
+happens after merge.

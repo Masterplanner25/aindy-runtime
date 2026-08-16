@@ -78,19 +78,24 @@ jobs:
           # The newest published release that is NOT the version in this checkout. On a
           # version-bump PR the current version is unpublished, so "latest on PyPI" is exactly
           # the release a deployment would be upgrading FROM.
-          PREV=$(python - <<'PY'
-          import json, urllib.request
-          with urllib.request.urlopen("https://pypi.org/pypi/aindy-runtime/json", timeout=30) as fh:
-              data = json.load(fh)
-          print(data["info"]["version"])
-          PY
-          )
+          # curl with retries rather than a one-shot urlopen: the first run of this workflow
+          # died on `URLError: Connection reset by peer` talking to PyPI. A version lookup is
+          # not worth failing an upgrade guard over.
+          PREV=$(curl -sS --retry 5 --retry-all-errors --retry-delay 3 --max-time 60 https://pypi.org/pypi/aindy-runtime/json | python -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
           echo "previous=$PREV" >> "$GITHUB_OUTPUT"
           echo "upgrading FROM aindy-runtime==$PREV TO the checkout ($CURRENT)"
           if [ "$CURRENT" = "$PREV" ]; then
             echo "::notice title=Upgrade path::checkout version $CURRENT is already the latest release; this run exercises a same-version upgrade, which is still a valid no-drift case."
           fi
+
+      - name: Enable pgvector extension
+        run: |
+          set -euo pipefail
+          # `memory_nodes` declares Vector(1536); without the extension the CREATE TABLE fails
+          # and poisons the transaction, which then surfaces as a confusing
+          # `pg_advisory_unlock` error rather than "extension missing".
+          PGPASSWORD=aindy_up psql -h localhost -U aindy_up -d aindy_up -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
       - name: Install the PREVIOUS release and build its schema
         run: |
@@ -206,6 +211,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Enable pgvector extension
+        run: |
+          set -euo pipefail
+          # `memory_nodes` declares Vector(1536); without the extension the CREATE TABLE fails
+          # and poisons the transaction, which then surfaces as a confusing
+          # `pg_advisory_unlock` error rather than "extension missing".
+          PGPASSWORD=aindy_up psql -h localhost -U aindy_up -d aindy_up -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
       - name: Install this build and bootstrap
         run: |
