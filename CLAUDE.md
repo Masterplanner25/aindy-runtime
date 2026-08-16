@@ -485,6 +485,7 @@ that exists but does not enforce, the same shape as `DOCS-COVERAGE-CLAIM-1` / `C
 | `Install Smoke Test` | `runtime-ci.yml` | wheel installs and imports |
 | `pip-audit (OSV)` | `security-audit.yml` | dependency CVEs |
 | `Boot Smoke — Linux / Python 3.11` | `smoke-postgres.yml` | published wheel boots against real PG |
+| *(not required yet)* `Upgrade Path Guard` | `upgrade-path-guard.yml` | previous release's DB → this build (`FR-8`/`FR-14`). **Read its `negative-control` job**: on a release with no schema change the main job passes trivially. |
 
 **Before adding an eleventh, check what made these ten safe:** no `paths:` filter (the classic
 trap — a filtered check never reports on unrelated PRs and blocks them forever), no job-level
@@ -499,7 +500,7 @@ normal move, not an optimization.
 
 ## ★ Trusting a green check — read this before citing CI as evidence
 
-**Eight separate times** this repo has shipped something that *looked* covered and was not.
+**Nine separate times** this repo has shipped something that *looked* covered and was not.
 Assume there will be a ninth — the catalogue exists so you can recognise the shape, and the
 rules below are what it cost to learn:
 
@@ -513,6 +514,13 @@ rules below are what it cost to learn:
 | 6 | Covers, asserts nothing | a test asserting an *absence* passes when the wire is broken | `EVENTBUS-COVERAGE-1` |
 | 7 | Asserts the source, not the behaviour | route tests read the handler as *text*, never called it — 500 instead of 409 for a day | `ROUTE-GUARD-1` |
 | 8 | Verification that never runs | the boot-time route AST proof has no call site in the app | `ROUTE-AST-UNWIRED-1` |
+| 9 | **Green because there was nothing to catch** | a check whose condition this release does not contain — `Upgrade Path Guard` passes trivially with no schema change | `FR-8`/`FR-14` |
+
+**Variant 9 is the one to design against, not just record:** it cannot be fixed by making the
+check better, because the check is fine — the *release* lacks the condition. The only answer
+is a **negative control that injects the condition**, which is why `upgrade-path-guard.yml`
+ships with one. A new check is at its least proven exactly when it is newest, and "it went
+green" is worth nothing until something has made it go red.
 
 Variants 2 and 3 are fixed at the mechanism level (`tests/unit/conftest.py` defaults the marker;
 `AINDY_REQUIRE_NATIVE_BRIDGE=1` turns a skip into a failure) — but both stay listed, because the
@@ -803,7 +811,7 @@ file — because findings were written where they were discovered instead of whe
 - **MEM-DELETE-1** — core shipped. `sys.v1.memory.delete` is hard, syscall-only, tenant-scoped, irreversible, with its own `memory.delete` scope **not** granted by `memory.write`. **No SDK consumer — nothing calls it yet.** Four opt-in upgrades deferred (G1–G4).
 - **NODUS-SYS-SURFACE-1** — CLOSED. Idiomatic `import "std:sys"` routes to nodus's own 4-syscall stub, **not** the AINDY dispatcher; only the bare `sys(...)` builtin reaches `dispatch_syscall`. It could not be aliased, so there is a fail-loud guard in `nodus_worker.py`.
 - **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True`. Full note in its own section below.
-- **NATIVE-CI-1** — CLOSED. `Native Crate Build (Rust)` runs `cargo build --locked --release` every PR. **Encoded gotchas: `--locked` is the point; no `cargo test` (pyo3 `extension-module` omits libpython, so a test harness fails to link); deliberately not path-filtered (a `paths:` filter on a required check never reports and blocks forever); added to `runtime-ci.yml` because a new workflow file doesn't trigger on the PR that adds it.** Builds on Linux, not MSVC.
+- **NATIVE-CI-1** — CLOSED. `Native Crate Build (Rust)` runs `cargo build --locked --release` every PR. **Encoded gotchas: `--locked` is the point; no `cargo test` (pyo3 `extension-module` omits libpython, so a test harness fails to link); deliberately not path-filtered (a `paths:` filter on a required check never reports and blocks forever); added to `runtime-ci.yml` because a new workflow file doesn't trigger on the PR that adds it.** ★ *Corrected 2026-08-16: that holds for **`push`**-triggered workflows. A `pull_request` trigger fires from the PR's merge ref and DOES run on its own PR — `upgrade-path-guard.yml` proved it by failing on one. So a new workflow can be validated before merge if it is `pull_request`-triggered.* Builds on Linux, not MSVC.
 - **NATIVE-DISCOVERY-1** — CLOSED. Both crate consumers now delegate to `AINDY/memory/native_bridge.py`. **★ Trip hazard: `cargo build` emits `libmemory_bridge_rs.so` / `memory_bridge_rs.dll` — Python imports neither. CI renames; a local build needs it by hand.** **And `sys.path.insert` in priority order puts the lowest-priority path first** — that inversion let a stale debug build shadow a fresh release one.
 - **NATIVE-PARITY-1** — CLOSED. Native and Python scorers disagreed on negative `impact_score`. **Severity was defense-in-depth, not live** — `MemoryNodeDAO.save()` clamps at the universal write chokepoint. **★ The regression guard is native-independent on purpose** — parity tests skip without a built crate, so pinning the clamp only there would repeat DOCS-COVERAGE-CLAIM-1 in miniature.
 - **EVENTBUS-PUBLISH-LATCH-1** — CLOSED. **Root cause was one field meaning two things:** `_enabled` was both the operator kill switch and the runtime give-up latch, which made a transient blip permanent *and* invisible. Now split: config vs. a `CircuitBreaker`. **Behaviour change: `/health/deep` reports the bus degraded during suspension rather than `ok`.**

@@ -6291,7 +6291,17 @@ not ask for auto-DDL, and none was added.
 them. Same shape as `IDEM-11`'s `register_syscall`: the information existed, the surface did
 not expose it.
 
-**Still open, and it is the part that would prevent recurrence rather than soften it.** Their
+**★ CLOSED 2026-08-16 (#455) — the upgrade-path guard is built.** `Upgrade Path Guard` installs
+the previous released wheel from PyPI, builds its schema, installs this build over that database,
+and requires `bootstrap-schema` to either succeed or exit 3, with `--reconcile` resolving it and
+staying stable; it then boots `serve`, since `FR-14`'s symptom was a container that never reached
+it. **A `negative-control` job injects synthetic drift and requires the guard to see it** —
+without that, a release with no schema change (like the one shipping this) produces a green run
+that proves nothing, because a broken guard and a clean release look identical. Not yet a
+required check: a new workflow file does not trigger on the PR that adds it, so promote it after
+observing a real run. The original analysis follows.
+
+**Their**
 own analysis names it: *the upgrade path is never exercised against an existing database.* CI
 builds a fresh one, where `create_all` produces the new columns and there is nothing to
 reconcile — so **no green check can see this class of failure**; their own
