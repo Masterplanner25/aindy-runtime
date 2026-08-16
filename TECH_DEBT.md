@@ -6195,8 +6195,41 @@ visible, deliberate break rather than a surprise.
 
 ## FR-14 — the blessed deploy primitive breaks on every additive runtime schema release
 
-**Status: OPEN — filed by the app team 2026-08-15 from the 2.1.0 upgrade, verified here, and one
-part of their write-up corrected in the runtime's favour and against it.**
+**Status: PARTIALLY CLOSED (2026-08-16, #450)** — filed by the app team 2026-08-15 from the
+2.1.0 upgrade, verified here, and one part of their write-up corrected in the runtime's favour
+and against it.
+
+**★ Shipped: two of their three asks.** The refusal itself is unchanged — they explicitly did
+not ask for auto-DDL, and none was added.
+
+- **Distinct exit codes**, published in `--help` and pinned by tests as a public contract:
+  **3** additive reconcile required, **4** offline migration required, **5** manual repair
+  required. `1` stays "fix your environment", `2` stays "import failure" — load-bearing,
+  because the whole value of 3/4/5 is that they are *not* 1; sharing a code with a config
+  error would make an entrypoint retry a broken environment forever. **Only 3 is safe to
+  automate**; 4 and 5 must page someone, which is why they are three codes and not one
+  "schema not ready". Precedence puts **4 above 3** when a report says both — reporting 3
+  there would invite an entrypoint to auto-reconcile a database that needs a person.
+- **The entrypoint pattern documented where they actually looked** — `bootstrap-schema --help`
+  now states that a bare invocation under `set -e` is a crash loop in a container, and that
+  the bare form is the right *interactive* shape. Their entrypoint was modelled on the `init`
+  scaffold and inherited the bare form, so the help text is the right surface for this.
+- **Their first ask — "say it in the handoff" — is now a release-checklist step**, gated on a
+  `git diff` over `AINDY/db/models/` rather than on someone remembering.
+
+**★ The report always carried the distinction.** `SchemaReport` has `reconcile_supported`,
+`offline_migration_required`, `state` and `operator_action`; only the exit surface collapsed
+them. Same shape as `IDEM-11`'s `register_syscall`: the information existed, the surface did
+not expose it.
+
+**Still open, and it is the part that would prevent recurrence rather than soften it.** Their
+own analysis names it: *the upgrade path is never exercised against an existing database.* CI
+builds a fresh one, where `create_all` produces the new columns and there is nothing to
+reconcile — so **no green check can see this class of failure**; their own
+`deploy-bootstrap-guard.yml` passed while the live stack was crash-looping. The missing guard
+boots the **previous** runtime against a fresh DB, then the **new** one against that
+now-existing DB. That shape would have caught both `FR-8` and `FR-14` before either reached a
+running stack. Not built here.
 
 **What happened.** Their entrypoint runs `aindy-runtime bootstrap-schema` bare, under `set -e`.
 On 2.1.0 against an existing database it exits non-zero, because FR-13's additive

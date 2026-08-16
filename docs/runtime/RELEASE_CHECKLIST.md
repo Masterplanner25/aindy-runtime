@@ -1,6 +1,6 @@
 ---
 title: "Runtime Release Checklist"
-last_verified: "2026-08-15"
+last_verified: "2026-08-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -273,6 +273,21 @@ deployment that introduces TLS termination.
   not what remains outstanding** — the first survives promotion, the second cannot.
 - [ ] Breaking changes to stable surfaces are explicitly documented
 - [ ] Schema contract version bump is noted if any model changed
+- [ ] **★ If runtime-owned schema changed, the app handoff SAYS SO and names the step.**
+
+  `FR-14`: an additive runtime column makes a bare `bootstrap-schema` exit non-zero, which
+  under `set -e` + `restart: unless-stopped` is a **crash loop** — it took a live stack down
+  on 2.1.0. The handoff for that release said *"nothing to backfill and no data to prepare"*,
+  which was true **about data** and read to a deployer as "nothing to do".
+
+  So when `AINDY/db/models/` or `memory_persistence.py` changed, the handoff must state:
+  *existing deployments must run `bootstrap-schema --reconcile`* (or branch on **exit code 3**).
+  Check with `git diff vX.Y.Z..HEAD -- AINDY/db/models/ AINDY/memory/memory_persistence.py` —
+  a non-empty diff makes this mandatory, not a judgement call.
+
+  **This is the FR-8 shape twice over: the upgrade path is not exercised against an existing
+  database before release.** CI builds a fresh one, where `create_all` produces the new columns
+  and there is nothing to reconcile — so no green check can see this class of failure.
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
 - [ ] TECH_DEBT.md updated for any newly closed or opened entries
 - [ ] `sandbox_escape_test_posture()["posture"] == "all_pass"` for this release platform

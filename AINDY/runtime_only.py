@@ -208,6 +208,30 @@ def _promote_admin(email: str) -> NoReturn:
         db.close()
 
 
+# ── bootstrap-schema exit codes (FR-14) ──────────────────────────────────────
+#
+# These are a PUBLIC CONTRACT: a deploy entrypoint branches on them. Do not renumber, and do
+# not reuse a retired number. Filed by the app team after a bare `bootstrap-schema` in a
+# container entrypoint crash-looped a live stack on an additive runtime column — every
+# not-ready state exited 1, indistinguishable from a config error, so the entrypoint could
+# only die and leave the reason in a log.
+#
+#   0  success
+#   1  configuration error (e.g. DATABASE_URL unset) — do not retry, fix the environment
+#   2  the database layer could not be imported — a packaging/install problem
+#   3  additive reconcile required   -> re-running with --reconcile resolves it
+#   4  offline migration required    -> --reconcile will NOT help; a human must act
+#   5  manual repair required        -> neither of the above applies
+#
+# 3 is the one an entrypoint may safely automate: reconcile adds columns and indexes, never
+# drops. 4 and 5 must page someone. That split is the whole point of separating them — a
+# single "schema not ready" code would tempt an entrypoint into auto-reconciling a state
+# reconcile cannot fix.
+EXIT_SCHEMA_RECONCILE_REQUIRED = 3
+EXIT_SCHEMA_OFFLINE_MIGRATION_REQUIRED = 4
+EXIT_SCHEMA_MANUAL_REPAIR_REQUIRED = 5
+
+
 def _bootstrap_schema(reconcile: bool) -> NoReturn:
     """Build runtime-owned tables from packaged metadata and stamp alembic_version_runtime.
 
@@ -252,13 +276,40 @@ def _bootstrap_schema(reconcile: bool) -> NoReturn:
             print("ok: runtime-owned tables already present (no table changes).")
 
         if not report.ok:
+            # FR-14 — distinct, branchable exit codes.
+            #
+            # This previously exited 1 for every not-ready state, which is the same code as
+            # "DATABASE_URL is not set". A container entrypoint running this bare under
+            # `set -e` therefore could not tell "re-run me with --reconcile" from "your
+            # config is wrong" from "a human must do an offline migration" — so it crash
+            # looped, and the only way to learn which had happened was to read the log.
+            #
+            # The report already carried the distinction (`reconcile_supported`,
+            # `offline_migration_required`); only the exit surface collapsed it.
+            if report.offline_migration_required:
+                code = EXIT_SCHEMA_OFFLINE_MIGRATION_REQUIRED
+                remedy = (
+                    "An offline migration is required. --reconcile will NOT fix this; it "
+                    "only performs additive column/index changes."
+                )
+            elif report.reconcile_supported:
+                code = EXIT_SCHEMA_RECONCILE_REQUIRED
+                remedy = (
+                    "Re-run with --reconcile to apply the additive column/index changes. "
+                    "This is safe to automate in an entrypoint: it adds, never drops."
+                )
+            else:
+                code = EXIT_SCHEMA_MANUAL_REPAIR_REQUIRED
+                remedy = "Manual repair is required; neither --reconcile nor a migration applies."
+
             print(
                 f"error: runtime-owned schema is not ready: {report.summary()}\n"
-                "Re-run with --reconcile for an additive column/index fix, or perform "
-                "the required offline migration before retrying.",
+                f"{remedy}\n"
+                f"state={report.state} operator_action={report.operator_action} "
+                f"exit_code={code}",
                 file=sys.stderr,
             )
-            raise SystemExit(1)
+            raise SystemExit(code)
 
         # (b) Stamp the runtime's Alembic baseline (the half the app layer cannot do).
         rev = stamp_runtime_alembic_head(engine)
@@ -719,8 +770,24 @@ def main() -> None:
             "schema upgrade has a stamped line to migrate from. Safe to run repeatedly. "
             "Requires DATABASE_URL. Intended for a deploy entrypoint that splits schema "
             "ownership: run this for runtime tables + baseline, then have the app build "
-            "only its own tables."
+            "only its own tables.\n"
+            "\n"
+            "EXIT CODES (stable; a deploy entrypoint may branch on these):\n"
+            "  0  success\n"
+            "  1  configuration error (e.g. DATABASE_URL unset) — fix the environment\n"
+            "  2  database layer could not be imported — a packaging/install problem\n"
+            "  3  additive reconcile required — re-running with --reconcile resolves it\n"
+            "  4  offline migration required — --reconcile will NOT help; a human must act\n"
+            "  5  manual repair required — neither of the above applies\n"
+            "\n"
+            "CONTAINER ENTRYPOINTS: running this bare under `set -e` will exit non-zero on "
+            "any release that adds a runtime column, and with `restart: unless-stopped` that "
+            "is a crash loop. Either pass --reconcile (it adds columns and indexes, never "
+            "drops), or branch on exit code 3. Only 3 is safe to automate; 4 and 5 need a "
+            "person. Bare invocation is the right shape interactively, where you want to be "
+            "told before anything is altered."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     bootstrap_parser.add_argument(
         "--reconcile",
