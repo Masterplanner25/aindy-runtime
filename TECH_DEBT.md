@@ -3359,6 +3359,68 @@ default. See **RTR-2** advance for detail.
 
 ---
 
+## SYSMAX-5 — the scheduler thread pool is smaller than the job count, and never sized deliberately
+
+**Status: OPEN — P2.** Filed 2026-08-16, found while fixing `FR-15` (b). Not implicated in any
+known incident on its own; it is the same shape as the defect that *was*, one level up.
+
+**Measured.** `scheduler_service.start()` builds `BackgroundScheduler` and — before `FR-15` (b)
+— passed no `executors=`, so the pool was APScheduler's default `ThreadPoolExecutor()`, i.e.
+**10 workers**. Against that:
+
+| | Jobs |
+|---|---|
+| Runtime, `platform-only` profile (the floor) | **12** |
+| App-registered via `get_scheduled_jobs()` in `aindy-apps-monolith` | **21** `register_scheduled_job` call sites |
+| Realistic deployment total | **~33 jobs on 10 workers** |
+
+App jobs are added at `scheduler_service.py:348` with **no `executor=`**, so every one lands on
+`default`.
+
+**Why the ratio matters here specifically.** Two of those jobs can hold a worker for a long time,
+and neither is bounded:
+
+- `scheduler_heartbeat_tick` holds a worker for the **entire duration of one INLINE execution**.
+  Dispatch is INLINE by default (`FR-15`), and the reported incident had it held for ~13 minutes.
+- Several maintenance jobs (`recover_stuck_flow_runs`, `process_pending_memory_embeddings`,
+  `cleanup_stale_logs`, `effect_record_cleanup`, …) open DB sessions and can block up to
+  `DB_POOL_TIMEOUT` — **60s** since `DB-NODUS-BUDGET-1` raised it — when the connection pool is
+  exhausted. Pool exhaustion is not hypothetical: it is `RT-MEMTXN-LEAK-1`, and it was present
+  during the `FR-15` incident.
+
+So the failure mode is a **maintenance brownout**: enough slow jobs coincide, the shared pool is
+saturated, and every remaining job silently stops running — including recovery jobs whose entire
+purpose is to clean up after the condition that saturated the pool. Nothing raises; APScheduler
+logs `maximum number of running instances reached` per starved job and keeps going.
+
+**What `FR-15` (b) already fixed, and what it deliberately did not.** That change gave
+`scheduler_wait_tick` its own single-thread executor, because time-wait firing is a correctness
+guarantee and must not be probabilistic. **It protected one job by name.** Everything else still
+shares the same 10 workers, so the general ratio problem is untouched — recording it here rather
+than widening that PR's scope.
+
+**Not a live incident.** No observed failure is attributed to this, and the ratio has presumably
+been this way since the scheduler was written. It is filed because it is *latent by
+construction*: the pool size was never chosen, it is an upstream default that our own job count
+already exceeds, and the gap widens with every app that registers a job.
+
+**Proposed fix, in order of value.**
+
+1. **Size the default executor deliberately and say why.** It is now an explicit argument
+   (`FR-15` (b) added `executors=`), so this is a one-line change plus a comment — but pick the
+   number from the job count and the blocking profile, not from taste.
+2. **Consider a second dedicated executor for the recovery jobs.** They are the ones whose value
+   is highest exactly when the pool is saturated, which is when they currently cannot run.
+3. **Emit pool saturation.** APScheduler's `maximum number of running instances reached` is a
+   per-job log line, not a metric; there is no signal for *"the scheduler pool is full"*. This is
+   the same observability gap `FR-15` (c) closed for the dispatch queue, and it should be closed
+   the same way rather than rediscovered from logs during the next incident.
+
+**Do NOT close this by raising the number alone.** A bigger pool moves the threshold; it does not
+bound either of the two unbounded holders. The durable fix for the worst holder is `FR-15` (a) —
+taking dispatch off the inline path entirely — and this entry should be re-read after that lands,
+because it may reduce to items 2 and 3.
+
 ## SYSMAX-2 — Autonomous trigger scheduler has no queue back-pressure
 
 **Status:** CLOSED (2026-06-07)
