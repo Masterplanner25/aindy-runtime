@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Added — `scheduler.queued` event and a queue-wait histogram (`FR-15`, #442)
+
+Between an item entering the scheduler queue and `execution.started` firing, **nothing was
+emitted**. The app team measured a **177-second** window of that silence; inside it a queued
+request and a hung process are externally indistinguishable, which is what turned a diagnosis
+into a three-hour investigation.
+
+- **`scheduler.queued`** SystemEvent at enqueue, carrying `queue_depth` — the number that
+  separates *"queued behind 40 things"* from *"queued alone and the dispatcher is wedged"*.
+  Those have the same external symptom and completely different causes. It lands in
+  `system_events`, the table operators actually query after the fact.
+- **`aindy_scheduler_queue_wait_seconds`** histogram observed at dispatch. Buckets run to
+  **300s** on purpose: the observed pathological waits were 22s / 48s / 184s, so a histogram
+  topping out near 10s would have put every interesting sample in `+Inf`. The depth gauge
+  (`aindy_scheduler_queue_depth`) already existed and is already scraped — only the *duration*
+  half was missing.
+- Off switch `AINDY_SCHEDULER_QUEUE_EVENTS` (default on), resolved per call, no restart needed.
+
+**The event is `scheduler.queued`, not the `execution.queued` that was requested, and the
+difference is load-bearing.** The execution-contract gate raises for any `execution.*` event
+emitted outside a pipeline, and the two hottest enqueue callers — the event-bus subscriber
+thread and wait expiry — have no pipeline active. The requested name would raise in exactly the
+paths that matter most. Same reason `recall.used` / `score.computed` are un-prefixed.
+
+**Consumers reading the event stream see one new event type per enqueued execution unit** — the
+same order of magnitude as the `execution.started` row that already exists per item.
+
+**This does not change dispatch behaviour.** It makes the existing wait visible. The wait itself
+is `FR-15` (b) *decouple dispatch from the 1s heartbeat* and (a) *flip
+`AINDY_ASYNC_HEAVY_EXECUTION`*, both still open — see `TECH_DEBT.md` `FR-15` for why the
+observability step deliberately shipped first.
+
 ### Changed — guest confinement is now verified across the whole gated surface (`GUEST-CONFINE-1`, #440)
 
 `GUEST-CONFINE-1` shipped with three demonstrated blocks (`subprocess_shell`, `http_get`,
