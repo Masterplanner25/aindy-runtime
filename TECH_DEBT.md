@@ -7146,6 +7146,56 @@ precisely because of this — which is the runtime already conceding the point i
 
 ## HTTP-SCOPE-GAP-1 — the capability model does not reach the runtime's own front door
 
+**★ FIRST HALF CLOSED 2026-08-16 (#449) — a JWT no longer bypasses scopes.**
+
+The conditional half of this finding is fixed. `enforce_api_key_scope` gated API-key callers
+only, so an interactive browser session was **strictly more privileged than any API key**. A JWT
+session now presents `session_scopes` and is gated by the same check.
+
+**The hard prerequisite this entry recorded — "a JWT carries NO scopes today, so 'stop
+bypassing' implemented literally denies every session request" — was solved the recommended
+way: derive from the user row.** `_resolve_authenticated_jwt_user` already loaded
+`User.is_admin`; authority is derived from it **per request**, so nothing is encoded in the
+token, **no live session is invalidated** (2.0.0 already did that once via `purpose`), and an
+admin grant or revocation takes effect on the next call rather than the next login.
+
+**The scope split is the app team's, not ours** (`RUNTIME_FEATURE_REQUESTS.md` → *Response to
+v2.1.0 §6*). Ordinary: `flow.read`, `flow.execute`, `memory.read`, `memory.write`, `agent.run`,
+`execution.read`. Admin adds `webhook.manage`, `platform.admin`. **Neither includes
+`memory.delete` or `event.emit`** — nothing in their client uses either, so a session must not
+inherit them; an API key can still be granted them explicitly. Both their constraints are
+honoured: admin keys on the **existing user-row flag** (one source of truth for "operator"), and
+nothing here pretends to answer data ownership.
+
+**★ It ships ENFORCING rather than default-off, and the justification is an enumeration rather
+than confidence.** Only **7 of 147** route decorators enforce a scope at all, and the only three
+they require — `flow.read`, `flow.execute`, `memory.read` — are in the ordinary set. So every
+signed-in user still passes every currently-enforcing route; the blast radius is *countable*,
+which is what distinguishes this from a tightening that genuinely needs soak (`IDEM-11`,
+`AUTHORITY-VALUE-1`'s clamp). `test_every_enforced_scope_is_held_by_an_ordinary_session` scans
+the source for real call sites and fails if anyone adds an enforcement an ordinary session cannot
+satisfy — so that argument decays into a CI failure rather than into 403s in a browser, which is
+exactly the *"scattered 403s that read as a frontend bug"* outcome the app team asked us to
+avoid. Escape hatch: `AINDY_JWT_SCOPE_ENFORCEMENT=0`.
+
+**A bug this change introduced and the existing suite caught.** `_resolve_authenticated_jwt_user`
+has two degraded return paths (no usable `Session`; a DB error under `TEST_MODE`) that return
+before the user row is read. Deriving scopes only at the end left those principals with **no
+grant at all**, i.e. denied everything. `test_scope_guard_passes_jwt_user` failed and surfaced
+it. Fixed by seeding the **non-admin** grant immediately after `user_id`, before any early
+return, and re-deriving once the row confirms `is_admin` — least privilege on the degraded paths,
+authoritative on the normal one. That test was **rewritten, not deleted**: it had been asserting
+the defect (a JWT with no scopes passing `flow.read`), and now asserts the same route still works
+for the same user for a different reason, plus the two fail-closed cases.
+
+**Still open, and it is the larger half:** **140 of 147 routes enforce nothing at all** — the
+scope model reaches the front door but not most of it. `memory_router.py` still has **zero**
+`SyscallDispatcher` references and `create_node` still calls `MemoryNodeDAO(db).save(...)`
+directly, so the REST path can still reach effects without the dispatcher. Widening enforcement
+route-by-route is the remaining work, and per the app team's request the release that enforces
+new scopes must **name them in the handoff**.
+
+
 **Status: OPEN — P0.** Filed 2026-08-15 from the Codex comparative audit (G3), verified with
 exact counts.
 

@@ -26,3 +26,51 @@ class Scopes:
         WEBHOOK_MANAGE,
         PLATFORM_ADMIN,
     ]
+
+    #: HTTP-SCOPE-GAP-1 — the scopes a JWT *session* carries, derived from the user row.
+    #
+    # Sourced from the app team's real call surface (their answer to `APP_HANDOFF_v2.1.0.md`
+    # §6), not from our guess: Tasks, MasterPlan, Genesis, memory, search, social and identity
+    # between them do recall, node create/update, feedback, share and flow runs.
+    #
+    # ★ Derived from `User.is_admin`, deliberately NOT from a token claim. A `scopes` claim
+    # would invalidate every live session on upgrade — 2.0.0 already did that once via
+    # `purpose` — and would create a second source of truth for "is this person an operator",
+    # which the app team explicitly asked us not to do.
+    JWT_SESSION: list[str] = [
+        FLOW_READ,
+        FLOW_EXECUTE,
+        MEMORY_READ,
+        MEMORY_WRITE,
+        AGENT_RUN,
+        EXECUTION_READ,
+    ]
+
+    #: What an admin session adds. Their operator console (`client/src/api/operator.js`) does
+    #: webhook CRUD, DLQ drain, user promotion and the execution graph.
+    JWT_ADMIN_EXTRA: list[str] = [
+        WEBHOOK_MANAGE,
+        PLATFORM_ADMIN,
+    ]
+
+    #: Deliberately in NEITHER derived set: `memory.delete` (nothing in the client issues a
+    #: DELETE against memory) and `event.emit` (nothing in the client emits directly). An API
+    #: key can still be granted them explicitly; a browser session cannot inherit them.
+
+
+def derive_session_scopes(*, is_admin: bool) -> list[str]:
+    """Scopes for a JWT-authenticated session, derived from the user row.
+
+    HTTP-SCOPE-GAP-1. Before this, `enforce_api_key_scope` gated API-key callers only —
+    its own docstring said *"JWT users carry full trust and are never gated"* — which made
+    an interactive browser session **strictly more privileged than any API key**.
+
+    The admin set is keyed on `User.is_admin`, the flag the platform already uses, so there
+    is exactly one answer to "is this person an operator". The app's UI already draws this
+    line itself (`useAuth().isAdmin`, `<AdminAccessRequired />`) but **only in the frontend**;
+    this makes the server enforce a boundary that already exists rather than inventing one.
+    """
+    scopes = list(Scopes.JWT_SESSION)
+    if is_admin:
+        scopes.extend(Scopes.JWT_ADMIN_EXTRA)
+    return scopes
