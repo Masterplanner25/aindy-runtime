@@ -3399,7 +3399,38 @@ default. See **RTR-2** advance for detail.
 
 ## SYSMAX-5 — the scheduler thread pool is smaller than the job count, and never sized deliberately
 
-**Status: OPEN — P2.** Filed 2026-08-16, found while fixing `FR-15` (b). Not implicated in any
+**Status: CLOSED (2026-08-16, #453).** Filed 2026-08-16, found while fixing `FR-15` (b).
+
+**Fixed by isolation, not capacity — and that distinction was the whole finding.** Three lanes:
+`default` (10) for ordinary maintenance and every app-registered job, `recovery` (2) for the six
+jobs whose value peaks when the scheduler is saturated, `waits` (1) for time-wait firing.
+
+**★ The entry warned "do not close this by raising the number alone", and building it produced
+the concrete reason.** `DB_POOL_SIZE` (10) + `DB_MAX_OVERFLOW` (20) = **30 connections, shared
+with request handling**. Every scheduler thread can hold a session, so raising `default` to
+exceed the job count would leave request handling starved instead — the RT-MEMTXN-LEAK-1 shape,
+where a login took 42s. A bigger pool moves the threshold; dedicated lanes remove the coupling,
+and cost +3 threads. `test_total_scheduler_threads_leave_db_headroom` asserts the lanes stay
+within half the DB budget, so that trade cannot be made accidentally later.
+
+`queue_backend_reconnect` is the sharpest protected case: if the queue backend is down *and* the
+pool is saturated, the job that would reconnect it cannot run — self-sustaining rather than
+merely delayed.
+
+**Item 3 (emit saturation) shipped too:** `aindy_scheduler_job_starved_total{job_id,reason}`,
+driven by an APScheduler listener on `EVENT_JOB_MAX_INSTANCES` / `EVENT_JOB_MISSED`. Those were
+previously a per-job log line only — which is what the `FR-15` incident printed once per starved
+second while nobody could see it as a signal. The `reason` label separates "previous run still
+going" from "no worker was free"; they have different causes.
+
+**Test-shim gap closed in passing, the second of its kind.** `pytest.ini` sets
+`pythonpath = . AINDY`, so `import apscheduler` resolves to the vendored shim — which had no
+`events` module and no `add_listener`, so the listener silently took its `except ImportError`
+path and **would have shipped unexercised by any test**. The shim grew to match the guard rather
+than the guard being weakened to match the shim (same call as the `executors.pool` addition in
+`FR-15` (b)).
+
+**Original finding follows.** Not implicated in any
 known incident on its own; it is the same shape as the defect that *was*, one level up.
 
 **Measured.** `scheduler_service.start()` builds `BackgroundScheduler` and — before `FR-15` (b)
