@@ -25,10 +25,37 @@ no pin move.**
 2.0.0 forced a conversation by moving the pin. This one does not. The work below is therefore
 *checking behaviour changes*, not performing an upgrade.
 
-**Run migrations.** Alembic head **`0016`**, schema contract `2026-08-15.1`. Migration `0016`
-only *widens* what is accepted — it replaces a global `UNIQUE (agents.name)` with two partial
-unique indexes — so there is nothing to backfill and no data to prepare. Verified against real
-PostgreSQL on nine properties, including blank-database safety and an idempotent downgrade.
+### ⚠️ A required manual step on any existing database
+
+**Corrected 2026-08-15, after the app team hit this on a live stack.** An earlier version of this
+section said migration `0016` *"only widens what is accepted … so there is nothing to backfill and
+no data to prepare."* **That is true about data and false about deployment**, and the distinction
+is the whole problem — this document conflated them.
+
+FR-13's new `agents.metadata` / `agents.updated_at` columns are additive and nullable, so no data
+needs preparing. But a bare `aindy-runtime bootstrap-schema` — **the command this repository's own
+README calls the "blessed deploy primitive"** — *refuses* to add them:
+
+```
+error: runtime-owned schema is not ready: Runtime-owned schema requires an explicit additive
+reconcile: Runtime table 'agents' is missing required column 'metadata'.
+```
+
+Under `set -e` plus `restart: unless-stopped` that is a **crash loop**, and the API never reaches
+`serve`. Run the reconcile before starting:
+
+```bash
+aindy-runtime bootstrap-schema --reconcile
+```
+
+**And note it is not only the CLI.** `serve`'s own schema guard refuses the same drift unless
+`AINDY_SCHEMA_RECONCILE=true` — so removing `bootstrap-schema` from an entrypoint moves the
+failure, it does not remove it. Two gates, two different opt-ins, neither on by default. Tracked
+as **FR-14**.
+
+Alembic head **`0016`**, schema contract `2026-08-15.1`. `0016` itself was verified against real
+PostgreSQL on nine properties including blank-database safety and an idempotent downgrade — that
+verification was sound; it simply never covered the deploy path.
 
 ---
 
@@ -190,7 +217,13 @@ Also open, and worth knowing rather than acting on:
   syscalls declares its execution guarantee. Duplicate-effect exposure in default configuration
   is real.
 - **`HTTP-SCOPE-GAP-1`** — scope checks reach a small minority of HTTP routes. See §6.
-- **Your `FR-7` status is stale** (flagged previously, repeated because it has not moved): all
-  four defects shipped in 2.0.0 and are in source. You run 2.1.0, so only the document is behind.
+- **~~Your `FR-7` status is stale~~ — withdrawn.** Checked against your repo:
+  `docs/handoffs/RUNTIME_FEATURE_REQUESTS.md` has carried **`FR-7 — ✅ CLOSED in 2.0.0`** since
+  2026-08-06. The claim was stale on *our* side, propagated from `CLAUDE.md` without checking a
+  repository we had on disk — the same "concluding from a stale note rather than the source"
+  failure this document warns about elsewhere. It has been removed at the origin so it cannot be
+  repeated a fourth time. The accompanying "you run 2.1.0" was also wrong: you were on 2.0.1
+  until the upgrade PR.
 
-**Next available FR number: `FR-14`.**
+**Next available FR number: `FR-15`** — `FR-14` was filed from this upgrade (see the deploy
+step in §1).
