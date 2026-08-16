@@ -300,6 +300,21 @@ deployment that introduces TLS termination.
   **This is the FR-8 shape twice over: the upgrade path is not exercised against an existing
   database before release.** CI builds a fresh one, where `create_all` produces the new columns
   and there is nothing to reconcile — so no green check can see this class of failure.
+- [ ] **★ If any route started enforcing a scope, the app handoff NAMES the scopes.**
+
+  `HTTP-SCOPE-GAP-1`. The app team's one stated condition on scope rollout: *name the scopes in
+  the handoff for the release that enforces them*, because the alternative is scattered 403s
+  that read to them as a frontend bug and get debugged in the wrong repo.
+
+  Check with `git diff vX.Y.Z..HEAD -- AINDY/routes/ | grep enforce_api_key_scope` — a non-empty
+  result makes this mandatory, not a judgement call. State the **route → scope** table and,
+  separately, whether an ordinary JWT session already holds them: sessions derive scopes from
+  the user row, so the exposed callers are almost always **platform API keys**, and *"no session
+  is affected"* is not the same claim as *"no caller is affected"*.
+
+  A new gate is at its least proven when it is newest: `test_every_enforced_scope_is_held_by_an_ordinary_session`
+  fails in CI if a gate an ordinary user cannot satisfy is added, but it says nothing about the
+  keys an operator issued last year.
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
 - [ ] TECH_DEBT.md updated for any newly closed or opened entries
 - [ ] `sandbox_escape_test_posture()["posture"] == "all_pass"` for this release platform
