@@ -2552,6 +2552,44 @@ the builder stage `pip install` line.
 
 ## NODUS-UPGRADE-1 — nodus-lang pinned at 3.0.2; v4.0.0 available
 
+**★ 4.1.0 → 4.2.0 bumped 2026-08-16 (#451), filed as `FR-16` by the app team.**
+
+**The exact pin is the reason this needed a runtime release.** `Requires-Dist:
+nodus-lang==4.1.0` means an app cannot adopt a nodus release on its own — `pip install
+nodus-lang==4.2.0` succeeds and leaves the environment inconsistent with the runtime's declared
+requirement, which is worse than a clean refusal. Reproduced: an editable install of this repo
+**downgraded 4.2.0 back to 4.1.0**. The pin stays exact deliberately — hard-pinning a language
+runtime is defensible — but that choice makes prompt bumping the runtime's obligation rather
+than the app's problem.
+
+**Probe checklist, and one item is NEW since the 4.1.0 bump.** `GUEST-CONFINE-1` (shipped
+2026-08-15) makes guest confinement depend on the VM constructor accepting `allow_subprocess`,
+`allow_network` and `allow_env`. **A silently renamed or removed argument would leave the guest
+unconfined while every test that mocks the VM still passed** — so this must be verified against
+the real VM, not inferred. Verified for 4.2.0: all three present with identical defaults, and
+all **31** gated builtins still refused.
+
+Re-verified alongside it: the three long-standing fragile couplings
+(`nodus.services.syscall_runtime.call_syscall`, `NodusRuntime._get_active_vm`,
+`register_function`), and that `register_function` **still refuses to override a builtin** —
+which is the premise `NODUS-SYS-SURFACE-1`'s fail-loud guard rests on.
+
+**4.2.0's breaking change does not reach us.** *"Every error now reports the resolved absolute
+path"* is inert here: nodus errors are forwarded, never parsed — `nodus_adapter.py` and
+`nodus_execution_service.py` only ever pass `result.get("error")` through, and nothing matches
+on error text or location.
+
+**Why the app team wanted it:** 4.2.0 fixes four causes behind an intermittent resume failure on
+a path they run (`AINDY_REASONING_NODUS_NATIVE`) — a sweeper adopting runs it never created, an
+unlocked store scan that loses records on Windows, and a 200ms resume budget sized for running a
+script rather than recompiling one (`RESUME_TIMEOUT_MS`, now 30s). **They explicitly did NOT
+claim it explains the runtime's own `run_reasoning_apply` returning `{'data': {}}`** — only that
+the signatures match and both are load-dependent. Worth re-running the nodus tests before
+assuming the 45s-limit note is the whole story.
+
+No runtime code change was required. 167 nodus/worker/flow/simulation tests pass against 4.2.0.
+
+
 **Status:** CLOSED (2026-06-11); pin last updated 2026-07-17 (4.0.5 → 4.1.0)
 
 **Implemented:** Bumped `pyproject.toml` + `AINDY/requirements.txt` pin from `nodus-lang==3.0.2`
