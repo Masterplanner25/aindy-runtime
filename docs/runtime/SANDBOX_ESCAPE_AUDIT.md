@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-08-05"
+last_verified: "2026-08-15"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -762,6 +762,71 @@ release, rather than the release having changed anything about it.
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v2.0.1` release commit.
+
+### Entry 014 — 2026-08-15 (gate ran 2026-08-16 UTC)
+
+`sandbox-escape-linux.yml` release gate, fired automatically on the `v2.1.0` tag
+**Host OS:** Ubuntu (GitHub-hosted `ubuntu-latest`), native Linux kernel — Docker uses a native
+Linux-containers backend, not a Docker Desktop VM
+**Container image:** `python:3.11-alpine`. **Note:** the gate log records
+`Status: Downloaded newer image for python:3.11-alpine`, so the tag resolved to a *freshly pulled*
+image rather than a cached one — the exact digest is in the run artifact and is not assumed
+identical to Entries 002–013.
+**Test command:** `pytest -m sandbox_escape` (via workflow; `SANDBOX_ESCAPE_IMAGE=python:3.11-alpine`)
+**Commit:** `ea988d1` (release tag `v2.1.0`)
+**Operator:** CI (release gate, run 31918622619)
+
+**Results by category:**
+
+| Category | Tests | Pass | Fail | Skip | Notes |
+|---|---|---|---|---|---|
+| Filesystem escape | 3 | 3 | 0 | 0 | Read-only rootfs, read-only bind mount, scoped tmpfs all verified |
+| Network escape | 3 | 3 | 0 | 0 | TCP, UDP, kernel interface evidence all blocked (`--network none`) |
+| Process / pids | 2 | 2 | 0 | 0 | pids limit hit; cgroup `pids.max=10` — ran natively, **0 skips** |
+| Privilege escalation | 4 | 4 | 0 | 0 | CAP_NET_RAW, CAP_CHOWN removed; NoNewPrivs=1 in /proc; combined-controls check |
+| Host env leak | 2 | 2 | 0 | 0 | No production secrets present; PYTHONIOENCODING transmitted |
+| Path boundary | 3 | 3 | 0 | 0 | Canary not reachable; plugin root accessible; traversal contained |
+
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.15s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run 31918622619) —
+holds exact per-test durations and the image digest.
+
+**Platform notes:**
+Seventeen-vector result on the same native-Linux gate as Entries 002–013, for the `v2.1.0`
+release commit published to PyPI as `aindy-runtime==2.1.0`.
+
+**Nothing in this release touches the certified boundary — verified, not assumed.** `git diff
+v2.0.1..v2.1.0` over `sandbox_runner.py`, `plugin_host.py`, `sandbox_certification.py` and
+`tests/sandbox/` is **empty**; the only Dockerfile change is the builder-stage pin moving to
+`2.1.0`. No change to the OCI flags, the capability set, or the runner selection path.
+
+Dependency movement in this release is `greenlet` 3.5.3 → 3.5.4, `alembic` 1.17.0 → 1.19.0,
+`pydantic-settings` 2.14.2 → 2.15.0 and `uvicorn` 0.52.0 → 0.52.1 — none of which is a sandbox
+dependency, and unlike `v2.0.1` there is no security-relevant crypto bump to name.
+
+**★ A distinction this entry must make explicit, because 2.1.0 is the release that documented
+several isolation findings.** `TECH_DEBT.md` gained `GUEST-CONFINE-1`, `TOOL-SEAM-ISOLATION-1`
+and `EXEC-ENV-BIND-1` in this cycle, one of which is demonstrated. **None of them is a finding
+against the boundary this gate certifies.** The gate certifies the **Tier-2 extension sandbox** —
+the `ContainerizedOciSandboxRunner` path reached through `plugin_host.py`. The open findings are
+that the *same provider is not bound to two other seams*: the Nodus guest VM, and the in-process
+tool seam. Those seams have never been inside this gate's scope and this entry does not claim
+otherwise.
+
+Concretely, so a future reader cannot conflate them:
+
+| Boundary | Certified here? | Status |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** | 17/17, container-grade |
+| Nodus guest VM | No — out of scope | `GUEST-CONFINE-1`, open, P0 |
+| In-process tool seam | No — out of scope | `TOOL-SEAM-ISOLATION-1`, open, P0 |
+
+So this entry records that the gate **re-verified** the container-grade posture for a minor
+release that did not modify it — and, deliberately, that the release's other isolation findings
+sit outside what a green gate here proves.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.1.0` release commit.
 
 ---
 
