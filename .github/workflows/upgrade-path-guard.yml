@@ -1,0 +1,244 @@
+name: Upgrade Path Guard
+
+# FR-8 / FR-14 — the class of failure no other check can see.
+#
+# Every existing job builds a FRESH database, where `create_all` produces whatever columns the
+# current build declares and there is nothing to reconcile. That is why the app team's own
+# `deploy-bootstrap-guard.yml` passed while their live stack was crash-looping on 2.1.0: the
+# failure only exists when a database PREDATES the schema change, which is true of every real
+# deployment and no CI run.
+#
+# This job builds that state deliberately:
+#
+#   1. install the PREVIOUS released wheel from PyPI
+#   2. `bootstrap-schema` against a fresh database  -> the schema of that era
+#   3. install THIS build from the checkout
+#   4. `bootstrap-schema` against that now-existing database
+#
+# Step 4 is the one that took a stack down. It must either succeed (no runtime schema change in
+# this release) or exit **3** — "additive reconcile required", the branchable code added by
+# FR-14 — and `--reconcile` must then resolve it.
+#
+# ★ A green run here does NOT by itself prove the guard works. On a release with no schema
+# change there is nothing to catch, and a broken guard is indistinguishable from a clean
+# release. The `negative-control` job exists for exactly that reason: it injects synthetic
+# drift and requires the guard to detect it. If the control ever passes silently, this whole
+# workflow is decorative.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PGHOST: localhost
+  PGPORT: "5432"
+  DATABASE_URL: postgresql://aindy_up:aindy_up@localhost:5432/aindy_up
+  SECRET_KEY: upgrade-path-guard-secret-key-not-a-real-one-000000
+  TEST_MODE: "0"
+
+jobs:
+  upgrade-path:
+    name: Upgrade Path — previous release → this build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aindy_up
+          POSTGRES_PASSWORD: aindy_up
+          POSTGRES_DB: aindy_up
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve the previous released version
+        id: prev
+        run: |
+          set -euo pipefail
+          CURRENT=$(python -c "exec(open('AINDY/_version.py').read()); print(__version__)")
+          # The newest published release that is NOT the version in this checkout. On a
+          # version-bump PR the current version is unpublished, so "latest on PyPI" is exactly
+          # the release a deployment would be upgrading FROM.
+          PREV=$(python - <<'PY'
+          import json, urllib.request
+          with urllib.request.urlopen("https://pypi.org/pypi/aindy-runtime/json", timeout=30) as fh:
+              data = json.load(fh)
+          print(data["info"]["version"])
+          PY
+          )
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "previous=$PREV" >> "$GITHUB_OUTPUT"
+          echo "upgrading FROM aindy-runtime==$PREV TO the checkout ($CURRENT)"
+          if [ "$CURRENT" = "$PREV" ]; then
+            echo "::notice title=Upgrade path::checkout version $CURRENT is already the latest release; this run exercises a same-version upgrade, which is still a valid no-drift case."
+          fi
+
+      - name: Install the PREVIOUS release and build its schema
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/prev
+          /tmp/prev/bin/pip install --quiet --upgrade pip
+          /tmp/prev/bin/pip install --quiet "aindy-runtime==${{ steps.prev.outputs.previous }}"
+          # This is the state a real deployment is in before an upgrade: a database built by
+          # the release it is currently running.
+          /tmp/prev/bin/aindy-runtime bootstrap-schema
+          echo "previous release built its schema."
+
+      - name: Record the pre-upgrade schema
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet psycopg2-binary
+          python - <<'PY' > /tmp/before.txt
+          import os, psycopg2
+          with psycopg2.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+              cur.execute("""
+                  SELECT table_name, column_name FROM information_schema.columns
+                  WHERE table_schema='public' ORDER BY table_name, column_name
+              """)
+              for row in cur.fetchall():
+                  print(f"{row[0]}.{row[1]}")
+          PY
+          echo "columns before upgrade: $(wc -l < /tmp/before.txt)"
+
+      - name: Install THIS build over that database
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet -e .
+
+      - name: ★ bootstrap-schema against the pre-existing database
+        id: upgrade
+        run: |
+          set +e
+          aindy-runtime bootstrap-schema
+          CODE=$?
+          set -e
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          case "$CODE" in
+            0)
+              echo "::notice title=No runtime schema change::bootstrap-schema succeeded against the previous release's database. This release adds no runtime columns, so there was nothing to reconcile — see the negative-control job, which is what proves the guard can still detect drift."
+              ;;
+            3)
+              echo "::notice title=Additive reconcile required::exit 3 — the branchable code (FR-14). A deploy entrypoint can act on this; verifying --reconcile resolves it next."
+              ;;
+            *)
+              echo "::error title=Upgrade path broken::bootstrap-schema exited $CODE against a database built by ${{ steps.prev.outputs.previous }}. Exit 1 means a deploy entrypoint cannot distinguish this from a config error; 4/5 mean a human must intervene on every upgrade. This is the FR-14 failure mode."
+              exit 1
+              ;;
+          esac
+
+      - name: Verify --reconcile resolves an additive upgrade
+        if: steps.upgrade.outputs.exit_code == '3'
+        run: |
+          set -euo pipefail
+          aindy-runtime bootstrap-schema --reconcile
+          # Idempotency: a second bare run must now be clean, or the reconcile did not stick.
+          aindy-runtime bootstrap-schema
+          echo "reconcile resolved the drift and is stable on re-run."
+
+      - name: Boot the upgraded runtime
+        run: |
+          set -euo pipefail
+          # The point of the upgrade is a process that serves traffic, not a schema that
+          # merely validates. FR-14's symptom was a container that never reached `serve`.
+          python - <<'PY'
+          import os, sys, time, urllib.request, subprocess, signal
+          env = dict(os.environ, AINDY_HOST="127.0.0.1", AINDY_PORT="8099")
+          proc = subprocess.Popen(["aindy-runtime", "serve"], env=env)
+          try:
+              for _ in range(60):
+                  try:
+                      with urllib.request.urlopen("http://127.0.0.1:8099/health", timeout=2) as fh:
+                          if fh.status == 200:
+                              print("upgraded runtime serves /health after the upgrade.")
+                              break
+                  except Exception:
+                      time.sleep(1)
+              else:
+                  print("::error title=Upgraded runtime never became healthy::the schema upgraded but the process did not serve — FR-14's actual symptom.")
+                  sys.exit(1)
+          finally:
+              proc.send_signal(signal.SIGTERM)
+              proc.wait(timeout=30)
+          PY
+
+  negative-control:
+    name: Negative control — the guard must detect drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: aindy_up
+          POSTGRES_PASSWORD: aindy_up
+          POSTGRES_DB: aindy_up
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install this build and bootstrap
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -e . psycopg2-binary
+          aindy-runtime bootstrap-schema
+
+      - name: ★ Inject synthetic drift and require the guard to see it
+        run: |
+          set -euo pipefail
+          # Reproduces FR-13's shape: a database that predates an additive column. Without
+          # this, the upgrade-path job above proves nothing on a release with no schema
+          # change — a broken guard and a clean release look identical.
+          python - <<'PY'
+          import os, psycopg2
+          with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
+              conn.autocommit = True
+              with conn.cursor() as cur:
+                  cur.execute("ALTER TABLE agents DROP COLUMN IF EXISTS updated_at")
+          print("dropped agents.updated_at to simulate a pre-upgrade database.")
+          PY
+
+          set +e
+          aindy-runtime bootstrap-schema
+          CODE=$?
+          set -e
+          if [ "$CODE" != "3" ]; then
+            echo "::error title=Guard is blind::bootstrap-schema exited $CODE against a database with a known missing column; expected 3 (additive reconcile required). The upgrade-path job cannot be trusted while this is true."
+            exit 1
+          fi
+          echo "guard detected the injected drift as exit 3."
+
+          aindy-runtime bootstrap-schema --reconcile
+          aindy-runtime bootstrap-schema
+          echo "--reconcile restored the column and the result is stable."

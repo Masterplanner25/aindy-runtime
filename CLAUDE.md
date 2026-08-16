@@ -485,6 +485,7 @@ that exists but does not enforce, the same shape as `DOCS-COVERAGE-CLAIM-1` / `C
 | `Install Smoke Test` | `runtime-ci.yml` | wheel installs and imports |
 | `pip-audit (OSV)` | `security-audit.yml` | dependency CVEs |
 | `Boot Smoke — Linux / Python 3.11` | `smoke-postgres.yml` | published wheel boots against real PG |
+| *(not required yet)* `Upgrade Path Guard` | `upgrade-path-guard.yml` | previous release's DB → this build (`FR-8`/`FR-14`). **Read its `negative-control` job**: on a release with no schema change the main job passes trivially. |
 
 **Before adding an eleventh, check what made these ten safe:** no `paths:` filter (the classic
 trap — a filtered check never reports on unrelated PRs and blocks them forever), no job-level
@@ -499,7 +500,7 @@ normal move, not an optimization.
 
 ## ★ Trusting a green check — read this before citing CI as evidence
 
-**Eight separate times** this repo has shipped something that *looked* covered and was not.
+**Nine separate times** this repo has shipped something that *looked* covered and was not.
 Assume there will be a ninth — the catalogue exists so you can recognise the shape, and the
 rules below are what it cost to learn:
 
@@ -513,6 +514,13 @@ rules below are what it cost to learn:
 | 6 | Covers, asserts nothing | a test asserting an *absence* passes when the wire is broken | `EVENTBUS-COVERAGE-1` |
 | 7 | Asserts the source, not the behaviour | route tests read the handler as *text*, never called it — 500 instead of 409 for a day | `ROUTE-GUARD-1` |
 | 8 | Verification that never runs | the boot-time route AST proof has no call site in the app | `ROUTE-AST-UNWIRED-1` |
+| 9 | **Green because there was nothing to catch** | a check whose condition this release does not contain — `Upgrade Path Guard` passes trivially with no schema change | `FR-8`/`FR-14` |
+
+**Variant 9 is the one to design against, not just record:** it cannot be fixed by making the
+check better, because the check is fine — the *release* lacks the condition. The only answer
+is a **negative control that injects the condition**, which is why `upgrade-path-guard.yml`
+ships with one. A new check is at its least proven exactly when it is newest, and "it went
+green" is worth nothing until something has made it go red.
 
 Variants 2 and 3 are fixed at the mechanism level (`tests/unit/conftest.py` defaults the marker;
 `AINDY_REQUIRE_NATIVE_BRIDGE=1` turns a skip into a failure) — but both stay listed, because the

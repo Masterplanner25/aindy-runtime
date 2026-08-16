@@ -277,6 +277,14 @@ deployment that introduces TLS termination.
   not what remains outstanding** — the first survives promotion, the second cannot.
 - [ ] Breaking changes to stable surfaces are explicitly documented
 - [ ] Schema contract version bump is noted if any model changed
+- [ ] **Read the `Upgrade Path Guard` result, including its `negative-control` job.**
+
+  The guard installs the previous released wheel, builds its schema, then runs this build's
+  `bootstrap-schema` over that database — the state no other job reaches. **On a release with
+  no runtime schema change it passes trivially**, because there is no drift to detect; a broken
+  guard and a clean release are indistinguishable there. `negative-control` injects synthetic
+  drift and requires exit 3, so it is the half that carries meaning on such a release. **Say
+  which case applied in the handoff** — "the guard was green" means different things in each.
 - [ ] **★ If runtime-owned schema changed, the app handoff SAYS SO and names the step.**
 
   `FR-14`: an additive runtime column makes a bare `bootstrap-schema` exit non-zero, which
