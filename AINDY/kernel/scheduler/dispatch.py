@@ -11,14 +11,24 @@ from AINDY.kernel.scheduler.common import (
 
 
 class SchedulerDispatchMixin:
-    def schedule(self) -> int:
+    def schedule(self, *, tick_waits: bool = True) -> int:
+        """Drain up to ``MAX_PER_SCHEDULE_CYCLE`` queued items.
+
+        ``tick_waits`` defaults to True so any direct caller keeps the historical
+        behaviour (wait maintenance ran as a prelude to dispatch). The runtime's own
+        scheduler passes **False** and drives ``tick_waits()`` from a separate job —
+        FR-15 (b): with both on one ``max_instances=1`` tick, a slow INLINE execution
+        skipped the next tick entirely and time-based waits stopped firing, so an
+        unrelated busy flow could keep a parked flow parked.
+        """
         import time as _time
 
         import AINDY.kernel.scheduler_engine as compat
         from AINDY.core.execution_dispatcher import dispatch as _dispatch
 
-        self._check_stale_waits()
-        self.tick_time_waits()
+        if tick_waits:
+            self._check_stale_waits()
+            self.tick_time_waits()
 
         rm = compat.get_resource_manager()
         dispatched = 0

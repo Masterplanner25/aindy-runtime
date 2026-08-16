@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Fixed — a slow execution no longer stops parked flows from waking (`FR-15` (b), #443)
+
+Wait firing ran only as a prelude to dispatch, inside `schedule()`. Dispatch is INLINE by
+default (see `FR-15`) and the driving APScheduler job is `max_instances=1`, so while one flow
+executed the next tick was **skipped entirely and no time-based wait fired**.
+
+**That is a correctness bug, not a latency one:** a flow parked on a timer stayed parked because
+an *unrelated* flow was busy. It is also why `/health` went down for 13 minutes in the reported
+incident — the same tick drove wait expiry and stale-wait cleanup.
+
+- Wait maintenance moved to its own `scheduler_wait_tick` job (`tick_waits()` on the engine).
+- **And its own executor.** Splitting the job is necessary but not sufficient: `max_instances`
+  is per-job while the thread pool is shared, and this scheduler registers **16 jobs against
+  APScheduler's default pool of 10**, several able to block for `DB_POOL_TIMEOUT` (60s) — the
+  exact condition present during the incident. A dedicated single-thread executor makes the
+  guarantee structural rather than probabilistic.
+- `schedule()` gains `tick_waits: bool = True`. **The default preserves the historical
+  behaviour** for any direct caller; the runtime's own tick passes `False`.
+
+Safe by construction: `tick_time_waits` claims a due wait by removing it from `_waiting` under
+the engine lock and fires it only after releasing, so the two paths cannot double-fire one wait.
+Asserted with 8 concurrent tickers over 25 due waits, not assumed.
+
+**Test-shim gap closed in passing.** `pytest.ini` sets `pythonpath = . AINDY`, so `import
+apscheduler` resolves to the vendored shim in `AINDY/apscheduler` — which **silently dropped
+`**kwargs`**, meaning no test could assert any job's `executor`, `max_instances` or `coalesce`,
+despite `max_instances=1` being load-bearing here. The shim now records them and gained an
+`executors.pool` module, without which the dedicated-executor branch would have shipped
+**unexercised by any test**.
+
+**No dispatch behaviour change.** `FR-15` (a) — flipping `AINDY_ASYNC_HEAVY_EXECUTION` — remains
+open and still needs soak.
+
 ### Added — `scheduler.queued` event and a queue-wait histogram (`FR-15`, #442)
 
 Between an item entering the scheduler queue and `execution.started` firing, **nothing was
