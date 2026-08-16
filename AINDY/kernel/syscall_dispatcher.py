@@ -166,6 +166,16 @@ def _syscall_idempotency_enabled() -> bool:
     return os.getenv("AINDY_SYSCALL_IDEMPOTENCY", "").strip().lower() in {"1", "true", "yes"}
 
 
+def _child_context_clamp_enabled() -> bool:
+    """AUTHORITY-VALUE-1 gate. When off (default), ``child_context`` may still widen.
+
+    Resolved per call rather than cached at import — the standing rule, learned from FR-10
+    and the ``AINDY_REDIS_URL`` alias: an import-time env read is invisible to behavioural
+    tests, so the flag could not be exercised without a module reload.
+    """
+    return os.getenv("AINDY_CHILD_CONTEXT_CLAMP", "").strip().lower() in {"1", "true", "yes"}
+
+
 # Lazy import of ResourceManager to avoid circular imports at module load.
 # The resource manager is only consulted inside dispatch(), so it's safe.
 def _get_rm():
@@ -913,11 +923,51 @@ def child_context(
         def _handle_flow_run(payload, context):
             ctx = child_context(context, capabilities=["memory.read"])
             return get_dispatcher().dispatch("sys.v1.memory.read", {}, ctx)
+
+    **AUTHORITY-VALUE-1 — a child must narrow, never widen.** ``capabilities`` is a
+    *request*, and the parent's grant is the ceiling: asking for something the parent does
+    not hold is escalation, not delegation. ``mint_token`` already enforces exactly this for
+    delegated runs (``capability_ceiling`` — *"a delegate never receives more than the
+    intersection of the parent's grant and its own registered capabilities"*); this path was
+    left conventional and inherits or widens whatever it is handed.
+
+    The clamp is **opt-in via ``AINDY_CHILD_CONTEXT_CLAMP``, default off**, because it is not
+    the two-line change it looks like. `aindy-apps-monolith`'s ``_dispatch_owner_syscall``
+    builds a child granting the *nested* syscall's capability, while
+    ``_resolve_dispatch_capabilities`` grants the parent **exactly the outer syscall's own
+    capability** — so clamping intersects to the empty set and denies a call that works
+    today. Enabling this without fixing that caller breaks the app's automation syscalls.
+
+    **A widening is logged either way.** With the flag off nothing changes except a WARNING,
+    which is the point: the real exposure has never been measured, and a boundary should not
+    be tightened on an argument when it can be tightened on a count instead.
     """
+    requested = list(capabilities) if capabilities is not None else list(parent.capabilities)
+    ceiling = set(parent.capabilities)
+    widened = [c for c in requested if c not in ceiling]
+
+    if widened:
+        if _child_context_clamp_enabled():
+            requested = [c for c in requested if c in ceiling]
+            logger.warning(
+                "[SyscallContext] child_context CLAMPED: dropped %s (not held by parent); "
+                "child grant is now %s",
+                sorted(widened),
+                sorted(requested),
+            )
+        else:
+            logger.warning(
+                "[SyscallContext] child_context WIDENED authority: %s not held by parent "
+                "(granted anyway — AUTHORITY-VALUE-1, set AINDY_CHILD_CONTEXT_CLAMP=1 to "
+                "deny). Parent held %s",
+                sorted(widened),
+                sorted(ceiling),
+            )
+
     return SyscallContext(
         execution_unit_id=parent.execution_unit_id,
         user_id=parent.user_id,
-        capabilities=capabilities if capabilities is not None else list(parent.capabilities),
+        capabilities=requested,
         trace_id=parent.trace_id,
         memory_context=list(parent.memory_context),
         metadata=metadata if metadata is not None else dict(parent.metadata),

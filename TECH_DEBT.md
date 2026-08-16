@@ -6402,6 +6402,45 @@ precedent for closing this class of gap already exists in the same file.
 
 ## AUTHORITY-VALUE-1 — the syscall capability check reads a value the calling frame supplied
 
+**★ PARTIAL — `child_context` clamp shipped opt-in 2026-08-16 (#448), and the estimate that
+preceded it was wrong.**
+
+`child_context()` fell back to `list(parent.capabilities)` and, when handed an explicit
+`capabilities=[...]`, granted it **whatever the parent held**. So it could *widen* authority, not
+merely inherit it. `mint_token` already enforces the correct invariant for delegated runs
+(`capability_ceiling` — *"a delegate never receives more than the intersection of the parent's
+grant and its own registered capabilities"*); this neighbouring path was left conventional.
+
+**It was scoped as "two lines — `mint_token` proves the invariant computable." That was wrong,
+and the reason is worth keeping.** A repo-wide grep found no `child_context` caller under
+`AINDY/` or `tests/` — only its own docstring — which reads as a zero-caller change. **The app
+repo calls it:** `aindy-apps-monolith/apps/automation/syscalls/syscall_handlers.py:45`
+(`_dispatch_owner_syscall`) builds a child granting the **nested** syscall's capability, while
+`_resolve_dispatch_capabilities` grants the parent **exactly the outer syscall's own
+capability** (SDK-SYSCALL-GRANT-1, least privilege). Clamping therefore intersects to the
+**empty set** and denies a call that works today. Applying the clamp unconditionally breaks the
+app's automation syscalls.
+
+That is the same self-granting shape this entry already documents at `entrypoints.py:83` and
+`nodus_execution_service.py:226` — the app is granting itself the capability it needs for a
+nested call, because nothing hands it one.
+
+**Shipped as:** clamp behind `AINDY_CHILD_CONTEXT_CLAMP` (default **off**, resolved per call), and
+**a WARNING on every widening regardless of the flag**. The warning is the point: the real
+exposure has never been counted, and this repo's own history says a boundary should be tightened
+on a measurement rather than an argument. Flip the flag after the app-side caller is given a
+legitimate grant — not before.
+
+**Guard:** `tests/unit/test_child_context_clamp.py` (10 tests). It pins the default-off choice
+*and* encodes the app-caller reason as an executable test, so a future reader who flips the
+default gets a failing assertion pointing at the cause rather than an app-side outage.
+Mutation-checked: removing the clamp fails 3; defaulting the flag on fails 2.
+
+**Still open in this entry:** everything else — `SyscallContext.capabilities` is still a
+caller-constructible list, `_infer_dispatch_capability` still derives a grant from the syscall
+name, and the `if not user_id:` paths still skip the boundary rather than deny.
+
+
 **Status: OPEN — P1.** Filed 2026-08-15 from the substrate-boundary audit (F-2), verified.
 
 **Not a vulnerability, and should not be reported as one.** Every entry point has its own

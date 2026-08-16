@@ -2,7 +2,26 @@
 
 ## Unreleased
 
-_Nothing yet._
+### Added — `child_context` can no longer widen authority (`AUTHORITY-VALUE-1`, opt-in, #448)
+
+`child_context()` granted whatever `capabilities=[...]` it was handed, **whether or not the
+parent held them** — so it could *widen* authority, not merely inherit or narrow it.
+`mint_token` already enforces the correct invariant for delegated runs (`capability_ceiling`);
+this neighbouring path was left conventional.
+
+- New `AINDY_CHILD_CONTEXT_CLAMP` (default **off**, resolved per call). When on, a child's
+  capabilities are clamped to the parent's grant — narrowing always allowed, widening dropped.
+- **A widening now logs a WARNING regardless of the flag.** That is the point: the real exposure
+  has never been counted, and a boundary is better tightened on a measurement than an argument.
+
+**Default-off is deliberate, and not conservatism.** Applying the clamp unconditionally **breaks
+app automation syscalls today**: `aindy-apps-monolith`'s `_dispatch_owner_syscall` builds a child
+granting the *nested* syscall's capability, while the parent context carries **exactly the outer
+syscall's own capability** — so the intersection is empty and the nested dispatch is denied. Flip
+the flag only after that caller is given a legitimate grant.
+
+No behaviour change with the flag off, beyond the new warning.
+
 
 ## 2.2.0 — 2026-08-16
 
