@@ -6172,6 +6172,14 @@ operations against an allowlist, has **zero callers outside its own module**, an
 `ALLOWED_OPERATION_CAPABILITIES` contains only memory operations (`recall`, `remember`,
 `share`, …) — so it could not have blocked subprocess or http even if it were wired.
 
+**★ This is NOT a finding against the sandbox-escape gate, and the two must not be read against
+each other.** That suite certifies the **Tier-2 extension sandbox** — the
+`ContainerizedOciSandboxRunner` path reached through `plugin_host.py` — and it passes 17/17 on
+every release tag. The Nodus guest VM has never been inside its scope. So *"container-grade certified"* and
+*"the guest runs unconfined"* are both true simultaneously; the gap is that one provider is bound to one seam and
+not to the others. `SANDBOX_ESCAPE_AUDIT.md` Entry 014 carries the same table from the other
+direction, so a reader arriving from either document reaches the same conclusion.
+
 **★ Migration risk is far lower than the audit estimated — measured.** The audit says *"Any
 existing `.nd` script that uses `std:http` or `std:subprocess` breaks"* and recommends shipping
 default-off and log-only for one release. Searched both repositories: **no first-party Nodus
@@ -6658,6 +6666,14 @@ or issue arbitrary SQL through the session it was given.
 
 **The provider that should be on the other side already exists** (`sandbox_runner.py`) and is
 reached only from `plugin_host.py`.
+
+**★ This is NOT a finding against the sandbox-escape gate, and the two must not be read against
+each other.** That suite certifies the **Tier-2 extension sandbox** — the
+`ContainerizedOciSandboxRunner` path reached through `plugin_host.py` — and it passes 17/17 on
+every release tag. The in-process tool seam has never been inside its scope. So *"container-grade certified"* and
+*"every authority check at the tool seam is advisory"* are both true simultaneously; the gap is that one provider is bound to one seam and
+not to the others. `SANDBOX_ESCAPE_AUDIT.md` Entry 014 carries the same table from the other
+direction, so a reader arriving from either document reaches the same conclusion.
 
 **Why it belongs at runtime level.** Every application mounting a tool would otherwise re-solve
 containment itself, and the boundary must sit *below* the tool to mean anything. The audit's
