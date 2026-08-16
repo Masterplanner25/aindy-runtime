@@ -235,9 +235,12 @@ release is cut *and* that pin is bumped in the same PR.
   message** — no exit code, no stderr, no callback name.
 - Empty stdout is now its own error naming the callback; every failure path reports
   `exit=<code>` plus stderr when present; the timeout path stays distinct.
-- This is why `FLAKY-1` has resisted diagnosis, and the first natural traceback captured for it
-  **refuted** its recorded leading mechanism: the failure takes the `ok:false` branch, not the
-  timeout branch that had been assumed from a *forced* reproduction.
+- This is why `FLAKY-1` has resisted diagnosis: until now every failure of it produced the same
+  contentless message regardless of cause. The fix is what will let the next occurrence say which
+  cause it was. *(A traceback captured while chasing it appeared to contradict FLAKY-1's recorded
+  mechanism; on further evidence — 11 consecutive clean runs — that reading was withdrawn, since
+  the sample came from a machine that could not spawn processes. Corrected in `TECH_DEBT.md`
+  before release rather than shipped as a wrong claim in these notes.)*
 
 ### Fixed — `AINDY_REDIS_URL` alias removed from the rate limiter (2026-08-14)
 
