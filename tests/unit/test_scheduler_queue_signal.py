@@ -83,25 +83,51 @@ def test_event_is_not_execution_prefixed():
     )
 
 
-def test_emitting_outside_a_pipeline_does_not_raise(captured, monkeypatch):
-    """The behavioural half — asserting the name alone proves nothing about the gate.
+@pytest.fixture
+def _outside_pipeline(monkeypatch):
+    """Arrange 'no pipeline active' rather than assuming it, and restore afterwards.
 
-    Enforcement is turned ON here. With an `execution.`-prefixed name this raises
-    `RuntimeError`; the whole point of the naming choice is that it does not.
+    ★ `pipeline_active` is a ContextVar that an earlier test in the same session can leave
+    set. A first draft of the two tests below *asserted* the precondition instead of
+    establishing it — they passed in isolation and **failed in CI's full `runtime_only`
+    run**, which is precisely the trap CI-MARKER-1 hit with `test_infinity_async_job_loop`.
+    Same fix as there: set it, assert it, reset it in a `finally`.
+
+    ★ Gotcha when mutation-checking this fixture: breaking it surfaces as pytest **ERROR**,
+    not `FAILED`, because the failure is in setup rather than in a test body. A mutation
+    check that greps only `^FAILED` reports zero and reads as "the guard is untested".
+    Verified here as `FAILED=0 ERROR=2`. Same family as `exit code 5 is
+    EXIT_NOTESTSCOLLECTED, not an error`.
     """
     from AINDY.config import settings
-    from AINDY.platform_layer.trace_context import is_pipeline_active
+    from AINDY.platform_layer.trace_context import (
+        is_pipeline_active,
+        reset_pipeline_active,
+        set_pipeline_active,
+    )
 
     monkeypatch.setattr(type(settings), "ENFORCE_EXECUTION_CONTRACT", True, raising=False)
-    assert not is_pipeline_active(), "precondition: no pipeline, as on the enqueue path"
+    token = set_pipeline_active(False)
+    try:
+        assert not is_pipeline_active(), "precondition: no pipeline, as on the enqueue path"
+        yield
+    finally:
+        reset_pipeline_active(token)
 
+
+def test_emitting_outside_a_pipeline_does_not_raise(captured, _outside_pipeline):
+    """The behavioural half — asserting the name alone proves nothing about the gate.
+
+    Enforcement is ON. With an `execution.`-prefixed name this raises `RuntimeError`; the
+    whole point of the naming choice is that it does not.
+    """
     _emit()  # must not raise
 
     assert len(captured) == 1
     assert captured[0]["event_type"] == "scheduler.queued"
 
 
-def test_the_real_gate_would_reject_the_name_that_was_requested(monkeypatch):
+def test_the_real_gate_would_reject_the_name_that_was_requested(_outside_pipeline):
     """Liveness control for the two tests above.
 
     Without this, both would pass against a gate that had been removed entirely — the
@@ -109,9 +135,6 @@ def test_the_real_gate_would_reject_the_name_that_was_requested(monkeypatch):
     `execution.`-prefixed name and requires it to object.
     """
     import AINDY.core.system_event_service as ses
-    from AINDY.config import settings
-
-    monkeypatch.setattr(type(settings), "ENFORCE_EXECUTION_CONTRACT", True, raising=False)
 
     with pytest.raises(RuntimeError, match="outside pipeline"):
         ses.emit_system_event(db=None, event_type="execution.queued", payload={})
