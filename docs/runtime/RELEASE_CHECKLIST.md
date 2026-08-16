@@ -276,4 +276,12 @@ deployment that introduces TLS termination.
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
 - [ ] TECH_DEBT.md updated for any newly closed or opened entries
 - [ ] `sandbox_escape_test_posture()["posture"] == "all_pass"` for this release platform
+- [ ] **After the tag publishes: expect ONE spurious `Boot Smoke` failure on the next push to
+  `main`, and re-run it.** The job's own *"is this version published?"* step reads PyPI's **JSON
+  API**, while `pip` resolves against the **simple index** — different endpoints with different
+  CDN propagation. For a couple of minutes after publish the check says "published, proceed" and
+  pip says `No matching distribution found`. Observed on `v2.2.0` (published 08:31, failed 08:33,
+  passed on re-run). It is a **required** check, so this red-lines unrelated PRs until re-run.
+  Confirm propagation with `curl -s https://pypi.org/simple/aindy-runtime/ | grep <version>`
+  before assuming it is anything else.
 - [ ] Dockerfile builder stage version pin bumped to match new release (`pip install "aindy-runtime==X.Y.Z"` in Stage 1)
