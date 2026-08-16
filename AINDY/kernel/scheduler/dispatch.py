@@ -12,6 +12,8 @@ from AINDY.kernel.scheduler.common import (
 
 class SchedulerDispatchMixin:
     def schedule(self) -> int:
+        import time as _time
+
         import AINDY.kernel.scheduler_engine as compat
         from AINDY.core.execution_dispatcher import dispatch as _dispatch
 
@@ -50,6 +52,19 @@ class SchedulerDispatchMixin:
                 saturated_tenants.add(item.tenant_id)
                 logger.debug("[Scheduler] deferred eu=%s tenant=%s reason=%s", item.execution_unit_id, item.tenant_id, reason)
                 continue
+
+            # FR-15 — record how long this item sat in the queue, just before it is
+            # dispatched. Observed here rather than inside dispatch() because only the
+            # scheduler knows when the item was enqueued. A 0.0 stamp means the item did
+            # not come through enqueue() (a dispatcher-reconstructed retry), which is
+            # "unknown", not "waited zero" — so it is skipped rather than recorded as a
+            # fast sample that would drag the histogram toward a flattering answer.
+            if item.enqueued_at_monotonic:
+                from AINDY.core.scheduler_queue_signal import observe_queue_wait
+
+                observe_queue_wait(
+                    _time.monotonic() - item.enqueued_at_monotonic, priority=item.priority
+                )
 
             stub = _ResumedEUStub(id=item.execution_unit_id, type=item.eu_type, priority=item.priority)
             context = {"eu_id": item.execution_unit_id, "run_id": item.run_id, "source": "scheduler.resume"}

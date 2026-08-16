@@ -6581,6 +6581,13 @@ and the mechanism is version-independent.
 - **(c) Emit `execution.queued` + a queue-depth gauge.** Independent of (a)/(b), and the thing
   that turns the next occurrence into a one-line answer instead of a three-hour investigation.
 
+**★ (c) SHIPPED 2026-08-15 (#442).** `scheduler.queued` SystemEvent at enqueue (carrying
+`queue_depth`) + `aindy_scheduler_queue_wait_seconds` histogram at dispatch. Named
+**`scheduler.`, not the requested `execution.`** — the contract gate raises for `execution.*`
+outside a pipeline and the hottest enqueue callers have none, so the requested name would have
+raised in exactly the paths that matter. Off switch `AINDY_SCHEDULER_QUEUE_EVENTS`. Does **not**
+change dispatch behaviour; (b) and (a) remain open.
+
 **Recommended order: (c), then (b), then (a).** (c) is safe and immediately useful; (b) removes
 the starvation coupling regardless of which dispatch mode is chosen; (a) is the real fix but is
 the one that needs soak, and doing it last means the first occurrence after the flip is
