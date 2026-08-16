@@ -324,7 +324,28 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         """
         return dispatch_worker_syscall(name, payload_arg, user_id=user_id)
 
-    runtime = NodusRuntime(project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None)
+    # GUEST-CONFINE-1 — the guest VM runs submitted script content, not first-party code, so
+    # it is denied the three ambient host capabilities. Without these the VM defaults to
+    # allow_subprocess/network/env=True and nodus registers the *real* std:subprocess and
+    # std:http modules, letting a guest script reach subprocess, network and host env
+    # WITHOUT touching the dispatcher, capability token, effect ledger, egress guard or tool
+    # registry — demonstrated 2026-08-15 (a guest script created a file on the host, read the
+    # real PATH, and performed real DNS).
+    #
+    # These are deny-by-default and deliberately NOT configurable here. A per-execution
+    # environment descriptor is EXEC-ENV-BIND-1; a global env flag would re-open the hole for
+    # every run at once, which is the wrong shape. When a guest legitimately needs egress it
+    # goes through the mediated paths (sys() / call_tool), which are gated.
+    #
+    # Note the VM already confines filesystem access: `allowed_paths` defaults to the cwd.
+    # The demonstrated host-file write went through subprocess, which bypasses that check
+    # entirely — so allow_subprocess=False is what closes it.
+    runtime = NodusRuntime(
+        project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None,
+        allow_subprocess=False,
+        allow_network=False,
+        allow_env=False,
+    )
     def _call_tool(tool_name: Any, args: Any) -> Any:
         if simulate_mode:
             from AINDY.runtime.tool_simulation import simulate_agent_tool

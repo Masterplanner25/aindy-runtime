@@ -6198,8 +6198,54 @@ on the grounds that unattended reboot recovery is worth more than a faster failu
 
 ## GUEST-CONFINE-1 — the guest VM runs unconfined; effects on the primary execution path are not mediated
 
-**Status: OPEN — P0.** Filed 2026-08-15 from the substrate-boundary audit (F-1), **independently
-verified, and upgraded from the audit's own `[Strong inference]` to demonstrated.**
+**Status: CLOSED (2026-08-15).** Filed 2026-08-15 from the substrate-boundary audit (F-1),
+**independently verified, and upgraded from the audit's own `[Strong inference]` to
+demonstrated.** Closed the same day by the three-kwarg fix. The original diagnosis is preserved
+below unchanged — it is the audit trail, and the demonstration method is worth keeping.
+
+**What was implemented.** `AINDY/runtime/nodus_worker.py` now constructs the guest VM with
+`allow_subprocess=False, allow_network=False, allow_env=False`. nodus substitutes
+`_make_blocked_stub` for each denied module, so a guest call returns a structured `SandboxError`
+naming the flag rather than failing silently — a guest can distinguish *denied* from *the runtime
+broke*. Verified against the real worker entry point (`run_one`), reproducing the original
+demonstration: all three operations now refuse and **no host file is created**.
+
+**Deliberately not env-configurable.** A global flag would re-open the boundary for every run at
+once, which is the wrong shape; per-execution declaration is `EXEC-ENV-BIND-1`. This was a defect
+fix, not a new primitive — the VM already accepted the arguments.
+
+**Blast radius, measured before shipping:** zero first-party `.nd`/`.nodus` scripts in
+`aindy-runtime` (8 scripts) or `aindy-apps-monolith` (2 scripts) call `subprocess_*`, `http_*` or
+`env_get`. Deny-by-default broke nothing in either repo. A third-party script relying on the old
+behaviour will now fail loudly — called out at the top of `CHANGELOG.md` `## Unreleased`.
+
+**Correction to the filed entry — the filesystem half was already confined.** The entry implied
+the VM was open on all axes. It was not: `allowed_paths` defaults to `[os.getcwd()]`, so the io
+builtins were already path-confined. The demonstrated host-file write went through **subprocess**,
+which is not subject to that check at all. So `allow_subprocess=False` is what actually closed the
+demonstrated escape, and the filesystem guard was never the gap.
+
+**Regression guard:** `tests/unit/test_guest_confinement.py` — 5 tests, marked `runtime_only`
+(verified selected by `Runtime Contracts`; the complement collects nothing). It drives the real
+worker rather than asserting on the construction site's source text (`ROUTE-GUARD-1`), and carries
+an explicit **liveness control**, because every other assertion in the file asserts an *absence*
+and would pass trivially against a VM that was simply broken (`EVENTBUS-COVERAGE-1`).
+**Mutation-tested: removing the three arguments fails 4 of 5, and the liveness control still
+passes** — the intended shape, since the control is not testing the fix.
+
+**Two findings from writing the tests, kept because they cost time:** `run_one` **stringifies**
+the VM's structured error (`nodus_worker.py:463` wraps it in `str(...)`), so the `kind`
+discriminator survives only as text and assertions must substring-match rather than read a dict;
+and `print()` output does **not** land in `stdout_log` on this path, so it is not a usable liveness
+signal — `set_state` + `output_state` is.
+
+**Remaining gap:** none for the guest boundary. The adjacent, still-open work is the *provider*
+re-homing this converges with — `EXEC-ENV-BIND-1`, `TOOL-SEAM-ISOLATION-1`, `EGRESS-INPROC-1` —
+where `create_sandbox_runner` reachable only from `plugin_host.py` is the shared root.
+
+---
+
+**Original finding, as filed (retained):**
 
 **The gap.** Every agent run executes as a compiled Nodus workflow inside a `nodus_worker`
 subprocess. That subprocess builds the guest VM with

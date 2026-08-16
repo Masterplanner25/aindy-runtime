@@ -2,7 +2,68 @@
 
 ## Unreleased
 
-_Nothing yet._
+**★ Read before upgrading — a guest Nodus script can no longer reach subprocess, network or
+host environment.** This is a confinement fix, so it is a *narrowing*: any `.nd` / `.nodus`
+script that called `subprocess_*`, `http_*` or `env_get` now fails with a `SandboxError`
+instead of succeeding. **Measured before shipping: no first-party script in `aindy-runtime`
+(8 scripts) or `aindy-apps-monolith` (2 scripts) uses any of them**, so this is expected to
+break nothing — but a third-party script that relied on the old behaviour will stop working,
+deliberately and loudly. Mediated egress (via `sys()` / `call_tool`) is unaffected.
+
+### Fixed — the guest VM ran unconfined (`GUEST-CONFINE-1`, P0, #438)
+
+`nodus_worker` builds the Nodus VM for **submitted script content**, not first-party code, but
+passed none of the VM's confinement arguments. The VM defaults to `allow_subprocess=True,
+allow_network=True, allow_env=True`, under which nodus registers the **real** `std:subprocess`
+and `std:http` modules — so a guest script could reach subprocess, network and the host
+environment **without touching the syscall dispatcher, capability token, effect ledger, egress
+guard or tool registry**. Every authority check the runtime performs was bypassable by not
+going through it.
+
+This was **demonstrated, not inferred** (2026-08-15): driving `nodus_worker.run_one()`,
+`env_get("PATH")` returned the real host PATH, `http_get` performed real DNS, and
+`subprocess_shell` returned `exit_code: 0` and **created a file on the host filesystem**.
+
+- The worker now constructs the VM with `allow_subprocess=False, allow_network=False,
+  allow_env=False`. A denied call returns a structured `SandboxError` naming the flag, so a
+  guest can tell *denied* from *the runtime broke*.
+- **Deliberately not configurable by an env var.** A global flag would re-open the hole for
+  every run at once. Per-execution variation is `EXEC-ENV-BIND-1` (the environment descriptor),
+  which is the correct shape and is tracked separately.
+- **Scope:** this closes the *guest boundary*. It was never an unauthenticated remote path —
+  `POST /platform/nodus/run` requires `get_current_user` and is rate-limited.
+- **Note on the filesystem half:** the VM already confined file access (`allowed_paths`
+  defaults to the cwd). The demonstrated host-file write went through subprocess, which is not
+  subject to that check at all — so `allow_subprocess=False` is what actually closed it.
+- The source validator never helped and could not have: `validate_nodus_source` blocks only
+  Python-isms, and `validate_requested_operation_usage()` has zero callers outside its own
+  module.
+
+Regression suite: `tests/unit/test_guest_confinement.py` (5 tests, `runtime_only`, so
+`Runtime Contracts` selects it). It drives the real worker entry point rather than asserting on
+the construction site's source text (`ROUTE-GUARD-1`), and carries an explicit **liveness
+control** — every other assertion in the file is an assertion of *absence* and would pass
+trivially against a VM that was simply broken (`EVENTBUS-COVERAGE-1`). **Mutation-tested: with
+the three arguments removed, 4 of 5 fail and the liveness control still passes**, which is the
+intended shape.
+
+### Changed — `CLAUDE.md` trimmed from 154 KB to 66 KB (docs-only, #438)
+
+No behaviour change; recorded because `CLAUDE.md` is the agent-instruction surface and its
+*size* is load-bearing — it is loaded into every session.
+
+- The `TECH_DEBT.md` prefix registry was **104 KB, 68% of the file**, and was a lossy duplicate
+  of `TECH_DEBT.md`, whose entries are 2–5× longer. It is now a one-line-per-item index that
+  says so. Verified: all 114 identifiers still resolve (96 named in `CLAUDE.md`, 18 in
+  `TECH_DEBT.md`), **zero orphaned**.
+- Its own header claimed "open items only" while carrying **25 fully-closed entries (32 KB)**.
+  Closed entries whose *rule* still bites keep a line; inert history became a name.
+- **Corrected a stale directive:** the release section still described 2.1.0 as unreleased and
+  `main` as 45 commits ahead of 2.0.1, after the tag had shipped. Also dropped three completed
+  directives (the cargo job, the cryptography 48→49 check, the UI major cluster).
+- Removed a duplicated `admin_router.py` row; compressed justification prose while keeping every
+  rule verbatim; the "trusting a green check" catalogue said "six" and listed seven — now eight,
+  including `ROUTE-AST-UNWIRED-1`.
 
 ## 2.1.0 — 2026-08-15
 

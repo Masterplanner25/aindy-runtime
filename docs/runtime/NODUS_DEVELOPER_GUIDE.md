@@ -1,7 +1,7 @@
 ---
 title: "Nodus Developer Guide"
 api_version: "1.0"
-last_verified: "2026-06-07"
+last_verified: "2026-08-15"
 status: current
 owner: "platform-team"
 ---
@@ -13,7 +13,7 @@ runtime-injected context, every available built-in function, WAIT/RESUME semanti
 handling, and practical examples.
 
 For the full Nodus language syntax, types, and stdlib reference see the `nodus-lang` package
-documentation. A.I.N.D.Y. pins **nodus-lang == 4.0.3**.
+documentation. A.I.N.D.Y. pins **nodus-lang == 4.1.0** (see §8).
 
 ---
 
@@ -27,6 +27,37 @@ Nodus scripts run in a subprocess launched by `nodus_worker.py`. The subprocess:
 
 Scripts are **not** long-running processes. Each invocation runs to completion (or to a WAIT
 suspension) and exits. State is carried forward between invocations via the flow's `output_state`.
+
+### 1.1 What a script may not do (GUEST-CONFINE-1)
+
+A script is treated as **submitted content, not first-party code**, so the VM is constructed with
+three host capabilities denied. These builtins are registered as blocked stubs and any call fails
+with a `SandboxError` naming the flag:
+
+| Denied | Builtins affected | Flag |
+|---|---|---|
+| Subprocess execution | `subprocess_run`, `subprocess_shell`, … | `allow_subprocess=False` |
+| Network access | `http_get`, `http_post`, `http_request`, `http_stream`, `http_sse`, … | `allow_network=False` |
+| Host environment | `env_get`, … | `allow_env=False` |
+
+Filesystem access is confined separately and was already: `allowed_paths` defaults to the working
+directory. Note the demonstrated escape that prompted this went *through subprocess*, which is not
+subject to the path check at all.
+
+**This is not a restriction you can lift from a script, and there is no env var for it.** A global
+switch would re-open the boundary for every run at once; per-execution environment declaration is
+tracked as `EXEC-ENV-BIND-1`.
+
+**Do this instead.** The denial is on the *raw ambient* capability, not on the capability itself —
+what a script loses is the unmediated path. Reach the same effects through the gated seams, which
+carry capability checks, the effect ledger and quota accounting:
+
+- **Outbound calls / side effects** → `call_tool("<tool>", {...})`, which enforces the run's scoped
+  capability token (§3).
+- **Runtime capabilities** → the bare `sys("<syscall>", {...})` builtin (§3, and note §3.4 — the
+  idiomatic `import "std:sys"` does *not* reach A.I.N.D.Y.'s dispatcher).
+- **Configuration a script needs** → pass it in via flow state or `input_payload` rather than
+  reading host env.
 
 ---
 
@@ -265,7 +296,7 @@ normally.
 
 ---
 
-## 6. Type quick-reference (nodus-lang 4.0.3)
+## 6. Type quick-reference (nodus-lang 4.1.0)
 
 | Value | `type()` result |
 |-------|----------------|
