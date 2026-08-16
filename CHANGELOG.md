@@ -2,31 +2,26 @@
 
 ## Unreleased
 
-### Changed — `nodus-lang` 4.1.0 → 4.2.0 (`FR-16`, #451)
+_Nothing yet._
 
-`Requires-Dist: nodus-lang==4.1.0` is an **exact** pin, so an app cannot adopt a nodus release
-on its own: `pip install nodus-lang==4.2.0` succeeds and leaves the environment inconsistent
-with the runtime's declared requirement — worse than a clean refusal. Reproduced here, an
-editable install of this repo **downgraded 4.2.0 back to 4.1.0**.
+## 2.3.0 — 2026-08-16
 
-**The pin stays exact.** Hard-pinning a language runtime is defensible; what it creates is an
-obligation to bump promptly, which this does.
+**Shape: MINOR — `2.3.0`.** No signature, route or response contract was removed or narrowed.
+`recommended_runtime_requirement` derives from the major, so it stays `>=2.0,<3.0` and **no
+consumer pin has to move**.
 
-Risk-probed before landing, and one check is new since the last bump:
+| | |
+|---|---|
+| Schema contract | `2026-08-15.1` — **unchanged** |
+| Alembic head | `0016` — **unchanged**, no new revisions |
+| Consumer pin | unchanged |
 
-- **`GUEST-CONFINE-1`'s confinement depends on VM constructor arguments.** `allow_subprocess`,
-  `allow_network` and `allow_env` all survive with identical defaults, and **all 31 gated
-  builtins are still refused under 4.2.0** — verified against the real VM, because a silently
-  renamed argument would leave the guest unconfined while every test that mocks the VM passed.
-- The three long-standing fragile couplings survive (`syscall_runtime.call_syscall`,
-  `NodusRuntime._get_active_vm`, `register_function`), and `register_function` still refuses to
-  override a builtin — which `NODUS-SYS-SURFACE-1`'s fail-loud guard depends on.
-- **Its breaking change — "every error now reports the resolved absolute path" — does not affect
-  this repo:** nodus errors are forwarded, never parsed. Nothing matches on error text.
+**No schema work on upgrade**, verified by diffing `AINDY/db/models/` and
+`memory_persistence.py` against `v2.2.0` rather than assumed. The new `Upgrade Path Guard`
+therefore passed **trivially** on this release — see its entry below for why that is stated
+rather than presented as evidence.
 
-No runtime code change. 4.2.0 fixes a resume path (`RESUME_TIMEOUT_MS`, store-lock scanning, and
-a sweeper adopting runs it did not create) that the app team runs under
-`AINDY_REASONING_NODUS_NATIVE`.
+### ★ One behaviour change to read before upgrading
 
 ### ★ Changed — a JWT session is no longer exempt from scope checks (`HTTP-SCOPE-GAP-1`, #449)
 
@@ -60,8 +55,150 @@ says *may I read executions*, not *whose*.
 `enforce_api_key_scope` keeps its name despite now covering both principal types: it appears at 7
 call sites and in the app team's notes, and renaming a security-relevant surface for cosmetics is
 churn.
+### Changed — changelog entries are now files in `changelog.d/` (#452)
 
-_Nothing yet._
+A PR still writes its own entry in the same PR — the protocol in `CLAUDE.md` is unchanged. It is
+now a **new file** in `changelog.d/` rather than an edit to `CHANGELOG.md`'s `## Unreleased`.
+
+Editing one shared section made every concurrent PR collide, three times in one afternoon
+(#449/#450/#451). The failure mode was worse than the annoyance: the reflexive "keep mine"
+resolution **silently reverted another PR's entry**, and a dropped changelog paragraph breaks no
+build. A new file cannot conflict with another new file.
+
+- Create `changelog.d/<PR>-<slug>.md`; prefix **`00-`** if an operator must read it before
+  upgrading, which is how the protocol's "at the top, not buried" rule becomes mechanical.
+- `python scripts/assemble_changelog.py` folds fragments in and deletes them; `--check` verifies
+  none are stranded. **A release step, never a per-PR gate** — fragments are supposed to exist
+  during development, so gating on their absence would invert the design.
+
+This entry is itself a fragment.
+
+### Fixed — scheduler jobs no longer starve each other (`SYSMAX-5`, #453)
+
+The scheduler ran ~33 jobs (12 runtime + ~21 app-registered) against a **single pool of 10
+workers**, with two unbounded holders: `scheduler_heartbeat_tick` occupies a worker for the whole
+duration of an INLINE execution (~13 minutes in the `FR-15` incident), and DB-heavy jobs can
+block for `DB_POOL_TIMEOUT` (60s) under connection-pool exhaustion.
+
+The failure mode was a **maintenance brownout**: the pool saturates and the remaining jobs
+silently stop running — including the recovery jobs whose purpose is cleaning up after the
+condition that saturated it. Nothing raised.
+
+**Three lanes, sized for isolation rather than capacity:**
+
+| Lane | Workers | Holds |
+|---|---|---|
+| `default` | 10 | ordinary maintenance + every app-registered job |
+| `recovery` | 2 | the six jobs whose value *peaks* when the scheduler is saturated |
+| `waits` | 1 | time-wait firing (`FR-15` (b)) |
+
+**★ Raising `default` would have been the wrong fix**, not merely a weaker one:
+`DB_POOL_SIZE` (10) + `DB_MAX_OVERFLOW` (20) = **30 connections shared with request handling**.
+Twenty concurrent scheduler jobs each holding a session would leave ten for the API — the
+RT-MEMTXN-LEAK-1 shape, where a login took 42 seconds. A test asserts the lanes stay within half
+the DB budget, so that trade cannot be made accidentally.
+
+`queue_backend_reconnect` is the sharpest case: if the queue backend is down *and* the pool is
+saturated, the job that would reconnect it could not run — a self-sustaining outage.
+
+**New metric `aindy_scheduler_job_starved_total{job_id,reason}`.** APScheduler reports
+saturation only as a per-job log line (*"maximum number of running instances reached"*) — which
+is exactly what the `FR-15` incident printed once per starved second while nobody could see it
+as a signal. `reason` separates `max_instances` (previous run still going) from `missed` (no
+worker free); they have different causes and different fixes.
+
+### Fixed — `remove_job` failures were swallowed under a misleading comment (#454)
+
+Found by auditing the vendored `apscheduler` shim after the same gap appeared twice
+(`FR-15` (b), `SYSMAX-5`).
+
+`pytest.ini` sets `pythonpath = . AINDY`, so `import apscheduler` resolves to
+`AINDY/apscheduler` — a hand-written shim — for **every test in this repo**. Anything the
+runtime calls that the shim does not implement is untested by construction, and where the call
+sits inside a `try/except` it fails *silently*.
+
+- **`nodus_schedule_service._remove_from_scheduler` caught `Exception` and passed**, under a
+  comment saying *"Job may already be gone"*. The shim had no `remove_job`, so under test the
+  call raised `AttributeError` and was swallowed — **removal could have been a permanent no-op
+  with every test green**, and a renamed scheduler API would have looked identical to a
+  legitimately deleted job. Now only `JobLookupError` is silent; anything else warns.
+- The shim gained `get_job`, `remove_job` and `jobstores.base.JobLookupError`, raising the same
+  type production raises so a test exercises the same branch.
+- **New guard, derived from source rather than a maintained list:** a test scans `AINDY/` for
+  methods called on the scheduler and fails if the shim cannot express one. A hand-written list
+  of expected methods would drift exactly as the shim did.
+
+Also pinned: **`import nodus` must resolve to the installed package**, not `AINDY/nodus/`. That
+directory shares the real package's name *and* `runtime/embedding.py` shares its exact module
+path — the path `GUEST-CONFINE-1`'s tests import `NodusRuntime` from to assert 31 builtins are
+refused. Today the collision is self-limiting (the file is a re-export, so shadowing would
+self-import and fail loudly), but that depends on it staying a re-export.
+
+### Added — CI now exercises the upgrade path against an existing database (`FR-8` / `FR-14`, #455)
+
+The class of failure no other check could see. **Every existing job builds a fresh database**,
+where `create_all` produces whatever columns the current build declares and there is nothing to
+reconcile — which is why the app team's own `deploy-bootstrap-guard.yml` passed while their live
+stack was crash-looping on 2.1.0. The failure only exists when a database **predates** the schema
+change, which is true of every real deployment and no CI run.
+
+`Upgrade Path Guard` builds that state deliberately: install the **previous released wheel from
+PyPI**, `bootstrap-schema` against a fresh database, install **this build** over it, and
+`bootstrap-schema` again. That last step is the one that took a stack down. It must either
+succeed or exit **3** (`additive reconcile required` — the branchable code from `FR-14`), and
+`--reconcile` must then resolve it and stay stable on re-run. It finishes by booting `serve`,
+because `FR-14`'s actual symptom was a container that never reached it.
+
+**★ Read this before treating a green run as proof.**
+
+**This release contains no runtime schema change, so the guard passes trivially here.** There is
+no drift to detect, and on such a release *a broken guard and a clean release look identical* —
+which is precisely the "green because there was nothing to catch" trap this repo has catalogued
+seven times.
+
+That is why the workflow ships with a **`negative-control` job** that injects synthetic drift
+(dropping `agents.updated_at`, reproducing `FR-13`'s shape) and **requires** the guard to report
+exit 3. The control is the load-bearing half on any release without a schema change: if it ever
+passes silently, the upgrade-path job is decorative and should not be trusted.
+
+**Not yet a required check.** Promote it only after reading a real run — and read the
+`negative-control` result, not just the overall green.
+
+*Correction, recorded because it contradicts a note elsewhere in this repo:* **this workflow DID
+run on the pull request that added it.** `CLAUDE.md`'s `NATIVE-CI-1` entry says a new workflow
+file does not trigger on its own PR; that holds for `push`-triggered workflows, but a
+`pull_request` trigger fires from the PR's merge ref and so does run. It failed on that first
+run — for two setup reasons of its own (a missing `CREATE EXTENSION vector`, and a one-shot PyPI
+lookup that hit a connection reset) — which is a better outcome than a first run that only
+happens after merge.
+
+
+### Changed — `nodus-lang` 4.1.0 → 4.2.0 (`FR-16`, #451)
+
+`Requires-Dist: nodus-lang==4.1.0` is an **exact** pin, so an app cannot adopt a nodus release
+on its own: `pip install nodus-lang==4.2.0` succeeds and leaves the environment inconsistent
+with the runtime's declared requirement — worse than a clean refusal. Reproduced here, an
+editable install of this repo **downgraded 4.2.0 back to 4.1.0**.
+
+**The pin stays exact.** Hard-pinning a language runtime is defensible; what it creates is an
+obligation to bump promptly, which this does.
+
+Risk-probed before landing, and one check is new since the last bump:
+
+- **`GUEST-CONFINE-1`'s confinement depends on VM constructor arguments.** `allow_subprocess`,
+  `allow_network` and `allow_env` all survive with identical defaults, and **all 31 gated
+  builtins are still refused under 4.2.0** — verified against the real VM, because a silently
+  renamed argument would leave the guest unconfined while every test that mocks the VM passed.
+- The three long-standing fragile couplings survive (`syscall_runtime.call_syscall`,
+  `NodusRuntime._get_active_vm`, `register_function`), and `register_function` still refuses to
+  override a builtin — which `NODUS-SYS-SURFACE-1`'s fail-loud guard depends on.
+- **Its breaking change — "every error now reports the resolved absolute path" — does not affect
+  this repo:** nodus errors are forwarded, never parsed. Nothing matches on error text.
+
+No runtime code change. 4.2.0 fixes a resume path (`RESUME_TIMEOUT_MS`, store-lock scanning, and
+a sweeper adopting runs it did not create) that the app team runs under
+`AINDY_REASONING_NODUS_NATIVE`.
+
 ### Changed — `bootstrap-schema` exits with branchable codes (`FR-14`, #450)
 
 Every not-ready state exited **1** — the same code as "DATABASE_URL is not set". A container
