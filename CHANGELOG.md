@@ -69,6 +69,95 @@ No behaviour change; recorded because `CLAUDE.md` is the agent-instruction surfa
   rule verbatim; the "trusting a green check" catalogue said "six" and listed seven — now eight,
   including `ROUTE-AST-UNWIRED-1`.
 
+### Added — `register_syscall` can declare an execution guarantee (`IDEM-11`, #439)
+
+`SyscallEntry` has always accepted `execution_guarantee`; **`register_syscall` never forwarded
+it.** Every syscall registered through that function — i.e. **every app/plugin syscall** — got
+`AT_LEAST_ONCE` with **no way to opt in**. The at-most-once gate was unreachable for plugin
+syscalls *by construction*, not by configuration.
+
+- `register_syscall(..., execution_guarantee="EXACTLY_ONCE")` now works, and is validated
+  against the two accepted values. A typo'd `"EXACTLY ONCE"` **raises** rather than silently
+  becoming `AT_LEAST_ONCE` — a silent downgrade is indistinguishable from never declaring it.
+- No behaviour change for existing callers: the default is unchanged.
+
+### Fixed — 6 non-idempotent syscalls were undeclared (`IDEM-11`, #439)
+
+A per-syscall audit of all 23 built-ins. **Declared `EXACTLY_ONCE` went 1 → 7:** `event.emit`,
+`flow.run`, `flow.execute_intent`, `nodus.execute`, `job.submit`, `agent.undo` join
+`memory.write`. Each is a call where a retry produces a *second* effect — a duplicate event,
+flow run, script execution or job.
+
+**These declarations are inert** until `AINDY_SYSCALL_IDEMPOTENCY` is enabled (default off) or
+the run is a durable continuation, so this change carries no behaviour change on its own. The
+flag flip is deliberately separate and follows soak.
+
+Reads and genuinely convergent writes were left `AT_LEAST_ONCE` on purpose — `agent.cancel`
+(CAS to a terminal status), `agent.ensure_initial_run` (find-or-create), `agent.simulate`,
+`memory.delete` (delete-by-id), `agent.execute` (guarded by its `approved` precondition).
+Over-declaring is not free: it puts a ledger write on a hot path.
+
+**Two filed measurements were wrong and are corrected in `TECH_DEBT.md`:** the registry holds
+**23** entries, not 27; and the one pre-existing `EXACTLY_ONCE` was **`memory.write`**, not
+`memory.delete`. That inverts the significance — the guarded call was the runtime's busiest
+write path, not the syscall with zero callers.
+
+### Fixed — an `EXACTLY_ONCE` result that isn't JSON-serializable no longer fails the call (`IDEM-11`, #439)
+
+The gate caches the handler's return in a **JSONB** column. The **tool** path (MEB-0) has always
+`json.dumps`-checked it and degraded to caching nothing with a warning. Its **syscall** twin
+(MEB-1b) had no check and no `try`.
+
+So a handler returning a `UUID` / `datetime` / ORM object raised inside the ledger commit,
+unwound to `dispatch()`'s belt-and-suspenders handler, and came back as an **error envelope —
+after the effect had already happened**. The caller is told a side-effecting syscall failed when
+it succeeded. It surfaces only with the flag on, i.e. **exactly when someone flips it**, which is
+why it mattered to fix before the flip rather than after.
+
+Behaviour now matches the tool path: warn, cache nothing, let the call succeed. A ledger failure
+also degrades to `AT_LEAST_ONCE` instead of failing a call whose effect is already real.
+
+### Added — `IDEM-12`: `agent.undo` double-compensates on a second call (latent, #439)
+
+Found while doing the audit above. `undo_run_effects` selects effects by
+`status == "success"`, **never marks them reversed** and never consults `effect_reversals` — so
+a second `sys.v1.agent.undo` re-invokes **every** compensator (a double refund, a second
+reversing transfer) and duplicates audit rows.
+
+**Not live: zero compensators are registered today**, so every effect reports `irreversible` and
+the only present harm is duplicate audit rows. It goes live with the first compensator someone
+registers. Filed, not fixed — `EXACTLY_ONCE` above is defense-in-depth only, since the gate is
+default-off and keys on `(name, payload, scope)`.
+
+### Fixed — the 2.1.0 entry's Dockerfile-pin line was false at publication (2026-08-15)
+
+The `## 2.1.0` entry below says **"The Dockerfile builder-stage pin is still `2.0.1`."** It is
+`2.1.0`, and has been since the release itself. That entry is left exactly as written — it is
+the audit trail of what was believed then, not a claim to re-litigate — but the line should not
+be trusted, and the *reason* it is wrong is worth more than the correction.
+
+**It was not a line that went stale. It was false at the instant it was published.** The history:
+
+- `42dc841` (#425) wrote it under `## Unreleased`, where it was **true and useful** — a standing
+  reminder that the pin had not yet been bumped.
+- `ea988d1` (#434) promoted `## Unreleased` to `## 2.1.0 — 2026-08-15` **and** bumped the pin
+  `2.0.1` → `2.1.0` in the same commit, exactly as `PYPI-PUBLISH-1` requires.
+
+So the single commit that published the sentence is the commit that falsified it. The promotion
+carried it along verbatim.
+
+**This is a structural trap between two protocols this repo already has, and it will recur on
+every release.** `PYPI-PUBLISH-1` requires the pin bump and the CHANGELOG to land in one PR;
+the CHANGELOG protocol requires entries to be authored while the work is in `Unreleased`. Any
+*pin-status* sentence is therefore correct in `Unreleased` and self-invalidating on promotion —
+the promotion PR is by definition the one that resolves it.
+
+**Guard added:** `docs/runtime/RELEASE_CHECKLIST.md` now makes dropping unreleased-only status
+notes an explicit sub-step of the promotion, rather than something the author has to remember.
+
+A useful generalisation for anything written under `Unreleased`: state what a change *is*, not
+what has *not yet been done about it*. The first survives promotion; the second cannot.
+
 ## 2.1.0 — 2026-08-15
 
 **Shape: MINOR — `2.1.0`.** Everything below is additive. No signature, route or response
