@@ -75,9 +75,20 @@ def normalize_allowed_operations(value: Optional[list[str]]) -> list[str]:
 def validate_nodus_source(task_code: str) -> None:
     """Validate a Nodus script source for basic structural and security issues.
 
-    The Nodus VM enforces its own sandbox (no imports, no filesystem, no network).
-    This validator performs lightweight pre-execution checks without parsing
-    Nodus syntax as Python - the two languages are not compatible with Python AST.
+    This validator performs lightweight pre-execution checks without parsing Nodus syntax as
+    Python - the two languages are not compatible with Python AST.
+
+    **This is not a confinement boundary and never was.** It blocks Python-isms (``import``,
+    ``__import__``, ``eval``, ``exec``) and caps length; that is all. Confinement is the VM's
+    job, via the ``allow_subprocess`` / ``allow_network`` / ``allow_env`` arguments that
+    ``nodus_worker`` passes when it builds the runtime.
+
+    *Corrected 2026-08-15 (GUEST-CONFINE-1).* This docstring previously asserted "the Nodus VM
+    enforces its own sandbox (no imports, no filesystem, no network)" — which was false, and was
+    the belief that let the hole survive: the VM defaults to allowing subprocess, network and
+    host env, and the worker was passing none of the deny flags. A guest script reached all
+    three without touching the dispatcher. Do not restate a guarantee here that this function
+    does not implement.
     """
     source = str(task_code or "")
     if not source.strip():

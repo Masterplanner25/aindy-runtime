@@ -6239,6 +6239,22 @@ discriminator survives only as text and assertions must substring-match rather t
 and `print()` output does **not** land in `stdout_log` on this path, so it is not a usable liveness
 signal — `set_state` + `output_state` is.
 
+**★ Second correction — "zero callers" was true but misleading, and it mis-classified the
+failure.** The original finding below says `validate_requested_operation_usage()` "has **zero
+callers outside its own module**", which reads as dead code. **Verified 2026-08-15: it runs on
+every authorized execution.** Its call site is `nodus_security.py:145`, inside
+`authorize_nodus_execution`, which `nodus_execution_service.py:1361` calls. The literal claim is
+true only because the direct caller happens to live in the same file. The finding's *conclusion*
+stands — it could never have blocked subprocess or http — but for the other reason it gave:
+`ALLOWED_OPERATION_CAPABILITIES` contains **exactly 8 entries, all memory operations** (`recall`,
+`recall_all`, `recall_from`, `recall_tool`, `record_outcome`, `remember`, `share`, `suggest`) and
+nothing for subprocess, network or env. **So this was never "verification that exists but does not
+run" (variant 8) — it is "gates, doesn't cover" (variant 5).** Worth getting right, because the
+two have different fixes: the first needs wiring, the second needs vocabulary. `validate_nodus_source`'s
+docstring — which asserted the VM "enforces its own sandbox (no imports, no filesystem, no
+network)" — was corrected in the same change; that false reassurance is the belief that let the
+hole survive.
+
 **Remaining gap:** none for the guest boundary. The adjacent, still-open work is the *provider*
 re-homing this converges with — `EXEC-ENV-BIND-1`, `TOOL-SEAM-ISOLATION-1`, `EGRESS-INPROC-1` —
 where `create_sandbox_runner` reachable only from `plugin_host.py` is the shared root.

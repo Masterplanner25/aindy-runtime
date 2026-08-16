@@ -35,9 +35,13 @@ This was **demonstrated, not inferred** (2026-08-15): driving `nodus_worker.run_
 - **Note on the filesystem half:** the VM already confined file access (`allowed_paths`
   defaults to the cwd). The demonstrated host-file write went through subprocess, which is not
   subject to that check at all — so `allow_subprocess=False` is what actually closed it.
-- The source validator never helped and could not have: `validate_nodus_source` blocks only
-  Python-isms, and `validate_requested_operation_usage()` has zero callers outside its own
-  module.
+- **Neither pre-execution validator could have caught this**, for two different reasons:
+  `validate_nodus_source` only blocks Python-isms (`import`, `__import__`, `eval`, `exec`) plus
+  a length cap. `validate_requested_operation_usage` *does* run on every authorized execution
+  (via `authorize_nodus_execution`, called from `nodus_execution_service.py`) — but its
+  vocabulary is `ALLOWED_OPERATION_CAPABILITIES`, which contains **8 memory operations and
+  nothing else**; `subprocess_*`, `http_*` and `env_get` were never in it, so it never looked.
+  Confinement was always the VM's job, and the VM was not asked.
 
 Regression suite: `tests/unit/test_guest_confinement.py` (5 tests, `runtime_only`, so
 `Runtime Contracts` selects it). It drives the real worker entry point rather than asserting on
