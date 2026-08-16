@@ -6507,6 +6507,85 @@ Validation` enforces — which is why nothing caught it.
 
 ---
 
+## FR-15 — dispatch into the execution pipeline is serialised through a 1s single-instance job
+
+**Status: OPEN — P0 (defect), diagnosed 2026-08-15.** Filed by the app team after a Genesis
+session showed a **177-second** gap with zero events; their writeup is
+`aindy-apps-monolith/docs/handoffs/DEFECT_GENESIS_MESSAGE_LATENCY.md`. They inferred a
+single-slot serialisation from the queueing behaviour and **explicitly declined to claim the
+mechanism**. There is one. This entry names it.
+
+**Answer to their question 1: yes — and it is default-on.**
+
+The chain, verified against source and demonstrated:
+
+1. `_scheduler_heartbeat_tick()` (`scheduler_service.py:355`) is the **only** thing that drains
+   the scheduler queue. It calls `SchedulerEngine.schedule()`.
+2. It is registered as an APScheduler job on `IntervalTrigger(seconds=1)` with
+   **`max_instances=1`** (`scheduler_service.py:192-199`).
+3. `schedule()` (`kernel/scheduler/dispatch.py:14`) loops up to `MAX_PER_SCHEDULE_CYCLE = 10`
+   items and calls `execution_dispatcher.dispatch(...)` for each.
+4. `dispatch()` runs `handler_fn()` **synchronously** when the mode is `INLINE`.
+5. `_decide_mode()` returns `INLINE` for everything, because **Rule 2 short-circuits Rules 4 and
+   5**: `async_heavy_execution_enabled()` reads `AINDY_ASYNC_HEAVY_EXECUTION`, which
+   **defaults to false** (`execution_dispatcher.py:94`), is commented out in both `.env` and
+   `.env.example`, and is pinned `"false"` in CI.
+
+So **the flow executes inside the 1-second heartbeat tick**, and while it runs no other queued
+work can be dispatched at all — `schedule()` is the sole dispatcher and only one instance may
+run. That is the single slot. Their `maximum number of running instances reached (1)` log is not
+a side-symptom; it is the queue being blocked, printing once per starved second.
+
+**★ The code written to prevent exactly this is unreachable by default.** Rule 4 is
+*"high-priority work should never block a request thread"* and Rule 5 routes the heavy types
+`{flow, agent, nodus, job}` to ASYNC. Both sit **below** the env-flag check. Demonstrated across
+all eight combinations of those four types × `{high, normal}` priority: **every one returns
+`INLINE` by default and `ASYNC` with the flag on.** `priority="high"` blocks the thread the
+docstring promises it never will.
+
+This is the repo's own recurring shape — **built, and not wired.** Compare `ROUTE-AST-UNWIRED-1`
+(a boot-time proof with no call site) and `IDEM-11` (a gate whose declarations were unreachable
+from `register_syscall`). Here an entire correctly-designed async path is gated behind a flag
+nobody sets.
+
+**Their measurements are consistent with this and nothing else needs to be invoked to explain
+them:** wait time = queue depth × per-item duration, so 5.4s / 18.2s / 48.8s / 22.3s / 184.1s is
+unbounded and non-monotonic by construction. The app's synchronous
+`sys.v1.analytics.execute_infinity` per chat message (which they have already owned) lengthens
+each item and therefore amplifies the queue — but is not required for the queue to form.
+
+**Answer to their question 2 — the observability gap is real and separable.**
+`execution.started` is emitted by `ExecutionPipeline` once a unit is actually claimed, so
+everything before that — the entire time an item sits in `self._queues` — emits nothing. A
+queued request and a hung process are externally identical. This is fixable independently of the
+dispatch decision and is the cheapest of the three asks.
+
+**Answer to their question 3 — a bound.** There is a per-cycle cap (`MAX_PER_SCHEDULE_CYCLE = 10`)
+but **no cap on the duration of any single inline item**, and no queue-depth limit. One slow flow
+starves the scheduler for as long as it runs, which is why `/health` timed out at 2.7 cores for
+13 minutes: the heartbeat that also drives wait-expiry and stale-wait cleanup never got a turn.
+
+**Not attributable to 2.1.0 — agreed, and stronger than that: this predates it.** The env-flag
+short-circuit is not new in 2.1.0. Their caution about load-dependent misattribution is correct
+and the mechanism is version-independent.
+
+**Fix options (owner decision, deliberately not taken here).**
+
+- **(a) Flip `AINDY_ASYNC_HEAVY_EXECUTION` on by default.** One line; makes Rules 4/5 live as
+  designed. But it changes execution for `flow`/`agent`/`nodus`/`job` from inline to threaded in
+  every deployment at once, which is a real behaviour change and wants soak — the standing
+  decision puts soak in `aindy-apps-monolith`.
+- **(b) Decouple dispatch from the heartbeat.** Give `schedule()` its own worker rather than
+  borrowing a `max_instances=1` maintenance job, so a slow item cannot starve wait-expiry and
+  cleanup even under INLINE.
+- **(c) Emit `execution.queued` + a queue-depth gauge.** Independent of (a)/(b), and the thing
+  that turns the next occurrence into a one-line answer instead of a three-hour investigation.
+
+**Recommended order: (c), then (b), then (a).** (c) is safe and immediately useful; (b) removes
+the starvation coupling regardless of which dispatch mode is chosen; (a) is the real fix but is
+the one that needs soak, and doing it last means the first occurrence after the flip is
+diagnosable because (c) already shipped.
+
 ## IDEM-12 — `agent.undo` re-invokes every compensator when called twice
 
 **Status: OPEN — P2 (latent).** Filed 2026-08-15, found while doing the `IDEM-11` per-syscall
