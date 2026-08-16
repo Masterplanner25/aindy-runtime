@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+_Nothing yet._
+
+## 2.1.0 — 2026-08-15
+
 **Shape: MINOR — `2.1.0`.** Everything below is additive. No signature, route or response
 contract was removed or narrowed, and `recommended_runtime_requirement` stays `>=2.0,<3.0`, so
 **no consumer pin has to move** — unlike the 2.0.0 cut.
