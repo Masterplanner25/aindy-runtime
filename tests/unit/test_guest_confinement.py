@@ -42,6 +42,13 @@ def _run(script: str) -> dict:
 def _sandbox_error(result: dict) -> str:
     """Return the error text, asserting the failure is a *sandbox* refusal.
 
+    ★ Callers assert the **flag name** appears, not a specific sentence. nodus 5.0.0 rephrased
+    every denial from `... allow_subprocess=False ...` to `Blocked: subprocess execution is not
+    granted; pass allow_subprocess=True to NodusRuntime to allow it`. The old assertions failed
+    on wording while the guest was still fully confined — a cosmetic break that costs an hour of
+    "is the sandbox broken?" if the test cannot distinguish the two. Naming the flag is the part
+    that carries meaning: it says *which* boundary refused.
+
     `run_one` stringifies the VM's structured error (`nodus_worker.py:463` wraps it in
     `str(...)`), so this is substring matching on a repr, not a dict lookup. That is worth
     stating because it is a real constraint on what these tests can assert: the `kind`
@@ -97,7 +104,7 @@ def test_subprocess_is_denied_and_writes_no_host_file():
     try:
         result = _run(f'let x = subprocess_shell("echo hi > {marker}")\n')
 
-        assert "allow_subprocess=False" in _sandbox_error(result)
+        assert "allow_subprocess" in _sandbox_error(result)
         assert not os.path.exists(marker), "guest script created a file on the host filesystem"
     finally:
         if os.path.exists(marker):
@@ -112,7 +119,7 @@ def test_network_is_denied():
     """
     result = _run('let x = http_get("http://example.com")\n')
 
-    assert "allow_network=False" in _sandbox_error(result)
+    assert "allow_network" in _sandbox_error(result)
 
 
 def test_host_env_is_denied():
@@ -123,7 +130,7 @@ def test_host_env_is_denied():
     """
     result = _run('let x = env_get("PATH")\n')
 
-    assert "allow_env=False" in _sandbox_error(result)
+    assert "allow_env" in _sandbox_error(result)
 
 
 # --------------------------------------------------------------------------------------
@@ -147,9 +154,18 @@ def _gated_builtin_names() -> dict[str, list[str]]:
     source = inspect.getsource(registry)
     out: dict[str, list[str]] = {}
     for flag in ("allow_subprocess", "allow_network", "allow_env"):
+        # ★ nodus 5.0.0 restructured this. The gated names are no longer inline in the *if*
+        # branch; they are the tuple in the `else:` branch that installs the blocked stub:
+        #
+        #     _blocked = _make_blocked_stub(vm, _denied_reason("...", "allow_env"), ENV)
+        #     for _name in ("env_get", "env_set", ...):
+        #
+        # Matching from `_denied_reason(..., "<flag>")` to that tuple targets the list itself.
+        # The previous pattern swept the whole branch for quoted strings, which on 5.0.0 also
+        # picked the flag name out of `_denied_reason` — three phantom "builtins" that are
+        # unreachable by definition and therefore reported as leaks.
         match = re.search(
-            rf'if getattr\(vm, "{flag}", True\):(.*?)'
-            r"(?=\n        if getattr|\n        from nodus|\Z)",
+            rf'_denied_reason\([^)]*"{flag}"\).*?for _name in \((.*?)\)',
             source,
             re.S,
         )
