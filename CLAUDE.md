@@ -706,10 +706,17 @@ scope creep. **Consequence: flag soak happens in `aindy-apps-monolith`, not here
 ships capabilities default-off; the app repo turns them on and lives with them. Don't plan soak
 work in this repo.
 
-**Release state (verified 2026-08-15): `v2.1.0` is released and `main` is clean behind it.**
-Dockerfile pin `2.1.0`, schema contract `2026-08-15.1`, Alembic head `0016`, `CHANGELOG.md`
-`## Unreleased` empty. `recommended_runtime_requirement` stays `>=2.0,<3.0`, so no consumer pin
-has to move.
+**Release state (verified 2026-08-17): `v2.3.0` is the newest TAG; `2.4.0` is prepared on `main`
+and the tag is pending.** `AINDY/_version.py` and the Dockerfile pin both read `2.4.0`,
+`CHANGELOG.md` has `## 2.4.0 — 2026-08-17` with `## Unreleased` empty, and `changelog.d/` is
+drained. Schema contract stays `2026-08-15.1` and Alembic head stays `0016` — **no runtime-owned
+model changed this release**, so `bootstrap-schema` exits 0 against an existing database and the
+`Upgrade Path Guard`'s main job passes trivially (its `negative-control` is the half that carries
+meaning). `recommended_runtime_requirement` stays `>=2.0,<3.0`, so no consumer pin has to move.
+
+*This paragraph has now gone stale three times — it said `2.0.0` after 2.0.0 shipped, described
+2.1.0 as unreleased after it was tagged, and still said `v2.1.0` while 2.3.0 was live. **Verify
+against `git tag` and `CHANGELOG.md` before acting on it.***
 
 > **This section has gone stale twice.** It once directed "the next release must be 2.0.0" after
 > 2.0.0 had shipped, and then described 2.1.0 as unreleased after it was tagged. **If you are

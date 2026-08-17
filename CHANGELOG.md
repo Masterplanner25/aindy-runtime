@@ -2,7 +2,574 @@
 
 ## Unreleased
 
-_Nothing yet._
+## 2.4.0 — 2026-08-17
+
+### Changed — the last identity-only routes now check authority (`HTTP-SCOPE-GAP-1`, #464)
+
+**Operators read this before upgrading.** Eighteen more routes now require a scope: all 13 under
+`/coordination/*` and the 5 user-owned agent routes under `/platform/agents`. They previously
+depended on `get_current_user` alone — agent registration, heartbeats, deregistration, the
+inter-agent inbox and agent CRUD were reachable by anyone who could authenticate.
+
+| Routes | Scope |
+|---|---|
+| `/coordination/agents`, `/agents/status`, `/agents/register`, `/agents/{id}/heartbeat`, `DELETE /agents/{id}`, `/graph`, `/messages/inbox`, `/messages/{id}/acknowledge` | `agent.run` |
+| `/coordination/runs`, `/runs/{id}/children`, `/conflict/run` | `execution.read` |
+| `/coordination/memory/shared`, `/conflict/memory` | `memory.read` **or** `memory.write` |
+| `GET/POST/PATCH/DELETE /platform/agents`, `/platform/agents/{slug}/restore` | `agent.run` |
+
+`platform.admin` continues to satisfy any gate.
+
+**Interactive users lose nothing.** All four scopes are in the ordinary derived session set, and
+a test drives the real routes to prove it. As with the memory router, the callers to check are
+**platform API keys** issued without these scopes.
+
+**Three gates rather than one, deliberately.** `/coordination/memory/shared` queries
+`memory_nodes` directly and `/conflict/memory` inspects a memory path — gating them on
+`agent.run` because they live in the agent router would make that router a second door onto
+memory. Tests assert the split in both directions: an agent-scoped caller cannot read shared
+memory, and a memory-scoped caller cannot register an agent.
+
+**No `agent.read`/`agent.manage` was invented.** The agent surface is gated as one authority
+because the vocabulary has no finer grain, and adding one would oblige every consumer to grant a
+scope that answers no question they ask today. If that split is wanted later it should be a
+deliberate vocabulary change, not a side effect of adding gates.
+
+**★ `/platform/agents` never inherited the `/platform` admin gate** — it is mounted on the app
+directly rather than through `platform_router`, by design (FR-12b exists so an ordinary user can
+own an agent). That is also why it had no authority check at all. Owner scoping is unchanged and
+still does the work a scope cannot: a scope answers *"may you touch agents"*, never *"may you
+touch **this** agent"*.
+
+**Both prefixes are covered.** The coordination handlers are registered at `/coordination/*` and
+at `/apps/coordination/*`; the gate is on the endpoint, so it applies to either. The app's
+`smoke_autonomy.py` calls the `/apps` form with a Bearer JWT and is unaffected.
+
+**Census after this change** — 126 registered routes: **47 scope-gated, 56 admin-gated, 21
+public, 2 identity-only.** The two are `POST /auth/logout` and `POST /auth/password/change`,
+which act only on the caller's own account, where a scope is a permission nobody could be
+denied. A test pins that set by equality, so both adding an ungated route and gating one of
+those two fail in CI.
+
+### Fixed — an API key could mint itself a wider API key (`KEY-SCOPE-ESCALATION-1`, #463)
+
+**Security. Operators should read this and audit existing keys before upgrading.**
+
+`POST /platform/keys` validated only that each requested scope *exists* (membership in
+`Scopes.ALL`), never that the caller was entitled to grant it. Demonstrated end to end against
+real PostgreSQL, starting from an API key holding the single scope `flow.read`:
+
+1. `POST /platform/keys {"scopes": ["platform.admin","memory.delete","event.emit"]}` → **201**,
+   key issued with exactly those scopes
+2. `GET /platform/admin/users` with the new key → **200**, every user's email and admin flag
+3. `POST /platform/admin/users/{own_id}/promote` → **200**, `is_admin: true`
+
+Step 3 lands in the **user row**, so revoking the minted key does not undo the escalation, and
+every subsequent JWT session for that account is an admin session.
+
+Nothing upstream would have stopped it: `require_platform_admin_access` admits **any**
+authenticated API key to the whole `/platform` tree, on the stated assumption that *"scope
+enforcement happens per-endpoint or per-syscall"* — which `keys_router` did not do.
+
+**The fix is a delegation rule: you cannot grant what you do not hold.** A new
+`grantable_scopes(principal)` bounds key creation by the creator's own authority — an API key's
+own scopes, or a session's derived scopes. A request naming any scope outside that set is
+refused with **403 `scope_not_grantable`**, listing only the scopes that were not grantable. An
+unknown scope still returns **422**, because *"that is not a scope"* and *"you may not grant that
+scope"* are different failures.
+
+A holder of `platform.admin` may still grant anything. That is deliberate, not a loophole:
+`platform.admin` already satisfies every scope gate and reaches user promotion, and it preserves
+the documented affordance that a key *can* carry `memory.delete`/`event.emit`, which no session
+inherits.
+
+**What this does not change:** no existing key loses any access it already had — the rule only
+governs what a key can *grant*. **What it does not close:** `require_platform_admin_access`
+admitting any API key to 56 `/platform/*` routes is the broader hole and is tracked separately;
+this removes the escalation ladder, not the reach.
+
+**Audit advice:** any key carrying `platform.admin`, `memory.delete` or `event.emit` that you did
+not deliberately issue should be revoked, and `users.is_admin` reviewed for accounts you did not
+promote yourself.
+
+**★ Why no test caught this, and the trap for whoever tests it next:** `platform_api_keys.scopes`
+is a PostgreSQL `ARRAY`. On SQLite the insert fails at the driver (`type 'list' is not
+supported`) **after** the authorization gate has been passed, so the harness turns a 201 into a
+500 and the finding reads as an unrelated bug.
+
+### Changed — the memory router now enforces authority, not just identity (`HTTP-SCOPE-GAP-1` D, #462)
+
+**Operators read this before upgrading.** All 22 routes under `/memory/*` now require a scope.
+Previously they depended on `get_current_user` alone — `grep -c enforce_api_key_scope` in
+`AINDY/routes/memory_router.py` was **0** while that file reached memory writes, graph edits and
+Nodus script execution. Anyone who could authenticate could do all of it, and an API key issued
+with, say, `flow.read` only could too.
+
+**Scopes required:**
+
+| Routes | Scope |
+|---|---|
+| all reads — `GET /nodes`, `/nodes/{id}`, `/history`, `/links`, `/traverse`, `/performance`, `/agents`, `/agents/{ns}/recall`, and `POST /nodes/search`, `/nodes/expand`, `/recall`, `/recall/v3`, `/federated/recall`, `/suggest` | `memory.read` **or** `memory.write` |
+| `POST /nodes`, `PUT /nodes/{id}`, `POST /links`, `POST /nodes/{id}/share`, `POST /nodes/{id}/feedback` | `memory.write` |
+| `POST /nodus/execute`, `POST /execute`, `POST /execute/complete` | `flow.execute` |
+
+`platform.admin` continues to satisfy any gate.
+
+**Interactive users lose nothing.** An ordinary JWT session derives `memory.read`, `memory.write`
+and `flow.execute` from the user row (`derive_session_scopes`), so every gate here is satisfiable
+without issuing anyone a grant. A test asserts exactly that against the real routes, so if it
+ever stops being true it fails in CI rather than as scattered 403s that read as a frontend bug.
+
+**API keys are where to look.** A platform key that calls `/memory/*` over HTTP and was issued
+without these scopes will now get **403**. Grant the scope, or use `POST /platform/syscall`,
+which was already gated. No first-party caller is affected: the SDK's `client.memory.*` goes
+through the syscall route, not these HTTP routes.
+
+**★ The read gate accepts `memory.write` as well**, matching `_DISPATCH_CAPABILITY_SCOPES`
+exactly. Without that, one key would read fine through `POST /platform/syscall` and be refused
+on `GET /memory/nodes` — two answers to one authority question from one credential.
+`enforce_api_key_scope` gained any-of alternatives for this; existing single-scope call sites are
+unchanged.
+
+**★ Execution is not a memory scope.** `/memory/execute` and `/memory/nodus/execute` compile and
+run caller-supplied workflow code. Filing them under `memory.write` would have made "may I
+remember this" and "may I run this" the same permission, so they take `flow.execute`.
+
+**Behaviour note:** `POST /memory/execute/complete` has returned **410 Gone** since completion
+moved inside `POST /memory/execute`. A caller without `flow.execute` now gets **403** there
+instead — authorization is checked before the deprecation notice.
+
+Still open on `HTTP-SCOPE-GAP-1`: the other routers. This closes the router the entry named; it
+does not close the entry.
+
+### Changed — `nodus-lang` 4.2.0 → **5.0.1**, `nodus-mcp` → **0.1.3** (`NODUS-UPGRADE-1`)
+
+A major bump, adopted with **no behavioural change to this runtime**.
+
+**Both packages move together, across all three declaration sites** — `pyproject.toml`,
+`AINDY/requirements.txt`, and the `Install MCP extra` step in `runtime-ci.yml`. CI installs the
+second and a `--no-deps` editable install means the first is never applied there; the third
+installs the MCP packages directly rather than through the extra, so a constraint fixed in only
+the first two is silently re-resolved by it. Both of this week's dependency failures were one of
+those sites being missed.
+
+**`nodus-mcp 0.1.3` is what unblocked this.** 0.1.2 required `nodus-lang<5.0.0`, which made
+`pip install aindy-runtime[mcp]` a flat `ResolutionImpossible` against a 5.x pin — not a CI
+problem but an uninstallable published extra. 0.1.3 floats the requirement to
+`nodus-lang>=4.0.0`, so the cap is gone rather than merely raised, and a future nodus major will
+not stall the runtime the same way.
+
+**Two breaking changes upstream, and neither reaches us:**
+
+**1. `NodusRuntime` now denies capabilities by default** (embedding only; `nodus run` is
+unaffected). A runtime can no longer spawn subprocesses, open sockets or read the process
+environment unless the embedder grants it.
+
+We had already done this by hand. `GUEST-CONFINE-1` (#438) found the same hole nodus's own audits
+found — *"the capability chokepoint was built and unused, with the door propped open by
+registering subprocess and http by default"* — and fixed it caller-side by passing
+`allow_subprocess=False, allow_network=False, allow_env=False`. **The runtime has exactly one
+construction site** (`nodus_worker.py:343`) and it already passed all three, so deny-by-default
+is now belt-and-braces rather than the mechanism. The app monolith constructs `NodusRuntime`
+**nowhere**, so nothing there needs granting either.
+
+**2. A Nodus program can no longer write into `.nodus/`** — the workflow store and graph state,
+which a program could previously use to forge run records. The only `.nodus/` this repo ships is
+`AINDY/nodus/stdlib/.nodus/deps.json`, which is *read* at import by the module resolver and never
+written by a guest, so this is a no-op here.
+
+**Verified against the real VM, not inferred:**
+
+- **All 31 gated builtins are still blocked** — 7 subprocess / 18 network / 6 env, identical to
+  4.1.0. The guest surface did not widen or shrink across the major bump.
+- The full nodus-touching suite passes: guest confinement, the `std:sys` fail-loud guard, the
+  worker, agent plan compilation.
+
+**Three test-side adjustments, all cosmetic breakage rather than regressions** — worth
+distinguishing, because four confinement tests went red and "the sandbox is broken" was the
+obvious first read:
+
+- **Denial wording changed.** 5.0.0 rephrased `... allow_subprocess=False ...` to
+  `Blocked: subprocess execution is not granted; pass allow_subprocess=True to NodusRuntime to
+  allow it`. The tests asserted the old sentence while the guest was fully confined. They now
+  assert the **flag name** appears — the part that carries meaning, since it says *which*
+  boundary refused — instead of a phrasing that is not ours to depend on.
+- **★ Gated-builtin discovery no longer scrapes source at all.** It read the names out of
+  `nodus.builtins.registry` with a regex, and broke on two consecutive releases: 5.0.0 moved them
+  from the `if` branch into the `else:` branch's tuple, and 5.0.1 replaced that with a
+  `block_group(...)` call, at which point the pattern matched nothing.
+
+  Both breakages were **loud** — the discovery assertion and the `>= 31` floor turned an empty
+  sweep into a red test rather than a vacuous pass — which is the only reason scraping was
+  tolerable. **5.0.1 adds `GATED_BUILTINS` as a public mapping** (`{flag: GatedBuiltinGroup}` with
+  `names`, `arity`, `capability`, `description`), so the scraping is deleted. Still *derived*
+  rather than hardcoded, which is the property that matters: a builtin nodus adds to a gate shows
+  up automatically instead of silently widening the guest surface.
+- **The defaults assertion is inverted, not deleted.** It asserted nodus shipped permissive
+  defaults, and said in its own docstring that a flip would be *"a good failure to have to
+  read"*. It flipped; the test now asserts deny-by-default, so a future revert to permissive is
+  a red test rather than a discovery — which is how `GUEST-CONFINE-1` was found the first time.
+
+`tests/unit/test_nodus_upgrade_contract.py` — added days before this bump — caught the defaults
+change on its first run and confirmed every other coupling (`_get_active_vm`, `call_syscall`,
+builtin-override refusal, keyword-only flags, no `**kwargs` catch-all) survived intact.
+
+### Fixed — a narrow API key could reach the whole `/platform` tree, including signing-key rotation (`KEY-SCOPE-ESCALATION-1`, `HTTP-SCOPE-GAP-1`, #465)
+
+**Security. Operators should read this and audit issued keys before upgrading.**
+
+`require_platform_admin_access`, the dependency on the `/platform` parent router, returns **any**
+authenticated API key unconditionally — its docstring justifies that with *"scope enforcement
+happens per-endpoint or per-syscall"*. For **46 of 53** routes it did not. Demonstrated from a key
+holding the single scope `flow.read`, owned by a non-admin user:
+
+| Route | Before | After |
+|---|---|---|
+| `GET /platform/keys`, `/nodes`, `/webhooks`, `/nodus/*`, `/queue/*`, `/observability/*`, `/flows/runs` | **200** | 403 |
+| `POST /platform/queue/dead-letters/drain` | **200** — drained the queue | 403 |
+| `POST /platform/ops/rotate-secret-key` | **200 — rotated the platform signing key** | 403 |
+
+**★ The rotation is worse than destructive.** The caller supplies the new key, so afterwards they
+know the signing secret and can mint tokens that verify — every user impersonable, admin
+included. `KEY-SCOPE-ESCALATION-1`'s delegation rule does not touch this: that rule bounds what a
+key may *grant*, not what it may *do*.
+
+**Scopes now required**, per endpoint:
+
+| Routes | Scope |
+|---|---|
+| `/platform/keys` (4), `/queue/*` (5), `/nodes` (4), `/observability/*` (11), `/flows/runs*` + `/flows/registry` (5), `POST`+`DELETE /platform/flows` (2), `/ops/rotate-secret-key` | `platform.admin` |
+| `/platform/webhooks` (4) | `webhook.manage` |
+| `/platform/nodus/*` — run, upload, list, schedule, flow (7) | `flow.execute` |
+| `/platform/tenants/{id}/usage` | `execution.read` |
+
+**Interactive users are unaffected — not "mostly", at all.** The parent gate already required
+`is_admin` for JWT callers, and an admin session derives both `platform.admin` and
+`webhook.manage`. Only API keys are newly constrained, which is the entire point.
+
+**★ One first-party consumer is affected, and it is ours.** `aindy-runtime nodus run` and
+`aindy-runtime nodus upload` (`AINDY/cli.py`) post to `/platform/nodus/run` and
+`/platform/nodus/upload`. A platform key (`aindy_…`) used with the CLI now needs **`flow.execute`**;
+before, any key worked. A Bearer JWT for an admin is unaffected — admin sessions derive
+`flow.execute`. Nothing else in this repo, the SDK, or the app monolith sends `X-Platform-Key`:
+the SDK's `client.memory.*` is `MemoryAPI(self.syscalls)`, i.e. `POST /platform/syscall`, which is
+one of the two routes deliberately left ungated below.
+
+**Audit advice:** a platform API key issued with narrow scopes could, until now, do anything on
+this tree. Review `users.is_admin` for accounts you did not promote, and rotate `SECRET_KEY`
+yourself if you cannot account for every key that has existed.
+
+**Why the router gate was not simply tightened.** `POST /platform/syscall` is the SDK's entire
+surface and is used with narrow scopes like `memory.read`; requiring `platform.admin` there would
+break every SDK caller. The fix is the per-endpoint enforcement the docstring already assumed.
+
+**Two routes stay ungated at the route level, deliberately:** `POST /platform/syscall` and
+`GET /platform/syscalls`. Their authority is resolved **per syscall** by
+`_resolve_dispatch_capabilities`, which grants only the requested syscall's own capability and
+scope-checks API-key callers there. A route-level scope would either have to be one every SDK key
+holds — no constraint at all — or break the SDK. A test pins that set by equality so a 47th
+ungated route fails CI rather than shipping.
+
+**The safety guard was rewritten, and strengthened.**
+`test_every_enforced_scope_is_held_by_an_ordinary_session` required every gate to be satisfiable
+by an *ordinary* session. That was right when every gated route was one an ordinary user should
+reach, and would now have been an argument for weakening `platform.admin`. It is replaced by
+`test_no_route_enforces_a_scope_nobody_can_satisfy`, which is route-derived and allows two
+branches: satisfiable by an ordinary session, **or** the route is admin-gated and the scope is one
+an admin session derives. A gate failing both is a permission nobody can hold — a 403 the caller
+cannot fix — and that is now what fails CI.
+
+**Interaction with `KEY-SCOPE-ESCALATION-1`'s delegation rule.** `POST /platform/keys` now requires
+`platform.admin`, and a `platform.admin` holder may grant any scope — so the delegation rule added
+in #463 is currently **unreachable over HTTP**: no principal both passes the gate and is bounded
+by the rule. It stays anyway, and its test now says so explicitly rather than pretending to be a
+route test. The two controls answer different questions — the gate asks *"may you manage keys"*,
+the rule asks *"may you grant **this**"* — and if the gate is ever loosened to let a narrower key
+manage its own keys, the rule is the only thing standing between that and a `flow.read` key
+minting `platform.admin` again.
+
+**The invariant now pinned in CI**, rather than a route count that will drift: the runtime has two
+admin dependencies that do different things — `require_admin_principal` demands `platform.admin`
+on an API key, while `require_platform_admin_access` admits any key unconditionally — and **no
+route may rely on the second one alone**. That distinction is how this survived review; a test
+now asserts no route depends on the permissive guard by itself, with the two SDK routes as named
+exceptions.
+
+Census across 126 registered routes: **91 scope-gated, 12 admin-gated, 21 public, 2 identity-only**
+(was 47 / 56 / 21 / 2).
+
+### Added — `SANDBOX_ESCAPE_AUDIT.md` Entry 016 for the `v2.3.0` gate run (#457)
+
+17 / 17 PASS on the `v2.3.0` tag (`python:3.11-alpine`, native Linux containers, commit
+`c911312`). The certified boundary is untouched — `git diff v2.2.0..v2.3.0` over
+`sandbox_runner.py`, `plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is empty.
+
+**★ The entry names the one dependency change and why a green gate here does not cover it.**
+`nodus-lang` 4.1.0 → 4.2.0 does not touch the Tier-2 OCI runner this suite certifies, but it
+*does* touch the **guest** boundary `GUEST-CONFINE-1` closed, because confinement is expressed
+as VM constructor arguments. Had one been renamed, the guest would run unconfined **while this
+suite still reported 17/17** — the two boundaries are independent. That was verified against the
+real VM before the bump landed, not inferred from this result.
+
+### Fixed — capability providers ran on every tool check, and a slow one denied tool execution (`CAPABILITY-PROVIDER-TIMEOUT-1`, #466)
+
+`_load_capability_definition_providers` is reached from `get_capability_definitions`,
+`get_capability_definition`, `get_capabilities_for_tool` and `get_capabilities_for_agent`, and
+therefore from `check_tool_capability` — **the tool-execution path**. Capability providers are
+subprocess-isolated, so **every tool capability check spawned a process per provider** and waited
+on a 30-second budget.
+
+Under CPU contention that budget was exceeded, the exception was swallowed into a
+`logger.warning`, and the capability set came back empty. The observable symptom was tool
+execution refused with *"tool 'x' has no registered capability mapping"* — a message that names
+the tool and nothing about the cause.
+
+**It fails closed.** `check_tool_capability` refuses a tool whose mapping is missing, so this is
+an **availability** problem, not a security one: a slow host stops tool execution rather than
+letting anything through. (The guard is conditional — `if not required_capabilities and tool_name
+in TOOL_REGISTRY` — so it is now pinned by a test rather than assumed.)
+
+**Measured**, 10 `get_capabilities_for_tool` lookups on an idle machine:
+
+| | subprocess invocations | wall time |
+|---|---|---|
+| before | **10** | 56.4s |
+| after | **1** | 11.4s |
+
+That is ~5.6 seconds of subprocess per tool capability check, paid on every tool call, and it
+scaled linearly with the number of checks. The remaining 11.4s is the one cold call.
+
+**Three changes:**
+
+- Each provider's bundle is **cached**, so a provider runs once instead of per check. The bundle
+  is still *applied* on every call, so clearing the definition dicts repopulates correctly.
+- A **failure is never cached** — a transient timeout is retried on the next call instead of
+  persisting for the life of the process.
+- The failure logs at **ERROR**, naming what it costs, rather than a warning nobody reads.
+
+**★ The cache lives on the provider object, not in a module global.** A
+`_capability_providers_loaded` latch would have to be added by hand to two separate
+registry-reset dictionaries, and forgetting either leaves a stale `True` that empties the
+capability set permanently — this same bug, reintroduced by its own fix. The provider list is
+already reset by both, so a cache attached to the objects inside it is invalidated for free.
+
+**Not done, deliberately:** this surface was *not* added to
+`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`. That set is for callbacks that read live in-process
+state a subprocess cannot reconstruct; `runtime_capability_bundle` returns a literal dict and
+does not qualify. Moving it there would weaken a documented isolation boundary for a performance
+reason.
+
+**Residual:** the first capability lookup in a process still spawns one subprocess per provider,
+so a sufficiently contended host can still fail it once — now retried rather than permanent. If
+it recurs, `AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS` is the next lever.
+
+### Fixed — `recall()` no longer issues three queries per candidate (`MEM-RECALL-N1-1`, #458)
+
+Scoring ran `_get_model_by_id` (1 × `memory_nodes`) **plus** `get_graph_connectivity_score`
+(2 × `memory_links` COUNT) **per candidate**, over up to `limit * 3` semantic *and* `limit * 3`
+tag candidates.
+
+- The re-fetch existed only to read four columns — `success_count`, `failure_count`,
+  `usage_count`, `weight` — that the originating SELECT had already read and `_node_to_dict`
+  then dropped. They are now carried, and the re-fetch is gone.
+- Connectivity is now **two grouped queries for the whole candidate set** instead of two per
+  candidate, via `get_graph_connectivity_scores()`. The per-node function is unchanged and
+  still used elsewhere.
+
+**Response shape:** `weight` is newly present on memory dicts.
+`success_count` / `failure_count` / `usage_count` are **not** newly exposed — the scoring loop
+already wrote them onto returned candidates — but they are now present *consistently*, including
+when the old re-fetch would have missed (a row deleted between the two queries silently left the
+counts unset).
+
+Ranking is unchanged; equivalence with the per-node score is asserted, and a test counts real
+SQL so a refactor that merely *looks* batched fails.
+
+### Fixed — `ISOLATION_MODEL_PLAN.md` contradicted itself (`ISOLATION-DOC-STATUS-1`, #458)
+
+Line 6 said *"Planning — no implementation has begun"* while line 148 of the same file said
+*"Scope B1 complete"* — and the sandbox runners, plugin host, certification surface and
+nine-file escape suite were all built, wired, and passing 17/17 on every release tag.
+
+**Why it survived:** the file lives at the **repository root**, outside `docs/runtime/`, so the
+`Runtime Docs Validation` frontmatter and `last_verified` checks that catch exactly this never
+looked at it.
+
+The status now says implemented, and — deliberately, so the correction does not over-reach in
+the other direction — states what is **not**: Tier-2 is certified on Linux only (`C3` open), and
+the provider is reachable from a single seam (`TOOL-SEAM-ISOLATION-1`, `EXEC-ENV-BIND-1`).
+
+### Added — the nodus upgrade checklist is now executable (`NODUS-UPGRADE-1`, #467)
+
+`nodus-lang` is pinned **exactly**, so an app cannot adopt a nodus release on its own and bumping
+promptly is the runtime's obligation. What to re-verify before each bump lived as prose in
+`CLAUDE.md`. It is now `tests/unit/test_nodus_upgrade_contract.py`, asserted against the
+**installed nodus package** rather than a mock — the whole point being `GUEST-CONFINE-1`'s note
+that *a renamed argument leaves the guest unconfined while every VM-mocking test still passes*.
+
+What it pins:
+
+- the three confinement flags (`allow_subprocess`, `allow_network`, `allow_env`) are still
+  accepted, and still **keyword-only**;
+- `NodusRuntime._get_active_vm` still exists — a *private* method `nodus_worker.py:409` depends
+  on, referenced nowhere else in the repo and therefore carrying no compatibility promise;
+- `nodus.services.syscall_runtime.call_syscall` is still where the `std:sys` fail-loud guard
+  patches it (`NODUS-SYS-SURFACE-1`);
+- the installed `nodus-lang` matches the pin in `pyproject.toml`.
+
+**★ Two things this turned up.**
+
+**`NodusRuntime.__init__` has no `**kwargs`.** That is good news worth pinning: a renamed
+confinement flag raises `TypeError` at construction instead of being silently swallowed, so the
+worker fails closed. Had there been a catch-all, `GUEST-CONFINE-1` could recur invisibly — which
+is how it went unnoticed the first time. A test now asserts the absence of the catch-all, because
+it is a property of someone else's code that our confinement depends on.
+
+**"nodus forbids overriding a builtin" was only ever a docstring.** `NODUS-SYS-SURFACE-1`'s
+fail-loud guard rests on that refusal — if a nodus release allowed overrides, a guest could
+redefine `syscall` and bypass the guard, and every existing test would still pass because they
+all *assume* the refusal rather than check it. Now asserted against the real VM for `print`,
+`len` and `syscall`, so a failure distinguishes *"this builtin became overridable"* from *"the
+refusal mechanism is gone"*.
+
+### Fixed — CI had been testing `nodus-lang 4.1.0` while the wheel required 4.2.0
+
+**★ The version check found this on its first CI run, and it is the reason the check exists.**
+
+`Runtime Contracts` and `Integration Tests` both install with:
+
+```
+python -m pip install -r AINDY/requirements.txt
+python -m pip install -e .[test] --no-deps --no-build-isolation
+```
+
+**`--no-deps` means `pyproject.toml`'s pins are never applied in CI.** The effective environment
+is `AINDY/requirements.txt` — which still said `nodus-lang==4.1.0`. The pin moved to `4.2.0` in
+#451 (FR-16, the app team's requested nodus upgrade) and that PR did not update the second file,
+which had carried `4.1.0` since the initial repo extraction.
+
+So since #451 every green run — **including the ones that signed off FR-16** — exercised the
+version being upgraded *away from*, while the published wheel required the new one. The nodus
+4.2.0 adoption was never actually tested.
+
+`AINDY/requirements.txt` is corrected to `4.2.0`, and
+`tests/unit/test_dependency_pin_agreement.py` now fails when the two sources disagree about any
+shared package. Exactly one had drifted, so this was a missed edit rather than systemic rot —
+which is what a guard is for, since the next bump can miss it identically.
+
+**Adoption note for the next nodus release: bump both files.** The guard will say so if you
+don't.
+
+### Added — a pin that cannot be installed now fails at the developer's desk, naming the culprit
+
+A pin can be written, committed and merged while being **impossible to install**, because another
+package in the same environment caps it. pip then resolves *down* without complaint, and the only
+symptom is that the installed version differs from the declared one — which says nothing about
+who is responsible.
+
+`test_no_installed_package_forbids_our_declared_pins` checks every exact pin in `pyproject.toml`
+against the stated requirements of every installed distribution, and fails with the offender
+named:
+
+```
+nodus-mcp requires nodus-lang<5.0.0,>=4.0.0 but we pin ==5.0.0
+```
+
+**Found by walking into it.** Bumping `nodus-lang` to 5.0.0 passed locally and failed CI with
+`installed nodus-lang 4.2.0 != pinned 5.0.0`. The cause is `nodus-mcp 0.1.2`, which requires
+`nodus-lang<5.0.0`; CI installs it *after* `requirements.txt`, so pip silently downgraded
+nodus-lang to satisfy it. `pip install nodus-lang==5.0.0 nodus-mcp` is a flat
+`ResolutionImpossible`.
+
+Local had been green only because the environment was in a state pip would never produce —
+`nodus-lang 5.0.0` force-installed alongside `nodus-mcp 0.1.2`. `pip check` flagged it; nothing
+in the test suite did. This closes that gap.
+
+Our own distribution is excluded from the scan: in an editable dev install its recorded metadata
+is whatever it was at `pip install -e .` time and goes stale on every pin change, which would
+fail for a reason that is not a conflict. `pyproject.toml` is the authority on our own
+declaration, and the existing tests already compare it against `AINDY/requirements.txt`.
+
+Same family as `MCP-SDK-2X-1`: an ecosystem package capping a dependency and blocking an upgrade
+until it ships a compatible release.
+
+### Added — `ROUTE-EFFECT-BYPASS-1` filed: four memory routes reach effects without the dispatcher (#459)
+
+Split out of `HTTP-SCOPE-GAP-1` because the fix is different work — that entry is about scope
+checks not reaching routes; this is about routes not reaching the chokepoint at all. **A scope
+decorator on a route that skips the dispatcher still leaves the effect unmediated.**
+
+Documentation only; no behaviour change.
+
+**Measured smaller than the parent entry implied.** `HTTP-SCOPE-GAP-1` notes `memory_router.py`
+has "zero `SyscallDispatcher` references", which reads as if all 22 routes bypass. **18 of 22 go
+through `_mem_run_flow` → `run_flow` → the dispatcher.** Four do not: `POST /nodes` and
+`POST /links` (writes), `POST /nodes/search` and `POST /recall` (reads) — and the file carries
+**no scope checks either**, so those four have neither gate.
+
+### Fixed — two memory routes now reach effects through the dispatcher (`ROUTE-EFFECT-BYPASS-1` A+B, #460)
+
+`POST /memory/nodes` and `POST /memory/recall` called `MemoryNodeDAO` directly with the request's
+own session, so the effect passed **no capability check, no tenant-isolation check, no quota
+accounting and no effect ledger**. A scope decorator would not have helped — the effect never
+reached the chokepoint that reads scopes.
+
+Both now dispatch. `POST /nodes` goes through `sys.v1.memory.write`, which since the `IDEM-11`
+audit declares **`EXACTLY_ONCE`**, so it gains at-most-once as well.
+
+**★ `sys.v1.memory.write` now merges the caller's `extra` instead of replacing it.** It hard-set
+`extra={"execution_unit_id": …}`, discarding anything the caller sent. The route passes
+`extra=body.extra`, so rewiring without this fix would have been **silent data loss behind a
+201** — not a failure. `execution_unit_id` still wins a key collision, so provenance stays
+non-forgeable.
+
+The dispatch helper hands the **request's own session** to the handler via `_db`, keeping the
+write inside the caller's transaction; opening a second session per request is the shape
+`RT-MEMTXN-LEAK-1` traced to pool exhaustion. A non-success envelope raises `HTTPException`
+rather than returning 200 with an error body (`ROUTE-GUARD-1`).
+
+**Two routes deliberately not rewired**, and a test pins which: `POST /links` has **no syscall
+equivalent** (a build, not a rewire), and `POST /nodes/search` calls `dao.find_similar` with
+`min_similarity`, which `sys.v1.memory.search` neither accepts nor uses — it calls `dao.recall`.
+Rewiring that one would change search *semantics* under cover of a mediation fix.
+
+### Added — `sys.v1.memory.link`, and `POST /memory/links` now dispatches (`ROUTE-EFFECT-BYPASS-1` C, #461)
+
+`POST /memory/links` reached `MemoryNodeDAO.create_link` directly, so building the memory graph
+passed **no capability check, no tenant-isolation check and no effect ledger**. Unlike items A+B
+this was a build, not a rewire — no link syscall existed.
+
+**★ It carries its own `memory.link` capability, which `memory.write` does not grant.** A syscall
+that adds a mediation hop and no authority granularity would just relocate the same
+undifferentiated power behind a longer call path. Writing a *node* and wiring the *graph between
+nodes* are different powers; `memory.delete` already set the precedent of a memory capability
+`memory.write` does not confer. A test drives the dispatcher with a `memory.write`-only context
+and requires refusal, so the split is a boundary rather than a label.
+
+Declared **`EXACTLY_ONCE`** (`IDEM-11`): `create_link` inserts a row, so a retry builds a *second*
+edge between the same pair. Registry floor `SYSCALL_REGISTRY_MIN_COUNT` 23 → 24.
+
+**Tenant scoping is the syscall's, not the route's.** Both endpoints resolve through a
+tenant-scoped `get_by_id` before the write, and a node belonging to another tenant is reported
+identically to one that does not exist — distinguishing them would make the route an existence
+oracle for other tenants' ids, which is the `/auth/register` enumeration shape somewhere else.
+The route keeps its status contract: **404** for an unresolvable node, **422** for a link the DAO
+refuses, rather than collapsing both to 400.
+
+**Deliberately off the `POST /platform/syscall` dispatch surface.** `memory.link` is absent from
+`_DISPATCH_CAPABILITY_SCOPES`, so SDK callers get an empty grant and the dispatcher denies it;
+the syscall is reachable only from the HTTP route that already had the caller. That is the
+conservative order for a `stable=False` entry — publishing an experimental syscall to SDK callers
+is the half that cannot be withdrawn. Two tests pin the omission as a decision. Adding it later
+means a `Scopes.MEMORY_LINK` of its own; mapping it onto `MEMORY_WRITE` would undo at the scope
+layer exactly the split the capability makes above.
+
+Direct-DAO routes in `memory_router.py`: **2 → 1**. The last is `POST /nodes/search`, which calls
+`dao.find_similar` with `min_similarity` — `sys.v1.memory.search` neither accepts nor uses it
+(it calls `dao.recall`), so rewiring would change search *semantics* under cover of a mediation
+fix. A test pins the count in both directions: a drop means the remaining work landed, a rise
+means a new bypass was introduced.
+
 
 ## 2.3.0 — 2026-08-16
 
