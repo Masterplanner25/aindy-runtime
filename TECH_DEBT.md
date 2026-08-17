@@ -4407,7 +4407,48 @@ will keep passing off a populated `node_modules` long after the lockfile has gon
 
 ## MCP-SDK-2X-1 — `[mcp]` extra capped at `mcp<2`; nodus-mcp still targets the 1.x server API
 
-**Status:** Open — pinned workaround shipped 2026-07-31, upstream unblock pending. Surfaced
+**Status:** Open — pinned workaround shipped 2026-07-31, upstream unblock pending.
+
+**★ SECOND INSTANCE 2026-08-17, in the other direction — `nodus-mcp` now blocks a *nodus* upgrade.**
+`nodus-lang 5.0.0` was published and #468 bumped both pin sites. CI failed with
+`installed nodus-lang 4.2.0 != pinned 5.0.0`, because **`nodus-mcp 0.1.2` requires
+`nodus-lang<5.0.0,>=4.0.0`** and CI installs it *after* `requirements.txt`, so pip resolved back
+down.
+
+**This is not a CI problem and must not be fixed in CI.** Verified:
+
+```
+$ pip install --dry-run "nodus-lang==5.0.0" "nodus-mcp>=0.1.2"
+ERROR: ResolutionImpossible
+```
+
+So pinning `nodus-lang==5.0.0` makes **`pip install aindy-runtime[mcp]` uninstallable for a
+user**. Isolating the MCP tests into their own job — the obvious "fix" — would let CI go green
+while shipping an extra nobody can install. The guard added in #469 is reporting a real
+constraint, not an inconvenience.
+
+**Ordering protocol for adopting a new nodus major.** There is no deadlock here, only a sequence,
+and it is worth writing down because the failure looks like one:
+
+1. `nodus-lang X.0.0` publishes. *(Nothing downstream can be done before this; the version has to
+   exist to be depended on — the same shape as `Boot Smoke` being unable to validate a version
+   before its tag exists, `PYPI-PUBLISH-1`.)*
+2. **`nodus-mcp` releases a version accepting `nodus-lang>=X`.** It can do this immediately once
+   step 1 lands; nothing blocks it.
+3. The runtime bumps `nodus-lang` **and** `nodus-mcp` **in one PR**, in **all three** places:
+   `pyproject.toml`, `AINDY/requirements.txt`, and the `Install MCP extra` step in
+   `runtime-ci.yml` — which installs the packages directly rather than via the extra, so a
+   constraint fixed in only the first two is silently re-resolved by the third.
+
+**★ The upstream change worth making, since both packages are first-party:** a hard
+`nodus-lang<5.0.0` upper bound on a fast-moving first-party dependency **guarantees** this stall
+on every major release. A cap earns its place when a break is known; a prophylactic one converts
+every nodus major into a two-repo release train. Either release the two in lockstep, or let
+`nodus-mcp` float (`>=4.0.0`) and rely on its own tests to catch a real break.
+
+**Until then the runtime stays on `nodus-lang==4.2.0`.** #468 holds the completed adoption work
+(31 gated builtins re-verified, discovery retargeted, defaults assertion inverted) as a draft,
+rebased and ready to merge the day a compatible `nodus-mcp` exists. Surfaced
 when `mcp 2.0.0` was published and turned every CI run red.
 
 **What broke.** Both install sites specified `mcp>=1.0.0` with **no upper bound** — the
