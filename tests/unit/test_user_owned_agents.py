@@ -33,8 +33,24 @@ pytestmark = pytest.mark.runtime_only
 
 
 def _user() -> dict:
+    """A principal shaped like the one `get_current_user` actually produces.
+
+    ★ `session_scopes` is not decoration. Since `HTTP-SCOPE-GAP-1` gated these routes on
+    `agent.run`, a hand-built principal without scopes is refused **403** before the handler
+    runs — which is correct behaviour and made nine tests here fail at once. The fake was
+    always missing a field the real resolver has always set; the gate is simply the first thing
+    that read it.
+    """
+    from AINDY.auth.api_key_auth import derive_session_scopes
+
     uid = str(uuid.uuid4())
-    return {"sub": uid, "user_id": uid, "is_admin": False, "auth_type": "jwt"}
+    return {
+        "sub": uid,
+        "user_id": uid,
+        "is_admin": False,
+        "auth_type": "jwt",
+        "session_scopes": derive_session_scopes(is_admin=False),
+    }
 
 
 def _row(db, *, name, namespace, owner=None, active=True) -> Agent:
@@ -250,7 +266,10 @@ class TestUserAgentRoutes:
     ):
         """Falling through would write `owner_user_id = NULL`, i.e. create a *shared*
         agent — the one outcome an ownership route must never produce by accident."""
-        runtime_only_app.dependency_overrides[get_current_user] = lambda: {"auth_type": "api_key"}
+        # Carries the scope so the request reaches the ownership check — the point of this
+        # test is the NULL-owner branch, not the scope gate.
+        runtime_only_app.dependency_overrides[get_current_user] = lambda: {
+            "auth_type": "api_key", "api_key_scopes": ["agent.run"]}
         r = runtime_only_client.post("/platform/agents", json={"name": "X", "slug": "x"})
         assert r.status_code == 400
 
@@ -260,7 +279,8 @@ class TestUserAgentRoutes:
         """`owner_user_id` is a UUID column, so a non-UUID id would otherwise raise deep
         inside the query and surface as an internal error with no usable reason."""
         runtime_only_app.dependency_overrides[get_current_user] = lambda: {
-            "user_id": "not-a-uuid", "auth_type": "jwt"}
+            "user_id": "not-a-uuid", "auth_type": "jwt",
+            "session_scopes": ["agent.run"]}
         r = runtime_only_client.post("/platform/agents", json={"name": "X", "slug": "x"})
         assert r.status_code == 400, r.text
 
