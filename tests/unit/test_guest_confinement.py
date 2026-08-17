@@ -139,38 +139,28 @@ def test_host_env_is_denied():
 
 
 def _gated_builtin_names() -> dict[str, list[str]]:
-    """Read the gated builtin names out of nodus's own registry source.
+    """Read the gated builtin names from nodus's **public** registry API.
 
-    Derived rather than hardcoded so this does not rot when nodus adds a builtin: a new
-    `http_*` that the flag fails to cover shows up as a test failure instead of silently
-    widening the guest surface. The floor assertion below catches the opposite drift — names
-    silently disappearing from the gate.
+    ★ This used to scrape `nodus.builtins.registry` source with a regex, and broke on two
+    consecutive nodus releases — 5.0.0 moved the names from the `if` branch into the `else:`
+    branch's tuple, and 5.0.1 replaced that with a `block_group(...)` call, at which point the
+    pattern matched nothing at all.
+
+    Both times the breakage was **loud** — `assert groups[...]` and the floor below turned a
+    discovery failure into a red test rather than a silently empty sweep — which is the only
+    reason scraping was tolerable in the first place.
+
+    5.0.1 added `GATED_BUILTINS` as a public mapping (`{flag: GatedBuiltinGroup}` with `names`,
+    `arity`, `capability`, `description`), so the scraping is gone. This is still *derived* rather
+    than hardcoded, which is the property that matters: a builtin nodus adds to a gate shows up
+    here automatically instead of silently widening the guest surface.
+
+    `group.arity` is now available too, if `_is_blocked` ever wants to stop guessing.
     """
-    import inspect
-    import re
+    from nodus.builtins.registry import GATED_BUILTINS
 
-    import nodus.builtins.registry as registry
-
-    source = inspect.getsource(registry)
-    out: dict[str, list[str]] = {}
-    for flag in ("allow_subprocess", "allow_network", "allow_env"):
-        # ★ nodus 5.0.0 restructured this. The gated names are no longer inline in the *if*
-        # branch; they are the tuple in the `else:` branch that installs the blocked stub:
-        #
-        #     _blocked = _make_blocked_stub(vm, _denied_reason("...", "allow_env"), ENV)
-        #     for _name in ("env_get", "env_set", ...):
-        #
-        # Matching from `_denied_reason(..., "<flag>")` to that tuple targets the list itself.
-        # The previous pattern swept the whole branch for quoted strings, which on 5.0.0 also
-        # picked the flag name out of `_denied_reason` — three phantom "builtins" that are
-        # unreachable by definition and therefore reported as leaks.
-        match = re.search(
-            rf'_denied_reason\([^)]*"{flag}"\).*?for _name in \((.*?)\)',
-            source,
-            re.S,
-        )
-        out[flag] = sorted(set(re.findall(r'"([a-z_0-9]+)"', match.group(1)))) if match else []
-    return out
+    assert GATED_BUILTINS, "nodus exposes GATED_BUILTINS but it is empty"
+    return {flag: sorted(group.names) for flag, group in GATED_BUILTINS.items()}
 
 
 def _is_blocked(name: str) -> bool:

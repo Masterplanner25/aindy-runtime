@@ -47,7 +47,7 @@ dependencies = [
   "Mako==1.3.12",
   "MarkupSafe==3.0.3",
   "nltk==3.10.0",
-  "nodus-lang==5.0.0",
+  "nodus-lang==5.0.1",
   "numpy==2.4.6",
   "limits==5.8.0",
   "openai==2.46.0",
@@ -128,7 +128,7 @@ mcp = [
   # MCPClientAdapter SSE transport requires it. Install with: pip install aindy-runtime[mcp]
   # >=0.1.2 required for the server-side SSE transport (/messages/ mount, #7) and the
   # per-session auth_hook context (headers/session, #8) that MEB-3a multi-tenant uses.
-  "nodus-mcp>=0.1.2",
+  "nodus-mcp>=0.1.3",
   # Capped below 2.0.0 (MCP-SDK-2X-1): nodus-mcp 0.1.2 — the latest release — is built
   # against the 1.x low-level server API and calls `Server.list_tools()`, which mcp 2.0.0
   # removed. With mcp 2.0.0 installed, constructing a `NodusServer` raises
