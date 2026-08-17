@@ -134,3 +134,74 @@ def test_nodus_lang_is_pinned_exactly_in_both():
         "nodus-lang is no longer pinned exactly in AINDY/requirements.txt — CI would be free to "
         "resolve a different nodus than the one the wheel requires"
     )
+
+# --------------------------------------------------------------------------------------
+# ★ Is the pin actually installable alongside everything else we install?
+# --------------------------------------------------------------------------------------
+
+
+def test_no_installed_package_forbids_our_declared_pins():
+    """★ Turns "installed != pinned" into "X caps it", which is the actionable half.
+
+    A pin can be written, committed and merged while being **impossible to install**, because
+    another package in the same environment caps it. pip then quietly resolves *down*, and the
+    only symptom is that the installed version does not match the declared one — which says
+    nothing about who is responsible.
+
+    This is not hypothetical. Bumping `nodus-lang` to 5.0.0 passed locally and failed CI with
+    `installed nodus-lang 4.2.0 != pinned 5.0.0`. The cause was `nodus-mcp 0.1.2`, which requires
+    `nodus-lang<5.0.0,>=4.0.0`; CI installs it *after* `requirements.txt`, so pip downgraded
+    nodus-lang to satisfy it. `pip install nodus-lang==5.0.0 nodus-mcp` is a flat
+    `ResolutionImpossible`.
+
+    Local was green only because the environment had been forced into a state pip would never
+    produce — `pip check` flagged it, nothing else did. This asserts the declared pin against
+    every installed distribution's stated requirements, so the conflict surfaces at the developer's
+    desk and names the package responsible.
+
+    `MCP-SDK-2X-1` is the same family: an ecosystem package capping a dependency and blocking an
+    upgrade until it ships a compatible release.
+    """
+    from importlib.metadata import distributions
+
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+
+    declared = _pyproject_pins()
+    exact = {
+        name: spec[2:]
+        for name, spec in declared.items()
+        if spec.startswith("==") and "," not in spec
+    }
+    assert exact, "no exact pins found to check — the parser has probably stopped matching"
+
+    conflicts: list[str] = []
+    for dist in distributions():
+        dist_name = _normalise(dist.metadata["Name"] or "")
+        # Our own distribution is excluded: in an editable dev install its recorded metadata is
+        # whatever it was at `pip install -e .` time and goes stale on every pin change, which
+        # would make this fail for a reason that is not a conflict. `pyproject.toml` is the
+        # authority on our own declaration, and the tests above already compare it.
+        if dist_name == "aindy-runtime":
+            continue
+        for raw in dist.requires or []:
+            try:
+                requirement = Requirement(raw)
+            except Exception:
+                continue
+            target = _normalise(requirement.name)
+            if target not in exact or not requirement.specifier:
+                continue
+            if requirement.marker is not None and not requirement.marker.evaluate():
+                continue  # an extra/platform-conditional requirement that does not apply here
+            if not requirement.specifier.contains(Version(exact[target]), prereleases=True):
+                conflicts.append(
+                    f"{dist_name} requires {target}{requirement.specifier} "
+                    f"but we pin =={exact[target]}"
+                )
+
+    assert not conflicts, (
+        "our declared pins cannot be installed alongside packages already in this environment, "
+        "so pip will silently resolve to a different version than the one shipped: "
+        f"{sorted(set(conflicts))}"
+    )
