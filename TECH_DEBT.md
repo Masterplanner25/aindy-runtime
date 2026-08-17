@@ -7256,39 +7256,73 @@ precisely because of this — which is the runtime already conceding the point i
 
 ---
 
-## TEST-ISOLATION-REGISTRY-1 — a test that passes in the full suite and fails in a subset
+## CAPABILITY-PROVIDER-TIMEOUT-1 — the capability set silently empties when a subprocess is slow
 
-**Status: OPEN — P2 (assurance). Found 2026-08-16** while regression-testing
+**Status: OPEN — P1 (runtime, not test-only). Found 2026-08-16** while regression-testing
 `KEY-SCOPE-ESCALATION-1`.
 
-`tests/unit/test_platform_only_startup.py::test_platform_only_registers_runtime_agent_defaults`
-**fails** under
+**★ CORRECTION — this entry was first filed the same day as `TEST-ISOLATION-REGISTRY-1`, a
+test-isolation problem. That diagnosis was WRONG.** The symptom was
+`test_platform_only_registers_runtime_agent_defaults` failing with
+`registry.get_capability_definitions()` empty under some selections and passing under others,
+which reads exactly like registry state leaking across app boots. It is not. The log line the
+first pass did not go looking for says what actually happens:
 
 ```
-pytest tests/unit -k "key or scope or auth or platform or route"
+WARNING AINDY.platform_layer.registry Capability definition provider failed:
+runtime callback command timed out after 30s
+(set AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS to raise the budget)
 ```
 
-with `registry.get_capability_definitions()` returning an **empty set**, and **passes** in a full
-`pytest tests/unit` run, and passes when run alone or paired with either app-booting test file.
-It appeared only when one more `runtime_only_app`-booting file joined the selection, so the cause
-is registry global state surviving (or being restored across) app boots, not the new code — the
-same selection on a clean tree is green.
+**The mechanism.** `capability_definition_provider` is **not** in
+`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`, so `register_capability_definition_provider` routes it
+through `_maybe_wrap_runtime_callback` → a **subprocess**. `_load_capability_definition_providers`
+then calls each provider inside
 
-**Why it is worth an entry rather than a shrug.** The repo's green-check catalogue is about
-checks that pass when they should fail. This is the same defect class with the sign flipped in a
-way that is *more* dangerous, not less: if a test's outcome depends on which other tests ran,
-then a **real** failure can be masked by the full-suite ordering just as easily as a spurious one
-was produced by the subset ordering. Nothing here distinguishes the two cases today.
+```python
+try:
+    _apply_capability_provider_bundle(provider())
+except Exception as exc:
+    logger.warning("Capability definition provider failed: %s", exc)
+```
 
-**Do not "fix" it by pinning the order.** That makes the result reproducible without making it
-meaningful. The fix is for the registry snapshot/restore in `tests/fixtures/client.py` to
-guarantee that a boot leaves capability providers registered regardless of what booted before —
-i.e. the test's precondition should be *established*, not *inherited*. (Same shape as the
-`pipeline_active` ContextVar leak fixed during the `IDEM-11` work, where tests asserted a
-precondition instead of establishing it.)
+Under load the subprocess exceeds its 30s budget, the timeout is caught, and
+`get_capability_definitions()` returns `{}` — **with no error reaching the caller**. This is the
+silent-degradation shape the `_maybe_wrap_runtime_callback` section of `CLAUDE.md` warns about,
+in a surface that section does not list.
 
-**Reproduction cost is low but not free:** the full suite takes ~50 minutes locally, so confirm
-with the subset selection above and then a targeted full run, not by bisecting by hand.
+**Why P1 rather than a flaky-test annoyance.** Capability definitions gate what tools and agents
+are allowed to do. A contended or slow host therefore produces an **empty capability vocabulary**
+at runtime, and every consumer of it degrades quietly rather than failing. Nothing distinguishes
+*"this deployment defines no capabilities"* from *"the process that defines them timed out"*. The
+test was only the messenger, and it is the sole reason this was seen at all.
+
+**Do not close it by raising `AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS`**, and do not close it in the
+test harness. Both make the symptom go away without making the failure legible. Options, in
+preference order:
+
+1. **Make the failure loud.** A provider that raises should surface, not degrade to `{}` — at
+   minimum distinguish "no providers registered" from "a provider failed" in the return value.
+2. **Reconsider the isolation choice for this surface.** `runtime_capability_bundle` reads
+   registry state, which is the exact argument that put `run_tool_provider` and `planner_context`
+   in `_STATEFUL_IN_PROCESS_CALLBACK_SURFACES` (`PLANNER-SUBPROC-1`). This may be a fourth member
+   of that set rather than a timeout to tune.
+3. **Only then** consider the budget.
+
+**Expect it to flake CI until fixed, and know what makes it fire.** Both observed failures — one
+full `tests/unit` run, one `-k` subset — happened while a *second* heavy pytest run was competing
+for CPU on the same machine. Two isolated re-runs of the identical selection afterwards were
+clean, with zero timeout warnings. So the trigger is **CPU contention starving the subprocess**,
+not test order and not any particular test file. A re-run on a quiet machine will usually pass,
+which is precisely what makes it easy to dismiss as noise.
+
+**Diagnostic that settles it in one line:** `grep -c "Capability definition provider failed"` on
+the run output. Non-zero means this; zero means look elsewhere. The assertion failure itself
+(`get_capability_definitions()` empty) says nothing about the cause, which is how the first
+diagnosis went wrong.
+
+*(Kept under the old name in one place: `CLAUDE.md`'s registry line was written as
+`TEST-ISOLATION-REGISTRY-1` before the cause was known, and is corrected in place.)*
 
 ---
 
@@ -7465,16 +7499,41 @@ registered routes:
 router-level walk over-reports it for routes that opted out. Accumulate the router's
 `dependencies` down each nesting level — and remember `_IncludedRouter` hides the nesting.*
 
-**The real remainder is 20 routes, and 2 of them should stay open:** `POST /auth/logout` and
-`POST /auth/password/change` act only on the caller's own identity, where a scope adds nothing.
-The other **18** are `coordination_router` (13) and `platform/agents_router` (5) — agent
-registry, heartbeats, inbox, conflict resolution and user-owned agent CRUD — which map to
-**`agent.run`**, already in the ordinary session set. Per the app team's request the release that
-enforces them must **name the scopes in the handoff**.
+**★ THIRD SLICE CLOSED 2026-08-16 (#464) — the 18 remaining identity-only routes.**
+`coordination_router` (13) and `platform/agents_router` (5) are gated. Census now: **47
+scope-gated, 56 admin-gated, 21 public, 2 identity-only** of 126.
 
-**But do `KEY-SCOPE-ESCALATION-1` first.** Tagging 18 more routes is worth little while a
-`flow.read` key can mint itself `platform.admin`; the escalation makes every scope on every key
-advisory. *(The "`memory_router.py` still has zero `SyscallDispatcher`
+- **Three gates, not one.** `agent.run` for the agent surface; `execution.read` for the run
+  views (`/runs`, `/runs/{id}/children`, `/conflict/run`); `memory.read` OR `memory.write` for
+  `/memory/shared` and `/conflict/memory`, which query `memory_nodes` and inspect a memory path.
+  **Gating those two on `agent.run` because they live in this router would have made the agent
+  surface a second door onto memory** — the exact distinction the memory router had just drawn.
+  Tests assert the split in *both* directions, so neither gate is decorative.
+- **No `agent.read`/`agent.manage` invented.** The agent surface is one authority because the
+  vocabulary has no finer grain, and adding one obliges every consumer to grant a scope that
+  answers no question they ask today. A read/write split there should be a deliberate vocabulary
+  change, not a side effect of adding gates.
+- **★ `/platform/agents` never inherited the `/platform` admin gate** — it is included on the app
+  directly, not through `platform_router`, which is *why* FR-12b works for ordinary users and
+  also why it had no authority check at all. Owner scoping is untouched and still does what a
+  scope cannot: a scope answers *"may you touch agents"*, never *"may you touch **this** agent"*.
+- Mutation-checked 3/3: file `/memory/shared` under `agent.run` (3 fail), ungate
+  `list_my_agents` (3), file the run views under `agent.run` (2).
+- **The two survivors are a decision, pinned by equality**, not a remainder:
+  `POST /auth/logout` and `POST /auth/password/change` act only on the caller's own account,
+  where a scope is a permission nobody could be denied. The test fails both if an ungated route
+  appears **and** if someone gates one of these two while tidying.
+
+**Discovered doing it (not fixed, not filed as its own entry — record only):** in a booted app
+`coordination_router` is reachable through **two** registrations — it is in `APP_ROUTERS`,
+mounted under `/apps`, and appears again via `get_routers()`. Both copies carry the same gate, so
+this is a composition detail rather than an authority one, but any route census must dedupe by
+`(method, path)` or it over-counts.
+
+**What is left of this entry is no longer route tagging.** It is
+`KEY-SCOPE-ESCALATION-1`'s open half: `require_platform_admin_access` admits **any** authenticated
+API key to all 56 `/platform/*` routes. Narrowing that is the last structural piece, and it is
+the one with real blast radius. *(The "`memory_router.py` still has zero `SyscallDispatcher`
 references" half of this paragraph is now stale twice over — `ROUTE-EFFECT-BYPASS-1` A–C rewired
 three of its four direct-DAO routes and this slice added the gates. What remains there is one
 route, `POST /nodes/search`, and it is tracked in that entry, not this one.)*

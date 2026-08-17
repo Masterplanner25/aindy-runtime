@@ -21,8 +21,31 @@ from AINDY.agents.agent_coordinator import serialize_agent_registry
 from AINDY.agents.agent_runtime.presentation import run_to_dict
 from AINDY.db.models.agent_registry import AgentRegistry
 from AINDY.memory.memory_persistence import MemoryNodeModel
-from AINDY.services.auth_service import get_current_user
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 from AINDY.utils.uuid_utils import normalize_uuid
+
+
+# ── HTTP-SCOPE-GAP-1 — scope gates for the coordination surface ───────────────────────────
+#
+# Every route here depended on `get_current_user` alone: identity, not authority. Agent
+# registration, heartbeats, deregistration and the inter-agent inbox were reachable by anyone
+# who could authenticate.
+#
+# Three gates rather than one, because this router spans three kinds of authority and there is
+# no `agent.read`/`agent.manage` in the vocabulary to split it further. Inventing one would
+# oblige every consumer to grant a scope that answers no question they ask today; if the agent
+# surface later needs a read/write split, that is a deliberate vocabulary change, not a
+# side effect of adding gates.
+_REQUIRE_AGENT = Depends(enforce_api_key_scope(Scopes.AGENT_RUN))
+# Run views are execution history, which already has its own scope.
+_REQUIRE_EXECUTION_READ = Depends(enforce_api_key_scope(Scopes.EXECUTION_READ))
+# `/memory/shared` queries `memory_nodes` directly and `/conflict/memory` inspects a memory
+# path — memory authority, not agent authority. Read accepts a write grant, matching
+# `_DISPATCH_CAPABILITY_SCOPES` and the memory router.
+_REQUIRE_MEMORY_READ = Depends(
+    enforce_api_key_scope(Scopes.MEMORY_READ, Scopes.MEMORY_WRITE)
+)
 
 
 router = APIRouter(prefix="/coordination", tags=["Coordination"])
@@ -63,6 +86,7 @@ def get_agents(
     include_stale: bool = False,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     return execute_with_pipeline_sync(
         request=request,
@@ -79,6 +103,7 @@ def get_agents_status(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     return execute_with_pipeline_sync(
         request=request,
@@ -95,6 +120,7 @@ def get_coordination_graph(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     return execute_with_pipeline_sync(
         request=request,
@@ -112,6 +138,7 @@ def register_agent(
     body: AgentRegisterRequest,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     return execute_with_pipeline_sync(
         request=request,
@@ -138,6 +165,7 @@ def heartbeat_agent(
     body: AgentHeartbeatRequest | None = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     heartbeat = body or AgentHeartbeatRequest()
 
@@ -182,6 +210,7 @@ def deregister_agent(
     agent_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     def handler(ctx):
         if str(agent_id) == LOCAL_AGENT_ID:
@@ -215,6 +244,7 @@ def get_coordination_runs(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_EXECUTION_READ,
 ):
     from AINDY.db.models import AgentRun
 
@@ -247,6 +277,7 @@ def get_coordination_run_children(
     parent_run_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_EXECUTION_READ,
 ):
     def handler(ctx):
         from AINDY.db.models import AgentRun
@@ -287,6 +318,7 @@ def get_coordination_inbox(
     limit: int = 50,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     def handler(ctx):
         messages = get_inbox(
@@ -322,6 +354,7 @@ def acknowledge_coordination_message(
     body: MessageAcknowledgeRequest,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     def handler(ctx):
         ack_id = acknowledge_message(
@@ -354,6 +387,7 @@ def get_shared_memory(
     tags: str | None = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     def handler(ctx):
         user_id = normalize_uuid(current_user["sub"])
@@ -391,6 +425,7 @@ def detect_run_conflict_route(
     body: RunConflictRequest,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_EXECUTION_READ,
 ):
     return execute_with_pipeline_sync(
         request=request,
@@ -414,6 +449,7 @@ def detect_memory_conflict_route(
     body: MemoryConflictRequest,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_MEMORY_READ,
 ):
     return execute_with_pipeline_sync(
         request=request,

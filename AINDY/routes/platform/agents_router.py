@@ -44,10 +44,24 @@ from sqlalchemy.orm import Session
 
 from AINDY.db.database import get_db
 from AINDY.db.models.agent import Agent
-from AINDY.services.auth_service import get_current_user
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 from AINDY.utils.uuid_utils import normalize_uuid
 
 router = APIRouter()
+
+# ── HTTP-SCOPE-GAP-1 — scope gate for user-owned agents ───────────────────────────────────
+#
+# These five routes are mounted on the app directly (`prefix="/platform"`), NOT through
+# `platform_router`, so they do **not** inherit its `require_platform_admin_access` gate — by
+# design, since FR-12b exists so an ordinary user can own an agent. That also meant they had
+# no authority check of any kind, only identity.
+#
+# `agent.run` for all five: creating, renaming, deactivating and restoring an agent are
+# authority over agents, and the vocabulary has no `agent.manage` to distinguish them from
+# running one. Owner scoping is unchanged and still does the work a scope cannot — a scope
+# answers "may you touch agents", never "may you touch *this* agent".
+_REQUIRE_AGENT = Depends(enforce_api_key_scope(Scopes.AGENT_RUN))
 
 #: A slug is the user-chosen half of a derived namespace. Lowercase so the derived
 #: namespace is stable under any case-folding a downstream store applies, and no
@@ -173,6 +187,7 @@ def list_my_agents(
     ),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     """List the caller's agents. Never returns another user's agents."""
     owner_id = _caller_id(current_user)
@@ -196,6 +211,7 @@ def create_my_agent(
     body: AgentCreateRequest,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     """Register an agent owned by the caller.
 
@@ -249,6 +265,7 @@ def update_my_agent(
     body: AgentUpdateRequest,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     """Update name / description / metadata on an agent the caller owns.
 
@@ -284,6 +301,7 @@ def deactivate_my_agent(
     slug: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     """Deactivate an agent the caller owns. Soft — memory nodes are preserved."""
     owner_id = _caller_id(current_user)
@@ -300,6 +318,7 @@ def restore_my_agent(
     slug: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_AGENT,
 ):
     """Reactivate an agent the caller owns.
 
