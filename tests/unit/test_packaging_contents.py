@@ -107,3 +107,29 @@ def test_the_readme_states_the_native_path_is_not_installed():
 
     assert "build-from-source accelerator" in readme
     assert "installed users run the" in readme.lower() or "Python scoring path" in readme
+
+
+# --------------------------------------------------------------------------------------
+# CONTRIBUTORS.md — a file that promises to travel has to travel
+# --------------------------------------------------------------------------------------
+
+
+def test_contributors_file_exists_and_is_declared_for_both_artifacts():
+    """★ Its own text is the requirement: *"anyone who installs the package gets the code;
+    this file travels with it so the credit does too."*
+
+    A repo-root file cannot reach a wheel through package-data — that only matches inside
+    `AINDY/`. `MANIFEST.in` covers the sdist; `license-files` is the only mechanism that puts a
+    root file into a wheel, as `dist-info/licenses/`. Declaring one and not the other would
+    leave the promise true for `pip download --no-binary` and false for `pip install`.
+
+    The file is asserted to exist because the config now names it: `license-files` pointing at
+    a missing path is a build-time problem in a fresh clone, not a quiet no-op.
+    """
+    assert (_ROOT / "CONTRIBUTORS.md").is_file(), (
+        "CONTRIBUTORS.md is referenced by license-files and MANIFEST.in but does not exist"
+    )
+    assert "include CONTRIBUTORS.md" in _MANIFEST, "sdist would not carry CONTRIBUTORS.md"
+    assert '"CONTRIBUTORS.md"' in _PYPROJECT, (
+        "CONTRIBUTORS.md is not in license-files, so the wheel would not carry it"
+    )

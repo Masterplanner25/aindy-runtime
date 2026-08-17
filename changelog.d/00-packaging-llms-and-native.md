@@ -36,3 +36,10 @@ builds. `prune` is the fix; `exclude-package-data` is belt-and-braces against th
 
 Before benchmarking any move to per-platform wheels: no comparison of the native scorer against
 the Python one exists in this repo, and that measurement should come first.
+
+
+**`CONTRIBUTORS.md` now ships too.** It records contributions present in this repository and its
+own text says it travels with the package — which was not true. A repo-root file cannot reach a
+wheel through package-data (that matches only inside `AINDY/`), so it is declared twice:
+`include CONTRIBUTORS.md` in `MANIFEST.in` for the sdist, and in `license-files` for the wheel,
+where it lands as `dist-info/licenses/CONTRIBUTORS.md`. Verified in both artifacts.

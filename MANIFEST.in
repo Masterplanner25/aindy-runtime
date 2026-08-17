@@ -26,3 +26,9 @@ include AINDY/memory/native/memory_bridge_rs/build.rs
 # exactly the kind that ships the day someone cuts a release from their own machine.
 prune AINDY/memory/native/memory_bridge_rs/target
 
+# CONTRIBUTORS.md records contributions present in this repository. Its own text says the file
+# travels with the package, so it has to actually travel: this covers the sdist, and the
+# `license-files` entry in pyproject.toml puts it in the wheel's `dist-info/`. A root-level file
+# cannot reach a wheel through package-data — that only matches inside `AINDY/`.
+include CONTRIBUTORS.md
+

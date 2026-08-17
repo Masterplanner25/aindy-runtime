@@ -1,6 +1,19 @@
 # memory_bridge.py
 # Memory Bridge v0.1 - Core Construct
 # Architected with Solon Protocol Logic | Continuity > Content
+#
+# Origin and attribution:
+#     "Solon Protocol Logic" above refers to the work of **Cherokee Schill**.
+#     A conversation with Cherokee is the reason this subsystem was built, and
+#     her framing of memory as continuity and authorship — rather than as
+#     storage — is the design it was built to.
+#
+#     Her own work is the Ethical AI Framework, a consent-based ethical AI
+#     project: https://github.com/Ocherokee/ethical-ai-framework
+#
+#     This module contains no code written by Cherokee. The debt is
+#     architectural, and the header line above has carried it since v0.1.
+#     See CONTRIBUTORS.md.
 
 from datetime import datetime, timezone
 from uuid import uuid4
