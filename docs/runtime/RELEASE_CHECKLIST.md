@@ -315,6 +315,27 @@ deployment that introduces TLS termination.
   A new gate is at its least proven when it is newest: `test_every_enforced_scope_is_held_by_an_ordinary_session`
   fails in CI if a gate an ordinary user cannot satisfy is added, but it says nothing about the
   keys an operator issued last year.
+- [ ] **★ If a first-party ecosystem pin moved, all THREE sites moved with it.**
+
+  `nodus-lang` and `nodus-mcp` are declared in `pyproject.toml`, `AINDY/requirements.txt`, **and**
+  the `Install MCP extra` step in `runtime-ci.yml` — which installs those packages directly
+  rather than through the extra, so a constraint fixed in only the first two is silently
+  re-resolved by the third.
+
+  Two failures came from exactly this: #451 bumped `nodus-lang` in `pyproject.toml` only, so CI
+  tested 4.1.0 for four months while the wheel required 4.2.0; and #468's bump to 5.0.0 was
+  resolved back down by `nodus-mcp`'s `<5.0.0` cap installed in the third site.
+
+  `tests/unit/test_dependency_pin_agreement.py` covers the first two sites and reports which
+  installed package forbids a pin. Check the workflow step by hand.
+
+- [ ] **Adopting a new `nodus-lang` major requires a compatible `nodus-mcp` first.**
+
+  Sequence, not a deadlock: nodus publishes → `nodus-mcp` releases accepting the new major →
+  the runtime bumps **both** in one PR. Pinning a nodus major that `nodus-mcp` caps below makes
+  `pip install aindy-runtime[mcp]` **uninstallable** (`ResolutionImpossible`), so a green CI run
+  achieved by isolating the MCP tests would be shipping a broken extra. See `MCP-SDK-2X-1`.
+
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
 - [ ] TECH_DEBT.md updated for any newly closed or opened entries
 - [ ] `sandbox_escape_test_posture()["posture"] == "all_pass"` for this release platform
