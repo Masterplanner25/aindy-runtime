@@ -7256,6 +7256,111 @@ precisely because of this — which is the runtime already conceding the point i
 
 ---
 
+## TEST-ISOLATION-REGISTRY-1 — a test that passes in the full suite and fails in a subset
+
+**Status: OPEN — P2 (assurance). Found 2026-08-16** while regression-testing
+`KEY-SCOPE-ESCALATION-1`.
+
+`tests/unit/test_platform_only_startup.py::test_platform_only_registers_runtime_agent_defaults`
+**fails** under
+
+```
+pytest tests/unit -k "key or scope or auth or platform or route"
+```
+
+with `registry.get_capability_definitions()` returning an **empty set**, and **passes** in a full
+`pytest tests/unit` run, and passes when run alone or paired with either app-booting test file.
+It appeared only when one more `runtime_only_app`-booting file joined the selection, so the cause
+is registry global state surviving (or being restored across) app boots, not the new code — the
+same selection on a clean tree is green.
+
+**Why it is worth an entry rather than a shrug.** The repo's green-check catalogue is about
+checks that pass when they should fail. This is the same defect class with the sign flipped in a
+way that is *more* dangerous, not less: if a test's outcome depends on which other tests ran,
+then a **real** failure can be masked by the full-suite ordering just as easily as a spurious one
+was produced by the subset ordering. Nothing here distinguishes the two cases today.
+
+**Do not "fix" it by pinning the order.** That makes the result reproducible without making it
+meaningful. The fix is for the registry snapshot/restore in `tests/fixtures/client.py` to
+guarantee that a boot leaves capability providers registered regardless of what booted before —
+i.e. the test's precondition should be *established*, not *inherited*. (Same shape as the
+`pipeline_active` ContextVar leak fixed during the `IDEM-11` work, where tests asserted a
+precondition instead of establishing it.)
+
+**Reproduction cost is low but not free:** the full suite takes ~50 minutes locally, so confirm
+with the subset selection above and then a targeted full run, not by bisecting by hand.
+
+---
+
+## KEY-SCOPE-ESCALATION-1 — an API key can mint itself a wider API key
+
+**Status: OPEN — P0 (security). Found 2026-08-16 while inventorying the routes left ungated by
+`HTTP-SCOPE-GAP-1` D.** Demonstrated end to end against real PostgreSQL, not inferred.
+
+**The chain, as run.** Starting from an API key holding the single scope `flow.read`:
+
+| Step | Call | Result |
+|---|---|---|
+| 1 | `POST /platform/keys` `{"scopes": ["platform.admin","memory.delete","event.emit"]}` | **201** — key issued with exactly those scopes |
+| 2 | `GET /platform/admin/users` with the new key | **200** — every user's email and admin flag |
+| 3 | `POST /platform/admin/users/{own_id}/promote` | **200**, `is_admin: true` |
+
+Step 3 is the one that makes this permanent: the escalation lands in the **user row**, so every
+future JWT session for that account is an admin session too. Revoking the minted key does not
+undo it.
+
+**Root cause — one function, and its own docstring names the missing half.**
+
+```python
+def require_platform_admin_access(current_user = Depends(get_current_user)):
+    """Allow any authenticated API key; require is_admin for JWT users.
+
+    Used on the /platform router where API keys are pre-authorized at the
+    platform level (scope enforcement happens per-endpoint or per-syscall).
+    """
+    if current_user.get("auth_type") == "api_key":
+        return current_user          # <-- any key, any scopes, all 56 /platform routes
+```
+
+`keys_router.py` has **no per-endpoint scope check**, and neither does most of the tree. The
+docstring describes a two-part design whose second part was never built — the same shape as
+`ROUTE-AST-UNWIRED-1`, where the defect was the *claim* rather than the absence. The only
+validation on the requested scopes is membership in `Scopes.ALL`, i.e. *"is this a real scope"*,
+never *"may you grant it"*.
+
+**Scope of exposure — narrower than it first reads, and still serious.** The `/platform` tree
+requires `is_admin` for JWT callers, so an ordinary *session* cannot reach `POST /platform/keys`
+at all (verified: 403). The escalation is exclusively **API key → wider API key**. That does not
+soften it much: least privilege is the entire purpose of key scopes, so *any* leaked or
+misplaced low-scope key is equivalent to a full platform-admin key, and the two scopes a session
+is deliberately denied — `memory.delete` and `event.emit` — are both obtainable this way.
+
+**Two guards disagree about what an API key is**, which is how this survived review:
+`require_admin_principal` requires `platform.admin` on a key, while `require_platform_admin_access`
+requires nothing of one. Both are reachable on the same tree.
+
+**Fix, in order:**
+
+1. **Delegation rule on key creation (the decisive one).** A caller may only mint a key whose
+   scopes are a **subset of its own authority** — an API key's own `api_key_scopes`, a session's
+   `derive_session_scopes(is_admin)`. This closes escalation without changing what any existing
+   key can already *do*; it only stops keys granting themselves more.
+2. **Narrow `require_platform_admin_access`.** *"Any authenticated API key"* gating 56 routes is
+   the broader hole; the delegation rule does not close it, it only removes the escalation
+   ladder. This one has real blast radius — every key currently reaching `/platform/*` would need
+   appropriate scopes — so it needs the same enumerate-then-enforce treatment `HTTP-SCOPE-GAP-1`
+   used, and probably the same kind of hatch.
+3. **Reconcile the two admin guards** so there is one answer to "is this principal an operator".
+
+**★ Note for whoever takes (2): SQLite cannot reproduce this.** `platform_api_keys.scopes` is a
+PostgreSQL `ARRAY`; on SQLite the ORM insert fails at the driver with
+`ProgrammingError: type 'list' is not supported`, **after** the authorization gate has already
+been passed. A SQLite run therefore shows a 500 where PostgreSQL shows a 201 — the harness hides
+the finding behind an unrelated error. The proof above was run against a throwaway
+`pgvector/pgvector:pg16` container.
+
+---
+
 ## HTTP-SCOPE-GAP-1 — the capability model does not reach the runtime's own front door
 
 **★ FIRST HALF CLOSED 2026-08-16 (#449) — a JWT no longer bypasses scopes.**
@@ -7342,11 +7447,34 @@ things, so do not mix them in one ratio.)*
   **410 Gone** since completion moved inside `POST /memory/execute`; an unscoped caller now sees
   **403** there instead, because authorization precedes the deprecation notice.
 
-**Still open, and it is the larger half:** **97 of 126 registered routes enforce nothing at
-all** — the
-scope model reaches the front door but not most of it. Widening enforcement router-by-router is
-the remaining work, and per the app team's request the release that enforces new scopes must
-**name them in the handoff**. *(The "`memory_router.py` still has zero `SyscallDispatcher`
+**★ CORRECTION 2026-08-16 — the "97 of 126 enforce nothing" figure published with #462 was
+WRONG, and wrong in the alarming direction.** It came from walking each route's own `dependant`,
+which **does not include dependencies declared on the router it was included into**. The
+`/platform` tree carries `Depends(require_platform_admin_access)` on the parent `APIRouter`, so
+56 routes counted as "enforcing nothing" are in fact admin-gated. Corrected census of the 126
+registered routes:
+
+| Bucket | Count | Meaning |
+|---|---|---|
+| scope-gated | **29** | `enforce_api_key_scope` (22 memory + 7 pre-existing) |
+| admin-gated | **56** | `require_platform_admin_access` / `require_admin_principal` — authority, not a scope |
+| public | **21** | health, version, `/auth/{login,register,verify-email,password/*}`, `/watcher/signals`, `/client/*` |
+| **identity only** | **20** | the actual remaining gap |
+
+*Method note that generalises: a per-route dependency walk under-reports enforcement, and a
+router-level walk over-reports it for routes that opted out. Accumulate the router's
+`dependencies` down each nesting level — and remember `_IncludedRouter` hides the nesting.*
+
+**The real remainder is 20 routes, and 2 of them should stay open:** `POST /auth/logout` and
+`POST /auth/password/change` act only on the caller's own identity, where a scope adds nothing.
+The other **18** are `coordination_router` (13) and `platform/agents_router` (5) — agent
+registry, heartbeats, inbox, conflict resolution and user-owned agent CRUD — which map to
+**`agent.run`**, already in the ordinary session set. Per the app team's request the release that
+enforces them must **name the scopes in the handoff**.
+
+**But do `KEY-SCOPE-ESCALATION-1` first.** Tagging 18 more routes is worth little while a
+`flow.read` key can mint itself `platform.admin`; the escalation makes every scope on every key
+advisory. *(The "`memory_router.py` still has zero `SyscallDispatcher`
 references" half of this paragraph is now stale twice over — `ROUTE-EFFECT-BYPASS-1` A–C rewired
 three of its four direct-DAO routes and this slice added the gates. What remains there is one
 route, `POST /nodes/search`, and it is tracked in that entry, not this one.)*
