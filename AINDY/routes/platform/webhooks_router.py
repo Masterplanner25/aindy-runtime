@@ -5,9 +5,22 @@ from AINDY.core.execution_helper import execute_with_pipeline_sync
 from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.routes.platform.schemas import WebhookSubscription
-from AINDY.services.auth_service import get_current_user
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 
 router = APIRouter()
+
+# ── HTTP-SCOPE-GAP-1 / KEY-SCOPE-ESCALATION-1 — per-endpoint scopes on the /platform tree ──
+#
+# `require_platform_admin_access` on the parent router returns **any** authenticated API key
+# unconditionally, on the stated assumption that "scope enforcement happens per-endpoint or
+# per-syscall". For most of this tree it did not. Demonstrated: a `flow.read`-only key reached
+# every route here, drained the dead-letter queue and **rotated the platform signing key**.
+#
+# For JWT callers nothing changes — the parent gate already required `is_admin`, and an admin
+# session derives `platform.admin` and `webhook.manage`. Only API keys are newly constrained,
+# which is the point.
+_REQUIRE_WEBHOOK_MANAGE = Depends(enforce_api_key_scope(Scopes.WEBHOOK_MANAGE))
 
 
 def _execute_webhooks(
@@ -48,7 +61,7 @@ def _execute_webhooks(
 
 @router.post("/webhooks", status_code=201, response_model=None)
 @limiter.limit("30/minute")
-def create_webhook(request: Request, body: WebhookSubscription, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def create_webhook(request: Request, body: WebhookSubscription, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_WEBHOOK_MANAGE):
     def handler(ctx):
         from AINDY.platform_layer.event_service import subscribe_webhook
 
@@ -70,7 +83,7 @@ def create_webhook(request: Request, body: WebhookSubscription, db: Session = De
 
 @router.get("/webhooks", response_model=None)
 @limiter.limit("60/minute")
-def list_webhook_subscriptions(request: Request, current_user: dict = Depends(get_current_user)):
+def list_webhook_subscriptions(request: Request, current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_WEBHOOK_MANAGE):
     def handler(ctx):
         from AINDY.platform_layer.event_service import list_webhooks
 
@@ -81,7 +94,7 @@ def list_webhook_subscriptions(request: Request, current_user: dict = Depends(ge
 
 @router.get("/webhooks/{subscription_id}", response_model=None)
 @limiter.limit("60/minute")
-def get_webhook_subscription(request: Request, subscription_id: str, current_user: dict = Depends(get_current_user)):
+def get_webhook_subscription(request: Request, subscription_id: str, current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_WEBHOOK_MANAGE):
     def handler(ctx):
         from AINDY.platform_layer.event_service import get_webhook
 
@@ -95,7 +108,7 @@ def get_webhook_subscription(request: Request, subscription_id: str, current_use
 
 @router.delete("/webhooks/{subscription_id}", status_code=204, response_model=None)
 @limiter.limit("30/minute")
-def delete_webhook_subscription(request: Request, subscription_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def delete_webhook_subscription(request: Request, subscription_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_WEBHOOK_MANAGE):
     def handler(ctx):
         from AINDY.platform_layer.event_service import get_webhook, unsubscribe_webhook
 

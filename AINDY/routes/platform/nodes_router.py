@@ -5,9 +5,22 @@ from AINDY.core.execution_helper import execute_with_pipeline_sync
 from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.routes.platform.schemas import NodeRegistration
-from AINDY.services.auth_service import get_current_user
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 
 router = APIRouter()
+
+# ── HTTP-SCOPE-GAP-1 / KEY-SCOPE-ESCALATION-1 — per-endpoint scopes on the /platform tree ──
+#
+# `require_platform_admin_access` on the parent router returns **any** authenticated API key
+# unconditionally, on the stated assumption that "scope enforcement happens per-endpoint or
+# per-syscall". For most of this tree it did not. Demonstrated: a `flow.read`-only key reached
+# every route here, drained the dead-letter queue and **rotated the platform signing key**.
+#
+# For JWT callers nothing changes — the parent gate already required `is_admin`, and an admin
+# session derives `platform.admin` and `webhook.manage`. Only API keys are newly constrained,
+# which is the point.
+_REQUIRE_PLATFORM_ADMIN = Depends(enforce_api_key_scope(Scopes.PLATFORM_ADMIN))
 
 
 def _execute_nodes(request: Request, route_name: str, handler, *, db: Session | None = None, user_id: str, input_payload=None, success_status_code: int = 200):
@@ -39,7 +52,7 @@ def _execute_nodes(request: Request, route_name: str, handler, *, db: Session | 
 
 @router.post("/nodes/register", status_code=201, response_model=None)
 @limiter.limit("30/minute")
-def register_node(request: Request, body: NodeRegistration, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def register_node(request: Request, body: NodeRegistration, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
     user_id = str(current_user["sub"])
 
     def handler(ctx):
@@ -68,7 +81,7 @@ def register_node(request: Request, body: NodeRegistration, db: Session = Depend
 
 @router.get("/nodes", response_model=None)
 @limiter.limit("60/minute")
-def list_nodes(request: Request, current_user: dict = Depends(get_current_user)):
+def list_nodes(request: Request, current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
     def handler(ctx):
         from AINDY.platform_layer.node_registry import list_dynamic_nodes
 
@@ -79,7 +92,7 @@ def list_nodes(request: Request, current_user: dict = Depends(get_current_user))
 
 @router.get("/nodes/{name}", response_model=None)
 @limiter.limit("60/minute")
-def get_node(request: Request, name: str, current_user: dict = Depends(get_current_user)):
+def get_node(request: Request, name: str, current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
     def handler(ctx):
         from AINDY.platform_layer.node_registry import get_dynamic_node
 
@@ -93,7 +106,7 @@ def get_node(request: Request, name: str, current_user: dict = Depends(get_curre
 
 @router.delete("/nodes/{name}", status_code=204, response_model=None)
 @limiter.limit("30/minute")
-def delete_node(request: Request, name: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def delete_node(request: Request, name: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
     def handler(ctx):
         from AINDY.platform_layer.node_registry import delete_dynamic_node
 

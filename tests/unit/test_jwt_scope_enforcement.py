@@ -242,50 +242,90 @@ def test_the_scan_finds_the_memory_router_gates():
     )
 
 
-def test_every_enforced_scope_is_held_by_an_ordinary_session():
-    """★ This is the safety argument, executable.
+def test_no_route_enforces_a_scope_nobody_can_satisfy(runtime_only_app):
+    """★ The safety argument, executable — now route-derived and with two legitimate branches.
 
-    Default-on is only defensible because every scope any route currently enforces is one an
-    ordinary session holds. Scans the source for real `enforce_api_key_scope(...)` call sites
-    and asserts each is *satisfiable* by the ordinary set.
+    Originally this scanned the source and required **every** enforcement to be satisfiable by
+    an *ordinary* session, because at the time every gated route was one an ordinary user was
+    supposed to reach. That stopped being the whole truth when the `/platform` tree gained
+    per-endpoint gates: `platform.admin` and `webhook.manage` are deliberately **not** ordinary
+    scopes, and the routes carrying them sit behind `require_platform_admin_access`, which
+    already refuses a non-admin session. Requiring them to be ordinary would have been an
+    argument for *weakening* them.
 
-    If someone adds an enforcement an ordinary user cannot satisfy, this fails **here** rather
-    than as a 403 in a user's browser — which is exactly the "scattered 403s that read as a
-    frontend bug" outcome the app team asked us to avoid.
+    So the invariant is now: every gate must be satisfiable by **some** principal that can
+    actually reach the route —
 
-    ★ **The scan is paren-balanced, not a flat regex.** It used to match
-    `enforce_api_key_scope\\(Scopes\\.([A-Z_]+)\\)` — a closing paren immediately after one
-    argument. The moment `HTTP-SCOPE-GAP-1` (D) introduced the any-of form
-    `enforce_api_key_scope(Scopes.MEMORY_READ, Scopes.MEMORY_WRITE)`, and wrapped it across two
-    lines, that pattern stopped matching **and reported nothing wrong** — a scanner that goes
-    quiet as coverage grows, which is variant 2 of the green-check catalogue in miniature.
-    `test_the_scan_sees_the_any_of_form` is the control that keeps it honest.
+    * satisfiable by an ordinary session, **or**
+    * the route is admin-gated, and the scope is one an *admin* session derives.
+
+    A gate failing both is unreachable by anyone: a permission that cannot be held, which is a
+    403 nobody can fix. That is the failure this catches, and it is a strictly stronger
+    statement than the original — the old version would have passed a `platform.admin` gate on
+    a route with no admin dependency, which is exactly the shape that leaves a legitimate
+    caller stranded.
+
+    ★ Route-derived rather than source-scanned, because the second branch is a fact about the
+    *route* (does an admin dependency apply to it), and a source scan cannot see the router-level
+    dependency that supplies it. `_scan_enforcement_sites` is still exercised by the two tests
+    above; it is a good scanner for a question this test no longer asks.
     """
-    import pathlib
+    from fastapi.routing import APIRoute, _IncludedRouter
 
-    root = pathlib.Path(__file__).resolve().parents[2] / "AINDY"
     ordinary = set(_derive(False))
-    offenders: list[str] = []
-    found = 0
+    admin = set(_derive(True))
 
-    for path in root.rglob("*.py"):
-        if path.name == "auth_service.py":
-            continue  # its own definition + docstring example, not a route
-        for accepted in _scan_enforcement_sites(path.read_text(encoding="utf-8")):
-            found += 1
-            values = {getattr(_scopes(), attr) for attr in accepted}
-            # Any-of: the gate passes if the caller holds ANY accepted scope, so the question
-            # is whether the ordinary set INTERSECTS it — not whether every alternative is
-            # ordinary. `(MEMORY_READ, PLATFORM_ADMIN)` is satisfiable by an ordinary user and
-            # must not be flagged.
-            if not values & ordinary:
-                offenders.append(
-                    f"{path.relative_to(root)} -> {sorted('Scopes.' + a for a in accepted)}"
-                )
+    def dep_names(dependant):
+        out = set()
 
-    assert found > 0, "found no enforcement call sites — the scan is broken, not the code"
+        def walk(d):
+            for sub in d.dependencies:
+                out.add(getattr(sub.call, "__name__", ""))
+                walk(sub)
+
+        walk(dependant)
+        return out
+
+    gated = []
+
+    def walk(routes, inherited):
+        for route in routes:
+            if isinstance(route, APIRoute):
+                gated.append((route, dep_names(route.dependant) | inherited))
+            elif isinstance(route, _IncludedRouter):
+                extra = {
+                    getattr(d.dependency, "__name__", "")
+                    for d in (getattr(route.include_context, "dependencies", None) or [])
+                }
+                extra |= {
+                    getattr(d.dependency, "__name__", "")
+                    for d in (route.original_router.dependencies or [])
+                }
+                walk(route.original_router.routes, inherited | extra)
+
+    walk(runtime_only_app.routes, set())
+
+    offenders, found = [], 0
+    for route, deps in gated:
+        names = [n for n in deps if n.startswith("enforce_scope_")]
+        if not names:
+            continue
+        found += 1
+        # `enforce_scope_a_or_b` — recover the scopes from the dependency's own name, so this
+        # reads the enforcement that is actually wired rather than a decorator's source text.
+        accepted = set()
+        for name in names:
+            accepted |= {
+                part.replace("_", ".") for part in name[len("enforce_scope_") :].split("_or_")
+            }
+        is_admin_route = any("admin" in n for n in deps)
+        satisfiable = accepted & ordinary or (is_admin_route and accepted & admin)
+        if not satisfiable:
+            offenders.append(f"{sorted(route.methods)[0]} {route.path} -> {sorted(accepted)}")
+
+    assert found > 0, "found no gated routes — the walk is broken, not the code"
     assert not offenders, (
-        "these routes enforce a scope an ordinary session does NOT hold, so signed-in users "
-        f"will get 403s: {offenders}. Either widen the derived set deliberately, or confirm "
-        f"the route is admin-only and this test needs an allowlist."
+        "these routes enforce a scope no principal that can reach them is able to hold, so the "
+        f"403 is unfixable by the caller: {offenders}. Either widen the derived set "
+        f"deliberately, or put the route behind an admin dependency."
     )

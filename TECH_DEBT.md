@@ -7375,16 +7375,41 @@ requires nothing of one. Both are reachable on the same tree.
 
 **Fix, in order:**
 
-1. **Delegation rule on key creation (the decisive one).** A caller may only mint a key whose
+1. **Delegation rule on key creation. DONE 2026-08-16 (#463).** A caller may only mint a key whose
    scopes are a **subset of its own authority** — an API key's own `api_key_scopes`, a session's
    `derive_session_scopes(is_admin)`. This closes escalation without changing what any existing
    key can already *do*; it only stops keys granting themselves more.
-2. **Narrow `require_platform_admin_access`.** *"Any authenticated API key"* gating 56 routes is
-   the broader hole; the delegation rule does not close it, it only removes the escalation
-   ladder. This one has real blast radius — every key currently reaching `/platform/*` would need
-   appropriate scopes — so it needs the same enumerate-then-enforce treatment `HTTP-SCOPE-GAP-1`
-   used, and probably the same kind of hatch.
+2. **The `/platform` tree. DONE 2026-08-16 (#465) — and it was worse than this entry said.**
+   Probing what a `flow.read`-only key actually *reached* found **46 of 53** routes open,
+   including `POST /platform/queue/dead-letters/drain` (200, drained it) and
+   **`POST /platform/ops/rotate-secret-key` (200, rotated the platform signing key)**.
+
+   **★ The rotation is not merely destructive — it is a full auth compromise.** The caller
+   supplies the new key, so afterwards they know the signing secret and can mint tokens that
+   verify: any user impersonable, admin included. **The delegation rule in (1) does not touch
+   it** — that bounds what a key may *grant*, never what it may *do*. Two holes, one root cause,
+   and fixing the visible one first would have left the sharper one open.
+
+   **★ The 400 that nearly hid it.** The first probe sent a 40-character `new_key` that happened
+   to equal the active `SECRET_KEY`, and got **400** — which reads as a refusal in a status
+   column. It is `new_key is the same as the current active key`, raised *after* authorization
+   and after the length check. Re-running with a distinct value returned 200 and completed the
+   rotation. **A probe that only records status codes will mis-read a validation rejection as an
+   authorization one**; the regression test deliberately uses a distinct, valid key so it cannot
+   pass against the unfixed code.
+
+   Fixed with **per-endpoint scopes on 44 routes** — `platform.admin` for keys/queue/nodes/
+   observability/flow runs/flow CRUD/rotation, `webhook.manage` for webhooks, `flow.execute` for
+   the nodus surface, `execution.read` for tenant usage. **The router gate itself was NOT
+   tightened**, because `POST /platform/syscall` is the SDK's whole surface and is used with
+   narrow scopes like `memory.read`; requiring `platform.admin` there breaks every SDK caller.
+   That route and `GET /platform/syscalls` stay ungated at the route level by decision — their
+   authority is per-syscall in `_resolve_dispatch_capabilities` — pinned by an equality test so a
+   47th ungated route fails CI. **No JWT caller is affected at all:** the parent gate already
+   required `is_admin`, and an admin session derives `platform.admin` and `webhook.manage`.
 3. **Reconcile the two admin guards** so there is one answer to "is this principal an operator".
+   Still open, and now lower stakes: with (2) in place `require_platform_admin_access` is no
+   longer the only check on anything, so it is a tidiness problem rather than a hole.
 
 **★ Note for whoever takes (2): SQLite cannot reproduce this.** `platform_api_keys.scopes` is a
 PostgreSQL `ARRAY`; on SQLite the ORM insert fails at the driver with
@@ -7530,10 +7555,26 @@ mounted under `/apps`, and appears again via `get_routers()`. Both copies carry 
 this is a composition detail rather than an authority one, but any route census must dedupe by
 `(method, path)` or it over-counts.
 
-**What is left of this entry is no longer route tagging.** It is
-`KEY-SCOPE-ESCALATION-1`'s open half: `require_platform_admin_access` admits **any** authenticated
-API key to all 56 `/platform/*` routes. Narrowing that is the last structural piece, and it is
-the one with real blast radius. *(The "`memory_router.py` still has zero `SyscallDispatcher`
+**★ FOURTH SLICE CLOSED 2026-08-16 (#465) — the `/platform` tree.** 44 routes gained per-endpoint
+scopes; see `KEY-SCOPE-ESCALATION-1` item (2) for the mechanism and for the signing-key rotation
+it closed. Census across 126 registered routes is now **91 scope-gated, 12 admin-gated, 21
+public, 2 identity-only**.
+
+**★ The safety guard was rewritten and is now stronger.**
+`test_every_enforced_scope_is_held_by_an_ordinary_session` required every gate to be satisfiable
+by an *ordinary* session — correct while every gated route was one an ordinary user should reach,
+and by this slice it would have been **an argument for weakening `platform.admin`**. Replaced by
+`test_no_route_enforces_a_scope_nobody_can_satisfy`, route-derived, with two legitimate branches:
+satisfiable by an ordinary session, **or** the route is admin-gated and the scope is one an admin
+session derives. A gate failing both is a permission nobody can hold — a 403 the caller cannot
+fix. Mutation-checked by putting `memory.delete` on a non-admin route.
+
+**What remains of this entry:** nothing structural on the HTTP surface. The two ungated
+`/platform` routes are a recorded decision, the two identity-only routes are self-service, and
+`require_platform_admin_access` is no longer the sole check on anything (item 3 of
+`KEY-SCOPE-ESCALATION-1` is tidiness). The open questions the entry raised that are *not* about
+route coverage remain: `execution.read` conflating scope with data ownership, and the fact that a
+scope cannot answer *"may I read someone else's"*. *(The "`memory_router.py` still has zero `SyscallDispatcher`
 references" half of this paragraph is now stale twice over — `ROUTE-EFFECT-BYPASS-1` A–C rewired
 three of its four direct-DAO routes and this slice added the gates. What remains there is one
 route, `POST /nodes/search`, and it is tracked in that entry, not this one.)*

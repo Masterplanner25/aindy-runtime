@@ -13,6 +13,19 @@ from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 
 router = APIRouter()
 
+# ── HTTP-SCOPE-GAP-1 / KEY-SCOPE-ESCALATION-1 — per-endpoint scopes on the /platform tree ──
+#
+# `require_platform_admin_access` on the parent router returns **any** authenticated API key
+# unconditionally, on the stated assumption that "scope enforcement happens per-endpoint or
+# per-syscall". For most of this tree it did not. Demonstrated: a `flow.read`-only key reached
+# every route here, drained the dead-letter queue and **rotated the platform signing key**.
+#
+# For JWT callers nothing changes — the parent gate already required `is_admin`, and an admin
+# session derives `platform.admin` and `webhook.manage`. Only API keys are newly constrained,
+# which is the point.
+_REQUIRE_EXECUTION_READ = Depends(enforce_api_key_scope(Scopes.EXECUTION_READ))
+_REQUIRE_PLATFORM_ADMIN = Depends(enforce_api_key_scope(Scopes.PLATFORM_ADMIN))
+
 
 def _execute_platform_ops(request: Request, route_name: str, handler, *, db: Session | None = None, user_id: str, input_payload=None):
     metadata = {"source": "platform.ops"}
@@ -98,7 +111,7 @@ class RotateSecretKeyRequest(BaseModel):
 
 @router.get("/tenants/{tenant_id}/usage", response_model=None)
 @limiter.limit("60/minute")
-def get_tenant_usage(request: Request, tenant_id: str, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_tenant_usage(request: Request, tenant_id: str, current_user: dict = Depends(get_current_user), db: Session = Depends(get_db), _scope: None = _REQUIRE_EXECUTION_READ):
     def handler(ctx):
         caller_id = str(current_user["sub"])
         if caller_id != tenant_id:
@@ -244,6 +257,7 @@ def rotate_secret_key(
     body: RotateSecretKeyRequest,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     def handler(ctx):
         if len(body.new_key or "") < 32:
