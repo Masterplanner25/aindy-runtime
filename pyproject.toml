@@ -170,4 +170,14 @@ include = ["AINDY*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"AINDY" = ["*.json", "**/*.json", "platform/dist/**"]
+"AINDY" = ["*.json", "**/*.json", "platform/dist/**", "llms.txt", "llms-full.txt"]
+
+# Belt-and-braces, and measured as such: on a *clean* build the wheel does not pick up
+# cargo's `target/` anyway, because `target/` is not inside a package and package-data
+# globs only apply to packages setuptools finds. What actually shipped build output was
+# the **sdist** — MANIFEST's `recursive-include AINDY *.json` is path-based and matched
+# ~200 cargo fingerprint files, some embedding the building machine's absolute paths.
+# `prune` in MANIFEST.in is the fix for that. This entry exists so a stale `build/lib`
+# (which is how the wheel picked them up in testing) cannot reintroduce them.
+[tool.setuptools.exclude-package-data]
+"AINDY" = ["memory/native/memory_bridge_rs/target/**"]

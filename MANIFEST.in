@@ -1,3 +1,28 @@
 recursive-include AINDY *.json
 recursive-include AINDY/platform/dist *
 recursive-include docs/runtime *.md
+
+# llms.txt / llms-full.txt live under AINDY/ so they reach the *installed* package.
+# They existed only at the repo root before, which served a reader who had already found
+# the repo — the audience that needed them least.
+recursive-include AINDY llms*.txt
+
+# Rust source travels in the sdist so the optional native scorer can be built from it.
+# The compiled artifact is deliberately NOT shipped: the backend produces a pure-Python
+# `py3-none-any` wheel, and a `.pyd`/`.so` inside one would install a broken binary for
+# every user not on the exact OS/arch/CPython it was built with. `native_bridge.py`
+# degrades to the Python scorer, which is the correct behaviour for an optional accelerator.
+recursive-include AINDY/memory/native/memory_bridge_rs/src *.rs
+include AINDY/memory/native/memory_bridge_rs/Cargo.toml
+include AINDY/memory/native/memory_bridge_rs/Cargo.lock
+include AINDY/memory/native/memory_bridge_rs/build.rs
+
+# ...and never the build output. `recursive-include AINDY *.json` above is path-based, so
+# it matched ~200 cargo fingerprint files under `target/` — measured in the 2.4.0 sdist —
+# some of which embed the building machine's absolute rustup/toolchain paths.
+#
+# This never reached PyPI: CI builds in a checkout where `target/` is unpopulated, and the
+# published 2.3.0 wheel was verified to contain none. It is a local-build hazard, which is
+# exactly the kind that ships the day someone cuts a release from their own machine.
+prune AINDY/memory/native/memory_bridge_rs/target
+
