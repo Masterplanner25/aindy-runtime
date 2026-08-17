@@ -1087,14 +1087,56 @@ def _apply_capability_provider_bundle(bundle: CapabilityProviderBundle | dict[st
         register_restricted_tool(tool_name)
 
 
+#: Attribute stamped on a provider callable holding its last successful bundle.
+#:
+#: Deliberately stored **on the provider object** rather than in a module-level cache
+#: (CAPABILITY-PROVIDER-TIMEOUT-1). `_capability_definition_providers` is already reset by both
+#: registry-state reset paths, so a cache that lives on the objects in that list is invalidated
+#: by every reset for free. A module-level `_capability_providers_loaded` latch would have to be
+#: added to two separate reset dictionaries by hand, and forgetting either leaves a stale `True`
+#: that empties the capability set permanently — the precise failure this change exists to fix.
+_CAPABILITY_BUNDLE_CACHE_ATTR = "_aindy_capability_bundle"
+
+
 def _load_capability_definition_providers() -> None:
+    """Apply every registered capability bundle, calling each provider at most once.
+
+    **CAPABILITY-PROVIDER-TIMEOUT-1.** This is reached from `get_capability_definitions`,
+    `get_capability_definition`, `get_capabilities_for_tool` and `get_capabilities_for_agent`,
+    and therefore from `check_tool_capability` — i.e. **on the tool-execution path**. Providers
+    are subprocess-isolated by `_maybe_wrap_runtime_callback`, so before this cache every tool
+    capability check spawned a process per provider and waited on a 30s budget.
+
+    Under CPU contention that budget was exceeded, the exception was swallowed into a warning,
+    and the capability set came back empty. It fails **closed** — `check_tool_capability` refuses
+    a tool with no registered mapping — so the symptom is tool execution denied with
+    *"has no registered capability mapping"*, which names nothing about the real cause.
+
+    Two changes: the result is cached per provider, and a **failure is never cached**, so a
+    transient timeout is retried on the next call instead of persisting for the process lifetime.
+    """
     _ensure_runtime_agent_defaults()
     load_plugins()
     for provider in tuple(_capability_definition_providers):
-        try:
-            _apply_capability_provider_bundle(provider())
-        except Exception as exc:
-            logger.warning("Capability definition provider failed: %s", exc)
+        bundle = getattr(provider, _CAPABILITY_BUNDLE_CACHE_ATTR, None)
+        if bundle is None:
+            try:
+                bundle = provider()
+            except Exception as exc:
+                # ERROR, not WARNING: this leaves the capability set incomplete, which denies
+                # tool execution. A warning is what made it invisible.
+                logger.error(
+                    "Capability definition provider %r failed; capability set is incomplete "
+                    "and tool execution will be refused until it succeeds: %s",
+                    getattr(provider, "__name__", provider),
+                    exc,
+                )
+                continue
+            try:
+                setattr(provider, _CAPABILITY_BUNDLE_CACHE_ATTR, bundle)
+            except (AttributeError, TypeError):
+                pass  # not all callables accept attributes; correctness does not depend on it
+        _apply_capability_provider_bundle(bundle)
 
 
 def _ensure_runtime_agent_defaults() -> None:
