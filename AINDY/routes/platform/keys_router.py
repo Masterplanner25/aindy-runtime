@@ -40,12 +40,34 @@ def _execute_keys(request: Request, route_name: str, handler, *, db: Session, us
 @limiter.limit("10/minute")
 def create_key(request: Request, body: APIKeyCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     def handler(ctx):
-        from AINDY.auth.api_key_auth import Scopes
+        from AINDY.auth.api_key_auth import Scopes, grantable_scopes
         from AINDY.platform_layer.api_key_service import create_api_key
 
         invalid = [scope for scope in body.scopes if scope not in Scopes.ALL]
         if invalid:
             raise HTTPException(status_code=422, detail={"error": f"Unknown scopes: {invalid}. Valid: {Scopes.ALL}"})
+
+        # KEY-SCOPE-ESCALATION-1 — you cannot grant what you do not hold.
+        #
+        # The check above only asked whether each string is a real scope. A `flow.read`-only key
+        # could therefore mint itself `platform.admin` and then promote its own user row, which
+        # survives revoking the key. `require_platform_admin_access` admits ANY api_key to this
+        # router, so nothing upstream was going to stop it either.
+        #
+        # 403 rather than 422: the request is well-formed and understood, it is *refused*.
+        grantable = grantable_scopes(current_user)
+        ungrantable = sorted(set(body.scopes) - grantable)
+        if ungrantable:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "scope_not_grantable",
+                    "message": (
+                        f"Caller may not grant {ungrantable}. A key can only be created with "
+                        f"scopes its creator already holds. Granted: {sorted(grantable)}"
+                    ),
+                },
+            )
 
         expires_at = None
         if body.expires_at:
