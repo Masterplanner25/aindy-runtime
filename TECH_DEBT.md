@@ -7258,8 +7258,24 @@ precisely because of this — which is the runtime already conceding the point i
 
 ## CAPABILITY-PROVIDER-TIMEOUT-1 — the capability set silently empties when a subprocess is slow
 
-**Status: OPEN — P1 (runtime, not test-only). Found 2026-08-16** while regression-testing
-`KEY-SCOPE-ESCALATION-1`.
+**Status: FIXED 2026-08-16 (#466) — and DOWNGRADED P1 → P2 by measurement.** Found 2026-08-16
+while regression-testing `KEY-SCOPE-ESCALATION-1`.
+
+**★ SECOND CORRECTION: the P1 severity was also wrong, and in the direction that matters.** The
+entry argued that an empty capability vocabulary would leave *"every consumer degrading quietly"*
+— the implication being that capability checks become vacuous. **They do not. It fails closed.**
+`check_tool_capability` refuses a tool whose mapping is missing:
+
+```python
+if not required_capabilities and tool_name in TOOL_REGISTRY:
+    return {"ok": False, "error": f"tool '{tool_name}' has no registered capability mapping"}
+```
+
+Demonstrated by running it, not by reading it: with a healthy registry the check denies with
+*"capability 'read_memory' not granted"*; with a failed provider it denies with *"no registered
+capability mapping"*. So the real cost is **availability** — tool execution is refused, naming a
+symptom that says nothing about the cause — not a security hole. Note the guard is *conditional*
+on `tool_name in TOOL_REGISTRY`, which is why it is now pinned by a test rather than trusted.
 
 **★ CORRECTION — this entry was first filed the same day as `TEST-ISOLATION-REGISTRY-1`, a
 test-isolation problem. That diagnosis was WRONG.** The symptom was
@@ -7297,21 +7313,48 @@ at runtime, and every consumer of it degrades quietly rather than failing. Nothi
 *"this deployment defines no capabilities"* from *"the process that defines them timed out"*. The
 test was only the messenger, and it is the sole reason this was seen at all.
 
-**Do not close it by raising `AINDY_RUNTIME_CALLBACK_TIMEOUT_SECS`**, and do not close it in the
-test harness. Both make the symptom go away without making the failure legible. Options, in
-preference order:
+**Fixed without touching the budget or the harness, and without moving the isolation boundary.**
 
-1. **Make the failure loud.** A provider that raises should surface, not degrade to `{}` — at
-   minimum distinguish "no providers registered" from "a provider failed" in the return value.
-2. **Reconsider the isolation choice for this surface.** `runtime_capability_bundle` reads
-   registry state, which is the exact argument that put `run_tool_provider` and `planner_context`
-   in `_STATEFUL_IN_PROCESS_CALLBACK_SURFACES` (`PLANNER-SUBPROC-1`). This may be a fourth member
-   of that set rather than a timeout to tune.
-3. **Only then** consider the budget.
+**★ The measurement that reframed it: this is on the tool-execution path.**
+`_load_capability_definition_providers` is reached from `get_capability_definitions`,
+`get_capability_definition`, `get_capabilities_for_tool` and `get_capabilities_for_agent`, hence
+from `check_tool_capability` in `tool_registry.py`. So **every tool capability check spawned a
+subprocess per provider** and waited on a 30s budget. The timeout was not bad luck; it was a
+hot-path design defect with a 30-second fuse.
 
-**Expect it to flake CI until fixed, and know what makes it fire.** Both observed failures — one
-full `tests/unit` run, one `-k` subset — happened while a *second* heavy pytest run was competing
-for CPU on the same machine. Two isolated re-runs of the identical selection afterwards were
+**Measured, 10 `get_capabilities_for_tool` lookups on an idle machine: 10 subprocess
+invocations / 56.4s before, 1 / 11.4s after.** ~5.6s of subprocess per tool capability check,
+paid on every tool call and scaling linearly with the number of checks.
+
+1. **Cache each provider's bundle**, so a provider is called once rather than per check. The
+   bundle is still *applied* on every call, so clearing the definition dicts (which the test
+   fixtures do) repopulates correctly.
+2. **Never cache a failure** — a transient timeout is retried on the next call instead of
+   persisting for the process lifetime.
+3. **Log at ERROR, not WARNING**, naming what the failure costs (*"tool execution will be
+   refused"*), because the downstream error names the tool and not the cause.
+
+**★ The cache lives on the provider object, not in a module global.** A
+`_capability_providers_loaded` latch would have to be added by hand to **two** separate
+registry-reset dictionaries (`tests/fixtures/client.py` and `test_platform_only_startup.py`), and
+forgetting either leaves a stale `True` that empties the capability set permanently — which is
+this bug again, introduced by its own fix. `_capability_definition_providers` is already in both
+dictionaries, so a cache attached to the objects inside it is invalidated by every reset for free.
+
+**Rejected: adding this surface to `_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`.** That set's stated
+rationale is *"reads live in-process state a bare subprocess cannot reconstruct"*, and
+`runtime_capability_bundle` returns a **literal dict** — it does not qualify. Moving it there
+would weaken a documented boundary for a performance reason, which is the inverse of the shim
+rule (*grow the shim to match the guard, never weaken the guard*). The cache gets the same
+result without touching the contract.
+
+**Residual, stated rather than hidden:** the *first* capability lookup in a process still pays
+one subprocess spawn per provider, so a sufficiently contended host can still fail it once. The
+cache turns "every check, forever" into "once, retried on failure"; it does not make the budget
+irrelevant. If it recurs, the budget is now the honest next lever.
+
+**What made it fire.** Both observed failures — one full `tests/unit` run, one `-k` subset —
+happened while a *second* heavy pytest run was competing for CPU on the same machine. Two isolated re-runs of the identical selection afterwards were
 clean, with zero timeout warnings. So the trigger is **CPU contention starving the subprocess**,
 not test order and not any particular test file. A re-run on a quiet machine will usually pass,
 which is precisely what makes it easy to dismiss as noise.
