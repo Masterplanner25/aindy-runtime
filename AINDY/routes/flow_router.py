@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from AINDY.core.execution_helper import execute_with_pipeline
 from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
-from AINDY.services.auth_service import get_current_user, require_platform_admin_access
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user, require_platform_admin_access
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,18 @@ router = APIRouter(
     tags=["Flow Engine"],
     dependencies=[Depends(require_platform_admin_access)],
 )
+
+# ── HTTP-SCOPE-GAP-1 / KEY-SCOPE-ESCALATION-1 — per-endpoint scopes on the /platform tree ──
+#
+# `require_platform_admin_access` on the parent router returns **any** authenticated API key
+# unconditionally, on the stated assumption that "scope enforcement happens per-endpoint or
+# per-syscall". For most of this tree it did not. Demonstrated: a `flow.read`-only key reached
+# every route here, drained the dead-letter queue and **rotated the platform signing key**.
+#
+# For JWT callers nothing changes — the parent gate already required `is_admin`, and an admin
+# session derives `platform.admin` and `webhook.manage`. Only API keys are newly constrained,
+# which is the point.
+_REQUIRE_PLATFORM_ADMIN = Depends(enforce_api_key_scope(Scopes.PLATFORM_ADMIN))
 
 
 def _flow_failure(result: dict) -> str:
@@ -61,6 +74,7 @@ async def list_flow_runs(
     limit: int = 20,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     """List flow runs for the current user."""
     def handler(_ctx):
@@ -83,6 +97,7 @@ async def get_flow_run(
     run_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     """Get a single flow run with full state."""
     def handler(_ctx):
@@ -102,6 +117,7 @@ async def get_flow_run_history(
     run_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     """Get the node execution history for a flow run."""
     def handler(_ctx):
@@ -127,6 +143,7 @@ async def resume_flow_run(
     body: ResumeRequest,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     """Resume a waiting flow run with an event."""
     def handler(_ctx):
@@ -179,6 +196,7 @@ async def get_flow_registry(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     """List all registered flows and nodes."""
     def handler(_ctx):

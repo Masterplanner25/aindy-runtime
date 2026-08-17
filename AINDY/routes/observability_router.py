@@ -7,13 +7,26 @@ from sqlalchemy.orm import Session
 from AINDY.core.execution_helper import execute_with_pipeline_sync
 from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
-from AINDY.services.auth_service import get_current_user, require_platform_admin_access
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user, require_platform_admin_access
 
 router = APIRouter(
     prefix="/observability",
     tags=["Observability"],
     dependencies=[Depends(require_platform_admin_access)],
 )
+
+# ── HTTP-SCOPE-GAP-1 / KEY-SCOPE-ESCALATION-1 — per-endpoint scopes on the /platform tree ──
+#
+# `require_platform_admin_access` on the parent router returns **any** authenticated API key
+# unconditionally, on the stated assumption that "scope enforcement happens per-endpoint or
+# per-syscall". For most of this tree it did not. Demonstrated: a `flow.read`-only key reached
+# every route here, drained the dead-letter queue and **rotated the platform signing key**.
+#
+# For JWT callers nothing changes — the parent gate already required `is_admin`, and an admin
+# session derives `platform.admin` and `webhook.manage`. Only API keys are newly constrained,
+# which is the point.
+_REQUIRE_PLATFORM_ADMIN = Depends(enforce_api_key_scope(Scopes.PLATFORM_ADMIN))
 
 
 class DrainDlqRequest(BaseModel):
@@ -52,6 +65,7 @@ def get_llm_status(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     from AINDY.platform_layer.deepseek_client import get_deepseek_circuit_breaker
     from AINDY.platform_layer.openai_client import get_openai_circuit_breaker
@@ -81,6 +95,7 @@ def get_rippletrace_status(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     user_id = str(current_user["sub"])
 
@@ -209,6 +224,7 @@ def get_scheduler_status(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     user_id = str(current_user["sub"])
 
@@ -230,6 +246,7 @@ def get_request_metrics(
     limit: int = Query(50, ge=1, le=200),
     error_limit: int = Query(25, ge=1, le=200),
     window_hours: int = Query(24, ge=1, le=168),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     user_id = str(current_user["sub"])
     def handler(ctx):
@@ -255,6 +272,7 @@ def get_observability_dashboard(
     event_limit: int = Query(60, ge=1, le=200),
     agent_limit: int = Query(30, ge=1, le=100),
     health_limit: int = Query(20, ge=1, le=100),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     user_id = str(current_user["sub"])
     def handler(ctx):
@@ -276,6 +294,7 @@ def get_execution_graph(
     trace_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     user_id = str(current_user["sub"])
     def handler(ctx):
@@ -290,6 +309,7 @@ def get_queue_metrics(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     from AINDY.core.distributed_queue import get_queue
     from AINDY.platform_layer.health_service import get_memory_ingest_queue_status
@@ -320,6 +340,7 @@ def list_dead_letter(
     user_id: str | None = Query(None),
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     from AINDY.agents.dead_letter_service import list_dead_lettered_runs
 
@@ -346,6 +367,7 @@ def get_dead_letter_run(
     flow_run_id: str,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     caller_user_id = str(current_user["sub"])
 
@@ -380,6 +402,7 @@ def get_system_state(
     request: Request,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     user_id = str(current_user["sub"])
 
@@ -503,6 +526,7 @@ def drain_queue_dlq(
     body: DrainDlqRequest,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
+    _scope: None = _REQUIRE_PLATFORM_ADMIN,
 ):
     from AINDY.worker.worker_loop import drain_dead_letters
 

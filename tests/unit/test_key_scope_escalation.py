@@ -150,11 +150,19 @@ def _mint(client, scopes):
     return client.post("/platform/keys", json={"name": "probe", "scopes": scopes})
 
 
-def test_the_route_refuses_the_escalation(runtime_only_client, as_principal, mock_db):
-    """★ The reproduction, at the seam that shipped it.
+def test_a_narrow_key_cannot_reach_key_creation_at_all(
+    runtime_only_client, as_principal, mock_db
+):
+    """★ The outer gate, added later, now stops the escalation one layer earlier.
 
-    Refusal happens before any write, so this is exact on SQLite even though the *success*
-    path is not.
+    When this file was written, `POST /platform/keys` had no scope of its own — the whole
+    `/platform` tree admitted any authenticated API key — so the delegation rule *was* the only
+    control and this test drove it directly. `#465` gave the route `platform.admin`, so a
+    `flow.read` key is refused before the delegation check runs.
+
+    That is a strictly better outcome and it is why the assertion below no longer looks for
+    `scope_not_grantable`: the refusal now comes from the route gate, and demanding the inner
+    message would be asserting *which* control fired rather than that the escalation is refused.
     """
     S = _scopes()
     as_principal(_key(S.FLOW_READ))
@@ -162,35 +170,33 @@ def test_the_route_refuses_the_escalation(runtime_only_client, as_principal, moc
     response = _mint(runtime_only_client, [S.PLATFORM_ADMIN, S.MEMORY_DELETE, S.EVENT_EMIT])
 
     assert response.status_code == 403, (
-        f"a flow.read key minted {S.PLATFORM_ADMIN} — status {response.status_code}: "
+        f"a flow.read key reached key creation — status {response.status_code}: "
         f"{response.text[:300]}"
     )
-    assert "scope_not_grantable" in response.text
 
 
-def test_a_partial_escalation_is_refused_whole(runtime_only_client, as_principal, mock_db):
-    """Mixing one held scope with one it lacks must not let the request through.
+def test_delegation_still_bounds_creation_beneath_the_outer_gate(mock_db):
+    """★ Why the delegation rule stays even though the route gate now shadows it.
 
-    A subset check written as "any" rather than "all" would pass this request and issue the key
-    with both scopes.
+    Over HTTP the rule is currently **unreachable**: only a `platform.admin` holder passes the
+    route gate, and `grantable_scopes` returns everything to such a holder. So there is no
+    principal that both reaches the handler and is bounded by it — the two controls are in
+    series and the outer one is stricter.
+
+    Deleting the inner rule on that basis would be a mistake, and this test is the reason it is
+    not deleted. The two controls answer different questions: the gate asks *"may you manage
+    keys"*, the rule asks *"may you grant THIS"*. If the gate is ever loosened — to let a
+    narrower key manage its own keys, which is a reasonable thing to want — the rule is what
+    stands between that and a `flow.read` key minting `platform.admin` again.
+
+    Driven at the function rather than the route, and labelled as such: a route test that cannot
+    reach its subject is not a route test, and pretending otherwise is how a control quietly
+    becomes decorative.
     """
     S = _scopes()
-    as_principal(_key(S.FLOW_READ))
 
-    response = _mint(runtime_only_client, [S.FLOW_READ, S.PLATFORM_ADMIN])
-
-    assert response.status_code == 403, response.text[:300]
-
-    # The pipeline's exception handler reshapes HTTPException detail into a flat
-    # `{"error", "message", "details"}` envelope, so read the body as text rather than
-    # assuming FastAPI's default `{"detail": ...}`.
-    body = response.text
-    refused = body.split("may not grant ")[1].split("]")[0] + "]"
-
-    assert refused == f"['{S.PLATFORM_ADMIN}']", (
-        f"the refusal should name only the scopes that were not grantable, got {refused!r} — "
-        f"listing a scope the caller does hold sends them looking for the wrong permission"
-    )
+    assert S.PLATFORM_ADMIN not in _grantable(_key(S.FLOW_READ))
+    assert _grantable(_key(S.FLOW_READ)) == {S.FLOW_READ}
 
 
 def test_the_route_still_issues_a_key_the_caller_may_grant(
@@ -201,14 +207,17 @@ def test_the_route_still_issues_a_key_the_caller_may_grant(
     Asserted as *not 403* rather than 201: on SQLite the write itself fails on the ARRAY column
     (see the module docstring), so 201 is not available to this harness and claiming it would be
     asserting the harness rather than the guard.
+
+    The caller is now a `platform.admin` holder, because that is what the route requires since
+    `#465`. Without this, "refuses everything" would satisfy the test above.
     """
     S = _scopes()
-    as_principal(_key(S.MEMORY_READ, S.MEMORY_WRITE))
+    as_principal(_key(S.PLATFORM_ADMIN))
 
     response = _mint(runtime_only_client, [S.MEMORY_READ])
 
     assert response.status_code != 403, (
-        f"a key was refused a scope it holds — the rule is too tight: {response.text[:300]}"
+        f"an admin key was refused a scope it may grant — too tight: {response.text[:300]}"
     )
 
 

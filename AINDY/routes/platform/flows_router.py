@@ -11,6 +11,18 @@ from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 
 router = APIRouter()
 
+# ── HTTP-SCOPE-GAP-1 / KEY-SCOPE-ESCALATION-1 — per-endpoint scopes on the /platform tree ──
+#
+# `require_platform_admin_access` on the parent router returns **any** authenticated API key
+# unconditionally, on the stated assumption that "scope enforcement happens per-endpoint or
+# per-syscall". For most of this tree it did not. Demonstrated: a `flow.read`-only key reached
+# every route here, drained the dead-letter queue and **rotated the platform signing key**.
+#
+# For JWT callers nothing changes — the parent gate already required `is_admin`, and an admin
+# session derives `platform.admin` and `webhook.manage`. Only API keys are newly constrained,
+# which is the point.
+_REQUIRE_PLATFORM_ADMIN = Depends(enforce_api_key_scope(Scopes.PLATFORM_ADMIN))
+
 
 def _execute_flows(
     request: Request,
@@ -111,7 +123,7 @@ def get_flow_strategies(request: Request, current_user: dict = Depends(get_curre
 
 @router.post("/flows", status_code=201, response_model=None)
 @limiter.limit("30/minute")
-def create_flow(request: Request, body: FlowDefinition, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def create_flow(request: Request, body: FlowDefinition, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
     user_id = str(current_user["sub"])
 
     def handler(ctx):
@@ -205,7 +217,7 @@ def run_flow_endpoint(request: Request, name: str, body: FlowRunRequest, db: Ses
 
 @router.delete("/flows/{name}", status_code=204, response_model=None)
 @limiter.limit("30/minute")
-def delete_flow(request: Request, name: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def delete_flow(request: Request, name: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
     def handler(ctx):
         from AINDY.runtime.flow_registry import delete_dynamic_flow
 

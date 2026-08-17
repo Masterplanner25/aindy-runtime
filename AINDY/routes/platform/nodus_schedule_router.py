@@ -10,9 +10,22 @@ from AINDY.routes.platform.nodus_shared import (
     _validate_nodus_source,
 )
 from AINDY.routes.platform.schemas import NodusScheduleRequest
-from AINDY.services.auth_service import get_current_user
+from AINDY.auth.api_key_auth import Scopes
+from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 
 router = APIRouter()
+
+# ── HTTP-SCOPE-GAP-1 / KEY-SCOPE-ESCALATION-1 — per-endpoint scopes on the /platform tree ──
+#
+# `require_platform_admin_access` on the parent router returns **any** authenticated API key
+# unconditionally, on the stated assumption that "scope enforcement happens per-endpoint or
+# per-syscall". For most of this tree it did not. Demonstrated: a `flow.read`-only key reached
+# every route here, drained the dead-letter queue and **rotated the platform signing key**.
+#
+# For JWT callers nothing changes — the parent gate already required `is_admin`, and an admin
+# session derives `platform.admin` and `webhook.manage`. Only API keys are newly constrained,
+# which is the point.
+_REQUIRE_FLOW_EXECUTE = Depends(enforce_api_key_scope(Scopes.FLOW_EXECUTE))
 
 
 def _execute_nodus_schedule(request: Request, route_name: str, handler, *, db: Session, user_id: str, input_payload=None, success_status_code: int = 200):
@@ -41,7 +54,7 @@ def _execute_nodus_schedule(request: Request, route_name: str, handler, *, db: S
 
 @router.post("/nodus/schedule", status_code=201, response_model=None)
 @limiter.limit("30/minute")
-def create_nodus_schedule(request: Request, body: NodusScheduleRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def create_nodus_schedule(request: Request, body: NodusScheduleRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_FLOW_EXECUTE):
     user_id = str(current_user["sub"])
     if body.script:
         _validate_nodus_source(body.script, field="script")
@@ -74,7 +87,7 @@ def create_nodus_schedule(request: Request, body: NodusScheduleRequest, db: Sess
 
 @router.get("/nodus/schedule", response_model=None)
 @limiter.limit("60/minute")
-def list_nodus_schedules(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def list_nodus_schedules(request: Request, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_FLOW_EXECUTE):
     def handler(ctx):
         from AINDY.runtime.nodus_schedule_service import list_nodus_scheduled_jobs
 
@@ -86,7 +99,7 @@ def list_nodus_schedules(request: Request, db: Session = Depends(get_db), curren
 
 @router.delete("/nodus/schedule/{job_id}", status_code=204, response_model=None)
 @limiter.limit("30/minute")
-def delete_nodus_schedule(request: Request, job_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def delete_nodus_schedule(request: Request, job_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_FLOW_EXECUTE):
     def handler(ctx):
         from AINDY.runtime.nodus_schedule_service import delete_nodus_scheduled_job
 
