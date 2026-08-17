@@ -31,8 +31,30 @@ all *assume* the refusal rather than check it. Now asserted against the real VM 
 `len` and `syscall`, so a failure distinguishes *"this builtin became overridable"* from *"the
 refusal mechanism is gone"*.
 
-**Dev-environment note:** the exact pin means `pip install nodus-lang==X` succeeds and leaves a
-tree inconsistent with `pyproject.toml`. This was live here — `nodus-lang 4.1.0` installed against
-a `==4.2.0` pin, so local runs had been exercising a version the runtime does not declare. CI
-installs from `pyproject.toml` and was unaffected; the new version check fails locally, which is
-where it is useful.
+### Fixed — CI had been testing `nodus-lang 4.1.0` while the wheel required 4.2.0
+
+**★ The version check found this on its first CI run, and it is the reason the check exists.**
+
+`Runtime Contracts` and `Integration Tests` both install with:
+
+```
+python -m pip install -r AINDY/requirements.txt
+python -m pip install -e .[test] --no-deps --no-build-isolation
+```
+
+**`--no-deps` means `pyproject.toml`'s pins are never applied in CI.** The effective environment
+is `AINDY/requirements.txt` — which still said `nodus-lang==4.1.0`. The pin moved to `4.2.0` in
+#451 (FR-16, the app team's requested nodus upgrade) and that PR did not update the second file,
+which had carried `4.1.0` since the initial repo extraction.
+
+So since #451 every green run — **including the ones that signed off FR-16** — exercised the
+version being upgraded *away from*, while the published wheel required the new one. The nodus
+4.2.0 adoption was never actually tested.
+
+`AINDY/requirements.txt` is corrected to `4.2.0`, and
+`tests/unit/test_dependency_pin_agreement.py` now fails when the two sources disagree about any
+shared package. Exactly one had drifted, so this was a missed edit rather than systemic rot —
+which is what a guard is for, since the next bump can miss it identically.
+
+**Adoption note for the next nodus release: bump both files.** The guard will say so if you
+don't.
