@@ -1,16 +1,33 @@
 ---
-title: "Nodus 5.0.0 — Runtime Adoption Handoff"
+title: "Nodus 5.0.1 — Runtime Adoption Handoff"
 api_version: "1.0"
 last_verified: "2026-08-17"
 status: current
 owner: "platform-team"
 ---
 
-# Nodus 5.0.0 — adoption handoff
+# Nodus 5.0.1 — adoption handoff
 
 Written from `aindy-runtime` for whoever is working in `Nodus` / `nodus-mcp`.
 
-**One thing is required. Everything else is findings and optional suggestions.**
+> ## ✅ Resolved 2026-08-17 — both asks shipped the same day
+>
+> * **§1 (required)** — `nodus-mcp 0.1.3` floated `nodus-lang<5.0.0` to `>=4.0.0`. **Floated,
+>   not raised**, so a future nodus major will not stall the runtime the same way.
+> * **§4.2 (suggested)** — `nodus-lang 5.0.1` exposes **`GATED_BUILTINS`** as a public mapping
+>   (`{flag: GatedBuiltinGroup}` with `names`, `arity`, `capability`, `description`). The
+>   confinement sweep's source-scraping is deleted in favour of it.
+>
+> The runtime now pins `nodus-lang==5.0.1` and `nodus-mcp>=0.1.3`. Verified on 5.0.1: 31 gated
+> builtins still blocked, deny-by-default intact, `std:sys` guard and builtin-override refusal
+> sound.
+>
+> **One thing worth noting for next time:** discovery broke on 5.0.0 *and again* on 5.0.1 before
+> the API landed — 5.0.0 moved the names into the `else:` branch's tuple, 5.0.1 replaced that
+> with `block_group(...)`. Both breakages were loud rather than silent, which is the only reason
+> scraping was tolerable while it lasted. §4.2 is now moot; §4.1, §4.3 and §4.4 still stand.
+>
+> Kept as written below — the reasoning is what makes the next major cheap.
 
 ---
 

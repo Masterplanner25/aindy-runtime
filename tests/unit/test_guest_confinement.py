@@ -42,6 +42,13 @@ def _run(script: str) -> dict:
 def _sandbox_error(result: dict) -> str:
     """Return the error text, asserting the failure is a *sandbox* refusal.
 
+    ★ Callers assert the **flag name** appears, not a specific sentence. nodus 5.0.0 rephrased
+    every denial from `... allow_subprocess=False ...` to `Blocked: subprocess execution is not
+    granted; pass allow_subprocess=True to NodusRuntime to allow it`. The old assertions failed
+    on wording while the guest was still fully confined — a cosmetic break that costs an hour of
+    "is the sandbox broken?" if the test cannot distinguish the two. Naming the flag is the part
+    that carries meaning: it says *which* boundary refused.
+
     `run_one` stringifies the VM's structured error (`nodus_worker.py:463` wraps it in
     `str(...)`), so this is substring matching on a repr, not a dict lookup. That is worth
     stating because it is a real constraint on what these tests can assert: the `kind`
@@ -97,7 +104,7 @@ def test_subprocess_is_denied_and_writes_no_host_file():
     try:
         result = _run(f'let x = subprocess_shell("echo hi > {marker}")\n')
 
-        assert "allow_subprocess=False" in _sandbox_error(result)
+        assert "allow_subprocess" in _sandbox_error(result)
         assert not os.path.exists(marker), "guest script created a file on the host filesystem"
     finally:
         if os.path.exists(marker):
@@ -112,7 +119,7 @@ def test_network_is_denied():
     """
     result = _run('let x = http_get("http://example.com")\n')
 
-    assert "allow_network=False" in _sandbox_error(result)
+    assert "allow_network" in _sandbox_error(result)
 
 
 def test_host_env_is_denied():
@@ -123,7 +130,7 @@ def test_host_env_is_denied():
     """
     result = _run('let x = env_get("PATH")\n')
 
-    assert "allow_env=False" in _sandbox_error(result)
+    assert "allow_env" in _sandbox_error(result)
 
 
 # --------------------------------------------------------------------------------------
@@ -132,29 +139,28 @@ def test_host_env_is_denied():
 
 
 def _gated_builtin_names() -> dict[str, list[str]]:
-    """Read the gated builtin names out of nodus's own registry source.
+    """Read the gated builtin names from nodus's **public** registry API.
 
-    Derived rather than hardcoded so this does not rot when nodus adds a builtin: a new
-    `http_*` that the flag fails to cover shows up as a test failure instead of silently
-    widening the guest surface. The floor assertion below catches the opposite drift — names
-    silently disappearing from the gate.
+    ★ This used to scrape `nodus.builtins.registry` source with a regex, and broke on two
+    consecutive nodus releases — 5.0.0 moved the names from the `if` branch into the `else:`
+    branch's tuple, and 5.0.1 replaced that with a `block_group(...)` call, at which point the
+    pattern matched nothing at all.
+
+    Both times the breakage was **loud** — `assert groups[...]` and the floor below turned a
+    discovery failure into a red test rather than a silently empty sweep — which is the only
+    reason scraping was tolerable in the first place.
+
+    5.0.1 added `GATED_BUILTINS` as a public mapping (`{flag: GatedBuiltinGroup}` with `names`,
+    `arity`, `capability`, `description`), so the scraping is gone. This is still *derived* rather
+    than hardcoded, which is the property that matters: a builtin nodus adds to a gate shows up
+    here automatically instead of silently widening the guest surface.
+
+    `group.arity` is now available too, if `_is_blocked` ever wants to stop guessing.
     """
-    import inspect
-    import re
+    from nodus.builtins.registry import GATED_BUILTINS
 
-    import nodus.builtins.registry as registry
-
-    source = inspect.getsource(registry)
-    out: dict[str, list[str]] = {}
-    for flag in ("allow_subprocess", "allow_network", "allow_env"):
-        match = re.search(
-            rf'if getattr\(vm, "{flag}", True\):(.*?)'
-            r"(?=\n        if getattr|\n        from nodus|\Z)",
-            source,
-            re.S,
-        )
-        out[flag] = sorted(set(re.findall(r'"([a-z_0-9]+)"', match.group(1)))) if match else []
-    return out
+    assert GATED_BUILTINS, "nodus exposes GATED_BUILTINS but it is empty"
+    return {flag: sorted(group.names) for flag, group in GATED_BUILTINS.items()}
 
 
 def _is_blocked(name: str) -> bool:

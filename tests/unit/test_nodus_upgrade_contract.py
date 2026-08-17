@@ -90,22 +90,31 @@ def test_the_deny_flags_are_keyword_only(runtime_cls):
     assert not positional, f"these confinement flags are no longer keyword-only: {positional}"
 
 
-def test_confinement_is_the_runtimes_doing_not_nodus_default(runtime_cls):
-    """Recorded so nobody 'simplifies' the worker by trusting the library default.
+def test_nodus_still_defaults_to_denying(runtime_cls):
+    """★ This test caught the 5.0.0 change on the first run, and it was the *good* kind.
 
-    nodus ships these permissive (`True`). Deny-by-default is ours, applied per construction in
-    `nodus_worker`. If a future nodus flips them to `False`, this test fails — and that is a
-    *good* failure to have to read, because the worker's explicit arguments would then be
-    belt-and-braces rather than the only thing standing between a guest and the host.
+    Until 5.0.0 nodus shipped these permissive (`True`), so deny-by-default was **ours** —
+    applied per construction in `nodus_worker`, and the only thing standing between a guest
+    script and the host. The original version of this test asserted exactly that, and said in
+    its own docstring that a flip to `False` would be a good failure to have to read.
+
+    **nodus 5.0.0 flipped them to `False`.** The worker's explicit arguments are now
+    belt-and-braces rather than load-bearing, which is a genuine upstream improvement.
+
+    Kept, inverted, because the *new* proposition is worth guarding: if a later nodus reverts to
+    permissive defaults, any construction path that forgets the flags silently unconfines its
+    guest. `nodus_worker` passes them regardless — deliberately, so this repo never depends on
+    someone else's default — but a revert is something we would want to learn from a red test
+    rather than from a demonstration, which is how `GUEST-CONFINE-1` was found the first time.
     """
     parameters = inspect.signature(runtime_cls.__init__).parameters
 
-    permissive = {flag: parameters[flag].default for flag in _DENY_FLAGS}
+    defaults = {flag: parameters[flag].default for flag in _DENY_FLAGS}
 
-    assert all(value is True for value in permissive.values()), (
-        f"nodus changed its confinement defaults to {permissive}. Not necessarily a problem — "
-        f"but re-read `nodus_worker` and GUEST-CONFINE-1 before updating this test, because the "
-        f"reason the worker passes them explicitly has changed."
+    assert all(value is False for value in defaults.values()), (
+        f"nodus confinement defaults are now {defaults}, i.e. permissive again. `nodus_worker` "
+        f"still passes all three explicitly so the guest stays confined — but any other "
+        f"construction site is now unconfined by default. Re-read GUEST-CONFINE-1."
     )
 
 
