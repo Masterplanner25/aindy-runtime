@@ -42,6 +42,16 @@ def test_runtime_package_metadata_declares_console_entrypoints():
         "*.json",
         "**/*.json",
         "platform/dist/**",
+        # Added deliberately: these lived only at the repo root and so reached neither the
+        # wheel nor the sdist. `package-data` cannot match outside the package, which is why
+        # moving them under `AINDY/` was part of the same change.
+        "llms.txt",
+        "llms-full.txt",
+    ]
+    # Cargo build output must never be package data. `**/*.json` above would otherwise be
+    # free to pick up fingerprint files if a stale `build/lib` carries them across builds.
+    assert pyproject["tool"]["setuptools"]["exclude-package-data"]["AINDY"] == [
+        "memory/native/memory_bridge_rs/target/**",
     ]
     assert pyproject["project"]["optional-dependencies"]["release"] == [
         "build==1.5.0",

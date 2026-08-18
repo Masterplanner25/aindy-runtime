@@ -259,6 +259,21 @@ pip install aindy-runtime
 **Import name:** The distribution name is `aindy-runtime` but the importable module is `AINDY`
 (uppercase — it is an acronym). `import aindy_runtime` will not work.
 
+**The native memory scorer is a build-from-source accelerator, not something you install.**
+`aindy-runtime` publishes a pure-Python `py3-none-any` wheel, so **installed users run the
+Python scoring path** — which is the supported configuration, not a degraded one.
+
+The optional Rust scorer (`AINDY/memory/native/memory_bridge_rs`, a `cdylib` via pyo3) is
+**not shipped compiled**, deliberately: a `.pyd`/`.so`/`.dylib` is specific to one OS,
+architecture and CPython version, and putting one inside a `py3-none-any` wheel would install
+a broken binary for everyone on a different combination. `AINDY/memory/native_bridge.py` looks
+for a built artifact and falls back to Python when it finds none, so nothing breaks either way.
+
+The **source** ships in the sdist (`Cargo.toml`, `Cargo.lock`, `build.rs`, `src/*.rs`), so it
+can be built locally — see `AINDY/memory/native/memory_bridge_rs/BUILD.md`. Before investing in
+per-platform wheels, measure: no benchmark comparing the native scorer against the Python one
+exists in this repo, and that measurement should come first.
+
 ```python
 from AINDY._version import __version__  # correct
 from AINDY.platform_layer.deployment_contract import deployment_contract_summary

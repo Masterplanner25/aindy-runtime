@@ -9,6 +9,12 @@ description = "Self-hostable AI agent execution runtime — syscall contract, DA
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+# LICENSE is picked up by default; CONTRIBUTORS.md is named explicitly so attribution reaches
+# an installed user, not just someone browsing the repo. `license-files` is the only mechanism
+# that carries a repo-root file into a wheel (as `dist-info/licenses/`), which is what the
+# file's own promise — "anyone who installs the package gets the code; this file travels with
+# it so the credit does too" — actually requires.
+license-files = ["LICENSE", "CONTRIBUTORS.md"]
 authors = [{ name = "Shawn Knight", email = "shawnknight@the-master-plan.com" }]
 keywords = ["runtime", "fastapi", "agents", "flows", "memory", "plugins", "aindy", "llm"]
 classifiers = [
@@ -170,4 +176,14 @@ include = ["AINDY*"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"AINDY" = ["*.json", "**/*.json", "platform/dist/**"]
+"AINDY" = ["*.json", "**/*.json", "platform/dist/**", "llms.txt", "llms-full.txt"]
+
+# Belt-and-braces, and measured as such: on a *clean* build the wheel does not pick up
+# cargo's `target/` anyway, because `target/` is not inside a package and package-data
+# globs only apply to packages setuptools finds. What actually shipped build output was
+# the **sdist** — MANIFEST's `recursive-include AINDY *.json` is path-based and matched
+# ~200 cargo fingerprint files, some embedding the building machine's absolute paths.
+# `prune` in MANIFEST.in is the fix for that. This entry exists so a stale `build/lib`
+# (which is how the wheel picked them up in testing) cannot reintroduce them.
+[tool.setuptools.exclude-package-data]
+"AINDY" = ["memory/native/memory_bridge_rs/target/**"]
