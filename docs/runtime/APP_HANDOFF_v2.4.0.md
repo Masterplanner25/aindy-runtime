@@ -1,7 +1,7 @@
 ---
 title: "App Handoff — Runtime v2.4.0"
 api_version: "1.0"
-last_verified: "2026-08-17"
+last_verified: "2026-08-18"
 status: current
 owner: "platform-team"
 ---
@@ -13,6 +13,12 @@ enforced anything. Nothing changes for a signed-in user, and that claim is teste
 keys are the callers to check.**
 
 No schema change. No migration. No new env var required.
+
+**No feature requests were closed in this release.** `FR-12b` and `FR-16` appear in the changelog
+only as context for other work; the last FR movement was in v2.3.0 (`FR-14`'s branchable exit
+codes, `FR-16`'s nodus bump). Nothing on `APP-FR-*` moved here, and **FR-6 items 2+3** and
+**FR-14's remaining half** are still where they were. This release is authorization, dependency
+adoption and packaging.
 
 ---
 
@@ -135,7 +141,32 @@ this one it means the control worked.
 
 ---
 
-## 6. Soak flags — still off, still yours to exercise
+## 6. What the installed package now contains
+
+Packaging changed in this release, and it is in the published artifact:
+
+- **`AINDY/llms.txt` and `AINDY/llms-full.txt` now ship.** They previously existed only at the
+  repo root, so they reached neither the wheel nor the sdist — they served a reader who had
+  already found the repo, which is the audience that needed them least. If you point any tooling
+  at an orientation file, it can now read one from the installed package.
+- **`CONTRIBUTORS.md` ships**, as `dist-info/licenses/CONTRIBUTORS.md` in the wheel and at the
+  root of the sdist.
+- **The Rust scorer's source ships in the sdist** (`Cargo.toml`, `Cargo.lock`, `build.rs`,
+  `src/*.rs`) so it can be built locally. The **compiled** artifact deliberately does not: the
+  wheel is `py3-none-any`, and a `.pyd`/`.so` inside one installs a broken binary for anyone on a
+  different OS/arch/CPython. `native_bridge.py` falls back to the Python scorer, which is the
+  supported configuration — **installed users have always run the Python path**, and now the
+  README says so.
+- **Cargo build output no longer leaks into the sdist.** `recursive-include AINDY *.json` had
+  been matching ~200 fingerprint files under the crate's `target/`, some embedding the building
+  machine's absolute paths. It never reached PyPI — the published 2.3.0 wheel was checked and
+  contains none — because CI builds where `target/` is unpopulated. It was a local-build hazard.
+
+Nothing here requires action from you.
+
+---
+
+## 7. Soak flags — still off, still yours to exercise
 
 Unchanged from v2.3.0. These ship default-off and need app-side soak before the runtime flips
 them:
@@ -152,7 +183,7 @@ them:
 
 ---
 
-## 7. Known-open, so you are not surprised
+## 8. Known-open, so you are not surprised
 
 - **`IDEM-12`** — a second `sys.v1.agent.undo` re-invokes every compensator. Latent only because
   **zero compensators are registered**; it goes live with the first one.
@@ -163,3 +194,13 @@ them:
   process still spawns one subprocess per provider. On a heavily contended host that can still
   time out once; it now retries rather than persisting. Symptom would be a tool refused with
   *"has no registered capability mapping"*.
+
+---
+
+## 9. Landed after the tag — **not** in v2.4.0
+
+So you do not go looking for these in `2.4.0`:
+
+- **Grouped dependency bumps** — `SQLAlchemy` 2.0.52, `uvicorn` 0.52.3, `Mako` 1.4.1, `regex`
+  2026.7.19, `prometheus-fastapi-instrumentator` 8.1.0, plus the Rust `cc`/`uuid` lockfile
+  bumps. Merged to `main` after the tag; they ship in the next release.
