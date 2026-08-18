@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-08-16"
+last_verified: "2026-08-18"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -906,6 +906,61 @@ two boundaries are independent, and a green gate here would not have noticed.
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v2.3.0` release commit.
+
+### Entry 017 — 2026-08-18
+
+**Trigger:** `v2.4.0` release tag (`sandbox-escape-linux.yml`, run `32085467838`).
+**Commit:** `d5a6bcd7af00475c9a9724b68c4bc076326bfb7e`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`).
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.92s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `32085467838`).
+
+**Platform notes:**
+Seventeen-vector result on the same native-Linux gate as Entries 002–016, for the `v2.4.0`
+release commit.
+
+**Nothing in this release touches the certified boundary — verified, not assumed.**
+`git diff v2.3.0..v2.4.0` over `sandbox_runner.py`, `plugin_host.py`,
+`sandbox_certification.py` and `tests/sandbox/` is **empty**.
+
+**★ The dependency movement is a MAJOR one this time: `nodus-lang` 4.2.0 → 5.0.1** (with
+`nodus-mcp` 0.1.2 → 0.1.3). As in Entry 016, it does not touch this gate's boundary — the Tier-2
+OCI runner does not embed the Nodus VM — but it lands squarely on the **guest** boundary
+`GUEST-CONFINE-1` closed, and a major release is exactly where that boundary is most likely to
+move.
+
+It did move, and in the safe direction: **nodus 5.0.0 made `NodusRuntime` deny-by-default**, so
+the confinement this runtime had been applying by hand since `GUEST-CONFINE-1` is now also the
+library default. Verified against the real VM rather than inferred from the release notes: **all
+31 gated builtins are still refused** (7 subprocess / 18 network / 6 env — unchanged from the
+count recorded in Entry 016), and the three constructor flags are still accepted and still
+keyword-only.
+
+**★ What a green gate here would NOT have caught, and nearly hid:** four confinement tests went
+red on the bump and **none was a regression** — 5.0.0 rephrased its denial messages, and the
+test that enumerates gated builtins broke twice on registry restructuring. This suite reported
+17/17 throughout. The two boundaries are independent; had the guest actually been unconfined,
+this gate would still have said 17/17.
+
+**The scope table, restated because it is the thing most likely to be collapsed:**
+
+| Boundary | Certified by this gate? | Status after `v2.4.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | `GUEST-CONFINE-1` closed; re-verified against nodus-lang **5.0.1** by `tests/unit/test_guest_confinement.py` and `test_nodus_upgrade_contract.py`, **not** by this suite |
+| In-process tool seam | **No** | `TOOL-SEAM-ISOLATION-1`, open, P0 |
+
+**Also worth recording, though outside this gate's boundary:** `v2.4.0` is an authorization
+release — scope enforcement went from 29 of 126 registered routes to 91, closing two
+demonstrated API-key escalations (`KEY-SCOPE-ESCALATION-1`). Those are HTTP-surface boundaries,
+certified by neither this suite nor any sandbox tier, and are recorded here only so a reader of
+this log does not infer from "17/17" that the release's security work was covered by it.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.4.0` release commit.
+
+---
 
 ---
 
