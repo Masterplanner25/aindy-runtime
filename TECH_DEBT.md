@@ -734,6 +734,68 @@ in `tests/unit/test_runtime_alembic_head.py`; this one only needs to know `0015`
 
 ---
 
+## LINT-FORMAT-1 — a documented lint command the repository does not satisfy
+
+**Status: Open — P3 (cosmetic). Filed 2026-08-19.**
+
+**What it is.** `CLAUDE.md`'s Commands section listed two lint commands side by side:
+
+```bash
+ruff check AINDY/
+ruff format AINDY/
+```
+
+The first is real. The second has never been true of this tree.
+
+**Measured 2026-08-19**, with the same config CI uses (`AINDY/ruff.toml`):
+
+| Scope | Would reformat | Already formatted |
+|---|---:|---:|
+| `AINDY/` | 259 | — |
+| `tests/` | 198 | — |
+| both | **457** | 102 |
+
+**Why it matters more than a cosmetic issue normally would.** `CLAUDE.md` is the authoritative
+agent-instruction surface. An agent that reads the Commands section, runs `ruff format AINDY/`
+as documented, and commits the result produces a **~450-file diff** on top of whatever it was
+actually asked to do. The command is not wrong in isolation — it is wrong *as an instruction*,
+because following it has a blast radius nothing on the page warns about.
+
+It is also the shape this repo catalogues repeatedly: **a claim that is stated, unenforced, and
+untrue** — `DOCS-COVERAGE-CLAIM-1` (docs citing test files that did not exist),
+`ROUTE-AST-UNWIRED-1` (a verification with no call site), `DEBT-COMPAT-1` (a compatibility policy
+served over HTTP that nothing reads). Nothing about the running system differs whether the
+command is honoured, which is why it survived.
+
+**What CI actually runs** (`runtime-ci.yml`, `Runtime Lint`):
+
+```bash
+python -m ruff check AINDY tests --config AINDY/ruff.toml
+```
+
+`check`, not `format`, and over `tests` as well as `AINDY` — so the documented command was also
+narrower than the enforced one. Both halves of the line were misleading.
+
+**Not a `check`/`format` conflict.** `line-length = 120` in `AINDY/ruff.toml`, and the formatted
+output of `test_debt_registry_accuracy.py` has a longest line of 117 and passes `ruff check`. The
+two tools agree; the tree simply predates ever running one of them.
+
+**Action taken now:** the Commands section states what CI runs, and warns against running
+`format` casually. `tests/unit/test_debt_registry_accuracy.py` — the one file this cycle added
+code to — was formatted, so newly written code is not left knowingly unformatted.
+
+**★ Do NOT close this by formatting the repository in one sweep.** It rewrites almost every file,
+destroys `git blame` across all of it, and buys nothing any check verifies. If it is ever wanted,
+the only version worth doing is: format **and** add `ruff format --check` to `Runtime Lint` **in
+the same PR**. Formatting without enforcing resets the clock and nothing more — the same reason
+`NATIVE-CI-1` was not closed by building the crate once by hand.
+
+**Open question if it is ever taken up:** whether to use `.git-blame-ignore-revs` so the sweep
+commit is skippable in blame. That file does not exist in this repo today, and adding one is a
+prerequisite, not an afterthought.
+
+---
+
 ## ROUTE-GUARD-1 — an HTTPException from an unmanaged route reported as a 500
 
 **Status: FIXED (2026-08-15).** Found while building FR-12b, when a new route's deliberate
