@@ -118,6 +118,46 @@ def test_nodus_still_defaults_to_denying(runtime_cls):
     )
 
 
+def test_two_runtimes_in_one_process_do_not_share_guest_memory(runtime_cls):
+    """★ CVE-shaped, and it was live for us on the pin this test file shipped with.
+
+    nodus <= 5.0.2 bound `GLOBAL_MEMORY_STORE` at **import**, so every `NodusRuntime` in a
+    process shared one guest memory dict. `memory_put`/`memory_get` are guest builtins — any
+    `.nd` script can call them — so one tenant's script could read another's values.
+
+    **Why that reaches us specifically:** `runtime/nodus_worker_pool.py` reuses worker processes
+    across requests, and its docstring asserts *"a reused process never leaks state between
+    runs"* on the strength of `run_one` rebuilding per-request state. `run_one` cannot reset a
+    module global inside nodus, so the claim was false for this one channel. Exposure was bounded
+    by the warm pool being opt-in (`AINDY_NODUS_WARM_POOL`, default off) — bounded, not absent.
+
+    Reproduced before fixing, per the repo's mutation rule: on 5.0.1 the second runtime printed
+    `password123`; on 5.0.4 it prints `nil`. Fixed upstream in 5.0.3 (per-runtime stores, sharing
+    opt-in via `memory_store=` / `share_process_state=True`); 5.0.4 is the follow-up that
+    unbreaks a `nodus-sdk` subclass collision, which we do not depend on.
+
+    This asserts the **default**. If a future bump makes sharing the default again, or a
+    construction site starts passing `share_process_state=True`, the warm pool leaks tenant data.
+    """
+    kwargs = dict(allow_subprocess=False, allow_network=False, allow_env=False)
+    writer = runtime_cls(**kwargs)
+    reader = runtime_cls(**kwargs)
+
+    writer_result = writer.run_source('memory_put("secret", "password123")')
+    assert writer_result["ok"], f"liveness control failed: {writer_result}"
+
+    reader_result = reader.run_source('print(memory_get("secret"))')
+
+    assert reader_result["ok"], f"liveness control failed: {reader_result}"
+    assert "password123" not in reader_result["stdout"], (
+        "a second NodusRuntime in the same process read the first one's guest memory "
+        f"(stdout={reader_result['stdout']!r}). This is the nodus <= 5.0.2 import-bound "
+        "GLOBAL_MEMORY_STORE bug. With AINDY_NODUS_WARM_POOL on, worker processes are reused "
+        "across requests, so this is cross-tenant guest-memory disclosure. Do not enable the "
+        "warm pool until this passes."
+    )
+
+
 # --------------------------------------------------------------------------------------
 # The three fragile couplings CLAUDE.md names
 # --------------------------------------------------------------------------------------
