@@ -7,9 +7,19 @@ Sequential dedup is the easy half: the first call has already committed its `eff
 before the second one looks.
 
 **Contention is the risk the flag actually carries.** N callers racing the same
-`(action_type, input, scope)` all reach the gate before any of them has committed, so the
-guarantee rests on a database uniqueness constraint doing its job under a real transaction —
-which nothing in this repository has ever exercised.
+`(action_type, input, scope)` all reach the gate before any of them has committed — which
+nothing in this repository had ever exercised.
+
+★★ WHAT IT FOUND ON ITS FIRST RUN
+---------------------------------
+**`EXACTLY_ONCE` is not exactly-once under contention.** Eight concurrent identical calls ran the
+handler **twice**. That is by design — the gate degrades to `AT_LEAST_ONCE` when it loses the
+insert race to a live pending row, because strict at-most-once needs advisory locking — and
+`IDEMPOTENCY_CONTRACT.md` documents it precisely.
+
+**The gap was the index, not the code.** `CLAUDE.md`'s `IDEM-11` line said *"at-most-once is
+built"* with no concurrency caveat, and that line is what an implementer reads before flipping
+the flag. Corrected there; pinned here.
 
 ★ The flag-off control is not optional
 --------------------------------------
