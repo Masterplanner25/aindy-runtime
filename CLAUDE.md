@@ -706,23 +706,34 @@ scope creep. **Consequence: flag soak happens in `aindy-apps-monolith`, not here
 ships capabilities default-off; the app repo turns them on and lives with them. Don't plan soak
 work in this repo.
 
-**Release state (verified 2026-08-17): `v2.3.0` is the newest TAG; `2.4.0` is prepared on `main`
-and the tag is pending.** `AINDY/_version.py` and the Dockerfile pin both read `2.4.0`,
-`CHANGELOG.md` has `## 2.4.0 — 2026-08-17` with `## Unreleased` empty, and `changelog.d/` is
-drained. Schema contract stays `2026-08-15.1` and Alembic head stays `0016` — **no runtime-owned
-model changed this release**, so `bootstrap-schema` exits 0 against an existing database and the
-`Upgrade Path Guard`'s main job passes trivially (its `negative-control` is the half that carries
-meaning). `recommended_runtime_requirement` stays `>=2.0,<3.0`, so no consumer pin has to move.
+**★ Release state — there is deliberately no version number in this paragraph any more.** Read
+it from the four places that cannot go stale, and reconcile them:
 
-*This paragraph has now gone stale three times — it said `2.0.0` after 2.0.0 shipped, described
-2.1.0 as unreleased after it was tagged, and still said `v2.1.0` while 2.3.0 was live. **Verify
-against `git tag` and `CHANGELOG.md` before acting on it.***
+```bash
+git tag --sort=-creatordate | head -1      # newest tag
+cat AINDY/_version.py                      # what the next build will call itself
+grep 'aindy-runtime==' Dockerfile          # what the image installs
+sed -n '/^## Unreleased/,/^## [0-9]/p' CHANGELOG.md   # empty = drained, else a release is owed
+```
 
-> **This section has gone stale twice.** It once directed "the next release must be 2.0.0" after
-> 2.0.0 had shipped, and then described 2.1.0 as unreleased after it was tagged. **If you are
-> reading a release directive here, verify it against `git tag` and `CHANGELOG.md` before acting
-> on it.** The release *protocol* — which does not go stale — is in the `PYPI-PUBLISH-1` line of
-> the prefix registry and in `docs/runtime/RELEASE_CHECKLIST.md`.
+*Why the numbers are gone rather than corrected: this paragraph has been wrong **four** times —
+it said `2.0.0` after 2.0.0 shipped, described 2.1.0 as unreleased after it was tagged, said
+`v2.1.0` while 2.3.0 was live, and said `v2.3.0` while 2.4.0 was live. Each correction was
+accurate on the day it was written and decayed the same way. A fifth was free, so the class was
+removed instead.* Per-release facts — schema contract, Alembic head,
+`recommended_runtime_requirement`, whether `bootstrap-schema` needs `--reconcile` — belong in
+that release's `CHANGELOG.md` entry and app handoff, where they stay attached to the release
+they describe.
+
+**What does not decay, and is why this section still exists: the newest *tag* and the newest
+*fix* are different things.** Work merged after a tag is in no installable release until the
+next one is cut — `2.4.0` shipped with the `nodus-lang` pin that `f7f3555` had already fixed on
+`main`, which is the whole reason `2.4.1` exists. **Before telling anyone a fix has shipped, run
+`git tag --contains <commit>`;** "it is on `main`" and "it is released" are separate claims and
+only the first is cheap to verify.
+
+The release *protocol* — which does not go stale either — is in the `PYPI-PUBLISH-1` line of the
+prefix registry and in `docs/runtime/RELEASE_CHECKLIST.md`.
 
 **Standing decisions** (full record: `TECH_DEBT.md` → `DECISIONS-2026-08-01`):
 

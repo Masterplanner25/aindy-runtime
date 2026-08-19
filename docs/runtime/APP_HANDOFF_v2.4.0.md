@@ -1,7 +1,7 @@
 ---
 title: "App Handoff — Runtime v2.4.0"
 api_version: "1.0"
-last_verified: "2026-08-18"
+last_verified: "2026-08-19"
 status: current
 owner: "platform-team"
 ---
@@ -13,6 +13,19 @@ enforced anything. Nothing changes for a signed-in user, and that claim is teste
 keys are the callers to check.**
 
 No schema change. No migration. No new env var required.
+
+> **★ Upgrade to `2.4.1`, not `2.4.0`.** Everything below still applies unchanged — `2.4.1` is a
+> patch on top of it with no schema change, no migration, no new env var, and no further scope
+> movement. It exists because `2.4.0` shipped with `nodus-lang` pinned at `5.0.1`, and
+> `nodus-lang <= 5.0.2` shares one guest memory dict across every `NodusRuntime` in a process.
+>
+> **Whether that reached you depends on one flag: `AINDY_NODUS_WARM_POOL`.** It is off by
+> default. Left off, worker processes are not reused and this is latent — upgrade at your
+> convenience. **Turned on, two tenants' `.nd` scripts served by the same warm worker could read
+> each other's `memory_put`/`memory_get` values** — upgrade before anything else in this
+> handoff, or turn the flag off until you have.
+>
+> No app-side change is needed either way; the fix is entirely in the pin.
 
 **No feature requests were closed in this release.** `FR-12b` and `FR-16` appear in the changelog
 only as context for other work; the last FR movement was in v2.3.0 (`FR-14`'s branchable exit
