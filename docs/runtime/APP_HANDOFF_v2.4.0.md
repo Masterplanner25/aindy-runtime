@@ -26,6 +26,8 @@ No schema change. No migration. No new env var required.
 > handoff, or turn the flag off until you have.
 >
 > No app-side change is needed either way; the fix is entirely in the pin.
+>
+> Full detail — including the two dependency bumps that need a second look on your side — is in **`APP_HANDOFF_v2.4.1.md`**.
 
 **No feature requests were closed in this release.** `FR-12b` and `FR-16` appear in the changelog
 only as context for other work; the last FR movement was in v2.3.0 (`FR-14`'s branchable exit

@@ -18,6 +18,7 @@ That is unambiguous. It does **not** try to parse the prose for partial closure:
 `IDEM-11` legitimately describe closed halves while remaining open, and a checker that guessed at
 those would produce false positives and be disabled within a month.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -149,20 +150,15 @@ def test_the_size_cap_is_a_ratchet_not_a_ceiling_we_are_far_below():
     reason to delete this test.
     """
     sections = _registry_sections()
-    largest_open = max(
-        (len(line) for h, e in sections.items() if h.startswith("Open") for line in e), default=0
-    )
-    largest_closed = max(
-        (len(line) for h, e in sections.items() if h.startswith("Closed") for line in e), default=0
-    )
+    largest_open = max((len(line) for h, e in sections.items() if h.startswith("Open") for line in e), default=0)
+    largest_closed = max((len(line) for h, e in sections.items() if h.startswith("Closed") for line in e), default=0)
 
     assert largest_open > _MAX_ENTRY_BYTES * 0.7, (
         f"largest open entry is {largest_open}B against a {_MAX_ENTRY_BYTES}B cap — the cap is "
         "no longer close to the data. Ratchet it down."
     )
     assert largest_closed > _MAX_CLOSED_ENTRY_BYTES * 0.7, (
-        f"largest closed entry is {largest_closed}B against a {_MAX_CLOSED_ENTRY_BYTES}B cap — "
-        "ratchet it down."
+        f"largest closed entry is {largest_closed}B against a {_MAX_CLOSED_ENTRY_BYTES}B cap — ratchet it down."
     )
 
 
@@ -176,10 +172,8 @@ def test_the_registry_stays_a_minority_of_the_file():
     """
     text = _CLAUDE.read_text(encoding="utf-8")
     lines = text.split("\n")
-    start = next(
-        i for i, ln in enumerate(lines) if ln.startswith("## TECH_DEBT.md — prefix registry")
-    )
-    end = next(i for i, ln in enumerate(lines[start + 1:], start + 1) if ln.startswith("## "))
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("## TECH_DEBT.md — prefix registry"))
+    end = next(i for i, ln in enumerate(lines[start + 1 :], start + 1) if ln.startswith("## "))
     registry = len("\n".join(lines[start:end]))
 
     share = registry / len(text)
