@@ -446,6 +446,40 @@ jobs:
           --cov=AINDY
           --cov-report=xml
 
+      # ── Soak: the same suite with the gated flags ON ────────────────────────
+      #
+      # Eight registry items have "soak, then flip" as their remaining work, and nothing has
+      # ever run this suite with any of those flags enabled. The functional tests above prove
+      # each mechanism is CORRECT; this step is the only place they run under CONTENTION with
+      # the flag on, which is the risk the flags actually carry.
+      #
+      # ★ Non-blocking on purpose, and this is the part to get right. A soak that can red-line
+      # unrelated PRs on its first flake gets disabled within a week, and a disabled check is
+      # worse than an advisory one because it still looks present. It reports; it does not gate.
+      # Promote it to required only after it has been green across a release window AND has been
+      # made to go red on purpose — "it went green" is worth nothing until something has made it
+      # fail (see the trusting-a-green-check catalogue).
+      #
+      # ★ It runs the WHOLE suite, not `-k soak`. The soak tests set their own flags with
+      # monkeypatch — they are self-contained and already run in the step above, testing both
+      # flag states — so re-running only those with env flags on would be a near-duplicate that
+      # measures nothing new. The question this step answers is the other one: does turning the
+      # flag on break anything ELSE that was passing.
+      #
+      # ★ The flag-off control lives INSIDE the soak tests, not here: each one drives the same
+      # workload with the gate off and asserts the un-deduplicated result, which is what proves
+      # the concurrency is real. Without that, a serialised drive would dedup by accident and
+      # the soak would read as evidence while measuring nothing.
+      - name: Soak — the WHOLE suite with the gated flags ON (advisory)
+        continue-on-error: true
+        env:
+          AINDY_SYSCALL_IDEMPOTENCY: "true"
+          AINDY_TOOL_IDEMPOTENCY: "true"
+        run: >
+          python -m pytest
+          -c pytest.integration.ini
+          -q
+
       - name: Upload integration coverage report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
