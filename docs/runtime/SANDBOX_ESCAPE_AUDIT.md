@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-08-18"
+last_verified: "2026-08-19"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -959,6 +959,46 @@ this log does not infer from "17/17" that the release's security work was covere
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v2.4.0` release commit.
+
+---
+
+## Entry 018 — 2026-08-19
+
+**Trigger:** `v2.4.1` release tag (`sandbox-escape-linux.yml`, run `32282549887`).
+**Commit:** `d6c64d9a6f4b7525f05b0a10af809f80b5066bf1`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:6857d2dae63e052057f2db389a7061188ac9a92a3fa8d402bde68f36df6fada1`.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.81s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `32282549887`).
+Six attack vectors: `env_leak`, `filesystem_escape`, `network_escape`, `path_boundary`,
+`privilege_escalation`, `process_escape`.
+
+**This entry is short because the release is small, and that is the finding.**
+`git diff v2.4.0..v2.4.1` over `sandbox_runner.py`, `plugin_host.py`, `sandbox_certification.py`
+and `tests/sandbox/` is **empty**. Twenty files changed in total; the only non-doc source change
+is a docstring correction in `nodus_worker_pool.py`.
+
+**★ But read Entry 017's warning again before reading this 17/17 as reassurance.** `v2.4.1`
+exists *because* of a security fix — `nodus-lang` 5.0.1 → 5.0.4, closing a cross-runtime guest
+memory disclosure — **and this gate would have reported 17/17 either way.** Entry 017 said the
+same thing prospectively about the 4.2.0 → 5.0.1 major: the two boundaries are independent, and
+the Tier-2 OCI runner does not embed the Nodus VM. One release later that stopped being a
+hypothetical. The guest boundary was actually wrong on the pin `v2.4.0` shipped, and every green
+check in this log was green throughout.
+
+The guest-side verification is `tests/unit/test_nodus_upgrade_contract.py::test_two_runtimes_in_one_process_do_not_share_guest_memory`
+(mutation-tested 2/11 against 5.0.1) and `tests/unit/test_guest_confinement.py` — **not this
+suite**, which is why the scope table below is restated rather than assumed.
+
+| Boundary | Certified by this gate? | Status after `v2.4.1` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | `GUEST-CONFINE-1` closed; guest memory isolation newly pinned against nodus-lang **5.0.4**. Residual open: nothing sets the guest's `cwd`, so `allowed_paths` still defaults to an inherited directory |
+| In-process tool seam | **No** | `TOOL-SEAM-ISOLATION-1`, open, P0 — unchanged |
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.4.1` release commit.
 
 ---
 
