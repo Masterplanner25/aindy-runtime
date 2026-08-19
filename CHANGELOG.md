@@ -2,6 +2,93 @@
 
 ## Unreleased
 
+## 2.4.1 — 2026-08-19
+
+A patch release carrying one security-relevant dependency fix and the grouped dependency
+bumps. **No runtime-owned model changed**, so the schema contract stays `2026-08-15.1`, the
+Alembic head stays `0016`, and `bootstrap-schema` exits 0 against an existing database with
+nothing to reconcile. No route began enforcing a new scope, so no caller loses access.
+
+`2.4.0` shipped with `nodus-lang` at the affected `5.0.1` pin — the fix landed on `main` after
+that tag, which is what this release exists to close.
+
+### Changed — `nodus-lang` pinned to 5.0.4 (was 5.0.1) (#488)
+
+**Operators: read this if you have enabled `AINDY_NODUS_WARM_POOL`.** It is off by default and
+this is latent for every deployment that left it that way.
+
+- Bumped `nodus-lang` `5.0.1` → `5.0.4` in `pyproject.toml` and `AINDY/requirements.txt`.
+- **This is a security fix, not a routine bump.** `nodus-lang <= 5.0.2` bound its
+  `GLOBAL_MEMORY_STORE` at **import**, so every `NodusRuntime` constructed in one process shared a
+  single guest memory dict. `memory_put`/`memory_get` are guest builtins available to any `.nd`
+  script, so one script could read another's stored values. Upstream 5.0.3 gives each runtime its
+  own store; sharing is now opt-in.
+- **Why it reached the runtime:** `AINDY/runtime/nodus_worker_pool.py` reuses worker processes
+  across requests. Its docstring claimed a reused process "never leaks state between runs" on the
+  strength of `run_one` rebuilding per-request state — but `run_one` cannot reset a module global
+  inside a dependency. **With `AINDY_NODUS_WARM_POOL` enabled on an affected pin, two tenants'
+  scripts served by the same warm worker could read each other's guest memory.** The pool is
+  opt-in and off by default, so this was latent rather than live. The docstring has been corrected.
+- Regression guard added:
+  `tests/unit/test_nodus_upgrade_contract.py::test_two_runtimes_in_one_process_do_not_share_guest_memory`,
+  mutation-tested against 5.0.1.
+- `nodus-mcp` is unchanged at `>=0.1.3` and resolves against 5.0.4, so `aindy-runtime[mcp]`
+  remains installable. This retires the second instance of `MCP-SDK-2X-1`, where a
+  `nodus-lang<5.0.0` cap in `nodus-mcp` had blocked a nodus major.
+
+### Changed — dependency bumps, grouped (#485)
+
+Nine dependabot PRs taken as one, because `strict: true` branch protection means each
+individual merge forces a rebase of the other eight, and because dependabot resolves each
+package independently — grouping is necessary but not sufficient, so the set was hand-aligned
+and verified to resolve together.
+
+| Package | From | To |
+|---|---|---|
+| `SQLAlchemy` | 2.0.51 | 2.0.52 |
+| `uvicorn` | 0.52.1 | 0.52.3 |
+| `Mako` | 1.3.12 | 1.4.1 |
+| `regex` | 2026.6.28 | 2026.7.19 |
+| `prometheus-fastapi-instrumentator` | 8.0.2 | 8.1.0 |
+| `cc` (Rust build-dep) | 1.4.1 | 1.4.3 |
+| `uuid` (Rust) | 1.24.0 | 1.24.1 |
+
+Every Python pin moved in **both** `pyproject.toml` and `AINDY/requirements.txt`. CI installs
+the second and then `pip install -e . --no-deps`, so a bump applied to only the first is a bump
+CI never exercises — which is exactly how `nodus-lang` was tested at 4.1.0 for four months while
+the wheel required 4.2.0. `test_dependency_pin_agreement.py` now fails when they disagree.
+
+The Rust bumps are lockfile-only — `Cargo.toml` declares caret ranges — and pull
+`find-msvc-tools` 0.1.10 → 0.1.11 as a transitive of `cc`.
+
+**★ The two GitHub Actions bumps were really a consistency defect, and in a workflow added this
+release.** Dependabot proposed `actions/checkout` 4 → 7 and `actions/setup-python` 5 → 7. All 34
+other usages across the workflows are **SHA-pinned with a version comment**; only
+`upgrade-path-guard.yml` used floating `@v4` / `@v5` tags. Rather than bump a tag, both are now
+pinned to the same commit SHAs the rest of the repo already uses, so a moved tag cannot change
+what runs. No floating action tag remains in any workflow.
+
+**Verified, not assumed:** the full declared set resolves (`pip install --dry-run -r
+AINDY/requirements.txt`, and again with the separately-installed MCP extra); the Rust crate
+builds `cargo build --locked --release`; and the native scorer was **loaded and exercised** with
+`AINDY_REQUIRE_NATIVE_BRIDGE=1` rather than left to skip — a skip reads green, which is
+`NATIVE-CI-1`.
+
+**Release notes read for every pin that moved, at release time.** The rule this satisfies was
+added in #490 *because* of `nodus-lang`; this is its first application, and it changed two
+readings. `Mako` 1.4.0 is a **breaking** release — it raises its Python floor to 3.10 and its
+`MarkupSafe` floor to 2.0 — which the version distance (`1.3.12 → 1.4.1`) does not show;
+`requires-python = ">=3.11"` and `MarkupSafe==3.0.3` satisfy both, so the bump is safe here and
+would not have been on an older floor. `SQLAlchemy` 2.0.52 carries two behaviour changes,
+`aliased()` on select/union constructs and `Table.to_metadata()` copying rather than reusing
+default objects; neither API appears anywhere under `AINDY/`, checked rather than assumed. The
+rest are benign for this runtime: `uvicorn` 0.52.2/0.52.3 are `zttp` parser updates (bodyless
+request receives, parsing performance), `regex` 2026.7.19 fixes two segfaults reachable only
+through crafted recursion/fuzzy patterns and is a transitive dependency we never import, and
+`prometheus-fastapi-instrumentator` 8.1.0's `root_path` and nested-app label changes cannot
+reach us — **it is declared in both pin files and imported nowhere in the codebase.**
+
+
 ## 2.4.0 — 2026-08-17
 
 ### Fixed — `llms.txt` and the Rust source were missing from the distribution
