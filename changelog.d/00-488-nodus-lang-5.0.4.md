@@ -1,4 +1,4 @@
-### Changed — `nodus-lang` pinned to 5.0.4 (was 5.0.1) (#491)
+### Changed — `nodus-lang` pinned to 5.0.4 (was 5.0.1) (#488)
 
 **Operators: read this if you have enabled `AINDY_NODUS_WARM_POOL`.** It is off by default and
 this is latent for every deployment that left it that way.
