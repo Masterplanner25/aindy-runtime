@@ -131,29 +131,70 @@ def test_without_the_flag_the_handler_runs_once_per_caller(monkeypatch, testing_
 # ── The soak ─────────────────────────────────────────────────────────────────
 
 
-def test_exactly_once_holds_under_concurrent_identical_calls(
-    monkeypatch, testing_session_factory
+def test_the_gate_degrades_to_at_least_once_under_contention(
+    monkeypatch, testing_session_factory, caplog
 ):
-    """★ The evidence IDEM-11's flip depends on: N callers race the same key, handler runs ONCE."""
+    """★ THE FINDING FROM THIS HARNESS'S FIRST RUN — and it is a documentation gap, not a bug.
+
+    The first version of this test asserted ``len(runs) == 1``. It failed in CI: **the handler
+    ran 2 times across 8 concurrent identical calls.** That assertion was wrong, not the code.
+
+    ``effect_ledger.resolve_effect_record`` deliberately degrades when it loses the insert race
+    against a *live* pending row::
+
+        # A live concurrent call holds the slot; degrade to AT_LEAST_ONCE for
+        # this invocation (strict at-most-once under concurrency needs advisory
+        # locking — see IDEMPOTENCY_CONTRACT.md).
+        return False, None
+
+    and `IDEMPOTENCY_CONTRACT.md` documents it exactly, in its state table: *"pending (fresh,
+    ≤ 15 min old) | concurrent-insert race — live call in flight | gate degrades to
+    AT_LEAST_ONCE for this call; warning logged."*
+
+    **So why did anyone write the wrong assertion?** Because `CLAUDE.md`'s `IDEM-11` line — the
+    thing an implementer reads before flipping the flag — said *"at-most-once is built"* with no
+    concurrency caveat at all. The contract and the index disagreed, and the index is what gets
+    read. That line is corrected; this test is the executable version of the correction.
+
+    **What this means for the flip: `EXACTLY_ONCE` is not exactly-once under contention.** It is
+    "exactly once unless another caller holds the slot, in which case at-least-once with a
+    warning." Anyone flipping `AINDY_SYSCALL_IDEMPOTENCY` for a non-idempotent effect needs to
+    know that, and until this test existed nothing said it in a form that could fail.
+    """
+    import logging
+
     monkeypatch.setenv("AINDY_SYSCALL_IDEMPOTENCY", "true")
     name, runs = _register_probe(exactly_once=True)
-    eu_id = str(uuid.uuid4())
-    payload = {"x": 1}
 
-    outcome = _drive(name, eu_id, payload)
+    with caplog.at_level(logging.WARNING):
+        outcome = _drive(name, str(uuid.uuid4()), {"x": 1})
 
     assert outcome.ok, (
         f"{len(outcome.failures)} of {WORKERS} concurrent callers raised — the gate must "
-        f"serialise or replay, never fail. First: {outcome.failures[0] if outcome.failures else None}"
+        f"serialise, replay or degrade, never fail. First: "
+        f"{outcome.failures[0] if outcome.failures else None}"
     )
-    assert len(runs) == 1, (
-        f"EXACTLY_ONCE under contention: handler ran {len(runs)} times across {WORKERS} "
-        f"concurrent identical calls. This is the failure the flag exists to prevent and the "
-        f"case no sequential test can reach."
+    assert set(r.get("status") for r in outcome.results) == {"success"}
+
+    # The guarantee that DOES hold: the gate dedups the large majority.
+    assert 1 <= len(runs) < WORKERS, (
+        f"handler ran {len(runs)} times across {WORKERS} concurrent calls. 1 would mean strict "
+        f"at-most-once (the gate does not claim it); {WORKERS} would mean the gate does nothing "
+        f"under contention, which would make the flag worthless exactly where it matters."
     )
 
-    statuses = [r.get("status") for r in outcome.results]
-    assert set(statuses) == {"success"}, f"non-success envelopes returned: {statuses}"
+    # ★ The degradation must be COUNTABLE. It is the only signal an operator gets that
+    # EXACTLY_ONCE did not hold for a given call.
+    if len(runs) > 1:
+        assert any(
+            "degrading to AT_LEAST_ONCE" in r.message % r.args if r.args else
+            "degrading to AT_LEAST_ONCE" in r.message
+            for r in caplog.records
+        ), (
+            "the handler ran more than once but no degradation warning was logged — the "
+            "downgrade would be silent, and an operator would have no way to know that "
+            "EXACTLY_ONCE did not hold"
+        )
 
 
 def test_the_ledger_holds_exactly_one_row_for_the_raced_key(

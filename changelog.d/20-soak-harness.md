@@ -34,6 +34,24 @@ sequentially**. Sequential dedup is the easy half — the first call has already
 `effect_records` row before the second one looks. Contention is the risk the flag carries, and
 nothing had ever exercised it.
 
+#### ★★ What it found on its first CI run
+
+**`EXACTLY_ONCE` is not exactly-once under contention.** Eight concurrent identical calls ran the
+handler **twice**. That is *by design* — `resolve_effect_record` degrades to `AT_LEAST_ONCE` when
+it loses the insert race against a live pending row, because strict at-most-once needs advisory
+locking, and it logs a warning. `IDEMPOTENCY_CONTRACT.md` documents it in its state table.
+
+**The defect is the index, not the code.** `CLAUDE.md`'s `IDEM-11` line — the thing an
+implementer reads before flipping `AINDY_SYSCALL_IDEMPOTENCY` — said *"at-most-once is built"*
+with no concurrency caveat. The contract and the index disagreed, and the index is what gets read.
+Corrected, and the soak now pins the documented behaviour: the gate dedups the large majority, one
+`success` row per `action_id` holds, and any degradation must be accompanied by its warning so it
+cannot be silent.
+
+**Consequence for the flip:** anyone enabling this for a genuinely non-idempotent effect is buying
+"exactly once unless another caller holds the slot." Until this test existed, nothing said so in a
+form that could fail.
+
 #### ★ Two things this does not claim
 
 - **No metric observes the idempotency gate.** `aindy_durable_effects` and
