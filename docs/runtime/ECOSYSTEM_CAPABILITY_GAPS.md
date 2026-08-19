@@ -1,7 +1,7 @@
 ---
 title: "Ecosystem Capability Gaps — Corrected aindy-runtime/Nodus Lens"
 api_version: "1.0"
-last_verified: "2026-06-26"
+last_verified: "2026-08-17"
 status: current
 owner: "platform-team"
 ---
@@ -25,8 +25,12 @@ stranded in the research directory. The full per-project audits and the correcte
 The v1 analysis discounted nearly every rating on three false premises. All three are corrected and
 source-cited:
 
-1. **nodus-lang is `4.0.5`, not `3.0.2`** — `pyproject.toml:50`, `AINDY/requirements.txt:27`, installed
-   package all 4.0.5. "3.0.2" survives only in a historical code comment and a closed tech-debt note.
+1. **nodus-lang is not `3.0.2`** — *(version updated 2026-08-17: the pin is now **`nodus-lang==5.0.1`**
+   with `nodus-mcp>=0.1.3`, in `pyproject.toml` and `AINDY/requirements.txt`, which must agree —
+   `tests/unit/test_dependency_pin_agreement.py` enforces it. This line read "4.0.5" and was quoted at
+   that value by four external analyses; the standing point is that the embed is current, not that it
+   is any particular number, so re-read the pin rather than this line.)* "3.0.2" survives only in a
+   historical code comment and a closed tech-debt note.
 2. **The AINDY↔Nodus integration is LIVE on the execution path**, not "two decoupled layers / unbuilt."
    `.nd` scripts run via `sys.v1.nodus.execute` → `NodusRuntimeAdapter._execute()` → subprocess
    `AINDY/runtime/nodus_worker.py`; the host builtin `sys(name, payload)` (`nodus_worker.py:167`) calls
@@ -47,12 +51,12 @@ Only **G6** (and, narrowly, **G5a**) are debt-shaped. The rest are deferred road
 
 | # | Gap | Class | Severity | Existing tracking | Who leads in the field |
 |---|---|---|---|---|---|
-| **G1** | **Event-sourced durable execution / transparent crash continuation.** Non-waiting `running` flows are marked FAILED on restart; no replay log. (WAIT/RESUME + rehydration + ResumeWatchdog already cover *suspended* flows.) | Roadmap | **P0** | `ECOGAP-1` (new) | Temporal (gold); LangGraph partial; ADK/OpenHands/OI ship event logs |
-| **G2** | **Hostile-safe sandboxing — strong-VM tier on non-Linux.** *(Audit overstated this — see correction below.)* Container-grade is closed/certified/escape-tested cross-platform; the residual is the `strong_sandbox_vm` (dedicated-VM, hostile-third-party) tier being Linux-only, plus the dev default being unsandboxed by design. | Roadmap | **P2** (was wrongly P0) | **C2 (closed), C3 (open)** | OpenHands/OI/SWE-agent at container-to-strong; near parity |
-| **G3** | **Provider breadth + embedding SPOF.** Only OpenAI + DeepSeek concretely in tree; OpenAI hard-required for embeddings. | Roadmap | **P1** | **MEMORY-EMBEDDING-PROVIDER-1** + `ECOGAP-3` (LLM breadth) | ADK (100+), MS (~20), MetaGPT (~27), CrewAI (5+cache) |
+| **G1** | **Event-sourced durable execution / transparent crash continuation.** *(Corrected 2026-08-17 — this row described the state before ECOGAP-1 Phase 1 merged 2026-07-08.)* Still true **in default configuration**: a non-waiting `running`/`executing` flow is failed by the stuck-run scanners. But `core/flow_continuation.py` + `core/agent_continuation.py` + the `FlowHistory` fold now provide checkpoint-resume from the last committed node — **opt-in and default-off** (`AINDY_DURABLE_CONTINUATION`), continuation-safe flows only. Checkpoint resume, not replay. (WAIT/RESUME + rehydration + ResumeWatchdog already cover *suspended* flows.) | Roadmap | **P0** | `ECOGAP-1` (Phases 1+2+2a shipped opt-in; DUR-1..4 delivered) | Temporal (gold); LangGraph partial; ADK/OpenHands/OI ship event logs |
+| **G2** | **Hostile-safe sandboxing — strong-VM tier on non-Linux.** *(Audit overstated this — see the correction notice below.)* Container-grade is closed/certified/escape-tested cross-platform; the residual is the `strong_sandbox_vm` (dedicated-VM, hostile-third-party) tier being Linux-only, plus the dev default being unsandboxed by design. | Roadmap | **P2** (was wrongly P0) | **C2 (closed), C3 (open)** | **SWE-agent + OpenClaw** — ★ **the witness list was wrong twice; see the G2 correction notice before citing this row** |
+| **G3** | **Provider breadth + embedding SPOF.** *(★ CLOSED-IN-SUBSTANCE 2026-07-12 via ECOGAP-3; this row was NOT updated and the stale text propagated — corrected 2026-08-17.)* It read *"Only OpenAI + DeepSeek concretely in tree; OpenAI hard-required for embeddings."* **Both halves are now false:** the LLM registry is open (`register_llm_provider`, `FallbackLLMClient`, `registered_provider_names`) with **four** built-ins — `openai`, `deepseek`, `anthropic`, `azure_openai` — and embeddings run behind `AINDY_EMBEDDING_PROVIDER` with a `local` sentence-transformers path plus a `memory reembed` migration. Residual: built-in *breadth* by count still trails the field; **extensibility no longer requires a core edit.** | Roadmap | **P3** (was P1) | **MEMORY-EMBEDDING-PROVIDER-1** + `ECOGAP-3` (shipped) | ADK (100+), MS (~20), MetaGPT (~27), CrewAI (5+cache) |
 | **G4a** | **Capability-gated egress + secret-broker** (MCP-as-syscall-boundary). Runtime-owned, trusted/enforced half. | Roadmap | **P1** | `ECOGAP-4` (new) | OpenHands (control-plane MCP host + key proxy) |
-| **G4b** | **Concrete MCP/A2A wire adapters.** App/plugin layer, registered via the plugin ABI — *not* a kernel primitive. | Hosted/plugin | P2 | `ECOGAP-4` (new) | CrewAI (MCP+A2A client), ADK/MS (A2A edge) |
-| **G5a** | **Durable timer / misfire handling.** *(SHIPPED 2026-07-12 — see ECOGAP-5.)* Fixed a latent bug where restored jobs failed to register with the real scheduler; added per-job `misfire_policy` (`skip`/`run_once`) with a coalesced downtime catch-up. FireTime primitive deferred. | Debt (small) | **P3** | `ECOGAP-5` (5a shipped) | Temporal (durable timer queue) |
+| **G4b** | **Concrete MCP/A2A wire adapters.** *(★ MCP SHIPPED both directions 2026-07-11, opt-in — this row was not updated and an external analysis published "[Observed] the runtime has no MCP client" against a pin a month later. Corrected 2026-08-17.)* **In tree:** `platform_layer/mcp_client.py` (#222 — discovers a remote server's tools and registers each via `register_tool` under a dedicated `MCP_EGRESS_CAPABILITY`, distinct from `outbound.http`, so remote tools pass the same `execute_tool` gate as local ones) and `platform_layer/mcp_server.py` (#223 — stdio + SSE, syscall allowlist, auth hook). Both default-off; `[mcp]` extra. **Still absent: A2A — zero matches under `AINDY/`.** | Hosted/plugin | P2 (**A2A only**) | `ECOGAP-4` (G4b MCP shipped) | CrewAI (MCP+A2A client), ADK/MS (A2A edge) |
+| **G5a** | **Durable timer / misfire handling.** *(SHIPPED 2026-07-12 — see ECOGAP-5.)* Fixed a latent bug where restored jobs failed to register with the real scheduler; added per-job `misfire_policy` (`skip`/`run_once`) with a coalesced downtime catch-up. FireTime primitive deferred. **★ Shipped reference for the residual (2026-08-19): DBOS's `workflow_schedules` carries `automatic_backfill` beside `last_fired_at` — backfill as a per-schedule declared property rather than a global policy.** | Debt (small) | **P3** | `ECOGAP-5` (5a shipped) | Temporal (durable timer queue) |
 | **G5b** | **Workflow-as-data.** *(Largely DELIVERED via RTR-1 — tracking was stale.)* Ships as the `NodusWorkflow` table (versioned `.nd` source artifact) + `register`/`rehydrate`/`run_nodus_workflow`; `FLOW_REGISTRY` holds only runtime kernel flows, not business creep. JSON-graph variant deferred. | Roadmap (Nodus) | **P2** | `ECOGAP-5` (5b delivered) | Temporal (CHASM workflow-as-data) |
 | **G6** | **Execution-path test coverage.** *(Corrected 2026-07-12 — see ECOGAP-6.)* Surface-B has real-subprocess/real-PG coverage (`test_agent_vm_parity`, `test_planner_loop_*`) and CI runs the real PG+Redis integration tier; the true gap was `worker/worker_loop.py` (zero) + continuation resume (unit-only). Now largely closed. | **Debt** | **P2** | `ECOGAP-6` (largely closed) | internal hygiene; no external leader |
 
@@ -63,6 +67,34 @@ which protocol schema, which cadence) is app/data the runtime interprets. By tha
 runtime**, not new creep.
 
 ## G2 — correction notice (the ecosystem audit was wrong)
+
+**★ Second correction, 2026-08-19 — the *witnesses* were wrong, and so was the framing.**
+
+The "who leads" column read **"OpenHands/OI/SWE-agent at container-to-strong; near parity."**
+Two of those four cited witnesses do not survive contact with their own source:
+
+| Cited | Standing after verification |
+|---|---|
+| **Open Interpreter** | **Discounted** (2026-08-18) — a fork of the Codex monorepo; `package.json` names it `codex-monorepo` and the `sandboxing/` crates credited to it are `codex-rs`'s |
+| **OpenHands** | **Materially weakened** (2026-08-19) — `openhands/app_server/sandbox/docker_sandbox_service.py` sets **no** `mem_limit`, `nano_cpus`, `security_opt`, `seccomp`, `apparmor`, `cap_drop`, `user=`, `read_only` or `pids_limit`. A container per session **with default settings**. The control plane holds the Docker client directly (`:102`) — its own audit: *"compromise of the FastAPI app = host takeover."* Only the **remote** backend carries `runtime_class` (gvisor/sysbox), enforced in an external service no audit could inspect |
+| **SWE-agent** | **Stands** — tools are installed *into* the deployment; the boundary is structural, not a wrapper around host execution |
+| **OpenClaw** | **Stands** — bind mounts, network mode, seccomp and AppArmor validated and refused before container start |
+
+**★ And the framing was wrong, not only the count.** This row has been read as *"the
+execution-sandbox peers are materially ahead."* **On container hardening, we are ahead of OpenHands
+on the self-hosted path**: `ContainerizedOciSandboxRunner` applies a read-only rootfs, a read-only
+plugin mount and `--pids-limit`, is escape-tested 17/17 across six vector classes every release,
+and reports an assurance ceiling that refuses to overclaim.
+
+**What this runtime actually lacks is narrower, and each half is already tracked:**
+
+1. **Default-on** — `insecure_dev_subprocess` is the default outside distributed profiles.
+2. **Wiring** — `TOOL-SEAM-ISOLATION-1`: the provider reaches the plugin seam, not the tool seam.
+3. **The non-Linux strong tier** — `C3`.
+
+**The gap is defaults and wiring, not capability** — a materially different piece of work from
+"catch up on container hardening," and the reason this row sat at a wrong severity for so long.
+
 
 The v1/v2 ecosystem analysis flagged hostile-safe sandboxing as a leading **P0** gap ("default execution is
 in-process/trusted; the execution-sandbox peers are materially ahead"). **This understates the actual,

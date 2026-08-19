@@ -2075,10 +2075,58 @@ is limited to `starlette.exceptions.HTTPException` — a stable import).
 
 ## DEBT-COMPAT-1 — Cross-version compatibility story between runtime and SDK
 
-**Status:** Deferred — Low Priority
+**★★ REOPENED 2026-08-18 — P2. The trigger fired, in the only consumer, and nothing surfaced it.**
+
+Provenance: measured against `C:\dev\claw` while checking `C:\codev\openclaw_research\`.
+
+**The deferral rationale below — *"Only one version of each exists today"* — is false.** The
+first-party flagship carries `aindy_runtime-1.4.0.dist-info` in its venv while this repo is at
+**2.4.0**: a full major behind, and **below the floor the runtime itself advertises**
+(`runtime_compatibility.py` computes `recommended_runtime_requirement` as `>=2.0,<3.0`).
+
+**★ Why nobody noticed, and it is the actionable part: `aindy-runtime` is not declared as a
+dependency anywhere in that consumer.** `grep -n aindy` over its `pyproject.toml` returns nothing —
+only `nodus-*` packages are declared. **No pin exists, so no pin can go stale visibly:** nothing to
+bump, nothing in a lockfile, no install step that could fail. The version survives only in a README
+table, which is exactly where it rotted.
+
+**★ And the runtime half is the same shape as `ROUTE-AST-UNWIRED-1` — a declaration published with
+no consumer.** `platform_layer/runtime_compatibility.py` emits, in its own payload:
+
+> *"The apps repo **must declare a normal Python dependency range on `aindy-runtime` with an
+> explicit upper bound** before the next MAJOR runtime release."*
+
+Its only reader is `routes/version_router.py`, which serves it on `/api/version`. **Nothing
+consumes it. No consumer is ever told it is out of contract.** The policy sentence is violated by
+the only consumer there is, and the mechanism that states the policy cannot observe the violation.
+
+**Resolution path, revised — smallest first:**
+
+1. **Consumer-side (one line, not ours to make but the root cause):** declare
+   `aindy-runtime>=2.0,<3.0`. Every subsequent drift becomes visible to ordinary tooling.
+2. **Runtime-side, cheap:** have the SDK — or any client that already calls `/api/version` — compare
+   its installed `aindy-runtime` against `recommended_runtime_requirement` and **warn**. The
+   declaration already exists and is already served; what is missing is one comparison at one call
+   site. Warn, do not refuse: a hard gate on a version check is how a working deployment dies on a
+   patch bump.
+3. **Then the original path below** — a compatibility-window policy and cross-version testing.
+
+**★ Do not close this with a policy document.** The gap is not that the policy is unwritten; it is
+written, and served over HTTP, and unread. **A compatibility contract with no consumer is a
+compatibility contract that cannot fail** — which is why a consumer sat a major behind, under the
+advertised floor, without anything anywhere raising a word.
+
+**Related:** `SUBSTRATE-WITNESS-1` (same consumer, the integration-depth half of the same picture),
+`ROUTE-AST-UNWIRED-1` and `DOCS-COVERAGE-CLAIM-1` (the published-and-unconsumed family),
+`PYPI-PUBLISH-1` (release protocol, which does pin the Dockerfile — the one place a version *is*
+checked).
+
+---
+
+**Status:** Deferred — Low Priority *(superseded by the reopen above)*
 **Trigger condition:** When two runtime versions exist in the wild
 simultaneously (e.g., a 1.0 cloud runtime serving users whose local
-SDKs are still on a 0.x version, or vice versa).
+SDKs are still on a 0.x version, or vice versa). **★ FIRED — see above.**
 
 **Context:** Today, the runtime and SDK ship at matching versions and
 the compatibility contract is implicit. Under the local + cloud
@@ -2613,6 +2661,15 @@ unaffected). Does NOT address NODUS-WARMPOOL-1 (cold-start wall-clock timeout �
 architecture issue, not a nodus-lang concern).
 
 ---
+
+### Index detail moved here 2026-08-18
+
+`CLAUDE.md`'s registry line for this item had grown to 4,409 bytes — **larger than this entry**,
+which inverts the arrangement: the index is status, hook and pointer; the detail belongs here.
+Preserved verbatim so the trim loses nothing:
+
+> - **NODUS-UPGRADE-1** — pin now **`nodus-lang==5.0.1`** + **`nodus-mcp>=0.1.3`** (2026-08-17; was 4.2.0 in #451/FR-16). **★ Bump BOTH packages across ALL THREE sites** (`pyproject.toml`, `AINDY/requirements.txt`, the `Install MCP extra` step in `runtime-ci.yml` — the third installs directly, not via the extra, so it silently re-resolves a constraint fixed only in the first two). **nodus-mcp 0.1.3 floated its `nodus-lang<5.0.0` cap**, which is what unblocked this; 0.1.2 made `aindy-runtime[mcp]` a flat `ResolutionImpossible` against a 5.x pin. **★ Gated-builtin discovery no longer scrapes registry source** — it broke on 5.0.0 AND 5.0.1 (loudly, via the discovery assert + `>=31` floor); **5.0.1 exposes `GATED_BUILTINS`** (`{flag: group}` with `names`/`arity`/`capability`), so use that. **★ 5.0.0 is a MAJOR bump adopted with ZERO behavioural change here**, because `GUEST-CONFINE-1` (#438) had already done its headline breaking change by hand: 5.0.0 makes `NodusRuntime` **deny-by-default**, and our one construction site (`nodus_worker.py:343`) already passed all three flags. nodus's own audits reached the same finding we did — *"the capability chokepoint was built and unused, the door propped open by registering subprocess and http by default"*. Second breaking change (a program can no longer write `.nodus/`, which could forge run records) doesn't reach us — our only `.nodus/` is `stdlib/.nodus/deps.json`, read at import, never written by a guest. The monolith constructs `NodusRuntime` **nowhere**. **Verified against the real VM: all 31 gated builtins still blocked (7/18/6, unchanged).** **★ Four confinement tests went red and NONE was a regression** — 5.0.0 rephrased denials (`allow_subprocess=False` → `Blocked: … pass allow_subprocess=True …`) so assertions now match the **flag name** not the sentence; and gated-name discovery moved to the `else:` branch's `for _name in (...)` tuple, where the old regex was also capturing the flag name out of `_denied_reason()` as 3 phantom builtins. **Distinguish cosmetic from real before touching the sandbox.** **★ The pin is EXACT, so an app cannot adopt a nodus release on its own** — `pip install nodus-lang==X` succeeds and leaves the env inconsistent with our declared requirement, and an editable install *downgrades* it back. Staying exact is deliberate; the cost is that bumping promptly is the runtime's obligation. **★ The probe checklist is now EXECUTABLE: `tests/unit/test_nodus_upgrade_contract.py`** (added #467) — it asserts the nodus surface against the **installed package**, so bump the pin and run it. Two facts it pinned: **`NodusRuntime.__init__` has NO `**kwargs`**, so a renamed confinement flag raises `TypeError` rather than silently unconfining the guest (that absence is now a test, since our confinement depends on someone else's signature); and **"nodus forbids overriding a builtin" had been a DOCSTRING ONLY** — `NODUS-SYS-SURFACE-1`'s guard rests on it, so a nodus that allowed overrides would let a guest redefine `syscall` past the guard with every test still green. **★★ It found a REAL one on its first CI run: CI had been testing `nodus-lang 4.1.0` while the wheel required 4.2.0.** `Runtime Contracts` + `Integration Tests` install `-r AINDY/requirements.txt` then `pip install -e . --no-deps` — **`--no-deps` means pyproject's pins are NEVER applied in CI**; the effective env is `requirements.txt`, which still said 4.1.0 because #451 (FR-16) bumped only `pyproject.toml`. **So every green run since #451, including the ones that signed off FR-16, exercised the version being upgraded AWAY FROM — the 4.2.0 adoption was never tested.** Fixed + guarded by `tests/unit/test_dependency_pin_agreement.py` (the two sources must agree on every shared package). **★ Bump BOTH files on any dependency change.** Still verify behaviour too: **`GUEST-CONFINE-1` depends on the VM accepting `allow_subprocess`/`allow_network`/`allow_env`, so verify all 31 gated builtins still refuse AGAINST THE REAL VM** — a renamed argument leaves the guest unconfined while every VM-mocking test still passes. Also re-check the three fragile couplings (`syscall_runtime.call_syscall`, `NodusRuntime._get_active_vm`, `register_function` still refusing builtin overrides — `NODUS-SYS-SURFACE-1` depends on that). 4.2.0's breaking change (errors carry absolute paths) doesn't reach us: nodus errors are forwarded, never parsed.
+
 
 ## MONITORING-GRAFANA-1 — Grafana excluded from compose monitoring profile
 
@@ -4811,6 +4868,67 @@ LangGraph (pending-writes-then-checkpoint, partial); ADK/OpenHands/Open Interpre
 event logs. Absorb targets: ADK append-event fold, LangGraph `versions_seen` vector clock,
 Temporal at-least-once idempotent-start. **Do not import weaker JSON-snapshot models.**
 
+### ★ "Replay" means three different things — which one we declined, and what it actually is
+
+**Added 2026-08-18, provenance `ADK-LENS-2026-08-18`.** The Phase 3 reframe above says
+*"kernel deterministic replay is out of scope"* without saying what that is, and three unrelated
+mechanisms in this space are all called "replay." Six comparative audits now cite one or another of
+them at us. Separating them once:
+
+| # | Mechanism | What is stored | What re-executes | Who has it |
+|---|---|---|---|---|
+| 1 | **Event-sourced state fold** | state *deltas* per step | **nothing** — state is rebuilt by folding the log | ADK `append_event`; **us, as DUR-4** |
+| 2 | **Deterministic code replay** | every non-deterministic *result* (clock, uuid, RNG, activity return) | **the code, from the beginning** — with recorded values injected so it takes the same branches | Temporal |
+| 3 | **Ordering replay** | the *sequence* concurrent results landed in | nothing; results are re-ordered on merge | ADK `ReplaySequenceBarrier`; us, as `FLOW-PARALLEL-1`'s "merge in declaration order" |
+| 4 | **Pending-writes / completed-unit result durability** | a finished unit's *output*, persisted **before** the consolidating checkpoint | nothing — recovery **applies** the recorded result instead of redoing the unit | LangGraph `pending-writes-then-checkpoint`; MAF per-superstep chain (executor state flushed *before* the checkpoint). **Us: flow layer YES (`runner.py:347-359`), agent layer NO** → `RECOVERY-GRANULARITY-1`. *(★ Corrected 2026-08-19: OpenHands was listed here and does **not** belong — its immutable per-event blob log (`filesystem_event_service.py:35-36`) is **row 1**, which we already ship as DUR-4. Two arrivals, not three.)* |
+
+**★ Row 4 was added 2026-08-18 and it matters for how the declined decision is read.** #2 was
+declined because determinism is a VM concern, because forward-resume never re-executes code, and
+because it constrains every line of workflow code. **None of those reasons apply to #4** — it
+persists a *result*, imposes no constraint on the code, and intercepts no non-determinism. So
+*"we declined replay"* must **not** be read as covering #4. Three peers arrived at #4
+independently (LangGraph, OpenHands, MAF), which makes it the strongest convergence signal in the
+comparative corpus.
+
+**#2 is the one that was declined, and it is worth understanding rather than dismissing.** The idea
+is that you do not store state at all — you store *inputs*. On recovery you re-run the original
+code from the top, and every time it reaches something non-deterministic, instead of *doing* it
+again the runtime *looks up what happened last time* and hands back the recorded value. The code
+runs again; **the world does not.** Every branch it takes is the branch it took before, because
+every input it sees is the input it saw before. When the log runs out — the point where the crash
+happened — execution becomes real again and continues forward.
+
+That is why Temporal workflow code must be deterministic: no `datetime.now()`, no `uuid4()`, no
+direct I/O. Those are replaced by SDK-mediated equivalents that record on the first pass and replay
+on the second, and side-effecting *activities* are not re-invoked at all — their recorded results
+are returned. The payoff is real: nothing is re-executed on recovery, and *"what did this run know
+at step 40"* is answerable exactly.
+
+**Why it is the wrong shape here, restating the three reasons concretely:**
+
+1. **Wrong layer.** Determinism is a property of whatever runs the code. Here that is the Nodus VM,
+   not the kernel — the kernel dispatches, it does not own an opcode loop. Building replay in the
+   kernel would put the constraint on the wrong side of the seam.
+2. **Unnecessary.** Replay exists to make *re-execution* safe. We do not re-execute: continuation
+   resumes **forward** from the last committed node, so only the single in-flight node re-runs, and
+   `DUR-1`/`DUR-2` made that node's runtime-mediated effects at-most-once. We do not have the
+   problem replay solves.
+3. **Huge, and the boundary is in the wrong place.** ~20 raw `uuid4` sites would each need routing
+   through a recording shim, and the nodus worker runs in a **subprocess** — so the recording
+   boundary does not even sit inside one process.
+
+**★ The cost side is the part that usually goes unsaid: deterministic replay is not a feature you
+add, it is a constraint you impose on every line of workflow code anyone ever writes.** That is a
+reasonable trade for Temporal, whose product *is* the workflow language. It is a poor trade for a
+substrate whose value proposition is that ordinary code can run under it.
+
+**And ADK does not have #2 either** — which is why its own audit calls this *"a design-pattern
+edge, not a runtime-durability win."* ADK has #1 and #3, and its workflow loop state is explicitly
+non-durable (`_workflow.py:261` `# TODO`). **We have #1 shipped and #3 specified.** The honest
+statement of the residual is not *"we lack replay"* — it is: **the single re-run node's
+un-mediated side effects are the only thing recovery cannot make safe**, which is recorded above
+and is a much smaller claim.
+
 **Phase 1 — flow-level continue-from-last-node (2026-07-08, opt-in default off).**
 Key realization: the substrate already existed — `FlowRun.state` is a full post-node
 snapshot and `current_node` already points at the next, not-yet-run node, and
@@ -5018,7 +5136,14 @@ Grounded against source so the reopen scope is real, not aspirational:
   `extension_policy.py:224`), fires at *webhook/callback registration*, not tool egress. (2)
   **secret gating is fail-open on ungated names** — a secret with no registered scope in
   `SECRET_SCOPES` resolves for any caller.
-- **G4b has zero runtime code; the plug-in point is ready.** No MCP/A2A/JSON-RPC wire code lives
+- **G4b has zero runtime code; the plug-in point is ready.** *(★ SUPERSEDED 2026-07-11 — this
+  bullet is the preserved original diagnosis and is **no longer true**. See the status header at
+  the top of this entry: both halves of G4b shipped. `AINDY/platform_layer/mcp_client.py` (#222)
+  and `AINDY/platform_layer/mcp_server.py` (#223) are in tree. **Marked 2026-08-17 because an
+  external analysis read this bullet, missed the header ~90 lines above it, and published
+  "[Observed] the runtime has no MCP client" against a pin a month after the client shipped** —
+  see `MAF-REFERENCE-2026-08-17`. A2A remains genuinely absent: zero matches under `AINDY/`.)*
+  No MCP/A2A/JSON-RPC wire code lives
   in this repo (the `json-rpc` string hits are sandbox exec-boundary labels, unrelated). Real
   implementations exist out-of-tree at `C:\dev\nodus-mcp` (client+server, `protocol/jsonrpc.py`;
   `nodus_mcp_aindy/adapters/syscall.py` already duck-types `SyscallEntry`/`TOOL_REGISTRY` → MCP
@@ -6413,7 +6538,70 @@ on the grounds that unattended reboot recovery is worth more than a faster failu
 
 ## GUEST-CONFINE-1 — the guest VM runs unconfined; effects on the primary execution path are not mediated
 
-**Status: CLOSED (2026-08-15).** Filed 2026-08-15 from the substrate-boundary audit (F-1),
+**★ RESIDUAL OPEN 2026-08-17 — the fourth argument was never passed. Read this before citing this
+entry as closed.** The demonstrated escape is closed and stays closed; what follows is a
+*different* bound that this entry's own fix recommendation named and did not deliver.
+
+Step 1 of the sequencing below reads: *"pass `allow_subprocess=False`, `allow_network=False`,
+`allow_env=False` **(and an explicit `allowed_paths`)**"*. Three landed
+(`nodus_worker.py:345-347`). The fourth did not, and the comment at `nodus_worker.py:340` records
+why it was judged unnecessary — *"the VM already confines filesystem access: `allowed_paths`
+defaults to the cwd."*
+
+**That reasoning does not hold, because nothing sets the cwd.** Neither spawn path passes `cwd=`:
+`nodus_worker_pool.py:108` (`subprocess.Popen`, warm pool) and `nodus_runtime_adapter.py:278`
+(`subprocess.run`, cold path) both **inherit the server process's working directory**. So the
+guest's only filesystem bound is an inherited process default the runtime never declares, never
+asserts, and no test pins:
+
+| Deployment | Inherited cwd | What the guest can reach |
+|---|---|---|
+| Docker (`Dockerfile:71`) | `/home/aindy` | `alembic.ini` and `alembic/` — **a guest can rewrite migration scripts that execute on the next boot.** `.env` is mounted at `/etc/aindy/.env:ro`, outside cwd and read-only, so it is *not* exposed here |
+| Dev — which is how the runtime is exercised in the current phase | the repo root | the entire source tree, including `AINDY/.env` |
+
+**Severity, stated honestly.** Lower than the original finding: reaching the filesystem at all now
+requires the VM's own file builtins rather than `subprocess`, and the Docker blast radius is one
+directory. It is filed because the *claim* in the comment is wrong, and because a confinement
+whose bound is "whatever directory the operator happened to launch from" is not a confinement
+anyone can review.
+
+**Fix.** One kwarg plus a test that pins the bound. It is also the smallest true instance of
+`FS-SCOPE-1` — it converts an inherited process default into a declared scope. **Do not close
+`FS-SCOPE-1` with it:** one call site is not a vocabulary.
+
+**★★ The same missing `cwd=` governs a second, unrelated thing — and this one loses data
+(added 2026-08-18, provenance `CREWAI-NODUS-2026-08-18`).** Setting `cwd=` is now owed twice over,
+because the guest's working directory also decides **where its durable run state is written**:
+
+- Nodus's `nodus_lang_workflow` builds `LocalWorkflowStore(root=default_store_root())`, and
+  `default_store_root()` (`nodus_lang_workflow/runner.py:994-1007`) returns
+  `.nodus/workflow_framework` **relative to the process CWD** unless `NODUS_WORKFLOW_STORE_ROOT`
+  overrides it.
+- This runtime has **zero references** to `nodus_lang_workflow`, `WorkflowStore`,
+  `NODUS_WORKFLOW_STORE_ROOT` or `configure_default_workflow_runner`. Nothing overrides it.
+- So the store lands under the inherited CWD — **`/home/aindy` in Docker** (the `Dockerfile:71`
+  WORKDIR), the repo root in dev.
+- **`/home/aindy` has no volume in `docker-compose.yml`.** The api service mounts only
+  `./AINDY/.env:/etc/aindy/.env:ro`. So a guest workflow's **claims, waits, retry schedules and
+  rehydration records are container-ephemeral** — durable by construction, discarded on container
+  replacement.
+- `get_default_workflow_runner()` also **auto-starts a daemon sweep thread** bound to that root
+  (`runner.py:1022-1027`), which this runtime does not know exists and never stops.
+
+**★ Nodus's own docstring names the failure this already caused upstream**, which is why it is not
+speculative: *"every process that runs a workflow writes into `.nodus/workflow_framework` under
+whatever its working directory happens to be — which is how the test suite came to accumulate
+hundreds of run files inside the repo and slow its own later runs (#380)."*
+
+**Consequence for sequencing:** one line — `cwd=` on `nodus_worker_pool.py:108` and
+`nodus_runtime_adapter.py:278` — closes the filesystem bound above *and* pins the store location.
+Do that first, then declare the root explicitly (`NODUS_WORKFLOW_STORE_ROOT` or
+`configure_default_workflow_runner(root=…)`). The durable fix is in `ORCHESTRATOR-SPLIT-1`: inject
+a runtime-supplied `WorkflowStore` so the state stops living on a container filesystem at all.
+
+---
+
+**Status: CLOSED (2026-08-15)** — for the demonstrated escape; see the residual above. Filed 2026-08-15 from the substrate-boundary audit (F-1),
 **independently verified, and upgraded from the audit's own `[Strong inference]` to
 demonstrated.** Closed the same day by the three-kwarg fix. The original diagnosis is preserved
 below unchanged — it is the audit trail, and the demonstration method is worth keeping.
@@ -6961,6 +7149,15 @@ anyone registers one. Same severity shape as `NATIVE-PARITY-1`: real, reachable-
 not currently exploitable. `EXACTLY_ONCE` is defense-in-depth here, **not the fix** — the durable
 fix is for `undo_run_effects` to skip already-reversed effects, tracked as **IDEM-12**.
 
+**★ A complementary boundary we do not have (added 2026-08-19, DBOS `e0b742c`).** DBOS carries
+`deduplication_id` on `workflow_status` — idempotency at the **workflow-start** boundary
+(*"do not start this run twice"*). `EffectRecord` dedupes at the **effect** boundary (*"do not
+perform this effect twice"*). **Different questions; we answer only the second.** A duplicate start
+today produces a second run that then correctly dedupes each of its effects — right, but wasteful,
+and indistinguishable in the run list from two intended runs. Not filed separately: it is a
+one-column addition to this same story, and it should be scoped **with** the flag flip rather than
+before it.
+
 **Remaining work: flip the flag.** Default `AINDY_SYSCALL_IDEMPOTENCY` on in production, after
 soak. Per the standing decision (`CLAUDE.md` → current phase) that soak happens in
 `aindy-apps-monolith`, not here. The declarations shipped in this change are **inert** until the
@@ -7152,6 +7349,41 @@ The two are not in conflict once separated:
 That ordering is also the cheaper one: the P0 is three keyword arguments; the P1 is a schema
 change plus a resolution path.
 
+### ★ Settle the SHAPE before the field list — orthogonal axes, not a trust level (added 2026-08-18)
+
+Provenance: `LINUX_KERNEL_ARCHITECTURAL_AUDIT.md` §22 Lesson 5 (`C:\codev\Linux research\`).
+
+> namespaces (**visibility**) + cgroups (**resources**) + seccomp (**syscall surface**) + creds
+> (**authority**), composed. **Different isolation concerns — what you can *see*, *use*, *do* — are
+> independent; composing primitives is more flexible than one rigid "container."** Treat them as
+> **separate, independently-configurable axes, not a single trust level.**
+
+**This entry currently proposes `{filesystem, network, subprocess, env}` — a list of *toggles*,
+which is nearer a trust level than a set of axes.** Four booleans have sixteen states, most
+meaningless, and no way to say *"this run may see a lot and do very little."*
+
+**The decomposition worth adopting instead is visibility / resources / authority**, and the reason
+it matters here is that **three separate open entries are each one axis of it and none of them
+knows about the others**:
+
+| Axis | Entry | Today |
+|---|---|---|
+| **Visibility** (what the execution can see) | `FS-SCOPE-1` | no vocabulary at all — verb-shaped capabilities only |
+| **Authority** (what it may do) | this entry, `EGRESS-INPROC-1` | `egress_scope` for network; boolean toggles for the guest |
+| **Resources** (how much it may use) | `resource_manager` — `MAX_CONCURRENT_PER_TENANT`, EU caps | **exists, and nobody has proposed folding it into the descriptor** |
+
+The third row is the finding. Quota is already a per-execution constraint, resolved at a different
+seam, expressed in a different vocabulary, with its own failure mode (`SYSMAX-*` — advisory
+per-EU caps). **A descriptor that answers "what environment does this need?" and omits "how much
+may it consume?" has picked two axes out of three for no reason other than which audit surfaced
+them.**
+
+**★ The decades-tested part of Lesson 5 is the orthogonality, not the axis names.** Linux composes
+four independent mechanisms rather than shipping N container presets, and that is why a caller can
+express a combination nobody anticipated. A descriptor built as a trust-level enum, or as a flat
+bag of booleans, forecloses exactly that. **Decide the axes before the fields** — the field list is
+easy to change and the shape is not.
+
 ---
 
 ## QUEUE-DURABILITY-CLASS-1 — enqueued work can change durability class without the enqueuer knowing
@@ -7205,6 +7437,87 @@ effect/state store instead of `.nodus/graphs/*.json` — Nodus already exposes
 `runtime.set_effect_store(store)` for exactly this; or (b) publish an explicit ownership contract
 stating which engine owns which failure domain.
 
+### ★ There is a FOURTH store, and fix (a) does not reach it (added 2026-08-17)
+
+Provenance: `CREWAI_ON_NODUS_IMPLEMENTATION_STUDY.md` §6 (`C:\codev\Crewai research\`),
+re-verified against Nodus at **`v5.0.4-2`** on 2026-08-17.
+
+4. **Nodus `src/nodus_lang_workflow/`** — `models.py` (176) + `runner.py` (1 053) +
+   `store.py` (1 103), a **SQLite** `LocalWorkflowStore` behind a `WorkflowStore(ABC)`.
+
+**★ This one is categorically different from store 3 and that is why it was missed.**
+`task_graph.py` is a *checkpoint file*. `nodus_lang_workflow` is an **independent
+reimplementation of this runtime's entire durability vocabulary** — verified line-exact in source:
+
+| Runtime concept | Nodus equivalent (`store.py`) |
+|---|---|
+| `_claim_waiting_run` CAS lease | `claim_json` on `WorkflowRunRecord` (`:201`) |
+| `register_wait` + expiry | `_register_wait_on_record` (`:283`), `_expire_wait_timeout_on_record` (`:308`) |
+| `RetryPolicy` | `_schedule_retry_on_record` (`:235`), `_retry_due_for_record` (`:263`) |
+| `flow_run_rehydration` | `_rehydratable_run_records` (`:338`), `_terminal_run_records` (`:344`) |
+
+**★ Fix (a) above is insufficient — verified, do not assume otherwise.** `set_effect_store` exists
+at `nodus/runtime/embedding.py:530`, and `nodus_lang_workflow` contains **zero references to it**.
+The hook covers store 3 and not store 4. Any ownership contract must name this store explicitly or
+it will describe a system with a durability layer it does not mention.
+
+**The concrete failure mode, and it is narrower than "no shared transaction."** A `.nd` workflow
+running under `sys.v1.nodus.execute` can be resumed by **either** layer. `continue_crashed_agent_runs`
+re-drives a crashed run from the last *fully completed* segment — `_count_completed_segments`
+(`core/agent_continuation.py:110-118`) advances only on `total + n <= completed_steps`, so **a
+partially-executed segment restarts from its first step.** If the guest independently rehydrates
+its own claim/wait/retry state from SQLite while the host re-runs that segment from step one, the
+two disagree about what has already happened, and nothing detects it.
+
+**★ Why this is worse than a missing layer, and the reason it stays open rather than being
+deferred:** two well-built durability implementations that have never been tested against each
+other fail only where they overlap, and the overlap is only reachable by a crash. It is invisible
+until it is expensive. It also sharpens the guest seam generally — per `GUEST-CONFINE-1`, the
+guest is now confined, but it remains **independently stateful**, which no confinement flag
+addresses.
+
+### ★ Store 4 is not merely untracked — it is unconfigured, and fix (a) has a real form
+
+**Added 2026-08-18, provenance `CREWAI-NODUS-2026-08-18`.** Verified against Nodus `v5.0.4-2`.
+
+**The runtime has never had a say in where store 4 writes.** Repo-wide, `AINDY/` contains **zero**
+references to `nodus_lang_workflow`, `WorkflowStore`, `NODUS_WORKFLOW_STORE_ROOT` or
+`configure_default_workflow_runner`. So a guest workflow gets the default: a SQLite store rooted at
+`.nodus/workflow_framework` **relative to the worker process's CWD**, which no spawn path sets —
+`/home/aindy` in Docker, a directory with **no volume in compose**. Durable guest run state is
+therefore **container-ephemeral**, and a daemon sweep thread is auto-started against it that this
+runtime neither knows about nor stops. The full chain is written up under `GUEST-CONFINE-1`'s
+residual, because the same missing `cwd=` causes it.
+
+**★ Fix (a) above named the wrong hook. Here is the right one.** `set_effect_store`
+(`nodus/runtime/embedding.py:530`) reaches store 3 and **not** store 4 — verified, zero references
+to it in `nodus_lang_workflow`. But store 4 is **genuinely injectable**:
+
+```python
+# nodus_lang_workflow/store.py
+class WorkflowStore(ABC):
+    @abstractmethod def get_run(...)   / save_run(...)   / create_run(...)
+    @abstractmethod def claim_run(...) / release_claim(...)
+
+# nodus_lang_workflow/runner.py:437
+self.store = store or LocalWorkflowStore()
+```
+
+**Implement `WorkflowStore` over this runtime's PostgreSQL and inject it, and store 4 collapses
+into store 1.** That is bounded work against a small abstract surface, it removes a durability
+layer rather than documenting one, and it is the only option on the table that makes the
+crash-overlap question moot instead of merely answerable.
+
+**Revised ordering for this entry.** (b) — publish the ownership contract — is still first,
+because it is cheap and because a contract that omits store 4 is worse than none. But (a) is no
+longer vague: it is *"write a `WorkflowStore` implementation,"* and it should be scoped as such
+rather than carried as an aspiration.
+
+**★ Interim, if neither is done soon:** at minimum set `NODUS_WORKFLOW_STORE_ROOT` to a declared,
+runtime-owned, volume-backed path. That does not fix the split — two stores still disagree after a
+crash — but it stops the losing half of the problem, which is state written somewhere nobody
+declared and nothing preserves.
+
 **Assessment: (b) first.** The split may well be correct — three engines with three failure
 domains is a defensible design — but it is currently *undocumented*, which means it cannot be
 relied on or reviewed. Writing the contract is cheap, and it is the prerequisite for deciding
@@ -7241,6 +7554,28 @@ standalone.
 
 **Status: OPEN — P0.** Filed 2026-08-15 from the Codex comparative audit (G1), verified.
 Third of three convergent isolation findings — see `EXEC-ENV-BIND-1` for the convergence table.
+
+**★ Priority re-confirmed and the reason sharpened 2026-08-17** (Aider portability accuracy pass,
+`AIDER-PORTABILITY-2026-08-17`). Already P0; it should not be re-levelled down, and the argument
+for it is now stronger than when it was filed:
+
+- **It is the last one.** With `GUEST-CONFINE-1` closed 2026-08-15, `agents/tool_registry.py:366`
+  is the **only remaining seam in the runtime where foreign code executes unconfined** with the
+  process's ambient authority and the live DB session. The convergence table listed three seams;
+  two are answered. The provider is still bound to `plugin_host.py` alone — verified at HEAD:
+  the only *execution* call sites of `create_sandbox_runner` are `plugin_host.py:346` and `:816`;
+  every other reference reads `.metadata()`.
+- **Independent corroboration, from a system that has nothing to do with this repo.** The Aider
+  portability analysis proposes a minimum viable experiment — route exactly two call sites
+  through the runtime — and attaches exactly **one** safety precondition: *do not route the
+  agent's shell-out through the runtime until the isolation provider is wired at the tool seam*,
+  on the grounds that **"a gated path that does not actually confine would be worse than the
+  status quo it replaces."** An unsandboxed `run_cmd` is at least honest about being unsandboxed.
+  That precondition now points solely here, and it is the argument for why this blocks adoption
+  by any consumer that mutates external state.
+- **It is the enforcement point two other filed items need.** `FS-SCOPE-1` (new, P1) has no
+  enforcement point without it, and `EXEC-ENV-BIND-1` (P1) is the vocabulary both would consume.
+  One structural change serves three entries — cost this once, not three times.
 
 **The gap.** `execute_tool()` performs a full authority evaluation — token validity, granted
 tools, required capabilities, capability policy, rate limits, egress domains, secret scope — and
@@ -7283,6 +7618,103 @@ register_tool(..., isolation="in_process" | "subprocess" | "container" | "strong
 `available_runner_types`, and **fails closed** when a tool demands containment the host cannot
 supply. **Default stays `in_process`, so nothing changes until opted in** — the same discipline
 every MEB/DUR flag in this repository already follows.
+
+### ★ How the provider attaches — a transform, not an ABC (added 2026-08-17)
+
+Provenance: `workload-sandbox-provider-reference.md` in `C:\codev\Claude Code research\docs\`,
+read against `codex-rs`'s ~72,000-line isolation stack. It corrects an earlier recommendation in
+that same series and the correction is right. **This resolves the main open design question in
+this entry — `isolation=` is the *declaration*; the following is the *application mechanism*, and
+they compose.**
+
+The instinct is to model isolation as **polymorphic execution**: an ABC with `run`/`popen`/
+`upload`/`download` and one implementation per backend. `codex-rs` does the opposite and it is
+better for us:
+
+> `SandboxManager` is a **command transformer, not an executor.** It takes a command plus a policy
+> and returns a command that carries its own sandbox wrapper — `sandbox-exec` with a generated
+> SBPL profile on macOS, a `bwrap` invocation on Linux, a restricted-token launcher on Windows.
+> **One spawn path; the isolation rides in argv.**
+
+**★ Why this fits this runtime specifically, verified at HEAD.** There is exactly **one**
+execution chokepoint — `agents/tool_registry.py:366`, `entry["fn"](args=args, user_id=user_id,
+db=db)` — reached from exactly **three** call sites (`extension_worker.py:345`,
+`nodus_adapter.py:263`, `nodus_worker.py:135`). A transform slots in immediately before that call
+and needs **no backend implementations at all**. An ABC would require the runtime to grow N
+execution environments it does not have and does not want.
+
+**★ The reference request struct is also the answer to `FS-SCOPE-1`'s vocabulary question.**
+`SandboxExecRequest` carries, as peer fields:
+
+```rust
+pub sandbox: SandboxType,                     // None | MacosSeatbelt | LinuxSeccomp | WindowsRestrictedToken
+pub file_system_sandbox_policy: FileSystemSandboxPolicy,
+pub network_sandbox_policy: NetworkSandboxPolicy,
+pub permission_profile: PermissionProfile,
+```
+
+Filesystem policy and network policy sit **side by side**, which is exactly the resource-scoped
+pairing `FS-SCOPE-1` argues for and exactly what this runtime lacks (`egress_scope` exists, no
+path equivalent). It ships default-on across three operating systems, so the shape is proven
+rather than proposed. Note also `SandboxablePreference { Auto, Require, Forbid }` — the
+fails-closed vocabulary this entry already wants, named.
+
+**What not to take.** The 72,000 lines. Three runners already exist here and the honest per-platform
+limits are documented; this is a *seam* borrow, not an implementation borrow.
+
+**★ The missing request *shape*, from the third direction (added 2026-08-17).** The Codex
+portability analysis proposes `EphemeralIsolationRequest` (its N4) — *a per-invocation,
+policy-parameterised jail as a second **shape** behind the existing `SandboxRunner` interface.*
+That is the piece between the declaration and the transform, and it is why the three fit together
+rather than compete:
+
+| Layer | What it is | Source |
+|---|---|---|
+| `register_tool(..., isolation=…)` | the **declaration** — what containment this tool requires | this entry |
+| `EphemeralIsolationRequest` | the **request** — one invocation's resolved policy, built from the declaration + the deployment profile's `available_runner_types` | Codex N4 |
+| command transform at `tool_registry.py:366` | the **application** — argv rewritten to carry its own wrapper | `codex-rs` |
+
+**★ N4's own caveat is the load-bearing one and must survive into any build: absorb the shape,
+never the mechanism.** The runtime owns the request type and its policy vocabulary. Seatbelt,
+Landlock, seccomp and OCI stay behind the provider boundary, exactly as `SandboxRunner` already
+establishes. A runtime that grows platform-specific confinement code has moved the boundary in the
+wrong direction.
+
+**Existing runners already satisfy the long-lived shape**; what is absent is the *per-invocation*
+one. That is the whole delta — not a fourth runner.
+
+### ★ A cheaper first step than the provider: stop passing a pointer (added 2026-08-18)
+
+Provenance: `LINUX_KERNEL_ARCHITECTURAL_AUDIT.md` §22 Lesson 10 (`C:\codev\Linux research\`), a
+reframing no other document in the corpus used.
+
+> `fd → struct file`; userspace holds an **integer index into a kernel table, never a pointer**.
+> **Principle:** hand out **opaque handles, not direct references**, across a trust boundary;
+> resolve them through a controlled table you can **validate, revoke, and redirect**.
+
+**We get this half-right and then break it in the same function.** `execute_tool` resolves the tool
+by *name* through `TOOL_REGISTRY` — handle-shaped, correct — and then calls, at
+`agents/tool_registry.py:366`:
+
+```python
+result = entry["fn"](args=args, user_id=user_id, db=db)
+```
+
+**`db` is a live SQLAlchemy session — a direct object reference handed across the trust boundary.**
+It cannot be validated, cannot be revoked mid-call, and cannot be redirected to a narrower view.
+Every authority decision made before that line is advisory with respect to what the tool does with
+that one argument.
+
+**★ Why this is worth separating from the isolation work: a revocable handle is an improvement
+*even without* a sandbox.** Replacing the raw session with a scoped, capability-checked accessor —
+one that can be closed at return, refuses writes outside the tool's declared scope, and is
+resolvable through a table the runtime controls — narrows the seam without needing a provider, a
+transform, or a deployment-profile negotiation. It is the smallest thing on this entry that is
+independently shippable, and it composes with everything above rather than competing with it.
+
+**Do not treat it as a substitute for the provider.** A tool that holds a scoped session can still
+`import os`, spawn a thread, or open a socket — the ambient-authority problem is untouched. This
+narrows one argument; the provider bounds the process.
 
 **Invariant gained.** A tool's effective authority is bounded by its declared isolation class,
 not by the runtime process's ambient authority.
@@ -7762,6 +8194,105 @@ group's declared policy, and quota accounting summed across branches so
 keeps a parallel run replayable, and replayability is the property this engine is built around.
 Concurrency and determinism are separable; the runtime should own both or neither.
 
+**★★ Declaration-order merge answers ORDERING and not CONFLICT — this entry is under-specified
+(added 2026-08-18, provenance `LANGGRAPH-NODUS-2026-08-18`).** *"Merge output patches in
+declaration order"* says in what sequence patches are applied. It says **nothing about what
+happens when two branches wrote the same key.**
+
+**Verified: today that is last-write-wins by default.** `runner_steps.py:257` applies
+`state.update(patch)` on `node_status == "SUCCESS"` — a plain dict update. **Not a defect now**,
+because `resolve_next_node` returns exactly one successor so there is never a second writer. **It
+becomes one the day this entry lands**, silently, and last-write-wins is the worst possible default
+for a merge nobody declared.
+
+**LangGraph's answer is the design input, and the shape is the point rather than the policy** —
+conflict resolution is **typed and declared per cell**, not implicit:
+
+| Reducer | Semantics |
+|---|---|
+| `LastValue` | **rejects** more than one writer — the conflict is an error, not a silent overwrite |
+| `BinaryOperatorAggregate` | folds both writes with a declared operator |
+| `NamedBarrierValue` | joins — the cell is not ready until named writers have all written |
+| `Topic`, `EphemeralValue`, `add_messages` | append / non-persisted / domain-specific merge |
+
+**★ This is the same question the MetaGPT study asked about joins** (*"all-or-nothing,
+first-failure-cancels-siblings, or collect-partial?"*) **arriving from the write side.** Both have
+the same answer: the runtime should not pick one policy — it should require the flow to **declare**
+one, and refuse an undeclared concurrent write rather than resolving it by luck of ordering.
+
+**Do not take reducer-mediated channels wholesale.** That is a *language-layer* concern and belongs
+in Nodus's absorb list, not here. What belongs here is the narrower thing: **a declared merge
+policy per key, with an undeclared double-write failing loudly.** Note the same gap exists one
+layer down — Nodus's state sharing is `std:memory`, a process-local KV, with no merge discipline
+either, so neither layer currently has an answer.
+
+**Settle this together with `EFFECT-PARTIAL-1`.** Whether a partially-failed parallel group is one
+`FlowHistory` row or several decides what a partial-success envelope has to represent, and the
+merge policy decides what a *partially applied* patch set even means.
+
+### ★ A worked reference design now exists — read it before designing this (added 2026-08-17)
+
+Provenance: `MAF-REFERENCE-2026-08-17`. **Four independent comparative analyses (Codex, Aider,
+MetaGPT, OpenHands) each derived this same missing primitive from a different direction and none
+of the four systems had one to copy.** Microsoft Agent Framework does. The checkout is at
+`C:\codev\Autogen research\agent-framework\python\packages\core\agent_framework\_workflows\`,
+frozen at 2026-06-24, and every line reference below was verified in it.
+
+**★ The reframe, which makes this a smaller change than four analyses implied.** MAF runs
+Pregel/BSP supersteps (`_runner.py:78`, `run_until_convergence`) and writes **one checkpoint per
+superstep**, each linked to `previous_checkpoint_id` (`:84, :97, :144, :212`), with executor state
+flushed into shared state *before* the checkpoint. `PersistentFlowRunner` already commits
+`FlowHistory` per node with a monotonic `sequence_number` (`db/models/flow_run.py:79`). So:
+
+> **A superstep is the existing per-node commit boundary widened to span a barrier-delimited
+> group.** The work is not "add concurrency to the flow engine" — it is *widen the transaction*.
+
+**The four edge groups, all `DictConvertible` — i.e. the topology is data, not a call stack:**
+
+| MAF (`_edge.py`) | Semantics | Ours |
+|---|---|---|
+| `SingleEdgeGroup:470` | one → one | `resolve_next_node` — the only one that exists |
+| `FanOutEdgeGroup:501` | one → many, concurrent | absent |
+| `FanInEdgeGroup:616` | many → one, fires when all sources produced | absent |
+| `SwitchCaseEdgeGroup:808` | predicate-selected branch, with `Default` | partial — conditional edges pick among alternatives |
+
+**★ Note `SwitchCaseEdgeGroup` subclasses `FanOutEdgeGroup`, not `EdgeGroup`** — a switch is a
+*constrained fan-out* in their model. That is a design hint: one mechanism, two policies, rather
+than two node-group kinds.
+
+**★ The negative result is the most valuable part, and it is documented in their own source.**
+Predicates **do not serialize**. On restore, `SwitchCaseEdgeGroup._selection_func` becomes
+`_missing_callable("switch_case_selection")` (`_edge.py:463`) — and `_missing_callable` appears at
+`:50, :448, :463, :701`, so they hit the wall in four places and chose the same answer each time:
+**serialize the shape, name the predicate, fail loudly if it is missing on restore.** Anyone
+building workflow-as-data hits this exactly; do not rediscover it.
+
+**★ That wall is harder for us than for them.** Our conditional edges are **Python closures over
+in-process state** — `node_executor.py:57` calls `edge["condition"](state)` directly. MAF's
+predicates are at least named functions on a builder. Naming ours is a prerequisite for
+workflow-as-data, not a detail of it.
+
+**The join-semantics question this answers.** The MetaGPT analysis asked: *all-or-nothing,
+first-failure-cancels-siblings, or collect-partial-and-continue?* MAF's answer is **structural,
+not a policy choice** — `FanInEdgeGroup` buffers and fires when all sources have produced, inside
+a superstep whose barrier *is* the unit of progress. That converts the question from a semantics
+choice into a **transaction-boundary choice**, which is the right frame and one this engine is
+unusually well-placed for.
+
+**★ The open decision that frame exposes, and it is ours to make, not MAF's to answer:** should
+the barrier be the commit boundary (one row for the group, MAF's answer because BSP demands it),
+or should fan-out branches commit independently (which is what our per-node commit suggests)?
+**That decides whether a partially-failed group is one `FlowHistory` row or several**, and it
+therefore decides what `EFFECT-PARTIAL-1` has to represent. Settle the two together.
+
+**What to refuse.** MAF's durability posture. Its in-core checkpoint chain **does not survive the
+process** — crash-durable orchestration is delegated wholesale to Azure Durable Task
+(`python/packages/durabletask`; the only durable addressable actor is `AgentEntity : TaskEntity`).
+**Take the topology model, refuse the delegation.** Topology is a data-model change inside one
+subsystem; durability is CAS claims, leases, rehydration, watchdogs, DLQ and idempotency — the
+part this runtime already has and the part every system in the comparison corpus either bought,
+hand-rolled in a `while` loop, or improvised with `asyncio.create_task`.
+
 ---
 
 ## AUTHORITY-NEGOTIATION-1 — a capability denial has no bounded recovery path
@@ -7786,6 +8317,22 @@ downgrades rather than escalates. `sys.v1.agent.simulate` already provides a zer
 rehearsal against virtual tools, which is a strictly safer fallback than re-running with more
 authority. The design constraint to keep from the comparison is the shape, not the mechanism:
 **bounded (exactly one retry), directional (downgrade only, never escalate), and recorded.**
+
+**★ The missing mechanism has a name and a shape (added 2026-08-17).** The Codex portability
+analysis proposes it as its N1 and it is the piece this entry describes a use for without
+specifying: **`amend_token` — an authenticated, audited, monotonic-under-ceiling authority
+amendment.** Verified at HEAD: `capability_service.py` has `mint_token` (`:442`) and
+`refresh_token` (`:560`) and **no amendment primitive**. `refresh_token` deliberately never
+widens, so today the only way to change a run's authority is to mint a new one, which means a new
+approval, which is why a denial discards durable state.
+
+**★ `amend_token` must be the dual of `refresh_token`, not its mirror.** The whole value is the
+word *monotonic-under-ceiling*: an amendment may only move **within** the ceiling
+`capability_service.py:479-491` already computes, and for this entry's purpose only **downward**.
+An amend primitive that can widen is a second minting path, and a second minting path is how the
+one hard, cryptographic guarantee in the enforcement matrix stops being hard. If it is built,
+build the narrowing direction first and leave widening unimplemented rather than merely
+unauthorised.
 
 ---
 
@@ -8823,3 +9370,1685 @@ list. Security-sensitive (widens what tokens can dispatch); do not fold into an
 unrelated change. Related: **TIER3-V2V3** (closed) added the domain-level scope
 *gate*; this entry is about the capability *grant*. Source: SDK cross-check
 2026-07-05 while closing the `sys.v1.execution.get` gap.
+
+---
+
+## AIDER-PORTABILITY-2026-08-17 — provenance note for the six entries below
+
+**Not a debt item. A label, so the six entries that follow are not mistaken for audit findings.**
+
+`FS-SCOPE-1`, `EFFECT-PARTIAL-1`, `EFFECT-PRECONDITION-1`, `EFFECT-MANIFEST-1`,
+`EMBEDDED-FLOOR-1` and `PERF-BASELINE-1` were **found in comparative portability research, not in
+an audit of this repository**. The source is a three-document set at
+`C:\codev\Aider research\` — an architectural audit of Aider (2026-06-24), a 3-way ownership
+lens (2026-06-24), and a portability analysis asking *"if Aider ran on aindy-runtime, what would
+break?"* (2026-08-15, pinned at `edd3a80` = `v2.1.0-1`). An accuracy pass against `v2.4.0` on
+2026-08-17 re-verified every runtime-side claim in source and is written up in
+`ACCURACY_CHECK_vs_aindy-runtime_2.4.0.md` alongside them.
+
+**Why the provenance matters when you read these.** Every other entry in this file was found by
+looking at this codebase and asking what is wrong with it. These six were found by taking a
+mature external system with a *different shape* and asking what the runtime could not express for
+it. That method finds a different class of gap — **absent vocabulary rather than broken wiring**
+— and none of the six is a defect. Nothing is failing today. They are the things a consumer
+unlike our current consumer would hit immediately, and they will not surface from inside.
+
+**The one-line summary of what the exercise established**, because it is the most useful
+sentence produced and it belongs somewhere durable:
+
+> **Authority in `aindy-runtime` is enforced at the effect, not at the request. The agent's
+> decision mechanism — planner, parser, tool call, hard-coded script, or human — is outside the
+> trust boundary by construction.**
+
+That is a *validation*, not a gap. It was untested until an agent with **no tool-call protocol at
+all** was held against the model: Aider's LLM never requests anything, it emits prose and Aider's
+parser recovers the edits. An authority model that gated *requested capabilities* would have had
+nothing to gate. Ours gates the effect, so a text-parsed edit arriving at a tool seam is checked
+by exactly the mechanism a structured tool call is. Only an agent with no tool-call protocol
+could prove that, which is why three internal audits never did. It should be stated as an
+invariant in `EXECUTION_INVARIANTS.md`, not left in a research file.
+
+**The composite verdict the same exercise reached, which is why five of the six are effect-model
+items:** *the runtime's authority model is better specified than its effect model.* It answers
+**who is allowed to do this** with cryptographic and transactional rigour, and answers **what
+exactly was done, to what version of what, and how much of it succeeded** with a binary flag and
+a default-off gate.
+
+---
+
+## FS-SCOPE-1 — the capability vocabulary is verb-shaped; no authority statement can name a path
+
+**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17` (its B1, and
+the one it calls "the sharpest verified gap").
+
+**The gap, measured.** A repo-wide grep for `allowed_paths|path_scope|writable_root|allowed_dirs|
+fs_scope` under `AINDY/` returns **one hit, and it is a comment** (`nodus_worker.py:340`).
+`register_tool()` carries `egress_scope` — network authority is first-class — and nothing
+anywhere scopes paths. The runtime can express *may this run reach the network under scope X* and
+cannot express *may this run write `src/**` but not `.github/workflows/**`*.
+
+The vocabulary is **verb-shaped** (`memory.read`, `write_memory`, `execute_flow`), not
+**resource-shaped**. That is the whole finding; everything below is why it matters and how not to
+fix it.
+
+**Why an external system made it concrete when internal audits did not.** Aider's *entire*
+authority question is a path set: two tiers of file access — editable (`abs_fnames`, user-added)
+and read-only (`abs_read_only_fnames`, via `--read`) — enforced in `prepare_to_edit`. That is
+already a path-scoped capability model, implemented at the app layer, **with no runtime
+counterpart to receive it**. Our current consumer never asks the question, so the absence has
+never cost anything.
+
+**★ Do NOT build this the way the analysis proposes.** It suggests `fs_scope` alongside
+`egress_scope` on `register_tool`. That creates a **second vocabulary for the question
+`EXEC-ENV-BIND-1` already asks** — an execution unit declaring the environment it needs. Two
+vocabularies for one question is how this repo got `SyscallEntry.stable` and `_STABLE_SYSCALLS`
+measuring different things. `fs_scope` is a **field on the descriptor**; the descriptor is the
+thing to build. And its enforcement point is the same one `TOOL-SEAM-ISOLATION-1` needs. **One
+structural change serves three filed items** — worth knowing before any of them is costed alone.
+
+**★ The smallest true instance is available today and is already half-owed.** `GUEST-CONFINE-1`'s
+own recommended step 1 read *"pass `allow_subprocess=False`, `allow_network=False`,
+`allow_env=False` (and an explicit `allowed_paths`)"*. Three of the four landed. See that entry's
+`RESIDUAL` section — one call site, one kwarg, and it converts an inherited process default into
+a declared scope. **Do not close this entry with it.** One call site is not a vocabulary.
+
+**Generality.** Path scoping is the archetype of resource-scoped authority. The same absence
+would bite identically on object-store prefixes, database schemas and API resource paths.
+
+**★ A shipped reference for the vocabulary (added 2026-08-17, provenance
+`workload-sandbox-provider-reference.md`).** `codex-rs`'s `SandboxExecRequest` carries
+`file_system_sandbox_policy: FileSystemSandboxPolicy` and `network_sandbox_policy:
+NetworkSandboxPolicy` as **peer fields** on one request — precisely the resource-scoped pairing
+this entry argues for, default-on across macOS/Linux/Windows. It also names the fails-closed
+knob: `SandboxablePreference { Auto, Require, Forbid }`. So the shape is proven rather than
+proposed, and the answer to *"where does `fs_scope` live?"* is *"beside `egress_scope`, on the
+thing that describes one execution"* — i.e. the `EXEC-ENV-BIND-1` descriptor, which is what this
+entry already says. See `TOOL-SEAM-ISOLATION-1` for how it is applied (a command **transform** at
+the single chokepoint, not an execution ABC).
+
+**What does NOT belong in the fix.** A `sys.v1.repo.*` or filesystem syscall. None exists and
+none should — a versioned-filesystem syscall binds the substrate to one resource class. The
+absorbable thing is the scope vocabulary, not a resource-specific verb.
+
+---
+
+## EFFECT-PARTIAL-1 — the envelope has two states and a batched effect has three
+
+**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17` (its B2).
+Carried unchanged from the June lens audit through the August re-verification — the only absorb
+candidate in that document that survived two passes untouched.
+
+**The gap.** `syscall_dispatcher.py:22` documents the envelope status as
+`"status": "success" | "error"` — two states. Grepping `"partial"` across the dispatcher returns
+nothing. A batched effect has a third outcome and no way to say it.
+
+**Why it is not cosmetic.** Forced through a binary envelope, a five-unit effect with two
+failures becomes either **a lie** (`success`, silently partial) or **a waste** (`error`,
+discarding three applied units and re-attempting everything). That is the difference between a
+retry that converges and a retry that thrashes. The external reference: Aider's most
+operationally valuable failure behaviour is *"3 of 5 hunks applied; here are the 2 that didn't
+and why"* — `apply_partial_hunk` and `other_hunks_applied` exist precisely so the model retries
+only the failed sub-units, and its own audit names this as why its effective edit-success rate
+stays high with imperfect models.
+
+**★ Materially cheaper than the analysis assumes — measured, and this corrects its open question
+#3.** That question worries *"a partial application is a fourth condition and the schema has no
+room for it."* It has room. `EffectRecord.status` is
+`Column(String(32), nullable=False, default="pending")` with the three-value convention stated in
+a **docstring** (`effect_record.py:15, 70-71`) — not a SQLAlchemy `Enum`, no CHECK constraint.
+**No migration is required.** The work is the envelope contract plus every reader of `status`,
+which is a bounded grep, not a schema change.
+
+**★ It already bites in-house — this is not a hypothetical imported from another codebase.**
+`ROUTE-EFFECT-BYPASS-1` found `sys.v1.memory.write` **replacing** the caller's `extra` rather
+than merging it, so a naive rewire was silent data loss behind a `201`. That is precisely a
+partial effect reporting total success, in our own registry, discovered by accident.
+
+**★ Test discipline — this is trusting-a-green-check variant 6 by construction.** The thing being
+added is a *report*. A test asserting that a partial reports partial passes when the reporting
+wire is broken and the effect simply succeeded. **It needs a liveness control that proves the
+partial path was taken**, exactly as the EventBus wire suite needed one. Mutation-test it: break
+the partial accounting and confirm the suite goes red, and count how many tests fail.
+
+**Interaction with the ledger.** A partial application leaves external state in a condition that
+neither `pending` nor `success` describes, so the sub-unit records are the substantive half —
+the envelope alone would let the ledger keep lying more precisely. Record each sub-unit's effect
+independently or do not do this.
+
+**Generality.** Any batched effect: bulk API writes, multi-row upserts, fan-out notifications.
+
+**★ Complement, not overlap (noted 2026-08-18): `RETRY-CONTEXT-1`.** This entry shapes the
+*result* — which sub-units failed and why. That one carries a failure *forward* into the next
+attempt, and covers the **whole-call** failure this entry does not. The GPT Engineer lens audit
+derived the second half independently (`_improve_loop` re-sends the diff-parse error; `self_heal`
+re-sends stderr), which is why they are filed separately rather than merged: a partial-success
+envelope with nowhere to send it is half a mechanism, and so is a retry channel with nothing
+structured to put in it. **Build them together if either is built.**
+
+---
+
+## EFFECT-PRECONDITION-1 — an effect cannot declare the version of the world it expects
+
+**Status: OPEN — P2, deliberately deferred.** Filed 2026-08-17. Provenance:
+`AIDER-PORTABILITY-2026-08-17` (its B3).
+
+**The gap.** `EffectRecord` keys on
+`compute_action_id = sha256(json({"action_type", "input", "scope"}))` — the identity of the
+**request**, never of the world it acted on. An effect cannot say *"I expect resource R at
+version V; refuse me if it moved."* Replay safety is therefore about whether we already ran this
+call, not about whether running it now still means the same thing.
+
+**★ The reference implementation exists, is excellent, and is not ours.** Aider's Git discipline,
+verified in source at `commands.py:553`:
+
+| The primitive | Aider's mechanism |
+|---|---|
+| Effect declares a read-set with expected versions | `check_for_dirty_commit()` detects dirty targets; `dirty_commit()` commits the human's work first, establishing a known base |
+| Version token identifying pre-effect state | the commit hash, recorded in `self.aider_commit_hashes` |
+| Ledger refuses replay when the world moved | `/undo` refuses a commit not in that set, refuses merge commits (`len(parents) > 1`), refuses when files carry local modifications (`is_dirty(path=fname)`), refuses when already pushed (local head == remote head) |
+| Compensation needs the prior bytes | `git revert` of a known hash — the prior bytes are the version system's job, not the agent's |
+
+All four refusals confirmed against the source, not taken from the audit.
+
+**★ The design answer that falls out, and it is cheaper than the alternative we were heading
+toward.** The version identity is **whatever the external system's own version mechanism
+produces**. The runtime's job is to *record it, carry it, and refuse on mismatch* — and
+**never to reimplement it**. Content-addressed snapshots inside the runtime is the wrong shape:
+it makes the substrate authoritative over state it does not own, which fails the absorption test
+the adapter form passes.
+
+**★ Why P2 and genuinely premature — do not promote this out of order.** It needs an external
+mutable resource class the runtime actually mutates. There is no filesystem syscall and no
+`sys.v1.repo.*`, **correctly** — a versioned-filesystem syscall would bind the substrate to one
+resource class. Until `FS-SCOPE-1` gives the runtime something to hold a version token *for*,
+this is a primitive with no consumer. Build it third or not at all.
+
+**Open question, unresolved and worth carrying:** is there one external-version abstraction, or
+does every resource kind need its own adapter? Git OID, HTTP `ETag` and Kubernetes
+`resourceVersion` are similar in shape and different in failure mode.
+
+---
+
+## EFFECT-MANIFEST-1 — authority is minted from a plan; the general primitive is a manifest
+
+**Status: OPEN — P2, record-only.** Filed 2026-08-17. Provenance:
+`AIDER-PORTABILITY-2026-08-17` (its B4, and the idea it calls "the single most transferable in
+the document"). **Do not build before `FS-SCOPE-1` and `EFFECT-PARTIAL-1`.**
+
+**Not a defect.** Nothing is broken. This is filed so it is not rediscovered, because it reframes
+a design decision already made and the reframing is worth more than the code would be.
+
+**The reframe.** Plan-once is not really about planning. **It is about knowing the effect set
+before executing it.** A planner is one way to obtain that. A parse-validate-apply pipeline is
+another, and a tighter one.
+
+**The evidence, verified at `base_coder.py:2296`.** Aider's `apply_updates()` runs
+`get_edits() → apply_edits_dry_run() → prepare_to_edit() → apply_edits()` — **three validation
+stages before the first byte hits disk**. At the end of parsing it knows the exact file set and
+the exact hunks, so a token scoped to precisely that set could be minted *after* the model speaks
+and *before* any effect.
+
+**★ The inversion worth keeping, because it is uncomfortable and correct.** That is **strictly
+tighter than our own plan-once model**, where the capability set is derived from a plan the model
+produced *without having seen the state it will act on*. An external system satisfies the
+runtime's central assumption structurally, better than the runtime does.
+
+**The generalisation.** A.I.N.D.Y. produces one manifest per run. An agent that re-plans tool
+exposure per request cannot produce one per turn at all. Aider produces one naturally, several
+times per turn. **Three granularities of one shape:** a complete declaration of intended effects,
+made before any of them executes, against which authority is minted and outside which nothing may
+run. If the runtime's primitive were the manifest rather than the plan, all three would be
+first-class citizens of the same substrate — which is precisely the claim the word "substrate"
+makes.
+
+**Why it waits.** A manifest is a container for scoped authority statements. Until the vocabulary
+can express a resource scope (`FS-SCOPE-1`) and the envelope can report per-unit outcomes
+(`EFFECT-PARTIAL-1`), a manifest would carry only the verb-shaped capabilities the token already
+carries, and would be ceremony.
+
+---
+
+## EMBEDDED-FLOOR-1 — there is no supported profile below `single-instance`, and it requires Postgres
+
+**Status: OPEN — P2.** Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17` (its A6/B6).
+
+**The state, read from source.** `platform_layer/deployment_contract.py` declares four profiles.
+The floor is `single-instance`, declared `"stability": "stable"`, with
+`required_dependencies = {postgres: True, schema_enforcement: True, redis: False,
+event_bus: False, queue_backend: False, worker_process: False}` and
+`background_leadership_mode: "in-process"`. `AINDY_ALLOW_SQLITE` (`config.py:476`) is a test-only
+escape, documented as such.
+
+So a consumer shaped like *a library in a terminal* — no server, no daemon, no database, `pip
+install` and run — is **out of contract by declaration**. Not by omission.
+
+**★ The declaration is itself the finding, and it inverts what the analysis assumed.** Its §6/A6
+says *"what is still missing is the **declaration** of which guarantees hold in that
+configuration."* `deployment_contract.py` has existed since the initial repo extraction
+(2026-05-17) and declares exactly that. The finding survives and the evidence flips: there **is**
+a declared embedded contract, and it says Postgres is mandatory at the floor. That is a better
+position than an undeclared one — it is falsifiable and it is honest — but it is a *no*.
+
+**★ This is a soak-and-deployment gate, not a capability gap. State it that way or the entry
+misleads.** Nothing found in this pass says the single-process case *requires* Postgres in a way
+SQLite could not serve; `AINDY_ALLOW_SQLITE` exists and the entire unit suite runs on it. What is
+missing is (a) a profile that **declares** the reduced guarantees, and (b) a test tier that
+**asserts** them — the same *"verification that exists but does not enforce"* shape this file
+catalogues elsewhere. That is work, not invention, and it is bounded.
+
+**★ Scope boundary — keep separate from `DEPLOY-TARGET-1/2`.** Those are about scaling **up**
+(cloud manifests, multi-tenant SaaS readiness). This is about scaling **down**. They share no
+mechanism and folding them loses both.
+
+**★★ Evidence, not inference (added 2026-08-19, from DBOS).** This entry said *"nothing found so
+far says the single-process case **requires** Postgres in a way SQLite could not serve."* **A peer
+now proves it.** DBOS ships `SQLiteSystemDatabase(SystemDatabase)` (221 lines) and
+`PostgresSystemDatabase(SystemDatabase)` (343 lines) **subclassing one shared 6 508-line
+implementation** — checkpointing, recovery, queues and schedules are identical, with roughly 120
+lines of dialect between them. Same split at its app-data layer.
+
+**★ And the shape tells us where ours would go: the split is at the system-database boundary, not
+sprinkled through the engine** — for us, `AINDY/db/`. **The scoping question to answer first is
+which Postgres-specific features the runtime actually depends on** — JSONB, advisory locks,
+`FOR UPDATE`, and **pgvector, which is the real one.** An embedded profile would ship with memory
+*degraded* rather than absent, and that should be decided before the work, not during it.
+
+**Falsification target if anyone builds it:** a full session completes with no Redis and SQLite
+only, with the profile's declared guarantees asserted rather than assumed.
+
+**★ Independently re-derived (noted 2026-08-17).** The Codex portability analysis reached the same
+primitive from an unrelated direction — its **N8, "supported embedded profile as a contract, not
+an exception handler"** — and its §10 makes the argument this entry only implies: *downward scale
+is the direction generality is never argued in, and the one that decides the word "substrate."*
+Its framing of the fix is also the right one and matches §3.2 above: **absorb as contract, not as
+code** — most of the degradation already exists; what is missing is the declaration that it is
+supported. Two derivations from two systems, neither of which knew about the other.
+
+---
+
+## PERF-BASELINE-1 — no execution-path timing is asserted anywhere, and every flag flip is waiting on it
+
+**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17`.
+
+**Measured.** **Zero latency assertions across `tests/`.** Every `duration_ms` reference is a
+type-or-shape assertion — `test_syscall_dispatch_contract.py:78` asserts
+`isinstance(result["duration_ms"], int) and result["duration_ms"] >= 0`; the Infinity tests assert
+a *mocked* value round-trips. Nothing anywhere asserts a bound on how long anything takes.
+
+**★ Two independent comparative analyses reached the same conclusion from opposite directions:**
+per-effect and per-turn overhead on the real durability path is **the** decisive unknown, and it
+is the one falsification target that requires **no new primitive** to satisfy. Both marked it
+`[Unknown]` and neither could resolve it, because the repository contains no baseline to read.
+
+**★ Why P1 and not P2 — the reason is internal, not external.** Look at the standing backlog:
+`IDEM-11` (flip after soak), `DUR-1..4` (soak then flip), `RTR-4` (soak then flip),
+`DB-NODUS-BUDGET-1` (soak then flip), `FR-15 (a)` (`AINDY_ASYNC_HEAVY_EXECUTION`, needs soak),
+`AUTHORITY-VALUE-1` (`AINDY_CHILD_CONTEXT_CLAMP`, needs a caller fix then soak),
+`INFINITY-RUNTIME-1` (flag flip after soak), `NODUS-WARMPOOL-1`. **Eight items whose remaining
+work is "gather evidence that the flagged path is acceptable, then flip."** There is currently
+**no instrument in this repository that could produce that evidence.** The flag backlog is not
+blocked on courage or on build effort; a large part of it is blocked on measurement that does not
+exist. That is what makes this P1 rather than a nice-to-have.
+
+**★ The trap to design against is variant 9 — green because there was nothing to catch.** A
+timing assertion added to a suite that never exercises the durable path passes trivially and
+certifies nothing. The baseline must run **against the path being flipped** — dispatcher with
+`AINDY_SYSCALL_IDEMPOTENCY` on, continuation on, the real effect ledger — and every threshold
+needs a control that makes it fail, or this becomes the ninth entry in that table rather than the
+answer to eight others.
+
+**What is wanted, stated so scope does not drift.** Not a microbenchmark suite and not a
+performance-regression gate on every PR. A **per-effect and per-turn number on the real path,
+recorded, with a regression bound**, runnable on demand. The `Integration Tests` job already
+stands up live Postgres and Redis, which is the expensive half.
+
+**Prior art in this repo, and the caution it carries.** `RT-MEMTXN-LEAK-1` produced real numbers
+(login 43.6s → 0.3s, 60 held connections → 0) — under incident conditions, by hand, after the
+damage. `CAPABILITY-PROVIDER-TIMEOUT-1` produced 10 lookups = 10 spawns / 56.4s → 1 / 11.4s, the
+same way. **Both measurements were possible, both were made only after something broke, and
+neither left a standing instrument behind.** That is the pattern to end.
+
+---
+
+## MAF-REFERENCE-2026-08-17 — provenance note for the three entries below
+
+**Not a debt item. A label, same shape as `AIDER-PORTABILITY-2026-08-17`.**
+
+`FLOW-GRAPH-SIGNATURE-1`, `WAIT-TYPED-CONTRACT-1` and `OTEL-GENAI-SEMCONV-1` come from a
+**reference-implementation study, not a port analysis and not an audit**. Source:
+`C:\codev\Autogen research\` — an architectural audit of Microsoft Agent Framework (2026-06-24),
+a 3-way ownership lens (2026-06-24), and a study asking *"what does MAF's workflow engine ship
+that we derived and could not point at?"* (2026-08-15, pinned `d32bd5d` = `v2.1.0-3`). An accuracy
+pass against `v2.4.0` on 2026-08-17 re-verified every runtime-side claim in source and is written
+up in `ACCURACY_CHECK_vs_aindy-runtime_2.4.0.md` beside them.
+
+**Why this one is a different kind of input.** The Aider set found *absent vocabulary* by holding
+a differently-shaped agent against the runtime. This set found **a worked design for a primitive
+we had already derived**: four independent analyses each concluded fan-out/join was missing, and
+none of the four systems had one to copy. MAF does — typed, validated, serializable, checkpointed.
+`FLOW-PARALLEL-1` stopped being a design problem and became a reading exercise. The two entries
+below are the *other* two primitives that fell out of reading it, neither of which any other
+comparison surfaced.
+
+**The framing worth keeping, because it makes the change smaller than four analyses implied:**
+
+> A superstep is not "concurrency added to the flow engine." It is **the existing per-node commit
+> boundary widened to span a barrier-delimited group of nodes.** `PersistentFlowRunner` already
+> commits `FlowHistory` per node with a monotonic `sequence_number`; the question is the width of
+> the transaction, not the introduction of one.
+
+**The refusal, which is the load-bearing half and should not be lost:** MAF has the better
+workflow *shape* and **no workflow durability of its own** — it delegates crash-durable
+orchestration wholesale to Azure Durable Task (`python/packages/durabletask`), and its in-core
+checkpoint chain dies with the process. We have the inverse. Topology is a data-model change
+inside one subsystem; durability is CAS claims, leases, rehydration, watchdogs, DLQ and
+idempotency. **Take the topology model, refuse the delegation.** Five systems compared across the
+corpus, five different ways of not building durable orchestration natively — that is the
+strongest evidence in the set that this runtime's centre of gravity is in the right place.
+
+**★ One caution about this document specifically, which is why the accuracy pass matters:** it
+asserts `[Observed]` that the runtime has **no MCP client**. `AINDY/platform_layer/mcp_client.py`
+shipped 2026-07-11 (#222), a month *before* its own pin, and it answers that document's Open
+Question 5 — *"how would a remote MCP tool acquire a capability?"* — with a dedicated
+`MCP_EGRESS_CAPABILITY` distinct from `outbound.http`. A contributing cause was on our side: this
+file's `ECOGAP-4` entry carries a preserved-original bullet reading *"G4b has zero runtime code"*
+roughly 90 lines below a status header saying it shipped. That bullet is now marked superseded in
+place.
+
+---
+
+## FLOW-GRAPH-SIGNATURE-1 — a suspended run resumes against whatever flow definition exists now
+
+**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`.
+**Independent of `FLOW-PARALLEL-1` — do not bundle them.**
+
+**The gap.** `flow_run_rehydration` restores a `FlowRun` against whatever definition
+`register_all_flows()` produced *this boot*. Nothing records what the run was planned against and
+nothing detects that it changed. Verified absent at HEAD: `graph_signature|topology_hash|
+definition_hash` returns **zero hits** across `AINDY/`.
+
+**The failure mode, and why it is worse than it sounds.** For a system whose stated value is
+surviving restarts *across deploys*, the interesting case is exactly the one that has no guard: a
+node renamed, an edge rerouted, a branch condition changed between suspend and resume. The run
+proceeds against a definition it was never planned for, **silently and successfully.** There is no
+error, no warning, and no row that says the shape moved.
+
+**★ Sharpened by segment-level continuation.** `continue_crashed_agent_runs`
+(`core/agent_continuation.py:133`) re-drives crashed runs **from a segment boundary**, so resuming
+into a changed graph does not merely finish a stale plan — it **re-executes a segment whose
+meaning has moved.** The two mechanisms compose badly and neither knows about the other.
+
+**The reference implementation, verified in source.** MAF's `Runner.__init__` takes a
+`graph_signature_hash` — *"a hash representing the workflow graph topology for checkpoint
+validation"* (`_runner.py:40, 51, 60`) — writes it into every per-superstep checkpoint (`:228`) and
+**compares it on restore** (`:275`). That is the whole primitive: hash the shape, carry it, refuse
+on mismatch.
+
+**Proposed primitive.** Hash the flow topology at run start, store it on `FlowRun`, compare on
+rehydrate, and **quarantine rather than proceed** on mismatch. It converts a silent-wrong-execution
+failure into a loud one, which is the shape of guard this repository already prefers everywhere
+else.
+
+**★ A peer's cheaper answer, for comparison (added 2026-08-19, from DBOS).** DBOS pins
+`application_version` **on the run** (`workflow_status`) with an `application_versions` table —
+a **version string**, where this entry proposes a **topology hash**. Theirs is cheaper and coarser:
+it catches *"the app changed"* and not *"this flow's shape changed."* **That trade is exactly the
+design question below**, with a shipped instance on one side of it. Take the comparison; the
+mechanism is a choice.
+
+**★ The design question that decides whether it is worth anything — do not skip it.** *What goes
+into the hash?* A hash that changes on every deploy quarantines every in-flight run and will be
+switched off within a week. A hash that ignores too much validates nothing. The likely answer is
+**node identities plus edge topology, excluding node bodies and predicate implementations** — the
+same split MAF makes, where the *shape* is data and the predicate is a name. Settle this before
+writing the hash, not after.
+
+**Why P1.** It is cheap, it is independent of everything else in the flow-engine backlog, and it
+closes a *correctness* failure mode rather than adding capability. It also interacts with nothing
+that needs soak — the mismatch branch is either taken or it is not.
+
+**Related, not the same:** `ORCHESTRATOR-SPLIT-1` (three durable stores, no shared recovery
+contract) and `FLOW-PARALLEL-1` (topology model). This entry needs neither to land.
+
+---
+
+## WAIT-TYPED-CONTRACT-1 — a resume payload is trusted, not checked
+
+**Status: OPEN — P2.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`.
+
+**The gap, stated as an asymmetry rather than a deficiency.** `register_wait`
+(`kernel/scheduler/waits.py:8-30`) keys on `wait_for_event` plus an optional `correlation_id`,
+with `WaitCondition` types `event | time | external`. It is durable, cross-instance,
+Redis-mirrored, persisted-backup'd and rehydratable — **strictly stronger than MAF's on the axis
+that matters**, since MAF's checkpoint chain does not survive its process. What is missing is
+narrow and specific:
+
+- **nothing binds a resume payload to a schema**, and
+- **nothing ties a response back to the specific node that asked.**
+
+**★ The asymmetry is the finding.** `SyscallDispatcher.dispatch()` validates syscall inputs and
+outputs against declared schemas — that discipline exists, is enforced, and is the runtime's own
+standard. The wait path, which accepts data from *outside* the process boundary after an arbitrary
+delay across a restart, validates nothing. The looser gate is on the less trusted input.
+
+**The reference implementation.** MAF's `ctx.request_info()` / `@response_handler`
+(`_request_info_mixin.py`, in the workflow package rather than bolted on): the pending request is
+a first-class typed message, it is checkpointed, the typed response routes back to the originating
+node, and the workflow converges to `IDLE_WITH_PENDING_REQUESTS` rather than to an ambiguous idle.
+
+**Proposed primitive.** A pending-request record layered *on top of* the existing durable wait —
+payload schema plus originating-node reference — so a resume is **checked rather than trusted**.
+**Do not replace the wait mechanism.** Ours is the stronger half; this is a contract on it.
+
+**Why P2 rather than P1.** No exploit path is claimed: resumes today arrive through
+authenticated surfaces, so this is defence-in-depth and a correctness/debuggability improvement,
+not a hole. It rises to P1 the moment a wait can be resumed by a less-trusted caller — an external
+webhook, an MCP client, a third-party connector.
+
+**Interaction to watch.** A typed pending-request record is also the natural place to hang
+`FLOW-GRAPH-SIGNATURE-1`'s originating-topology reference. Build that one first and this one gets
+cheaper.
+
+---
+
+## OTEL-GENAI-SEMCONV-1 — our traces are richer than the standard and illegible to standard tooling
+
+**Status: OPEN — P2.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`.
+
+**The gap.** The runtime has OpenTelemetry spans, Prometheus metrics and a causal `SystemEvent`
+graph (`parent_event_id`, `build_trace_graph`, `get_downstream_effects`) — **arguably richer than
+the OpenTelemetry GenAI semantic conventions**, and aligned with none of them. MAF weaves the
+GenAI semconv as composable MRO layers with opt-in content capture.
+
+**★ Adopt the conventions, not the mechanism.** The MRO-layering is MAF's answer to a problem we
+do not have. The *naming* is the whole value: span and attribute names that standard observability
+tooling already understands, so a consumer's existing dashboards, samplers and cost attribution
+work against our traces without a translation layer. Renaming is cheap; the causal graph stays as
+it is and stays a differentiator.
+
+**Why it is filed rather than done.** It is a public surface. Attribute names appear in operator
+dashboards and anything a consumer has built against the current ones, so it needs the same
+treatment as any other rename: additive first, both emitted for a release, then a documented
+removal. That is a release-discipline question, not an engineering one — which is why it is P2 and
+not simply a chore.
+
+**Scope note.** Naming alignment only. Do **not** fold in content capture (prompt/response bodies
+on spans) without a separate decision — that is a data-handling question with its own answer, and
+MAF ships it opt-in for exactly that reason.
+
+**★ Independently re-derived (noted 2026-08-18).** The June Google ADK lens audit
+(`C:\codev\google adk research\`) reached the same absorb item from an unrelated system and for a
+different reason: ADK's `telemetry/` emits GenAI-semconv spans (`trace_call_llm`, `trace_tool_call`,
+token-usage and step metrics) and its audit's verdict on our side was *"arguably richer, and not
+semconv-aligned"* — the same conclusion the MAF study reached two months later. **Two unrelated
+frameworks asking for the same naming alignment, for different reasons, is better evidence than
+either request alone**, and it is the same convergence pattern recorded on `EMBEDDED-FLOOR-1` and
+`EFFECT-PRECONDITION-1`. It does not change the priority — this is still a public-surface rename
+gated on release discipline, not engineering — but it does mean the interop value is not
+speculative.
+
+---
+
+## SUBSTRATE-WITNESS-1 — the substrate claim has no first-party consumer that exercises it
+
+**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `claw-the-first-real-consumer.md` in
+`C:\codev\Claude Code research\docs\` (2026-08-15), the capstone of a nine-document port series.
+Re-verified against `C:\dev\claw` on 2026-08-17 — see the measurements below.
+
+**This is not a defect. It is a gap in the evidence, and it is the reason several other entries in
+this file cannot be closed with confidence.**
+
+**The finding.** Claw — the flagship first-party application, 107 `.py` files / 18,766 LOC —
+integrates with this runtime through **334 lines across three files**, all optional, most of it
+over HTTP, with the memory backend that would use it defaulting to `"local"`.
+
+| Measured 2026-08-17 | Value |
+|---|---|
+| `claw/aindy/app_registration.py` + `client.py` + `memory_store.py` | 61 + 53 + 220 = **334 lines** |
+| `claw/config/schema.py:157` | `memory_backend: str = "local"  # "local" \| "aindy" \| "aindy-fallback"` |
+| `execute_tool` / `EffectRecord` / `execution_token` / `EXACTLY_ONCE` in Claw's own source | **zero** — the only matches in the tree are inside its vendored `venv` copy of AINDY itself |
+
+So Claw *depends on* the runtime as a package and routes **none of its effects through it**. Its
+real effects — channel delivery across Discord/Telegram/Slack/Matrix/Signal, sessions, skills,
+scheduling, LLM calls, compaction — run through the `nodus-*` package ecosystem. They do not pass
+`execute_tool`, they carry no capability token, and they write no `EffectRecord`.
+
+**★ Why this belongs in the debt file rather than in a research folder.** The audit series that
+found it states the consequence plainly, and it is a statement about this repository:
+
+> When a first-party team, with full knowledge of the runtime and every incentive to use it, built
+> the flagship application, they integrated at the SDK boundary and defaulted it off.
+
+**The corollary that matters for how this file is read:** the accumulated coverage percentages
+across nine documents — 90–95% for Devika, 80–85% for MAF, 70–80% for SWE-agent, 55–65% for
+Temporal, 15–25% for Aider — describe capabilities the runtime **has**, not capabilities anything
+**uses**. That is not an argument that the runtime is unproven as software; the unit and
+integration suites are real and the required checks are real. It is narrower and sharper: **the
+substrate claim specifically — that an arbitrary agent can rely on these guarantees — has exactly
+one first-party witness, and that witness is testifying about the HTTP API.**
+
+**★ How this couples to the flag backlog, which is the practical cost.** Eight entries in this
+file end in *"soak, then flip"* — `IDEM-11`, DUR, `RTR-4`, `DB-NODUS-BUDGET-1`, `FR-15 (a)`,
+`AUTHORITY-VALUE-1`, `INFINITY-RUNTIME-1`, `NODUS-WARMPOOL-1`. Soak requires production traffic
+**through the path being flipped**. No first-party consumer sends traffic through the effect
+ledger, the capability token or the tool seam. So the soak those entries wait on is not merely
+un-run — under the current integration shape it **cannot** be run. Pair this with
+`PERF-BASELINE-1`: one entry says there is no instrument, this one says there is no traffic.
+
+**The recommended slice, and it is deliberately small** (the source document's option C, and the
+first recommendation across nine documents with a named, first-party, already-deployed subject):
+
+> Route **only Claw's outbound message delivery** through `execute_tool` with a declared
+> `EXACTLY_ONCE` guarantee.
+
+That class of effect is exactly what the ledger exists for — externally visible, irreversible, and
+currently at-least-once with no dedup. It exercises the capability token, the effect ledger and
+idempotent replay against a real workload, in the `single-instance` profile, on a machine already
+running. It answers, from production traffic rather than a harness, the three questions every port
+audit deferred: **is capability metadata derivable? does continuation hold for a real workload?
+does the ledger survive real tool results?**
+
+**★ Do not close this by writing a synthetic fixture.** A harness that calls `execute_tool` in a
+test proves the code path executes — which the unit suite already proves. The thing that is
+missing is a *consumer that would notice if the guarantee broke*, which is a different artifact
+and the only one that makes a soak mean anything. This is the `DOCS-COVERAGE-CLAIM-1` shape at the
+level of the whole system: coverage asserted, exercise absent.
+
+**Adjacent, and not the same:** `LOCAL-1` (upgrade path for local installs) and `DEPLOY-TARGET-1`
+(cloud manifests) are about *deploying* the runtime. This is about a consumer *depending on its
+guarantees* once deployed.
+
+**Second-order note worth keeping.** The same document observes that Claw's README claims an
+"AINDY execution kernel" and that it "fully exercises the underlying substrate." Whatever is done
+about the integration, the claim and the wiring should be made to agree — an internal flagship
+overstating its own integration is precisely how a team comes to believe the substrate is
+validated when it is not. That half is Claw's to fix, not this repository's, and is recorded here
+only so the two halves are not separated.
+
+---
+
+## PROGRESS-CHANNEL-1 — an execution can report a result or nothing; there is no partial-output surface
+
+**Status: OPEN — P2.** Filed 2026-08-17. Provenance: `CODEX_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
+§7 (its N5, one of two of its eight proposed primitives that six months of registry work had not
+already absorbed). Verified absent at HEAD.
+
+**The gap.** An execution produces a result when it finishes, and nothing before that. There is no
+surface on which a long-running execution can emit partial output. Verified repo-wide: no
+`StreamingResponse`, no `EventSourceResponse`, no `text/event-stream` on any execution surface.
+(The MCP *server* has an SSE transport — that is a different surface, exposing syscalls to
+external clients, not a progress channel on a running execution.)
+
+**Why an external system surfaced it and internal audits did not.** Everything this runtime hosts
+today is batch-shaped: a flow node runs, commits, and advances. Codex is interactive — a turn
+streams tokens and tool output to a human who is watching, and a substrate that can only say
+"done" is unusable for that class of consumer regardless of how good its durability is. Nothing in
+the current workload mix asks the question.
+
+**★ The three properties that make it a runtime primitive rather than an app concern**, and they
+are what keep the entry small:
+
+1. **It carries no authority.** A progress frame is not a capability-bearing call; nothing about
+   emitting one changes what the execution may do.
+2. **It constitutes no effect.** It writes no `EffectRecord`, is not replayed, and is not part of
+   the idempotency key. A re-run that emits different progress frames is still the same effect.
+3. **It attaches to the trace.** It belongs beside `SystemEvent`/`trace_id`, not beside the
+   result — which is what makes it the runtime's to own rather than each consumer's.
+
+Those three are also the **guard rails**. The failure mode to design against is a progress channel
+that quietly becomes an effect channel — the moment a consumer depends on a frame having been
+delivered, it has become a delivery guarantee and inherits every problem the effect ledger exists
+to solve. **Progress is best-effort by construction, and that must be stated in the contract, not
+discovered.**
+
+**Interaction worth noting.** `agent_continuation.py:11` already records the adjacent fact:
+*"AgentStep is a post-segment batch write, so mid-segment progress isn't durable."* That is the
+same boundary from the durability side. A progress channel does not make mid-segment state durable
+and must not be mistaken for doing so — it makes it **observable**, which is a different and much
+cheaper guarantee.
+
+**★★ OPEN QUESTION — a shipped peer decided the opposite (added 2026-08-19, from DBOS).** The
+"no effect / best-effort" constraint above was reasoned from first principles. **DBOS made progress
+durable**: a `streams` table keyed `(workflow_uuid, key, offset)` with `value` and `function_id`, in
+the system database. **The `offset` column is the tell** — offsets exist so a consumer can resume,
+which is only meaningful if the stream is durable. That is a deliberate design, not an accident.
+
+Either they are paying the cost this entry names — every frame a durable write, and a consumer that
+depends on delivery has turned observability into a delivery guarantee — **or the cost is worth
+paying**, because a durable ordered stream buys resumable consumers, replayable output and a record
+of *what the workflow was saying*, none of which a best-effort channel can offer and all of which
+matter for an agent streaming to a human. **Source alone cannot decide it.** Do not treat this
+entry's constraint as settled: it is one reasoned position against one shipped one.
+
+**Why P2.** No current consumer needs it, and `SUBSTRATE-WITNESS-1` says why that is weak
+evidence: there is one first-party consumer and it talks to the HTTP API. This rises the moment
+anything interactive is hosted — which the port series argues is the untested direction that
+decides whether "substrate" is the right word.
+
+---
+
+## SCOPE-NAMING-1 — `enforce_api_key_scope` no longer describes what it does
+
+**Status: OPEN — P3, cosmetic.** Filed 2026-08-17. **Filed because the source already says it is
+filed**: `AINDY/services/auth_service.py:601` reads *"`SCOPE-NAMING-1` tracks the rename if it is
+ever worth doing"*, and that identifier appeared nowhere in this file or `CLAUDE.md` until now. A
+comment asserting a thing is tracked when it is not is the smallest possible instance of the
+claimed-and-absent shape this repository catalogues, so it is cheaper to make the comment true
+than to remove it.
+
+**The gap.** `enforce_api_key_scope` gates **every** caller, not only API-key callers. Since
+`HTTP-SCOPE-GAP-1` removed the JWT exemption, a session presents `session_scopes` derived from the
+user row (`derive_session_scopes`) and is checked by the same dependency. The name is now narrower
+than the behaviour.
+
+**★ Deliberately not renamed, and the reason is the entry.** It appears at 41 call sites across 14
+route files and in the app team's own notes. Renaming a security-relevant dependency for cosmetics
+churns a surface where the diff is hard to review and a missed call site fails **open**. If it is
+ever done: add the new name as an alias, migrate call sites in one mechanical pass, and pin the
+old name's continued behaviour by a test before deleting it — do not rename in place.
+
+**Not to be confused with the real remainder of `HTTP-SCOPE-GAP-1`**, which is a design question:
+`execution.read` conflates scope with data ownership, and a scope cannot answer *"may I read
+someone else's."* That one is substantive; this one is a word.
+
+---
+
+## CREWAI-NODUS-2026-08-18 — provenance note
+
+**Not a debt item.** Third provenance label in this file, after `AIDER-PORTABILITY-2026-08-17` and
+`MAF-REFERENCE-2026-08-17`.
+
+Source: `C:\codev\Crewai research\` — a CrewAI architectural audit (2026-06-24), a 3-way ownership
+lens (2026-06-24), and `CREWAI_ON_NODUS_IMPLEMENTATION_STUDY.md` (2026-08-15, Nodus pinned
+`1a04d1d` = `v4.2.0-4`). An accuracy pass on 2026-08-18 re-verified it against
+`C:\dev\Coding Language` @ **`v5.0.4-2`**, `C:\codev\nodus-showcase-crewai`, and this runtime at
+`v2.4.0`; the write-up is `ACCURACY_CHECK_vs_aindy-runtime_2.4.0.md` in that folder.
+
+**★ Why this folder produced runtime findings at all, when it is a Nodus study.** The other four
+research folders asked *"could the substrate host this system?"* and answered from source. This one
+had a working implementation on disk — a CrewAI hierarchical crew expressed as a 39-line Nodus
+flow with real MCP and A2A across process boundaries. Its runtime findings are therefore
+**second-order**: not *"the runtime is missing X"* but *"here is what the runtime does not know
+about a guest that is doing real work."* That is a class of finding no source audit of `AINDY/`
+can produce, because the evidence is entirely on the other side of the seam.
+
+**What it produced, all filed against existing entries rather than as new prefixes:**
+
+- The **fourth durable store** and the fact that the runtime never configures it →
+  `ORCHESTRATOR-SPLIT-1`, which had recorded three.
+- That the **same missing `cwd=`** governs both the guest's filesystem bound and its durable-state
+  location → `GUEST-CONFINE-1` residual.
+- `NODUS-UPGRADE-2` — the 5.0.1 → 5.0.4 bump, filed because the above touches the guest seam.
+- A four-document error traced back to **our own** `RUNTIME_MODULE_MAP.md` → corrected there.
+
+**One empirical result worth keeping, which is validation rather than debt.** Four successive
+rounds of deepening — real LLM provider, real MCP client↔server transport, cross-process A2A with
+bearer auth, scope-addressed memory — left `crew_flow.nd` **byte-for-byte unchanged**. The study
+cites the showcase's own `NEXT_STEPS.md` for this; that repository has exactly **one commit**, so
+it cannot demonstrate invariance-under-change. **The filesystem can, and does:** `crew_flow.nd`
+mtime `2026-06-24 20:20`, while all six host-wiring files (`host.py`, `a2a_client.py`,
+`a2a_server.py`, `mcp_server.py`, README, NEXT_STEPS) are `2026-07-09 06:12–06:19`. A two-week gap
+with the orchestration file untouched.
+
+That is the only **tested** layer-placement result across five research folders, and it supports a
+boundary this repository already holds on reasoning: **the runtime should not grow orchestration
+syntax.** Recorded in `WHAT_THE_RUNTIME_IS.md` §5.
+
+**★ And the pointed half, which belongs beside it:** the showcase never routes through `sys()`.
+Its own absorption-test table marks **Enforcement ❌** — *"no sandbox, no budget governor, no
+capability gate on the delegated call in this demo"* — and states plainly that it *"demonstrates
+Nodus's orchestration layer, not the Surface-B gated path."* So the **composition** boundary now
+has a working witness and the **authority** boundary still has none. That is
+`SUBSTRATE-WITNESS-1` seen from the other side, and the two entries should be read together.
+
+---
+
+## NODUS-UPGRADE-2 — pin is `5.0.1`; Nodus is at `5.0.4`
+
+**Status: OPEN — P3, routine.** Filed 2026-08-18. Provenance: `CREWAI-NODUS-2026-08-18` — the
+Nodus repo was cloned and read directly for that accuracy pass and turned out to be three patch
+releases ahead of what this runtime pins.
+
+`pyproject.toml` and `AINDY/requirements.txt` pin `nodus-lang==5.0.1`. `C:\dev\Coding Language` is
+at `1969e26` (`v5.0.4-2`).
+
+**Follow `NODUS-UPGRADE-1`'s protocol — it is closed but its rules are not.** In particular:
+
+- **★ Bump across ALL THREE sites**: `pyproject.toml`, `AINDY/requirements.txt`, and the
+  `Install MCP extra` step in `runtime-ci.yml`, which installs directly rather than via the extra.
+  `--no-deps` in CI means pyproject's pins are **never applied there**; the effective environment
+  is `requirements.txt`. That asymmetry is how CI tested nodus 4.1.0 for four months while the
+  wheel required 4.2.0.
+- **★ Check `nodus-mcp` first.** `MCP-SDK-2X-1` records the reverse-direction trap: `nodus-mcp`
+  capped `nodus-lang<5.0.0` and blocked the 5.0.0 bump, and the fix was **not** to isolate the MCP
+  tests — `pip install "nodus-lang==5.0.4" "nodus-mcp>=0.1.3"` must resolve, or
+  `aindy-runtime[mcp]` becomes uninstallable for users and green CI ships a broken extra.
+- Guards already in place: `tests/unit/test_dependency_pin_agreement.py` (the two sources must
+  agree, and a pin no installed package permits fails naming the capper) and
+  `tests/unit/test_nodus_upgrade_contract.py` (an executable probe checklist).
+- **★ Distinguish cosmetic from real before touching confinement.** Four confinement tests went
+  red on 5.0.0 and none was a regression.
+
+**Sequence it with the `GUEST-CONFINE-1` residual and the `ORCHESTRATOR-SPLIT-1` store work** —
+all three touch the guest seam, and doing them in one pass means one confinement re-verification
+instead of three.
+
+---
+
+## ADK-LENS-2026-08-18 — provenance note
+
+**Not a debt item.** Fourth provenance label, after `AIDER-PORTABILITY-2026-08-17`,
+`MAF-REFERENCE-2026-08-17` and `CREWAI-NODUS-2026-08-18`.
+
+Source: `C:\codev\google adk research\` — a Google ADK 2.0 architectural audit and an
+A.I.N.D.Y.-lens audit, both 2026-06-24, checked against `v2.4.0` on 2026-08-18. Write-up:
+`ACCURACY_CHECK_vs_aindy-runtime_2.4.0.md` in that folder.
+
+**★ This folder produced no new debt, and that is the finding worth recording.** Every absorb item
+it proposed either **already shipped**, is **already tracked**, or would **reverse a decision this
+file records with reasons**. Listing it so nobody re-opens the same items from the same source:
+
+| ADK absorb item | Disposition |
+|---|---|
+| Event-sourced state fold + replay-based resume | **Shipped** as DUR-4 (`core/flow_history_fold.py`); the deterministic-replay remainder was declined — see `ECOGAP-1` and the taxonomy added there |
+| OTel GenAI semconv alignment | `OTEL-GENAI-SEMCONV-1` — **ADK is a second independent derivation**, noted on that entry |
+| Frontier/ready-set scheduling, `JoinNode` fan-in, routed cycles | `FLOW-PARALLEL-1`; MAF already supplies the worked reference design. ADK's own engine is non-durable (`_workflow.py:261` `# TODO`), so it is a vocabulary reference, not an implementation one |
+| Plugin "first-non-`None`-wins" middleware semantics | **Considered and declined** — `HOOK-PRECEDENCE-1` below |
+| `app:`/`user:`/`temp:` state-prefix scoping | App-layer; the audit says so itself |
+| A2A HTTP interop adapter | `ECOGAP-4`, genuinely open — the one interop axis ADK still wins |
+| Schema-from-signature tool declarations, typed `finish_task` completion | Nodus-side, per the audit's own placement |
+| Cloud deployment profiles | `DEPLOY-TARGET-1`, already open and correctly cited |
+
+**★ What it did surface, and it is about our own accuracy rather than our capability:** its §22
+credits two mechanisms this file has filed as open P0s. It cites *"aindy-runtime's **APScheduler
+1s heartbeat** … supply the process-independent scheduler ADK does not have"* — that heartbeat is
+`FR-15`, and `_decide_mode` short-circuits to `INLINE` by default
+(`core/execution_dispatcher.py:142-147`), so heavy dispatch is serialized through one slot. And it
+lists `EffectRecord` EXACTLY_ONCE flatly as a delivered substrate property (`IDEM-11`: eight
+declarations, flag still off) while routing tool execution through a seam that runs in-process with
+the live DB session (`TOOL-SEAM-ISOLATION-1`). **An external audit reading our strengths off the
+mechanism names is the mirror image of the inventory-vs-reachability pattern this corpus keeps
+finding in the other direction.**
+
+**Credit where due — and it is unusual.** The lens audit's §1 makes four layer-precision
+corrections to the architectural audit's §22, separating durable `EffectRecord` *enforcement* from
+Nodus `std:effects` *syntax*, and file-based `.nodus/graphs/` checkpoints from DB-backed
+durability. **All four hold at HEAD**, and the CrewAI/Nodus study reached the same distinctions
+independently from source two months later. Its instruction *"do not merge the two checkpoint
+stories"* was right — and there turned out to be three, since Nodus also carries the SQLite
+`LocalWorkflowStore` now tracked as store 4 under `ORCHESTRATOR-SPLIT-1`.
+
+---
+
+## HOOK-PRECEDENCE-1 — first-non-`None`-wins hook semantics: considered, declined
+
+**Status: RECORDED DECISION — not debt, not open work.** 2026-08-18. Provenance:
+`ADK-LENS-2026-08-18`. Filed so the same proposal from the same source is not re-litigated.
+
+**The proposal.** Google ADK's plugin system runs 13 app-wide hooks with **first-non-`None`-wins**
+semantics: handlers are consulted in order, the first to return a non-`None` value wins, and the
+rest are skipped. Both ADK documents recommend mapping that onto our `register_*` ABI and
+*"preserving the first-non-`None` middleware semantics."*
+
+**Why it is declined: it would change our model, not extend it.** Our ~40 `register_*` hooks are
+already one of two shapes, and neither has an ambiguity for first-non-`None` to resolve:
+
+| Shape | Examples | Resolution |
+|---|---|---|
+| **Keyed — one handler per key** | `register_response_adapter(route_prefix, …)`, `register_route_guard(route_prefix, …)`, `register_execution_adapter(entity_type, …)` | The key *is* the disambiguator. There is no second handler to lose a race to. |
+| **Run-all-and-collect** | `_event_handlers[event_type].append(…)`, `_startup_hooks`, `_agent_completion_hooks[run_type].append(…)`, `_capability_definition_providers` | Every handler runs and results are accumulated. Precedence is not a question because nothing is discarded. |
+
+**★ The substantive objection, and it is the reason this is a decision rather than a backlog
+item.** First-non-`None`-wins means **a handler's effect depends on registration order relative to
+handlers it cannot see**. For a UI framework that is a convenience; for a substrate whose whole
+proposition is that authority and effects are auditable, it introduces a silent, order-dependent
+override path — one plugin can suppress another's participation by registering earlier, and
+nothing in the audit trail records that it happened. Run-all-and-collect has the opposite
+property: every participant is visible in the result.
+
+**What would change the answer.** A concrete hook where exactly one handler must win *and* the key
+cannot express which — i.e. a genuine policy-arbitration point rather than a fan-out. None exists
+today. If one appears, the right shape is an **explicit, declared** arbiter (one registration, Tier
+1, like `register_agent_planner_backend`), which is the same conclusion `DISPATCH-ADMISSION-1`
+reached for admission policy — **not** implicit ordering.
+
+**Do not confuse with `CAPABILITY-PROVIDER-TIMEOUT-1`**, which is about a provider loop failing
+closed under contention. That is a defect in a run-all path, not an argument for first-wins.
+
+---
+
+## RETRY-CONTEXT-1 — a retry re-attempts the same call; it cannot make a better-informed one
+
+**Status: OPEN — P2.** Filed 2026-08-18. Provenance: the GPT Engineer lens audit
+(`C:\codev\gpt engineer\`, 2026-06-24), verified against source at `v2.4.0` on 2026-08-18;
+write-up in that folder's `ACCURACY_CHECK_vs_aindy-runtime_2.4.0.md`.
+**Independently half-derived by the Aider analysis — see below.**
+
+**The gap, verified.** `execute_with_retry(fn, …)` (`core/retry_policy.py:224`) calls `fn()` **with
+no argument carrying the prior failure**. The policy classifies the error to decide *whether* to
+retry (`is_retryable_error`, `:210`) and sleeps between attempts (`_retry_delay_seconds`, `:179`),
+and that is the whole of its interaction with the failure. Repo-wide,
+`last_error|previous_error|failure_context|error_context` returns only `plugin_host.py` status
+fields used for *reporting*; **nothing threads a failure into a retry.**
+
+So the runtime can re-attempt an identical call. It cannot attempt a better-informed one.
+
+**★ Derived twice, from unrelated systems, as two halves of one primitive:**
+
+| Source | The half it names |
+|---|---|
+| **GPT Engineer** | *why the last attempt failed*, fed into the next — `_improve_loop` re-sends the diff-parse error (≤2); `self_heal` re-sends stdout/stderr (≤10) |
+| **Aider** | *which sub-units failed and why* — *"3 of 5 hunks applied; here are the 2 that didn't"*, so the retry re-attempts only the failures. Its own audit names this as why its effective edit-success rate stays high with imperfect models |
+
+**`EFFECT-PARTIAL-1` covers Aider's half and not this one.** A partial-success envelope answers
+*which units failed*; it says nothing about a **whole-call** failure, which is the common case and
+the one gpt-engineer's two loops exist to handle. The two entries are complements: one shapes the
+*result*, this one carries it *forward*.
+
+**★ Why it belongs at runtime level — the argument is about who owns the loop.** The runtime owns
+`RetryPolicy`, `execute_with_retry`, the DLQ and stuck-run recovery. If the loop is runtime-owned
+but only the app can use the failure, then any app wanting an informed retry must **reimplement the
+loop** to reach the context. That is exactly what happened in the comparison corpus: **three
+hand-rolled retry loops across two codebases** — `_improve_loop`, `self_heal`, and Aider's
+`max_reflections=3` — each existing largely to carry a string forward. A substrate whose retry
+primitive forces that reimplementation is not providing the primitive.
+
+**★ The runtime carries; it does not interpret. This is the boundary that keeps the entry small.**
+Reading a stderr blob, a diff-parse error or a schema violation and deciding what to do next is
+**app content** and must stay app-side. The primitive is a **channel** — the previous attempt's
+error made available to the next attempt — not a policy. Note the precedent already in the file:
+`is_retryable_error` inspects the error string, but only to *classify*, never to *interpret*. Stay
+on that side of the line.
+
+**Guard rails, because two of these are how it goes wrong:**
+
+1. **Bound it.** Attempt N carrying all N−1 prior errors is a context-window bomb in exactly the
+   workload that retries most. Carry the last failure, or the last K, truncated — and decide that
+   before writing it, not after someone's prompt overflows.
+2. **It carries no authority and constitutes no effect.** Same three properties as
+   `PROGRESS-CHANNEL-1`: not capability-bearing, not an `EffectRecord`, not part of an idempotency
+   key. A retry that fails differently because of a carried error is still the same effect for
+   dedup purposes.
+3. **Do not let it become a control channel.** If a caller starts branching on the *shape* of the
+   carried error rather than passing it to a model or a validator, the runtime has acquired an
+   interpretation surface it said it would not own.
+
+**Why P2.** Nothing is broken; retries work, they are merely uninformed. It rises with the first
+consumer whose retry is model-driven — which is every coding-agent-shaped workload in the
+comparison corpus, and none of the workloads running today (`SUBSTRATE-WITNESS-1`).
+
+**★ Its consumer, from the same absorb register (recorded 2026-08-19, not filed separately):**
+Devika's *"EXACTLY_ONCE retry/repair routing — failure → **repair handler** before DLQ."* Today the
+path is retry-the-same-call → DLQ, with nothing between. A repair stage is the natural **consumer**
+of this entry's payload: you cannot repair what you were not told broke. Not opened as its own
+prefix because it is unbuildable before this entry and `RETRY-CLASSIFY-1` exist — a repair handler
+needs both *what failed* and *what class of failure it was*.
+
+**Related:** `EFFECT-PARTIAL-1` (the result shape this would carry), `AUTHORITY-NEGOTIATION-1`
+(the other bounded-retry entry — note it is about retrying at *lower authority*, a different axis
+that composes with this one), `PROGRESS-CHANNEL-1` (same no-authority/no-effect discipline).
+
+---
+
+## LANGGRAPH-NODUS-2026-08-18 — provenance note
+
+**Not a debt item.** Fifth provenance label, after `AIDER-PORTABILITY-2026-08-17`,
+`MAF-REFERENCE-2026-08-17`, `CREWAI-NODUS-2026-08-18` and `ADK-LENS-2026-08-18`.
+
+Source: `C:\codev\Langgraph research\` — a LangGraph architectural audit and lens audit (both
+2026-06-24) plus `LANGGRAPH_ON_NODUS_IMPLEMENTATION_STUDY.md` (2026-08-15), verified 2026-08-18
+against Nodus `v5.0.4-2`, `C:\codev\nodus-showcase-langgraph`, and this runtime at `v2.4.0`.
+Write-up: `ACCURACY_CHECK_vs_aindy-runtime_2.4.0.md` in that folder.
+
+**★ Nine systems in, this is the folder that produced the one genuinely new gap — and it is a
+reframe, not a missing feature.** Every other comparison asked *"what does the runtime lack?"*
+This one asked what the *unit of scheduling* costs you, and answered:
+
+> **The runtime checkpoints at the boundary of the unit it schedules, and any control flow inside
+> that unit is invisible to recovery.**
+
+Filed as `RECOVERY-GRANULARITY-1`. It also sharpened `FLOW-PARALLEL-1` (declaration-order merge
+answers ordering, not conflict) and added a fourth meaning to `ECOGAP-1`'s replay taxonomy.
+
+**★ Why this comparison is worth more than its coverage percentage.** LangGraph is the peer on the
+axis this runtime is *strongest* on — durable, checkpointed, resumable orchestration. Every prior
+audit named it as the reference: MetaGPT's called it *"the more runtime-like design"*, OpenHands'
+*"far better at durable, inspectable, resumable orchestration."* **A comparison against the system
+built for your strongest axis is the one that finds real gaps**, because agreement on everything
+else strips out the noise. The June lens audit put coverage at 85–90%; the study's read of that is
+the right one — *"the 10–15% is one mechanism, and it is the mechanism the peer was built around."*
+
+**★ And the method note worth keeping, because it is where the finding came from.** The gap was
+**volunteered by the artifact, not found by an auditor.** The showcase's own `EVALUATION.md`
+states it (*"a crash mid-loop resumes that step as one unit"*), and its `README.md` opens by
+conceding the axis it will lose: *"LangGraph's channel-state + reducer + pending-writes replay
+engine is a **more rigorous** crash-consistency-of-state story than Nodus's snapshot model… This
+showcase **deliberately picks the axis Nodus wins**."* Both quotes verified verbatim. A comparison
+that names its scope selection *before* making its case produces findings a defensive one cannot.
+
+---
+
+## RECOVERY-GRANULARITY-1 — recovery granularity is welded to scheduling granularity
+
+**Status: OPEN — P2 (cost and blast-radius, not correctness).** Filed 2026-08-18. Provenance:
+`LANGGRAPH-NODUS-2026-08-18`.
+
+**The property, stated once because it is the general form of three prior findings:**
+
+> The runtime checkpoints at the boundary of the unit it schedules. **Any control flow inside that
+> unit is invisible to recovery** — a crash re-runs the whole unit from its start.
+
+**★ We already have the repair at one layer, which is what makes this precise rather than
+aspirational.**
+
+| Layer | Unit | Durable write ordering | Recovery |
+|---|---|---|---|
+| **Flow** | a node | `runner.py:347-359` commits a `FlowHistory` row carrying `input_state` + `output_patch` **before** the snapshot and `current_node` advance | resumes at the next node; the completed node's patch is already durable |
+| **Agent** | a **segment** | `AgentStep` is a **post-segment batch write** — its own docstring says so (`agent_continuation.py:11`) | `_count_completed_segments` (`:110-118`) advances only on `total + n <= completed_steps`, so **a partially-executed segment restarts from step one** |
+
+`DUR-4`'s fold docstring states the flow-layer ordering explicitly: *"the last FlowHistory row
+commits **before** the snapshot advance, so it is at least as fresh as the snapshot for the last
+completed node."* **That is pending-writes-then-checkpoint.** We built it once and did not carry it
+down a layer.
+
+**★ What it costs, and why this is P2 rather than P0 — do not overstate it.** `DUR-2`'s
+`durable_effects_scope()` engages all three effect chokepoints declaration-free on a continued run,
+so **mediated effects do not double-fire**. The re-run is *correct*. What it costs is **work**: a
+crashed agent run **re-issues every LLM call in the partially-completed segment**, and any
+**un-mediated** side effect inside that segment re-fires — which is the residual `ECOGAP-1` already
+names, here given a granularity. For an agent runtime, re-issuing LLM calls on every recovery is a
+cost-and-latency problem worth fixing, not a soundness one.
+
+**The mechanism to copy, and it is specific.** LangGraph's **pending-writes-then-checkpoint**:
+completed node writes are persisted *before* the consolidated checkpoint, and on resume finished
+tasks are **replayed rather than re-executed**. Applied here: commit each `tool_step`'s result
+durably as it completes, so continuation resumes *inside* a segment.
+
+**★★ A worked reference at exactly our missing granularity (added 2026-08-19, DBOS `e0b742c`,
+MIT, 31 650 LOC).** `operation_outputs` is **one row per completed step**, keyed
+`(workflow_uuid, function_id)` with `output`, `error` and `child_workflow_id`. Before any step runs,
+`_core.py:2098-2115` calls `check_operation_execution(workflow_id, function_id, name)` and, if a
+record exists, logs *"Replaying transaction"* and **returns the recorded output or re-raises the
+recorded error — the step does not execute.** That is row 4 at **step** granularity: precisely what
+we have at the flow node and lack at the agent step.
+
+**★ And it answers "how do you know what to replay" more cheaply than the vector clock below.**
+DBOS uses a **monotonic per-workflow ordinal** (`function_id`) — position *is* identity. That works
+because its workflows are sequential by default; a vector clock earns its keep only once branches
+advance independently, i.e. when `FLOW-PARALLEL-1` lands. **They are not competing answers — they
+are the pre- and post-fan-out answers, and the ordinal is the one to build first.**
+
+**★ The constraint it buys with, so it is not conflated with the declined row 2:** replay-by-ordinal
+requires steps to be issued in a **stable order**, not deterministic *code*. `ECOGAP-1`'s three
+reasons for declining row 2 still do not apply.
+
+**★ The companion idea, which is the cheap part: `versions_seen` as one vector clock.** LangGraph
+tracks `versions_seen` against `channel_versions`, and the **same comparison drives both
+incremental scheduling (what is ready) and resume (what was already done)**. That answers the
+question two prior studies left dangling — *how do you know what to replay* — with **one data
+structure instead of a second bookkeeping system**. Do not invent a separate "what was done" ledger
+if this is built.
+
+**★ Two peers arrived at this independently.** LangGraph: pending-writes-then-checkpoint. MAF: a
+parent-linked per-superstep chain with executor state flushed *before* the checkpoint. Both are
+system-fact convergence — they built it.
+
+**★ Corrected 2026-08-19, and the correction matters more than the entry.** This paragraph said
+**three**, listing OpenHands' *"immutable per-event blob log"*, and called it *"the strongest
+convergence signal in the whole comparative corpus."* Verified against OpenHands source
+(`filesystem_event_service.py:35-36` — `model_dump_json` then `write_text`, one file per event):
+**that is taxonomy row 1, an event-sourced record, which this runtime already ships as `DUR-4`.**
+It is the thing you rebuild state *from*, not a write-before-checkpoint ordering. **The finding
+survives on two arrivals; the superlative does not.** It was cited from a sibling document's
+one-line summary without reading the system — the exact failure
+`COMPARATIVE_RESEARCH_INDEX.md` §5 warns about, committed two entries after that warning was
+written.
+
+**★ It does NOT reopen the declined decision, and the distinction is load-bearing.** `ECOGAP-1`
+declined *kernel deterministic replay* because determinism is a VM concern, because forward-resume
+never re-executes code, and because it constrains every line of workflow code. **None of those
+apply here.** This persists a finished unit's *result* before the consolidating checkpoint; it
+imposes no constraint on the code and intercepts no non-determinism. See the fourth row of
+`ECOGAP-1`'s replay taxonomy.
+
+**The trade to weigh before building.** The alternative to pending writes is *smaller scheduled
+units* — more checkpoints, more overhead, more rows. Pending writes is the option that **decouples
+recovery granularity from scheduling granularity** instead of forcing them to move together, which
+is why it is the right shape and not merely the popular one.
+
+**★ A third, adjacent shape worth recording here rather than filing (SWE-agent, 2026-08-19):
+salvage-on-terminal-failure.** Its absorb list asks to *"recover the last durable step's effect
+rather than only marking FAILED"* — i.e. when you **cannot** continue, extract what completed
+instead of discarding it. That is neither this entry (*resume* mid-unit) nor `EFFECT-PARTIAL-1`
+(*report* a batched effect's partial outcome); it is what to do at a **terminal** boundary. It
+becomes buildable only once the per-step record this entry proposes exists, which is why it is
+recorded here rather than opened separately.
+
+**Related:** `ECOGAP-1` (the taxonomy and the un-mediated-effect residual), `PROGRESS-CHANNEL-1`
+(observability of mid-unit progress — a different guarantee; that one makes progress *visible*,
+this one makes it *durable*, and neither implies the other), `ORCHESTRATOR-SPLIT-1` (a fourth store
+with its own claim/wait/retry state that would need to agree with any of this).
+
+---
+
+## COST-GOVERNOR-1 — every quota exists except the one that matters for an LLM runtime
+
+**Status: OPEN — P1.** Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
+(`C:\codev\MetaGPT research\`, 2026-08-15, its **M2**), verified against source at `v2.4.0`.
+**The last verified-but-unfiled gap across ten comparative research folders.**
+
+**The gap, measured.** `kernel/resource_manager.py:71-74` defines exactly four quota dimensions:
+
+| Dimension | Default |
+|---|---|
+| `MAX_WALL_TIME_MS` | 300 000 (5 min) |
+| `MAX_MEMORY_BYTES` | 268 435 456 (256 MiB) |
+| `MAX_SYSCALLS_PER_EXECUTION` | 100 |
+| `MAX_CONCURRENT_PER_TENANT` | 5 |
+
+**No token, cost, spend or budget dimension exists.**
+
+**★ And it is worse than a missing cap — there is no meter.** A repo-wide grep for
+`prompt_tokens|completion_tokens|total_tokens|token_usage` returns only
+`runtime/memory/context_builder.py` and its callers, where `_estimate_tokens` sizes a **memory
+context** to fit a prompt window. **Nothing anywhere captures token usage from an LLM response.**
+So this is not "we measure spend and fail to cap it" — the quantity is never observed. Any fix is
+**meter first, then govern**, and the meter is the larger half.
+
+**★ The one-line statement of why this is odd rather than merely incomplete**, worth keeping
+verbatim from the source analysis:
+
+> the runtime enforces a **300-second wall-clock ceiling** and a **256 MiB memory ceiling** on
+> execution units whose actual dominant cost is **tokens**, which it does not measure at all.
+
+**Why it belongs at runtime level — it passes the absorption tests more cleanly than most entries
+in this file.**
+
+- **Generality** — every LLM-executing workload has a spend dimension regardless of what the agent
+  does. Nothing about it is coding-agent-shaped or A.I.N.D.Y.-agent-shaped.
+- **Enforcement** — ★ **an agent cannot bound its own spend credibly, because it is the thing
+  spending.** This is the same argument that puts concurrency limits in the runtime rather than in
+  a well-behaved caller.
+- **Invariant** — *"this tenant cannot exceed budget B"* is unavailable to any higher layer,
+  exactly as *"this tenant cannot exceed 5 concurrent executions"* is, and the runtime already owns
+  the second.
+- **Layer** — it sits beside four quotas that already exist, resolved at the same seam, in the same
+  vocabulary.
+
+**★ Do NOT fold this into `BILLING-2`, and the distinction is load-bearing.** That entry is
+*"Metering model not chosen"* — per-seat vs per-agent-run vs usage-based — **deferred until
+commercial launch**, with the reopen trigger *"before billing infrastructure or Stripe integration
+begins."* That is **revenue metering**: different consumer, different accuracy requirement,
+different trigger, and a decision that can wait. A cost **governor** is a runtime quota that stops
+execution, and it is needed **the first time an agent loops**, not the first time an invoice is
+issued. A shared meter could serve both; the two decisions must not be coupled, because deferring
+the governor behind a commercial-launch gate is how a runaway run becomes a bill.
+
+**★ Converges with a finding from an unrelated comparand.** The Linux kernel audit's Lesson 5
+(recorded on `EXEC-ENV-BIND-1`) argues isolation decomposes into orthogonal axes — **visibility /
+resources / authority** — and notes the *resources* axis lives in `resource_manager`, is resolved
+at a different seam, and has never been folded into the environment descriptor. **This entry says
+that same axis is missing its dominant dimension.** A kernel audit and a multi-agent-framework port
+arriving at the same under-served axis from opposite directions is the reason both are P1 rather
+than P2.
+
+**The reference implementation, for shape only.** MetaGPT's `CostManager` is checked at every round
+boundary and raises `NoMoneyException` on breach; its own architectural audit calls the budget
+governor one of only four *"architectural ideas worth adopting."* Its scaling analysis notes token
+cost grows **superlinearly with rounds × roles** and that *"budget cap is the only backstop"* — a
+system with **only** the cost quota, meeting a runtime with **every quota except** the cost one.
+
+### ★★ All four design questions below are answered in shipped code (added 2026-08-19)
+
+Provenance: LiteLLM `c696fdf` (MIT), `litellm/proxy/spend_tracking/budget_reservation.py` —
+**1 322 lines devoted to reservation alone**. Write-up: `LITELLM_ON_AINDY_RUNTIME_AUDIT.md`.
+
+**The mechanism is reserve → call → reconcile:**
+
+```
+reserve_budget_for_request(...)      :148   estimate, ATOMICALLY PRE-FILL counters, return reservation
+reconcile_budget_reservation(...)    :257   replace reserved with actual, per entry, then finalize
+release_budget_reservation(...)      :276   = reconcile(actual_cost=0.0) — the call never happened
+release_budget_reservation_on_cancel :283   reconcile a still-open reservation cancelled mid-flight
+```
+
+**★ Q3 — "estimated or actual?" — the question this entry could not settle. The answer is BOTH.**
+Reserve an *estimate* so admission is decidable before spending; reconcile to the *actual* after.
+**The estimate never becomes the record.** And the concurrency subtlety is recorded in their own
+comment, which is the kind of thing only shipping teaches:
+
+> *"The reservation path admits at the strict-`<` boundary and **atomically pre-fills the same
+> counter** we'd read here. Re-checking with `>=` would reject a request the reservation already
+> admitted…"*
+
+A naive check is read-then-compare, which N concurrent requests all pass. **A reservation makes
+admission and accounting one atomic operation.**
+
+**★ Q1 — where checked:** an `async_pre_call_hook` (`hooks/max_budget_limiter.py`) against a
+**`DualCache`** (Redis + in-process) counter. **The hot path never reads the database.**
+
+**★ Q2 — whose budget:** six scopes *concurrently* — key, user, team, team_member, org, end_user,
+plus tags. **Ours should still start with two** (per-tenant and per-run, as proposed above); the
+point is that the counter design must not assume one.
+
+**★ Q4 — fail open or closed:** a `fail_closed_budget_enforcement: bool = False` parameter —
+configurable, defaulting **open**. **Take the configurability, not the default:** theirs suits a
+gateway whose failure mode is a refused customer call; ours already answers this shape at
+`resource_manager.py:595, :639` (closed in prod, open in dev/test) and should stay consistent with it.
+
+**★ And the operational half this entry called "the bigger half" is bigger than stated.** The
+metering infrastructure dwarfs the enforcement: async spend writes off the hot path
+(`db/db_transaction_queue/spend_update_queue.py`), bulk daily aggregation, periodic budget-window
+resets (`common_utils/reset_budget_job.py`) — and, the part that would **not** be designed from
+first principles, **partitioning and a cleanup job** for the spend log
+(`spend_logs_partition_manager.py`, `spend_log_cleanup.py`). One row per LLM call needs retention
+management before it needs anything else.
+
+**Design notes worth settling before building, because they decide the shape:**
+
+1. **Where is it checked?** The natural seam is the same one the other quotas use
+   (`resource_manager.can_execute` / `check_quota` at dispatcher entry and per flow node), but
+   spend accrues *inside* an LLM call, not at a syscall boundary. A per-EU running total updated
+   after each LLM response, checked at the next boundary, is the cheap version — and it inherits
+   `CANCEL-REACH-1`'s limitation: **the breach is observed between effects, not during one.**
+2. **Whose budget?** Per-tenant is the analogue of `MAX_CONCURRENT_PER_TENANT`; per-run is the
+   analogue of `MAX_SYSCALLS_PER_EXECUTION`. MetaGPT's is per-team-run. Probably both, as the
+   existing quotas already are.
+3. **★ Estimated or actual?** Providers return usage in the response, so *actual* is available —
+   but only **after** the spend. A pre-flight *estimate* is the only thing that can refuse a call
+   before it costs money, and estimates are wrong. Decide which one the ceiling is defined against
+   before writing it, or the first over-budget run will be an argument about semantics.
+4. **Fail-closed or fail-open on a metering failure?** `resource_manager` already answers this for
+   the other dimensions — closed in prod, open in dev/test (`:595, :639`). Follow it rather than
+   inventing a second policy.
+
+**Why P1 and not P0.** Nothing is broken and no exposure is claimed: the workloads running today
+are first-party and small (`SUBSTRATE-WITNESS-1`). It is P1 rather than P2 because it is the only
+quota whose absence is *unbounded* — wall-time, memory and syscalls all self-limit at some ceiling,
+and spend does not.
+
+**Related:** `EXEC-ENV-BIND-1` (the resources axis this belongs to), `BILLING-1..5` (revenue
+metering — adjacent consumer, do not couple), `CANCEL-REACH-1` (a breach detected mid-effect has
+the same reach problem), `SYSMAX-1/-3/-4` (the existing per-EU caps, some advisory).
+
+---
+
+## INITIATOR-IDENTITY-1 — the identity that initiates work is not the identity the runtime authenticates
+
+**Status: OPEN — P2 today, P0 the day an inbound-driven consumer ships.** Filed 2026-08-18.
+Provenance: `OPENCLAW_ON_AINDY_RUNTIME_AUDIT.md` (`C:\codev\openclaw_research\`) — an audit
+performed to fill the one folder in the comparative corpus that had no runtime-facing document.
+**It is the only finding in twelve folders that required an inbound-event-driven comparand to
+produce.**
+
+**The runtime's assumption, stated where it is made.** `kernel/tenant_context.py:13` — *"A.I.N.D.Y.
+uses a single-user-per-tenant model: tenant_id == user_id."* The dispatcher establishes it by
+requiring an authenticated caller (`syscall_dispatcher.py:405-409`), and exactly two tables carry
+`tenant_id`. Every mechanism downstream — memory namespacing, per-tenant quota, the audit trail —
+resolves against that one identity.
+
+**★ The assumption holds only while work is *requested*.** Every consumer the runtime has been
+designed against, and every port the corpus has proposed (Aider, Codex, MetaGPT), is
+**user-initiated**: an authenticated caller asks, and the caller is the subject. **An
+inbound-event-driven consumer breaks that.** OpenClaw listens on Discord, Telegram, Slack, Matrix,
+Signal, iMessage, WhatsApp and LINE; work begins when *a message arrives*. Its unit of scoping is a
+composite **session key** — account + agent + peer — built per inbound message
+(`resolve-route.ts:86`, `:291`), with DM access decided separately (`allow | block | pairing`).
+
+**A channel peer is not a runtime user.** An operator running such a consumer has **one**
+authenticated identity — their own — and **N** end-user identities the runtime cannot name,
+authenticate, or scope to.
+
+**What collapses, concretely:**
+
+| Mechanism | Intended | What actually happens |
+|---|---|---|
+| Memory namespacing `/memory/{tenant}/…` | per subject | **per operator** — every peer's recall shares one space, and one peer can recall another's context |
+| `MAX_CONCURRENT_PER_TENANT = 5` | per subject | **per deployment** — one chatty channel starves every other |
+| Audit trail / `SystemEvent` attribution | who did this | records *the operator did this*, when what happened is *a peer asked and the operator's agent did it* |
+| Capability token | scoped to the subject | scoped to the operator; the peer's request is indistinguishable from the operator's own |
+
+**★ This is not the multi-tenancy entry, and conflating them loses the finding.**
+`DEPLOY-TARGET-2` is *"can we run many operators on one deployment"* — a scaling question, deferred
+to a commercial trigger. **This is the opposite direction: one operator, many end users, and no
+vocabulary for the second.** A perfectly single-tenant deployment has this problem the moment it
+faces a channel.
+
+**★ And it is not `PAYMENTS-ARCHITECTURE-1` question 3**, which asks the *billing* version — *"who
+is the billing subject, the operator or end-users of the operator's product?"* — and defers it to
+Stripe work. **The execution and authority version is this entry**, it is answerable independently,
+and it is needed first: you cannot bill a subject you cannot name, but you *can* leak one
+end-user's memory to another long before anyone invoices.
+
+**What a fix would need, sketched only — do not build on this sketch.** An **acting-subject**
+distinct from the authenticated caller: carried on `SyscallContext` beside `user_id`, namespacing
+memory, dimensioning quota, and appearing in `SystemEvent` attribution — **without** being an
+authentication claim, because the runtime cannot verify a Discord handle. That distinction is the
+whole design problem: it is an *attributed* identity the caller asserts, not an *authenticated*
+one, and the runtime must be honest about which it is holding. Compare `AUTHORITY-VALUE-1`: the
+mistake to avoid is letting an asserted value silently acquire the standing of a verified one.
+
+**★★ The accounting half is shipped by a peer in our own domain (added 2026-08-19, LiteLLM).**
+`reserve_budget_for_request` takes `end_user_id` / `end_user_object` and resolves a dedicated
+counter (`_get_end_user_budget_counter` :443) **alongside** the key/user/team/org counters. The API
+key is the authenticated caller; **`end_user` is who the operator says the call is *for*** — and it
+carries its own budget.
+
+**★ It is an ATTRIBUTED, not authenticated, identity — exactly the distinction this entry insists
+on.** LiteLLM cannot verify an `end_user_id`; the caller asserts it. It is used for **accounting and
+limits, never for authorisation.** That is a shipped instance of the shape sketched above, and it
+shows the accounting half is useful *even where the authorisation half is impossible*.
+
+**★ The rule to carry over, and it is the one that keeps this safe: an asserted subject may only
+CONSTRAIN, never WIDEN or SELECT.** LiteLLM's `end_user` can only reduce available spend. **If an
+acting subject were allowed to namespace memory, an asserted value would be selecting a namespace —
+a read-authorisation decision wearing accounting clothes.** Constrain-only is the boundary between
+this being useful and this being a hole.
+
+**★ Deliberately not proposed: making the peer a real `User` row.** That converts every Discord
+contact into an account, drags registration, auth and the admin-bootstrap constraint into a chat
+adapter, and gets the trust level exactly wrong — the runtime would be *authenticating* an identity
+it has no way to verify.
+
+**Why P2 now.** No consumer today is inbound-driven; `SUBSTRATE-WITNESS-1` records that the one
+first-party consumer talks to the HTTP API and routes no effects. **It is P0 the day one ships**,
+because the first symptom is cross-peer memory recall, which is a data-leak class rather than a
+tidiness class, and nothing in the current model would flag it.
+
+**Related:** `SUBSTRATE-WITNESS-1` (no consumer exercises any of this yet), `DEPLOY-TARGET-2`
+(many operators — the other axis), `PAYMENTS-ARCHITECTURE-1` q3 (the billing version),
+`AUTHORITY-VALUE-1` (asserted vs verified values — the trap to avoid), `TENANT-2` (per-tenant
+quota, which inherits the wrong subject).
+
+---
+
+## LEASE-FENCE-1 — the background lease has no fencing token, so a stale leader's writes are indistinguishable from the real one's
+
+**Status: OPEN — P2, defence-in-depth.** Filed 2026-08-18. Provenance:
+`PI_ON_AINDY_RUNTIME_AUDIT.md` (`C:\codev\openclaw_research\`) — an audit of Pi, the agent-loop
+library OpenClaw embeds. **It is the one primitive in the comparative corpus that an excluded layer
+has and this substrate does not.**
+
+**The gap, verified.** `db/models/background_task_lease.py` carries `name`, `owner_id`,
+`acquired_at`, `heartbeat_at`, `expires_at`. A repo-wide grep for `fence|fencing|epoch` under
+`AINDY/` returns **nothing**. `platform_layer/leadership.py`'s own docstring states the model:
+
+> *"Row owned by us → renew … **Row expired → take over.**"*
+
+**★ What expiry alone cannot do.** A process that loses its lease to expiry — a GC pause, a disk
+stall, a network partition — **has no way to learn that before acting**. It finds out at its next
+renew attempt, and everything it did in the interval it did believing it was leader. Expiry bounds
+**how long** two leaders coexist. It does nothing about **what the stale one wrote** in that window,
+because its writes are indistinguishable from the incumbent's.
+
+**A fencing token closes exactly that.** The reference, from Pi's
+`session-backends/sqlite-node/src/sqlite/storage/writer-leases.ts`:
+
+```sql
+INSERT INTO writer_leases (session_id, owner_id, fence, expires_at_ms)
+VALUES (…, …, 1, …)
+ON CONFLICT … DO UPDATE SET
+    fence = writer_leases.fence + 1,          -- monotonic, bumped on every takeover
+    expires_at_ms = excluded.expires_at_ms
+  WHERE writer_leases.expires_at_ms <= <now>  -- only steal an expired lease
+RETURNING owner_id, fence, expires_at_ms
+```
+
+A conditional upsert that takes the lease only from an expired holder and **increments a monotonic
+fence on every takeover**. The holder then carries that fence on its writes, and the store rejects
+anything presenting a lower one. **The stale leader is not asked to notice it is stale — it is
+refused.**
+
+**★ Severity, stated honestly rather than dramatically — this is not a live corruption path.** Our
+lease guards *background leadership* (which instance runs maintenance jobs), **not individual
+writes**. Two leaders briefly both running orphan recovery and cleanup is bounded, and those jobs
+are largely idempotent. Nothing observed suggests this has bitten.
+
+**★ It is filed anyway, for three reasons, and the third is the one that matters:**
+
+1. The fix is **one integer column and one comparison** — smaller than most entries in this file.
+2. The failure mode is **invisible when it happens**. There is no error, no log line, and no row
+   that says two leaders acted; you would infer it from duplicated side effects long afterward.
+3. **An agent-loop library has the better primitive than the substrate whose job this is.** Pi is
+   the layer this corpus excludes from the runtime thirteen times over — and it fenced its leases
+   while we did not. That is the whole argument for the entry.
+
+**Scope note — do not over-build it.** Pi fences a **per-session writer** lease; ours is a
+**per-role leadership** lease. The analogous change is a fence on the leadership row plus a check
+wherever a leader-only write happens, **not** a general fencing framework. `LEASE-1` is closed and
+its mechanism is sound; this extends it, it does not reopen it.
+
+**★ Where it would actually pay, and it is worth checking before building:** the leader-only paths
+are the scheduler's maintenance jobs — `_recover_orphaned_approved_runs`, the effect-record TTL
+cleanup, `requeue_stale_jobs`, the stuck-run watchdog. Several already have their own guards
+(`AGENT-APPROVE-001b`'s 10-minute threshold, `EffectRecord` status filters). **A fence is most
+valuable on whichever of those is least idempotent** — establish that first rather than fencing
+uniformly.
+
+### ★★ Second witness, and the gap was named eight weeks before it was filed (added 2026-08-19)
+
+**Temporal fences shard ownership with exactly this primitive**, verified in source
+(`C:\codev\Temporal research	emporal`):
+
+> `common/persistence/data_interfaces.go:144` — *"**ShardOwnershipLostError** is returned when
+> conditional update fails due to **RangeID** for the shard"*
+
+with `PreviousRangeID` and `RangeID` carried on the update requests (`:183-228`). Every write
+presents the RangeID it believes it holds; a conditional update **fails** if the shard has been
+re-acquired. **The stale owner is refused, not eventually informed.** That is the same mechanism as
+Pi's `fence`, in the industry's reference durable-execution engine, as its **core shard-ownership
+mechanism** rather than an incidental feature.
+
+**So this is system-fact convergence ×2 — Temporal and Pi** — and by the taxonomy in
+`COMPARATIVE_RESEARCH_INDEX.md` §5 that is the strong kind: both *built* it, neither is an
+auditor's proposal.
+
+**★ And the uncomfortable part, recorded because the process lesson outlives the entry:
+`TEMPORAL_AINDY_LENS_AUDIT.md` named this gap on 2026-06-24** — *"a **monotonic-RangeID storage-CAS
+fence** (vs aindy's DB-lease, now real but weaker)"* — listing it among the advantages that
+**survive** correction, and mentioning `RangeID` six times. **It was never filed.** `LEASE-1` closed
+the same day, the lease became "real," and the observation that it was *"weaker"* in a specific,
+named way went into a document and nowhere else. This entry was opened 2026-08-18 from Pi, believing
+it new; it was eight weeks old.
+
+**The lesson is not "read the audits."** It is that **an audit's *surviving-gap* list is a filing
+queue and was never treated as one** — six of the June lens audits carry one, and this is the second
+item found in them that had no registry entry (cf. `COST-GOVERNOR-1`, where the same audit family
+recorded a capability as *Covered* on the strength of a sentence about where it belonged).
+
+**Related:** `LEASE-1` (closed — the lease mechanism this extends), `ORCHESTRATOR-SPLIT-1` (store 4,
+`nodus_lang_workflow`, has its own `claim` with no fence either — same gap, different store),
+`IDEM-11`/`IDEM-12` (the effect-side answer to duplicate work, which a fence complements rather
+than replaces), `RETRY-CLASSIFY-1` (note that Temporal's fence failure is a **named error type**,
+`ShardOwnershipLostError` — a class, not a matched substring).
+
+---
+
+## AUTHORITY-LIFETIME-1 — the capability token is bound to the clock, not to the execution it authorises
+
+**Status: OPEN — P2, additive hardening.** Filed 2026-08-19. Provenance:
+`OPENHANDS_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md` (`C:\codev\OpenHands_research`, its **O3**),
+verified on both sides.
+
+**The gap.** `agents/capability_service.py:25` — `TOKEN_TTL_HOURS = 24`, with `expires_at` threaded
+through mint and verify and a rotation grace key ring. A grep of that module for
+`revoke|revocation|invalidate` returns **nothing**.
+
+**So a capability token minted for a run that finished in ninety seconds stays valid for the rest
+of the day.** Nothing about the run reaching `completed`, `failed` or `cancelled` invalidates the
+authority that run was issued. The token is bound to wall-clock time and to nothing else.
+
+**The reference, verified in source.** OpenHands mints a fresh 32-byte session key per sandbox and
+binds it to the sandbox's *lifecycle state* — `openhands/app_server/sandbox/session_auth.py:13`:
+
+> *"Session API keys are only valid while the sandbox is RUNNING."*
+
+Enforced at `:76` (`if sandbox_info.status != SandboxStatus.RUNNING`), owner-checked at `:103`,
+nulled on pause and rotated on resume. **A stolen key is useless the moment the sandbox pauses.**
+
+**★ These compose rather than compete, which is why this is additive and not a redesign.**
+
+| Question | Answered by |
+|---|---|
+| *What may this bearer do?* | `capability_ceiling` + granted tools — **ours, and materially stronger; OpenHands has no grant set, ceiling or delegation semantics at all** |
+| *While what is true?* | RUNNING-only — **theirs, and we have no analogue** |
+
+The primitive is **authority bound to execution lifecycle**: mint at unit start, invalidate at unit
+terminal state, rotate on resume. It closes a window a 24-hour TTL leaves open **by
+construction** — not by oversight, and that distinction matters when costing it.
+
+**What it costs, stated honestly.** A **revocation check** the token model does not currently have.
+Today verification is pure crypto — HMAC compare against a key ring, no I/O. Binding to lifecycle
+means the verifier must consult run state, which turns a stateless check into a stateful one on the
+hot path. **That is the real design question, and it should be settled before any code:**
+
+1. **Where does the check live?** `execute_tool`'s capability branch already has a DB session in
+   hand, so the marginal cost there is small. `SyscallDispatcher` does not necessarily.
+2. **Cache or not?** A terminal-state check is cacheable *negatively* — once a run is terminal it
+   stays terminal — so a small negative cache is sound where a positive one is not.
+3. **Fail open or closed on a lookup failure?** `resource_manager` already answers this shape for
+   quota — closed in prod, open in dev/test (`:595, :639`). Follow it rather than inventing a
+   second policy.
+
+**Why P2.** No exploit path is claimed. The token is HMAC-signed and unforgeable, it is scoped by a
+ceiling, and every entry point has its own authorisation — so this is **defence-in-depth on an
+already-strong component**, narrowing a window rather than closing a hole. It rises if tokens ever
+travel further than the process that minted them.
+
+**★ Do not conflate with the two adjacent entries.** `AUTHORITY-VALUE-1` is about capabilities that
+are *caller-supplied values* rather than issued claims — a different weakness in a different
+mechanism. `KEY-SCOPE-ESCALATION-1`'s *"survives revoking the key"* was about API-key scopes, and is
+closed. **This one is about a correctly-issued, correctly-scoped token outliving the thing it was
+issued for.**
+
+**Related:** `AUTHORITY-VALUE-1`, `AUTHORITY-NEGOTIATION-1` (a token amendment path —
+`amend_token` there and lifecycle binding here are the two halves of "the token should track the
+run"), `CANCEL-REACH-1` (cancellation that does not reach an in-flight effect has the same
+between-boundaries limitation any revocation check would).
+
+---
+
+## RETRY-CLASSIFY-1 — retryability is decided by substring matching on an error string, in five places
+
+**Status: OPEN — P2.** Filed 2026-08-19. Provenance: `SWE_AGENT_AINDY_LENS_AUDIT.md`
+(`C:\codev\swe agent research\`), whose absorb list asks for a **declarative error policy table**
+to replace *"the fragile sentinel-string channel"* — and points correctly at us.
+
+**The classifier.** `core/retry_policy.py:95`:
+
+```python
+_NON_RETRYABLE_SUBSTRINGS: tuple[str, ...] = (
+    "permission", "unauthorized", "forbidden", "not found",
+    "404", "401", "403", "invalid", "blocked by policy",
+)
+```
+
+`is_retryable_error(error)` lowercases the message and returns `not any(substr in lower …)`.
+
+**★ It is wired far more widely than the module implies — five real call sites, not a helper
+awaiting adoption:**
+
+| Site | What it decides |
+|---|---|
+| `flow_engine/runner_steps.py:266` | whether a failed flow node retries |
+| `runtime/nodus_adapter.py:279` | whether a tool result is retried |
+| `runtime/nodus_worker.py:389` | **registered as a Nodus host function** — guest scripts call it directly |
+| `runtime/agent_plan_compiler.py:55, :67, :145` | **emitted into generated agent plans** as `is_retryable_error(__result_0["error"])` |
+| `core/retry_policy.py:228, :250` | the default classifier for `execute_with_retry` |
+
+**The failure modes are concrete.** Substring matching on a lowercased message means:
+
+- **`"404"` matches a duration** — `"request took 404ms"` — and an ID, a port, a byte count. Any
+  transient failure whose text happens to contain those three characters becomes permanently fatal.
+- **`"invalid"` matches `"invalidated cache"`** and `"cache invalidation in progress"`.
+- **`"not found"` matches a DNS message** and a row-not-yet-committed race.
+- **`"permission"` matches `"permission granted"`.**
+
+**★ Direction of failure, and why it is P2 rather than P1.** A false positive **gives up on a
+retryable error** — the run fails permanently where a retry would have succeeded. That is the safer
+of the two directions; nothing is executed twice and no effect is duplicated. It is filed because
+it is **silent**: nothing records *"this was classified non-retryable,"* so the outcome is
+indistinguishable from a genuine hard failure, and a support conversation about it starts from no
+evidence.
+
+**★ The sharpest instance is the generated one.** `agent_plan_compiler.py` emits this call **into
+Nodus source**, so an agent's retry behaviour — inside a compiled plan, inside a guest VM — is
+decided by substring matching on an error string that may itself have been shaped by a model. A
+tool whose error text an LLM influences can, in principle, influence whether its own failure is
+retried.
+
+**The shape to build, from the absorb item.** A **typed, declarative classification table**:
+errors carry a class (`transient | permission | not_found | policy | fatal`) set at the raising
+site or mapped from a typed exception, and the policy maps class → action. Substring matching
+survives only as a **last-resort fallback for un-classed errors**, and when it fires it should say
+so in the retry record.
+
+**★ Sequence it with `RETRY-CONTEXT-1`; they are the two halves of one retry story.** That entry is
+about carrying *what went wrong* **forward** into the next attempt. This one is about **classifying**
+it in the first place. A typed error class is exactly what a carried failure should contain, so
+building either one without the other means designing the same payload twice.
+
+**One thing verified and NOT a finding, recorded so it is not re-derived.** The docstring on
+`is_retryable_error` reads *"Current system does not use this — it is here as the central place to
+add the check when callers adopt it."* **That is stale, not true**: callers adopted it in the five
+sites above. It is a documentation defect, and it is **not** a fourth instance of the
+published-and-unconsumed family (`ROUTE-AST-UNWIRED-1`, `DEBT-COMPAT-1`) — which is what it looked
+like on first reading.
+
+**Related:** `RETRY-CONTEXT-1` (the other half), `EFFECT-PARTIAL-1` (a partial result is a third
+outcome this binary classifier cannot express), `AUTHORITY-NEGOTIATION-1` (a `CAPABILITY_DENIED`
+is exactly the kind of error that should carry a class rather than a matched substring).
+
+---
+
+## EVENT-OUTBOX-1 — system events are buffered in memory and emitted after the work commits, so a crash loses the record of work that happened
+
+**Status: OPEN — P2.** Filed 2026-08-19. Provenance: the **consolidated absorb register** in
+`C:\codev\Ecosystem_Coverage_Analysis_v2.md` — *"RangeID monotonic CAS fence **+ transactional
+outbox** (Temporal)"*. The fence half became `LEASE-FENCE-1`; **this is the other half, and it had
+no entry.**
+
+**The mechanism, traced.**
+
+1. `core/execution_signal_helper.py:16` — `queue_system_event(...)`. While the pipeline is active it
+   does **not** write anything. It appends the event to
+   `ctx.metadata["queued_execution_signals"]["events"]` — **an in-memory dict on a ContextVar** —
+   and returns a *provisional* UUID.
+2. The handler runs and commits its own work. Flow nodes do exactly this:
+   `flow_engine/runner.py:359` commits the `FlowHistory` row before the snapshot advance.
+3. **Only after the handler returns** does the pipeline flush: `pipeline.py:146` extracts the
+   signals, `:171` applies them, and `execution_pipeline/signals.py:111+` loops the buffer calling
+   `emit_system_event`.
+4. That loop wraps each emit in `try: … except Exception:` and swallows.
+
+**So there is a window — between the handler's commit and `pipeline.py:171` — in which the work is
+durable and the record of it is not.** A crash there loses the event. An emit failure there loses
+it silently.
+
+**★ What is lost is not an effect, which is why this is P2 and not P0.** `SystemEvent` rows are the
+**audit and causal record**, not the work. Nothing is duplicated, nothing is corrupted, no effect
+re-fires. What is lost is *the evidence that something happened.*
+
+**★ And that is exactly the asymmetry the OpenHands analysis named, now with a mechanism behind
+it:**
+
+> A.I.N.D.Y. has the better **index** over its events and the weaker **record**.
+
+`build_trace_graph`, `parent_event_id`, `get_downstream_effects`, MAS path queries and pgvector are
+a genuinely strong index. **They index a record that can silently lose rows.** A hole in the causal
+graph is worse than a missing join (`AUDIT-CORRELATION-1`) because a missing join is visible and a
+missing row is not — the graph simply reads as though the work never occurred.
+
+**Second-order consequence worth checking before this is scoped:** `memory/memory_capture_engine.py`
+reads `get_downstream_effects(...)` to decide what to capture. **A lost event is therefore also a
+potentially-missed memory capture**, which is silent in a second system. That coupling should be
+confirmed or ruled out first — it decides whether this is an observability item or a memory-loop
+item.
+
+**The primitive: a transactional outbox.** Write the event into the **same transaction** as the
+work — an `outbox` row committed atomically with the `FlowHistory`/`EffectRecord` write — and let a
+relay drain it to `SystemEvent` and the event bus afterwards. **The crash window closes because
+there is no window: either both landed or neither did.** Redelivery becomes at-least-once, which is
+correct for an audit record and is what the relay's dedupe key handles.
+
+**★★ A cheaper fix than the one proposed above (added 2026-08-19, from DBOS).** DBOS has no outbox
+table and no relay — and no window either, because **its event store *is* its workflow store**:
+`set_event_from_workflow` opens `with self.engine.begin() as c:` and writes both the step record
+(`_record_operation_result_txn(…, c)`) and the `workflow_events` insert **on that one connection**.
+Atomicity is free when there is nothing to span.
+
+**`SystemEvent` already lives in the same PostgreSQL as `FlowRun`, so the same option is open to
+us.** The cheaper repair is therefore **write the event on the handler's own connection inside the
+handler's transaction**, keeping the buffer only for events that genuinely cannot be known until
+after commit. That is materially less machinery than an outbox row plus a relay, and it closes the
+same window. **Scope the co-location fix first; reach for the outbox only if something must span
+two stores.**
+
+**★ Do not "fix" this by emitting eagerly instead of buffering.** The buffer exists for a reason —
+provisional IDs let a handler reference an event it has not written yet, and batching keeps
+per-node event emission off the handler's critical path. Eager emission trades this gap for a
+worse one: events written for work that then rolls back, i.e. a record of things that did **not**
+happen. **The outbox is the shape that gets both.**
+
+**Scope note.** The `required: bool` flag on `queue_system_event` is carried through to
+`emit_system_event` but does **not** change *when* the emit happens — a `required=True` event is in
+the same buffer and the same window. If a cheap interim mitigation is wanted, making `required`
+events bypass the buffer is it; that is a narrowing, not a fix.
+
+**Related:** `AUDIT-CORRELATION-1` (joins the trail cannot make — this is the row it cannot make
+them *from*), `RECOVERY-GRANULARITY-1` (the flow layer already commits its `FlowHistory` row before
+the snapshot; the event for that same node does not get the same treatment), `LEASE-FENCE-1` (the
+other half of the same absorb bullet), `EVENTBUS-PUBLISH-LATCH-1` (closed — publish-side circuit
+breaker; this is the write side and is a different failure).
+
+---
+
+## DBOS-PEER-2026-08-19 — provenance note
+
+**Not a debt item.** Sixth provenance label, after `AIDER-PORTABILITY-2026-08-17`,
+`MAF-REFERENCE-2026-08-17`, `CREWAI-NODUS-2026-08-18`, `ADK-LENS-2026-08-18` and
+`LANGGRAPH-NODUS-2026-08-18`.
+
+Source: `C:\codev\DBOS research\dbos-transact-py` @ `e0b742c` (2026-08-14, **MIT**, 56 non-test
+`.py` / 31 650 LOC), audited 2026-08-19 against `v2.4.0`. Write-up:
+`DBOS_ON_AINDY_RUNTIME_AUDIT.md` in that folder. Both sides source-verified; nothing executed.
+
+**★ This is the only comparand in eighteen that solves OUR problem with OUR substrate choice** —
+durable execution in one Postgres, no separate orchestrator. Temporal answered *"shard it"*; DBOS
+answered *"don't"*, which is what we answered.
+
+**It opened no new prefix, and that is the result.** Every finding landed on an entry that already
+existed, as a **worked answer** rather than a new gap: `RECOVERY-GRANULARITY-1` (per-step
+`operation_outputs` + replay-not-re-execute, and a monotonic ordinal as a cheaper identity than a
+vector clock), `EVENT-OUTBOX-1` (**a simpler fix than the one filed** — no outbox, no relay, no
+window, because the event store *is* the workflow store), `EMBEDDED-FLOOR-1` (SQLite and Postgres
+behind one shared implementation), `FLOW-GRAPH-SIGNATURE-1` (version string vs topology hash — the
+entry's own open trade, with a shipped instance on one side), `ECOGAP-5` (`automatic_backfill`),
+`IDEM-11` (start-boundary `deduplication_id`), `RETRY-CLASSIFY-1` (named error types).
+
+**★ Three method lessons that generalise past this target:**
+
+1. **A peer on your own axis produces answers, not gaps.** Seventeen comparands solved adjacent
+   problems and produced *entries*; the one that solved the same problem produced *implementations
+   of entries already filed*. Given that `COMPARATIVE_RESEARCH_INDEX.md` §5c concludes the
+   bottleneck is **completion rather than discovery**, this is the higher-yield kind of audit — and
+   the signal that discovery has saturated.
+2. **It corrected one of my own filings downward.** `EVENT-OUTBOX-1` proposed an outbox table plus a
+   relay; the peer showed the window closes with a connection argument. **Reading a peer is cheaper
+   than reasoning alone.**
+3. **And it challenged a constraint reasoned to alone.** `PROGRESS-CHANNEL-1` specifies progress as
+   best-effort *"by construction"*; DBOS ships a durable `streams` table with offsets, deliberately.
+   **One reasoned position against one shipped one is not a settled question**, and that entry now
+   says so rather than asserting the constraint.
+
+**One honest downgrade, recorded so it is not overstated:** `owner_xid` is a **start-time ownership
+guard**, not a per-write fence. `LEASE-FENCE-1` keeps Temporal and Pi as its witnesses; DBOS is a
+third and lesser instance.
+
+---
+
+## LITELLM-DOMAIN-2026-08-19 — provenance note
+
+**Not a debt item.** Seventh provenance label.
+
+Source: `C:\codev\LiteLLM research\litellm` @ `c696fdf` (2026-08-19, **MIT**), audited 2026-08-19
+against `v2.4.0`. **Scope deliberately narrow** — only `proxy/spend_tracking/`, `proxy/hooks/`,
+`proxy/db/` and `proxy/auth/`. Write-up: `LITELLM_ON_AINDY_RUNTIME_AUDIT.md`.
+
+**Not a substrate comparison.** LiteLLM is an LLM gateway, not a durable execution engine, and
+nothing about its orchestration bears on us. **It was audited for one subsystem** — the one where
+`COST-GOVERNOR-1` records that a comparand has something and we have nothing.
+
+**Result: no new prefix; two entries got worked answers.**
+
+- **`COST-GOVERNOR-1`** — all four of its stated design questions answered in shipped code, with
+  **reserve → call → reconcile** as the mechanism and the hardest question (*estimated or actual?*)
+  answered **both**.
+- **`INITIATOR-IDENTITY-1`** — the accounting half of the acting-subject problem, shipped, as an
+  **attributed, constrain-only** `end_user` budget scope.
+
+**★ Second consecutive audit to produce answers rather than gaps** (after `DBOS-PEER-2026-08-19`).
+`COMPARATIVE_RESEARCH_INDEX.md` §5c predicted this: once the bottleneck is **completion rather than
+discovery**, a peer on a specific axis returns implementations of filed entries, not new ones.
+**That is the signal that comparative research has done its job** — and the reason the next unit of
+work is a build, not another audit.
