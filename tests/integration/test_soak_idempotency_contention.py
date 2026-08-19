@@ -32,18 +32,17 @@ gate off and asserts the handler runs **N times**. It is doing two jobs:
    that reads as evidence and is not.
 2. **Being the regression baseline** the soak is compared against.
 
-★ There is no metric for this
------------------------------
-Searched the 52 registered metrics: **nothing observes the idempotency gate firing.**
-``aindy_durable_effects`` and ``aindy_effect_attribution`` are ContextVars, not metrics. So the
-invariant here is asserted on handler-run count and on `effect_records` rows, and the metric
-window watches the **pool** instead — because the realistic way this flag hurts in production is
-not a wrong answer, it is `RT-MEMTXN-LEAK-1` again: the gate opens its own `SessionLocal`, and N
-concurrent gated calls means N extra connections.
+★ The gate is now observable — it was not when this file was written
+-------------------------------------------------------------------
+When this soak first ran, **nothing observed the gate at all**: ``aindy_durable_effects`` and
+``aindy_effect_attribution`` are ContextVars, not metrics, so with the flag on an operator had no
+way to tell whether the gate was firing, replaying, or silently degrading. That absence was the
+real blocker on a *production* soak — there was nothing to read.
 
-**Filing note for whoever flips the flag: an operator cannot currently tell whether the gate is
-doing anything.** A counter on gate hit/replay is a prerequisite for a real production soak, and
-it does not exist.
+``aindy_effect_gate_outcomes_total{outcome=reserved|replayed|degraded|reclaimed}`` now exists,
+and this file asserts on it. **``degraded`` is the label that matters**: a deployment where it is
+a meaningful fraction of ``reserved`` is one where the guarantee the operator thinks they enabled
+is not the one they have.
 """
 
 from __future__ import annotations
@@ -172,26 +171,23 @@ def test_the_gate_degrades_to_at_least_once_under_contention(monkeypatch, testin
     monkeypatch.setenv("AINDY_SYSCALL_IDEMPOTENCY", "true")
     name, runs = _register_probe(exactly_once=True)
 
-    # ★ Spy on the logger directly rather than scraping ``caplog``. The degradation warning is
-    # emitted from a WORKER THREAD by a module logger, and caplog did not capture it reliably
-    # across that boundary — the first version of this assertion failed in CI for that reason,
-    # not because the warning was missing. A test whose instrument is timing- or
-    # config-dependent produces exactly the ambiguous result a soak must not produce.
-    import AINDY.kernel.effect_ledger as _ledger
-
-    degradations: list[str] = []
-    _real_warning = _ledger.logger.warning
-
-    def _spy(msg, *args, **kwargs):
-        try:
-            degradations.append(msg % args if args else str(msg))
-        except Exception:
-            degradations.append(str(msg))
-        return _real_warning(msg, *args, **kwargs)
-
-    monkeypatch.setattr(_ledger.logger, "warning", _spy)
-
-    outcome = _drive(name, str(uuid.uuid4()), {"x": 1})
+    # ★ Assert on the METRIC, not on a log line. Three instruments were tried here and the
+    # first two were unusable:
+    #
+    #   caplog          — the warning is emitted from a WORKER THREAD by a module logger and
+    #                     caplog did not capture it reliably across that boundary. It failed CI
+    #                     on a docstring-only commit, which is the signature of an unreliable
+    #                     instrument rather than a regression.
+    #   a logger spy    — thread-safe and config-independent, but it observes a log line, which
+    #                     is not what an operator has.
+    #   this counter    — thread-safe, and it is the SAME signal production would read.
+    #
+    # A soak whose instrument cannot distinguish "the mechanism did not fire" from "I failed to
+    # observe it" produces exactly the ambiguous result a soak must not produce.
+    with metric_window(
+        "aindy_effect_gate_outcomes_total", labels={"outcome": "degraded"}
+    ) as degraded:
+        outcome = _drive(name, str(uuid.uuid4()), {"x": 1})
 
     assert outcome.ok, (
         f"{len(outcome.failures)} of {WORKERS} concurrent callers raised — the gate must "
@@ -210,10 +206,10 @@ def test_the_gate_degrades_to_at_least_once_under_contention(monkeypatch, testin
     # ★ The degradation must be COUNTABLE. It is the only signal an operator gets that
     # EXACTLY_ONCE did not hold for a given call.
     if len(runs) > 1:
-        assert any("degrading to AT_LEAST_ONCE" in m for m in degradations), (
-            "the handler ran more than once but no degradation warning was logged — the "
-            "downgrade would be silent, and an operator would have no way to know that "
-            "EXACTLY_ONCE did not hold"
+        assert degraded.delta("aindy_effect_gate_outcomes_total") >= 1, (
+            f"the handler ran {len(runs)} times but the degraded counter did not move — the "
+            f"downgrade would be SILENT in production, and an operator would have no way to "
+            f"know that EXACTLY_ONCE did not hold for those calls"
         )
 
 

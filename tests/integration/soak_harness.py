@@ -64,14 +64,27 @@ def read_metric(name: str, labels: Optional[dict[str, str]] = None) -> float:
         if value is not None:
             return float(value)
 
-    known = sorted(
-        sample.name
-        for metric in REGISTRY.collect()
-        for sample in metric.samples
-    )
+    # ★ A LABELLED metric has no sample for a label combination until `.labels(...)` is first
+    # called for it — prometheus_client does not materialise combinations up front. So "the
+    # family exists but this label set has not been observed yet" must read 0, while "no such
+    # metric" must still raise. Collapsing those two would restore exactly the hazard this
+    # function exists to prevent, in the case most likely to matter: the first assertion written
+    # against a brand-new counter.
+    #
+    # Found by using the harness for real. Its first labelled metric failed here, and the guard
+    # was right to refuse — it was the RULE that was too coarse, not the check.
+    family_names = {
+        metric.name for metric in REGISTRY.collect()
+    } | {
+        f"{metric.name}_total" for metric in REGISTRY.collect()
+    }
+    if name in family_names or name.removesuffix("_total") in family_names:
+        return 0.0
+
+    known = sorted(metric.name for metric in REGISTRY.collect())
     raise AssertionError(
         f"metric {name!r} (labels={labels or {}}) is not registered — a soak assertion against "
-        f"an unregistered metric measures nothing and passes forever. Known samples include: "
+        f"an unregistered metric measures nothing and passes forever. Known families include: "
         f"{known[:8]}{' …' if len(known) > 8 else ''}"
     )
 

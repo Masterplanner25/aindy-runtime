@@ -99,6 +99,21 @@ def durable_effects_active() -> bool:
     return _durable_effects.get()
 
 
+def _count_gate(outcome: str) -> None:
+    """Record a gate resolution (IDEM-11).
+
+    ★ Best-effort and import-local on purpose. A metrics failure must never change whether an
+    effect executes — the ledger is the correctness path and the counter is observability, and
+    inverting that would let a Prometheus problem become a duplicate side effect.
+    """
+    try:
+        from AINDY.platform_layer.metrics import effect_gate_outcomes_total
+
+        effect_gate_outcomes_total.labels(outcome=outcome).inc()
+    except Exception:  # pragma: no cover - observability must never break the effect path
+        pass
+
+
 def resolve_effect_record(
     db,
     action_id: str,
@@ -127,6 +142,7 @@ def resolve_effect_record(
 
     record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
     if record is not None and record.status == "success":
+        _count_gate("replayed")
         return True, record.result_payload
     if record is None:
         payload_bytes = json.dumps(
@@ -145,6 +161,7 @@ def resolve_effect_record(
                 )
             )
             db.commit()
+            _count_gate("reserved")
         except IntegrityError as exc:
             # Only the action_id unique-constraint race is recoverable; anything else
             # (FK, check) must propagate.
@@ -158,12 +175,14 @@ def resolve_effect_record(
             if record is None:
                 raise
             if record.status == "success":
+                _count_gate("replayed")
                 return True, record.result_payload
             stale_cutoff = utcnow() - timedelta(seconds=STALE_PENDING_THRESHOLD_SECONDS)
             if record.status == "pending" and record.created_at >= stale_cutoff:
                 # A live concurrent call holds the slot; degrade to AT_LEAST_ONCE for
                 # this invocation (strict at-most-once under concurrency needs advisory
                 # locking — see IDEMPOTENCY_CONTRACT.md).
+                _count_gate("degraded")
                 logger.warning(
                     "[effect_ledger] concurrent pending EffectRecord for action_id=%s;"
                     " degrading to AT_LEAST_ONCE for this call",
@@ -178,6 +197,7 @@ def resolve_effect_record(
             record.tenant_id = eff_tenant
             record.session_id = eff_session
             db.commit()
+            _count_gate("reclaimed")
     return False, None
 
 

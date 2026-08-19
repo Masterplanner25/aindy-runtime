@@ -381,3 +381,29 @@ infinity_score_write_failures_total = Counter(
     ["reason"],
     registry=REGISTRY,
 )
+
+
+# ── Effect ledger / idempotency gate (IDEM-11) ───────────────────────────────
+#
+# ★ Until 2026-08-19 NOTHING observed this gate. `aindy_durable_effects` and
+# `aindy_effect_attribution` are ContextVars, not metrics — so with
+# AINDY_SYSCALL_IDEMPOTENCY enabled an operator had no way to tell whether the gate was
+# firing, replaying, or silently degrading. That absence is why the flag could not be
+# soaked in production: there was nothing to read.
+#
+# ★ `degraded` is the label that matters and the reason this is one counter with an
+# outcome label rather than a single "gate fired" counter. EXACTLY_ONCE is NOT
+# exactly-once under contention — when the gate loses the insert race to a live pending
+# row it degrades to AT_LEAST_ONCE for that call (strict at-most-once needs advisory
+# locking; see IDEMPOTENCY_CONTRACT.md). That downgrade is correct and documented, and it
+# must be COUNTABLE: a deployment where `degraded` is a meaningful fraction of `reserved`
+# is one where the guarantee an operator thinks they enabled is not the one they have.
+effect_gate_outcomes_total = Counter(
+    "aindy_effect_gate_outcomes_total",
+    "Idempotency gate outcomes by resolution: reserved (this caller runs the effect), "
+    "replayed (a completed record was returned instead of executing), degraded (lost the "
+    "race to a live pending row, downgraded to AT_LEAST_ONCE for this call), reclaimed "
+    "(took over a stale or failed slot)",
+    ["outcome"],
+    registry=REGISTRY,
+)
