@@ -1,7 +1,7 @@
 ---
 title: "Nodus 5.0.1 — Runtime Adoption Handoff"
 api_version: "1.0"
-last_verified: "2026-08-17"
+last_verified: "2026-08-19"
 status: current
 owner: "platform-team"
 ---
@@ -9,6 +9,52 @@ owner: "platform-team"
 # Nodus 5.0.1 — adoption handoff
 
 Written from `aindy-runtime` for whoever is working in `Nodus` / `nodus-mcp`.
+
+> ## ⚠️ Superseded pin, 2026-08-19 — the runtime now ships `nodus-lang==5.0.4`
+>
+> **This document is kept as written.** It records what was asked at 5.0.1 and why, and that
+> reasoning is what makes the next major cheap. The note below is the correction, not a rewrite —
+> everything under it still describes the 5.0.1 handoff.
+>
+> **The pin moved 5.0.1 → 5.0.4** (`aindy-runtime` #488). `nodus-mcp` is unchanged at `>=0.1.3`
+> and resolves against it, so `aindy-runtime[mcp]` stays installable.
+>
+> ### ★ 5.0.3 was a security fix, and we filed the bump as routine
+>
+> Worth surfacing to whoever maintains Nodus, because the runtime side of it is a lesson about
+> *us*, not about Nodus.
+>
+> `nodus-lang <= 5.0.2` bound `GLOBAL_MEMORY_STORE` at **import**, so every `NodusRuntime`
+> constructed in one process shared a single guest memory dict. `memory_put`/`memory_get` are
+> guest builtins reachable from any `.nd` script, so one script could read another's values.
+> 5.0.3 gives each runtime its own store, with sharing opt-in via `memory_store=` /
+> `share_process_state=True`. **That fix is correct and the opt-in shape is the right one.**
+>
+> **Why it mattered here specifically:** `AINDY/runtime/nodus_worker_pool.py` reuses worker
+> processes across requests. Its docstring claimed a reused process *"never leaks state between
+> runs"* because `run_one` rebuilds per-request state — but `run_one` cannot reset a module global
+> living inside a dependency. It rebuilds what the runtime owns and nothing below it. Reproduced
+> on our own import path before bumping: **5.0.1 prints `password123`, 5.0.4 prints `nil`.**
+> Bounded by the warm pool being opt-in and off by default, so latent rather than live.
+>
+> **The runtime-side failure was one of process.** Our bump protocol is entirely about *how* to
+> upgrade safely — pin every install site, check the resolver, re-verify confinement against the
+> real VM — and says nothing about reading the intervening release notes to learn *what a release
+> contains*. So a security fix was triaged P3-routine on nothing but the version distance. Rule
+> added on our side: read the changelog before assigning severity, not after.
+>
+> **The one ask this generates for Nodus:** if a release fixes something with a security
+> consequence, saying so in the release notes' first line makes it much harder for a downstream
+> consumer to mis-triage. We found it by reading; a consumer bumping on version distance alone
+> would not have.
+>
+> §4.1, §4.3 and §4.4 still stand. §1 and §4.2 remain resolved as recorded below. `GATED_BUILTINS`
+> is unchanged in 5.0.4 and the confinement sweep still uses it.
+>
+> 5.0.4 itself unbreaks a `nodus-sdk` subclass property collision introduced by 5.0.3
+> (`self.memory_store` vs a read-only property). **We do not depend on `nodus-sdk`**, so that half
+> does not reach the runtime — noted only so the version jump is not mistaken for two fixes we
+> needed.
 
 > ## ✅ Resolved 2026-08-17 — both asks shipped the same day
 >
