@@ -8,9 +8,20 @@ owner: "platform-team"
 
 # `ExecutionEnvironmentSpec` — design
 
-**Status: DESIGN. No code, no schema, no migration has been written.** This document exists to
-settle the *shape* before anything lands, because a column added under the schema-contract
-protocol is expensive to take back and the descriptor is a semi-public surface.
+**Status: PHASE 1 SHIPPED 2026-08-19. Phases 2–4 are still design.** This document settled the
+*shape* before anything landed, because a column added under the schema-contract protocol is
+expensive to take back and the descriptor is a semi-public surface.
+
+**What exists now:** `AINDY/core/execution_environment.py`, three columns on `execution_units`
+(Alembic `0017`, schema contract `2026-08-19`), and an optional `env_spec=` on
+`require_execution_unit`. **It confines nothing** — see §9. 32 tests, mutation-tested 7/7.
+
+**One design decision changed during implementation, recorded here rather than silently:** §7
+recommended raising `ExecutionEnvironmentUnsatisfiable`. The guard as built catches the **base**
+`ExecutionEnvironmentError`, so a *malformed* spec propagates too. Letting `Invalid` fall into the
+non-fatal handler would have been the worse of the two outcomes — the work would proceed with no
+environment binding **and** no `ExecutionUnit` at all, from a caller actively trying to declare
+one.
 
 Tracks `EXEC-ENV-BIND-1` (P1). Read that `TECH_DEBT.md` entry first — this document does not
 restate the justification, only the design that follows from it.
@@ -214,7 +225,7 @@ capabilities it denied.
 baseline, update the two assertions in `test_runtime_schema_contract.py`, add Alembic **`0017`**,
 and bump `RUNTIME_ALEMBIC_HEAD_REVISION` in `AINDY/db/alembic_head.py`.
 
-**★ And it makes the release a `FR-14` release**, which the app handoff must say: an additive
+**★ CONFIRMED ON IMPLEMENTATION — this is a `FR-14` release**, which the app handoff must say: an additive
 runtime column means a bare `bootstrap-schema` exits **3** and, under `set -e` +
 `restart: unless-stopped`, crash-loops a container. The handoff must name
 `bootstrap-schema --reconcile`. This is the first release since that exit-code work where the

@@ -24,6 +24,12 @@ Status machine
                       └→ failed
   (completed and failed are terminal — no outbound transitions)
 
+  refused  — EXEC-ENV-BIND-1. The unit declared an ExecutionEnvironmentSpec this host
+             cannot satisfy, so it never ran. Terminal, and deliberately has NO inbound
+             transition either: a unit is *created* refused. Refusal happens before any
+             work starts, and a refused unit must never become runnable by a later
+             status update.
+
   waiting  — EU is suspended; no thread is running; it is waiting for an
              external event (flow node WAIT, ExecutionWaitSignal, resource
              quota release, etc.)
@@ -142,6 +148,38 @@ class ExecutionUnit(Base):
     # ── Extra ──────────────────────────────────────────────────────────────────
     extra = Column(JSONB, nullable=True)
     # Per-type metadata: workflow_type, objective_preview, operation_name, etc.
+
+    # ── Execution environment (EXEC-ENV-BIND-1) ────────────────────────────────
+    # The *requesting* half of the isolation contract. Design:
+    # docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md
+    #
+    # NULL means "declared nothing" and behaves exactly as it did before these columns
+    # existed. Every pre-existing row is NULL; the descriptor is opt-in per execution.
+    #
+    # ★ Real columns rather than keys in `extra` deliberately: a declared requirement must be
+    # queryable ("show me every unit that ran below its declared assurance") and guardable by
+    # test. `extra` is the right place for incidental payload and the wrong place for this.
+    #
+    # ★ Three columns rather than one because they answer three DIFFERENT questions. Collapsing
+    # them is the register_syscall / FR-14 shape — a surface that loses a distinction the
+    # record already had.
+    env_spec = Column(JSONB, nullable=True)
+    # What the caller DECLARED, verbatim after validation.
+    # Shape: ExecutionEnvironmentSpec.to_dict() — visibility / authority / resources /
+    # min_assurance. See core/execution_environment.py.
+
+    env_applied = Column(JSONB, nullable=True)
+    # The EFFECTIVE spec after intersection with the host floor. A caller may ask for more
+    # confinement than the floor and never for less, so this is always <= env_spec in
+    # permissiveness. Differs from env_spec only when the caller attempted to widen, which is
+    # also logged at WARNING.
+
+    env_evidence_class = Column(String(96), nullable=True)
+    # "<assurance_class>/<assurance_ceiling>" of the runner this host resolved to.
+    #
+    # ★ THIS is the field that says whether the environment was actually enforced. In phase 1
+    # nothing applies the spec, so a populated env_applied does NOT mean the execution was
+    # confined. Read this column before drawing that conclusion.
 
     # ── Timestamps ─────────────────────────────────────────────────────────────
     created_at = Column(

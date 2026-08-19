@@ -32,6 +32,11 @@ _STATUS_TRANSITIONS: dict[str, set] = {
     "resumed":   {"executing", "failed"},
     "completed": set(),
     "failed":    set(),
+    # EXEC-ENV-BIND-1. Terminal and unreachable by transition on purpose: a unit is CREATED
+    # refused, never moved into it. Refusal happens before any work starts, so there is no
+    # prior state to leave — and no outbound edge, because a refused unit must never become
+    # runnable by a later status update.
+    "refused":   set(),
 }
 
 
@@ -57,6 +62,9 @@ class ExecutionUnitService:
         correlation_id: Optional[str] = None,
         extra: Optional[dict] = None,
         status: str = "pending",
+        env_spec: Optional[dict] = None,
+        env_applied: Optional[dict] = None,
+        env_evidence_class: Optional[str] = None,
     ):
         """
         Create and persist a new ExecutionUnit. Returns the EU on success,
@@ -78,6 +86,11 @@ class ExecutionUnitService:
                 memory_context_ids=[],
                 output_memory_ids=[],
                 extra=extra,
+                # EXEC-ENV-BIND-1. All three default to None, which means "declared nothing"
+                # and is defined to behave exactly as before these columns existed.
+                env_spec=env_spec,
+                env_applied=env_applied,
+                env_evidence_class=env_evidence_class,
                 created_at=_now(),
                 updated_at=_now(),
             )
