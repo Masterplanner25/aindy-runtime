@@ -1,7 +1,7 @@
 ---
 title: "What aindy-runtime Is"
 api_version: "1.0"
-last_verified: "2026-08-15"
+last_verified: "2026-08-17"
 status: current
 owner: "platform-team"
 ---
@@ -95,13 +95,28 @@ row; it is that all six are present in one substrate, which is unusual.
 |---|---|
 | **Durable execution** | `FlowRun` checkpointing, WAIT/RESUME as a first-class lifecycle state, `WaitingFlowRun` with timeouts, boot-time rehydration, DLQ, `RetryPolicy`, lease-elected background leadership |
 | **OS-shaped primitives** | a versioned syscall ABI (`sys.v1.<domain>.<action>`) behind one `SyscallDispatcher`, capabilities, tenant isolation, `ResourceManager` quota, a priority-lane scheduler, an event bus |
-| **Agent runtime** | goal → plan → **approval that mints authority** → capability token → execute → verify → **undo**, with delegation clamped by a computed capability ceiling |
+| **Agent runtime** | goal → plan → **approval that mints authority** → capability token → execute → verify → **undo**, with a computed capability ceiling on delegation (clamp opt-in — §6) |
 | **Observation** | the watcher — runtime-owned, and the support-system document marks it CRITICAL |
 | **Platform** | operator SPA at `/platform`, REST + SDK, OTel + Prometheus, health and degraded-mode matrix |
 | **A first-party language** | **Nodus** — a language built from scratch, with its own stdlib and a runtime execution adapter, not a DSL-shaped config format |
 
 Two of these are rare on their own. The combination — plus a memory system that accumulates — is
 what the comparison audits kept finding their reference systems had reinvented more shallowly.
+
+**★ That claim is now measured rather than asserted.** Fourteen systems were audited against this
+runtime (`COMPARATIVE_RESEARCH_INDEX.md` §5b). Every serious one grows, buys or hand-rolls **part**
+of a runtime — Pi grew durable sessions with migrations and fenced leases; OpenClaw grew Docker
+isolation and cron; Codex grew 72 000 lines of three-OS sandboxing; MAF *bought* durability from
+Azure Durable Task; MetaGPT grew a cost governor. **None assembles the whole set, and each grows
+the part that hurt first.** The sharpest instance is a single stack split across two teams:
+OpenClaw took isolation and scheduling in February, and Pi — its own dependency — grew transport
+and durable sessions five months later, with neither holding the other's half.
+
+**What that licenses and what it does not.** It licenses *the category is real, by construction* —
+nine independent teams each built a piece. It does **not** license *"therefore they will adopt
+ours"*: a serious framework does not wait for a substrate, it grows one, and this runtime still has
+one first-party consumer talking to it over HTTP (`SUBSTRATE-WITNESS-1`). **Category validation and
+adoption are different claims; only the first is evidenced.**
 
 ---
 
@@ -114,8 +129,8 @@ to build?"* Concretely, for the kinds of systems that have been audited against 
 |---|---|
 | Executing model-authored code | containment posture, an **effect ledger** and `sys.v1.agent.undo`, an approval gate that mints scoped authority |
 | Long-horizon autonomous work | suspension that **survives a restart**, retry policy, orphan-run recovery, provenance of what a long run knew |
-| Multi-agent delegation | delegation that **cannot escalate** (capability ceiling), and one causal graph across agents instead of per-agent transcripts |
-| Anything multi-tenant | tenant isolation, cross-instance quota, lease-elected background work |
+| Multi-agent delegation | a capability ceiling on delegation, and one causal graph across agents instead of per-agent transcripts — see §6 on which half of the ceiling is on by default |
+| Work isolated per caller | caller-scoped execution and memory paths, cross-instance quota, lease-elected background work — *caller* isolation; see §6 before reading this as multi-tenancy |
 | Anything that should improve with use | the loop primitives in §1 — for free |
 
 The last row is the differentiator. Durability and authority can be assembled from existing
@@ -133,6 +148,17 @@ at execution time or it is lost.
 - **Not an agent framework.** It ships a deterministic reference planner to prove the seam works
   without a model. Prompt construction, context assembly, compaction and conversation state are
   deliberately outside it — a conclusion three independent comparison audits reached separately.
+- **Not an orchestration language, and this one has been tested rather than argued.** Composition
+  belongs in Nodus; the runtime supplies dispatch, durability and authority underneath it. A
+  CrewAI hierarchical crew expressed as a 39-line `.nd` flow survived four successive rounds of
+  host deepening — a real LLM provider, a real MCP client↔server transport, cross-process A2A with
+  bearer auth, and scope-addressed memory — with the flow file **unchanged**. The transport, the
+  model, the auth and the memory backend all moved; the orchestration expression did not. *(Source:
+  `C:\codev\nodus-showcase-crewai`; the invariance is corroborated by file mtimes — the flow dates
+  to 2026-06-24 while every host-wiring file dates to 2026-07-09. Recorded in `TECH_DEBT.md` under
+  `CREWAI-NODUS-2026-08-18`.)* **The honest limit on that result: the showcase never routes through
+  `sys()`, so it demonstrates the composition boundary and says nothing about the authority
+  boundary — see §6 and `SUBSTRATE-WITNESS-1`.**
 
 ---
 
@@ -147,22 +173,77 @@ than overclaiming, and this document holds itself to the same standard.
   granularity**, **at-most-once for effects that pass a ledgered chokepoint**, duplicate
   suppression under concurrent delivery, and at-most-one background leader bounded by a lease TTL.
   It does not offer exactly-once and does not claim to.
-- **The effect ledger is opt-in today.** See `IDEM-11` — the gate is off by default and few
-  syscalls declare their execution guarantee. Duplicate-effect exposure in default configuration
-  is real until that changes.
+- **The effect ledger is opt-in today.** See `IDEM-11` — the gate is off by default. *Corrected
+  2026-08-17: this said "few syscalls declare their execution guarantee." The per-syscall audit is
+  done and **eight** now declare `EXACTLY_ONCE` (`memory.write`, `memory.link`, `flow.run`,
+  `event.emit`, `flow.execute_intent`, `nodus.execute`, `job.submit`, `agent.undo`), so coverage is
+  no longer the limiter — the flag is.* Duplicate-effect exposure in default configuration is real
+  until it is flipped, and the flip is a soak decision (§6.1), not a build.
 - **The isolation posture is Tier-1.** Trusted, first-party code in-process is a stated design
-  position, not an accident. But three open findings — `GUEST-CONFINE-1`, `TOOL-SEAM-ISOLATION-1`,
-  `EXEC-ENV-BIND-1` — mean the isolation provider is bound to the extension boundary and not to
-  the guest or tool seams. Do not read "OS-shaped" as "safe for untrusted code."
-- **Capability enforcement does not yet reach every surface.** `HTTP-SCOPE-GAP-1`: scope checks
-  are applied to a small minority of HTTP routes, and a decision is recorded there to stop JWTs
-  bypassing scopes.
+  position, not an accident. `GUEST-CONFINE-1` closed 2026-08-15, so the guest VM is now confined;
+  `TOOL-SEAM-ISOLATION-1` and `EXEC-ENV-BIND-1` remain open, which means the isolation provider is
+  bound to the extension boundary and **the tool seam is the one place foreign code still runs
+  in-process with ambient authority.** Do not read "OS-shaped" as "safe for untrusted code."
+- **The capability ceiling on delegation is opt-in.** `AUTHORITY-VALUE-1` — `child_context()` can
+  widen a capability set, and the clamp that prevents it ships behind
+  `AINDY_CHILD_CONTEXT_CLAMP`, **default off**. A widening is logged at WARNING either way, so the
+  exposure is countable. §4 lists the ceiling as inherited; this is the qualifier on that row.
+- **"Multi-tenant" would be an overclaim; "caller-isolated" is accurate.** Isolation is enforced
+  by requiring an authenticated caller at the dispatcher and scoping memory paths to it; two
+  tables carry `tenant_id` and both document `tenant_id == user_id`, a single-user-per-tenant
+  model. Real multi-tenancy — billing identity decoupled from user identity, per-tenant quota
+  enforcement, data residency — is tracked as `DEPLOY-TARGET-2`, `TENANT-2`, `BILLING-1` and
+  `DATA-1`, all open.
+- **The effect model is thinner than the authority model.** The runtime answers *who is allowed to
+  do this* with cryptographic and transactional rigour, and answers *what exactly was done, to
+  what version of what, and how much of it succeeded* with a two-state envelope. Open:
+  `EFFECT-PARTIAL-1` (no partial-success state), `EFFECT-PRECONDITION-1` (an effect cannot declare
+  the version of the world it expects), `FS-SCOPE-1` (the capability vocabulary is verb-shaped and
+  cannot name a resource). This is the runtime's weakest axis and it was found by holding it
+  against an external system rather than by internal audit.
+- **Capability enforcement does not reach every surface, but the gap is much smaller than it
+  was.** `HTTP-SCOPE-GAP-1`: a census on a booted app counts **91 scope-gated / 12 admin / 21
+  public / 2 identity-only of 126 routes**. The remainder is a design question — `execution.read`
+  conflates scope with data ownership, and a scope cannot answer *"may I read someone else's"*.
 - **There is no intra-execution parallelism.** `FLOW-PARALLEL-1` — the flow engine advances one
   node at a time.
+- **There is no supported profile below `single-instance`, and it requires PostgreSQL.**
+  `EMBEDDED-FLOOR-1`. A consumer shaped like a library in a terminal — no server, no daemon, no
+  database — is out of contract. See the note immediately below on what that does and does not
+  mean.
 
 Every item above is tracked in `TECH_DEBT.md` with its evidence. A positioning document that
 omitted them would be the same failure as a security matrix describing enforcement the code does
 not perform.
+
+### 6.1 What is gated by capability, and what is gated by soak
+
+**These are not the same kind of "not yet," and collapsing them makes the runtime read as less
+finished than it is.**
+
+A large share of what §6 lists is **built, tested, and shipped behind a default-off flag** — the
+at-most-once effect gate (`AINDY_SYSCALL_IDEMPOTENCY`, with eight syscalls now declaring their
+guarantee), durable crash continuation (`AINDY_DURABLE_CONTINUATION`), delegation-scoped private
+memory (`AINDY_DELEGATION_PRIVATE_MEMORY`), the delegation capability clamp
+(`AINDY_CHILD_CONTEXT_CLAMP`), async heavy execution (`AINDY_ASYNC_HEAVY_EXECUTION`), the Nodus
+warm pool, own-session memory recall. **None of those is waiting on engineering.** They are
+waiting on production soak, and the runtime currently has one maintainer and one consuming
+application, so soak time is the scarce input — not design, not build effort, and not a missing
+capability. An operator willing to run that soak on their own deployment can turn any of them on
+today; the flags exist precisely so that choice belongs to the deployer.
+
+`EMBEDDED-FLOOR-1` is the same shape and worth saying plainly: **nothing found so far says the
+single-process case *requires* PostgreSQL in a way SQLite could not serve.** `AINDY_ALLOW_SQLITE`
+exists and the entire unit suite runs on it. What is missing is a profile that *declares* the
+reduced guarantees and a test tier that *asserts* them — bounded work, not invention. The floor
+is where it is because no one has needed a lower one, not because a lower one is out of reach.
+
+**The honest boundary between the two categories:** `TOOL-SEAM-ISOLATION-1`, `FS-SCOPE-1`,
+`EFFECT-PARTIAL-1`, `EFFECT-PRECONDITION-1` and `FLOW-PARALLEL-1` are genuine capability gaps —
+something must be designed and built. Everything in the paragraphs above is a deployment
+decision someone else is equally able to make. `PERF-BASELINE-1` sits between them: the flag
+backlog is blocked on evidence, and no instrument currently exists to produce it, which is why
+it is filed P1.
 
 ---
 

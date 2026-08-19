@@ -1,6 +1,6 @@
 ---
 title: "Runtime Module Map"
-last_verified: "2026-06-03"
+last_verified: "2026-08-18"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -128,7 +128,36 @@ No extraction candidates here. These are the execution substrate proper.
 
 **Tag: CORE RUNTIME**
 
-Authoritative runtime persistence. The 27 runtime-owned ORM tables are execution truth.
+Authoritative runtime persistence. The **runtime-owned ORM tables** — **36** as of 2026-08-18 —
+are execution truth. **`runtime_owned_table_names()` in `schema_contract.py` is authoritative;
+prefer it over this count**, which is a snapshot and has gone stale before.
+
+> **★ Corrected 2026-08-18. This line read *"The 27 runtime-owned ORM tables"* and did two kinds of
+> damage.** It was **stale by nine**, and — more consequentially — **four independent external
+> analyses quoted it back as a *multi-tenancy* claim**: the Aider, Microsoft-Agent-Framework,
+> Codex-era and CrewAI lens audits each rendered it as *"TenantContext (27 normalized tables)"* or
+> *"27 tenant tables"*, and scored the runtime's multi-tenancy as covered on that basis.
+>
+> **These tables are runtime-owned, not tenant-partitioned.** Exactly **two** carry a `tenant_id`
+> column — `effect_records` and `execution_units` — and both document the model as
+> *single-user-per-tenant, `tenant_id == user_id`*. Tenant isolation is a dispatcher-level check
+> that an authenticated caller is present, not a schema-wide partition; real multi-tenancy is
+> tracked open as `DEPLOY-TARGET-2`, `TENANT-2`, `BILLING-1` and `DATA-1`.
+>
+> **★ The corruption is traceable to a single day, and it is worth recording because the mechanism
+> is general.** The 2026-06-23 Devika architectural audit copied this line **faithfully** —
+> *"27 normalized **runtime** tables"*. The Devika **lens** audit written the next day rewrote it as
+> *"27-table **TenantContext** schema"*, and the three sibling lens audits written that same day
+> (Aider, Microsoft Agent Framework, CrewAI) all carry the tenancy framing. **One word changed, in
+> one document, on one day** — and five documents then scored a guarantee none of them had checked
+> against source. The one document that *did* read the source got it right.
+>
+> **A figure that travels between documents without returning to source will eventually change
+> meaning, and nothing flags the day it does.** That is the reason this line now names
+> `runtime_owned_table_names()` instead of carrying a number alone.
+>
+> Found while checking the CrewAI/Nodus research folder against source
+> (`CREWAI-NODUS-2026-08-18`); origin traced in the Devika folder's accuracy check.
 
 | Module / Sub-package | Notes |
 |---|---|
