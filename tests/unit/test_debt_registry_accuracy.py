@@ -90,3 +90,100 @@ def test_closed_sections_are_not_empty():
         "the Closed sections are nearly empty, which means closures are being dropped rather "
         "than filed — the history is the point"
     )
+
+
+# ---------------------------------------------------------------------------
+# Entry size — the registry's own "one line per item" rule, enforced.
+# ---------------------------------------------------------------------------
+#
+# ★ Stating the rule three times did not work. Measured across the file's history:
+#
+#   trimmed to  66 KB  ->  98.8 KB within a week
+#   #487 "re-trim"     ->  reported -14,936 B; the file went 96,913 -> 115,234 B
+#
+# That last one is the instructive failure, and it was not dishonesty: six entries really were
+# trimmed. The delta was measured **over the entries touched**, while the same commit added
+# several new ones. Nothing contradicted it, because nothing measured the file.
+#
+# So the guard is per-entry, not a whole-file budget. A file budget can be satisfied by deleting
+# an unrelated entry; a per-entry cap can only be satisfied by the entry that broke it.
+#
+# The caps are the current high-water mark, NOT an endorsement of that length. They are a
+# ratchet: they stop the next entry from exceeding the worst one already here. Ratchet them
+# **down** in a dedicated pass. Never raise one to accommodate a new entry — 79 of 91 entries
+# already have a larger record in `TECH_DEBT.md`, so the detail has somewhere to go, and an
+# entry that cannot be trimmed without loss is one whose text was never indexed anywhere.
+
+_MAX_ENTRY_BYTES = 1150
+_MAX_CLOSED_ENTRY_BYTES = 850
+
+
+def _cap_for(heading: str) -> int:
+    return _MAX_CLOSED_ENTRY_BYTES if heading.startswith("Closed") else _MAX_ENTRY_BYTES
+
+
+def test_no_registry_entry_exceeds_its_size_cap():
+    """★ One line per item. Detail belongs in `TECH_DEBT.md`, which is 6x this file."""
+    oversized = [
+        (heading, line[:60], len(line), _cap_for(heading))
+        for heading, entries in _registry_sections().items()
+        for line in entries
+        if len(line) > _cap_for(heading)
+    ]
+
+    assert not oversized, (
+        "registry entries over the size cap — move the detail into `TECH_DEBT.md` and leave the "
+        "status, the hook and the pointer here. Do NOT raise the cap: "
+        + "; ".join(f"{h}: {s}… is {n}B > {cap}B" for h, s, n, cap in oversized)
+    )
+
+
+def test_the_size_cap_is_a_ratchet_not_a_ceiling_we_are_far_below():
+    """Liveness control for the cap.
+
+    ★ A cap set far above the real distribution passes for years without ever being the
+    reason anything is short — the `Upgrade Path Guard` failure mode (variant 9: green because
+    there was nothing to catch). This asserts the cap is still *near* the data it governs, so
+    the test above is doing work. If this fails because everything got much shorter, that is
+    the moment to ratchet the caps down — which is the intended maintenance action, not a
+    reason to delete this test.
+    """
+    sections = _registry_sections()
+    largest_open = max(
+        (len(line) for h, e in sections.items() if h.startswith("Open") for line in e), default=0
+    )
+    largest_closed = max(
+        (len(line) for h, e in sections.items() if h.startswith("Closed") for line in e), default=0
+    )
+
+    assert largest_open > _MAX_ENTRY_BYTES * 0.7, (
+        f"largest open entry is {largest_open}B against a {_MAX_ENTRY_BYTES}B cap — the cap is "
+        "no longer close to the data. Ratchet it down."
+    )
+    assert largest_closed > _MAX_CLOSED_ENTRY_BYTES * 0.7, (
+        f"largest closed entry is {largest_closed}B against a {_MAX_CLOSED_ENTRY_BYTES}B cap — "
+        "ratchet it down."
+    )
+
+
+def test_the_registry_stays_a_minority_of_the_file():
+    """The failure the caps exist to prevent, stated as the outcome rather than the mechanism.
+
+    Per-entry caps bound each line; nothing bounds the *count*. The registry reached 68% of
+    CLAUDE.md once by growing in both directions at once, and at that size the file stops being
+    an orientation document. This is deliberately loose — it is a backstop, and the per-entry
+    cap is the working control.
+    """
+    text = _CLAUDE.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    start = next(
+        i for i, ln in enumerate(lines) if ln.startswith("## TECH_DEBT.md — prefix registry")
+    )
+    end = next(i for i, ln in enumerate(lines[start + 1:], start + 1) if ln.startswith("## "))
+    registry = len("\n".join(lines[start:end]))
+
+    share = registry / len(text)
+    assert share < 0.60, (
+        f"the registry is {share:.0%} of CLAUDE.md ({registry:,}B of {len(text):,}B). It is an "
+        "index; `TECH_DEBT.md` is the record. Move detail down rather than raising this bound."
+    )
