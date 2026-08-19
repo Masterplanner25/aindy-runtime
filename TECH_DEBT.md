@@ -7273,7 +7273,47 @@ is the cost. Roll out per domain.
 
 ## EXEC-ENV-BIND-1 — an execution unit cannot declare the environment it needs
 
-**Status: OPEN — P1.** Filed 2026-08-15 from the Hermes architectural map (G1), verified.
+**Status: PHASE 1 SHIPPED 2026-08-19 — still OPEN (P1) for phases 2–4.**
+
+**Phase 1 = declare / refuse / record, and it changes no execution path.**
+`AINDY/core/execution_environment.py` + three columns on `execution_units` (`env_spec`,
+`env_applied`, `env_evidence_class`; Alembic `0017`, schema contract `2026-08-19`) + an optional
+`env_spec=` on `require_execution_unit`. **It confines nothing** — a populated `env_applied` is
+NOT evidence of confinement; `env_evidence_class` is the field that says whether the environment
+was enforced, and on the default dev runner it reads `insecure-dev/no-isolation-guarantee`.
+
+**★ Three implementation facts worth carrying, none of which were in the filed proposal:**
+
+1. **The re-raise guard is load-bearing and its placement is the whole mechanism.**
+   `require_execution_unit` ends in a broad `except Exception` that returns `None`, and its three
+   callers are documented not to block on that. `except ExecutionEnvironmentError: raise` sits
+   *before* it — the `SyscallContractViolation` shape. Mutation-testing that one line red-lines
+   five tests. **A refusal swallowed by a broad handler is worse than no refusal**, because the
+   recorded row says `refused` while the work ran.
+2. **The guard catches the BASE class, not just `Unsatisfiable`.** A malformed spec must also
+   propagate: letting it fall through means the work proceeds with no environment binding *and*
+   no `ExecutionUnit`, from a caller that was actively trying to declare one.
+3. **`assurance_rank()` ranks an unknown class LOW (-1), deliberately.** Ranking it high would
+   make a typo — or an upstream rename — satisfy every declared minimum, failing open on the one
+   comparison that gates whether work runs at all. The three class-name literals are duplicated
+   from `platform_layer` and pinned by test so a rename fails loudly instead of reordering the
+   ladder.
+
+**★ And the property that made it safe to ship: the clamp is narrow-only.** The effective spec is
+the intersection of declared and host floor, so phase 1 cannot reduce confinement below what the
+host already applies. The worst failure mode is an over-strict refusal, which is **loud**, rather
+than an under-confined run, which is **silent**. Unlike `AUTHORITY-VALUE-1`'s clamp it is **not
+flagged** — no caller supplies a spec today, so there is no compatibility argument, and a security
+default that ships off is a pattern this registry keeps recording as a mistake.
+
+**Remaining (phases 2–4):** the guest path asks (also closes `GUEST-CONFINE-1`'s `cwd` residual) →
+the tool seam asks (`TOOL-SEAM-ISOLATION-1`, the P0) → the resources axis becomes enforcing and
+`COST-GOVERNOR-1` adds spend. Design and phasing table:
+`docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`.
+
+---
+
+**Original filing follows. Status: OPEN — P1.** Filed 2026-08-15 from the Hermes architectural map (G1), verified.
 **Closely related to `GUEST-CONFINE-1`, and deliberately filed separately** — see the priority
 note below, which is the one place two independent audits disagree.
 

@@ -205,6 +205,126 @@ def _resolve_policy_for_eu(eu_type: str, extra: dict[str, Any]) -> dict[str, Any
 # ── EU gate ───────────────────────────────────────────────────────────────────
 
 
+def _resolve_env_columns(
+    *,
+    db,
+    eu_type: str,
+    user_id: str,
+    source_type: str,
+    source_id: str,
+    correlation_id: str | None,
+    merged_extra: dict[str, Any],
+    env_spec: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Resolve a declared environment spec into the three EU columns (EXEC-ENV-BIND-1).
+
+    Returns ``{}`` when nothing was declared, so the ``create()`` call is byte-for-byte what it
+    was before this existed. Raises :class:`ExecutionEnvironmentUnsatisfiable` when the host
+    cannot provide the declared environment — **after** writing a terminal ``refused`` row.
+
+    ★ Both halves are required and neither is sufficient alone. Recording without raising is a
+    refusal that does not refuse, because a caller ignoring status runs the handler anyway — the
+    exact failure this entry exists to fix, reproduced inside the fix. Raising without recording
+    loses the audit row at the moment it is most interesting.
+    """
+    if env_spec is None:
+        return {}
+
+    from AINDY.core.execution_environment import (
+        ExecutionEnvironmentSpec,
+        ExecutionEnvironmentUnsatisfiable,
+        resolve_environment,
+    )
+    from AINDY.core.execution_unit_service import ExecutionUnitService
+
+    declared = ExecutionEnvironmentSpec.from_dict(env_spec)
+    try:
+        resolution = resolve_environment(declared)
+    except ExecutionEnvironmentUnsatisfiable as unsat:
+        _record_refusal(
+            db=db,
+            eus=ExecutionUnitService(db),
+            eu_type=eu_type,
+            user_id=user_id,
+            source_type=source_type,
+            source_id=source_id,
+            correlation_id=correlation_id,
+            merged_extra=merged_extra,
+            declared=declared,
+            unsat=unsat,
+        )
+        raise
+
+    return {
+        "env_spec": resolution.declared.to_dict(),
+        "env_applied": resolution.effective.to_dict(),
+        "env_evidence_class": resolution.evidence_class,
+    }
+
+
+def _record_refusal(
+    *,
+    db,
+    eus,
+    eu_type: str,
+    user_id: str,
+    source_type: str,
+    source_id: str,
+    correlation_id: str | None,
+    merged_extra: dict[str, Any],
+    declared,
+    unsat,
+) -> None:
+    """Write a terminal ``refused`` ExecutionUnit so the decision leaves a trail.
+
+    ★ Committed, not flushed — the same reason ``_resolve_effect_record`` commits: the record
+    must be durable across session close, and the caller is about to unwind with an exception
+    that may well roll its transaction back. A refusal that vanishes with the transaction that
+    refused it answers "was this the containment you asked for?" with silence.
+
+    ★ Failure to record is logged and swallowed on purpose. The refusal itself must still
+    propagate; losing the audit row is bad, but converting a refusal into an acceptance because
+    the audit write failed would be far worse.
+    """
+    refusal_extra = dict(merged_extra)
+    refusal_extra["environment_refusal"] = {
+        "required": unsat.required,
+        "available": unsat.available,
+        "reason": str(unsat),
+    }
+    try:
+        eus.create(
+            eu_type=eu_type,
+            user_id=user_id,
+            source_type=source_type,
+            source_id=source_id,
+            correlation_id=correlation_id or source_id,
+            status="refused",
+            extra=refusal_extra,
+            env_spec=declared.to_dict(),
+            env_applied=None,
+            env_evidence_class=f"refused/{unsat.available}",
+        )
+        db.commit()
+    except Exception as exc:
+        logger.error(
+            "[ExecutionGate] refusal recorded in log only — audit row write failed "
+            "source=%s/%s required=%s available=%s: %s",
+            source_type,
+            source_id,
+            unsat.required,
+            unsat.available,
+            exc,
+        )
+    logger.warning(
+        "[ExecutionGate] execution REFUSED source=%s/%s required=%s available=%s",
+        source_type,
+        source_id,
+        unsat.required,
+        unsat.available,
+    )
+
+
 def require_execution_unit(
     *,
     db: Session,
@@ -214,6 +334,7 @@ def require_execution_unit(
     source_id: str,
     correlation_id: str | None = None,
     extra: dict[str, Any] | None = None,
+    env_spec: dict[str, Any] | None = None,
 ):
     """
     Ensure a DB-backed ExecutionUnit exists for (source_type, source_id) before
@@ -233,12 +354,46 @@ def require_execution_unit(
     any ``risk_level`` / ``workflow_type`` keys already present in ``extra``.
     Callers that need a non-default policy should set those keys in ``extra``
     before calling this function.
+
+    ExecutionEnvironmentSpec (EXEC-ENV-BIND-1)
+    ------------------------------------------
+    ``env_spec`` is an optional declarative environment request. Design:
+    ``docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md``.
+
+    * ``None`` (the default, and every pre-existing caller) — behaviour is byte-for-byte
+      what it was. Nothing is resolved, nothing is recorded, nothing can be refused.
+    * Supplied — the spec is clamped to the host floor (a caller may ask for MORE
+      confinement and never for less), the host's assurance class is resolved, and the
+      unit is **refused** if the host cannot meet the declared minimum.
+
+    ★ **This function does not APPLY any confinement.** It selects, refuses and records.
+    Each seam applies its own; see the design doc's phasing table.
+
+    ★ **Environment errors break the non-fatal contract, deliberately and only here.**
+    ``ExecutionEnvironmentError`` — both ``Unsatisfiable`` (policy) and ``Invalid`` (a caller
+    bug) — propagates instead of collapsing to ``None``.
+    That is the whole point: a refusal a caller is documented to ignore is not a refusal.
+    An EU row is still written in terminal ``refused`` status first, so the decision leaves
+    an audit trail — "was this the containment you asked for?" must not be answered with
+    silence.
     """
+    from AINDY.core.execution_environment import ExecutionEnvironmentError
     from AINDY.core.execution_unit_service import ExecutionUnitService
 
     try:
         merged_extra: dict[str, Any] = dict(extra or {})
         merged_extra["retry_policy"] = _resolve_policy_for_eu(eu_type, merged_extra)
+
+        env_columns = _resolve_env_columns(
+            db=db,
+            eu_type=eu_type,
+            user_id=user_id,
+            source_type=source_type,
+            source_id=source_id,
+            correlation_id=correlation_id,
+            merged_extra=merged_extra,
+            env_spec=env_spec,
+        )
 
         eus = ExecutionUnitService(db)
         eu = eus.get_by_source(source_type, source_id)
@@ -251,6 +406,7 @@ def require_execution_unit(
                 correlation_id=correlation_id or source_id,
                 status="executing",
                 extra=merged_extra,
+                **env_columns,
             )
             logger.debug(
                 "[ExecutionGate] EU created source=%s/%s eu_id=%s policy=%s",
@@ -278,6 +434,23 @@ def require_execution_unit(
                 (eu.extra or {}).get("retry_policy"),
             )
         return eu
+    except ExecutionEnvironmentError:
+        # ★ EXEC-ENV-BIND-1, and this placement is load-bearing.
+        #
+        # The BASE class, covering both Unsatisfiable (a policy outcome) and Invalid (a caller
+        # bug). Letting Invalid fall through to the handler below would be the worse of the two:
+        # the work would proceed with no environment binding AND no ExecutionUnit at all, from a
+        # caller that was actively trying to declare one. A malformed declaration must be loud.
+        #
+        # The handler below is a deliberate non-fatal net: require_execution_unit returns None
+        # on failure and its three callers are documented not to block on that. A refusal that
+        # fell into it would be swallowed, and the recorded row would say `refused` while the
+        # work ran — worse than no refusal at all.
+        #
+        # Same shape as SyscallDispatcher.dispatch()'s `except SyscallContractViolation: raise`,
+        # placed before its own belt-and-suspenders handler for the same reason. Any future
+        # exception type callers are expected to catch needs a guard here too.
+        raise
     except Exception as exc:
         logger.warning(
             "[ExecutionGate] require_execution_unit failed (non-fatal) source=%s/%s: %s",

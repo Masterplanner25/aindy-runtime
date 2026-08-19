@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 _RUNTIME_MODEL_PREFIXES = ("AINDY.db.models.",)
 _RUNTIME_MODEL_MODULES = {"AINDY.memory.memory_persistence"}
-SCHEMA_CONTRACT_VERSION = "2026-08-15.1"
+SCHEMA_CONTRACT_VERSION = "2026-08-19"
 SCHEMA_INSPECT_MODULE = "python -m AINDY.db.schema_ops inspect --format json"
 
 SCHEMA_STATE_BLANK_DATABASE = "blank_database"
