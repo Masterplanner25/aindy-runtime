@@ -7368,10 +7368,43 @@ of this entry. The other limit is documentation: `SECURITY_MATRIX.md` and the RE
 scope enforcement the code applies to 7 of 147 routes (`HTTP-SCOPE-GAP-1`), and an operator making
 a trust decision on that is misled by the runtime, not by their own configuration.
 
-**Proposed:** one declarative type, not five — `ExecutionEnvironmentSpec { filesystem, network,
-processes, cpu_ms/memory_mb/timeout_ms, secrets, persistence, min_assurance }` — attached to
-`ExecutionUnit` and resolved at `execution_gate.gate_and_dispatch` (`execution_gate.py:294`) via
-the existing `resolve_sandbox_runner_type` / `create_sandbox_runner`. Invariant: an execution
+**Proposed:** one declarative type, not five — `ExecutionEnvironmentSpec` — attached to
+`ExecutionUnit` and resolved via the existing `resolve_sandbox_runner_type` /
+`sandbox_runner_assurance_posture`.
+
+**★★ CORRECTION 2026-08-19 — this proposal named a resolution point that does not run, and the
+repo already knew.** It said "resolved at `execution_gate.gate_and_dispatch`
+(`execution_gate.py:294`)". **`gate_and_dispatch` has ZERO callers repo-wide**, is not re-exported
+from any `__init__.py`, and `docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md:50` states plainly
+that it *"is dead code with no callers."* Two documents, opposite implications, and the one an
+implementer would read is this one. Building resolution there is `ROUTE-AST-UNWIRED-1` exactly —
+a mechanism that exists and never runs.
+
+**The live seam is `require_execution_unit`** (`execution_gate.py:208`), three call sites:
+`core/execution_pipeline/resources.py:12` (every route handler), `routes/flow_router.py:153`,
+`runtime/nodus_execution_service.py:1347`.
+
+**★ And its return contract rules out the obvious refusal mechanism:** the docstring says
+*"Returns None on failure (non-fatal — callers must not block on this)"*, and all three call sites
+are written to that. **A descriptor that refuses by returning `None` would be ignored by design.**
+Refusal needs a distinct exception (audited for any broad `except Exception` between raise and
+caller, as `SyscallContractViolation` needed) and/or a terminal `refused` EU row. Settle it before
+implementing.
+
+**★ A third constraint, which is what makes phase 1 safe:** `gate_and_dispatch` takes
+`handler_fn: Callable[[], Any]` — an opaque zero-argument closure — so even alive it could not
+*apply* confinement, only select and refuse. That is the split this entry already argues for, and
+it means **declare + refuse + record changes no execution path at all**.
+
+**★ Shape warning for whoever implements:** `SandboxRunner` is a long-lived JSON-RPC process ABC
+(`start`/`execute`/`probe`/`heartbeat`/`shutdown`/`pid`). `TOOL-SEAM-ISOLATION-1`'s settled answer
+is a command **transform** — a different shape. The descriptor must resolve to a **policy**, not
+to that ABC, or it silently assumes every seam is a long-lived worker; the tool seam is not.
+
+**★ DESIGN SETTLED 2026-08-19 — `docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`.** Owner chose
+the **three-axis** shape (visibility / authority / resources) over the flat toggle list, and
+design-doc-before-code. That doc carries the field list, the storage decision (three real columns,
+not `extra`), the phasing, and the open decisions — read it before writing anything here. Invariant: an execution
 unit runs only in an environment whose certified assurance class meets or exceeds its declared
 minimum; if none is available on this host, the unit does not run — the pattern
 `deployment_contract.py` already implements for deployment profiles.
