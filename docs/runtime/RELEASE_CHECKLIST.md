@@ -1,6 +1,6 @@
 ---
 title: "Runtime Release Checklist"
-last_verified: "2026-08-16"
+last_verified: "2026-08-19"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -335,6 +335,43 @@ deployment that introduces TLS termination.
   the runtime bumps **both** in one PR. Pinning a nodus major that `nodus-mcp` caps below makes
   `pip install aindy-runtime[mcp]` **uninstallable** (`ResolutionImpossible`), so a green CI run
   achieved by isolating the MCP tests would be shipping a broken extra. See `MCP-SDK-2X-1`.
+
+- [ ] **★ Every dependency pin that moved this cycle had its release notes read.**
+
+  Not "does it resolve" and not "do the tests pass" — **what does the release contain.** List the
+  pins that moved (`git diff vX.Y.Z..HEAD -- pyproject.toml AINDY/requirements.txt`) and confirm
+  the intervening notes were read for each. For a multi-version jump that means *every* release
+  in the span, not just the target: the fix is often in the middle one.
+
+  **The failure this exists to prevent, measured 2026-08-19:** `NODUS-UPGRADE-2` was filed
+  *"P3, routine"* on the sole basis that the pin was three patch releases behind. `nodus-lang`
+  5.0.3 was a **cross-runtime guest-memory disclosure fix** — `GLOBAL_MEMORY_STORE` bound at
+  import, so every `NodusRuntime` in a process shared one guest memory dict, reachable from any
+  `.nd` script via `memory_put`/`memory_get`. It was found only because someone read the
+  changelog before bumping. **A severity assigned from version distance is not an assessment.**
+
+  **★ Why the rest of this section could not have caught it.** Everything above is about *how*
+  to bump safely — three sites, resolver traps, `nodus-mcp` sequencing, confinement re-verified
+  against the real VM. All of it ran, all of it passed, and all of it would have passed just as
+  well on a bump that silently carried a security fix nobody knew about. **A protocol that only
+  covers mechanics cannot produce a severity**, and severity is what decides whether a bump is a
+  routine PR or something an operator must be told about.
+
+  Two consequences when the notes say a release fixed something with a security consequence:
+
+  - The changelog fragment gets the `00-` operator-read prefix, and says plainly whether the
+    runtime was exposed and under what conditions. `00-488-nodus-lang-5.0.4.md` is the worked
+    example.
+  - **Check whether any of our own claims depended on the broken behaviour.** For that one,
+    `nodus_worker_pool.py`'s docstring asserted a reused process *"never leaks state between
+    runs"* — false on the affected pins, because `run_one` rebuilds the state the runtime owns
+    and cannot reset a module global inside a dependency. **Upstream bugs invalidate downstream
+    docstrings, and nothing greps for that.**
+
+  Reproduce before believing either way. Upstream notes are a lead, not evidence: 5.0.1 printed
+  `password123` and 5.0.4 printed `nil` on our own import path, which is what made the severity
+  a fact rather than a reading. Pin it with a test that fails on the old version — the guard for
+  this one is mutation-tested at 2/11.
 
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
 - [ ] TECH_DEBT.md updated for any newly closed or opened entries
