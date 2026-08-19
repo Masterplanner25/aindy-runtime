@@ -3,11 +3,20 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import sys
+import tempfile
 import uuid
 from typing import Any, Optional
+
+# ★ This module had NO logger, and that is not an oversight to fix casually: the worker's
+# STDOUT IS THE PROTOCOL CHANNEL — the adapter and the warm pool both parse it as JSON frames,
+# so anything printed there corrupts the response. `logging` is safe because it never writes to
+# stdout unless a handler is configured to; the default lands on stderr, which the pool sends to
+# DEVNULL and the one-shot path captures. Never use `print()` in this module.
+logger = logging.getLogger(__name__)
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
 if ROOT_DIR not in sys.path:
@@ -237,6 +246,53 @@ def dispatch_worker_syscall(name: str, payload: Any, *, user_id: str) -> Any:
         return {"status": "error", "error": str(exc), "data": None, "syscall": name}
 
 
+def _environment_kwargs(payload: dict[str, Any]) -> tuple[dict[str, Any], "tempfile.TemporaryDirectory[str]"]:
+    """Confinement arguments for this execution's VM, plus the scratch dir keeping them valid.
+
+    EXEC-ENV-BIND-1 phase 2 — the guest path *asks* rather than being hardcoded.
+
+    * ``payload["env_spec"]`` (optional) is what the ExecutionUnit declared.
+    * It is clamped to :data:`GUEST_FLOOR`, so a declared spec can only ever ask for MORE
+      confinement than ``GUEST-CONFINE-1`` already enforces, never less. A guest cannot widen
+      its own sandbox by declaring a permissive spec — that is the whole safety property.
+    * With no declared spec the floor applies unchanged, which is byte-for-byte the confinement
+      the three hardcoded literals used to provide, plus the explicit ``allowed_paths``.
+
+    ★ The scratch directory is per-execution and returned so the caller holds it: dropping it
+    would remove the only path the guest is allowed to touch, mid-run.
+
+    ★ A malformed spec falls back to the floor rather than raising. The seam that validates is
+    ``require_execution_unit``; by the time a payload reaches the worker it has already been
+    accepted, and failing an execution here over a spec the gate approved would move a
+    validation error to the wrong boundary. Falling back to the floor is the safe direction —
+    it is the most restrictive option available.
+    """
+    from AINDY.core.execution_environment import (
+        ExecutionEnvironmentSpec,
+        clamp_to_floor,
+        guest_floor,
+        nodus_runtime_kwargs,
+    )
+
+    scratch = tempfile.TemporaryDirectory(prefix="aindy-nodus-guest-")
+
+    declared = guest_floor()
+    raw = payload.get("env_spec")
+    if raw:
+        try:
+            declared, _widened = clamp_to_floor(
+                ExecutionEnvironmentSpec.from_dict(raw), guest_floor()
+            )
+        except Exception as exc:
+            logger.warning(
+                "[NodusWorker] declared env_spec unusable, falling back to the guest floor: %s",
+                exc,
+            )
+            declared = guest_floor()
+
+    return nodus_runtime_kwargs(declared, scratch_root=scratch.name), scratch
+
+
 def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute one Nodus request payload and return the result dict.
 
@@ -337,14 +393,28 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     # every run at once, which is the wrong shape. When a guest legitimately needs egress it
     # goes through the mediated paths (sys() / call_tool), which are gated.
     #
-    # Note the VM already confines filesystem access: `allowed_paths` defaults to the cwd.
-    # The demonstrated host-file write went through subprocess, which bypasses that check
-    # entirely — so allow_subprocess=False is what closes it.
+    # ★ CORRECTED 2026-08-19 (EXEC-ENV-BIND-1 phase 2). This comment used to read "the VM
+    # already confines filesystem access: `allowed_paths` defaults to the cwd" — which was
+    # WRONG in the way that mattered. nodus resolves `allowed_paths` to `[os.getcwd()]` at
+    # construction time, and NO spawn path sets the worker's cwd (neither
+    # nodus_worker_pool.WarmNodusWorker nor nodus_runtime_adapter's subprocess.run passes
+    # `cwd=`). So the guest inherited the SERVER's working directory: `/home/aindy` in Docker,
+    # which holds `alembic/` — a guest could write migrations that run on next boot — and the
+    # repo root in dev, which holds `AINDY/.env`. The escape was closed; the BOUND was an
+    # undeclared inherited default.
+    #
+    # It is now stated. `_environment_kwargs` derives every confinement argument from an
+    # ExecutionEnvironmentSpec clamped to the guest floor, and passes `allowed_paths`
+    # EXPLICITLY — which also makes the `NODUS_ALLOWED_PATHS` env var inert, since nodus reads
+    # it only on the unspecified-default branch.
+    env_kwargs, scratch_dir = _environment_kwargs(payload)
+    # ★ DO NOT "clean up" this binding. `scratch_dir` is a TemporaryDirectory whose lifetime IS
+    # the guest's only writable path: dropping the reference removes the directory mid-run and
+    # the guest loses the one location it is permitted to touch. It is released explicitly at
+    # the end of run_one, and a test asserts the directory exists while the VM does.
     runtime = NodusRuntime(
         project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None,
-        allow_subprocess=False,
-        allow_network=False,
-        allow_env=False,
+        **env_kwargs,
     )
     def _call_tool(tool_name: Any, args: Any) -> Any:
         if simulate_mode:
@@ -507,6 +577,16 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                 "error": str(exc),
                 "stdout_log": stdout_buffer.getvalue(),
             }
+
+    # ★ EXEC-ENV-BIND-1 phase 2 — release the guest's scratch root. Deliberately explicit
+    # rather than left to garbage collection: a warm worker (NODUS-WARMPOOL-1) serves many
+    # requests in one process, so relying on refcounting would accumulate one temp directory
+    # per execution for the process lifetime. Best-effort — a cleanup failure must never fail
+    # an execution that already produced a result.
+    try:
+        scratch_dir.cleanup()
+    except Exception as exc:  # pragma: no cover - platform-dependent unlink races
+        logger.debug("[NodusWorker] scratch cleanup failed (non-fatal): %s", exc)
 
     return result_payload
 

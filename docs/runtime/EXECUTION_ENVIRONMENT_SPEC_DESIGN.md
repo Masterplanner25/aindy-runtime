@@ -8,15 +8,17 @@ owner: "platform-team"
 
 # `ExecutionEnvironmentSpec` — design
 
-**Status: PHASE 1 SHIPPED 2026-08-19. Phases 2–4 are still design.** This document settled the
-*shape* before anything landed, because a column added under the schema-contract protocol is
-expensive to take back and the descriptor is a semi-public surface.
+**Status: PHASES 1 AND 2 SHIPPED 2026-08-19. Phases 3–4 are still design.** This document
+settled the *shape* before anything landed, because a column added under the schema-contract
+protocol is expensive to take back and the descriptor is a semi-public surface.
 
 **What exists now:** `AINDY/core/execution_environment.py`, three columns on `execution_units`
-(Alembic `0017`, schema contract `2026-08-19`), and an optional `env_spec=` on
-`require_execution_unit`. **It confines nothing** — see §9. 32 tests, mutation-tested 7/7.
+(Alembic `0017`, schema contract `2026-08-19`), an optional `env_spec=` on
+`require_execution_unit`, and a guest path that derives every confinement argument from a spec
+clamped to `GUEST_FLOOR`. Phase 1 confines nothing; **phase 2 is the first place a declared spec
+actually changes how something runs.**
 
-**One design decision changed during implementation, recorded here rather than silently:** §7
+**One design decision changed during implementation, recorded rather than made silently:** §7
 recommended raising `ExecutionEnvironmentUnsatisfiable`. The guard as built catches the **base**
 `ExecutionEnvironmentError`, so a *malformed* spec propagates too. Letting `Invalid` fall into the
 non-fatal handler would have been the worse of the two outcomes — the work would proceed with no
@@ -297,8 +299,8 @@ the moment it is most interesting. Settle before implementing.
 
 | Phase | Content | Blast radius |
 |---|---|---|
-| **1** | spec type, three columns, resolution + refusal at `require_execution_unit`, per-run record | **no execution path changes** |
-| **2** | the guest path asks — descriptor drives `nodus_worker` confinement kwargs; closes `GUEST-CONFINE-1`'s `cwd` residual | changes how guest scripts run; re-run the confinement suite against the real VM |
+| **1** | ✅ **SHIPPED** — spec type, three columns, resolution + refusal at `require_execution_unit`, per-run record | **no execution path changed**; mutation-tested 7/7 |
+| **2** | ✅ **SHIPPED** — the guest path asks; `nodus_worker` derives every confinement arg from a spec clamped to `GUEST_FLOOR`, with an explicit per-execution scratch root. Closes `GUEST-CONFINE-1`'s residual | confinement suite re-run against the real VM, green; mutation-tested 6/6 |
 | **3** | the tool seam asks — `TOOL-SEAM-ISOLATION-1`'s command transform reads the descriptor | the P0 |
 | **4** | resources axis becomes enforcing, not just declared; `COST-GOVERNOR-1` adds spend | touches `resource_manager` |
 
@@ -337,15 +339,106 @@ Written here because the repo's own catalogue says a new check is least proven w
 
 ---
 
-## 11. Open decisions
+## 10a. What phase 2 changed, and the two things it did not
 
-1. **The refusal mechanism** — §7. Recommendation: raise **and** record.
-2. **Who supplies the spec.** Caller-supplied is the honest default, but that means the value is
-   attacker-influenced in the same way `AUTHORITY-VALUE-1` describes — a spec the calling frame
-   supplies could *widen*. **A spec must only ever narrow against a host-level floor**, mirroring
-   `AUTHORITY-VALUE-1`'s clamp. This should be decided before phase 1, not after.
-3. **Whether `min_assurance` accepts `assurance_ceiling`** as well as `assurance_class`. They
-   measure different things and the provider side already distinguishes them.
-4. **Defaults per `eu_type`.** A registered default per kind (`flow`/`agent`/`nodus`/`job`) would
-   make the descriptor useful without every caller supplying one — but a default that is not
-   `NULL` changes behaviour for existing traffic, so it belongs in a later phase.
+**The residual was a wrong comment, not a missing line.** `nodus_worker.py` carried
+*"the VM already confines filesystem access: `allowed_paths` defaults to the cwd"* — true of
+nodus, false here, because nothing sets the worker's cwd. Correcting the comment and passing
+`allowed_paths` explicitly turned out to be the same change.
+
+**Two behaviour changes worth stating:**
+
+- **`NODUS_ALLOWED_PATHS` is now inert.** nodus reads that env var only on its
+  unspecified-default branch, so passing `allowed_paths` explicitly means an operator can no
+  longer widen the guest's filesystem bound out-of-band. Deliberate, and the safe direction.
+- **A declared spec is CLAMPED to `GUEST_FLOOR`, never merged with it.** A guest cannot widen its
+  own sandbox by arriving with a permissive descriptor. That property is what makes it safe to
+  accept a spec from a caller at all.
+
+**★ What it did NOT close, against expectation.** `ORCHESTRATOR-SPLIT-1` predicted the same
+missing `cwd=` closed both its store-4 data loss and this residual. **False:** the residual was
+closed by bounding the VM's `allowed_paths`, which is *stronger* than setting a cwd but leaves the
+**process** cwd untouched. `nodus_lang_workflow`'s `LocalWorkflowStore` still roots at
+`.nodus/workflow_framework` relative to wherever the worker started. That entry is corrected.
+
+**★ A hazard found while wiring it:** `nodus_worker.py` had **no logger**, and that is not an
+oversight to fix casually — **its stdout is the JSON protocol channel**, so anything printed there
+corrupts the frame the adapter parses. A module logger was added (logging defaults to stderr,
+which the pool sends to DEVNULL and the one-shot path captures). **Never use `print()` in that
+module.** The fallback path's first draft called `logger.warning` before one existed; the
+malformed-spec test caught it.
+
+---
+
+## 11. Decisions — settled 2026-08-19
+
+### 11.1 Refusal mechanism: **raise AND record**
+
+`ExecutionEnvironmentUnsatisfiable` is raised, *and* an EU row is written in a terminal `refused`
+state carrying `env_spec` / `env_evidence_class`.
+
+Neither half is sufficient alone, and the reasons are the ones this repo has already paid for:
+
+- **Record-only** is a stated posture with no teeth — a refusal that does not refuse, because a
+  caller ignoring status runs the handler anyway. That is the exact failure this entry exists to
+  fix, reproduced inside the fix.
+- **Raise-only** loses the audit row at the moment it is most interesting. The point of the whole
+  entry is that *"was this the containment you asked for?"* becomes answerable; a refusal that
+  leaves no trace answers it with silence.
+
+**★ Implementation hazard, non-negotiable: audit for a broad `except Exception` between the raise
+and each of the three call sites.** `SyscallDispatcher` needed an explicit
+`except SyscallContractViolation: raise` placed *before* its belt-and-suspenders handler for
+exactly this reason, and `evaluate_trigger()` is the cautionary case — it collapses every
+exception to a `defer` decision and still returns 202, so a failure there is permanently invisible.
+A refusal swallowed by a broad handler is worse than no refusal, because the row says `refused`
+while the work ran.
+
+### 11.2 A spec may only ever NARROW — never widen
+
+**Settled: the host floor wins, always.** The effective spec is the intersection of the
+caller-supplied spec and a host-level floor; a caller can ask for *more* confinement than the
+floor and never for less.
+
+This is `AUTHORITY-VALUE-1` in a new place, and worth stating as the general rule rather than a
+local one: **the syscall capability check already reads a value the calling frame supplied, and
+`child_context()` could widen it.** A descriptor supplied by the caller has precisely the same
+shape, so it gets the clamp from the start rather than as a retrofit behind a flag.
+
+Two consequences to build in, not bolt on:
+
+- **The clamp is not optional and is not flagged.** `AUTHORITY-VALUE-1`'s clamp shipped opt-in
+  (`AINDY_CHILD_CONTEXT_CLAMP`, default off) because an existing caller in
+  `aindy-apps-monolith` would have been denied by it. **No caller supplies a spec today** — the
+  field does not exist — so there is no compatibility argument for making this one optional, and
+  a security default that ships off is the pattern this registry keeps recording as a mistake.
+- **A widening attempt is logged at WARNING and the clamped value is used**, not silently
+  narrowed. `AUTHORITY-VALUE-1` warns on every widening either way so the exposure is countable;
+  same here. Silently clamping makes a caller's stated requirement and the runtime's applied one
+  differ with nothing recording the gap — which is the problem this entry is about.
+
+**★ And note the asymmetry that makes this safe to build now:** narrowing-only means the
+descriptor can never *reduce* confinement below what the host already applies. So phase 1 cannot
+weaken any existing execution even if the resolution logic is wrong — the worst failure is an
+over-strict refusal, which is loud, rather than an under-confined run, which is silent.
+
+### 11.3 `min_assurance` takes `assurance_class` only
+
+Not `assurance_ceiling`. They measure different things — the class is *what kind of boundary*, the
+ceiling is *how well verified* — and the provider side already keeps them distinct. Accepting both
+in one field would collapse that distinction at the requesting side, which is the
+`register_syscall` / `FR-14` shape again.
+
+`assurance_ceiling` is still **recorded** in `env_evidence_class`, so the verification tier is
+never lost; it is simply not something a caller can gate on in phase 1. Revisit if a real caller
+needs *"container-grade, but only if kernel-observable-verified"*.
+
+### 11.4 Defaults per `eu_type` — deferred, deliberately
+
+A registered default per kind (`flow`/`agent`/`nodus`/`job`) would make the descriptor useful
+without every caller supplying one. **But a default that is not `NULL` changes behaviour for
+existing traffic**, which is precisely what phase 1 promises not to do. It belongs in phase 2 or
+later, alongside the first seam that actually applies a spec.
+
+Filing note for whoever takes it: the default must go through the same narrowing clamp as a
+caller-supplied spec, or it becomes a second, privileged way to set the same field.

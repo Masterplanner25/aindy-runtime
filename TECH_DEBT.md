@@ -7273,7 +7273,16 @@ is the cost. Roll out per domain.
 
 ## EXEC-ENV-BIND-1 — an execution unit cannot declare the environment it needs
 
-**Status: PHASE 1 SHIPPED 2026-08-19 — still OPEN (P1) for phases 2–4.**
+**Status: PHASES 1 AND 2 SHIPPED 2026-08-19 — still OPEN (P1) for phases 3–4.**
+
+**Phase 2 = the guest path asks.** `nodus_worker` derives every confinement argument from an
+`ExecutionEnvironmentSpec` clamped to `GUEST_FLOOR` instead of three hardcoded `False` literals,
+and passes `allowed_paths` explicitly against a per-execution scratch root. This closes
+`GUEST-CONFINE-1`'s residual. **★ Two consequences: `NODUS_ALLOWED_PATHS` is now inert (nodus
+reads it only on its unspecified-default branch), and a declared spec is CLAMPED to the floor
+rather than merged with it — a guest cannot widen its own sandbox.** **★ It did NOT close
+`ORCHESTRATOR-SPLIT-1`'s store 4, against that entry's prediction: bounding `allowed_paths` is
+stronger than setting a cwd but leaves the PROCESS cwd untouched.**
 
 **Phase 1 = declare / refuse / record, and it changes no execution path.**
 `AINDY/core/execution_environment.py` + three columns on `execution_units` (`env_spec`,

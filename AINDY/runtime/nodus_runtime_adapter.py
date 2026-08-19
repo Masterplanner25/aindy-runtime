@@ -94,6 +94,15 @@ class NodusExecutionContext:
     allowed_operations: Optional[list[str]] = None
     event_sink: Optional[Callable[[str, dict], None]] = None
     max_execution_ms: Optional[int] = None
+    # EXEC-ENV-BIND-1 phase 2 — the environment this execution declared, as
+    # ExecutionEnvironmentSpec.to_dict(). Carried across the subprocess boundary because a
+    # ContextVar cannot cross it (same reason `durable_effects` is carried, DUR-2b).
+    #
+    # ★ None is the normal case and means "the guest floor applies", which is byte-for-byte the
+    # confinement GUEST-CONFINE-1 already enforced. A supplied spec is CLAMPED to that floor in
+    # the worker, so it can only ever ask for MORE confinement — a guest cannot widen its own
+    # sandbox by declaring a permissive spec.
+    env_spec: Optional[dict[str, Any]] = None
     # RTR-1 Phase 2a — agent tool-calling seam. When a scoped capability token is
     # present, Nodus scripts may call AINDY tools via the call_tool() host
     # function; execute_tool enforces the token. Absent a token, tool calls are
@@ -210,6 +219,7 @@ class NodusRuntimeAdapter:
                 "input_payload": context.input_payload or {},
                 "allowed_operations": list(context.allowed_operations or []),
                 "max_execution_ms": max_execution_ms,
+                "env_spec": context.env_spec,
                 "context": {
                     "user_id": str(context.user_id or ""),
                     "execution_unit_id": str(context.execution_unit_id or ""),

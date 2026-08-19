@@ -293,6 +293,68 @@ def host_floor() -> ExecutionEnvironmentSpec:
     return DEFAULT_HOST_FLOOR
 
 
+#: ★ The guest floor — what a submitted `.nd` script may never exceed.
+#:
+#: This is ``GUEST-CONFINE-1`` restated as a DECLARATION rather than three literal ``False``
+#: arguments at one construction site. The escape it closes was demonstrated, not inferred: a
+#: guest script created a file on the host, read the real PATH, and performed real DNS.
+#:
+#: ★ Why the guest gets its own floor rather than the permissive default: the honest-posture
+#: defence ("we never claimed OS isolation for Tier 1, so putting untrusted code there is the
+#: operator's call") covers DEPLOYED CODE. It does not transfer to SUBMITTED CONTENT — a script
+#: arriving through ``POST /platform/nodus/run`` is data from an authenticated session, not
+#: something an operator placed in a Tier-1 slot.
+#:
+#: ``filesystem=scoped`` rather than ``none``: nodus resolves ``allowed_paths`` at construction
+#: and the worker needs a writable scratch root. Scoped-to-a-per-execution-temp-dir is the
+#: bound; ``host`` is what this floor exists to refuse.
+GUEST_FLOOR = ExecutionEnvironmentSpec(
+    visibility=Visibility(filesystem=FS_SCOPED, env=ENV_NONE),
+    authority=Authority(network=NET_NONE, subprocess=False),
+)
+
+
+def guest_floor() -> ExecutionEnvironmentSpec:
+    """Floor for the Nodus guest VM. See :data:`GUEST_FLOOR`."""
+    return GUEST_FLOOR
+
+
+def nodus_runtime_kwargs(spec: ExecutionEnvironmentSpec, *, scratch_root: str) -> dict[str, Any]:
+    """Translate an effective spec into ``NodusRuntime(**kwargs)``.
+
+    ★ ``allowed_paths`` is passed EXPLICITLY and that is the point of this function.
+    ``NodusRuntime`` defaults it to ``[os.getcwd()]`` *at construction time*, and no spawn path
+    sets the worker's cwd — so the guest inherits the server's working directory: ``/home/aindy``
+    in Docker, which holds ``alembic/`` (a guest could rewrite migrations that run on next boot),
+    and the repo root in dev, which holds ``AINDY/.env``. The escape was closed by
+    ``GUEST-CONFINE-1``; the *bound* was an undeclared inherited default until this function.
+
+    ★ Passing it explicitly also makes ``NODUS_ALLOWED_PATHS`` inert. That env var is read only
+    on nodus's unspecified-default branch, so an operator can no longer widen the guest's
+    filesystem bound out-of-band. That is a deliberate behaviour change, and the safe direction.
+
+    ★ The three deny flags are derived, not hardcoded. They were literals at one construction
+    site; deriving them means the guest path has a *stated requirement* that can be recorded and
+    audited, which is the whole point of EXEC-ENV-BIND-1.
+    """
+    if spec.visibility.filesystem == FS_NONE:
+        allowed_paths: list[str] = []
+    elif spec.visibility.filesystem == FS_HOST:
+        # Unreachable for the guest: the floor clamps `host` down. Kept explicit so a future
+        # caller that removes the floor gets unrestricted access only by writing it out.
+        allowed_paths = None  # type: ignore[assignment]
+    else:
+        declared_roots = [r for r in spec.visibility.filesystem_roots if r]
+        allowed_paths = declared_roots or [scratch_root]
+
+    return {
+        "allowed_paths": allowed_paths,
+        "allow_subprocess": spec.authority.subprocess,
+        "allow_network": spec.authority.network != NET_NONE,
+        "allow_env": spec.visibility.env != ENV_NONE,
+    }
+
+
 # ── Clamp ─────────────────────────────────────────────────────────────────────
 
 
