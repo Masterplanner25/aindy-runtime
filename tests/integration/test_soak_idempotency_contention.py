@@ -141,9 +141,7 @@ def test_without_the_flag_the_handler_runs_once_per_caller(monkeypatch, testing_
 # ── The soak ─────────────────────────────────────────────────────────────────
 
 
-def test_the_gate_degrades_to_at_least_once_under_contention(
-    monkeypatch, testing_session_factory, caplog
-):
+def test_the_gate_degrades_to_at_least_once_under_contention(monkeypatch, testing_session_factory):
     """★ THE FINDING FROM THIS HARNESS'S FIRST RUN — and it is a documentation gap, not a bug.
 
     The first version of this test asserted ``len(runs) == 1``. It failed in CI: **the handler
@@ -171,13 +169,29 @@ def test_the_gate_degrades_to_at_least_once_under_contention(
     warning." Anyone flipping `AINDY_SYSCALL_IDEMPOTENCY` for a non-idempotent effect needs to
     know that, and until this test existed nothing said it in a form that could fail.
     """
-    import logging
-
     monkeypatch.setenv("AINDY_SYSCALL_IDEMPOTENCY", "true")
     name, runs = _register_probe(exactly_once=True)
 
-    with caplog.at_level(logging.WARNING):
-        outcome = _drive(name, str(uuid.uuid4()), {"x": 1})
+    # ★ Spy on the logger directly rather than scraping ``caplog``. The degradation warning is
+    # emitted from a WORKER THREAD by a module logger, and caplog did not capture it reliably
+    # across that boundary — the first version of this assertion failed in CI for that reason,
+    # not because the warning was missing. A test whose instrument is timing- or
+    # config-dependent produces exactly the ambiguous result a soak must not produce.
+    import AINDY.kernel.effect_ledger as _ledger
+
+    degradations: list[str] = []
+    _real_warning = _ledger.logger.warning
+
+    def _spy(msg, *args, **kwargs):
+        try:
+            degradations.append(msg % args if args else str(msg))
+        except Exception:
+            degradations.append(str(msg))
+        return _real_warning(msg, *args, **kwargs)
+
+    monkeypatch.setattr(_ledger.logger, "warning", _spy)
+
+    outcome = _drive(name, str(uuid.uuid4()), {"x": 1})
 
     assert outcome.ok, (
         f"{len(outcome.failures)} of {WORKERS} concurrent callers raised — the gate must "
@@ -196,11 +210,7 @@ def test_the_gate_degrades_to_at_least_once_under_contention(
     # ★ The degradation must be COUNTABLE. It is the only signal an operator gets that
     # EXACTLY_ONCE did not hold for a given call.
     if len(runs) > 1:
-        assert any(
-            "degrading to AT_LEAST_ONCE" in r.message % r.args if r.args else
-            "degrading to AT_LEAST_ONCE" in r.message
-            for r in caplog.records
-        ), (
+        assert any("degrading to AT_LEAST_ONCE" in m for m in degradations), (
             "the handler ran more than once but no degradation warning was logged — the "
             "downgrade would be silent, and an operator would have no way to know that "
             "EXACTLY_ONCE did not hold"
