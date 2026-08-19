@@ -4,8 +4,21 @@ The default execution path spawns a fresh worker subprocess per Nodus execution,
 cold-starts the whole plugin stack (~12s on heavy app profiles) before the script runs.
 This module keeps ONE worker process alive so that import/plugin-load cost is paid once
 and amortized across every execution; each request still runs through
-``nodus_worker.run_one``, which rebuilds all per-request state, so a reused process never
-leaks state between runs.
+``nodus_worker.run_one``, which rebuilds all per-request state *that this module owns*.
+
+★ That is not the same as "a reused process never leaks state between runs", which this
+docstring claimed until 2026-08-19. ``run_one`` cannot reset a module global living inside
+a dependency, and ``nodus-lang <= 5.0.2`` bound ``GLOBAL_MEMORY_STORE`` at **import** — so
+every ``NodusRuntime`` in the process shared one guest memory dict, and a guest ``.nd``
+script calling ``memory_put``/``memory_get`` could read another tenant's values out of a
+reused worker. Reproduced on 5.0.1 before the bump; fixed upstream in 5.0.3 (per-runtime
+stores) and pinned here at 5.0.4. Exposure was bounded by this pool being opt-in and off by
+default, not by the claim being true. Regression guard:
+``tests/unit/test_nodus_upgrade_contract.py::test_two_runtimes_in_one_process_do_not_share_guest_memory``.
+
+**The general rule this leaves behind:** per-request state rebuilt *here* says nothing about
+process-global state held *below* here. Before enabling the pool after any dependency bump,
+re-run that guard — a reused process is only as isolated as its most import-bound dependency.
 
 Opt-in — ``AINDY_NODUS_WARM_POOL`` (default off). When off, ``warm_pool_enabled()`` is
 false and the adapter uses the existing fresh-subprocess path unchanged. **Phase 2** — a

@@ -10103,35 +10103,75 @@ has a working witness and the **authority** boundary still has none. That is
 
 ---
 
-## NODUS-UPGRADE-2 — pin is `5.0.1`; Nodus is at `5.0.4`
+## NODUS-UPGRADE-2 — pin `5.0.1` → `5.0.4`; ★ filed P3-routine, was a security fix
 
-**Status: OPEN — P3, routine.** Filed 2026-08-18. Provenance: `CREWAI-NODUS-2026-08-18` — the
-Nodus repo was cloned and read directly for that accuracy pass and turned out to be three patch
-releases ahead of what this runtime pins.
+**Status: CLOSED (2026-08-19).** Filed 2026-08-18 as *"P3, routine"*. Provenance:
+`CREWAI-NODUS-2026-08-18` — the Nodus repo was cloned for that accuracy pass and turned out to be
+three patch releases ahead of our pin. **The severity was wrong, and the way it was wrong is the
+finding worth keeping.**
 
-`pyproject.toml` and `AINDY/requirements.txt` pin `nodus-lang==5.0.1`. `C:\dev\Coding Language` is
-at `1969e26` (`v5.0.4-2`).
+**What the bump actually contained.** `nodus-lang` 5.0.3 fixes a **cross-runtime guest-memory
+disclosure**: `GLOBAL_MEMORY_STORE` was bound at **import**, so every `NodusRuntime` constructed in
+one process shared a single guest memory dict. `memory_put`/`memory_get` are guest builtins — any
+`.nd` script can call them — so one script could read another's values. Upstream gives each runtime
+its own store; sharing is now opt-in (`memory_store=`, `share_process_state=True`). 5.0.4 is the
+follow-up unbreaking a `nodus-sdk` subclass property collision — **verified we do not depend on
+`nodus-sdk`**, so that half does not reach us.
 
-**Follow `NODUS-UPGRADE-1`'s protocol — it is closed but its rules are not.** In particular:
+**★ Why it reached us, and the docstring that hid it.** `AINDY/runtime/nodus_worker_pool.py`
+reuses worker processes across requests. Its module docstring asserted:
 
-- **★ Bump across ALL THREE sites**: `pyproject.toml`, `AINDY/requirements.txt`, and the
-  `Install MCP extra` step in `runtime-ci.yml`, which installs directly rather than via the extra.
-  `--no-deps` in CI means pyproject's pins are **never applied there**; the effective environment
-  is `requirements.txt`. That asymmetry is how CI tested nodus 4.1.0 for four months while the
-  wheel required 4.2.0.
-- **★ Check `nodus-mcp` first.** `MCP-SDK-2X-1` records the reverse-direction trap: `nodus-mcp`
-  capped `nodus-lang<5.0.0` and blocked the 5.0.0 bump, and the fix was **not** to isolate the MCP
-  tests — `pip install "nodus-lang==5.0.4" "nodus-mcp>=0.1.3"` must resolve, or
-  `aindy-runtime[mcp]` becomes uninstallable for users and green CI ships a broken extra.
-- Guards already in place: `tests/unit/test_dependency_pin_agreement.py` (the two sources must
-  agree, and a pin no installed package permits fails naming the capper) and
-  `tests/unit/test_nodus_upgrade_contract.py` (an executable probe checklist).
-- **★ Distinguish cosmetic from real before touching confinement.** Four confinement tests went
-  red on 5.0.0 and none was a regression.
+> *"each request still runs through `nodus_worker.run_one`, which rebuilds all per-request state,
+> **so a reused process never leaks state between runs**."*
 
-**Sequence it with the `GUEST-CONFINE-1` residual and the `ORCHESTRATOR-SPLIT-1` store work** —
-all three touch the guest seam, and doing them in one pass means one confinement re-verification
-instead of three.
+**`run_one` cannot reset a module global living inside a dependency.** The claim was true of the
+state this module owns and false for the channel below it. Corrected in place 2026-08-19, with the
+general rule attached: *per-request state rebuilt here says nothing about process-global state held
+below here.*
+
+**Reproduced, not taken on faith** (the `NODUS-UPGRADE-1` rule — distinguish cosmetic from real).
+Two `NodusRuntime`s in one process, our own import path, `allow_*=False`:
+
+| Pin | Second runtime's `print(memory_get("secret"))` |
+|---|---|
+| `5.0.1` | **`password123`** |
+| `5.0.4` | `nil` |
+
+**Exposure was bounded — by the flag, not by the claim.** Reaching it needs
+`AINDY_NODUS_WARM_POOL` on (**default off**, and it has never been flipped) *plus* two tenants' `.nd`
+scripts using the memory builtins in the same reused worker. So this was **latent, not live** —
+the same shape as `IDEM-12`, and latent for the same kind of reason: a default that happens to be
+off. **Had the warm-pool soak been done before this bump, it would have been done on a pin that
+made the pool's own safety claim false.**
+
+**Guard added:** `tests/unit/test_nodus_upgrade_contract.py::test_two_runtimes_in_one_process_do_not_share_guest_memory`.
+Mutation-tested — **2 of 11 fail on 5.0.1** (the isolation assert, plus the version-pin assert by
+design); both liveness controls pass first, so the failure is the assertion and not the scripts
+failing to run. It asserts the **default**, so a future release that re-shares, or a construction
+site that starts passing `share_process_state=True`, fails here.
+
+**What the protocol got right and what it missed.**
+
+- ✅ **Three sites** — in the event only **two** changed. The `Install MCP extra` step pins
+  `nodus-mcp`, not `nodus-lang`, and `nodus-mcp 0.1.3` has **no upper bound**, so it cannot
+  re-resolve away from `requirements.txt`. The rule stays as written; it is cheap and the failure
+  it prevents is silent.
+- ✅ **`MCP-SDK-2X-1` reverse trap checked first.**
+  `pip install --dry-run "nodus-lang==5.0.4" "nodus-mcp>=0.1.3" "mcp>=1.0.0,<2"` resolves clean, so
+  `aindy-runtime[mcp]` stays installable. **The second instance of `MCP-SDK-2X-1` is now dead** —
+  the `nodus-lang<5.0.0` cap that made 5.0.0 `ResolutionImpossible` is gone from 0.1.3.
+- ✅ **Confinement re-verified against the real VM** — all 21 tests across the three guard files
+  green on 5.0.4; nothing cosmetic went red this time.
+- ❌ **★ Nothing in the protocol asks what a patch release *contains*.** It is entirely about
+  *how* to bump safely — three sites, resolver traps, confinement re-verification — and says
+  nothing about reading the upstream changelog to find out whether a bump is routine. That is how
+  a security fix got filed P3. **Rule added: read the intervening release notes before assigning
+  a severity, not after.**
+
+**Related:** `NODUS-WARMPOOL-1` (closed — this is a precondition its soak now depends on),
+`GUEST-CONFINE-1` (the guest seam; its residual still stands), `INITIATOR-IDENTITY-1` (this was
+cross-*tenant* disclosure, which is that entry's concern seen from the VM side), `IDEM-12` (the
+other latent-because-a-default-is-off item).
 
 ---
 
