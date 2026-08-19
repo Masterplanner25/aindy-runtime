@@ -164,6 +164,28 @@ def test_metric_exists_is_false_for_unknown_names():
     assert metric_exists("aindy_nope_not_here") is False
 
 
+def test_an_unobserved_label_combination_reads_zero_rather_than_raising():
+    """★ Found by using the harness for real, on its first labelled metric.
+
+    prometheus_client does not materialise label combinations until ``.labels(...)`` is first
+    called for one, so a brand-new counter has NO sample for any label set. "The family exists
+    but this combination has not been observed" must read 0; "no such metric" must still raise.
+
+    Collapsing those two restores the exact hazard ``read_metric`` exists to prevent, in the case
+    most likely to matter — the first assertion written against a new counter. The guard was
+    right to refuse; the rule was too coarse.
+    """
+    assert read_metric(
+        "aindy_effect_gate_outcomes_total", {"outcome": "never-used-in-this-test-run"}
+    ) == 0.0
+
+
+def test_an_unknown_family_still_raises_even_with_labels():
+    """The other half: labels must not become a way to smuggle a typo past the guard."""
+    with pytest.raises(AssertionError, match="not registered"):
+        read_metric("aindy_no_such_family_at_all", {"outcome": "degraded"})
+
+
 def test_metric_window_captures_a_real_delta():
     from AINDY.platform_layer.metrics import db_pool_exhaustion_events_total
 
