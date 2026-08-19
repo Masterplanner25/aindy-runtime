@@ -7696,8 +7696,32 @@ standalone.
 
 ## TOOL-SEAM-ISOLATION-1 — every authority check at the tool seam is advisory with respect to the code that runs next
 
-**Status: OPEN — P0.** Filed 2026-08-15 from the Codex comparative audit (G1), verified.
+**Status: OPEN — P0. SCOPED 2026-08-19 → `docs/runtime/TOOL_SEAM_ISOLATION_SCOPE.md`.**
+Filed 2026-08-15 from the Codex comparative audit (G1), verified.
 Third of three convergent isolation findings — see `EXEC-ENV-BIND-1` for the convergence table.
+
+**★★ READ THE SCOPE DOC BEFORE ACTING ON ANYTHING BELOW.** Measuring this entry against source at
+`03d5a87` produced four corrections, and two of them change what should be built:
+
+1. **A tool is a Python CALLABLE, not a command.** The "settled" command-transform answer recorded
+   below is one level of indirection off — there is no argv at `tool_registry.py:366`. The borrow
+   still holds, but the thing transformed is *a tool worker's* argv, which means a
+   **serialization boundary** (args + result + errors across a process) is the real cost and is
+   not mentioned anywhere below.
+2. **The three call sites are in three different processes.** `extension_worker.py:345` runs
+   *inside* the Tier-2 sandbox (it is what `SandboxRunner` spawns); `nodus_worker.py:144` is in
+   the Nodus worker subprocess; only `nodus_adapter.py:263` is host-side. "In the runtime process"
+   is true of one of three.
+3. **No foreign in-process code runs here at HEAD.** 3 runtime-owned tools, 15 app fns (thin
+   syscall adapters), and MCP tools are **runtime-owned proxies** — the foreign code is remote.
+   The gap is *structural* (the runtime cannot bound what a consumer registers), not live.
+4. **All 18 tool fns take `db`; NONE uses it.** Measured across this repo and
+   `aindy-apps-monolith`. The Lesson-10 revocable-handle step is therefore a measured no-op —
+   the same evidence `GUEST-CONFINE-1` gathered before denying its three capabilities.
+
+**Recommendation from the scope: ship the handle (A), declare `isolation=` (B), do NOT build the
+process boundary (C) without a named consumer.** C becomes urgent the moment a consumer registers
+a tool that *executes what it is given* — a shell-out, an eval, a plugin loader.
 
 **★ Priority re-confirmed and the reason sharpened 2026-08-17** (Aider portability accuracy pass,
 `AIDER-PORTABILITY-2026-08-17`). Already P0; it should not be re-levelled down, and the argument
