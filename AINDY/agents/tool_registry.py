@@ -361,9 +361,33 @@ def execute_tool(
         # gated by the run's granted capabilities via this ambient scope; the secret
         # is consumed inside the tool and never returned to the script.
         from AINDY.platform_layer.secret_broker import capability_scope
+        from AINDY.agents.tool_session import RevocableToolSession
 
-        with _egress_cm, capability_scope(_scoped_caps):
-            result = entry["fn"](args=args, user_id=user_id, db=db)
+        # TOOL-SEAM-ISOLATION-1 step A — hand the tool a REVOCABLE HANDLE, not the live session.
+        #
+        # The Linux fd model: pass an opaque handle across a trust boundary, resolved through a
+        # table you can validate and revoke — never a direct pointer. `execute_tool` already
+        # resolves the tool by NAME through TOOL_REGISTRY (handle-shaped, correct) and then
+        # handed over a live SQLAlchemy Session, which cannot be validated, revoked mid-call or
+        # narrowed. Every authority check above was advisory with respect to that one argument.
+        #
+        # ★ Measured before changing it: of the 18 tool functions that exist (3 here, 15 in
+        # aindy-apps-monolith), 18 take `db` and 0 reference `db.<anything>`. Pure ambient
+        # authority with zero utility — so this narrowing breaks nothing that exists. Same
+        # evidence GUEST-CONFINE-1 gathered before denying its three capabilities.
+        #
+        # ★ The runtime keeps the REAL session: _finalize_tool_effect runs after the tool
+        # returns and needs it, and revoke() deliberately does not close it — closing a
+        # request-shared session out from under its owner is RT-MEMTXN-LEAK-1.
+        #
+        # ★ This narrows ONE ARGUMENT. It does not bound the process: a tool can still import
+        # os, spawn a thread, or open a socket. Do not read this as the entry being closed.
+        _tool_db = RevocableToolSession(db, tool_name=tool_name)
+        try:
+            with _egress_cm, capability_scope(_scoped_caps):
+                result = entry["fn"](args=args, user_id=user_id, db=_tool_db)
+        finally:
+            _tool_db.revoke()
         if _idempotent:
             _finalize_tool_effect(db, _action_id, "success", result, tool_name)
         return {"success": True, "result": result, "error": None}

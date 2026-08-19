@@ -136,7 +136,7 @@ boundary, a provider negotiation, or a consumer to justify it.
 
 | # | Step | Depends on | Breaks today? |
 |---|---|---|---|
-| **A** | Stop handing tools a live `Session`. Pass a scoped accessor that is closed at return and refuses out-of-scope work; keep the parameter name so no signature changes | nothing | **no** — measured: 0 of 18 use it |
+| **A** | ✅ **SHIPPED 2026-08-19** — the tool receives a `RevocableToolSession`, revoked in a `finally` when the call returns. Parameter name unchanged, so no tool signature moves | nothing | **no** — measured: 0 of 18 use it |
 | **B** | `register_tool(..., isolation=…)` as a **declaration only** — recorded on the `ExecutionUnit`'s `env_spec`, refused when the host cannot satisfy it, applied by nobody | `EXEC-ENV-BIND-1` ✅ shipped | no — declaration is inert |
 | **C** | A per-invocation **tool worker**: serialize `(tool_name, args)` out of process, run it, return the result | the serialization boundary in §2 | yes — changes how every tool runs |
 | **D** | The policy→argv **transform** wrapping C's worker (`bwrap` / `sandbox-exec` / restricted token) | C | no further — C is the behaviour change |
@@ -148,7 +148,7 @@ consumer that needs it** — which is `SUBSTRATE-WITNESS-1`'s decision, not this
 
 ## 7. Recommendation
 
-**Ship A. Declare B. Do not start C without a named consumer.**
+**A is shipped. Declare B next. Sequence C behind a named consumer.**
 
 - **A** is a measured no-op that removes the single widest piece of ambient authority at the seam,
   and it is the only step whose value does not depend on anything else landing.
@@ -156,10 +156,23 @@ consumer that needs it** — which is `SUBSTRATE-WITNESS-1`'s decision, not this
   environment; letting a *tool* declare one costs a keyword argument and makes the seam's
   requirement recordable and refusable before anything can apply it. It also gives `FS-SCOPE-1`
   its enforcement *point* on paper, which is what that entry has been waiting for.
-- **C** is a process boundary around every tool call. Its cost is real, its benefit is entirely
-  about code that **does not exist yet**, and the runtime currently has no consumer sending
-  traffic through this path at all. Building it now optimises for a threat model no deployment
-  has.
+- **C** is a process boundary around every tool call. Its cost is real and its benefit is about
+  code that does not exist **yet**.
+
+  **★ Correction (owner, 2026-08-19): "nothing currently sends traffic through this path" and
+  "we are not going to" are not the same statement, and the first must not be used to argue the
+  second.** An earlier draft of this section leaned on the absence of traffic as though it settled
+  the question. It does not: it is a fact about today, and every consumer is owner-controlled, so
+  the traffic is a decision not yet taken rather than a constraint. **This is the second time that
+  substitution has been made in this repository** — `SUBSTRATE-WITNESS-1` carried the same wording
+  ("the flag backlog is stuck because no first-party consumer sends any") and was corrected the
+  same day. Treat the pattern as a known failure mode when reading any entry whose priority rests
+  on current usage.
+
+  What survives the correction is narrower and still holds: **C should be sequenced behind a
+  named consumer, because its shape depends on what that consumer registers** — a shell-out, an
+  eval and a plugin loader do not want the same boundary, and building before knowing which one
+  risks building the wrong one. That is a sequencing argument, not a "no".
 
 **★ The honest counter-argument, recorded so it is not lost:** the Aider portability analysis
 attaches exactly one safety precondition to routing an external agent through this runtime — *do
