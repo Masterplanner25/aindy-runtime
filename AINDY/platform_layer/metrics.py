@@ -407,3 +407,26 @@ effect_gate_outcomes_total = Counter(
     ["outcome"],
     registry=REGISTRY,
 )
+
+
+# ── Tool return contract (TOOL-SEAM-ISOLATION-1 step C1) ─────────────────────
+#
+# ★ This counter is the GATE ON C2, not a style check. A tool's return has to marshal for the
+# tool to run behind a process boundary at all — you cannot hand a `UUID` or an open session
+# across a pipe. Every tool that exists already returns a dict by convention (18/18, all typed
+# `-> dict`), but NOTHING enforced it, so "they all comply" was an assumption rather than a
+# measurement. This makes it a number.
+#
+# ★ Violations are counted and warned, never rejected. By the time the return is inspected the
+# handler has already run and its effect is real — failing the call there would discard a real
+# effect, which is strictly worse than passing an awkward value through. The syscall path made
+# the same call for the same reason (`SyscallDispatcher`: "a ledger failure must never turn
+# that into a caller-visible error"), and the two boundaries should not disagree.
+tool_return_contract_violations_total = Counter(
+    "aindy_tool_return_contract_violations_total",
+    "Tool returns that would not survive a process boundary, by reason: not_a_dict (the seam "
+    "and the effect ledger both assume a dict) or not_json_serializable (marshals nowhere). "
+    "A non-zero count is the list of tools that cannot be moved behind C2's boundary yet.",
+    ["reason", "declared_isolation"],
+    registry=REGISTRY,
+)
