@@ -138,7 +138,8 @@ boundary, a provider negotiation, or a consumer to justify it.
 |---|---|---|---|
 | **A** | ✅ **SHIPPED 2026-08-19** — the tool receives a `RevocableToolSession`, revoked in a `finally` when the call returns. Parameter name unchanged, so no tool signature moves | nothing | **no** — measured: 0 of 18 use it |
 | **B** | ✅ **SHIPPED 2026-08-19** — `register_tool(..., isolation=<assurance class>)` declares a minimum and is refused fail-closed when the host cannot meet it. **An assurance class, not a mechanism** (`in_process`/`subprocess` are indistinguishable as assurance), so it reuses `EXEC-ENV-BIND-1`'s vocabulary rather than growing a second one | `EXEC-ENV-BIND-1` ✅ | no — nothing declares one yet, and a satisfied declaration still runs in-process |
-| **C** | A per-invocation **tool worker**: serialize `(tool_name, args)` out of process, run it, return the result | the serialization boundary in §2 | yes — changes how every tool runs |
+| **C1** | ✅ **SHIPPED 2026-08-19** — measure whether each tool's return would survive a process boundary (`aindy_tool_return_contract_violations_total`). Measures, never rejects: the effect has already landed by then | nothing | no |
+| **C2** | A per-invocation **tool worker**: marshal `(tool_name, args)` out of process, run it, marshal the result back. **Opt-in per tool via the `isolation=` declaration from step B**, so undeclared tools keep running in-process and the subprocess round-trip is not imposed on everything | C1 reading zero for the tools being moved | yes — for declared tools only |
 | **D** | The policy→argv **transform** wrapping C's worker (`bwrap` / `sandbox-exec` / restricted token) | C | no further — C is the behaviour change |
 
 **A and B are worth doing on their own merits. C is the real cost and it should wait for a
@@ -148,7 +149,25 @@ consumer that needs it** — which is `SUBSTRATE-WITNESS-1`'s decision, not this
 
 ## 7. Recommendation
 
-**A and B are shipped. C is the open half, and it should be sequenced behind a named consumer — not because there is no traffic today, but because its SHAPE depends on what that consumer registers.**
+**A, B and C1 are shipped. C2 is the open half.**
+
+**★ CORRECTED 2026-08-19 (owner): "sequence C behind a named consumer" was the wrong frame, and
+this document argued it while containing the observation that refutes it.** §4 already says the
+exposure is *"the runtime cannot bound what a consumer registers"* — **a substrate obligation**,
+which is structural and not contingent on who shows up. A general execution substrate does not
+have one consumer whose shape settles the design; it has N, and waiting for "the" one is a
+category error.
+
+Testing the claim rather than restating it: **the boundary does not vary by consumer.** Every tool
+signature is `(args: dict, user_id: str, db) -> dict` — 21 typed that way, returning dict literals
+or syscall envelopes — and the variation that *does* exist between a shell-out, an `eval` and a
+plugin loader is **what the tool does inside**, which `ExecutionEnvironmentSpec`'s three axes
+already parameterise. The serialization boundary this document called "the real cost" turns out to
+exist already by convention; what was missing was any measurement of it, which is C1.
+
+**What remains for C2 is mechanical, and its cost is latency, not design.** A subprocess round-trip
+per tool call is real, which is the argument for it being **opt-in per tool via `isolation=`** —
+the declaration step B already ships. Tools that declare nothing keep running in-process.
 
 - **A** is a measured no-op that removes the single widest piece of ambient authority at the seam,
   and it is the only step whose value does not depend on anything else landing.

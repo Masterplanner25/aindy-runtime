@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from AINDY.core.execution_signal_helper import queue_system_event
 from AINDY.platform_layer.extension_boundary import sanitize_extension_context
@@ -152,6 +153,63 @@ def register_tool(
         return fn
 
     return wrapper
+
+
+def _check_tool_return(tool_name: str, entry: dict, result: Any) -> None:
+    """Record whether a tool's return would survive a process boundary (step C1).
+
+    ★ **This measures; it does not reject.** By the time the return is inspected the handler has
+    already run and its effect is real. Failing the call here would discard that effect, which is
+    strictly worse than passing an awkward value through — the same judgement
+    ``SyscallDispatcher`` made on the syscall path ("a ledger failure must never turn that into a
+    caller-visible error"), and the two boundaries must not disagree about it.
+
+    ★ **Why it exists at all: it is the gate on step C.** A tool cannot run behind a process
+    boundary unless its return marshals — you cannot hand a ``UUID``, a session, or a live object
+    across a pipe. All 18 tools that exist already return a dict, and every one is typed
+    ``-> dict``, but **nothing enforced it**, so "they all comply" was an assumption. This turns
+    it into ``aindy_tool_return_contract_violations_total``: a non-zero count is exactly the list
+    of tools that cannot be moved behind that boundary yet.
+
+    ★ A tool that DECLARED an isolation class is logged at ERROR rather than WARNING. It has
+    opted into a boundary its return cannot cross, so the mismatch is a defect in that tool
+    rather than an observation about an in-process one.
+    """
+    declared = entry.get("isolation")
+    reason = None
+
+    if not isinstance(result, dict):
+        reason = "not_a_dict"
+    else:
+        try:
+            json.dumps(result)
+        except (TypeError, ValueError):
+            reason = "not_json_serializable"
+
+    if reason is None:
+        return
+
+    try:
+        from AINDY.platform_layer.metrics import tool_return_contract_violations_total
+
+        tool_return_contract_violations_total.labels(
+            reason=reason, declared_isolation=str(declared or "none")
+        ).inc()
+    except Exception:  # pragma: no cover - observability must never affect the effect path
+        pass
+
+    log = logger.error if declared else logger.warning
+    log(
+        "[AgentTool] %s return violates the tool contract (%s, type=%s)%s. The call SUCCEEDED and "
+        "its effect stands; this is recorded because such a return cannot cross a process "
+        "boundary (TOOL-SEAM-ISOLATION-1 step C).",
+        tool_name,
+        reason,
+        type(result).__name__,
+        f" — and this tool declares isolation={declared!r}, so it cannot be confined until fixed"
+        if declared
+        else "",
+    )
 
 
 def _isolation_refusal(tool_name: str, entry: dict) -> Optional[dict]:
@@ -475,6 +533,7 @@ def execute_tool(
                 result = entry["fn"](args=args, user_id=user_id, db=_tool_db)
         finally:
             _tool_db.revoke()
+        _check_tool_return(tool_name, entry, result)
         if _idempotent:
             _finalize_tool_effect(db, _action_id, "success", result, tool_name)
         return {"success": True, "result": result, "error": None}
