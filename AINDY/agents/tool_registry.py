@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import os
+import sys
 from typing import Any, Callable, Optional
 
 from AINDY.core.execution_signal_helper import queue_system_event
@@ -153,6 +154,99 @@ def register_tool(
         return fn
 
     return wrapper
+
+
+def _tool_isolation_enforced() -> bool:
+    """Whether a declared tool actually runs out of process (step C2). Default ON.
+
+    ``AINDY_TOOL_ISOLATION=0`` reverts to declare-and-refuse only (step B): the declaration is
+    still validated and still refused when the host cannot meet it, but a satisfied declaration
+    runs in-process as it did before C2.
+
+    ★ The off switch exists because C2 costs a subprocess round-trip per call. It does NOT make
+    the boundary optional per-call — a deployment either enforces declarations or it does not,
+    and which one it chose is visible in one place rather than inferred from behaviour.
+    """
+    return os.getenv("AINDY_TOOL_ISOLATION", "").strip().lower() not in {"0", "false", "no", "off"}
+
+
+_TOOL_WORKER_TIMEOUT_S = 120.0
+
+
+def _run_tool_out_of_process(tool_name: str, args: dict, user_id: str) -> dict:
+    """Execute a tool in a one-shot worker subprocess (step C2). Returns an execute_tool envelope.
+
+    ★ **This NEVER falls back to in-process, and that is the single most important line here.**
+    The Nodus adapter deliberately does fall back — a warm-pool failure spills to a fresh
+    subprocess — because there both paths provide the *same* guarantee and the fallback is
+    strictly better than failing. Here they do not: falling back would run a tool that asked to
+    be confined **unconfined**, which is exactly the "gated path that does not actually confine"
+    failure this entry exists to prevent. A worker that crashes, times out, or cannot be spawned
+    means the tool does not run.
+
+    ★ Authority is evaluated by the caller before this is reached; the worker only executes.
+    Re-checking inside would put the decision in the process the boundary distrusts, and calling
+    ``execute_tool`` there would recurse.
+    """
+    import subprocess
+
+    payload = json.dumps({"tool_name": tool_name, "args": args or {}, "user_id": user_id})
+    cmd = [sys.executable, "-m", "AINDY.agents.tool_worker"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=payload,
+            capture_output=True,
+            text=True,
+            timeout=_TOOL_WORKER_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("[AgentTool] %s worker exceeded %ss", tool_name, _TOOL_WORKER_TIMEOUT_S)
+        return {
+            "success": False,
+            "result": None,
+            "error": (
+                f"tool {tool_name!r} exceeded its {_TOOL_WORKER_TIMEOUT_S}s isolated-execution "
+                f"budget. It was NOT retried in-process — it declared isolation."
+            ),
+        }
+    except Exception as exc:  # noqa: BLE001 — spawn failure is a refusal, not a fallback
+        logger.error("[AgentTool] %s worker could not be started: %s", tool_name, exc)
+        return {
+            "success": False,
+            "result": None,
+            "error": (
+                f"tool {tool_name!r} declares isolation and its worker could not be started "
+                f"({type(exc).__name__}: {exc}). Running it in-process would defeat the "
+                f"declaration, so it was refused."
+            ),
+        }
+
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        logger.error(
+            "[AgentTool] %s worker exited %s; stderr=%s",
+            tool_name,
+            proc.returncode,
+            (proc.stderr or "")[-400:],
+        )
+        return {
+            "success": False,
+            "result": None,
+            "error": f"tool {tool_name!r} isolated worker failed (exit {proc.returncode})",
+        }
+
+    try:
+        response = json.loads(proc.stdout)
+    except (TypeError, ValueError) as exc:
+        return {
+            "success": False,
+            "result": None,
+            "error": f"tool {tool_name!r} worker returned an unreadable response: {exc}",
+        }
+
+    if not response.get("ok"):
+        return {"success": False, "result": None, "error": str(response.get("error") or "failed")}
+    return {"success": True, "result": response.get("result"), "error": None}
 
 
 def _check_tool_return(tool_name: str, entry: dict, result: Any) -> None:
@@ -518,6 +612,9 @@ def execute_tool(
         #
         # ★ This narrows ONE ARGUMENT. It does not bound the process: a tool can still import
         # os, spawn a thread, or open a socket. Do not read this as the entry being closed.
+        # TOOL-SEAM-ISOLATION-1 step C2 — a tool that declared isolation runs OUT OF PROCESS.
+        # Placed after the refusal below? No: refusal must come first, because a tool whose class
+        # the host cannot meet must not be spawned at all. See the ordering immediately below.
         # TOOL-SEAM-ISOLATION-1 step B — refuse before doing anything, if the tool declared an
         # isolation class this host cannot provide. Placed here, after the authority checks and
         # before the handle is minted, so a refused tool touches nothing at all.
@@ -526,6 +623,23 @@ def execute_tool(
             if _idempotent:
                 _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
             return _refusal
+
+        # ★ After the refusal, before the in-process handle: a declared tool never reaches the
+        # in-process path at all. The result still goes through the effect ledger and the return
+        # contract check below, so a confined tool is accounted for exactly like a local one.
+        if entry.get("isolation") and _tool_isolation_enforced():
+            _isolated = _run_tool_out_of_process(tool_name, args or {}, user_id)
+            if _idempotent:
+                _finalize_tool_effect(
+                    db,
+                    _action_id,
+                    "success" if _isolated.get("success") else "failed",
+                    _isolated.get("result"),
+                    tool_name,
+                )
+            if _isolated.get("success"):
+                _check_tool_return(tool_name, entry, _isolated.get("result"))
+            return _isolated
 
         _tool_db = RevocableToolSession(db, tool_name=tool_name)
         try:

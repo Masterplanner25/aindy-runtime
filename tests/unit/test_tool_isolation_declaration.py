@@ -56,7 +56,16 @@ def _register(isolation=None):
 
 
 @pytest.fixture(autouse=True)
-def _cleanup():
+def _declare_only(monkeypatch):
+    """★ This file is about DECLARATION and REFUSAL (step B), so it pins enforcement OFF.
+
+    Step C2 makes a *satisfied* declaration run out of process. Without this pin, three tests
+    here would silently become tests of the worker instead — and one of them
+    (`test_an_allowed_tool_still_runs_in_process`) was written when in-process was the only
+    outcome. Separating the two concerns keeps each failure legible: a refusal bug fails here, a
+    boundary bug fails in `test_tool_isolation_enforcement.py`.
+    """
+    monkeypatch.setenv("AINDY_TOOL_ISOLATION", "0")
     yield
     TOOL_REGISTRY.pop(_PROBE, None)
 
@@ -189,10 +198,18 @@ def test_a_host_resolution_failure_refuses_a_strict_declaration(monkeypatch):
 # ── The boundary of the claim ────────────────────────────────────────────────
 
 
-def test_an_allowed_tool_still_runs_in_process(monkeypatch):
-    """★ THE thing most likely to be misread. A satisfied declaration means the host meets the
-    class — NOT that this tool was confined. It still executes in the runtime process with
-    ambient authority; step C is the process boundary and is not built."""
+def test_with_enforcement_off_an_allowed_tool_runs_in_process(monkeypatch):
+    """★ Rewritten when step C2 landed, which is what its previous version asked for.
+
+    It used to be called `test_an_allowed_tool_still_runs_in_process` and said "step C is the
+    process boundary and is not built" — with a note that if the same-pid assertion ever became
+    false, step C had landed and the test should be **rewritten rather than deleted**. C2 landed
+    and it went red on the first run, exactly as intended.
+
+    What it pins now is narrower and still worth having: with enforcement OFF
+    (`AINDY_TOOL_ISOLATION=0`), a declaration is validated and refused but never applied, so the
+    tool runs in-process. That is the step-B behaviour, and it must stay reachable for anyone who
+    does not want a subprocess per call."""
     _host(monkeypatch, ASSURANCE_STRONG)
     seen: dict = {}
 

@@ -139,7 +139,7 @@ boundary, a provider negotiation, or a consumer to justify it.
 | **A** | ✅ **SHIPPED 2026-08-19** — the tool receives a `RevocableToolSession`, revoked in a `finally` when the call returns. Parameter name unchanged, so no tool signature moves | nothing | **no** — measured: 0 of 18 use it |
 | **B** | ✅ **SHIPPED 2026-08-19** — `register_tool(..., isolation=<assurance class>)` declares a minimum and is refused fail-closed when the host cannot meet it. **An assurance class, not a mechanism** (`in_process`/`subprocess` are indistinguishable as assurance), so it reuses `EXEC-ENV-BIND-1`'s vocabulary rather than growing a second one | `EXEC-ENV-BIND-1` ✅ | no — nothing declares one yet, and a satisfied declaration still runs in-process |
 | **C1** | ✅ **SHIPPED 2026-08-19** — measure whether each tool's return would survive a process boundary (`aindy_tool_return_contract_violations_total`). Measures, never rejects: the effect has already landed by then | nothing | no |
-| **C2** | A per-invocation **tool worker**: marshal `(tool_name, args)` out of process, run it, marshal the result back. **Opt-in per tool via the `isolation=` declaration from step B**, so undeclared tools keep running in-process and the subprocess round-trip is not imposed on everything | C1 reading zero for the tools being moved | yes — for declared tools only |
+| **C2** | ✅ **SHIPPED 2026-08-19** — `AINDY/agents/tool_worker.py`, a one-shot subprocess. Opt-in per tool via `isolation=`; **no fallback** — a worker that crashes, times out or cannot start means the tool does not run, because falling back would execute a tool that asked to be confined unconfined | C1's counter | yes — for declared tools only |
 | **D** | The policy→argv **transform** wrapping C's worker (`bwrap` / `sandbox-exec` / restricted token) | C | no further — C is the behaviour change |
 
 **A and B are worth doing on their own merits. C is the real cost and it should wait for a
@@ -149,7 +149,7 @@ consumer that needs it** — which is `SUBSTRATE-WITNESS-1`'s decision, not this
 
 ## 7. Recommendation
 
-**A, B and C1 are shipped. C2 is the open half.**
+**A, B, C1 and C2 are all shipped.** The entry's invariant — *a tool's effective authority is bounded by its declared isolation class, not by the runtime process's ambient authority* — now holds **for tools that declare one**. Undeclared tools are unchanged, which is the remaining honest gap and a deliberate one: the round-trip is real latency.
 
 **★ CORRECTED 2026-08-19 (owner): "sequence C behind a named consumer" was the wrong frame, and
 this document argued it while containing the observation that refutes it.** §4 already says the
