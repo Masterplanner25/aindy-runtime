@@ -162,7 +162,15 @@ def test_backpressure_is_poolbusy_not_a_failed_execution(monkeypatch):
     monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "1")
     monkeypatch.setenv("AINDY_NODUS_WARM_POOL_SIZE", "1")
     monkeypatch.setenv("AINDY_NODUS_WARM_PREWARM", "0")
-    monkeypatch.setenv("AINDY_NODUS_WARM_ACQUIRE_TIMEOUT_MS", "200")  # give up fast
+    # ★ ZERO, not "small". At 200ms this assertion was TIMING-DEPENDENT: it passed locally 3/3
+    # and failed in CI, where the runner was fast enough that every caller finished inside the
+    # window and backpressure never fired. A soak that asserts a race outcome by racing is the
+    # exact failure mode this suite exists to avoid, and CI caught me doing it.
+    #
+    # With 0, `remaining <= 0` short-circuits before any wait: a caller that finds the pool
+    # saturated raises immediately. The barrier releases all four at once against a pool of one,
+    # so exactly one wins and the rest raise — deterministic, not probable.
+    monkeypatch.setenv("AINDY_NODUS_WARM_ACQUIRE_TIMEOUT_MS", "0")
     pool_mod.reset_pool()
     pool = pool_mod.get_pool()
     try:
@@ -172,7 +180,14 @@ def test_backpressure_is_poolbusy_not_a_failed_execution(monkeypatch):
     finally:
         pool_mod.reset_pool()
 
-    assert outcome.failures, "a pool of 1 under 4 concurrent callers must exert backpressure"
+    assert outcome.failures, (
+        "a pool of 1 under 4 simultaneous callers with a zero acquire timeout must exert "
+        "backpressure; no caller was refused, so the saturation path did not run"
+    )
+    assert len(outcome.failures) == 3, (
+        f"exactly one caller should win the single worker and three should be refused; got "
+        f"{len(outcome.results)} served and {len(outcome.failures)} refused"
+    )
     assert all(isinstance(e, pool_mod.PoolBusy) for e in outcome.failures), (
         f"backpressure must be PoolBusy so the adapter can recognise it and spill; got "
         f"{[type(e).__name__ for e in outcome.failures]}"

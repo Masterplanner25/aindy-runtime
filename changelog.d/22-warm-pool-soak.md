@@ -36,6 +36,19 @@ were defective mutations**, not weak tests: one edited `prewarm()`, which the fi
 and one added an unused class while `PoolBusy` was still raised. A mutation that does not change
 behaviour proves nothing.
 
+#### ★ CI caught the soak doing the thing this suite exists to prevent
+
+The backpressure assertion originally used a 200 ms acquire timeout and asserted that some caller
+was refused. It passed locally 3/3 and **failed in CI**, where the runner was fast enough that
+every caller finished inside the window and backpressure never fired.
+
+**A soak that asserts a race outcome by racing is timing-dependent evidence** — which is the exact
+failure mode the harness was built to avoid, and the reason its own concurrency assertion was
+rewritten twice. Fixed by setting the acquire timeout to **zero**, so `remaining <= 0`
+short-circuits before any wait: the barrier releases four callers at once against a pool of one,
+exactly one wins, three are refused. Deterministic rather than probable, and the assertion now
+pins the exact split.
+
 #### ★ It also found a trap in the soak harness itself
 
 `drive_concurrently` returned results in **completion order**, so a per-caller positional
