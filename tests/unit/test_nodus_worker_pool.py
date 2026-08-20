@@ -373,11 +373,21 @@ def test_run_one_warmup_loads_stack_without_running_a_script(monkeypatch):
 
 # ── env knobs ────────────────────────────────────────────────────────────────
 
-def test_warm_pool_enabled_flag(monkeypatch):
+def test_warm_pool_is_enabled_by_default(monkeypatch):
+    """★ The default flipped ON 2026-08-19 after the contention soak. This assertion used to
+    read `is False`, which is the correct way for a default change to announce itself."""
     monkeypatch.delenv("AINDY_NODUS_WARM_POOL", raising=False)
-    assert warm_pool_enabled() is False
+    assert warm_pool_enabled() is True
     monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "true")
     assert warm_pool_enabled() is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE", "Off"])
+def test_the_fresh_subprocess_path_stays_reachable(monkeypatch, value):
+    """A default that cannot be turned off is a different problem. Every spelling an operator
+    is likely to reach for must restore the fresh-subprocess path."""
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", value)
+    assert warm_pool_enabled() is False
 
 
 def test_max_requests_default_and_env(monkeypatch):

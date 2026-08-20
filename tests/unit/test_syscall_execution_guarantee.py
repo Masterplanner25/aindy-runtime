@@ -19,7 +19,8 @@ Three things are pinned here.
    someone flips it. The tool path (MEB-0) already degraded gracefully; its syscall twin did
    not.
 
-These declarations are **inert** unless `AINDY_SYSCALL_IDEMPOTENCY` is on or the run is a
+★ **`AINDY_SYSCALL_IDEMPOTENCY` defaults ON since 2026-08-19** (`=0` disables). These
+declarations were inert before that; they now fire by default. They also fire when the run is a
 durable continuation, so this suite asserts declarations and degradation, not dedup behaviour.
 End-to-end dedup needs a real Postgres effect ledger and belongs in the integration suite.
 """
@@ -296,3 +297,25 @@ def test_non_serializable_result_degrades_instead_of_failing_the_call(_engaged_g
     assert _engaged_gate["seen"]["cached"] is None, (
         "the unsafe result must be cached as nothing, not passed through to JSONB"
     )
+
+
+# ── The default itself ───────────────────────────────────────────────────────
+
+
+def test_the_gate_is_enabled_by_default(monkeypatch):
+    """★ The flip. Every other test here sets the flag explicitly, so none would notice the
+    default moving back."""
+    from AINDY.kernel.syscall_dispatcher import _syscall_idempotency_enabled
+
+    monkeypatch.delenv("AINDY_SYSCALL_IDEMPOTENCY", raising=False)
+    assert _syscall_idempotency_enabled() is True
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE", "Off"])
+def test_the_gate_can_be_turned_off_by_an_operator(monkeypatch, value):
+    """A default that cannot be disabled is a different problem — and this one changes effect
+    semantics, so the escape hatch has to work for every spelling someone reaches for."""
+    from AINDY.kernel.syscall_dispatcher import _syscall_idempotency_enabled
+
+    monkeypatch.setenv("AINDY_SYSCALL_IDEMPOTENCY", value)
+    assert _syscall_idempotency_enabled() is False
