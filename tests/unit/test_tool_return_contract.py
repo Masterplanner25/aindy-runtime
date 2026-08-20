@@ -34,7 +34,11 @@ _METRIC = "aindy_tool_return_contract_violations_total"
 
 
 @pytest.fixture(autouse=True)
-def _cleanup():
+def _in_process(monkeypatch):
+    """Pins enforcement off: this file measures the IN-PROCESS return contract. A declared tool
+    under C2 runs in a worker, where a non-marshalling return fails outright rather than being
+    counted — a different behaviour, tested in `test_tool_isolation_enforcement.py`."""
+    monkeypatch.setenv("AINDY_TOOL_ISOLATION", "0")
     yield
     TOOL_REGISTRY.pop(_PROBE, None)
 
