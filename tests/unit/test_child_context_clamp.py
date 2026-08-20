@@ -4,17 +4,26 @@
 parent does not hold is escalation, not delegation. `mint_token` already enforces exactly this
 for delegated runs via `capability_ceiling`; this path was left conventional.
 
-**Why the clamp is opt-in rather than simply applied.** It is not the two-line change it looks
-like. `aindy-apps-monolith`'s `_dispatch_owner_syscall` builds a child granting the *nested*
-syscall's capability, while `_resolve_dispatch_capabilities` grants the parent **exactly the
-outer syscall's own capability** — so clamping intersects to the empty set and denies a call
-that works today. `test_the_app_pattern_is_what_makes_this_opt_in` encodes that reasoning as an
-executable fact rather than a comment, so a future reader cannot flip the default on the
-assumption that it is free.
+**★ The clamp is ON by default since 2026-08-19.** `AINDY_CHILD_CONTEXT_CLAMP=0` restores the
+permissive behaviour, in which a widening request is granted and only logged.
 
-With the flag off the only change is a WARNING. That is deliberate: the real exposure has never
-been measured, and this repo's own history says a boundary should be tightened on a count, not
-on an argument.
+**Why it was opt-in, and why that reasoning was right about the mechanic and wrong about the
+consequence.** `aindy-apps-monolith`'s `_dispatch_owner_syscall` builds a child granting the
+*nested* syscall's capability, while `_resolve_dispatch_capabilities` grants the parent
+**exactly the outer syscall's own capability** — so clamping intersects to the empty set. That
+is true, and `test_the_app_pattern_is_what_makes_this_opt_in` still pins it.
+
+What was never measured was what the empty set *costs*. Measured 2026-08-19:
+
+* **18 of the 19 functions that widen are never registered** — unreachable, so a clamp cannot
+  break them.
+* **The one live caller degrades gracefully.** `_handle_agent_suggest_tools` widens for an
+  optional cached-suggestions lookup, inside `try/except`, with a full KPI-based fallback
+  beneath it. Denied, it warns and recomputes.
+
+So "denies a call that works today" described one optional optimisation with a fallback, not a
+working feature. The repo's own rule — tighten a boundary on a count, not an argument — is what
+moved the default, and the count is **1 degradation, 0 outages**.
 """
 from __future__ import annotations
 
@@ -49,6 +58,15 @@ def _clamp_on(monkeypatch):
 
 @pytest.fixture
 def _clamp_off(monkeypatch):
+    # ★ Explicitly "0", not delenv. The default flipped ON 2026-08-19, so an unset variable now
+    # means CLAMPED — and these two tests silently became tests of the clamp rather than of the
+    # permissive path. Both went red on the flip, which is the fixture doing its job.
+    monkeypatch.setenv("AINDY_CHILD_CONTEXT_CLAMP", "0")
+
+
+@pytest.fixture
+def _clamp_unset(monkeypatch):
+    """No value at all — asserts what an operator who configures nothing actually gets."""
     monkeypatch.delenv("AINDY_CHILD_CONTEXT_CLAMP", raising=False)
 
 
@@ -158,6 +176,61 @@ def test_no_warning_when_nothing_is_widened(_clamp_off, caplog):
 # --------------------------------------------------------------------------------------
 
 
+def test_an_operator_who_configures_nothing_gets_the_clamp(_clamp_unset):
+    """★ The default itself. Every other test in this file sets the flag explicitly, so none of
+    them would notice the default moving back."""
+    from AINDY.kernel.syscall_dispatcher import _child_context_clamp_enabled
+
+    assert _child_context_clamp_enabled() is True
+    parent = _ctx(["task.write"])
+    assert _child(parent, capabilities=["admin.everything"]).capabilities == []
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE", "Off"])
+def test_the_permissive_behaviour_is_reachable_by_an_operator(monkeypatch, value):
+    """A security default that cannot be turned off is a different kind of problem. Every
+    spelling an operator is likely to reach for must work, or they will conclude the flag is
+    broken and patch the source instead."""
+    from AINDY.kernel.syscall_dispatcher import _child_context_clamp_enabled
+
+    monkeypatch.setenv("AINDY_CHILD_CONTEXT_CLAMP", value)
+    assert _child_context_clamp_enabled() is False
+
+
+def test_a_clamped_child_fails_the_dispatch_gracefully_rather_than_raising():
+    """★ THE EVIDENCE THAT MOVED THE DEFAULT, and the thing the original reasoning never checked.
+
+    "Clamping denies a call that works today" is true of the mechanic. What it costs depends
+    entirely on how the caller handles a denial — and the app's `_dispatch_owner_syscall` reads
+    the returned envelope and raises `ValueError`, inside a `try/except` that logs a warning and
+    falls through to a full recomputation.
+
+    That chain only degrades gracefully if the dispatcher **returns an error envelope** rather
+    than raising something the app's handler cannot catch. This pins that, because it is the
+    difference between a lost optimisation and an outage.
+    """
+    from AINDY.kernel import syscall_registry as R
+    from AINDY.kernel.syscall_dispatcher import SyscallDispatcher
+
+    name = "sys.v1.test.clamp_probe"
+    R.SYSCALL_REGISTRY[name] = R.SyscallEntry(
+        handler=lambda payload, ctx: {"ok": True}, capability="analytics.read"
+    )
+    try:
+        dispatcher = SyscallDispatcher()
+        dispatcher._emit_syscall_event = lambda *a, **kw: None
+        starved = R.SyscallContext(
+            execution_unit_id="eu-1", user_id="u1", capabilities=[], trace_id="t"
+        )
+        result = dispatcher.dispatch(name, {}, starved)
+    finally:
+        R.SYSCALL_REGISTRY.pop(name, None)
+
+    assert isinstance(result, dict), "a denial must be an envelope, not an exception"
+    assert result.get("status") != "success"
+    assert result.get("error"), "the envelope must say why, or the caller cannot log it usefully"
+
+
 def test_the_app_pattern_is_what_makes_this_opt_in(_clamp_on):
     """Reproduces `aindy-apps-monolith`'s `_dispatch_owner_syscall` shape exactly.
 
@@ -167,8 +240,12 @@ def test_the_app_pattern_is_what_makes_this_opt_in(_clamp_on):
     capability".
 
     So the clamp reduces that child to an empty grant and the nested dispatch is denied.
-    **This is why the flag defaults off**, and this test exists so that fact is discovered by
-    a failing assertion rather than by an app-side outage.
+
+    ★ **The mechanic below is unchanged and still pinned; the conclusion drawn from it was
+    wrong.** This test used to end "this is why the flag defaults off." Measuring the cost
+    (2026-08-19) found 18 of 19 widening callers unregistered and the one live caller degrading
+    into an existing fallback, so the default moved ON. Keep this assertion — it is the fact.
+    Do not re-attach the inference to it.
     """
     parent = _ctx(["task.write"])          # outer syscall's capability, least-privilege
     child = _child(parent, capabilities=["memory.write"])  # nested syscall's capability

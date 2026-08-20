@@ -6820,6 +6820,50 @@ precedent for closing this class of gap already exists in the same file.
 
 ---
 
+## AUTHORITY-VALUE-1 — CLOSED 2026-08-19, clamp on by default
+
+**The flip, and why the blocker turned out not to exist.**
+
+`AINDY_CHILD_CONTEXT_CLAMP` now defaults **on**: a child context narrows the parent's capability
+grant and never widens it. `AINDY_CHILD_CONTEXT_CLAMP=0` restores the permissive behaviour.
+
+The flag shipped opt-in because of a single, well-recorded claim: clamping intersects
+`aindy-apps-monolith`'s `_dispatch_owner_syscall` pattern to the **empty set** and therefore
+"denies a call that works today." The mechanic is real — `test_the_app_pattern_is_what_makes_this_opt_in`
+encoded it as an executable fact, which was exactly the right instinct.
+
+**What was never measured was what the empty set costs.** Measured 2026-08-19 against the
+monolith at `feat/adopt-runtime-2.4.1`:
+
+| | |
+|---|---|
+| Functions calling `_dispatch_owner_syscall` | **19** |
+| Of those, **registered** (reachable by the dispatcher) | **1** |
+| Unregistered — dead code a clamp cannot break | **18** |
+
+The one live caller is `_handle_agent_suggest_tools` (`sys.v1.agent.suggest_tools`). It widens to
+`analytics.read` for an **optional** persisted-suggestions lookup, and the whole nested dispatch
+sits inside `try/except Exception` with a `logger.warning` and a **full KPI-based fallback**
+beneath it. Denied, it warns and recomputes.
+
+**So "denies a call that works today" described one optional optimisation with a fallback, not a
+working feature.** Count: **1 degradation, 0 outages.** The repo's own rule — tighten a boundary
+on a count, not an argument — is what moved the default, and it moved it in the direction the
+count supports.
+
+**★ The transferable lesson is about the shape of the error, not the flag.** An executable fact
+(the intersection is empty) had an inference layered on it (therefore an outage), and the
+inference was never re-measured for three months while the fact was cited as though it carried
+the conclusion. The test now keeps the fact and explicitly refuses the inference.
+
+**Evidence added rather than argued:** `tests/unit/test_child_context_clamp.py` gains a test that
+an operator configuring nothing gets the clamp, a parametrised test that every plausible spelling
+of "off" reaches the permissive path, and — the one the original reasoning never checked — that a
+starved context makes `dispatch` return an **error envelope** rather than raising, which is the
+whole reason the app's `try/except` degrades instead of failing.
+
+**Original entry follows.**
+
 ## AUTHORITY-VALUE-1 — the syscall capability check reads a value the calling frame supplied
 
 **★ PARTIAL — `child_context` clamp shipped opt-in 2026-08-16 (#448), and the estimate that
