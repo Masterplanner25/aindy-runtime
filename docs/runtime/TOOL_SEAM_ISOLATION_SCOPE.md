@@ -137,7 +137,7 @@ boundary, a provider negotiation, or a consumer to justify it.
 | # | Step | Depends on | Breaks today? |
 |---|---|---|---|
 | **A** | ✅ **SHIPPED 2026-08-19** — the tool receives a `RevocableToolSession`, revoked in a `finally` when the call returns. Parameter name unchanged, so no tool signature moves | nothing | **no** — measured: 0 of 18 use it |
-| **B** | `register_tool(..., isolation=…)` as a **declaration only** — recorded on the `ExecutionUnit`'s `env_spec`, refused when the host cannot satisfy it, applied by nobody | `EXEC-ENV-BIND-1` ✅ shipped | no — declaration is inert |
+| **B** | ✅ **SHIPPED 2026-08-19** — `register_tool(..., isolation=<assurance class>)` declares a minimum and is refused fail-closed when the host cannot meet it. **An assurance class, not a mechanism** (`in_process`/`subprocess` are indistinguishable as assurance), so it reuses `EXEC-ENV-BIND-1`'s vocabulary rather than growing a second one | `EXEC-ENV-BIND-1` ✅ | no — nothing declares one yet, and a satisfied declaration still runs in-process |
 | **C** | A per-invocation **tool worker**: serialize `(tool_name, args)` out of process, run it, return the result | the serialization boundary in §2 | yes — changes how every tool runs |
 | **D** | The policy→argv **transform** wrapping C's worker (`bwrap` / `sandbox-exec` / restricted token) | C | no further — C is the behaviour change |
 
@@ -148,7 +148,7 @@ consumer that needs it** — which is `SUBSTRATE-WITNESS-1`'s decision, not this
 
 ## 7. Recommendation
 
-**A is shipped. Declare B next. Sequence C behind a named consumer.**
+**A and B are shipped. C is the open half, and it should be sequenced behind a named consumer — not because there is no traffic today, but because its SHAPE depends on what that consumer registers.**
 
 - **A** is a measured no-op that removes the single widest piece of ambient authority at the seam,
   and it is the only step whose value does not depend on anything else landing.
