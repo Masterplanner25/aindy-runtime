@@ -167,13 +167,35 @@ def _syscall_idempotency_enabled() -> bool:
 
 
 def _child_context_clamp_enabled() -> bool:
-    """AUTHORITY-VALUE-1 gate. When off (default), ``child_context`` may still widen.
+    """AUTHORITY-VALUE-1 gate. **Default ON since 2026-08-19** — a child narrows, never widens.
 
-    Resolved per call rather than cached at import — the standing rule, learned from FR-10
-    and the ``AINDY_REDIS_URL`` alias: an import-time env read is invisible to behavioural
-    tests, so the flag could not be exercised without a module reload.
+    Set ``AINDY_CHILD_CONTEXT_CLAMP=0`` to restore the old permissive behaviour, in which a
+    widening request is granted and only logged.
+
+    ★ **Why the default moved, and why the old reasoning was wrong in its conclusion rather
+    than its facts.** The flag shipped opt-in because clamping intersects the app's
+    ``_dispatch_owner_syscall`` pattern to the EMPTY set — that mechanic is real and is still
+    pinned by test. What was never measured was the *consequence*, and measuring it (2026-08-19,
+    against ``aindy-apps-monolith``) changed the answer:
+
+    * **18 of the 19 functions that widen are never registered.** They are unreachable — the
+      dispatcher cannot call them, so a clamp cannot break them.
+    * **The one live caller degrades gracefully.** ``_handle_agent_suggest_tools`` widens to
+      ``analytics.read`` for an optional cached-suggestions lookup, wrapped in ``try/except``
+      with a full KPI-based fallback beneath it. Denied, it logs a warning and recomputes.
+
+    So "clamping denies a call that works today" was true of one optional optimisation with a
+    fallback, not of a working feature. A boundary should be tightened on a count, and the
+    count is 1 degradation and 0 outages.
+
+    Resolved per call rather than cached at import — the standing rule, learned from FR-10 and
+    the ``AINDY_REDIS_URL`` alias: an import-time env read is invisible to behavioural tests, so
+    the flag could not be exercised without a module reload.
     """
-    return os.getenv("AINDY_CHILD_CONTEXT_CLAMP", "").strip().lower() in {"1", "true", "yes"}
+    raw = os.getenv("AINDY_CHILD_CONTEXT_CLAMP", "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return True
 
 
 # Lazy import of ResourceManager to avoid circular imports at module load.
@@ -931,7 +953,11 @@ def child_context(
     intersection of the parent's grant and its own registered capabilities"*); this path was
     left conventional and inherits or widens whatever it is handed.
 
-    The clamp is **opt-in via ``AINDY_CHILD_CONTEXT_CLAMP``, default off**, because it is not
+    The clamp is **ON by default since 2026-08-19** (``AINDY_CHILD_CONTEXT_CLAMP=0`` restores
+    the permissive behaviour). It shipped opt-in because it looked like it would deny a working
+    app call; measuring that claim showed 18 of 19 widening callers unregistered and the one
+    live caller degrading into an existing fallback. The paragraph below records the original
+    reasoning, which was right about the mechanic and wrong about the consequence — it is not
     the two-line change it looks like. `aindy-apps-monolith`'s ``_dispatch_owner_syscall``
     builds a child granting the *nested* syscall's capability, while
     ``_resolve_dispatch_capabilities`` grants the parent **exactly the outer syscall's own
