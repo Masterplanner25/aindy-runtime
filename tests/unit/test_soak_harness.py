@@ -124,6 +124,38 @@ def test_assert_all_succeeded_reports_the_first_failure():
         outcome.assert_all_succeeded()
 
 
+def test_results_come_back_in_worker_index_order(monkeypatch):
+    """★ Found by using the harness, and it had already caused a false accusation.
+
+    A soak paired ``results[i]`` with caller ``i``. The driver appended in COMPLETION order, so
+    the pairing was wrong and the test failed deterministically 3/3 — reading exactly like a
+    cross-request state bleed in the component under test rather than a defect in the harness.
+
+    An unordered result list is a trap in a concurrency harness specifically: the natural way to
+    write a per-caller assertion is positional, and the failure it produces accuses the product.
+    """
+    import time
+
+    # Deliberately invert completion order: worker 0 finishes last.
+    def _work(i: int) -> int:
+        time.sleep((5 - i) * 0.02)
+        return i
+
+    outcome = drive_concurrently(_work, workers=5)
+    assert outcome.assert_all_succeeded() == [0, 1, 2, 3, 4], (
+        "results are not in worker-index order — a positional per-caller assertion would pair "
+        "the wrong result with the wrong caller"
+    )
+
+
+def test_partial_failure_still_reports_only_successes():
+    """The documented caveat: with failures present, `results` holds only the successful ones,
+    so positional pairing is valid only after assert_all_succeeded()."""
+    outcome = drive_concurrently(lambda i: 1 / 0 if i == 1 else i, workers=4)
+    assert outcome.results == [0, 2, 3]
+    assert len(outcome.failures) == 1
+
+
 def test_partial_failure_keeps_both_halves():
     outcome = drive_concurrently(lambda i: 1 / 0 if i % 2 else i, workers=4)
     assert len(outcome.results) == 2
