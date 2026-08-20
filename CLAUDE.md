@@ -994,7 +994,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Runtime → SDK contract | `docs/runtime/SDK_CONTRACT.md` |
 | Runtime → UI contract | `docs/runtime/UI_CONTRACT.md` |
 | **Nodus-side A2A/MCP packaging handoff (name collision + caps) — all fixes are Nodus's, none are ours** | `docs/runtime/NODUS_HANDOFF_a2a_mcp_packaging.md` |
-| Latest app-team handoff | `docs/runtime/APP_HANDOFF_v2.4.1.md` — short; a patch release. **`APP_HANDOFF_v2.4.0.md` is the one to read for behavioural change** (§1 scope enforcement, §7 the soak-flag inventory), and 2.4.1 adds no step to it |
+| Latest app-team handoff | `docs/runtime/APP_HANDOFF_v2.5.0.md` — **§1 is a required schema step (`bootstrap-schema --reconcile`), §2 is three default flips.** Not a `pip install` upgrade |
 | Release verification checklist | `docs/runtime/RELEASE_CHECKLIST.md` |
 | Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
 | **Soak harness — concurrency + metric readback** | `tests/integration/soak_harness.py`; guarded by `tests/unit/test_soak_harness.py` |

@@ -2,6 +2,641 @@
 
 ## Unreleased
 
+## 2.5.0 — 2026-08-20
+
+**★ Read this before upgrading. Two things need an operator decision, not just a `pip install`.**
+
+**1. This release changes the runtime-owned schema.** `execution_units` gains three additive
+nullable columns (Alembic **`0017`**, schema contract **`2026-08-19`**). Per `FR-14`, a bare
+`aindy-runtime bootstrap-schema` now exits **3** — and under `set -e` with
+`restart: unless-stopped` that is a **crash loop, not a warning**. Existing deployments must run
+`bootstrap-schema --reconcile`, or branch on exit code 3. A fresh database needs nothing.
+
+**2. Three execution defaults moved from off to on.** Each has an off switch, and each is a
+behaviour change on upgrade:
+
+| Flag | Now | Off switch | What changes |
+|---|---|---|---|
+| `AINDY_CHILD_CONTEXT_CLAMP` | **on** | `=0` | a nested syscall context can no longer widen its capability grant |
+| `AINDY_SYSCALL_IDEMPOTENCY` | **on** | `=0` | 8 `EXACTLY_ONCE` syscalls dedup within a run |
+| `AINDY_NODUS_WARM_POOL` | **on** | `=0` | Nodus executions reuse warm workers instead of a fresh subprocess each time |
+
+Every widening has been logged at WARNING since 2026-08-16 — `grep` your logs for
+`child_context WIDENED authority` before upgrading to see whether the clamp will affect you.
+
+**What this release is.** Two isolation programs reached working state. `EXEC-ENV-BIND-1` gave an
+execution unit a way to *declare* the environment it needs and the Nodus guest a way to *ask* for
+one; `TOOL-SEAM-ISOLATION-1` closed all four of its steps, so a tool that declares an isolation
+class now runs **out of process**. Alongside them, the apparatus that had been missing all along:
+a concurrency + metric-readback harness, which is what finally let three long-deferred flags be
+flipped on evidence rather than argument.
+
+**No dependency pins moved this release.** No route began enforcing a new scope, so no caller
+loses access.
+
+### Changed — a nested syscall context can no longer widen its capability grant (AUTHORITY-VALUE-1)
+
+**Operators: this is a security default moving to ON.** `AINDY_CHILD_CONTEXT_CLAMP` now defaults
+**true**. `child_context()` narrows the parent's capability grant and never widens it; a widening
+request is dropped and logged at WARNING. Set `AINDY_CHILD_CONTEXT_CLAMP=0` to restore the
+previous behaviour, in which the widening was granted and only warned about.
+
+**What this changes for you.** If any of your syscall handlers dispatch a nested syscall using
+`child_context(context, capabilities=[...])` with a capability the *parent* context does not
+hold, that nested dispatch will now be denied — an error envelope, not an exception. Every such
+widening has been logged at WARNING since 2026-08-16, so `grep` your logs for
+`child_context WIDENED authority` to see whether you have any before upgrading.
+
+#### Why the default moved, and why the previous reasoning was wrong in its conclusion only
+
+The flag shipped opt-in on one claim: clamping intersects `aindy-apps-monolith`'s
+`_dispatch_owner_syscall` pattern to the **empty set**, and therefore "denies a call that works
+today." **The mechanic is real and is still pinned by test.** What was never measured is what the
+empty set costs.
+
+Measured against the monolith:
+
+| | |
+|---|---|
+| Functions that widen via `_dispatch_owner_syscall` | **19** |
+| Registered — reachable by the dispatcher | **1** |
+| Unregistered — dead code a clamp cannot break | **18** |
+
+The one live caller widens for an **optional** cached-suggestions lookup, wrapped in
+`try/except` with a full recomputation beneath it. Denied, it logs a warning and recomputes.
+
+**Count: 1 degradation, 0 outages.** This repository's own rule is to tighten a boundary on a
+count rather than an argument, and the count supports the flip.
+
+#### The transferable part
+
+An **executable fact** — the intersection is empty — had an **inference** layered on it — therefore
+an outage — and the inference was never re-measured for three months while the fact was cited as
+though it carried the conclusion. The test keeps the fact and now explicitly refuses the
+inference.
+
+Three tests added, including the one the original reasoning never checked: a starved context makes
+`dispatch` return an **error envelope** rather than raising, which is the entire reason a caller's
+`try/except` degrades instead of failing.
+
+### Added — `ExecutionEnvironmentSpec`: an execution unit can declare the environment it needs (EXEC-ENV-BIND-1, phase 1)
+
+**★ Operators: this release changes the runtime-owned schema, and that has a deployment
+consequence you must handle before upgrading.**
+
+`execution_units` gains three additive, nullable columns (`env_spec`, `env_applied`,
+`env_evidence_class`; Alembic **`0017`**, schema contract **`2026-08-19`**). Per `FR-14`, an
+additive runtime column makes a bare `aindy-runtime bootstrap-schema` exit **3**
+(additive-reconcile-required) — and under `set -e` with `restart: unless-stopped` that is a
+**crash loop**, not a warning.
+
+**Existing deployments must run `aindy-runtime bootstrap-schema --reconcile`, or branch on exit
+code 3.** A fresh database needs nothing; `create_all` produces the columns. This is the first
+release since the exit-code work landed where the condition actually fires, so it is also the
+first time `Upgrade Path Guard`'s main job is doing real work rather than passing trivially.
+
+#### What it is
+
+The runtime owned a provider abstraction — `SandboxRunner`, three implementations, a
+certification ladder — and no vocabulary in which an execution unit could *request* anything from
+it. `ExecutionUnit` stored `wall_time_ms` / `memory_bytes` / `syscall_count`, but those are
+**measured actuals**. Nothing recorded what an execution was supposed to be allowed to do, so
+*"was this the containment you asked for?"* had no answer for any individual run.
+
+`ExecutionEnvironmentSpec` (`AINDY/core/execution_environment.py`) is the request record. Three
+orthogonal axes rather than a trust level or a bag of booleans:
+
+| Axis | Fields |
+|---|---|
+| **visibility** — what it may see | `filesystem {mode, roots}`, `env {mode, allow}` |
+| **authority** — what it may do | `network {mode, egress_scope}`, `processes {subprocess}` |
+| **resources** — how much it may use | `wall_time_ms`, `memory_bytes`, `syscalls` |
+| | `min_assurance`: `insecure-dev` \| `container-grade-sandbox` \| `strong-sandbox-tier` |
+
+Pass `env_spec=` to `require_execution_unit`. The spec is clamped to the host floor, the host's
+assurance class is resolved, and the unit is **refused** if the host cannot meet the declared
+minimum — raising `ExecutionEnvironmentUnsatisfiable` *and* writing a terminal `refused`
+ExecutionUnit row.
+
+#### What it does NOT do
+
+**It confines nothing.** Phase 1 is declare / refuse / record; each seam applies its own
+environment in a later phase. **A populated `env_applied` is not evidence that an execution was
+confined — `env_evidence_class` is the field that says whether it was**, and on the default dev
+runner it reads `insecure-dev/no-isolation-guarantee`.
+
+Nothing changes for existing callers. `env_spec` defaults to `None`, every pre-existing row is
+`NULL`, and `NULL` is defined to behave exactly as before these columns existed.
+
+#### Two properties worth knowing
+
+- **A spec may only ever narrow.** The effective spec is the intersection of the declared spec
+  and a host floor; a caller may ask for *more* confinement and never for less, because a
+  caller-supplied value is attacker-influenced in exactly the way `AUTHORITY-VALUE-1` describes.
+  Every widening attempt is logged at WARNING so the exposure is countable. **Unlike that entry's
+  clamp this one is not behind a flag** — no caller supplies a spec today, so there is no
+  compatibility argument for shipping a security default off.
+- **Refusal deliberately breaks the non-fatal contract, and only here.**
+  `require_execution_unit` returns `None` on failure and its callers are documented not to block
+  on that, so `ExecutionEnvironmentError` gets an explicit re-raise guard placed *before* the
+  broad handler — the same shape `SyscallContractViolation` needed in `SyscallDispatcher`. A
+  refusal swallowed by a broad handler is worse than no refusal, because the row says `refused`
+  while the work ran.
+
+Design and phasing: `docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`. 32 tests across two
+suites, mutation-tested **7/7** including a liveness control that fires if refusal is disabled
+entirely.
+
+### Changed — two execution defaults are now ON: the idempotency gate and the warm Nodus worker pool
+
+**Operators: both change runtime behaviour on upgrade. Each has a documented off switch.**
+
+| Flag | Was | Now | Off switch |
+|---|---|---|---|
+| `AINDY_SYSCALL_IDEMPOTENCY` | off | **on** | `AINDY_SYSCALL_IDEMPOTENCY=0` |
+| `AINDY_NODUS_WARM_POOL` | off | **on** | `AINDY_NODUS_WARM_POOL=0` |
+
+Both accept `0`, `false`, `no`, `off` (case-insensitive), each pinned by a parametrised test —
+a security or execution default that cannot be turned off is a different kind of problem.
+
+---
+
+#### `AINDY_SYSCALL_IDEMPOTENCY` — what it does, and precisely what it does not guarantee
+
+The gate dedups an `EXACTLY_ONCE` syscall on `(action_type, input, scope)` where the scope is the
+**execution unit id**. So a retry *within one run* replays the cached result instead of
+re-executing, and **two legitimate calls in different runs are untouched.** That scoping is what
+makes this safe to default on.
+
+Eight syscalls declare `EXACTLY_ONCE` and are affected: `memory.write`, `memory.link`,
+`event.emit`, `flow.run`, `flow.execute_intent`, `nodus.execute`, `job.submit`, `agent.undo`.
+
+**★ It is NOT exactly-once under contention.** When the gate loses the insert race against a live
+pending row it degrades to `AT_LEAST_ONCE` for that call and logs a warning — strict at-most-once
+needs advisory locking. Measured: **8 concurrent identical calls ran the handler twice.** Watch
+`aindy_effect_gate_outcomes_total{outcome="degraded"}`; a deployment where that is a meaningful
+fraction of `reserved` has a weaker guarantee than the name suggests.
+
+**★ This does not close `IDEM-12`.** `undo_run_effects` selects effects by `status == "success"`
+and never consults `effect_reversals`, so a deliberate second `sys.v1.agent.undo` still
+re-invokes every compensator. The gate is defence-in-depth, not the fix — and making reversal
+correctness depend on an env var is the shape `IDEM-10` already paid for.
+
+#### `AINDY_NODUS_WARM_POOL` — soaked before flipping
+
+Reuses a bounded pool of warm worker subprocesses so plugin cold-start is paid once rather than
+per execution. **Any warm-path failure falls back to a fresh subprocess**, so enabling it cannot
+make execution worse than the path it replaces — asserted at the adapter, where that claim lives.
+
+**The prior evidence was not what it looked like.** CI had set this flag for months, but the
+integration suite is *sequential*: it showed the pool serves requests, not that it serves
+*concurrent* ones correctly. Every pool test ran against **fake** processes, and end-to-end was
+deferred to "app-side PG-tier integration" — a consumer that does not exercise it.
+
+`tests/unit/test_soak_warm_pool_contention.py` closes that with six concurrent callers against a
+pool of two **real** worker subprocesses, mutation-tested 4/4.
+
+#### ★ What flipping found
+
+**The warm path had never been asserted to carry DUR-2b's durable-effects signal.** That signal
+must survive the process boundary because a ContextVar cannot cross it — and the warm pool is now
+the *default* path. A warm path that dropped it would have silently disabled at-most-once for
+every continued run while every existing DUR-2b test stayed green. It does carry it; there is now
+a test saying so.
+
+**Eight existing tests asserted on the fresh-subprocess payload and went red on the flip,
+correctly** — with the warm pool on, `subprocess.run` is never called and their capture reads an
+empty dict. Each now pins `AINDY_NODUS_WARM_POOL=0` explicitly, because each is about that path
+specifically; the payload itself is built once and shared by both paths.
+
+That is the expected shape of a default flip: the tests that silently depended on the old default
+announce themselves. Worth noting **CI found them and repeated local sweeps did not** — the local
+runs kept stopping partway and never reached those files alphabetically, so "zero failures so far"
+was measuring how far the run got, not whether the suite passed.
+
+### Changed — the Nodus guest VM now asks for its environment instead of being hardcoded (EXEC-ENV-BIND-1 phase 2)
+
+Phase 1 gave an execution unit a way to *declare* an environment. Phase 2 is the first place a
+declared spec actually changes how something runs.
+
+**The residual this closes was a wrong comment, not a missing line.** `nodus_worker.py` said
+*"the VM already confines filesystem access: `allowed_paths` defaults to the cwd"*. True of
+nodus — and false here, because **nothing sets the worker's cwd**. Neither
+`nodus_worker_pool.WarmNodusWorker` nor `nodus_runtime_adapter`'s `subprocess.run` passes `cwd=`,
+so the guest inherited the **server's** working directory: `/home/aindy` in Docker, which holds
+`alembic/` — a guest could write migrations that run on next boot — and the repo root in dev,
+which holds `AINDY/.env`. `GUEST-CONFINE-1` closed the *escape* in August; the **bound** stayed an
+undeclared inherited default until now.
+
+- Every confinement argument is now derived from an `ExecutionEnvironmentSpec` clamped to
+  `GUEST_FLOOR`, rather than three hardcoded `False` literals at one construction site. The guest
+  path has a *stated requirement* that can be recorded and audited.
+- `allowed_paths` is passed **explicitly**, bounded to a per-execution temporary scratch root that
+  is created before the VM and released after it. A warm worker no longer shares scratch between
+  requests.
+- With no declared spec the floor applies unchanged — byte-for-byte the confinement that shipped
+  in August, plus the explicit bound.
+
+#### Two behaviour changes for operators
+
+- **`NODUS_ALLOWED_PATHS` no longer has any effect.** nodus reads that variable only on its
+  unspecified-default branch, so passing `allowed_paths` explicitly makes it inert. If you were
+  using it to widen the guest's filesystem bound, that is now closed — deliberately, and it is
+  the safe direction. There is no replacement env var by design: a global flag re-opens the bound
+  for every run at once, which is the shape `GUEST-CONFINE-1` refused.
+- **A declared spec is clamped to the floor, never merged with it.** A guest cannot widen its own
+  sandbox by arriving with a permissive descriptor; it can only ask for *more* confinement.
+
+#### What it did not close
+
+`ORCHESTRATOR-SPLIT-1` predicted the same missing `cwd=` closed both its store-4 data loss and
+this residual. **It did not.** The residual was closed by bounding the VM's `allowed_paths` —
+stronger than setting a cwd, but it leaves the **process** cwd untouched, so
+`nodus_lang_workflow`'s `LocalWorkflowStore` still roots wherever the worker started. That entry
+has been corrected rather than left to mislead the next reader.
+
+Also: `nodus_worker.py` gained a module logger, which it had never had. That is not an oversight
+anyone should fix casually — **its stdout is the JSON protocol channel**, so a stray `print()`
+corrupts the frame the adapter parses. Logging defaults to stderr, which both spawn paths handle.
+
+11 new tests against the real VM, mutation-tested **6/6**; the existing `GUEST-CONFINE-1` suite
+re-run against the real VM and green.
+
+### Changed — tools receive a revocable DB handle, not the live session (TOOL-SEAM-ISOLATION-1 step A)
+
+`execute_tool` resolved the tool by **name** through `TOOL_REGISTRY` — handle-shaped and correct —
+and then handed it a live SQLAlchemy `Session`: a direct object reference across a trust boundary
+that could not be validated, revoked mid-call, or narrowed. Every authority check the function
+performs (token, granted tools, capabilities, policy, rate limit, egress, secret scope) was
+advisory with respect to what the tool did with that one argument.
+
+The tool now receives a `RevocableToolSession` (`AINDY/agents/tool_session.py`), revoked in a
+`finally` when the call returns. Using it afterwards raises `ToolSessionRevoked` naming the tool.
+
+**Measured before changing it:** across all 18 tool functions that exist — 3 runtime-owned and 15
+in `aindy-apps-monolith` — **18 take `db` in their signature and 0 reference `db.<anything>`.**
+Pure ambient authority with zero utility, so the narrowing breaks nothing that exists. The
+parameter name is unchanged, so no tool signature moves. Same evidence `GUEST-CONFINE-1` gathered
+before denying its three capabilities.
+
+**What it buys:** a tool can no longer stash the session and use it after the call. That is a
+security narrowing *and* a bug class — using a request-shared session after its request has moved
+on is `RT-MEMTXN-LEAK-1`'s neighbourhood. Any access at all is logged once per tool, so the
+exposure stays countable against a measured baseline of zero.
+
+**★ What it does NOT buy, and must not be read as:** the process is not bounded. A tool holding
+this handle can still `import os`, spawn a thread, or open a socket. **`TOOL-SEAM-ISOLATION-1`
+remains open.** Treating step A as closing it would be exactly the "gated path that does not
+actually confine" failure the scope warns against.
+
+**Known limitation, stated rather than discovered:** the handle is not a `Session` subclass, so
+`isinstance(db, Session)` is `False` inside a tool. Deliberate — subclassing would let it be
+passed anywhere a real session goes and defeat the point — and safe because no tool uses the
+parameter. A tool that genuinely needs data should reach through a syscall, which is what every
+app tool already does.
+
+Unflagged, because no compatibility argument exists and a security default that ships off is a
+pattern this repository keeps recording as a mistake. 14 tests, mutation-tested **7/7**.
+
+### Added — a concurrency + metric-readback harness, and the first soak that uses it
+
+**This is what eight "soak, then flip" items were waiting on, and it was never a product
+consumer.** Measured 2026-08-19:
+
+- **The integration suite was entirely sequential** — zero `ThreadPoolExecutor`, zero
+  `asyncio.gather`, zero concurrent drivers under `tests/integration/`.
+- **No test read a metric** — zero `get_sample_value`, zero `generate_latest`, zero `.collect()`,
+  against **52** registered metrics. `PERF-BASELINE-1` is misnamed: the instrument existed,
+  nothing consumed it.
+
+Everything else was already here: live Postgres and Redis on every PR, crash simulation, and the
+flags themselves. "Soak" had been standing in for an apparatus nobody built, and because the word
+sounds like it needs production it got deferred to a consumer that does not exist.
+
+#### What landed
+
+- `tests/integration/soak_harness.py` — `drive_concurrently()` (barrier-synchronised, surfaces
+  every worker exception), `metric_window()` / `read_metric()` (before/after readback that
+  **raises on an unregistered name** rather than reading zero).
+- `tests/integration/test_soak_idempotency_contention.py` — the first concurrent test in the
+  repository. N callers race the same `(action_type, input, scope)` against the `EXACTLY_ONCE`
+  gate on real Postgres, asserting the handler runs **once**, the ledger holds **one** row, and
+  the pool is not exhausted.
+- `tests/unit/test_soak_harness.py` — the harness guards itself, no database required.
+- An **advisory** CI step running the whole integration suite with `AINDY_SYSCALL_IDEMPOTENCY`
+  and `AINDY_TOOL_IDEMPOTENCY` **on**, answering the other question: does enabling them break
+  anything that was passing.
+
+#### Why the existing e2e test was not already this
+
+`test_idempotency_gate_e2e.py` turns the gate on and dispatches the same syscall **twice,
+sequentially**. Sequential dedup is the easy half — the first call has already committed its
+`effect_records` row before the second one looks. Contention is the risk the flag carries, and
+nothing had ever exercised it.
+
+#### ★★ What it found on its first CI run
+
+**`EXACTLY_ONCE` is not exactly-once under contention.** Eight concurrent identical calls ran the
+handler **twice**. That is *by design* — `resolve_effect_record` degrades to `AT_LEAST_ONCE` when
+it loses the insert race against a live pending row, because strict at-most-once needs advisory
+locking, and it logs a warning. `IDEMPOTENCY_CONTRACT.md` documents it in its state table.
+
+**The defect is the index, not the code.** `CLAUDE.md`'s `IDEM-11` line — the thing an
+implementer reads before flipping `AINDY_SYSCALL_IDEMPOTENCY` — said *"at-most-once is built"*
+with no concurrency caveat. The contract and the index disagreed, and the index is what gets read.
+Corrected, and the soak now pins the documented behaviour: the gate dedups the large majority, one
+`success` row per `action_id` holds, and any degradation must be accompanied by its warning so it
+cannot be silent.
+
+**Consequence for the flip:** anyone enabling this for a genuinely non-idempotent effect is buying
+"exactly once unless another caller holds the slot." Until this test existed, nothing said so in a
+form that could fail.
+
+#### ★ Two things this does not claim
+
+- **No metric observes the idempotency gate.** `aindy_durable_effects` and
+  `aindy_effect_attribution` are ContextVars, not metrics. An operator cannot currently tell
+  whether the gate is doing anything, so a counter on gate hit/replay is a prerequisite for a
+  production soak — and it does not exist. The soak asserts on handler-run count and DB rows
+  instead.
+- **The advisory step is advisory on purpose.** A soak that red-lines unrelated PRs on its first
+  flake gets disabled within a week, and a disabled check is worse than an advisory one because
+  it still looks present. Promote it only after it has been green across a release window **and**
+  has been made to go red deliberately.
+
+#### Backlog corrections found while measuring
+
+- **`AUTHORITY-VALUE-1` is not soak-gated.** `aindy-apps-monolith`'s
+  `apps/automation/syscalls/syscall_handlers.py:45` calls `child_context(capabilities=[capability])`
+  with the *nested* syscall's capability while the parent holds the *outer* one, so a clamp
+  intersects to empty. That is a caller fix in one file, then flip — no evidence required.
+- **`NODUS-WARMPOOL-1` is already soaking.** The integration job has set
+  `AINDY_NODUS_WARM_POOL: "1"` for some time; it has been running flag-on against real
+  infrastructure on every PR.
+
+Harness mutation-tested **6/6**; the first two versions of its central concurrency assertion were
+killed by that process — one was proving the thread pool had enough slots, the other measured a
+stagger placed after the barrier.
+
+### Added — the idempotency gate is now observable (`aindy_effect_gate_outcomes_total`)
+
+**Until now nothing observed the gate at all.** `aindy_durable_effects` and
+`aindy_effect_attribution` are ContextVars, not metrics — so with `AINDY_SYSCALL_IDEMPOTENCY`
+enabled an operator had no way to tell whether the gate was firing, replaying, or **silently
+degrading**. That absence was the real blocker on a production soak: there was nothing to read.
+
+`aindy_effect_gate_outcomes_total{outcome=…}` counts every resolution:
+
+| `outcome` | meaning |
+|---|---|
+| `reserved` | this caller won the slot and will execute the effect |
+| `replayed` | a completed record was returned instead of executing |
+| **`degraded`** | **lost the race to a live pending row — downgraded to `AT_LEAST_ONCE` for this call** |
+| `reclaimed` | took over a stale or failed slot |
+
+**`degraded` is the label the counter exists for.** `EXACTLY_ONCE` is not exactly-once under
+contention: when the gate loses the insert race to a live pending row it downgrades for that
+call. That is correct and documented in `IDEMPOTENCY_CONTRACT.md` — and it was **invisible**. A
+deployment where `degraded` is a meaningful fraction of `reserved` is one where the guarantee the
+operator believes they enabled is not the one they have.
+
+**Metrics failures never change execution.** `_count_gate` is best-effort and import-local: the
+ledger is the correctness path and the counter is observability, and inverting that would let a
+Prometheus problem become a duplicate side effect — the exact class the gate exists to prevent.
+
+The contention soak now asserts on this counter rather than on a log line. Three instruments were
+tried: `caplog` could not see a warning emitted on a worker thread, a logger spy was thread-safe
+but observed the wrong signal, and the counter is both thread-safe and what production reads.
+Recorded as **variant 10** in the trusting-a-green-check catalogue — *the instrument cannot see
+the thing* — because it generalises to every concurrent or cross-process test.
+
+Using the harness for real also improved it: `read_metric` now distinguishes an **unknown metric
+family** (still raises) from a **label combination not yet observed** (reads 0), because
+prometheus_client does not materialise label combinations until `.labels()` is first called. The
+guard was right to refuse; the rule was too coarse.
+
+### Added — the warm Nodus worker pool is soaked under contention against real workers (NODUS-WARMPOOL-1)
+
+`NODUS-WARMPOOL-1`'s remaining work was recorded as "soak, then flip." This is the soak, and it
+exists because of a gap the existing suite named in its own docstring:
+
+> *"…against fake processes/workers (no real subprocess) … End-to-end (a real warm worker serving
+> a nodus script) is **app-side PG-tier integration**."*
+
+**That deferral is the whole problem.** It handed the only end-to-end evidence to a consumer that
+does not exercise it (`SUBSTRATE-WITNESS-1`), so the pool ran against fakes here and against
+nothing there. Meanwhile CI has had `AINDY_NODUS_WARM_POOL=1` on every PR — real evidence, but
+**functional and sequential**: it shows the pool serves requests, not that it serves *concurrent*
+ones correctly.
+
+`tests/unit/test_soak_warm_pool_contention.py` adds seven tests against **real worker
+subprocesses**, six concurrent callers against a pool of two:
+
+- **Response correlation** — every caller gets back the marker *it* sent. The pool speaks
+  length-prefixed JSON over one worker's stdin/stdout, so if `_checkout`/`_checkin` exclusion is
+  ever wrong, two callers interleave frames and one receives another's result — a silent
+  cross-tenant wrong answer that fakes cannot detect and sequential tests cannot reach.
+- **Worker reuse under load** — with a long acquire timeout, callers queue and a worker is handed
+  from one to the next, which is where a stale frame in the pipe would surface.
+- **Boundedness**, **backpressure as `PoolBusy`**, and **no cross-caller state bleed**.
+
+#### ★ The layer mattered, and the first draft got it wrong
+
+`pool.execute()` **raises `PoolBusy`**; the **adapter** is what spills to a fresh subprocess. The
+first draft asserted the *pool* spills and produced three reds that looked like a product defect
+but were entirely the test's fault. The claim *"enabling the pool can never make execution worse
+than the default"* is about the adapter path, and it is now asserted there.
+
+Mutation-tested **4/4** — including that removing the size bound in `_checkout` and swapping
+`PoolBusy` for a bare `RuntimeError` both go red. An earlier run scored 2/4 and **both survivors
+were defective mutations**, not weak tests: one edited `prewarm()`, which the fixture disables,
+and one added an unused class while `PoolBusy` was still raised. A mutation that does not change
+behaviour proves nothing.
+
+#### ★ CI caught the soak doing the thing this suite exists to prevent
+
+The backpressure assertion originally used a 200 ms acquire timeout and asserted that some caller
+was refused. It passed locally 3/3 and **failed in CI**, where the runner was fast enough that
+every caller finished inside the window and backpressure never fired.
+
+**A soak that asserts a race outcome by racing is timing-dependent evidence** — which is the exact
+failure mode the harness was built to avoid, and the reason its own concurrency assertion was
+rewritten twice. Fixed by setting the acquire timeout to **zero**, so `remaining <= 0`
+short-circuits before any wait: the barrier releases four callers at once against a pool of one,
+exactly one wins, three are refused. Deterministic rather than probable, and the assertion now
+pins the exact split.
+
+#### ★ It also found a trap in the soak harness itself
+
+`drive_concurrently` returned results in **completion order**, so a per-caller positional
+assertion paired the wrong result with the wrong caller. It failed deterministically 3/3 and read
+exactly like a cross-request state bleed *in the pool*.
+
+An unordered result list is a trap in a concurrency harness specifically: the natural way to write
+a per-caller assertion is positional, and the failure it produces **accuses the product**.
+`drive_concurrently` now returns results in **worker-index order**, guarded by a test that inverts
+completion order, with the partial-failure caveat documented.
+
+### Added — a tool can declare the isolation it needs (TOOL-SEAM-ISOLATION-1 step B)
+
+`register_tool(..., isolation=...)` takes an **assurance class** — `"insecure-dev"`,
+`"container-grade-sandbox"` or `"strong-sandbox-tier"` — naming the minimum the host must provide
+for that tool to run. `None` (the default, and every existing tool) declares nothing and behaves
+exactly as before.
+
+A tool declaring more than the host provides is **refused**, fail-closed, before the handler runs
+and before it is handed anything.
+
+#### ★ This declares; it does not confine
+
+A tool that is *allowed* to run still runs **in-process with the process's ambient authority**.
+It can still `import os`, spawn a thread, or open a socket. **`TOOL-SEAM-ISOLATION-1` remains
+open** — step C is the process boundary and is not built.
+
+Reading a satisfied declaration as confinement would be exactly the *"gated path that does not
+actually confine"* failure the scope warns against, so it is stated in the parameter docstring,
+the module, and a test that asserts an allowed tool runs in the **same process id**.
+
+#### ★ An assurance class, not a mechanism
+
+The entry originally proposed `isolation="in_process" | "subprocess" | "container" | "strong_vm"`.
+That asks a caller to state a *mechanism* the runtime cannot verify — and `in_process` and
+`subprocess` are indistinguishable as **assurance**, because a bare subprocess is not a sandbox
+and both report `insecure-dev`.
+
+Declaring against `EXEC-ENV-BIND-1`'s existing assurance vocabulary reuses what is already there
+instead of growing a second one beside it — the same argument that keeps `FS-SCOPE-1` a field on
+that descriptor rather than a peer of `egress_scope`. The runtime owns the *request* vocabulary;
+mechanism stays behind the provider boundary.
+
+#### Three properties worth knowing
+
+- **A misspelled class raises at registration**, not at execution and not silently. That is the
+  `register_syscall` lesson from `IDEM-11`, where an unforwarded parameter left every plugin
+  syscall at the weakest setting with no way to opt in. Downgrading a typo would hand a tool a
+  weaker boundary than it asked for — the one direction that must never be quiet.
+- **A refusal is an envelope, not an exception.** `execute_tool`'s contract is
+  `{success, result, error}` and every caller reads it that way; a refusal that raised would be
+  caught by the seam's own broad handler and reported as a tool *failure*, which reads as "the
+  tool broke" rather than "this host cannot run it" — the status-code confusion `ROUTE-GUARD-1`
+  was. The error names both the requested and the provided class, so an operator can tell a
+  misconfigured host from an over-strict declaration.
+- **A host-resolution failure refuses.** `_host_assurance` reports the weakest class on any error,
+  so a broken provider denies a strict declaration rather than admitting it.
+
+12 tests, mutation-tested **6/6** — including that flipping `>=` to `>`, accepting an unknown
+class, or returning success on refusal all go red.
+
+### Added — tool returns are measured against the process-boundary contract (TOOL-SEAM-ISOLATION-1 step C1)
+
+`aindy_tool_return_contract_violations_total{reason, declared_isolation}` counts tool returns that
+would not survive a process boundary: `not_a_dict`, or `not_json_serializable`.
+
+**It measures; it does not reject.** By the time a return is inspected the handler has already run
+and its effect is real — failing the call there would **discard a real effect**, which is strictly
+worse than passing an awkward value through. `SyscallDispatcher` made the same judgement on the
+syscall path (*"a ledger failure must never turn that into a caller-visible error"*), and the two
+boundaries must not disagree.
+
+#### Why it exists: it is the gate on step C
+
+A tool cannot run behind a process boundary unless its return marshals — a `UUID`, a session, or
+any live object crosses no pipe. Every tool that exists returns a dict and every one is typed
+`-> dict`, but **nothing enforced it**, so "they all comply" was an assumption rather than a
+measurement. A non-zero count is now exactly the list of tools that cannot be confined yet.
+
+`not_json_serializable` is the case a plain `isinstance(result, dict)` check would miss, and it is
+the one that actually bit: on the syscall path a `UUID` return came back as an error envelope
+**after the effect had already landed**. That was fixed there and never here.
+
+#### Two details
+
+- **A tool that declared an isolation class is logged at ERROR and labelled separately.** It has
+  opted into a boundary its return cannot cross, so that is a defect in the tool rather than an
+  observation about an in-process one — and the label keeps the remediation list readable.
+- **A metrics failure never affects the call.** Observability does not sit on the effect path, the
+  same rule as the effect-gate counter.
+
+7 tests, mutation-tested **6/6** — including that a mutation which *rejects* instead of measuring
+goes red, because preserving a landed effect is the design and not an accident.
+
+### Added — a tool that declares isolation now runs out of process (TOOL-SEAM-ISOLATION-1 step C2)
+
+Steps A and B narrowed one argument and let a tool *declare* a boundary. **This is the first thing
+in this entry that applies one.**
+
+A tool registered with `register_tool(..., isolation=<assurance class>)` executes in a one-shot
+worker subprocess (`python -m AINDY.agents.tool_worker`) instead of in the runtime process.
+**Opt-in per tool** — a tool that declares nothing is unaffected and keeps running in-process,
+because a subprocess round-trip per call is real latency and must not be imposed on everything.
+
+`AINDY_TOOL_ISOLATION=0` reverts to declare-and-refuse only: the declaration is still validated
+and still refused when the host cannot meet it, but it is not applied.
+
+#### ★ There is no fallback, and that is the design
+
+A worker that **crashes, times out, or cannot be spawned means the tool does not run.**
+
+This is deliberately the opposite of the Nodus adapter, which spills a warm-pool failure to a
+fresh subprocess. There, both paths give the *same* guarantee and falling back is strictly better
+than failing. Here they do not: falling back would execute a tool that asked to be confined
+**unconfined** — precisely the *"gated path that does not actually confine"* failure this entry
+exists to prevent. Mutation-tested: making a failed worker fall back goes red.
+
+#### Three constraints worth knowing before declaring `isolation=`
+
+- **`db` is `None` in the worker.** A session cannot cross a process boundary. This is safe by
+  measurement rather than hope — all 18 tool functions take `db` and **none uses it** (step A). A
+  tool that needs data reaches through a syscall, which is what every app tool already does.
+- **A worker rebuilds `TOOL_REGISTRY` from the plugin stack.** A tool registered ad hoc in the
+  parent is invisible there, and the worker says so specifically rather than failing generically —
+  a registry mismatch is a deployment problem and a generic error would send an operator to the
+  wrong place.
+- **A non-marshalling return FAILS here**, where the in-process seam only counts it (step C1).
+  In-process the effect has landed and rejecting would discard it; in a worker the value cannot
+  cross the pipe, so there is nothing to carry back. That is exactly why C1's counter exists:
+  check `aindy_tool_return_contract_violations_total` before declaring isolation on a tool.
+
+#### Authority is not re-evaluated in the worker
+
+The parent's `execute_tool` checks token, granted tools, capabilities, policy, rate limit, egress
+and secret scope **before** delegating; the worker resolves the function and runs it. Re-checking
+inside would put the authority decision in the very process the boundary distrusts — and calling
+`execute_tool` there would recurse, since it routes declared tools to a worker.
+
+12 tests, mutation-tested **7/7**, including a real `python -m AINDY.agents.tool_worker`
+round-trip that proves the module is executable and that nothing else writes to stdout to corrupt
+the response frame.
+
+### Changed — CI now enforces the CLAUDE.md registry's size rule (#493)
+
+**This changes what a green `Runtime Contracts` means**, which is why it is here rather than
+filed as a docs-only change. `tests/unit/test_debt_registry_accuracy.py` gained three assertions:
+no registry entry may exceed 1150 bytes (850 under a `### Closed` heading), the cap must stay
+near the data it governs, and the registry must stay under 60% of `CLAUDE.md`. A PR that adds an
+over-long entry to the registry now fails CI.
+
+The caps are the current high-water mark, written into the test as a **ratchet against regrowth**
+rather than an endorsement of that length. The registry had been trimmed twice and grown back
+both times; the previous attempt reported −14,936 B while the file grew 96,913 → 115,234 B,
+because the delta was measured over the entries touched rather than over the file. Mutation
+tested 5/5, including a liveness control that fires if the cap ever drifts far above the data.
+
+Same PR trimmed the registry 67,986 → 55,829 B with no entry deleted, after verifying that 79 of
+91 entries already have a larger record in `TECH_DEBT.md`.
+
+### Fixed — the documented lint command now matches the one CI runs (#494)
+
+`CLAUDE.md`'s Commands section listed `ruff check AINDY/` and `ruff format AINDY/`. CI's
+`Runtime Lint` runs neither of those literally — it runs
+`ruff check AINDY tests --config AINDY/ruff.toml` — and **`ruff format --check` reports 457 of
+559 files would be reformatted**, so the second command had never been true of this tree.
+Following it as documented produces a ~450-file diff on top of whatever the agent was asked to
+do. The section now states the enforced command and warns against running `format` casually;
+filed as `LINT-FORMAT-1` with the measurements and the reason not to close it with a repo-wide
+sweep.
+
+
 ## 2.4.1 — 2026-08-19
 
 A patch release carrying one security-relevant dependency fix and the grouped dependency
