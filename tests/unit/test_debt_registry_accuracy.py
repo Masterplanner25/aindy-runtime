@@ -68,11 +68,7 @@ def _registry_sections() -> dict[str, list[str]]:
     current: str | None = None
     for line in _CLAUDE.read_text(encoding="utf-8").split("\n"):
         if line.startswith("### "):
-            current = (
-                line[4:].strip()
-                if line.startswith(("### Open", "### Closed"))
-                else None
-            )
+            current = line[4:].strip() if line.startswith(("### Open", "### Closed")) else None
             if current:
                 sections[current] = []
         elif current and line.startswith("- **"):
@@ -86,9 +82,7 @@ def test_the_registry_is_parseable():
 
     open_entries = sum(len(v) for k, v in sections.items() if k.startswith("Open"))
     assert any(k.startswith("Open — P0") for k in sections), "no P0 section found"
-    assert open_entries >= 15, (
-        f"only {open_entries} open entries parsed — the scan is broken"
-    )
+    assert open_entries >= 15, f"only {open_entries} open entries parsed — the scan is broken"
 
 
 def test_no_open_entry_headlines_itself_as_closed():
@@ -181,19 +175,8 @@ def test_the_size_cap_is_a_ratchet_not_a_ceiling_we_are_far_below():
     reason to delete this test.
     """
     sections = _registry_sections()
-    largest_open = max(
-        (len(line) for h, e in sections.items() if h.startswith("Open") for line in e),
-        default=0,
-    )
-    largest_closed = max(
-        (
-            len(line)
-            for h, e in sections.items()
-            if h.startswith("Closed")
-            for line in e
-        ),
-        default=0,
-    )
+    largest_open = max((len(line) for h, e in sections.items() if h.startswith("Open") for line in e), default=0)
+    largest_closed = max((len(line) for h, e in sections.items() if h.startswith("Closed") for line in e), default=0)
 
     assert largest_open > _MAX_ENTRY_BYTES * 0.7, (
         f"largest open entry is {largest_open}B against a {_MAX_ENTRY_BYTES}B cap — the cap is "
@@ -221,14 +204,8 @@ def test_the_registry_does_not_take_over_the_file():
     """
     text = _CLAUDE.read_text(encoding="utf-8")
     lines = text.split("\n")
-    start = next(
-        i
-        for i, ln in enumerate(lines)
-        if ln.startswith("## TECH_DEBT.md — prefix registry")
-    )
-    end = next(
-        i for i, ln in enumerate(lines[start + 1 :], start + 1) if ln.startswith("## ")
-    )
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("## TECH_DEBT.md — prefix registry"))
+    end = next(i for i, ln in enumerate(lines[start + 1 :], start + 1) if ln.startswith("## "))
     registry = len("\n".join(lines[start:end]))
 
     share = registry / len(text)
