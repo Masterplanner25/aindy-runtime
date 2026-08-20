@@ -5153,6 +5153,23 @@ aindy-runtime[mcp]`. Verified with a live SSE round-trip. Doc: `docs/runtime/MCP
 1. **A2A is out.** `nodus-a2a` is NOT a wire protocol — it's an in-process coordinator
    (registry + delegation *decisions*), zero transport/HTTP/agent-cards. External A2A interop
    is not deliverable from it; it would be a from-scratch build. G4b is MCP-only.
+
+   **★★ CORRECTED 2026-08-19 — the observation was right, the conclusion was not.** That pass
+   examined `C:\dev
+odus-a2a`, which really is the coordinator. **A SECOND package, also named
+   `nodus-a2a`, also at `0.1.0`, holds the wire** — `C:\codev2a-wire-pub`, an A2A 1.0.0 (Linux
+   Foundation) HTTP+JSON adapter with agent cards, codec and transport in ~1,071 LOC. So "it would
+   be a from-scratch build" is **false**: the wire exists and is well factored for host reuse
+   (`A2AHttpServer` takes `invoke` as a plain callable, and `handle_request` is a pure function, so
+   a host can mount the protocol without adopting the transport).
+
+   **What is actually blocking A2A, in order:** (1) the two packages collide on a **live** PyPI
+   name at the same version — the wire cannot ship until that is resolved; (2) the wire caps
+   `nodus-lang<5.0.0` while we pin `5.0.4`, the **third** instance of `MCP-SDK-2X-1`; (3) and the
+   real one on our side, `INITIATOR-IDENTITY-1` — `token_validator` returns a bool, which
+   authenticates the connection and not the peer, so every remote caller collapses to one identity.
+   **The wire turned out to be the cheap part.** All Nodus-side items are handed off in
+   `docs/runtime/NODUS_HANDOFF_a2a_mcp_packaging.md`.
 2. **The executable registration is `register_tool` → `TOOL_REGISTRY`, not `register_agent_tool`.**
    `register_agent_tool` writes to `_agent_tools`, read only by observability/listing — never by
    `execute_tool`. (Latent ABI gap: the "official" agent-tool plugin surface is discovery-only;
