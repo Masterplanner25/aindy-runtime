@@ -118,6 +118,11 @@ def test_result_is_json_safe(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def test_execute_threads_run_id_and_token_into_worker_payload(monkeypatch):
+    # ★ Pins the FRESH-SUBPROCESS path. `AINDY_NODUS_WARM_POOL` defaults ON since
+    # 2026-08-19, so without this the adapter takes the warm path, `subprocess.run` is
+    # never called, and the capture below reads an empty dict. This test is about that
+    # path specifically; the payload itself is built once and shared by both.
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "0")
     captured = {}
 
     class _Proc:
@@ -148,6 +153,11 @@ def test_execute_threads_run_id_and_token_into_worker_payload(monkeypatch):
 
 
 def test_execute_defaults_run_id_to_eu_and_token_none(monkeypatch):
+    # ★ Pins the FRESH-SUBPROCESS path. `AINDY_NODUS_WARM_POOL` defaults ON since
+    # 2026-08-19, so without this the adapter takes the warm path, `subprocess.run` is
+    # never called, and the capture below reads an empty dict. This test is about that
+    # path specifically; the payload itself is built once and shared by both.
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "0")
     captured = {}
 
     class _Proc:

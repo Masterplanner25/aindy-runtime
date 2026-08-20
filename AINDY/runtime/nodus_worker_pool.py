@@ -73,7 +73,26 @@ def _prewarm_timeout_s() -> float:
 
 
 def warm_pool_enabled() -> bool:
-    return os.getenv("AINDY_NODUS_WARM_POOL", "").strip().lower() in {"1", "true", "yes"}
+    """**Default ON since 2026-08-19.** ``AINDY_NODUS_WARM_POOL=0`` restores fresh subprocesses.
+
+    ★ Soaked before flipping, and the prior evidence was not what it looked like. CI had set this
+    flag for months, but the integration suite is **sequential** — it showed the pool serves
+    requests, not that it serves *concurrent* ones correctly. Every pool test in
+    ``test_nodus_worker_pool.py`` runs against **fake** processes, and its docstring deferred
+    end-to-end to "app-side PG-tier integration", i.e. to a consumer that does not exercise it.
+
+    ``tests/unit/test_soak_warm_pool_contention.py`` closes that: six concurrent callers against
+    a pool of two **real** worker subprocesses, asserting that no caller receives another's
+    result (the pool speaks length-prefixed JSON over one worker's pipe, so broken checkout
+    exclusion would interleave frames), that a worker handed from one caller to the next carries
+    no state, that the pool stays bounded, and that saturation raises ``PoolBusy`` for the
+    adapter to spill on. Mutation-tested 4/4.
+
+    ★ The safety net that makes the default defensible: **any** warm-path failure is surfaced to
+    the adapter, which falls back to a fresh subprocess — so enabling this cannot make execution
+    worse than the path it replaces. That claim is asserted at the adapter, where it lives.
+    """
+    return os.getenv("AINDY_NODUS_WARM_POOL", "").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _max_requests() -> int:

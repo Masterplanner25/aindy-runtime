@@ -162,8 +162,28 @@ def _gate_scope_engaged(value: Any) -> bool:
 
 
 def _syscall_idempotency_enabled() -> bool:
-    """MEB-1b global gate. When off (default), the syscall idempotency gate never fires."""
-    return os.getenv("AINDY_SYSCALL_IDEMPOTENCY", "").strip().lower() in {"1", "true", "yes"}
+    """MEB-1b global gate. **Default ON since 2026-08-19.** ``AINDY_SYSCALL_IDEMPOTENCY=0`` disables.
+
+    ★ **What the gate does and, precisely, does not guarantee.** It dedups an
+    ``EXACTLY_ONCE`` syscall on ``(action_type, input, scope)`` where the scope is the
+    **execution unit id** — so a retry *within one run* replays the cached result instead of
+    re-executing, and two legitimate calls in *different* runs are untouched. That scoping is
+    what makes this safe to default on.
+
+    **It is NOT exactly-once under contention.** When the gate loses the insert race against a
+    live pending row it degrades to ``AT_LEAST_ONCE`` for that call and logs a warning — strict
+    at-most-once needs advisory locking. Measured: 8 concurrent identical calls ran the handler
+    twice. Watch ``aindy_effect_gate_outcomes_total{outcome="degraded"}``; a deployment where
+    that is a meaningful fraction of ``reserved`` has a weaker guarantee than the name suggests.
+    Pinned by ``tests/integration/test_soak_idempotency_contention.py``.
+
+    ★ **Do NOT read this flip as closing IDEM-12.** ``undo_run_effects`` selects effects by
+    ``status == "success"`` and never consults ``effect_reversals``, so a deliberate second
+    ``sys.v1.agent.undo`` still re-invokes every compensator. The gate is defence-in-depth, not
+    the fix, and making reversal correctness depend on an env var is the shape IDEM-10 already
+    paid for.
+    """
+    return os.getenv("AINDY_SYSCALL_IDEMPOTENCY", "").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _child_context_clamp_enabled() -> bool:

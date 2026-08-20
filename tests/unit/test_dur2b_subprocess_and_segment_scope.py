@@ -58,9 +58,16 @@ def _capture_payload():
     return captured, _fake_run
 
 
-def test_subprocess_payload_carries_durable_flag():
+def test_subprocess_payload_carries_durable_flag(monkeypatch):
     """The per-run signal is written into the subprocess payload so the worker can
-    re-establish it (the parent contextvar cannot cross the process boundary)."""
+    re-establish it (the parent contextvar cannot cross the process boundary).
+
+    ★ Pins the FRESH-SUBPROCESS path explicitly. `AINDY_NODUS_WARM_POOL` defaults ON since
+    2026-08-19, so without this the adapter takes the warm path, `subprocess.run` is never
+    called, and the assertion below has nothing to read. The warm path's equivalent is
+    `test_warm_pool_payload_also_carries_durable_flag`.
+    """
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "0")
     from AINDY.runtime.nodus_runtime_adapter import NodusExecutionContext, NodusRuntimeAdapter
     from AINDY.kernel.effect_ledger import durable_effects_scope
 
@@ -75,6 +82,46 @@ def test_subprocess_payload_carries_durable_flag():
 
         adapter.run_script("let x = 1", ctx)  # outside the scope
         assert captured["payload"]["context"]["durable_effects"] is False
+
+
+def test_warm_pool_payload_also_carries_durable_flag(monkeypatch):
+    """★ The path this now takes by DEFAULT, and nothing asserted it before the flip.
+
+    DUR-2b's guarantee is that the per-run at-most-once signal survives the process boundary,
+    because a ContextVar cannot cross it. That guarantee is only as good as the path actually
+    taken — and since 2026-08-19 the default path is the WARM POOL, not a fresh subprocess.
+    A warm path that dropped `durable_effects` would silently disable at-most-once for every
+    continued run while every existing DUR-2b test stayed green.
+    """
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "1")
+    from AINDY.runtime import nodus_worker_pool as pool_mod
+    from AINDY.runtime.nodus_runtime_adapter import NodusExecutionContext, NodusRuntimeAdapter
+    from AINDY.kernel.effect_ledger import durable_effects_scope
+
+    captured = {}
+
+    class _FakePool:
+        def execute(self, payload, *, timeout_s):
+            captured["payload"] = payload
+            return {
+                "status": "success", "output_state": {}, "emitted_events": [],
+                "memory_writes": [], "simulated_effects": [], "stdout_log": "",
+            }
+
+    monkeypatch.setattr(pool_mod, "get_pool", lambda: _FakePool())
+
+    adapter = NodusRuntimeAdapter(MagicMock())
+    ctx = NodusExecutionContext(user_id="u", execution_unit_id="eu")
+
+    with durable_effects_scope():
+        adapter.run_script("let x = 1", ctx)
+    assert captured["payload"]["context"]["durable_effects"] is True, (
+        "the warm path dropped the durable-effects signal — at-most-once would be silently "
+        "disabled for continued runs on the default execution path"
+    )
+
+    adapter.run_script("let x = 1", ctx)
+    assert captured["payload"]["context"]["durable_effects"] is False
 
 
 def test_worker_wraps_run_source_in_durable_scope_when_flagged():
