@@ -192,12 +192,25 @@ def drive_concurrently(
     ★ Every exception is surfaced. ``ThreadPoolExecutor`` holds them until ``.result()``, so a
     driver that skips that produces a green test over N failed workers.
 
+    ★ **Results are returned in worker-index order**, so ``results[i]`` is ``fn(i)``'s return
+    value whenever every worker succeeded. When some fail, ``results`` holds only the successful
+    ones — so a per-caller positional assertion is only valid after ``assert_all_succeeded()``.
+
     ★ **Each worker must open its own DB session.** A SQLAlchemy ``Session`` is not thread-safe,
     and sharing one across drivers reproduces `RT-MEMTXN-LEAK-1` rather than testing the flag.
     ``fn`` is responsible for that; the harness cannot enforce it.
     """
     gate = threading.Barrier(workers) if barrier else None
-    results: list[Any] = []
+    # ★ Indexed, not appended. Results are returned in WORKER-INDEX order, never completion
+    # order. This was found by using the harness: a soak paired `results[i]` with caller `i`,
+    # completion order made that pairing wrong, and it failed deterministically 3/3 looking
+    # exactly like a cross-request state bleed in the component under test.
+    #
+    # An unordered result list is a trap in a CONCURRENCY harness specifically, because the
+    # natural way to write a per-caller assertion is positional and the failure it produces
+    # accuses the product rather than the test. Ordering it costs nothing and removes the trap.
+    slots: list[Any] = [None] * workers
+    ok: list[bool] = [False] * workers
     failures: list[BaseException] = []
     lock = threading.Lock()
 
@@ -210,12 +223,13 @@ def drive_concurrently(
             with lock:
                 failures.append(exc)
             return
-        with lock:
-            results.append(value)
+        slots[i] = value
+        ok[i] = True
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(_run, range(workers)))
 
+    results = [slots[i] for i in range(workers) if ok[i]]
     return DriveResult(results=results, failures=failures, workers=workers)
 
 
