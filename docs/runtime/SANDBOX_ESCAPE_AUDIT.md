@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-08-19"
+last_verified: "2026-08-20"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -999,6 +999,49 @@ suite**, which is why the scope table below is restated rather than assumed.
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v2.4.1` release commit.
+
+---
+
+## Entry 019 — 2026-08-20
+
+**Trigger:** `v2.5.0` release tag (`sandbox-escape-linux.yml`, run `32336533588`).
+**Commit:** `89d5fcd7ff45a5be13884baa7f9d06b7f053a9db`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:6857d2dae63e052057f2db389a7061188ac9a92a3fa8d402bde68f36df6fada1`.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.02s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `32336533588`).
+Six attack vectors: `env_leak`, `filesystem_escape`, `network_escape`, `path_boundary`,
+`privilege_escalation`, `process_escape`.
+
+**The certified boundary is untouched.** `git diff v2.4.1..v2.5.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**.
+
+**★ And yet this is the release where isolation changed the most — which is exactly the point
+this log has been making since Entry 017.** `v2.5.0` shipped `TOOL-SEAM-ISOLATION-1` end to end
+(a declared tool now runs in a worker subprocess) and `EXEC-ENV-BIND-1` phases 1–2 (an execution
+unit declares the environment it needs; the Nodus guest asks for one). **This suite covers none of
+it, and would have reported 17/17 either way.**
+
+Entry 017 raised that prospectively about a dependency bump; Entry 018 recorded it after the fact
+when `v2.4.1` fixed a guest-boundary bug this gate could not see. **Entry 019 is the third
+consecutive release where the number is honest and uninformative about the release's actual
+security work.** Read the scope table, not the number.
+
+| Boundary | Certified by this gate? | Status after `v2.5.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | `GUEST-CONFINE-1` **fully closed**: `allowed_paths` is now an explicit per-execution scratch root rather than the server's inherited cwd, and `NODUS_ALLOWED_PATHS` is inert. Verified by `tests/unit/test_guest_environment_binding.py`, **not** by this suite |
+| In-process tool seam | **No** — out of scope | `TOOL-SEAM-ISOLATION-1` **A–C2 shipped**: a tool declaring an isolation class runs out of process with no fallback. Verified by `tests/unit/test_tool_isolation_enforcement.py`, **not** by this suite. **Undeclared tools still run in-process** — the deliberate remaining gap |
+
+**★ A note for whoever certifies the next release.** Two of the three rows above moved this cycle
+while this gate's number did not change at all. If that keeps happening, the honest conclusion is
+not that the gate is weak — it certifies exactly what it claims — but that **the audit log's value
+is now mostly in the table rather than the count**, and a reader who scans only the summary line
+is getting less information each release.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.5.0` release commit.
 
 ---
 
