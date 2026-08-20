@@ -204,13 +204,20 @@ def test_the_size_cap_is_a_ratchet_not_a_ceiling_we_are_far_below():
     )
 
 
-def test_the_registry_stays_a_minority_of_the_file():
+def test_the_registry_does_not_take_over_the_file():
     """The failure the caps exist to prevent, stated as the outcome rather than the mechanism.
 
     Per-entry caps bound each line; nothing bounds the *count*. The registry reached 68% of
     CLAUDE.md once by growing in both directions at once, and at that size the file stops being
     an orientation document. This is deliberately loose — it is a backstop, and the per-entry
     cap is the working control.
+
+    ★ Renamed 2026-08-20 from `..._stays_a_minority_of_the_file`, which asserted more than it
+    checked: the bound is 60%, so the test passed happily at 51% — a majority. A name that
+    overstates its check is read as a guarantee by everyone who greps for one and never opens
+    it, which is the same defect as this module's docstring claiming `DONE` was covered when
+    the pattern never included it. If you want a real minority bound, lower the number; do not
+    restore the name.
     """
     text = _CLAUDE.read_text(encoding="utf-8")
     lines = text.split("\n")
