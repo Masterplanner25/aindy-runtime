@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-from typing import Callable
+from typing import Callable, Optional
 
 from AINDY.core.execution_signal_helper import queue_system_event
 from AINDY.platform_layer.extension_boundary import sanitize_extension_context
@@ -93,6 +93,7 @@ def register_tool(
     category: str,
     egress_scope: str,
     execution_guarantee: str = "AT_LEAST_ONCE",
+    isolation: Optional[str] = None,
 ):
     """Register an agent tool implementation with platform metadata.
 
@@ -100,7 +101,42 @@ def register_tool(
     is non-idempotent (send_email, etc.) declares "EXACTLY_ONCE" to opt into the tool-path
     effect boundary — a retry with the same (run, tool, args) replays the cached result
     instead of re-executing. Only active when AINDY_TOOL_IDEMPOTENCY is also enabled.
+
+    isolation (TOOL-SEAM-ISOLATION-1 step B): the **minimum assurance class** the host must
+    provide for this tool to run — one of ``"insecure-dev"``, ``"container-grade-sandbox"``,
+    ``"strong-sandbox-tier"``. ``None`` (the default) declares nothing and behaves exactly as
+    before.
+
+    ★ **This is a DECLARATION, not an application.** A tool declaring
+    ``isolation="container-grade-sandbox"`` on a host that cannot provide it is **refused** —
+    fail-closed. A tool that IS allowed to run still runs **in-process**; nothing here confines
+    it. Step C is the process boundary, and reading this as confinement would be exactly the
+    "gated path that does not actually confine" failure the scope warns about.
+
+    ★ **Why an assurance class rather than a mechanism** (``"subprocess"`` / ``"container"`` /
+    ``"strong_vm"``, as originally filed). The runtime owns the *request* vocabulary; the
+    mechanism stays behind the provider boundary. ``in_process`` and ``subprocess`` are not
+    distinguishable as *assurance* — both report ``insecure-dev``, because a bare subprocess is
+    not a sandbox — so a mechanism-shaped field would ask callers to state something the
+    runtime cannot honour or verify. It also reuses ``EXEC-ENV-BIND-1``'s existing vocabulary
+    rather than inventing a second one beside it, which is the same argument that keeps
+    ``FS-SCOPE-1`` a field on that descriptor.
+
+    A misspelled class raises at REGISTRATION rather than being silently downgraded — the
+    ``register_syscall`` lesson (``IDEM-11``), where an unforwarded parameter left every plugin
+    syscall at the weakest setting with no way to opt in.
     """
+    if isolation is not None:
+        from AINDY.core.execution_environment import ASSURANCE_ORDER
+
+        if isolation not in ASSURANCE_ORDER:
+            raise ValueError(
+                f"register_tool({name!r}): isolation={isolation!r} is not a known assurance "
+                f"class. Expected one of {', '.join(ASSURANCE_ORDER)}. Declaring an unknown "
+                f"class must fail loudly — silently downgrading it would hand the tool a weaker "
+                f"boundary than it asked for."
+            )
+
     def wrapper(fn: Callable) -> Callable:
         TOOL_REGISTRY[name] = {
             "fn": fn,
@@ -111,10 +147,52 @@ def register_tool(
             "category": category,
             "egress_scope": egress_scope,
             "execution_guarantee": execution_guarantee,
+            "isolation": isolation,
         }
         return fn
 
     return wrapper
+
+
+def _isolation_refusal(tool_name: str, entry: dict) -> Optional[dict]:
+    """Refuse a tool whose declared isolation this host cannot provide (fail-closed).
+
+    Returns an error envelope to return to the caller, or ``None`` to proceed.
+
+    ★ An envelope, not an exception: ``execute_tool``'s contract is ``{success, result, error}``
+    and every caller reads it that way. A refusal that raised would be caught by the seam's own
+    broad handler and reported as a tool *failure*, which reads to a caller as "the tool broke"
+    rather than "this host cannot run it" — the same status-code confusion ``ROUTE-GUARD-1`` was.
+
+    ★ Resolution failure refuses. ``_host_assurance`` reports the weakest class on any error, so
+    a broken provider denies a strict declaration rather than admitting it. Failing toward
+    refusal is the only safe direction for a boundary check.
+    """
+    declared = entry.get("isolation")
+    if not declared:
+        return None
+
+    from AINDY.core.execution_environment import _host_assurance, assurance_rank
+
+    host_class, evidence = _host_assurance()
+    if assurance_rank(host_class) >= assurance_rank(declared):
+        return None
+
+    logger.warning(
+        "[AgentTool] %s REFUSED: declares isolation=%s, host provides %s (%s)",
+        tool_name,
+        declared,
+        host_class,
+        evidence,
+    )
+    return {
+        "success": False,
+        "result": None,
+        "error": (
+            f"tool {tool_name!r} requires isolation {declared!r}; this host provides "
+            f"{host_class!r}. The tool was not executed."
+        ),
+    }
 
 
 def _tool_idempotency_enabled() -> bool:
@@ -382,6 +460,15 @@ def execute_tool(
         #
         # ★ This narrows ONE ARGUMENT. It does not bound the process: a tool can still import
         # os, spawn a thread, or open a socket. Do not read this as the entry being closed.
+        # TOOL-SEAM-ISOLATION-1 step B — refuse before doing anything, if the tool declared an
+        # isolation class this host cannot provide. Placed here, after the authority checks and
+        # before the handle is minted, so a refused tool touches nothing at all.
+        _refusal = _isolation_refusal(tool_name, entry)
+        if _refusal is not None:
+            if _idempotent:
+                _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
+            return _refusal
+
         _tool_db = RevocableToolSession(db, tool_name=tool_name)
         try:
             with _egress_cm, capability_scope(_scoped_caps):
