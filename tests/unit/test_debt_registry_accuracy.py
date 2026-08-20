@@ -15,8 +15,28 @@ between line 6 and line 148.
 **What this checks, and what it deliberately does not.** It only fires when a bullet under an
 `### Open` heading *opens* with a closure marker — `CLOSED`/`FIXED`/`DONE` followed by a date.
 That is unambiguous. It does **not** try to parse the prose for partial closure: entries like
-`IDEM-11` legitimately describe closed halves while remaining open, and a checker that guessed at
-those would produce false positives and be disabled within a month.
+`EXEC-ENV-BIND-1` (`PHASES 1+2 SHIPPED …; open for 3-4`) legitimately describes a closed half
+while remaining open, and a checker that guessed at those would produce false positives and be
+disabled within a month.
+
+★ **The word list is the weak part, and it has already failed once.** On 2026-08-20 two entries
+sat under `Open — P0` whose own headlines read `FLIPPED ON 2026-08-19` and `A+B+C1+C2 ALL
+SHIPPED 2026-08-19` — both closed, both invisible here, because the pattern knew only
+`CLOSED|FIXED|RESOLVED`. The same person wrote the entries and this guard months apart and
+simply reached for different words. **A check that matches a vocabulary is only as complete as
+the vocabulary someone happens to use.** When it misses one, add the word — do not reword the
+entry to suit the regex; the entries are evidence about how people actually write.
+
+★ **Residual, stated because the mutation run measured it: a QUALIFIED prefix still escapes.**
+`A+B+C1+C2 ALL SHIPPED 2026-08-19` goes green here — so of the two entries that drifted, this
+widening would have caught one. That is the no-guessing boundary holding, not a bug: a regex
+cannot tell `A+B+C1+C2 ALL SHIPPED` (all of them) from `PHASES 1+2 SHIPPED` (some of them), and
+the false-positive direction is the one that gets a check deleted. **The entry was reworded to
+lead with `CLOSED` instead** — which is the right resolution when the guard cannot decide, and
+the reason the registry convention asks for a leading verdict at all.
+
+*(The docstring also claimed `DONE` was covered when the pattern never included it. It is now.
+A sentence describing a regex is a second copy of that regex, and it drifted the same way.)*
 """
 
 from __future__ import annotations
@@ -32,8 +52,13 @@ _CLAUDE = pathlib.Path(__file__).resolve().parents[2] / "CLAUDE.md"
 
 # `**CLOSED 2026-08-16 ...`, `**FIXED 2026-08-16 ...`, `**CLOSED (2026-08-16)`, etc., appearing
 # at the START of the entry's description — i.e. the entry's own headline verdict.
+# `ALL` is the only permitted qualifier, because it strengthens the claim. Anything else in
+# front (`PHASES 1+2 SHIPPED`, `(b) and (c) shipped`) is a PARTIAL closure this must not judge.
+_CLOSURE_WORDS = ("CLOSED", "FIXED", "RESOLVED", "DONE", "SHIPPED", "FLIPPED")
 _CLOSURE_HEADLINE = re.compile(
-    r"^- \*\*(?P<name>[A-Za-z0-9.\-]+)\*\*\s+—\s+\*\*(?:CLOSED|FIXED|RESOLVED)\b[^*]*\d{4}-\d{2}-\d{2}"
+    r"^- \*\*(?P<name>[A-Za-z0-9.\-]+)\*\*\s+—\s+\*\*(?:ALL\s+)?(?:"
+    + "|".join(_CLOSURE_WORDS)
+    + r")\b[^*]*\d{4}-\d{2}-\d{2}"
 )
 
 
@@ -43,7 +68,11 @@ def _registry_sections() -> dict[str, list[str]]:
     current: str | None = None
     for line in _CLAUDE.read_text(encoding="utf-8").split("\n"):
         if line.startswith("### "):
-            current = line[4:].strip() if line.startswith(("### Open", "### Closed")) else None
+            current = (
+                line[4:].strip()
+                if line.startswith(("### Open", "### Closed"))
+                else None
+            )
             if current:
                 sections[current] = []
         elif current and line.startswith("- **"):
@@ -57,7 +86,9 @@ def test_the_registry_is_parseable():
 
     open_entries = sum(len(v) for k, v in sections.items() if k.startswith("Open"))
     assert any(k.startswith("Open — P0") for k in sections), "no P0 section found"
-    assert open_entries >= 15, f"only {open_entries} open entries parsed — the scan is broken"
+    assert open_entries >= 15, (
+        f"only {open_entries} open entries parsed — the scan is broken"
+    )
 
 
 def test_no_open_entry_headlines_itself_as_closed():
@@ -150,8 +181,19 @@ def test_the_size_cap_is_a_ratchet_not_a_ceiling_we_are_far_below():
     reason to delete this test.
     """
     sections = _registry_sections()
-    largest_open = max((len(line) for h, e in sections.items() if h.startswith("Open") for line in e), default=0)
-    largest_closed = max((len(line) for h, e in sections.items() if h.startswith("Closed") for line in e), default=0)
+    largest_open = max(
+        (len(line) for h, e in sections.items() if h.startswith("Open") for line in e),
+        default=0,
+    )
+    largest_closed = max(
+        (
+            len(line)
+            for h, e in sections.items()
+            if h.startswith("Closed")
+            for line in e
+        ),
+        default=0,
+    )
 
     assert largest_open > _MAX_ENTRY_BYTES * 0.7, (
         f"largest open entry is {largest_open}B against a {_MAX_ENTRY_BYTES}B cap — the cap is "
@@ -172,8 +214,14 @@ def test_the_registry_stays_a_minority_of_the_file():
     """
     text = _CLAUDE.read_text(encoding="utf-8")
     lines = text.split("\n")
-    start = next(i for i, ln in enumerate(lines) if ln.startswith("## TECH_DEBT.md — prefix registry"))
-    end = next(i for i, ln in enumerate(lines[start + 1 :], start + 1) if ln.startswith("## "))
+    start = next(
+        i
+        for i, ln in enumerate(lines)
+        if ln.startswith("## TECH_DEBT.md — prefix registry")
+    )
+    end = next(
+        i for i, ln in enumerate(lines[start + 1 :], start + 1) if ln.startswith("## ")
+    )
     registry = len("\n".join(lines[start:end]))
 
     share = registry / len(text)
