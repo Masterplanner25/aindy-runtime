@@ -144,6 +144,11 @@ def _run_execute(monkeypatch, *, max_ms, boot_env):
 
 
 def test_outer_timeout_adds_boot_allowance(monkeypatch):
+    # ★ Pins the FRESH-SUBPROCESS path. `AINDY_NODUS_WARM_POOL` defaults ON since
+    # 2026-08-19, so without this the adapter takes the warm path, `subprocess.run` is
+    # never called, and the capture below reads an empty dict. This test is about that
+    # path specifically; the payload itself is built once and shared by both.
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "0")
     cap = _run_execute(monkeypatch, max_ms=30_000, boot_env="15000")
     # outer subprocess kill = (script budget + boot allowance) seconds
     assert cap["timeout"] == 45.0
@@ -152,12 +157,22 @@ def test_outer_timeout_adds_boot_allowance(monkeypatch):
 
 
 def test_outer_timeout_uses_default_allowance(monkeypatch):
+    # ★ Pins the FRESH-SUBPROCESS path. `AINDY_NODUS_WARM_POOL` defaults ON since
+    # 2026-08-19, so without this the adapter takes the warm path, `subprocess.run` is
+    # never called, and the capture below reads an empty dict. This test is about that
+    # path specifically; the payload itself is built once and shared by both.
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "0")
     cap = _run_execute(monkeypatch, max_ms=30_000, boot_env=None)
     assert cap["timeout"] == (30_000 + _DEFAULT_BOOT_ALLOWANCE_MS) / 1000.0
     assert cap["payload"]["max_execution_ms"] == 30_000
 
 
 def test_boot_allowance_zero_restores_shared_budget(monkeypatch):
+    # ★ Pins the FRESH-SUBPROCESS path. `AINDY_NODUS_WARM_POOL` defaults ON since
+    # 2026-08-19, so without this the adapter takes the warm path, `subprocess.run` is
+    # never called, and the capture below reads an empty dict. This test is about that
+    # path specifically; the payload itself is built once and shared by both.
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "0")
     cap = _run_execute(monkeypatch, max_ms=30_000, boot_env="0")
     assert cap["timeout"] == 30.0  # outer == inner == old behavior
     assert cap["payload"]["max_execution_ms"] == 30_000

@@ -55,5 +55,12 @@ the *default* path. A warm path that dropped it would have silently disabled at-
 every continued run while every existing DUR-2b test stayed green. It does carry it; there is now
 a test saying so.
 
-One existing test asserted on the fresh-subprocess payload and went red on the flip, correctly —
-it now pins `AINDY_NODUS_WARM_POOL=0` explicitly, because it is about that path specifically.
+**Eight existing tests asserted on the fresh-subprocess payload and went red on the flip,
+correctly** — with the warm pool on, `subprocess.run` is never called and their capture reads an
+empty dict. Each now pins `AINDY_NODUS_WARM_POOL=0` explicitly, because each is about that path
+specifically; the payload itself is built once and shared by both paths.
+
+That is the expected shape of a default flip: the tests that silently depended on the old default
+announce themselves. Worth noting **CI found them and repeated local sweeps did not** — the local
+runs kept stopping partway and never reached those files alphabetically, so "zero failures so far"
+was measuring how far the run got, not whether the suite passed.

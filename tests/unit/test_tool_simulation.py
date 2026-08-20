@@ -154,6 +154,11 @@ def test_virtual_ignored_when_capability_denied(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def test_adapter_threads_simulate_and_parses_effects(monkeypatch):
+    # ★ Pins the FRESH-SUBPROCESS path. `AINDY_NODUS_WARM_POOL` defaults ON since
+    # 2026-08-19, so without this the adapter takes the warm path, `subprocess.run` is
+    # never called, and the capture below reads an empty dict. This test is about that
+    # path specifically; the payload itself is built once and shared by both.
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "0")
     from AINDY.runtime import nodus_runtime_adapter as adp
 
     captured = {}
@@ -184,6 +189,11 @@ def test_adapter_threads_simulate_and_parses_effects(monkeypatch):
 
 
 def test_adapter_default_not_simulate(monkeypatch):
+    # ★ Pins the FRESH-SUBPROCESS path. `AINDY_NODUS_WARM_POOL` defaults ON since
+    # 2026-08-19, so without this the adapter takes the warm path, `subprocess.run` is
+    # never called, and the capture below reads an empty dict. This test is about that
+    # path specifically; the payload itself is built once and shared by both.
+    monkeypatch.setenv("AINDY_NODUS_WARM_POOL", "0")
     from AINDY.runtime import nodus_runtime_adapter as adp
 
     captured = {}
