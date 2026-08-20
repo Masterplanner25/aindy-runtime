@@ -184,9 +184,20 @@ def test_the_gate_degrades_to_at_least_once_under_contention(monkeypatch, testin
     #
     # A soak whose instrument cannot distinguish "the mechanism did not fire" from "I failed to
     # observe it" produces exactly the ambiguous result a soak must not produce.
+    # ★ BOTH degradation labels. There are two paths to AT_LEAST_ONCE and asserting only one
+    # under-reports — which is exactly what this test caught in CI on 2026-08-20: the handler ran
+    # twice while `degraded` stayed flat, because the downgrade came through the DISPATCHER's
+    # gate-failure branch rather than the LEDGER's live-pending-row branch. That branch counted
+    # nothing at all.
+    #
+    # The property being asserted is not "the contention path fired" — it is "a downgrade was
+    # never silent". Pinning it to one label made a *correct* runtime look broken and, worse,
+    # would have let a real silent downgrade through the other path.
     with metric_window(
         "aindy_effect_gate_outcomes_total", labels={"outcome": "degraded"}
-    ) as degraded:
+    ) as degraded, metric_window(
+        "aindy_effect_gate_outcomes_total", labels={"outcome": "degraded_gate_error"}
+    ) as degraded_error:
         outcome = _drive(name, str(uuid.uuid4()), {"x": 1})
 
     assert outcome.ok, (
@@ -206,10 +217,15 @@ def test_the_gate_degrades_to_at_least_once_under_contention(monkeypatch, testin
     # ★ The degradation must be COUNTABLE. It is the only signal an operator gets that
     # EXACTLY_ONCE did not hold for a given call.
     if len(runs) > 1:
-        assert degraded.delta("aindy_effect_gate_outcomes_total") >= 1, (
-            f"the handler ran {len(runs)} times but the degraded counter did not move — the "
+        accounted = (
+            degraded.delta("aindy_effect_gate_outcomes_total")
+            + degraded_error.delta("aindy_effect_gate_outcomes_total")
+        )
+        assert accounted >= 1, (
+            f"the handler ran {len(runs)} times but NEITHER degradation counter moved — the "
             f"downgrade would be SILENT in production, and an operator would have no way to "
-            f"know that EXACTLY_ONCE did not hold for those calls"
+            f"know that EXACTLY_ONCE did not hold for those calls. If this fires again, look "
+            f"for a THIRD path to AT_LEAST_ONCE that nothing counts."
         )
 
 

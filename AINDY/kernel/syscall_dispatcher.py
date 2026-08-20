@@ -139,6 +139,21 @@ def _is_uuid(value: Any) -> bool:
         return False
 
 
+def _count_gate_outcome(outcome: str) -> None:
+    """Record a gate outcome from the dispatcher side (see effect_ledger._count_gate).
+
+    Best-effort and import-local, for the same reason the ledger's twin is: the gate is the
+    correctness path and the counter is observability. A metrics failure must never change
+    whether an effect executes.
+    """
+    try:
+        from AINDY.platform_layer.metrics import effect_gate_outcomes_total
+
+        effect_gate_outcomes_total.labels(outcome=outcome).inc()
+    except Exception:  # pragma: no cover - observability must never break the effect path
+        pass
+
+
 def _gate_scope_engaged(value: Any) -> bool:
     """True when a run scope should engage the idempotency gate: a bare UUID, or a
     prefixed run id whose tail (after the last ``_`` or ``:``) is a UUID — e.g.
@@ -561,6 +576,17 @@ class SyscallDispatcher:
                         pass
                 _gate_db = None
                 _gate_action_id = None
+                # ★ COUNT IT. There are TWO degradation paths and only one was instrumented:
+                # the ledger's "a live concurrent call holds the slot" (outcome=degraded, an
+                # expected contention outcome) and this one — the gate machinery itself failed.
+                # Both drop the caller to AT_LEAST_ONCE, so a counter that sees only the first
+                # UNDER-REPORTS the exposure, and the difference matters: one is contention,
+                # the other means the gate is broken and needs investigating.
+                #
+                # Found in CI by the contention soak, which asserts that a second handler run is
+                # never silent: the handler ran twice while `degraded` stayed flat, because the
+                # downgrade came through here.
+                _count_gate_outcome("degraded_gate_error")
                 logger.warning(
                     "[SyscallDispatcher] idempotency gate degraded to AT_LEAST_ONCE for %r: %s",
                     name, _gate_exc,

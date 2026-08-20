@@ -24,7 +24,7 @@ from tests.integration.soak_harness import metric_window, read_metric
 pytestmark = pytest.mark.runtime_only
 
 _NAME = "aindy_effect_gate_outcomes_total"
-_OUTCOMES = ("reserved", "replayed", "degraded", "reclaimed")
+_OUTCOMES = ("reserved", "replayed", "degraded", "degraded_gate_error", "reclaimed")
 
 
 @pytest.mark.parametrize("outcome", _OUTCOMES)
@@ -70,3 +70,34 @@ def test_an_unknown_outcome_label_still_records_rather_than_raising():
     """A typo'd label is an observability bug, not an execution one — it must not throw."""
     _count_gate("not-a-real-outcome")
     assert read_metric(_NAME, {"outcome": "not-a-real-outcome"}) >= 1.0
+
+
+def test_the_dispatcher_side_degradation_is_counted_too():
+    """★ The gap this file originally had, found in CI by the contention soak.
+
+    There are TWO paths to AT_LEAST_ONCE and only one was instrumented:
+
+      ledger      lost the insert race to a LIVE PENDING row  -> outcome="degraded"
+      dispatcher  the gate machinery itself raised            -> counted NOTHING
+
+    The soak asserts that a second handler run is never silent. It failed with the handler
+    having run twice while ``degraded`` stayed flat, because the downgrade came through the
+    dispatcher branch. A counter that sees only one path **under-reports the exposure**, and the
+    two are different remediations: contention is expected, a broken gate is not.
+    """
+    from AINDY.kernel.syscall_dispatcher import _count_gate_outcome
+
+    with metric_window(_NAME, labels={"outcome": "degraded_gate_error"}) as m:
+        _count_gate_outcome("degraded_gate_error")
+    m.assert_increased(_NAME)
+
+
+def test_the_two_degradation_paths_stay_distinguishable():
+    """Both mean at-most-once did not hold, but an operator has to tell them apart: one says
+    'you have contention', the other says 'the gate is broken'."""
+    from AINDY.kernel.syscall_dispatcher import _count_gate_outcome
+
+    with metric_window(_NAME, labels={"outcome": "degraded"}) as contention:
+        _count_gate_outcome("degraded_gate_error")
+
+    contention.assert_unchanged(_NAME)
