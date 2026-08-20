@@ -402,8 +402,11 @@ effect_gate_outcomes_total = Counter(
     "aindy_effect_gate_outcomes_total",
     "Idempotency gate outcomes by resolution: reserved (this caller runs the effect), "
     "replayed (a completed record was returned instead of executing), degraded (lost the "
-    "race to a live pending row, downgraded to AT_LEAST_ONCE for this call), reclaimed "
-    "(took over a stale or failed slot)",
+    "race to a live pending row, downgraded to AT_LEAST_ONCE for this call), "
+    "degraded_gate_error (the gate machinery itself failed and the caller was downgraded), "
+    "reclaimed (took over a stale or failed slot). ★ BOTH degraded* labels mean at-most-once "
+    "did not hold for that call; they are separate because one is contention and the other "
+    "means the gate is broken.",
     ["outcome"],
     registry=REGISTRY,
 )
