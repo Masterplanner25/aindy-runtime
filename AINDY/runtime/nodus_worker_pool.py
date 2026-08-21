@@ -12,17 +12,25 @@ a dependency, and ``nodus-lang <= 5.0.2`` bound ``GLOBAL_MEMORY_STORE`` at **imp
 every ``NodusRuntime`` in the process shared one guest memory dict, and a guest ``.nd``
 script calling ``memory_put``/``memory_get`` could read another tenant's values out of a
 reused worker. Reproduced on 5.0.1 before the bump; fixed upstream in 5.0.3 (per-runtime
-stores) and pinned here at 5.0.4. Exposure was bounded by this pool being opt-in and off by
-default, not by the claim being true. Regression guard:
+stores). Exposure was bounded by this pool being opt-in and off by default *at that time*,
+not by the claim being true. Regression guard:
 ``tests/unit/test_nodus_upgrade_contract.py::test_two_runtimes_in_one_process_do_not_share_guest_memory``.
 
 **The general rule this leaves behind:** per-request state rebuilt *here* says nothing about
 process-global state held *below* here. Before enabling the pool after any dependency bump,
 re-run that guard — a reused process is only as isolated as its most import-bound dependency.
 
-Opt-in — ``AINDY_NODUS_WARM_POOL`` (default off). When off, ``warm_pool_enabled()`` is
-false and the adapter uses the existing fresh-subprocess path unchanged. **Phase 2** — a
-bounded pool of up to ``AINDY_NODUS_WARM_POOL_SIZE`` (default 4) workers, each serving one
+★ **That rule got sharper on 2026-08-19 and this docstring did not notice for a day.** The
+"bounded by being off by default" sentence above stopped being a live mitigation the moment
+the flag flipped ON (see ``warm_pool_enabled``, ~200 lines below, which has said "Default ON
+since 2026-08-19" while this paragraph still said "default off" — one file, two answers, the
+``ISOLATION-DOC-STATUS-1`` shape). The consequence is not cosmetic: re-running that guard is
+no longer a precondition of *enabling* the pool, it is a precondition of every dependency
+bump, because the pool is already enabled. It was re-run for nodus-lang 5.1.0.
+
+``AINDY_NODUS_WARM_POOL`` is **default ON**; ``=0`` restores the fresh-subprocess path, in
+which ``warm_pool_enabled()`` is false and the adapter behaves as it did before. **Phase 2**
+— a bounded pool of up to ``AINDY_NODUS_WARM_POOL_SIZE`` (default 4) workers, each serving one
 request at a time, so up to N executions run concurrently. When all N are busy a caller
 waits up to ``AINDY_NODUS_WARM_ACQUIRE_TIMEOUT_MS`` (default 2000) for one to free, then the
 pool raises :class:`PoolBusy` and the adapter spills the request to a fresh subprocess

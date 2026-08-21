@@ -236,3 +236,80 @@ def test_the_installed_version_matches_the_declared_pin():
         f"results about the nodus surface are not evidence about what this runtime ships. "
         f"Run: pip install nodus-lang=={declared.group(1)}"
     )
+
+
+# --------------------------------------------------------------------------------------
+# ★ `filename=` is a LABEL, not a program selector (nodus-lang 5.1.0, upstream #521)
+# --------------------------------------------------------------------------------------
+#
+# Until 5.1.0, `run_source(source, filename=...)` ran the *file* named by `filename`
+# whenever one existed — discarding the `source` the caller passed and returning
+# `ok=True` with the other program's output. Present since nodus v0.4.0. Which program
+# ran therefore depended on the worker's process CWD.
+#
+# ★ That is the same shape as GUEST-CONFINE-1's residual, which was also a CWD the
+# runtime never set: the worker inherited the *server's* directory (`/home/aindy` in
+# Docker, holding `alembic/`). We were not exposed — every `filename` this runtime
+# passes is an angle-bracket label that cannot name a file — but "not exposed" was an
+# accident of formatting until these two tests, and the second is the one that keeps it
+# true as the adapter changes.
+
+
+def test_run_source_runs_the_passed_source_not_a_file_named_by_filename(runtime_cls, tmp_path):
+    """The upstream guarantee, asserted against a real file that really exists.
+
+    ★ The liveness control is the *other* program: `decoy.nd` on disk prints `DECOY`, and the
+    assertion demands `PASSED` in stdout AND `DECOY` absent. A test that only checked for
+    `PASSED` would pass vacuously if `run_source` silently returned nothing at all.
+    """
+    decoy = tmp_path / "decoy.nd"
+    decoy.write_text('print("DECOY")\n', encoding="utf-8")
+
+    runtime = runtime_cls(allow_subprocess=False, allow_network=False, allow_env=False)
+    result = runtime.run_source('print("PASSED")\n', filename=str(decoy))
+
+    stdout = str((result or {}).get("stdout") or "")
+    assert "PASSED" in stdout, (
+        f"run_source did not execute the source it was passed (stdout={stdout!r}, "
+        f"result={result!r}). If `DECOY` appears instead, nodus has regressed to the "
+        f"pre-5.1.0 behaviour where `filename` selected a program off disk."
+    )
+    assert "DECOY" not in stdout, (
+        f"run_source executed the FILE named by `filename` instead of the passed source "
+        f"(stdout={stdout!r}) — upstream #521, fixed in 5.1.0. Any caller that passes a "
+        f"`filename` resolvable from the process CWD is running a program it did not choose."
+    )
+
+
+def test_every_filename_this_runtime_passes_is_an_unopenable_label():
+    """★ Our half — and it CALLS the adapter rather than reading it (variant 7).
+
+    `_execute` is stubbed to capture the `filename` argument, so this exercises the real
+    `run_script` code path that builds it, without spawning a worker subprocess. The
+    assertion is that the label is angle-bracketed: `<...>` is not a legal path component on
+    Windows and names nothing on POSIX, so it cannot resolve to a file under any CWD.
+
+    This is what makes "we were never exposed to #521" a maintained property instead of a
+    one-time reading. If the adapter ever passes a real script path here, this fails.
+    """
+    from AINDY.runtime.nodus_runtime_adapter import (
+        NodusExecutionContext,
+        NodusRuntimeAdapter,
+    )
+
+    seen: dict[str, str] = {}
+    adapter = NodusRuntimeAdapter(db=None)
+    adapter._execute = lambda script, filename, context, **kw: seen.update(filename=filename)
+
+    adapter.run_script(
+        'print("x")',
+        NodusExecutionContext(user_id="u", execution_unit_id="eu-1"),
+    )
+
+    filename = seen.get("filename", "")
+    assert filename.startswith("<") and filename.endswith(">"), (
+        f"NodusRuntimeAdapter passed filename={filename!r}, which is not an angle-bracket "
+        f"label. Before 5.1.0 a resolvable path here made nodus run THAT file instead of the "
+        f"script we compiled (upstream #521). The pin protects us now; this assertion is what "
+        f"stops the adapter from re-acquiring the exposure."
+    )
