@@ -179,6 +179,19 @@ mongo_health_status = Gauge(
     registry=REGISTRY,
 )
 
+# ── Liveness probe event volume (FR-18) ──────────────────────────────────────
+# One increment per `/health` probe, labelled by what it persisted. `suppressed`
+# staying flat while probes flow is the tell that change-detection has been defeated
+# by a new volatile field — the write rate is then bounded only by the digest size.
+health_liveness_events_total = Counter(
+    "aindy_health_liveness_events_total",
+    "Liveness probes by what was persisted",
+    # persisted_boot | persisted_changed | persisted_interval | persisted_full
+    # | suppressed | disabled | failed
+    ["outcome"],
+    registry=REGISTRY,
+)
+
 # Queue
 
 async_queue_depth = Gauge(

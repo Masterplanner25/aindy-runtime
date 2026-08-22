@@ -1,6 +1,6 @@
 ---
 title: "Runtime Behavior"
-last_verified: "2026-06-24"
+last_verified: "2026-08-22"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -155,7 +155,13 @@ This document describes the current runtime behavior of the FastAPI backend as i
 - Auth, Analytics, ARM, Main-calculation, and Memory routes now also pass through the lighter route-layer execution pipeline in `core/execution_pipeline.py` / `core/execution_helper.py`, which preserves existing route response shapes while adding request-level trace/event handling.
 - Required outbound lifecycle events are emitted for instrumented external interactions through `platform_layer/external_call_service.py`.
 - Successful non-flow operational paths now also emit durable events where implemented, including:
-  - `health.liveness.completed`
+  - `health.liveness.completed` — **a digest, not a snapshot, and not one per probe (FR-18, 2026-08-22).**
+    It carries status, degraded domains, warnings and a fingerprint of the posture blobs, and is
+    persisted only when that fingerprint changes, on the first probe after boot, or once per
+    `AINDY_HEALTH_LIVENESS_EVENT_INTERVAL_SECONDS` (default 1h). It previously persisted the whole
+    26-key health response on **every** probe; driven by a container healthcheck timer rather
+    than by traffic, that reached 99.6% of one deployment's database. The full snapshot is available from
+    `GET /health/detail`; see `AINDY/core/health_liveness_signal.py`.
   - `health.readiness.completed`
   - `identity.created`
   - `auth.register.completed`
