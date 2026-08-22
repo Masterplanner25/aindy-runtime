@@ -1599,6 +1599,197 @@ all `settings.` call sites with `get_settings().`; gate log initialization insid
 
 ---
 
+## QUOTA-ACCRUAL-ORPHAN-1 — the dispatcher accrues resource usage that only the pipeline reaps
+
+**Status:** Open — P2, but a **live functional break**, not a latent risk. Found 2026-08-22
+while scoping `CLI-EXEC-SURFACE-1`; split out because the mechanism is not CLI- or MCP-specific.
+
+### The mechanism
+
+Resource accounting is split across two components that were never required to appear
+together:
+
+- **`SyscallDispatcher` accrues.** Step 4 of every dispatch calls
+  `record_usage(context.execution_unit_id, {"syscall_count": 1, "wall_time_ms": …})`
+  (`syscall_dispatcher.py:766-771`). `record_usage` → `record_cpu`/`record_syscall`, each of
+  which **creates the `UsageSnapshot` when absent** (`resource_manager.py:862, 871, 882`).
+- **`ExecutionPipeline` reaps.** `mark_completed` is called from
+  `core/execution_pipeline/resources.py:107,121` and the flow engine's completion/failure
+  paths (`runner_completion.py:180`, `runner_failure.py:39`) — and **nowhere else**, grepped
+  across `AINDY/`.
+
+**A caller that uses `dispatch_syscall` without `ExecutionPipeline` therefore accrues usage
+that nothing ever clears.** Route handlers are fine: they run inside the pipeline. The gap is
+every other dispatch path.
+
+### The one caller that hits it today
+
+`AINDY/platform_layer/mcp_server.py` has **zero** references to `ExecutionPipeline`, and its
+handler calls `dispatch_syscall(name, args, user_id=...)` with no `execution_unit_id` and no
+`trace_id` (`:188-196`). `dispatch_syscall` then builds the context with `run_id=""`
+(`syscall_dispatcher.py:904-910`), so every call checks *and accrues* against the key `""`,
+in the process-level singleton (`get_resource_manager()`, `resource_manager.py:984`).
+
+### Executed, with a liveness control
+
+`is_testing` is a pydantic **property** — patch it on the class or `check_quota`
+short-circuits to `(True, None)` at `resource_manager.py:639` and proves nothing:
+
+```
+call 1: check_quota('') -> (True, None)      # no snapshot yet — the one free call
+call 2: check_quota('') -> (True, None)
+bucket after 3 calls: {'eu_id': '', 'tenant_id': '', 'wall_time_ms': 15, 'syscall_count': 3}
+...after 108 accrued syscalls:
+check_quota('') -> (False, "RESOURCE_LIMIT_EXCEEDED: eu '' exceeded syscall_count limit (108 > 100)")
+control (eu-1, over cap) -> (False, "... eu 'eu-1' exceeded syscall_count limit (105 > 100)")
+```
+
+The control matters: without it, `(True, None)` twice is equally consistent with
+*"`check_quota` is a no-op"*, which would be a different (and smaller) finding.
+
+Three stages, in order:
+
+1. **The first id-less call escapes the quota** — no snapshot to exceed.
+2. **Every later id-less call shares ONE global bucket keyed `""`**, accumulating across
+   callers, sessions and tools. A per-*execution* budget silently became a per-*process* one,
+   with `tenant_id=""` — so `can_execute("")` is also being asked about a tenant that is not
+   one.
+3. **Past `MAX_SYSCALLS_PER_EXECUTION` (100) it trips and never recovers.** Every subsequent
+   id-less call is refused with `RESOURCE_LIMIT_EXCEEDED: eu '' exceeded syscall_count limit`.
+   `MAX_WALL_TIME_MS` (300 000) accrues identically — a second, slower path to the same
+   lockout.
+
+### Why it matters
+
+`aindy-runtime mcp-server --transport stdio` is a **long-lived** process. A session exceeding
+100 tool calls hits a hard stop, and the message cites an execution unit that does not exist —
+indistinguishable from a real quota breach, and not obviously connected to uptime.
+
+**Redis makes it worse, not better.** `_backend_get_syscalls("")` is a shared key, so the
+bucket spans every instance in the deployment rather than one process — the lockout becomes
+deployment-wide and outlives any single restart.
+
+**P2 only because exposure is bounded by adoption** — the MCP server is opt-in, behind the
+`[mcp]` extra, read-only by default, and spawned deliberately. The mechanism is not weak.
+**Promotion triggers (any one):** MCP server use becomes routine; a second non-pipeline
+`dispatch_syscall` caller appears (a CLI is the obvious candidate — see
+`CLI-EXEC-SURFACE-1`); or the deployment runs Redis, which widens the blast radius from one
+process to all of them.
+
+### The fix, and the shape to avoid
+
+**The rule: a caller that uses `dispatch_syscall` must own an `ExecutionUnit` lifecycle —
+claim it and reap it.** Not for metrics; so the quota has a subject that is *its own* and that
+someone eventually clears.
+
+- **Do not "fix" it by making `check_quota("")` return early.** That restores the *first*
+  stage (a caller with no budget at all) and deletes the evidence that the accrual is
+  unreaped. The empty key is a symptom.
+- **Do not give the dispatcher its own reaper.** Accrual and reaping would then live in two
+  places with no shared transaction, which is `ORCHESTRATOR-SPLIT-1`'s failure mode.
+- **Consider making the dispatcher refuse an empty `execution_unit_id` outright** — it is
+  never legitimate, and failing loudly at the seam beats accruing into a bucket named `""`.
+  Check first what else dispatches without one; `dispatch_syscall`'s signature makes
+  `execution_unit_id` optional, so the answer may not be only MCP.
+
+★ **Method note, worth more than the bug.** This was filed wrong first: read from source,
+labelled "measured", and stated as *"the quota is vacuous for an id-less caller"* — the exact
+opposite of what happens. It survived into a draft of
+`docs/runtime/CLI_EXECUTION_SURFACE_SCOPE.md`, a document that cites the
+`trusting-a-green-check` catalogue, and it is catalogue **variant 7** (asserting the source,
+not the behaviour). Running it took four minutes. The wrong version is preserved in that
+doc's §3 on purpose.
+
+---
+
+## CLI-EXEC-SURFACE-1 — the runtime can be administered from a terminal, never asked to do anything
+
+**Status:** Open — P2. Filed 2026-08-22. Scope doc:
+`docs/runtime/CLI_EXECUTION_SURFACE_SCOPE.md`.
+
+**This is a lens, not a defect.** Nothing is broken. What is filed is that a whole surface was
+never made the subject of a question, and three existing entries are facets of it that were
+filed separately because the lens was missing.
+
+### The finding
+
+Every one of the eight `aindy-runtime` subcommands administers the server — `init`, `serve`,
+`sandbox`, `bootstrap-schema`, `mcp-server`, `memory reembed`, `memory prune-cascade-debris`,
+`auth promote-admin`. **None executes anything.** No `run`, no `agent run`, no `flow run`, no
+`syscall`. Verified against the `add_parser` table and the `args.command ==` dispatch block in
+`AINDY/runtime_only.py`.
+
+The direction is the point. `nodus` — *below* the runtime — ships ~27 commands including
+`run`, `repl`, `workflow run|list|resume`, `goal-run`, `snapshot`/`restore`. `claw` — *above*
+it — ships a daemon lifecycle plus `agents`, `workspace`, `weave`. **The runtime in the middle
+is the only level that cannot be asked to do work.** So a person at a prompt either stands up
+HTTP or drops to `nodus run`, which reaches the interpreter without passing the dispatcher,
+the capability token, the effect ledger, the egress guard or the quota. **The terminal path
+routes around the runtime** — `FLOW-PARALLEL-1`'s shape ("apps needing parallelism route
+around the flow engine"), and `GUEST-CONFINE-1`'s.
+
+### ★ Why nine audits missed it, and the number that shows it
+
+Nine comparative audits examined systems that are *all* terminal-driven (Codex, Claude Code,
+Aider, SWE-agent, OpenClaw/Pi, GPT Engineer, …). `COMPARATIVE_RESEARCH_INDEX.md` has **zero**
+occurrences of "CLI" in 482 lines. The split across the audit documents is the mechanism:
+
+| Document class | "CLI" mentions |
+|---|---|
+| *Architecture* audits — describing **them** | 36, 13, 12, 11, 7, 4 |
+| `*_ON_AINDY_RUNTIME_*` / `*_AINDY_LENS_*` — turning it back on **us** | 1, 0, 0, 3, 1, 2 |
+
+The CLI was on both sides of every comparison and was the subject of neither. The cause is a
+mismatch nobody named: those systems are **app-level** tools whose CLI *is* the execution
+surface (`codex exec`, `aider`, `claude -p`), and it was being compared against our
+**runtime-level administration** CLI. Two different questions wearing the same word.
+
+*(Method caveat, stated because the conclusion rests on it: the counts above are keyword hits
+in the top-level audit `.md` files plus spot-reading, not a full read of nine folders. The
+zero in the index and the empty subcommand table are hard facts; "never asked of us" is a
+strong inference from a proxy.)*
+
+### ★★ Scoping this found a live bug — split out as `QUOTA-ACCRUAL-ORPHAN-1`
+
+**Read that entry, not this paragraph.** In one line: `SyscallDispatcher` **accrues** resource
+usage and only `ExecutionPipeline` **reaps** it, so any caller that dispatches outside the
+pipeline accrues forever. The one caller doing that today is `mcp-server`, which dispatches
+with no `execution_unit_id`; it gets one free call, then a single process-wide bucket keyed
+`""`, then a permanent `RESOURCE_LIMIT_EXCEEDED` past 100 syscalls.
+
+**Why it belongs in this entry's story at all:** it is the hole a CLI built the obvious way
+inherits on day one, and it is the reason the scope doc's answer to *"pipeline or beside it?"*
+is not a judgement call. **A CLI that executes must claim and reap an `ExecutionUnit`.**
+
+It also carries the method lesson this entry earned: the bug was filed **wrong first** — read
+from source, labelled "measured", and stated as the opposite of what happens — inside a
+document that cites the `trusting-a-green-check` catalogue. Variant 7, committed while writing
+about variant 7.
+
+### What this subsumes
+
+Three open entries are facets of "the runtime has no terminal-shaped consumer":
+
+- **EMBEDDED-FLOOR-1** — the *deployment* half ("a consumer shaped like a library in a
+  terminal is out of contract by declaration").
+- **PROGRESS-CHANNEL-1** — the *streaming* half. Its own text says it was "surfaced only by an
+  **interactive** comparator" — that is because we have no interactive surface to feel it
+  from.
+- **SUBSTRATE-WITNESS-1** — the *witness* half. A CLI would be the cheapest first-party
+  consumer that cannot route around the chokepoints.
+
+**Do not merge those into this one.** Each is actionable alone and two have their own
+dependents; this entry records that they share a root, which is the thing that was missing.
+
+### What would close it
+
+Either a decision that the runtime deliberately has no execution CLI — **recorded**, the way
+the declined kernel-replay decision is — or the tiered build in the scope doc. The scope doc's
+recommendation is neither: **settle the `ExecutionPipeline` question and fix the vacuous quota
+first**, because that is true either way.
+
+---
+
 ## CLI-SANDBOX-FORMAT-1: aindy-runtime sandbox returns raw JSON to terminal
 
 **Status:** CLOSED (2026-06-05)
