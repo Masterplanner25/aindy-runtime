@@ -1,4 +1,4 @@
-### Fixed — a liveness probe no longer persists a full health snapshot (FR-18)
+### Fixed — a liveness probe no longer persists a full health snapshot (FR-18, #517)
 
 **Operators: read this before upgrading — the fix stops the growth, it does not reclaim what
 was already written.**
