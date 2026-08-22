@@ -407,7 +407,7 @@ A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — ver
 item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
 blocked on a token-delivery channel (FR-1). **FR-7** (memory recall defects) shipped in
 v2.0.0. **FR-8, FR-9 and FR-10 arrived 2026-08-03 and shipped 2026-08-05 — see below; all
-three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. Next available: **FR-14**.
+three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database) arrived 2026-08-22; FR-18 is fixed here, FR-17 in a companion PR. Next available: **FR-19**.
 
 ### FR-8/9/10 — the 2.0.0 upgrade trio (SHIPPED 2026-08-05)
 
@@ -922,7 +922,7 @@ net-new, but all four defects were fixed in 2.0.0 and are present in source:
 `SIGNIFICANCE_IMPACT_WEIGHT` (MEM-IMPACT-IGNORES-SIGNIFICANCE-1). They are running 2.0.1, so
 the fixes are in their deployment; only the doc is behind.
 
-Next available: **FR-14**.
+Next available: **FR-19**.
 
 ---
 
@@ -7472,6 +7472,127 @@ change dispatch behaviour; (b) and (a) remain open.
 the starvation coupling regardless of which dispatch mode is chosen; (a) is the real fix but is
 the one that needs soak, and doing it last means the first occurrence after the flip is
 diagnosable because (c) already shipped.
+
+## FR-18 — every liveness probe persisted a full health snapshot: 99.6% of one database
+
+**Status: FIXED 2026-08-22 (this session).** Filed by the app team the same day, found while
+taking a `pg_dump` before a runtime upgrade — the dump would not finish. On a **local dev stack
+with four accounts and no real traffic**: `system_events` at **3653 MB across 183,604 rows**
+against a 3795 MB database, of which `health.liveness.completed` was **120,444 rows / 3317 MB**,
+3528 MB of it TOAST, `n_dead_tup = 0`. Not bloat, not a missing autovacuum — live intended data.
+`pg_dump --exclude-table-data=system_events` produced **17 MB**: the real data was 0.4% of it.
+
+**Mechanism, verified at HEAD.** `health_router._emit_health_event` persisted the **entire
+health response** — 26 top-level keys, `trusted_python_execution` alone ~52 kB uncompressed,
+plus the deployment contract, the sandbox attestation and the full plugin inventory — on every
+successful probe, each opening its own `SessionLocal`. The driver is a container healthcheck,
+i.e. **a timer, not traffic**. ★ Their report says "the recommended compose shape, every 15s";
+be precise about whose — **ours is the image's own `HEALTHCHECK`, `curl --fail /health` every
+30s** (2,880 rows/day); our compose's `api` healthcheck probes `/ready`, which emits nothing;
+their compose adds a 15s `/health` probe. Their measured rate over 34 days is ~3,500 rows/day
+= **~98 MB/day, ~3 GB/month**, unbounded, with no retention. The distinction does not change
+the verdict — it changes who has to act, and the answer is *both*, which is why the fix is in
+the runtime and not in a compose file.
+
+**Why it is a defect and not a preference, in one sentence: the content cannot change between
+two probes seconds apart.** Sandbox posture, deployment contract and plugin inventory are
+boot-time facts, so the same ~28 kB was rewritten thousands of times a day. Their three costs all
+hold — it swamps the signal (65% of `system_events` rows were liveness snapshots, in the table
+where FR-15 and FR-17 are investigated), it makes backup/restore impractical, and it is a
+continuous write load on the one endpoint that must stay up.
+
+**The fix takes their preference 1 AND preference 3, deliberately.** `AINDY/core/health_liveness_signal.py`
+persists a **digest** (status, degraded domains, warnings, a posture fingerprint, and the byte
+count of the snapshot it did not store) and only **on change**, on the first probe after boot,
+or once per `AINDY_HEALTH_LIVENESS_EVENT_INTERVAL_SECONDS` (default 1h).
+
+**★ Why both rather than the cheaper one — this is the reusable part.** They fail differently.
+Change-detection depends on the fingerprint excluding every volatile field; the moment a new
+health key arrives carrying a counter or a timestamp that `_VOLATILE_LEAF_KEYS` does not know,
+every probe reads as *changed* and the rate control silently does nothing. The digest is not
+defeated by that — it bounds a worst-case probe to a few hundred bytes instead of 28 kB. So the
+failure mode of the rate control is *a smaller improvement*, not a return to 98 MB/day. **The
+tell is `aindy_health_liveness_events_total{outcome="suppressed"}` staying flat while probes
+flow**; that counter exists so the degradation is visible rather than inferred, which is the
+`caplog`-vs-Prometheus lesson from the soak harness applied before the fact.
+
+**★ Fingerprint by allowlist, not by exclusion.** `_POSTURE_KEYS` names the keys that describe
+posture; anything else is not seen. An exclusion list has the opposite failure: a new key is
+included by default, and if it moves, the rate control breaks silently. This way a new key is
+ignored by default, and the cost of missing one is a change that goes unrecorded until the
+hourly heartbeat — visible, and recoverable by adding the key.
+
+**★ Found by the route test, and it is an operator-visible property: a COLD process writes
+several rows before it settles.** Some posture providers populate lazily (plugin-host probe,
+sandbox attestation, runtime conditions), so the first probes of a fresh container each
+register a real change. The test's first version asserted one row from a cold start and failed
+intermittently — it was measuring cache population, not rate control; it now warms once, resets,
+then measures. Two consequences kept: the digest carries **`changed_keys`** (per-key hashes, so
+a row says *which* key moved — otherwise "warming up" and "a volatile field is leaking into the
+fingerprint" produce identical evidence), and an operator seeing 2–3 liveness rows right after a
+restart is looking at correct behaviour.
+
+**Nothing consumes the event.** Checked across both repos before changing the payload shape:
+the only references are the emit site, this module, `RUNTIME_BEHAVIOR.md`, and the app's own
+`API_CONTRACTS.md` prose. There is no reader to break.
+
+**Escape hatches, because the shape changed:** `AINDY_HEALTH_LIVENESS_EVENT_PAYLOAD=full`
+restores the whole-snapshot payload, `AINDY_HEALTH_LIVENESS_EVENTS=0` turns a liveness probe
+back into a pure read, and the interval is tunable (`0` = record changes only). All three are
+read **per call**, never at import — the standing rule, and FR-10 is why.
+
+**★ What this does NOT do, and the app team named it first: it does not reclaim the 3.5 GB
+already written.** The fix is to the write rate; existing rows are an operator action
+(`DELETE FROM system_events WHERE type='health.liveness.completed' AND timestamp < now() - interval '7 days'`,
+then `VACUUM FULL` or `pg_repack` to return the space, since a plain delete leaves the TOAST
+pages allocated). That is in the changelog entry as a pre-upgrade note.
+
+**Still open, deliberately not built here: `system_events` has no retention policy at all.**
+Nothing prunes it — `scheduler_service` cleans stale logs and expired `EffectRecord` rows and
+nothing else. That is a real gap and it is *not* this fix: the app team's own framing is right,
+retention is a mitigation of accumulated volume and the write rate was the defect. Filing it
+rather than bolting it on, because a prune job needs a per-type policy (an `execution.*` row is
+the audit trail `EVENT-OUTBOX-1` and `AUDIT-CORRELATION-1` depend on; a liveness digest is not),
+and choosing that policy under the pressure of a full disk is how a retention job deletes the
+thing someone needed. **Tracked as `SYSEVENT-RETENTION-1`.**
+
+**★ A number worth keeping for the next audit of this class: the app measured this on a stack
+with no traffic.** Every cost above was paid by the runtime observing itself. When looking for
+the next one, rank event types by `pg_total_relation_size` share, not by whether they look
+important — the events that dominate a table are the ones emitted by a loop, and a loop's
+events are the least likely to be read.
+
+## SYSEVENT-RETENTION-1 — `system_events` grows without bound and nothing prunes it
+
+**Status: OPEN — P2, filed 2026-08-22 out of `FR-18`.** The runtime prunes stale job logs
+(`_cleanup_stale_logs`) and expired `EffectRecord` rows (`_cleanup_expired_effect_records`).
+It prunes **nothing** from `system_events`, which is the table every execution, every
+observability signal and every causal edge lands in. On the stack that produced FR-18 it
+reached 3.6 GB in five weeks on a dev box with four accounts.
+
+**FR-18 removed the loudest writer, not the class.** The remaining writers are legitimate and
+open-ended: one `execution.*` trio per execution, `autonomy.decision` (25,377 rows on the same
+stack), `watchdog.scan.completed` (16,648). Growth is now proportional to work done rather
+than to wall-clock, which is the right shape — and still unbounded.
+
+**★ Why this is not "add a cleanup job like the other two", and why it was not bolted onto the
+FR-18 fix.** The two existing jobs prune rows whose value is known to expire. A `SystemEvent`'s
+value is **not uniform by age — it is uniform by type**, and two entries in this file depend on
+that: `EVENT-OUTBOX-1` treats a missing row as evidence the work never happened, and
+`AUDIT-CORRELATION-1` joins `EffectRecord.action_id` to `SystemEvent` by convention with no FK,
+so a pruned row silently breaks a join nothing enforces. A blanket age policy would quietly
+delete the audit trail while leaving the keepalives. **The policy has to be per-type, and it
+has to be chosen before the disk is full**, not during.
+
+**Shape when it is built:** a declared retention class per event type (audit / operational /
+keepalive), defaulting to *keep* for anything unclassified, so a new event type cannot be
+deleted by omission — the same fail-closed default as `assurance_rank()` ranking unknown LOW.
+Batch-delete like `cascade_cleanup.prune_cascade_debris`, and log what was dropped by type:
+**a silent prune is indistinguishable from a lost write**, which is exactly the confusion
+`EVENT-OUTBOX-1` already fights.
+
+**Do not close this by documenting a `DELETE` for an operator to run.** That is the FR-18
+mitigation, and it is what every deployment is doing by hand right now.
 
 ## IDEM-12 — `agent.undo` re-invokes every compensator when called twice
 

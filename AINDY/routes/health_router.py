@@ -12,7 +12,7 @@ from sqlalchemy import text
 from AINDY.config import settings
 from AINDY.core.execution_helper import execute_with_pipeline
 from AINDY.core.execution_signal_helper import queue_system_event
-from AINDY.core.system_event_service import emit_system_event
+from AINDY.core.health_liveness_signal import record_liveness_probe
 from AINDY.db.database import SessionLocal, get_pool_status
 from AINDY.platform_layer.domain_health import domain_health_registry
 from AINDY.platform_layer.deployment_contract import redis_required, worker_required
@@ -155,16 +155,14 @@ def _testing_health_payload() -> dict:
 
 
 def _emit_health_event(payload: dict) -> None:
-    event_db = SessionLocal()
-    try:
-        emit_system_event(
-            db=event_db,
-            event_type="health.liveness.completed",
-            payload=payload,
-            required=False,
-        )
-    finally:
-        event_db.close()
+    """Record that the liveness path ran — as a digest, on change, not per probe.
+
+    FR-18: this used to persist the whole health response on every probe. Driven by a
+    container healthcheck timer rather than by traffic, that reached 99.6% of one
+    deployment's database. The decision and the write both live in
+    ``health_liveness_signal``; it never raises.
+    """
+    record_liveness_probe(payload)
 
 
 def liveness() -> dict:
