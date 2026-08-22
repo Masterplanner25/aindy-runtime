@@ -1599,6 +1599,128 @@ all `settings.` call sites with `get_settings().`; gate log initialization insid
 
 ---
 
+## EFFECT-OUTCOME-UNKNOWN-1 — the runtime has no word for "dispatched, outcome unobserved"
+
+**Status:** Open — P2. Filed 2026-08-22.
+
+**Provenance — two design notes, neither of them this repo's:**
+`OneDrive/…/Designs/NOTE_browser_automation_feasibility.md` (written against the `C:\codev`
+sweep of 2026-08-19/20, aimed here) and
+`C:\dev\Coding Language\docs\design\v5\03-outcome-ambiguity.md` (nodus-lang's answer to it).
+**Read the second before acting on this entry** — its §5.3 phase ladder and §7 impossibility
+proof are the reasoning, and neither is reproduced here. Answered from this side in that
+document's §14.
+
+### The finding, in this repo's terms
+
+Both notes converge on the same claim: for a counterparty that is not transactional, the
+achievable guarantee is **at-most-once dispatch with a recorded outcome**, where the outcome
+may legitimately be *unknown*. **The runtime can express neither half.** Two closed
+vocabularies, both binary:
+
+| vocabulary | where | values | what is missing |
+|---|---|---|---|
+| execution guarantee | `syscall_registry.py:1923` | `frozenset({"AT_LEAST_ONCE", "EXACTLY_ONCE"})` | **`AT_MOST_ONCE` — zero occurrences repo-wide** |
+| effect outcome | `db/models/effect_record.py:70-71` | `pending` / `success` / `failed` | **no `unknown`/`unobserved` — zero in the effect layer** |
+
+**So the nodus note's fix cannot be applied as written.** It correctly catches that the browser
+note contradicts itself — its §3 says at-most-once, its §6.1 says declare `EXACTLY_ONCE` — and
+says to correct §6.1 to match §3. But `register_syscall` validates against a frozenset of two,
+and **neither value is the right one**: one over-claims, the other under-claims, and the honest
+label is unregisterable. *The vocabulary gap is one level below where either note placed it.*
+
+★ **`EXACTLY_ONCE` would be a lie twice over, not once.** The nodus note argues the label is
+"success-shaped" because a website never agreed to it. Measured here (`IDEM-11`, closed
+2026-08-19): under contention **8 concurrent identical calls ran the handler twice**, degrading
+to `AT_LEAST_ONCE` with a warning (`_count_gate("degraded")`). The label would misdescribe the
+counterparty *and* our own gate.
+
+### ★ `pending` cannot be borrowed for this
+
+The obvious shortcut is to park an ambiguous effect at `pending` and call that unknown. Code
+that already exists closes it: `_cleanup_expired_effect_records` warns on **any** pending row
+older than one hour — *"may indicate stuck handlers; investigate action_ids"*
+(`scheduler_service.py:563-576`). A correctly-recorded ambiguity would be indistinguishable
+from a malfunction, and would page someone.
+
+That is `EVENTBUS-PUBLISH-LATCH-1`'s exact shape — **one field meaning two things**, there the
+operator kill switch and the give-up latch. Do not repeat it. (Pending rows are never deleted,
+so nothing is *lost*; the failure is misclassification, not data loss.)
+
+### Why the fix is cheaper than it reads
+
+`EffectRecord.status` is `String(32)` with **no CHECK and no Enum**, and
+`complete_effect_record(db, action_id, status, result_payload)` assigns the string
+**unvalidated** (`effect_ledger.py:204-213`). **A fourth value needs no migration.**
+
+That is the same structural fact `EFFECT-PARTIAL-1` already banked for its three-outcome
+problem. **Two entries, one change** — settle the status vocabulary once, for partial *and*
+unobserved, or they will diverge.
+
+### What is live today, stated precisely
+
+The runtime's authorized outbound boundary collapses the phase ladder. `outbound_request`
+(`platform_layer/outbound_http.py:88-101`) catches **`httpx.HTTPError`** — the base class,
+covering `ConnectError` (**knowably not dispatched**) and `ReadTimeout` (**the one true
+ambiguity**) identically — wraps both in `TransientHTTPError`, and retries: `max_retries=2` by
+default, **no method guard**. `_RETRYABLE_STATUS` also retries 500/502/503/504, which a POST
+may have committed before returning. That is nodus §8.1's *"retry blindly, which is assuming
+world A while behaving as though they had confirmed it."*
+
+**Exposure, measured rather than assumed:** `outbound_request` has **no caller in `AINDY/` —
+only `tests/unit/test_outbound_http.py`**. Email (`email_channel.py:193`) and registered
+connectors (`connector_service.py:62`) call `authorized_external_call` **directly**, and that
+function does **not** retry. So the blind retry is **shipped in a documented FR-1 client and
+unused in-tree** — latent here, live for any consumer that adopted it.
+
+**Promotion to P1 on any one of:** a consumer using `outbound_request` for a non-idempotent
+method; a retry loop added to `authorized_external_call`; or the first syscall whose
+counterparty is not transactional (a browser action being the motivating case).
+
+### Cross-links — this is a corner of a shape, not a standalone item
+
+| entry | relation |
+|---|---|
+| `EFFECT-PARTIAL-1` | **same column, one change.** Its three-outcome envelope and this fourth status are one vocabulary decision. Do not settle separately. |
+| `CANCEL-REACH-1` | **blocks the phase the browser note calls most important.** Its §5 table names `release_on_cancel` *"the path most implementations skip — and the one that matters most here"*; cancellation is durable but never reaches an in-flight effect. The four-phase pattern is three phases here. |
+| `EFFECT-PRECONDITION-1` | **a browser syscall un-defers it.** That entry is deferred because *"it needs an external mutable resource the runtime actually mutates, and there is no filesystem syscall and no `sys.v1.repo.*`"* — a browser is exactly that resource. ★ Its recorded answer (*"the version identity is whatever the external system's own mechanism produces — record it, carry it, refuse on mismatch, NEVER reimplement it"*) **is** nodus §7.4's pre-arranged trace. |
+| `IDEM-11` | `EXACTLY_ONCE` already degrades under contention — see above. |
+| `AUTHORITY-NEGOTIATION-1` / `approve_run` | **the browser note's *"you already have an approval inbox"* is half true.** `pending_approval` is on `AgentRun`: **pre-dispatch, run-level, whole-plan**. Reconciling an unknown outcome is **post-dispatch, effect-level**. Different surface, different time, different granularity. |
+
+★ **Three independent derivations, not two.** The nodus note treats it as notable that
+reserve → call → reconcile was reached twice (LiteLLM's spend governor, and its own domain
+statement §4.1). It was reached a **third** time in this repo, from Aider's Git discipline, and
+filed as `EFFECT-PRECONDITION-1` months earlier. Money, distributed-systems theory and version
+control converged on *plant an attributable trace before you act*.
+
+### Constraint on the planted trace, which neither note states
+
+`compute_action_id(action_type, input_payload, scope)` (`core/execution_gate.py:70-77`) is a
+SHA-256 of the **request**. A nonce planted to make an action attributable must therefore live
+*inside* the payload, and so **changes the key**. Consequence: it must be minted **once**,
+before the first dispatch, and reused across every retry — mint it per attempt and dedup breaks
+silently. Consistent with the notes' intent-record-first design, but it rules out the obvious
+implementation.
+
+### Do not
+
+- **Do not add `unknown` to the status set alone.** Without `AT_MOST_ONCE` in the guarantee
+  set a syscall still cannot *declare* that unknown is a legitimate terminal outcome, and the
+  status becomes a state nothing is permitted to reach.
+- **Do not add `AT_MOST_ONCE` alone** — the mirror of the same error.
+- **Do not overload `pending`.** See above.
+- **Do not "fix" the outbound retry by widening the except clause.** The fix is *narrowing*:
+  distinguish `ConnectError` from `ReadTimeout`, which httpx already does and which the current
+  base-class catch throws away. **The phase distinction exists in the library and is destroyed
+  at our boundary** — nodus §5.3 makes the same point about Playwright's exception types, which
+  makes this two instances of one cause.
+- **Do not build a browser driver to motivate this.** Three of the four blockers are runtime
+  gaps that exist now; a driver would meet all three on its first mutating call. Order: status
+  vocabulary (no migration) → guarantee vocabulary → `CANCEL-REACH-1` → an effect-level
+  reconciliation surface. The driver is genuinely last, and genuinely a library.
+
+---
+
 ## QUOTA-ACCRUAL-ORPHAN-1 — the dispatcher accrues resource usage that only the pipeline reaps
 
 **Status:** Open — P2, but a **live functional break**, not a latent risk. Found 2026-08-22
@@ -5348,7 +5470,7 @@ aindy-runtime[mcp]`. Verified with a live SSE round-trip. Doc: `docs/runtime/MCP
    **★★ CORRECTED 2026-08-19 — the observation was right, the conclusion was not.** That pass
    examined `C:\dev
 odus-a2a`, which really is the coordinator. **A SECOND package, also named
-   `nodus-a2a`, also at `0.1.0`, holds the wire** — `C:\codev2a-wire-pub`, an A2A 1.0.0 (Linux
+   `nodus-a2a`, also at `0.1.0`, holds the wire** — `C:\codev\a2a-wire-pub`, an A2A 1.0.0 (Linux
    Foundation) HTTP+JSON adapter with agent cards, codec and transport in ~1,071 LOC. So "it would
    be a from-scratch build" is **false**: the wire exists and is well factored for host reuse
    (`A2AHttpServer` takes `invoke` as a plain callable, and `handle_request` is a pure function, so
@@ -11188,7 +11310,7 @@ uniformly.
 ### ★★ Second witness, and the gap was named eight weeks before it was filed (added 2026-08-19)
 
 **Temporal fences shard ownership with exactly this primitive**, verified in source
-(`C:\codev\Temporal research	emporal`):
+(`C:\codev\Temporal research\temporal`):
 
 > `common/persistence/data_interfaces.go:144` — *"**ShardOwnershipLostError** is returned when
 > conditional update fails due to **RangeID** for the shard"*
