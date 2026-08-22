@@ -1,4 +1,4 @@
-### Fixed — async jobs now record that they started and finished (FR-17)
+### Fixed — async jobs now record that they started and finished (FR-17, #518)
 
 `emit_system_event` refuses any `execution.*` event emitted with neither an execution pipeline
 nor the async-execution context active. Two async-job sites tripped that guard, and because the
