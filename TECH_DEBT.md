@@ -7473,6 +7473,57 @@ the starvation coupling regardless of which dispatch mode is chosen; (a) is the 
 the one that needs soak, and doing it last means the first occurrence after the flip is
 diagnosable because (c) already shipped.
 
+## FR-17 — the async-job path emits `execution.*` from outside a pipeline, so the gate ate it
+
+**Status: FIXED 2026-08-22 (this session).** Filed by the app team 2026-08-16 while verifying
+2.3.0 on a live stack, as 🟢 observability: `AINDY/platform_layer/async_job_service.py`'s
+submit-time `execution.started` was refused by the execution-contract gate, logged as a
+warning and dropped. They were right about the mechanism, right that it is the same
+constraint `APP_HANDOFF_v2.2.0.md` §2 used to explain why the new event is `scheduler.queued`,
+and right that the cost is a trace timeline with a silent gap where the work started.
+
+**Verified against source before fixing.** `emit_system_event` (`system_event_service.py:449`)
+raises for any `execution.*` event when `is_pipeline_active()` is False **and**
+`is_async_execution_active()` is False. `_emit_async_system_event` catches everything and
+returns `None`, so the row simply never exists.
+
+**Their proposed second option — rename it, as `scheduler.queued` was renamed — is the wrong
+one here, and this is the part worth keeping.** That precedent works because nothing keys on
+the name. This event is load-bearing: `_ensure_root_execution_event_id` and
+`_has_existing_execution_started` locate an async job's trace root **by
+`type == execution.started`**, and `AUTO_MEMORY_EVENT_TYPES` keys capture on it. Renaming
+would trade a missing row for a broken trace root. So the fix is their first option: the
+submit path now declares itself an execution boundary (`async_execution_scope()`), which is
+what the gate is asking for.
+
+**★ The half they could not see, and it is bigger than the half they reported.** The same
+context is what makes the *worker thread's* `execution.completed` / `execution.failed` land —
+and in `_execute_job_inline` it was gated on `_async_job_loop_closure_enabled()`
+(`AINDY_ASYNC_JOB_LOOP_CLOSURE`, **default off**). One flag meant two things: *do async jobs
+join the Infinity loop* (its actual job) and *may the runtime record that an async job ran at
+all*. With the default flag, **every** async job's terminal execution event was discarded, so
+async traces started and never ended. `EVENTBUS-PUBLISH-LATCH-1` is the same shape — one field
+carrying an operator switch and a runtime latch — and it is why that field was split. The
+activation is now unconditional; the flag still gates loop closure, which is all it ever named.
+
+**★ Why this was invisible to CI.** In a unit or integration test the submit almost always
+happens under an active pipeline (a route test) or with the loop-closure flag on (the
+Infinity suites), so the gate passes and nothing looks wrong. The refused path is the one with
+no HTTP request behind it: a scheduler tick, the event-bus subscriber thread, an app
+`bootstrap.py`. `tests/unit/test_async_job_execution_contract.py` pins the no-pipeline case
+explicitly (`is_pipeline_active` patched False) and drives the real emit, because the whole
+defect was a call that looked right being answered by a gate the caller could not see.
+Mutation-tested 2/2: removing either fix fails a test.
+
+**Not claimed:** the app team explicitly did not date it or call it a 2.3.0 regression. It is
+older than that — the submit-side gate predates the flag, and the worker-side gating has been
+there since INFINITY-RUNTIME-1 Gap 5 shipped default-off.
+
+**Watch for, after the flip:** more `execution.*` rows for async jobs than before (that is the
+point), and with them more memory-capture attempts, since `EXECUTION_STARTED` is in
+`AUTO_MEMORY_EVENT_TYPES`. The RT-MEMTXN-LEAK-1 guards are what bound this — `async_submit_scope`,
+the `RUNTIME_INTERNAL_TASK_NAMES` refusal, and the NULL-user dedup fix — and the events at issue
+carry `task_name`, so runtime-internal maintenance jobs are still refused at capture.
 ## FR-18 — every liveness probe persisted a full health snapshot: 99.6% of one database
 
 **Status: FIXED 2026-08-22 (this session).** Filed by the app team the same day, found while

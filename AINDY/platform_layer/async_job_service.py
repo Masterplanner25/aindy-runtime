@@ -398,6 +398,15 @@ def _enforce_distributed_queue_backpressure(*, task_name: str) -> None:
 def _emit_async_system_event(*, db, event_type: str, user_id=None, trace_id: str | None = None, parent_event_id=None, source: str | None = None, payload: dict[str, Any] | None = None):
     from AINDY.core.system_event_service import emit_system_event
 
+    # FR-17 — capture is deliberately NOT gated here. Suppressing it behind
+    # `AINDY_ASYNC_JOB_LOOP_CLOSURE` looks like the tidy split (persist = observability,
+    # capture = loop closure) and would silently undo RT-MEMTXN-LEAK-1's decision:
+    # `EXECUTION_STARTED` stays in `AUTO_MEMORY_EVENT_TYPES` for ordinary jobs on
+    # purpose, and only runtime-internal maintenance tasks were cut (see the
+    # MEM-FORCE-UNGATED-1 note above that set). Route-driven submissions capture today;
+    # making the gate accept the no-pipeline ones gives them the same treatment, bounded
+    # by the same guards — `async_submit_scope`, the `RUNTIME_INTERNAL_TASK_NAMES`
+    # refusal, and the NULL-user dedup fix.
     try:
         return emit_system_event(
             db=db,
@@ -551,21 +560,31 @@ def _submit_async_job_inner(
         except Exception:
             db.rollback()
         dispatch_state = "inline" if force_inline_env or runner_disabled else "queued"
-        _emit_async_system_event(
-            db=db,
-            event_type=SystemEventTypes.EXECUTION_STARTED,
-            user_id=user_uuid,
-            trace_id=str(log_id),
-            parent_event_id=None,
-            source="async",
-            payload={
-                "run_id": str(log_id),
-                "task_name": task_name,
-                "source": source,
-                "execution_mode": "async_job",
-                "dispatch_state": dispatch_state,
-            },
-        )
+        # FR-17 — this is the async job's root `execution.started`, and the contract gate
+        # discards any `execution.*` event emitted with no pipeline and no async context.
+        # Submissions from a scheduler job, the event-bus subscriber thread or an app
+        # bootstrap have neither, so the row was silently dropped for exactly the callers
+        # whose traces are hardest to read. It cannot be renamed the way `scheduler.queued`
+        # was: `_ensure_root_execution_event_id` and `_has_existing_execution_started` key
+        # the whole async trace on this event type.
+        from AINDY.platform_layer.async_execution_context import async_execution_scope
+
+        with async_execution_scope():
+            _emit_async_system_event(
+                db=db,
+                event_type=SystemEventTypes.EXECUTION_STARTED,
+                user_id=user_uuid,
+                trace_id=str(log_id),
+                parent_event_id=None,
+                source="async",
+                payload={
+                    "run_id": str(log_id),
+                    "task_name": task_name,
+                    "source": source,
+                    "execution_mode": "async_job",
+                    "dispatch_state": dispatch_state,
+                },
+            )
         if inline_enabled:
             reasons = []
             if force_inline_env:
@@ -1105,14 +1124,22 @@ def _emit_async_job_score(
 def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]) -> None:
     JobLog = _job_log_model()
     trace_token = set_trace_id(str(log_id))
+    # FR-17 — the async context is what tells the execution-contract gate that this
+    # thread IS an execution boundary; every `execution.*` event emitted here is dropped
+    # without it, and a worker thread never has a pipeline. It used to be gated on
+    # `AINDY_ASYNC_JOB_LOOP_CLOSURE`, which made one flag mean two things: whether async
+    # jobs join the Infinity loop (its actual job, and still flagged below) and whether
+    # the runtime is allowed to record that an async job ran at all. With the flag off —
+    # the default — every job's `execution.completed`/`execution.failed` was discarded,
+    # so a trace showed work starting and never ending. EVENTBUS-PUBLISH-LATCH-1 is the
+    # same shape: one field carrying an operator switch and a runtime latch.
     async_ctx_token = None
-    if _async_job_loop_closure_enabled():
-        try:
-            from AINDY.platform_layer.async_execution_context import activate_async_execution_context
+    try:
+        from AINDY.platform_layer.async_execution_context import activate_async_execution_context
 
-            async_ctx_token = activate_async_execution_context()
-        except Exception:
-            async_ctx_token = None
+        async_ctx_token = activate_async_execution_context()
+    except Exception:
+        async_ctx_token = None
     parent_token = set_parent_event_id(_ensure_root_execution_event_id(db, str(log_id)))
     try:
         log = db.query(JobLog).filter(JobLog.id == log_id).first()
