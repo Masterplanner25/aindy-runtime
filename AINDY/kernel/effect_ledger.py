@@ -114,6 +114,58 @@ def _count_gate(outcome: str) -> None:
         pass
 
 
+def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session):
+    """Decide what to do about an EffectRecord row that already exists.
+
+    ★ Extracted 2026-08-22 because this decision existed in only ONE of the two places that
+    reach it, and the missing copy was a silent third path to ``AT_LEAST_ONCE``.
+
+    A caller finds an existing row by one of two routes, and *which* route is decided purely
+    by whether its ``SELECT`` lands before or after the winner's ``COMMIT``:
+
+    * lost the ``INSERT`` race  -> ``IntegrityError`` -> re-query -> this decision (counted)
+    * read the committed row    -> the opening ``SELECT`` already returned it (was UNCOUNTED)
+
+    Both are the same situation and must produce the same outcome and the same counter. They
+    did not: the second fell through to a bare ``return False, None``, so the handler ran a
+    second time and **no gate counter moved at all** — invisible to
+    ``aindy_effect_gate_outcomes_total``, which is the only signal an operator gets that
+    ``EXACTLY_ONCE`` did not hold. It also skipped the reclaim, so a ``failed`` row was
+    re-executed without being re-attributed or having its staleness clock reset.
+
+    Found by ``test_the_gate_degrades_to_at_least_once_under_contention`` firing the exact
+    message it was written to fire: *"look for a THIRD path to AT_LEAST_ONCE that nothing
+    counts."*
+    """
+    if record.status == "success":
+        _count_gate("replayed")
+        return True, record.result_payload
+
+    stale_cutoff = utcnow() - timedelta(seconds=STALE_PENDING_THRESHOLD_SECONDS)
+    if record.status == "pending" and record.created_at >= stale_cutoff:
+        # A live concurrent call holds the slot; degrade to AT_LEAST_ONCE for this
+        # invocation (strict at-most-once under concurrency needs advisory locking —
+        # see IDEMPOTENCY_CONTRACT.md).
+        _count_gate("degraded")
+        logger.warning(
+            "[effect_ledger] concurrent pending EffectRecord for action_id=%s;"
+            " degrading to AT_LEAST_ONCE for this call",
+            action_id,
+        )
+        return False, None
+
+    # Stale pending (abandoned) or prior failure: reclaim the slot in-place and
+    # re-attribute it to the writer that is reclaiming it (MEB-3b).
+    record.status = "pending"
+    record.completed_at = None
+    record.created_at = utcnow()
+    record.tenant_id = eff_tenant
+    record.session_id = eff_session
+    db.commit()
+    _count_gate("reclaimed")
+    return False, None
+
+
 def resolve_effect_record(
     db,
     action_id: str,
@@ -141,9 +193,10 @@ def resolve_effect_record(
     eff_session = session_id if session_id is not None else _ctx_session
 
     record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
-    if record is not None and record.status == "success":
-        _count_gate("replayed")
-        return True, record.result_payload
+    if record is not None:
+        # ★ Every existing-row outcome goes through the shared decision — including the
+        # non-success ones, which used to fall through to `return False, None` uncounted.
+        return _resolve_existing_row(db, record, action_id, eff_tenant, eff_session)
     if record is None:
         payload_bytes = json.dumps(
             dict(payload or {}), sort_keys=True, separators=(",", ":")
@@ -174,30 +227,7 @@ def resolve_effect_record(
             )
             if record is None:
                 raise
-            if record.status == "success":
-                _count_gate("replayed")
-                return True, record.result_payload
-            stale_cutoff = utcnow() - timedelta(seconds=STALE_PENDING_THRESHOLD_SECONDS)
-            if record.status == "pending" and record.created_at >= stale_cutoff:
-                # A live concurrent call holds the slot; degrade to AT_LEAST_ONCE for
-                # this invocation (strict at-most-once under concurrency needs advisory
-                # locking — see IDEMPOTENCY_CONTRACT.md).
-                _count_gate("degraded")
-                logger.warning(
-                    "[effect_ledger] concurrent pending EffectRecord for action_id=%s;"
-                    " degrading to AT_LEAST_ONCE for this call",
-                    action_id,
-                )
-                return False, None
-            # Stale pending (abandoned) or prior failure: reclaim the slot in-place and
-            # re-attribute it to the writer that is reclaiming it (MEB-3b).
-            record.status = "pending"
-            record.completed_at = None
-            record.created_at = utcnow()
-            record.tenant_id = eff_tenant
-            record.session_id = eff_session
-            db.commit()
-            _count_gate("reclaimed")
+            return _resolve_existing_row(db, record, action_id, eff_tenant, eff_session)
     return False, None
 
 
