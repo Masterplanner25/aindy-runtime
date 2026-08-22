@@ -1032,6 +1032,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Out-of-process tool worker (TOOL-SEAM-ISOLATION-1 step C2) | `AINDY/agents/tool_worker.py` — one-shot, `db=None`, **no fallback** |
 | Effect-gate outcome counter | `AINDY/kernel/effect_ledger.py` — `aindy_effect_gate_outcomes_total` |
 | **Liveness-probe event digest (FR-18) — read before touching `/health` event payloads** | `AINDY/core/health_liveness_signal.py` — digest + emit-on-change; counter `aindy_health_liveness_events_total` |
+| Async-job execution-boundary scope (FR-17) | `AINDY/platform_layer/async_execution_context.py` — `async_execution_scope()`; the contract gate's only exemption besides an active pipeline |
 | **Tool seam isolation scope (TOOL-SEAM-ISOLATION-1) — read before acting on that entry** | `docs/runtime/TOOL_SEAM_ISOLATION_SCOPE.md` |
 | **CLI as an execution surface — scope (CLI-EXEC-SURFACE-1)** | `docs/runtime/CLI_EXECUTION_SURFACE_SCOPE.md` |
 | **Outcome-ambiguity design + the runtime answer (EFFECT-OUTCOME-UNKNOWN-1) — read §5.3, §7, §14 before acting** | `C:\dev\Coding Language\docs\design\v5\03-outcome-ambiguity.md` |
