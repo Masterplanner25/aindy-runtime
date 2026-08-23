@@ -34,6 +34,8 @@ const IconExec = Icon("M8 5l8 7-8 7M4 5v14");
 const IconApprovals = Icon("M9 12l2 2 4-4M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z");
 const IconRegistry = Icon("M4 4h16v6H4zM4 14h16v6H4z");
 const IconUsers = Icon("M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75");
+const IconWebhooks = Icon("M12 3a4 4 0 0 1 3.5 5.9l2.6 4.5M18 21a4 4 0 0 1-3.5-6H9.3M6 9a4 4 0 1 0 4 6.5l2.5-4.4");
+const IconDlq = Icon("M4 6h16M6 6v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6M10 11v5M14 11v5M9 6V4h6v2");
 const IconTrace = Icon("M5 12a7 7 0 0 1 14 0M9 12a3 3 0 0 1 6 0M12 12v.01");
 const IconLogout = Icon("M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9");
 const IconChevron = Icon("M15 18l-6-6 6-6");
@@ -58,6 +60,8 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/approvals",    label: "Approvals",      icon: IconApprovals, runtime: false },
   { to: "/registry",     label: "Agent Registry", icon: IconRegistry,  runtime: false },
   { to: "/users",        label: "Users",          icon: IconUsers,     runtime: true  },
+  { to: "/webhooks",     label: "Webhooks",       icon: IconWebhooks,  runtime: true  },
+  { to: "/dead-letters", label: "Dead Letters",   icon: IconDlq,       runtime: true  },
   { to: "/trace",        label: "RippleTrace",    icon: IconTrace,     runtime: false, featureFlag: FEATURE_FLAGS.RIPPLETRACE_VIEWER },
 ];
 

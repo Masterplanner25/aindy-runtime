@@ -7629,7 +7629,7 @@ which removes the two shapes rather than labelling them.
 
 ## FR-21 — the operator surface exists twice, and the runtime's is missing two panels
 
-**Status: OPEN — P2, filed 2026-08-22. Scope settled; the ask is smaller than filed.** The app
+**Status: ADOPTED 2026-08-22 — both gap panels shipped; the app team retires theirs.** The app
 team offered a handover, not a complaint: they independently grew a second operator SPA
 (`client/src/PlatformApp.tsx`, 5,949 lines / 13 components / 12 routes) beside the one the
 runtime already serves at `/platform/`, and volunteered to delete theirs once the equivalent
@@ -7656,7 +7656,31 @@ the direction that matches route ownership.
 **What stays theirs:** `RippleTraceViewer` reads an app domain. Not every panel is a runtime
 concern, and the split should follow route ownership, not line count.
 
-**Note for whoever builds it: a UI change reaches no container until a release is cut and the
+**Shipped:** `WebhooksPanel.jsx` and `DeadLetterQueuePanel.jsx` in
+`platform/src/components/platform/`, routed at `/webhooks` and `/dead-letters`, with nav
+entries, admin gates and confirm-gated destructive actions.
+
+**★ Two wrong instruments were tried before the test worked, and both are general traps:**
+(1) walking `app.routes` reports `/webhooks`, never `/platform/webhooks`, because FastAPI
+>= 0.137 stores an included router as a lazy `_IncludedRouter` — the same trap that made
+`HTTP-SCOPE-GAP-1`'s census wrong by 56; (2) probing over HTTP for a non-404 is **vacuous
+here**, because `_SPAStaticFiles` is mounted at `/platform` and falls back to `index.html`,
+so a typo'd path answers **200 with HTML**. The working instrument is the **OpenAPI schema**,
+which carries full prefixes and methods — and it is what a client codes against. Mutation-tested
+2/2: a typo'd URL string and a removed nav entry each fail a test.
+
+**★ The DLQ name is ambiguous in this runtime and the panel had to pick:** `/platform/queue/dead-letters`
+(async job queue, replayable because the payload is preserved) versus
+`/platform/observability/dead-letter` (dead-lettered FLOW RUNS). The adopted panel is the queue
+one — the app team's version targeted the same, which is worth noting since the two are one
+grep apart.
+
+**Route paths staged in `platform/src/api/_routes.js` as `RUNTIME_ROUTES`, not in ui-kit's
+`ROUTES`** — ui-kit is a separate package with its own release train and a panel should not wait
+on one. Fold them in on the next ui-kit release and delete the block; `UI_CONTRACT.md` is
+authoritative either way.
+
+**Note: a UI change reaches no container until a release is cut and the
 Dockerfile pin is bumped** — the SPA ships as package data inside the wheel (see the *Platform UI
 — build chain* section of `CLAUDE.md`). Verify against `npm run dev`, and expect the running
 container to show the last *released* UI.

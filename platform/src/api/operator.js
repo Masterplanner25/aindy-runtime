@@ -1,5 +1,5 @@
 import { adminRequest as authRequest, unwrapEnvelope } from "./_core.js";
-import { ROUTES } from "./_routes.js";
+import { ROUTES, RUNTIME_ROUTES } from "./_routes.js";
 
 export function getFlowRuns(status = null, workflowType = null, limit = 20) {
   const params = new URLSearchParams();
@@ -70,4 +70,67 @@ export function getObservabilityDashboard(windowHours = 24) {
 
 export function getSystemState() {
   return authRequest("/platform/observability/system", { method: "GET" }).then(unwrapEnvelope);
+}
+
+// ── Webhooks (FR-21) ─────────────────────────────────────────────────────────
+// These routes return a BARE body: `webhooks_router` calls the pipeline with
+// `return_result=True` and returns `result.data` itself, so no envelope is built. The
+// DLQ helpers below are the opposite — same `/platform` tree, different shape. That is
+// FR-19's contract question sitting inside one console, which is why every helper here
+// goes through `unwrapEnvelope` (a no-op on a bare body) rather than each caller
+// guessing.
+
+export function getWebhooks() {
+  return authRequest(RUNTIME_ROUTES.WEBHOOKS.LIST, { method: "GET" }).then(unwrapEnvelope);
+}
+
+export function createWebhook({ event_type, callback_url, secret }) {
+  // `owner_class: "first-party-app"` is deliberate: an operator registering a callback on
+  // their own deployment is first-party. The external-third-party class additionally
+  // requires declared provenance, which is not something a console can supply honestly.
+  const body = { event_type, callback_url, owner_class: "first-party-app" };
+  if (secret) body.secret = secret;
+  return authRequest(RUNTIME_ROUTES.WEBHOOKS.CREATE, {
+    method: "POST",
+    body: JSON.stringify(body),
+  }).then(unwrapEnvelope);
+}
+
+export function deleteWebhook(subscriptionId) {
+  // 204, no body — nothing to unwrap.
+  return authRequest(RUNTIME_ROUTES.WEBHOOKS.DELETE(subscriptionId), { method: "DELETE" });
+}
+
+// ── Queue dead letters (FR-21) ───────────────────────────────────────────────
+// The async job queue's DLQ, not the flow-run dead-letter list under /observability.
+// Both exist and they are different records: this one holds queue jobs that exhausted
+// their attempts and can be replayed onto the queue.
+
+export function getQueueHealth() {
+  return authRequest(RUNTIME_ROUTES.QUEUE.HEALTH, { method: "GET" }).then(unwrapEnvelope);
+}
+
+export function getDeadLetters(limit = 100) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return authRequest(`${RUNTIME_ROUTES.QUEUE.DEAD_LETTERS}?${params.toString()}`, {
+    method: "GET",
+  }).then(unwrapEnvelope);
+}
+
+export function replayDeadLetter(jobId) {
+  return authRequest(RUNTIME_ROUTES.QUEUE.DEAD_LETTER_REPLAY(jobId), { method: "POST" }).then(
+    unwrapEnvelope,
+  );
+}
+
+export function deleteDeadLetter(jobId) {
+  return authRequest(RUNTIME_ROUTES.QUEUE.DEAD_LETTER_DELETE(jobId), { method: "DELETE" }).then(
+    unwrapEnvelope,
+  );
+}
+
+export function drainDeadLetters() {
+  return authRequest(RUNTIME_ROUTES.QUEUE.DEAD_LETTERS_DRAIN, { method: "POST" }).then(
+    unwrapEnvelope,
+  );
 }
