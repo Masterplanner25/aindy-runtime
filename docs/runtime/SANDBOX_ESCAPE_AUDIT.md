@@ -1045,6 +1045,52 @@ native Linux, certified for the `v2.5.0` release commit.
 
 ---
 
+## Entry 020 — 2026-08-22
+
+**Trigger:** `v2.6.0` release tag (`sandbox-escape-linux.yml`, run `32613267546`).
+**Commit:** `71391fa578c52a3e7e5e425d493019c067e2b6ef`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:6857d2dae63e052057f2db389a7061188ac9a92a3fa8d402bde68f36df6fada1`.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.48s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `32613267546`).
+Six attack vectors: `env_leak`, `filesystem_escape`, `network_escape`, `path_boundary`,
+`privilege_escalation`, `process_escape`.
+
+**The certified boundary is untouched.** `git diff v2.5.0..v2.6.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**. Same image digest
+as Entry 019, so the environment is identical too.
+
+**★ This time the number being uninformative is the correct outcome, not a warning.** Entries
+017–019 each flagged that the count stayed at 17/17 while the release's real isolation work
+happened outside this gate's scope. `v2.6.0` is different in kind: it is six app-team feature
+requests — an observability payload, an execution-contract gate, a response header, two operator
+panels, a published route inventory — and **none of them touch an isolation boundary at all**.
+The gate is reporting "nothing changed here" about a release where nothing here changed.
+
+Worth stating plainly because the run of three made the opposite reading tempting: a flat number
+is evidence when the diff is empty *and* the release did no isolation work. It is only
+uninformative when those two come apart, which is what Entries 017–019 recorded.
+
+| Boundary | Certified by this gate? | Status after `v2.6.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | unchanged this release (`GUEST-CONFINE-1` remains fully closed as of `v2.5.0`) |
+| In-process tool seam | **No** — out of scope | unchanged this release. **Undeclared tools still run in-process** — the deliberate remaining gap, carried forward from Entry 019 |
+
+**★ One thing this release DID add that no boundary row covers: `AINDY/route_inventory.json`
+publishes the runtime's full HTTP surface, including its 43 `/platform/*` operator routes.** That
+is an information-disclosure surface by construction — it ships inside the wheel, so anyone who
+can install the package can enumerate the admin route paths. Deliberate, and not a weakening:
+those paths were already discoverable from `/openapi.json` on any running instance, and every one
+of them is scope-gated at request time (`HTTP-SCOPE-GAP-1`'s census: 91 scope-gated, 12 admin,
+21 public of 126). Recorded here so the next auditor does not rediscover it as a finding.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.6.0` release commit.
+
+---
+
 ---
 
 *To add a new entry: run `pytest -m sandbox_escape -v`, note the summary line, and append
