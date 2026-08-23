@@ -214,6 +214,48 @@ rest.
 name is stable. Treat any unrecognised value as enveloped and check the value only if you branch
 on shape.
 
+## Route Inventory (FR-22)
+
+**The runtime publishes its own HTTP surface as a machine-readable file, and CI keeps it
+honest.** `AINDY/route_inventory.json` ships inside the wheel, so a consumer reads the
+inventory for the exact version they installed without booting anything:
+
+```python
+import json
+from importlib.resources import files
+
+inventory = json.loads(files("AINDY").joinpath("route_inventory.json").read_text())
+served = {(entry["method"], entry["path"]) for entry in inventory["routes"]}
+```
+
+Shape: `{"schema": 1, "boot_mode": "runtime-only", "route_count": N, "routes": [{"method",
+"path", "tags"}]}`. It is generated from the app's OpenAPI schema by
+`scripts/check_route_inventory.py` and pinned by `tests/unit/test_route_inventory.py`,
+which fails when the served surface and the file disagree **in either direction**. A
+published inventory with no check is just a second document that can go stale.
+
+**What "runtime-owned" means here: the boot profile, not the path prefix.** The inventory
+is everything served in `runtime-only` mode — no plugins, no app routers — so it needs no
+hand-curated ownership list that could drift on its own.
+
+> **★ `/apps/*` is NOT an app-ownership boundary.** 35 routes under that prefix —
+> coordination, memory, agent — are served by the runtime alone. A guard that treats
+> `/apps/*` as "the app's surface" is wrong about a third of it. The useful consequence:
+> subtract this inventory from your booted app's surface to get the genuinely app-owned
+> set, instead of curating one by hand.
+
+Two caveats worth stating, because absence has to mean something precise:
+
+- **The legacy alias surface is excluded.** Unprefixed aliases (`/flows/runs`,
+  `/coordination/agents`, …) exist only when `AINDY_ENABLE_LEGACY_SURFACE=true`; the
+  inventory publishes the supported surface, not the compatibility shims.
+- **No version field, deliberately.** The file is committed, so stamping a version would
+  make every release bump edit it and every branch conflict on it. The wheel it ships in
+  identifies the version.
+
+**A removal in this file is a breaking change for anyone pinned to it** and belongs in the
+changelog as such.
+
 ## Health/Readiness Contract
 
 | Endpoint | HTTP Status | Semantics |

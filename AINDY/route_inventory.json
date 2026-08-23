@@ -1,0 +1,865 @@
+{
+  "schema": 1,
+  "boot_mode": "runtime-only",
+  "route_count": 126,
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/",
+      "tags": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/version",
+      "tags": [
+        "version"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/coordination/agents",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/coordination/agents/register",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/coordination/agents/status",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/apps/coordination/agents/{agent_id}",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/coordination/agents/{agent_id}/heartbeat",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/coordination/conflict/memory",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/coordination/conflict/run",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/coordination/graph",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/coordination/memory/shared",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/coordination/messages/inbox",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/coordination/messages/{message_id}/acknowledge",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/coordination/runs",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/coordination/runs/{parent_run_id}/children",
+      "tags": [
+        "Coordination"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/memory/agents",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/memory/agents/{namespace}/recall",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/execute",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/execute/complete",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/federated/recall",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/links",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/memory/nodes",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/nodes",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/nodes/expand",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/nodes/search",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/memory/nodes/{node_id}",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/apps/memory/nodes/{node_id}",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/nodes/{node_id}/feedback",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/memory/nodes/{node_id}/history",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/memory/nodes/{node_id}/links",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/memory/nodes/{node_id}/performance",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/nodes/{node_id}/share",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/apps/memory/nodes/{node_id}/traverse",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/nodus/execute",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/recall",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/recall/v3",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/apps/memory/suggest",
+      "tags": [
+        "Memory"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/auth/admin/invalidate-sessions/{user_id}",
+      "tags": [
+        "auth"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/auth/login",
+      "tags": [
+        "auth"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/auth/logout",
+      "tags": [
+        "auth"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/auth/password/change",
+      "tags": [
+        "auth"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/auth/password/forgot",
+      "tags": [
+        "auth"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/auth/password/reset",
+      "tags": [
+        "auth"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/auth/register",
+      "tags": [
+        "auth"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/auth/verify-email",
+      "tags": [
+        "auth"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/automation/logs",
+      "tags": [
+        "Automation"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/automation/logs/{log_id}",
+      "tags": [
+        "Automation"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/automation/logs/{log_id}/replay",
+      "tags": [
+        "Automation"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/client/error",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/client/vitals",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health/",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health/deep",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health/detail",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health/details",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health/domains",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/health/sandbox",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/admin/agents",
+      "tags": []
+    },
+    {
+      "method": "POST",
+      "path": "/platform/admin/agents/register",
+      "tags": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/platform/admin/agents/{namespace}",
+      "tags": []
+    },
+    {
+      "method": "POST",
+      "path": "/platform/admin/agents/{namespace}/restore",
+      "tags": []
+    },
+    {
+      "method": "GET",
+      "path": "/platform/admin/users",
+      "tags": []
+    },
+    {
+      "method": "POST",
+      "path": "/platform/admin/users/{user_id}/promote",
+      "tags": []
+    },
+    {
+      "method": "GET",
+      "path": "/platform/agents",
+      "tags": []
+    },
+    {
+      "method": "POST",
+      "path": "/platform/agents",
+      "tags": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/platform/agents/{slug}",
+      "tags": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/platform/agents/{slug}",
+      "tags": []
+    },
+    {
+      "method": "POST",
+      "path": "/platform/agents/{slug}/restore",
+      "tags": []
+    },
+    {
+      "method": "GET",
+      "path": "/platform/db/verify",
+      "tags": [
+        "Database Verification"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/flows",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/flows",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/flows/registry",
+      "tags": [
+        "Flow Engine"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/flows/runs",
+      "tags": [
+        "Flow Engine"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/flows/runs/{run_id}",
+      "tags": [
+        "Flow Engine"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/flows/runs/{run_id}/history",
+      "tags": [
+        "Flow Engine"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/flows/runs/{run_id}/resume",
+      "tags": [
+        "Flow Engine"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/flows/strategies",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/platform/flows/{name}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/flows/{name}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/flows/{name}/run",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/keys",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/keys",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/platform/keys/{key_id}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/keys/{key_id}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/memory",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/memory/trace",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/memory/tree",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/nodes",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/nodes/register",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/platform/nodes/{name}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/nodes/{name}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/nodus/flow",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/nodus/run",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/nodus/schedule",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/nodus/schedule",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/platform/nodus/schedule/{job_id}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/nodus/scripts",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/nodus/upload",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/dashboard",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/dead-letter",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/dead-letter/{flow_run_id}",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/execution_graph/{trace_id}",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/llm/status",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/observability/queue/dlq/drain",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/queue/metrics",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/requests",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/rippletrace/status",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/scheduler/status",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/observability/system",
+      "tags": [
+        "Observability"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/ops/rotate-secret-key",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/queue/dead-letters",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/queue/dead-letters/drain",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/platform/queue/dead-letters/{job_id}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/queue/dead-letters/{job_id}/replay",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/queue/health",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/syscall",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/syscalls",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/tenants/{tenant_id}/usage",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/webhooks",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/webhooks",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/platform/webhooks/{subscription_id}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/webhooks/{subscription_id}",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/readiness",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/ready",
+      "tags": [
+        "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/watcher/signals",
+      "tags": [
+        "Watcher"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/watcher/signals",
+      "tags": [
+        "Watcher"
+      ]
+    }
+  ]
+}
