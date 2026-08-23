@@ -249,3 +249,38 @@ a CLI is ever built, and doing it first is what would make a CLI safe to add.
   `FS-SCOPE-1` explicitly records.
 - **Do not close `SUBSTRATE-WITNESS-1` with a CLI that only calls read syscalls.** That entry
   asks for a consumer that would *notice* if a guarantee broke.
+
+---
+
+## 8. ★★ What the CLI-review corpus changed about this scope (2026-08-22)
+
+*(Source: `C:\codev\CLI review`, 21 reviews + a cross-cutting note over 25 systems. Full analysis:
+`COMPARATIVE_RESEARCH_INDEX.md` §4b.)*
+
+**The scope above assumes a CLI would need building from the capability up. It would not.** Applying
+the note's partition test to this runtime, verified in source:
+
+- **static topology is already data** — `FLOW_REGISTRY` holds `{"start", "edges", "end"}` dicts, and
+  `GET /platform/flows/{name}` already serves one;
+- **dynamic trace is already data** — `parent_event_id` → `build_trace_graph`, `FlowHistory` with
+  `input_state`/`output_patch`, `EffectRecord`, four rehydration paths.
+
+Both axes reified puts this runtime in a group of two out of twenty-five, with the Linux kernel.
+**So every tier in §4 is verbs over structure that already exists**, not new machinery — which
+lowers the cost of tiers 1–2 substantially and does not change the §7 prohibitions at all.
+
+### Two verbs the corpus names that §4 does not
+
+- **`fork` — branch a run from step N.** Zero hits repo-wide; DBOS ships it (`dbos workflow fork`)
+  on exactly the record we already keep. **Explicitly NOT recommended here:** the note observes that
+  reifying a trace does not oblige you to make it replayable, and the kernel deliberately did not.
+  Filed as a decision to take, not a gap to close.
+- **`validate` — check a flow's topology before running it.** `validate_flow_registration` checks
+  the registration contract, not the graph. `langgraph validate` / `argo lint` / ADK `conformance`
+  all do this. Cheapest item in this document, and it composes with `FLOW-GRAPH-SIGNATURE-1`.
+
+### One thing to keep NOT doing
+
+**Do not build a renderer.** Nothing in the corpus shows a diagram earning its keep on its own, and
+the kernel — the strongest system on this axis — has none. Structure that is *navigable* beats
+structure that is *drawable*; ours is navigable over HTTP already.

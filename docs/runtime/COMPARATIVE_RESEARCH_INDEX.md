@@ -1,7 +1,7 @@
 ---
 title: "Comparative Research Index"
 api_version: "1.0"
-last_verified: "2026-08-18"
+last_verified: "2026-08-22"
 status: current
 owner: "platform-team"
 ---
@@ -31,14 +31,16 @@ hit immediately, and they do not surface from the inside. **This is the argument
 do it**, and the reason the next system studied is worth the time even if this runtime does not
 change in between.
 
-Three of the nineteen produced something no source audit could: **CrewAI/Nodus** had a running
+Three of the twenty-one produced something no source audit could: **CrewAI/Nodus** had a running
 implementation to measure rather than a codebase to read, **Claude Code** had a first-party
 consumer (Claw) to measure the substrate claim against, and **LangGraph** had a showcase whose own
 evaluation *volunteered* the gap rather than defending against it.
 
 ---
 
-## 2. The nineteen, and what each produced
+## 2. The twenty-one, and what each produced
+
+*(Count corrected 2026-08-22: the heading said "nineteen" while the table held twenty rows — `Temporal` and `Linux kernel` were added without it. The same index-contradicts-its-entries shape this file exists to prevent, one level up. The dated counts in §5b/§5c are point-in-time claims about earlier snapshots and are left alone.)*
 
 | Folder | Pin | Registry entries produced | Standing |
 |---|---|---|---|
@@ -62,6 +64,8 @@ evaluation *volunteered* the gap rather than defending against it.
 | **DBOS Transact** | `e0b742c`, MIT, audited 2026-08-19 | *(no new prefix)* — worked references folded into **five** entries; one challenge to a sixth | **The same architectural bet, taken further.** Highest findings-per-LOC in the corpus: 31 650 lines, both sides source-verified. See §5d |
 | **Temporal** | June 2026-06-24 | second witness for `LEASE-FENCE-1` | **The corpus's calibration instrument** — the only comparand that is *purely* substrate, so its 55–65% band is the one number not inflated by app-hosted content. Origin of the *replay vs re-run* framing |
 | **Linux kernel** | Linux 7.1.0, 2026-06-27 | *(none)* — two design principles folded into `TOOL-SEAM-ISOLATION-1` and `EXEC-ENV-BIND-1` | **Different in kind: supplies the VOCABULARY for why five open entries are the right shape** — see §4a |
+
+| **CLI review** (cross-cutting, 21 systems) | folder `C:\codev\CLI review`, 2026-08-22 | *(no new prefix)* — sharpening of `CLI-EXEC-SURFACE-1`; second, independent derivation of `RECOVERY-GRANULARITY-1`; cheapens `FLOW-GRAPH-SIGNATURE-1` | **The first folder that is a LENS rather than an audit** — one test applied to the whole corpus instead of one system read end to end. Runtime-agnostic by construction: one mention of aindy-runtime in 22 files, explicitly marked "comparison point, not recommendation". See §4b |
 
 Provenance headers in `TECH_DEBT.md`: `AIDER-PORTABILITY-2026-08-17`, `MAF-REFERENCE-2026-08-17`,
 `CREWAI-NODUS-2026-08-18`, `ADK-LENS-2026-08-18`, `LANGGRAPH-NODUS-2026-08-18`. Codex, Claude Code, Hermes and GPT Engineer
@@ -154,6 +158,81 @@ reading alongside its own successor. Its Lesson 4 states the principle correctly
 `aindy-runtime-vs-linux.md` reached the opposite verdict on the same property: *"its mediation is
 **by convention, not by structure**."* **Same system, same property, opposite conclusions — the
 later one correct.** The June document read design intent; the August one read enforcement.
+
+---
+
+## 4b. ★★ The topology-as-data partition — and the one place the runtime lands with the kernel
+
+*(Source: `C:\codev\CLI review`, 2026-08-22 — 21 CLI reviews plus a cross-cutting note. Verified
+against runtime source on receipt.)*
+
+The note asks one question of 25 systems:
+
+> **Can the system draw itself?** If it can, its structure is **data** — walkable, serializable,
+> validatable, actionable. If it cannot, the structure is **control flow**, and there is nothing to
+> walk.
+
+It is a proxy, not an aesthetic: reified structure is what makes static validation, conditional
+routing, resumption-from-position and an ops interface *possible at all*. Two independent axes —
+**static topology** (what can happen) and **dynamic trace** (what did).
+
+### Where the runtime lands, verified in source
+
+| Axis | Runtime | Evidence |
+|---|---|---|
+| **Static topology** | **Reified** | `FLOW_REGISTRY` holds literal `{"start", "edges": {node: [next]}, "end": [...]}` dicts (`flow_engine/entrypoints.py:22`, walked at `node_executor.py:50`), and `GET /platform/flows/{name}` serves a definition over HTTP |
+| **Dynamic trace** | **Reified** | `SystemEvent.parent_event_id` → `build_trace_graph` (`event_trace_service.py:78`), `FlowHistory` carrying `input_state` + `output_patch`, `EffectRecord`, `ExecutionUnit`; four rehydration paths |
+| **Can it draw itself?** | **No** | `mermaid|graphviz|to_digraph|get_graph|draw_graph|\.dot` — **zero hits** across `AINDY/` |
+
+**Both axes reified puts the runtime in a column of two out of twenty-five — with the Linux kernel
+and LiteLLM.** And the note's own argument says the missing renderer is not the deficiency it looks
+like: the kernel reifies both *without* a diagram, because a filesystem projection is a stronger
+form of the same property. **Structure that is navigable beats structure that is drawable.** Ours is
+navigable — over HTTP.
+
+### ★★ So the real finding is not about diagrams
+
+**We hold the data prerequisite that DBOS, Temporal and Codex build their entire operator surfaces
+on, and we expose none of it.** `dbos workflow list|steps|fork`, `tdbg rebuild`, `codex debug
+trace-reduce` — every one of those needs exactly what we already persist. `CLI-EXEC-SURFACE-1` said
+*"the middle level is the only one that cannot be asked to do work"*; that is true and it undersells
+the position. The gap is not capability, it is **verbs over structure we already have**.
+
+Two concrete absences fall out, both newly named by this lens:
+
+- **`fork` does not exist** — zero hits repo-wide. We can *resume* (four rehydration paths, plus
+  `continue_crashed_agent_runs`) but not *branch from step N*. DBOS forks a workflow that crashed
+  last week from an arbitrary step; we hold per-node `FlowHistory` and cannot.
+- **No pre-run topology validation.** `validate_flow_registration` checks the *registration
+  contract*, not the graph. `langgraph validate`, `argo lint` and ADK `conformance` all validate
+  structure before executing — cheap here precisely because the topology is a dict.
+
+### ★ The sharpest line, and it lands on us at exactly one layer
+
+> *"A retry counter is what a system reaches for when it has no representation of where it is."*
+
+The three systems that reify neither axis (aider, gpt-engineer, Devika) bound their loops with
+`max_reflections = 3`, `MAX_SELF_HEAL_ATTEMPTS = 10`, and nothing. The orchestrators confirm it from
+the other side: Airflow can name `none_failed_min_one_success` only because there is a graph of
+upstream states to quantify over.
+
+**Our flow layer has position** — `FlowHistory` commits `input_state` + `output_patch` *before* the
+snapshot advance. **Our agent layer does not**: `MAX_STEP_RETRIES = 3`, and
+`_count_completed_segments` restarts a partially-executed segment from step one. That is
+`RECOVERY-GRANULARITY-1`, **re-derived independently from a completely different starting point** —
+and the note supplies the reason it is easy to miss, from its MAF diagonal case: *"does this system
+reify its structure" is a question to ask per-LAYER, not per-project.* MAF can draw a `Workflow` and
+still bounds its tool loop with `max_iterations = 40`, because the two layers are separate and only
+one is reified. Same shape, same trap.
+
+### What it does NOT license
+
+- **Not a mandate to build a renderer.** Nothing in the corpus shows a diagram earning its keep on
+  its own; the properties come from reification, which we already have.
+- **Not "adopt DBOS's verbs".** The note is explicit that reifying a trace does not oblige you to
+  make it replayable — *the kernel deliberately did not*. `fork` is a decision, not a debt.
+- **Not a new prefix.** Everything here sharpens three existing entries. The corpus's recurring
+  error (§4) is filing a lens as a defect; this is a lens.
 
 ---
 

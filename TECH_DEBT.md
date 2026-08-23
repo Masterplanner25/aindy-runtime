@@ -1850,6 +1850,44 @@ the capability token, the effect ledger, the egress guard or the quota. **The te
 routes around the runtime** — `FLOW-PARALLEL-1`'s shape ("apps needing parallelism route
 around the flow engine"), and `GUEST-CONFINE-1`'s.
 
+### ★★ SHARPENED 2026-08-22 by the CLI-review corpus — the gap is verbs, not capability
+
+*(Source: `C:\codev\CLI review` — 21 CLI reviews + a cross-cutting note applying one test to 25
+systems. Full analysis: `COMPARATIVE_RESEARCH_INDEX.md` §4b.)*
+
+The note's test — **can the system draw itself?** — partitions on whether structure is *data* or
+*control flow*. Run against this runtime, verified in source:
+
+| Axis | Result | Evidence |
+|---|---|---|
+| Static topology | **reified** | `FLOW_REGISTRY` holds `{"start", "edges": {node: [next]}, "end": [...]}` dicts (`flow_engine/entrypoints.py:22`, walked at `node_executor.py:50`); `GET /platform/flows/{name}` serves one |
+| Dynamic trace | **reified** | `parent_event_id` → `build_trace_graph`; `FlowHistory` with `input_state`+`output_patch`; `EffectRecord`; four rehydration paths |
+| Draws itself | **no** | zero `mermaid|graphviz|get_graph|draw_graph|\.dot` hits under `AINDY/` |
+
+**Both axes reified puts us in a column of two out of twenty-five — with the Linux kernel.** And
+the missing renderer is not the deficiency it appears to be: the kernel reifies both without a
+diagram, because *navigable* beats *drawable*, and ours is navigable over HTTP.
+
+**So this entry's original framing undersells itself.** It said the middle level *cannot be asked to
+do work*. The sharper statement: **we already hold the data prerequisite that DBOS, Temporal and
+Codex build their whole operator surfaces on, and expose none of it.** `dbos workflow list|steps|
+fork`, `tdbg rebuild`, `codex debug trace-reduce` each need exactly what we already persist. The gap
+is **verbs over structure we have**, which is a much smaller thing to build than a capability.
+
+**Two absences this lens names for the first time:**
+
+- **`fork` — zero hits repo-wide.** We resume (four rehydration paths + `continue_crashed_agent_runs`)
+  but cannot branch from step N. DBOS forks a workflow that crashed last week from an arbitrary step;
+  we hold per-node `FlowHistory` and cannot. **★ Not automatically a debt: the note is explicit that
+  reifying a trace does not oblige you to make it replayable — the kernel deliberately did not.**
+- **No pre-run topology validation.** `validate_flow_registration` checks the *registration
+  contract*, not the graph. `langgraph validate` / `argo lint` / ADK `conformance` validate structure
+  before executing; cheap here precisely because the topology is a dict. This is also what makes
+  `FLOW-GRAPH-SIGNATURE-1` cheaper than filed — hashing a dict needs no new representation.
+
+**★ What NOT to take from it: do not build a renderer.** Nothing in the corpus shows a diagram
+earning its keep on its own. The properties come from reification, which we already have.
+
 ### ★ Why nine audits missed it, and the number that shows it
 
 Nine comparative audits examined systems that are *all* terminal-driven (Codex, Claude Code,
@@ -11392,7 +11430,20 @@ recorded here rather than opened separately.
 this one makes it *durable*, and neither implies the other), `ORCHESTRATOR-SPLIT-1` (a fourth store
 with its own claim/wait/retry state that would need to agree with any of this).
 
+
+**★★ Re-derived independently 2026-08-22 from the CLI-review corpus, and it supplies the reason
+this is easy to miss.** That note's sharpest line: *"a retry counter is what a system reaches for
+when it has no representation of where it is."* The three systems reifying neither topology nor
+trace bound their loops with `max_reflections = 3`, `MAX_SELF_HEAL_ATTEMPTS = 10`, and nothing.
+**Our flow layer has position** (`FlowHistory` commits before the snapshot advance); **our agent
+layer reaches for a counter** (`MAX_STEP_RETRIES = 3`, and `_count_completed_segments` restarts a
+partially-executed segment from step one). The generalisable part is MAF's diagonal case: **"is this
+structure reified?" is a question to ask per-LAYER, not per-project** — MAF can draw a `Workflow`
+and still bounds its tool loop at `max_iterations = 40`, because only one of its two layers is
+reified. Same shape here. See `COMPARATIVE_RESEARCH_INDEX.md` §4b.
+
 ---
+
 
 ## COST-GOVERNOR-1 — every quota exists except the one that matters for an LLM runtime
 
