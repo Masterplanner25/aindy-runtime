@@ -7569,7 +7569,7 @@ answer, and the guard is the only thing that notices.
 
 ## FR-19 — an enveloped and a bare response share one URL space with no discriminator
 
-**Status: OPEN — P1, filed 2026-08-22, direction settled (see below).** The app team's own
+**Status: RUNTIME HALF FIXED 2026-08-22; the remaining half is the app's.** The app team's own
 framing is the reason this is worth reading: it was **the dominant defect class of their entire
 live-verification phase** — five defects on five surfaces, ~40 `safeMap prevented crash` lines
 inside `@aindy/ui-kit`, 56 references in their walk log — and **it was never raised with us**.
@@ -7605,6 +7605,27 @@ existing consumer breaks.
 
 **★ Design constraint carried from `OTEL-GENAI-SEMCONV-1`: a header name is a public surface.**
 Additive first, documented before it is depended on, and never renamed casually.
+
+**Shipped: `X-AINDY-Envelope: v1`**, set on the one `adapt_response` exit that returns the
+canonical envelope — **not** on the error exit, the handler-built-`Response` exit, or a registered
+adapter's exit, because those bodies are not envelopes. A discriminator that over-claims is worse
+than none: it makes a client unwrap a plain body. Absence therefore means *not enveloped*, never
+*unknown*. Documented in `SDK_CONTRACT.md` and `UI_CONTRACT.md`.
+
+**★★ The find that would have made the whole mechanism useless: NONE of the runtime's response
+headers were readable cross-origin.** `CORSMiddleware` had `allow_headers=["*"]` and **no
+`expose_headers`** — and `allow_headers` governs the REQUEST direction. A browser exposes only the
+CORS safelist to page JavaScript, so the discriminator would have been invisible to precisely the
+consumer it exists for (their Vite dev server on `:5173` against `:8000`). **`X-Trace-ID` has been
+documented as a debugging aid all along while being unreadable by the browser doing the
+debugging.** Now exposed alongside `X-Request-ID`, `X-EU-ID`, `X-API-Version`.
+
+**★ Generalisable: a response header is not a delivered signal until CORS says so.** Anything
+added to `_trace_headers` or to a middleware in future needs the same one-line addition, and
+nothing enforces it — the test in `test_envelope_discriminator.py` pins the current set only.
+
+**Still open, and it is theirs:** preference 1 — every `/apps/*` route entering the pipeline —
+which removes the two shapes rather than labelling them.
 
 ## FR-21 — the operator surface exists twice, and the runtime's is missing two panels
 

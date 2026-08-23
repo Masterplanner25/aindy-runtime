@@ -179,6 +179,20 @@ def register_middleware(app) -> None:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
+        # FR-19 — without this, NONE of the runtime's response headers are readable by a
+        # browser client on another origin: the CORS spec exposes only a short safelist,
+        # and `allow_headers` governs the REQUEST direction, not the response. So the
+        # envelope discriminator would have been invisible to the exact consumer it
+        # exists for (a Vite dev server on :5173 talking to :8000), and `X-Trace-ID` has
+        # been unreadable there all along — a debugging aid the debugger could not see.
+        expose_headers=[
+            "X-AINDY-Envelope",
+            "X-Trace-ID",
+            "X-Request-ID",
+            "X-EU-ID",
+            "X-API-Version",
+            "X-Version-Warning",
+        ],
     )
     app.middleware("http")(enforce_execution_contract)
     app.middleware("http")(log_requests)

@@ -1,6 +1,6 @@
 ---
 title: "Runtime → UI Contract"
-last_verified: "2026-06-04"
+last_verified: "2026-08-22"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -137,6 +137,48 @@ runtime-owned paths a UI kit may target:
 > not inherit these. See UIKIT-ROUTE-DRIFT-1.
 
 ---
+
+## Response Envelope Contract (FR-19)
+
+**A response says whether its body is the execution envelope. Read the header; do not guess
+from the route.**
+
+Routes that pass through `ExecutionPipeline` return the canonical envelope:
+
+```json
+{"status": "success", "data": {...}, "trace_id": "...", "duration_ms": 12}
+```
+
+Every other route returns a bare body. Both live under the same URL space, so since
+2026-08-22 the runtime marks the enveloped ones:
+
+```
+X-AINDY-Envelope: v1
+```
+
+**Client rule:** unwrap `data` when the header is present; use the body as-is when it is not.
+That puts the knowledge in one helper instead of in every API module — which is the defect this
+closes: a consumer that guessed wrong rendered a **blank surface with no error**, because an
+envelope has no `.length`, so the empty-state branch did not fire either.
+
+**Three things that are easy to get wrong:**
+
+- **`X-Trace-ID` is not a discriminator.** Middleware sets it on *every* response.
+- **A blanket unwrap is not a substitute.** A bare body may legitimately carry a `data` key, and
+  unwrapping it corrupts the response.
+- **The header is absent on error responses, on handler-built `Response` objects, and on routes
+  with a registered response adapter** — because those bodies are not the envelope. Absence means
+  "not enveloped", never "unknown".
+
+Browser clients on another origin can read it: the runtime lists it in
+`Access-Control-Expose-Headers` along with `X-Trace-ID`, `X-Request-ID`, `X-EU-ID` and
+`X-API-Version`. Before FR-19 none of those were readable cross-origin — `allow_headers` governs
+the *request* direction, and a browser exposes only the CORS safelist unless the server names the
+rest.
+
+**Versioning:** `v1` is the current envelope shape. A future shape bumps the value; the header
+name is stable. Treat any unrecognised value as enveloped and check the value only if you branch
+on shape.
 
 ## Leakage Risks
 
