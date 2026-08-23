@@ -1824,10 +1824,55 @@ doc's §3 on purpose.
 
 ---
 
-## CLI-EXEC-SURFACE-1 — the runtime can be administered from a terminal, never asked to do anything
+## CLI-EXEC-SURFACE-1 — the operator half of the runtime is not in the syscall vocabulary
 
-**Status:** Open — P2. Filed 2026-08-22. Scope doc:
-`docs/runtime/CLI_EXECUTION_SURFACE_SCOPE.md`.
+**Status:** Open — P2. Filed 2026-08-22, **REFRAMED the same day — read this section first, the
+rest is the evidence that produced it.** Scope doc: `docs/runtime/CLI_EXECUTION_SURFACE_SCOPE.md`.
+
+### ★★ THE REFRAME — this is not a CLI entry, and the name is now narrower than the finding
+
+**In this architecture a terminal command is not a surface. It is a transport over the syscall
+vocabulary, and the vocabulary is the only part the runtime owns.**
+
+`mcp-server` is that design already shipped, not a proposal: `mcp_server.py:204` reads
+`SYSCALL_REGISTRY`, wraps an allowlisted subset as MCP tools, and every tool call ends at
+`dispatch_syscall(...)`. A CLI would be a second adapter of the same ~10-line shape. **A transport
+cannot grant authority it does not have, because it is not the thing that grants authority** —
+capability check, tenant isolation, quota, input *and output* schema validation, the idempotency
+gate, the OTel span and the uniform envelope all live in `SyscallDispatcher`, one layer below any
+adapter.
+
+So "should the runtime ship a CLI" was the wrong question. The answerable one:
+
+> **Is the operator half of the runtime supposed to be syscall-addressable, or is HTTP its intended
+> and only mediation?**
+
+**The asymmetry, measured against the 24 registered syscalls:**
+
+| Half | Syscall-addressable? | Verbs |
+|---|---|---|
+| **Execution** | **yes** | `flow.run`, `flow.execute_intent`, `nodus.execute`, `agent.execute\|simulate\|cancel\|undo`, `job.submit`, `event.emit`, `execution.get`, the seven `memory.*` |
+| **Operator** | **no — HTTP routes only** | resume (`POST /flows/runs/{id}/resume`, `flow_router.py:140`), list/get a flow definition, queue + DLQ (list/drain/replay/delete), trace graph, health, and the absent `validate` / `fork` |
+
+**Three doors open at once if an operator verb becomes a syscall** — `POST /platform/syscall`
+(route-ungated *by decision*, mediation is the dispatcher's per-syscall capability), `mcp-server`
+(allowlist, default read-only), and any future CLI. That is the point of the reframe and also the
+thing to decide deliberately: **handing DLQ drain to an LLM client is a decision, not a default.**
+
+**★ Two obligations a transport still owns, and both have already bitten** — this is what stops
+"transports are plumbing" from being a licence to write them carelessly:
+
+1. **Who is calling.** The dispatcher decides *what may be done*; the transport decides *whose
+   grant applies*. `mcp-server` answers by fiat (`AINDY_MCP_SERVER_USER_ID`) or per-session JWT,
+   and because `tenant_id == user_id` a shared transport identity is a shared memory namespace —
+   `INITIATOR-IDENTITY-1`.
+2. **Setting the call up correctly.** `mcp-server` dispatches with no `execution_unit_id`, so quota
+   accrues on the key `""` and nothing reaps it — `QUOTA-ACCRUAL-ORPHAN-1`. It never bypassed the
+   gate; it walked through it wrong, and a long-lived stdio session simply stops at 100 syscalls.
+
+**★ The name is kept deliberately.** `CLI-EXEC-SURFACE-1` is referenced from `CLAUDE.md`, the scope
+doc and three sibling entries; renaming a filed id in place is what `SCOPE-NAMING-1` records as the
+thing not to do. The heading now states the finding; the id stays the address.
 
 **This is a lens, not a defect.** Nothing is broken. What is filed is that a whole surface was
 never made the subject of a question, and three existing entries are facets of it that were
@@ -1943,10 +1988,24 @@ dependents; this entry records that they share a root, which is the thing that w
 
 ### What would close it
 
-Either a decision that the runtime deliberately has no execution CLI — **recorded**, the way
-the declined kernel-replay decision is — or the tiered build in the scope doc. The scope doc's
-recommendation is neither: **settle the `ExecutionPipeline` question and fix the vacuous quota
-first**, because that is true either way.
+**Answer the vocabulary question, and record the answer either way.**
+
+- **"HTTP is the intended mediation for operator actions"** is a legitimate close — those routes
+  are already scope-gated, `ROUTE_OWNERSHIP_INVENTORY.md` classifies them `operator` rather than
+  `core`, and a UI is their natural consumer. Record it the way the declined kernel-replay decision
+  is recorded, and this entry closes with no code.
+- **"Operator actions join the vocabulary"** makes this a bounded build: each verb becomes a
+  syscall with a capability, HTTP keeps its routes unchanged (the UI must not churn), MCP exposes
+  whichever an operator allowlists — plausibly none by default — and a CLI, if anyone wants one, is
+  the ~10-line adapter that already exists twice.
+
+**Either way, two things are true first and are worth doing regardless:** fix
+`QUOTA-ACCRUAL-ORPHAN-1` (a live functional break in the transport we already ship), and settle
+whether an execution entry must go through `ExecutionPipeline` — the scope doc's §3.
+
+**★ What NOT to do: do not build a CLI to answer this.** A transport is the cheapest part; adding
+one before the vocabulary question is settled just produces a third adapter over the same
+asymmetry, and a second identity story to get wrong.
 
 ---
 
