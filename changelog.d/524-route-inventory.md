@@ -1,4 +1,4 @@
-### Added — the runtime publishes its HTTP route inventory, and CI keeps it current (FR-22)
+### Added — the runtime publishes its HTTP route inventory, and CI keeps it current (FR-22, #524)
 
 `AINDY/route_inventory.json` lists every `(method, path)` the runtime serves in the
 `runtime-only` boot profile, with OpenAPI tags. It ships inside the wheel, so a consumer reads
