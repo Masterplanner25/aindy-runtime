@@ -1,4 +1,4 @@
-### Fixed — a route's deliberate 4xx is no longer replaced by a 500 (FR-20)
+### Fixed — a route's deliberate 4xx is no longer replaced by a 500 (FR-20, #520)
 
 A route registered under the execution contract that raised `HTTPException` **before** entering
 the pipeline had its status discarded: the guard converted every endpoint exception into a

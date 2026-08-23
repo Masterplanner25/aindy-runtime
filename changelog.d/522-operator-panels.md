@@ -1,4 +1,4 @@
-### Added — Webhooks and Dead-Letter Queue panels in the operator console (FR-21)
+### Added — Webhooks and Dead-Letter Queue panels in the operator console (FR-21, #522)
 
 The runtime serves an operator SPA at `/platform/`. The app team independently grew a second
 one beside it and offered it back rather than keep maintaining two — this adopts the part that

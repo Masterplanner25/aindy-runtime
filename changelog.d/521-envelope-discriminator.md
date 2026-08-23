@@ -1,4 +1,4 @@
-### Added — responses now say whether their body is the execution envelope (FR-19)
+### Added — responses now say whether their body is the execution envelope (FR-19, #521)
 
 Routes that pass through `ExecutionPipeline` return `{status, data, trace_id, duration_ms}`;
 every other route returns a bare body. Both share the same URL space and **nothing on the wire
