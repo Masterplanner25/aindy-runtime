@@ -225,6 +225,20 @@ reify its structure" is a question to ask per-LAYER, not per-project.* MAF can d
 still bounds its tool loop with `max_iterations = 40`, because the two layers are separate and only
 one is reified. Same shape, same trap.
 
+### ★★ Superseded framing, kept because the sequence matters
+
+The paragraphs above say the gap is *"verbs over structure we already have"*. That was one step
+short. **The finished frame, filed the same day: a terminal command is a TRANSPORT over the syscall
+vocabulary, and only the vocabulary is the runtime's to own** — `mcp-server` is already that
+adapter, ending at `dispatch_syscall`, so a CLI adds no authority surface at all. The question is
+therefore not what verbs a CLI should have, but whether the **operator** half belongs in
+`SYSCALL_REGISTRY` or whether HTTP is its intended mediation. See `TECH_DEBT.md`
+`CLI-EXEC-SURFACE-1` → *THE REFRAME*.
+
+Recorded rather than rewritten because the intermediate step is what produced the final one: the
+partition test established that the *structure* was already reified, which is what made "the gap is
+verbs" visible, which is what exposed that the verbs in question are syscalls.
+
 ### What it does NOT license
 
 - **Not a mandate to build a renderer.** Nothing in the corpus shows a diagram earning its keep on

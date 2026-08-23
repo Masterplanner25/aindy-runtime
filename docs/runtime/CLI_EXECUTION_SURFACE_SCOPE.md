@@ -252,7 +252,37 @@ a CLI is ever built, and doing it first is what would make a CLI safe to add.
 
 ---
 
-## 8. ★★ What the CLI-review corpus changed about this scope (2026-08-22)
+## 8. ★★ REFRAME (2026-08-22) — the scope above answers the wrong question
+
+**Read this before §§1–7. Those sections scope a CLI. In this architecture a terminal command is
+not a surface — it is a transport over the syscall vocabulary, and only the vocabulary is the
+runtime's to own.**
+
+`mcp-server` is that shape already shipped: `mcp_server.py:204` reads `SYSCALL_REGISTRY`, wraps an
+allowlisted subset as MCP tools, and each call ends at `dispatch_syscall(...)`. A CLI is a second
+adapter of the same ~10 lines. **A transport cannot grant authority it does not have** — capability,
+tenant isolation, quota, schema validation both ways, the idempotency gate and the envelope are all
+in `SyscallDispatcher`, a layer below any adapter. That is why §§4–5's tiering and identity anxiety
+shrink: they were sizing a *surface*, and the surface is plumbing.
+
+**The question that replaces them:** is the **operator** half of the runtime supposed to be
+syscall-addressable, or is HTTP its intended and only mediation? Measured against the 24 registered
+syscalls, the execution half is addressable (`flow.run`, `nodus.execute`, `agent.*`, `job.submit`,
+`event.emit`, `execution.get`, `memory.*`) and the operator half is not — resume, flow list/get,
+queue + DLQ, trace graph, health, and the absent `validate`/`fork` are HTTP routes only.
+
+**What still stands from §§1–7, and it is the part that matters:** §3's `ExecutionPipeline`
+question and §7's prohibitions apply to *any* adapter, and the two obligations a transport genuinely
+owns are already demonstrated by the one we ship — identity (`INITIATOR-IDENTITY-1`, since
+`tenant_id == user_id` makes a shared transport identity a shared memory namespace) and setting the
+call up correctly (`QUOTA-ACCRUAL-ORPHAN-1`, a dispatch with no `execution_unit_id`).
+
+**★ Do not build a CLI to answer the vocabulary question.** A third adapter over the same asymmetry
+answers nothing and adds a second identity story to get wrong.
+
+---
+
+## 8a. What the CLI-review corpus contributed (2026-08-22)
 
 *(Source: `C:\codev\CLI review`, 21 reviews + a cross-cutting note over 25 systems. Full analysis:
 `COMPARATIVE_RESEARCH_INDEX.md` §4b.)*
