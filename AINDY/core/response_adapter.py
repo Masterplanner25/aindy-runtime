@@ -7,6 +7,23 @@ from fastapi.responses import JSONResponse, Response
 from AINDY.platform_layer.registry import get_response_adapter
 
 
+#: FR-19 — the discriminator. Present exactly on responses whose body IS the canonical
+#: execution envelope (`{status, data, trace_id, duration_ms, …}`).
+#:
+#: Why a header rather than a body marker: the envelope's own keys cannot answer the
+#: question. A bare response may legitimately carry `status` or `data`, which is why the
+#: app team could not apply a blanket unwrap — doing so corrupts plain bodies. A header
+#: is additive, changes no shape, and lets one client helper branch where eleven modules
+#: previously each carried per-route knowledge of whether that route happened to enter a
+#: pipeline. That knowledge was unobtainable except by trying: the failure signature is a
+#: blank surface, because an envelope has no `.length` so the empty-state branch does not
+#: fire either.
+#:
+#: ★ `X-Trace-ID` cannot serve this purpose — `log_requests` sets it on EVERY response.
+ENVELOPE_HEADER = "X-AINDY-Envelope"
+ENVELOPE_VERSION = "v1"
+
+
 def _legacy_error_response(canonical: dict[str, Any], *, status_code: int) -> JSONResponse:
     error_status = canonical.get("metadata", {}).get("status_code") or status_code
     return JSONResponse(
@@ -62,9 +79,16 @@ def adapt_response(route_name: str, canonical: dict[str, Any], *, status_code: i
             trace_headers=_trace_headers(canonical),
         )
 
+    # The only exit that returns the canonical envelope as the body, and therefore the
+    # only one that may claim the header. Every branch above returns something else — an
+    # app-registered adapter's shape, a bare `{detail}` error, or a Response the handler
+    # built itself — and marking those would make the discriminator a lie, which is worse
+    # than not having one.
+    headers = _trace_headers(canonical)
+    headers[ENVELOPE_HEADER] = ENVELOPE_VERSION
     return JSONResponse(
         status_code=status_code,
         content=jsonable_encoder(canonical),
-        headers=_trace_headers(canonical),
+        headers=headers,
     )
 
