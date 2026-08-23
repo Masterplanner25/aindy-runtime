@@ -80,10 +80,28 @@ class TestUnmanagedRoutesKeepTheirStatusCodes:
     # string on PostgreSQL. Tracked separately rather than folded into a route-guard fix.
 
 
+def _violation_count(route: str, outcome: str) -> float:
+    from AINDY.platform_layer.metrics import REGISTRY
+
+    value = REGISTRY.get_sample_value(
+        "aindy_route_contract_violations_total", {"route": route, "outcome": outcome}
+    )
+    return float(value or 0.0)
+
+
 class TestManagedRoutesStillViolate:
     """Liveness control — the guard must still fire where it is supposed to.
 
-    A fix that simply stopped raising would pass every assertion above.
+    A fix that simply stopped enforcing would pass every assertion above.
+
+    ★ Rewritten for FR-20, and the rewrite is the interesting part. This control used to
+    assert that a managed route's `HTTPException` *raises* — which is exactly what FR-20
+    changed, because the caller needs that status. So the control had to move to the
+    signal that survived: the violation counter. Both routes below now answer 418; what
+    separates them is whether the runtime recorded a contract violation for it.
+
+    Had the control been left asserting the raise, the only options would have been to
+    delete it (losing the liveness check) or to keep a wrong status to satisfy a test.
     """
 
     @staticmethod
@@ -94,7 +112,7 @@ class TestManagedRoutesStillViolate:
         enforce_registered_route_execution(app)
         return app
 
-    def test_http_exception_from_a_managed_route_is_still_a_violation(self):
+    def test_http_exception_from_a_managed_route_is_recorded_as_a_violation(self):
         router = APIRouter()
 
         @router.get("/managed-teapot")
@@ -102,9 +120,14 @@ class TestManagedRoutesStillViolate:
             raise HTTPException(status_code=418, detail="teapot")
 
         app = self._managed_app(router)
+        before = _violation_count("/managed-teapot", "status_preserved")
         with TestClient(app, raise_server_exceptions=True) as client:
-            with pytest.raises(RouteExecutionViolation, match="/managed-teapot"):
-                client.get("/managed-teapot")
+            response = client.get("/managed-teapot")
+
+        assert response.status_code == 418, response.text
+        assert _violation_count("/managed-teapot", "status_preserved") == before + 1, (
+            "the caller got its status but the contract violation went unrecorded"
+        )
 
     def test_unmanaged_route_in_the_same_shape_is_not_a_violation(self):
         """Same endpoint, same exception; the only difference is the contract dependency.
@@ -122,6 +145,11 @@ class TestManagedRoutesStillViolate:
         register_exception_handlers(app)
         enforce_registered_route_execution(app)
 
+        before = _violation_count("/unmanaged-teapot", "status_preserved")
         with TestClient(app, raise_server_exceptions=True) as client:
             response = client.get("/unmanaged-teapot")
         assert response.status_code == 418, response.text
+        # Both shapes now answer 418, so the status no longer tells them apart — the
+        # counter does. An unmanaged route did not violate anything and must not be
+        # recorded as if it had.
+        assert _violation_count("/unmanaged-teapot", "status_preserved") == before

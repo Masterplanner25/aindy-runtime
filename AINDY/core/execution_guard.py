@@ -21,6 +21,11 @@ _EXEMPT_PREFIXES = (
 )
 
 FAILURE_ENDPOINT_PRE_PIPELINE_EXCEPTION = "endpoint_pre_pipeline_exception"
+#: FR-20 — the endpoint body raised an `HTTPException` before entering the pipeline.
+#: Still a contract violation, but a *deliberate* status the caller is entitled to: a
+#: stale link must 404, not 500. Kept distinct from the class above so the guard can
+#: record the violation without also discarding the answer.
+FAILURE_ENDPOINT_HTTP_ERROR = "endpoint_http_error_before_pipeline"
 FAILURE_DEPENDENCY_HTTP_ERROR = "dependency_http_error_before_endpoint"
 FAILURE_VALIDATION_ERROR = "validation_error_before_endpoint"
 FAILURE_UNEXPECTED_PRE_ENDPOINT_EXCEPTION = "unexpected_exception_before_endpoint"
@@ -63,6 +68,16 @@ def classify_execution_failure(request: Request, exc: Exception) -> str | None:
         request.state.execution_contract_route_phase = "pipeline_exception"
         return None
     if getattr(request.state, "execution_endpoint_entered", False):
+        # FR-20 — an `HTTPException` from the endpoint body carries an intended status.
+        # A dependency raising the same type already keeps its status (see the branch
+        # below); only the endpoint case lost it, so the two disagreed about what an
+        # HTTPException means depending on where it was raised.
+        if isinstance(exc, HTTPException):
+            request.state.execution_contract_failure_classification = (
+                FAILURE_ENDPOINT_HTTP_ERROR
+            )
+            request.state.execution_contract_route_phase = "endpoint_http_error"
+            return FAILURE_ENDPOINT_HTTP_ERROR
         request.state.execution_contract_failure_classification = (
             FAILURE_ENDPOINT_PRE_PIPELINE_EXCEPTION
         )
@@ -102,6 +117,10 @@ def validate_execution_contract(
         FAILURE_DEPENDENCY_HTTP_ERROR,
         FAILURE_VALIDATION_ERROR,
         FAILURE_UNEXPECTED_PRE_ENDPOINT_EXCEPTION,
+        # FR-20. Without this the middleware would re-raise where the route guard
+        # deliberately did not, and the status would be lost one layer further out —
+        # the fix has to be made in both places or in neither.
+        FAILURE_ENDPOINT_HTTP_ERROR,
     }:
         return
     message = f"ExecutionContract violation: route bypassed execution pipeline for {request.method} {request.url.path}"

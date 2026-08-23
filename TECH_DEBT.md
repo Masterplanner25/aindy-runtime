@@ -407,7 +407,7 @@ A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — ver
 item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
 blocked on a token-delivery channel (FR-1). **FR-7** (memory recall defects) shipped in
 v2.0.0. **FR-8, FR-9 and FR-10 arrived 2026-08-03 and shipped 2026-08-05 — see below; all
-three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate, #518) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database, #517) arrived 2026-08-22 and were fixed the same day; both have their own sections. Next available: **FR-19**.
+three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate, #518) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database, #517) arrived 2026-08-22 and were fixed the same day; both have their own sections. **FR-19/20/21 arrived 2026-08-22**; 20 fixed, 19 and 21 open, each with its own section. Next available: **FR-22**.
 
 ### FR-8/9/10 — the 2.0.0 upgrade trio (SHIPPED 2026-08-05)
 
@@ -922,7 +922,7 @@ net-new, but all four defects were fixed in 2.0.0 and are present in source:
 `SIGNIFICANCE_IMPACT_WEIGHT` (MEM-IMPACT-IGNORES-SIGNIFICANCE-1). They are running 2.0.1, so
 the fixes are in their deployment; only the doc is behind.
 
-Next available: **FR-19**.
+Next available: **FR-22**.
 
 ---
 
@@ -7524,6 +7524,122 @@ point), and with them more memory-capture attempts, since `EXECUTION_STARTED` is
 `AUTO_MEMORY_EVENT_TYPES`. The RT-MEMTXN-LEAK-1 guards are what bound this — `async_submit_scope`,
 the `RUNTIME_INTERNAL_TASK_NAMES` refusal, and the NULL-user dedup fix — and the events at issue
 carry `task_name`, so runtime-internal maintenance jobs are still refused at capture.
+## FR-20 — the route guard replaced a deliberately raised 4xx with an opaque 500
+
+**Status: FIXED 2026-08-22.** Filed by the app team 2026-08-22 (observed 2026-07-22 during their
+frontend walk) as 🟡 diagnostics, and offered with the violation accepted as theirs:
+`masterplan_router.py` disagreed with itself about which routes enter the pipeline, and they now
+enforce it in their own CI. Their ask was narrow and correct — *preserve the raised status while
+still recording the violation*.
+
+**Verified, and the runtime already disagreed with itself.** `_wrap_route_call` converted **every**
+endpoint exception into `RouteExecutionViolation` (a 500) when `_is_pipeline_bypass_on_error` was
+true. But `classify_execution_failure` has always let a **dependency**-raised `HTTPException`
+through with its status (`FAILURE_DEPENDENCY_HTTP_ERROR`, 401 stays 401). So the same exception
+type kept its meaning when raised one frame earlier and lost it when raised in the endpoint body.
+The app team did not name that asymmetry; it is the strongest argument for their ask.
+
+**★ The fix is in TWO places or it is in neither.** The route guard chooses not to raise, and then
+`enforce_execution_contract` (middleware) calls `validate_execution_contract`, which raises on its
+own for any classification outside its allowlist. Fixing only the guard moves the 500 one layer
+out and looks like the fix failed. A new classification — `FAILURE_ENDPOINT_HTTP_ERROR` — is what
+carries the decision across the two layers; a mutation reverting just the middleware half was run
+and does put the 500 back, with the test catching it.
+
+**★ The subtle cost, and why the counter is not optional: the 500 WAS the record.** Before this,
+the only evidence that a managed route bypassed the pipeline was the status the caller received —
+one signal carrying two meanings (the app's contract slip, and the answer to the request).
+Preserving the status therefore *had* to create somewhere else for the violation to land, or the
+fix would trade a wrong status for a silent one, which is strictly worse and is this file's
+recurring shape. Hence `aindy_route_contract_violations_total{route, outcome}` with
+`status_preserved` / `converted_500`, plus an ERROR log.
+
+**★ It forced a liveness control to be rewritten, and that rewrite is the part to remember.**
+`TestManagedRoutesStillViolate` existed because of `ROUTE-GUARD-1` — *"a fix that simply stopped
+raising would pass every assertion above"*. FR-20 is exactly a fix that stops raising, for one
+case. The control could not keep asserting the raise, so it moved to the signal that survived: a
+managed route and an unmanaged one now both answer 418, and what separates them is whether a
+violation was recorded. The alternative — deleting the control, or keeping a wrong status to
+satisfy a test — is how enforcement quietly disappears.
+
+**Scope kept deliberately narrow:** only `HTTPException` (the starlette base, so both FastAPI's
+and starlette's) is preserved. Any other exception from a managed route is still a
+`RouteExecutionViolation` and still a 500, which is right — an unexpected exception is not an
+answer, and the guard is the only thing that notices.
+
+## FR-19 — an enveloped and a bare response share one URL space with no discriminator
+
+**Status: OPEN — P1, filed 2026-08-22, direction settled (see below).** The app team's own
+framing is the reason this is worth reading: it was **the dominant defect class of their entire
+live-verification phase** — five defects on five surfaces, ~40 `safeMap prevented crash` lines
+inside `@aindy/ui-kit`, 56 references in their walk log — and **it was never raised with us**.
+They fixed it eleven times in client code and asked zero times. That ratio is the finding.
+
+**Verified at HEAD.** Only routes that go through `ExecutionPipeline` get the envelope:
+`response_adapter.adapt_response` returns the canonical dict (`{status, data, trace_id,
+duration_ms, …}`) as the body. Everything else returns a bare body straight from FastAPI. Both
+live under the same `/apps/*` URL space, and **nothing on the wire tells them apart** — the only
+headers the adapter sets are `X-Trace-ID` and `X-EU-ID`.
+
+**★ `X-Trace-ID` cannot be the discriminator, and this is the trap to avoid:** `log_requests`
+middleware sets it on **every** response, enveloped or not. A client branching on its presence
+would unwrap everything.
+
+**★ Why the failure is so expensive to debug, in their words and confirmed by the shape:** an
+envelope where a list was expected has no `.length`, so the empty-state branch does not fire
+either — the surface renders **blank, with no error at all**. And a blanket unwrap is not
+available as a workaround, because it corrupts any bare response that legitimately carries a
+`data` key.
+
+**Their preference 1 (envelope everything under `/apps/*`) is not ours to do** — whether a route
+enters the pipeline is an app decision, and theirs were inconsistent (3 of 11 client modules
+unwrapped, 8 did not; same root as FR-20). But they are right that the *consequence* is a
+contract question only the runtime can settle: even with their side perfectly consistent, a
+client still has to know which routes are enveloped, and there is no way to find out except by
+trying.
+
+**Direction settled 2026-08-22: preference 2 — make it detectable.** A response header on every
+pipeline-adapted response, documented in `SDK_CONTRACT.md` / `UI_CONTRACT.md`, so the knowledge
+lives in one client helper instead of in every module. Additive: no body shape changes, no
+existing consumer breaks.
+
+**★ Design constraint carried from `OTEL-GENAI-SEMCONV-1`: a header name is a public surface.**
+Additive first, documented before it is depended on, and never renamed casually.
+
+## FR-21 — the operator surface exists twice, and the runtime's is missing two panels
+
+**Status: OPEN — P2, filed 2026-08-22. Scope settled; the ask is smaller than filed.** The app
+team offered a handover, not a complaint: they independently grew a second operator SPA
+(`client/src/PlatformApp.tsx`, 5,949 lines / 13 components / 12 routes) beside the one the
+runtime already serves at `/platform/`, and volunteered to delete theirs once the equivalent
+lands here.
+
+**★ Verified, and their framing overstates it by three panels.** They name five as "the clear
+runtime ones" — DLQ, flow engine, webhooks, registry, admin promotion. The runtime SPA already
+ships `FlowEngineConsole`, `AgentRegistry`, `AdminUsersPanel` and `ExecutionConsole`
+(`platform/src/components/platform/`). **The genuine gaps are two: a webhooks panel and a DLQ
+panel.** So the adoption is ~380 lines of their code, not 5,949 — check the served bundle before
+scoping this, not the panel list.
+
+**Both gaps drive runtime-owned routes**, which is what makes them ours: `POST/GET/DELETE
+/platform/webhooks` (full CRUD, `webhooks_router.py`), `GET /observability/dead-letter`,
+`GET /observability/dead-letter/{flow_run_id}`, `POST /platform/queue/dlq/drain`. Their own check
+of our served bundle found **zero** occurrences of `webhook`, `dlq`, `dead-letter` or `drain` —
+so these are not duplicate implementations, they are capabilities our operator surface does not
+expose. An operator should not go to an app repo to drain a runtime DLQ.
+
+**★ The ambiguity is the actual defect, and they say so: nobody ever established which surface is
+canonical.** Settling that is most of the value; the two panels are the price of settling it in
+the direction that matches route ownership.
+
+**What stays theirs:** `RippleTraceViewer` reads an app domain. Not every panel is a runtime
+concern, and the split should follow route ownership, not line count.
+
+**Note for whoever builds it: a UI change reaches no container until a release is cut and the
+Dockerfile pin is bumped** — the SPA ships as package data inside the wheel (see the *Platform UI
+— build chain* section of `CLAUDE.md`). Verify against `npm run dev`, and expect the running
+container to show the last *released* UI.
+
 ## FR-18 — every liveness probe persisted a full health snapshot: 99.6% of one database
 
 **Status: FIXED 2026-08-22 (this session).** Filed by the app team the same day, found while

@@ -179,6 +179,18 @@ mongo_health_status = Gauge(
     registry=REGISTRY,
 )
 
+# ── Route contract violations (FR-20) ────────────────────────────────────────
+# A managed route that raised before entering the execution pipeline. Until FR-20 the
+# only record of this was the 500 the caller got, which meant fixing the status would
+# have made the violation invisible. `status_preserved` is a deliberate HTTPException
+# the caller now receives intact; `converted_500` is anything else, still a 500.
+route_contract_violations_total = Counter(
+    "aindy_route_contract_violations_total",
+    "Managed routes that raised before entering the execution pipeline",
+    ["route", "outcome"],  # status_preserved | converted_500
+    registry=REGISTRY,
+)
+
 # ── Liveness probe event volume (FR-18) ──────────────────────────────────────
 # One increment per `/health` probe, labelled by what it persisted. `suppressed`
 # staying flat while probes flow is the tell that change-detection has been defeated
