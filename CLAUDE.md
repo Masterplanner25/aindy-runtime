@@ -1043,7 +1043,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Runtime → SDK contract | `docs/runtime/SDK_CONTRACT.md` |
 | Runtime → UI contract | `docs/runtime/UI_CONTRACT.md` |
 | **Nodus-side A2A/MCP packaging handoff (name collision + caps) — all fixes are Nodus's, none are ours** | `docs/runtime/NODUS_HANDOFF_a2a_mcp_packaging.md` |
-| Latest app-team handoff | `docs/runtime/APP_HANDOFF_v2.5.0.md` — **§1 is a required schema step (`bootstrap-schema --reconcile`), §2 is three default flips.** Not a `pip install` upgrade |
+| Latest app-team handoff | `docs/runtime/APP_HANDOFF_v2.6.0.md` — **is** a plain `pip install` (no schema step, no flag flips); §1 is the FR-18 disk reclaim an upgrade does NOT do for you, §4 records that `/apps/*` is not an ownership boundary |
 | Release verification checklist | `docs/runtime/RELEASE_CHECKLIST.md` |
 | Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
 | **Soak harness — concurrency + metric readback** | `tests/integration/soak_harness.py`; guarded by `tests/unit/test_soak_harness.py` |

@@ -2,6 +2,371 @@
 
 ## Unreleased
 
+## 2.6.0 — 2026-08-22
+
+**Six app-team feature requests (FR-17 through FR-22), two idempotency-gate corrections, and a `nodus-lang` bump. No schema change and no migration — verified against `v2.5.0..2.6.0`: nothing under `AINDY/db/models/`, `alembic/versions/` or `memory_persistence.py` moved, so this one really is a `pip install` upgrade.** The two entries below that need an operator decision rather than an install come first, as the protocol requires.
+
+### Fixed — a liveness probe no longer persists a full health snapshot (FR-18, #517)
+
+**Operators: read this before upgrading — the fix stops the growth, it does not reclaim what
+was already written.**
+
+Every successful `GET /health` wrote a `health.liveness.completed` SystemEvent whose payload was
+the **entire health response**: 26 top-level keys, including `trusted_python_execution` (~52 kB
+uncompressed), the deployment contract, the sandbox attestation and the full plugin inventory.
+The write rate is set by a container healthcheck — **a timer, not traffic**. The published image
+probes `/health` every 30s on its own (2,880 rows/day); a deployment whose compose adds its own
+`/health` probe writes more. Measured on a real stack: **~98 MB/day, ~3 GB/month**, unbounded,
+with no retention.
+
+The app team found it when a `pg_dump` would not finish. On a dev stack with four accounts and
+no real traffic: `system_events` at **3653 MB / 183,604 rows** against a 3795 MB database, of
+which `health.liveness.completed` was **120,444 rows / 3317 MB — 99.6% of the database**.
+`n_dead_tup` was 0, so this was not bloat and not a missing autovacuum; it was live, intended
+data. `pg_dump --exclude-table-data=system_events` produced **17 MB**.
+
+**What changed.** `/health` now records a **digest** — status, degraded domains, warnings, a
+fingerprint of the posture blobs, and the byte size of the snapshot it did not store — and only
+when something changed, on the first probe after boot, or once an hour. The full snapshot is
+still available on demand from `GET /health/detail`. The route's own response is unchanged.
+
+| | Before | Now |
+|---|---|---|
+| Payload per row | the whole ~28 kB health response | a few hundred bytes |
+| Rows/day at the image's 30s probe | 2,880 | 24 + one per posture change |
+
+Each row carries `changed_keys` — which posture keys moved — so a change is legible without
+the snapshot. **Expect two or three rows immediately after a restart:** some posture providers
+populate lazily, so a cold process registers real changes before it settles.
+
+**Reclaiming the existing rows is an operator action.** Nothing prunes `system_events`, so an
+upgraded deployment keeps whatever it already wrote:
+
+```sql
+DELETE FROM system_events
+ WHERE type = 'health.liveness.completed'
+   AND timestamp < now() - interval '7 days';
+```
+
+A plain `DELETE` leaves the TOAST pages allocated — follow with `VACUUM FULL system_events`
+(takes an exclusive lock) or `pg_repack` to return the space to the filesystem.
+
+**New environment variables**, all read per call, so none needs a restart:
+
+- `AINDY_HEALTH_LIVENESS_EVENTS` (default `true`) — `0` makes a liveness probe a pure read.
+- `AINDY_HEALTH_LIVENESS_EVENT_PAYLOAD` (default `digest`) — `full` restores the old payload.
+- `AINDY_HEALTH_LIVENESS_EVENT_INTERVAL_SECONDS` (default `3600`) — heartbeat floor for an
+  unchanged posture; `0` records changes only.
+
+**New metric:** `aindy_health_liveness_events_total{outcome}` —
+`persisted_boot|persisted_changed|persisted_interval|persisted_full|suppressed|disabled|failed`.
+If `suppressed` stays flat while probes flow, change-detection is being defeated by a volatile
+health field and the write rate is bounded only by the digest size — that is the tell.
+
+**Consumers:** none. The event type had no reader in either repo before this change, which is
+why the payload shape could move.
+
+### Fixed — the idempotency gate had a second, uncounted path to `AT_LEAST_ONCE`
+
+**Operators running `AINDY_SYSCALL_IDEMPOTENCY` (on by default since 2.5.0): the degradation
+counter under-reported.** `aindy_effect_gate_outcomes_total{outcome="degraded"}` counted only one
+of the two ways a call gets downgraded.
+
+| Path | Meaning | Before | Now |
+|---|---|---|---|
+| `effect_ledger` — lost the insert race to a **live pending row** | contention; expected | `degraded` | `degraded` |
+| `SyscallDispatcher` — the **gate machinery itself raised** | the gate is broken | **counted nothing** | `degraded_gate_error` |
+
+Both drop the caller to `AT_LEAST_ONCE`, so a dashboard watching only `degraded` would have shown
+a clean gate while calls were silently losing at-most-once. They stay separate labels because the
+remediations differ: one says *you have contention*, the other says *investigate the gate*.
+
+**Found in CI by the contention soak**, which asserts that a second handler run is never silent.
+It failed with the handler having run twice while `degraded` stayed flat — the downgrade had come
+through the dispatcher branch. The soak now asserts across **both** labels, because the property
+that matters is *"a downgrade was never silent"*, not *"the contention path fired"*. Pinning it to
+one label made a correct runtime look broken and would have let a real silent downgrade through
+the other path.
+
+If it ever fires again, the assertion message now says what to look for: **a third path to
+`AT_LEAST_ONCE` that nothing counts.**
+
+### Changed — `nodus-lang` 5.0.4 → 5.1.0 (#513)
+
+`nodus-lang==5.1.0` across all three pin sites (`pyproject.toml`, `AINDY/requirements.txt`, and
+the `Install MCP extra` CI step). `nodus-mcp` is unchanged at `>=0.1.3`, and it caps `nodus-lang`
+only at `>=4.0.0` — unbounded above — so this is a one-repo bump, not a two-repo release train.
+
+**The one behaviour change worth an operator's minute, and it is upstream's, not ours.** Before
+5.1.0, `run_source(source, filename=...)` ran the **file** named by `filename` whenever such a
+file existed — discarding the `source` the caller passed and returning `ok=True` with the other
+program's output. Present since nodus v0.4.0 (upstream #521). `filename` is now purely a label; a
+real path still resolves relative imports against its directory, and `run_file` is unchanged.
+
+**This runtime was never exposed, and that is now asserted rather than read.** Every `filename`
+reaching `run_source` is built by `NodusRuntimeAdapter.run_script` as `<nodus:eu:{id}>`, with
+`nodus_worker` falling back to the same angle-bracket form; `<...>` names no file under any
+working directory. Our own `run_file` reads the script itself and passes the *source* through the
+same path. Two guards in `tests/unit/test_nodus_upgrade_contract.py` keep it that way — one pins
+the upstream guarantee, one calls the adapter and fails if it ever passes a resolvable path.
+
+*Worth recording because of the shape:* this is the same failure mode as `GUEST-CONFINE-1`'s
+residual — behaviour depending on a process CWD the runtime never sets. There the worker inherited
+the server's directory (`/home/aindy` in Docker, which holds `alembic/`). We escaped this one by a
+formatting convention, not by a decision.
+
+**New in the guest workflow DSL** (available to `.nd` scripts; the runtime does not consume it
+yet): a step can carry a guard (`step ship after review when reached("approved")`) and declare
+which dependency outcomes satisfy it (`with { on: ["failed"] }`); a `state` cell can declare how
+concurrent writes merge and whether it is durable; every task now reports a terminal status
+(`completed`, `failed`, `upstream_failed`, `skipped`, `omitted`, `cancelled`, `abandoned`) where
+anything that never got a turn was previously just absent from the result; and a failed step
+drains the run instead of tearing the scheduler down, so a timed-out step still gets its `finally`
+blocks and its siblings finish.
+
+Those first two are worked references for open runtime entries — declared per-cell merge policy is
+what `FLOW-PARALLEL-1` says any fan-out fix must have (the flow layer is `state.update(patch)`,
+last-write-wins, today), and the status vocabulary is `EFFECT-PARTIAL-1`'s three-outcome problem
+solved one layer down. Neither entry changes here; they now have an implementation to point at.
+
+### Fixed — `nodus_worker_pool` module docstring contradicted its own function (#513)
+
+The module docstring still described `AINDY_NODUS_WARM_POOL` as *"Opt-in (default off)"* and
+credited that default with bounding the `nodus-lang <= 5.0.2` shared-guest-memory exposure, while
+`warm_pool_enabled()` ~200 lines below has said **default ON** since 2026-08-19. One file, two
+answers — the `ISOLATION-DOC-STATUS-1` shape.
+
+Not cosmetic: that docstring's standing rule is *"before enabling the pool after any dependency
+bump, re-run the guest-memory isolation guard."* With the pool already enabled, re-running it is a
+precondition of **every** dependency bump, not of a flag flip that has already happened. It was
+re-run for this bump.
+
+### Fixed — the effect gate had a **third** silent path to `AT_LEAST_ONCE` (#516)
+
+**Operators running `AINDY_SYSCALL_IDEMPOTENCY` (on by default since 2.5.0): duplicate handler
+runs were under-reported again, and this time by the most common route, not the rarest.**
+
+`resolve_effect_record` opens with a `SELECT`. A caller that finds an existing row gets there by
+one of two routes, and which one is decided purely by whether its `SELECT` lands before or after
+the winner's `COMMIT`:
+
+| Route | What the caller sees | Before | Now |
+|---|---|---|---|
+| Lost the `INSERT` race | `IntegrityError` → re-query → live `pending` | `degraded` | `degraded` |
+| **Read the committed row** | the opening `SELECT` already returned `pending` | **counted nothing** | `degraded` |
+| **Read a `failed` row** | the opening `SELECT` returned `failed` | **counted nothing, and did not reclaim** | `reclaimed` |
+
+Both of the bottom two run the handler a second time. Neither moved
+`aindy_effect_gate_outcomes_total`, which is the only signal an operator has that `EXACTLY_ONCE`
+did not hold.
+
+**This is the larger half of the duplicates, not an edge case.** Under contention most losing
+callers do not race the insert at all — they arrive slightly later and read the committed
+`pending` row. So the counter was reporting the *rarer* route and silently dropping the common
+one.
+
+**Also fixed, on the same path:** reading a `failed` row skipped the reclaim, so the row kept the
+previous attempt's attribution and `created_at` while a new attempt ran against it. That left its
+staleness clock running from the *first* attempt, and left the slot marked `failed` during
+re-execution — so a third caller arriving in that window also fell through uncounted. It is now
+reclaimed exactly as the race path already did: `pending`, clock reset, re-attributed.
+
+**Root cause worth recording: the decision existed in only one of the two places that reach it.**
+It was written for the `IntegrityError` branch and never mirrored for the direct read, which then
+fell through to a bare `return False, None`. It is now one `_resolve_existing_row` helper called
+from both, so the two cannot diverge again.
+
+**How it was found, and why it took three rounds.**
+`test_the_gate_degrades_to_at_least_once_under_contention` fired the exact message it was written
+to carry after the *second* fix (#511): *"look for a THIRD path to `AT_LEAST_ONCE` that nothing
+counts."* It fired on a docs-only PR.
+
+★ **The soak could only ever catch this by luck, and that is the more transferable lesson.** Its
+degradation assertion is guarded by `if len(runs) > 1`, so a run where the threads happen not to
+collide skips the assertion and reports green — `trusting-a-green-check` **variant 9**, *green
+because there was nothing to catch*. A sibling PR containing the same commit passed the same job
+for exactly that reason, which is why "re-run it until it goes green" would have laundered the
+finding rather than fixed it.
+
+The regression guard is therefore **deterministic and sequential**, in
+`tests/integration/test_effect_ledger_gate_accounting.py` — no concurrency is needed to
+demonstrate any of this, which is itself the point. Mutation-tested: reverting the fix fails the
+two bug tests and correctly leaves the liveness control and the replay test passing.
+
+### Fixed — async jobs now record that they started and finished (FR-17, #518)
+
+`emit_system_event` refuses any `execution.*` event emitted with neither an execution pipeline
+nor the async-execution context active. Two async-job sites tripped that guard, and because the
+emitter catches and logs, the rows simply never existed:
+
+- **Submission.** `submit_async_job` emits the job's root `execution.started`. Submissions that
+  come from a route have a pipeline and were fine; submissions from a scheduler tick, the
+  event-bus subscriber thread or an app `bootstrap.py` have none, and were dropped with
+  `WARNING [AsyncJob] … ExecutionContract violation`. Reported by the app team on a live stack.
+- **The worker thread.** `_execute_job_inline` activated that context only when
+  `AINDY_ASYNC_JOB_LOOP_CLOSURE` was set — **off by default** — so with the default settings
+  *every* async job's `execution.completed` / `execution.failed` was discarded. Async traces
+  started and never ended.
+
+Both now declare the async-execution boundary, via a new `async_execution_scope()` context
+manager. The events were not renamed to a non-`execution.*` type the way `scheduler.queued` was:
+`_ensure_root_execution_event_id` and `_has_existing_execution_started` locate an async job's
+trace root by `type == execution.started`, so a rename would trade a missing row for a broken
+trace root.
+
+**Changed meaning of `AINDY_ASYNC_JOB_LOOP_CLOSURE`.** It no longer decides whether an async
+job's execution events are recorded — only whether each job emits a `SCORE_COMPUTED` record and
+joins the Infinity loop, which is what its name says. One flag was carrying both an operator
+preference and a runtime latch; that is the shape `EVENTBUS-PUBLISH-LATCH-1` was split to avoid.
+
+**What operators will see:** more rows in `system_events` for async jobs — one `execution.started`
+per submission that previously produced none, and a terminal `execution.*` per job where the
+default previously produced none. Memory capture follows persistence exactly as it already did
+for route-driven submissions; `RUNTIME_INTERNAL_TASK_NAMES` still refuses to capture the
+runtime's own maintenance jobs, so the RT-MEMTXN-LEAK-1 cycle stays cut.
+
+### Fixed — a route's deliberate 4xx is no longer replaced by a 500 (FR-20, #520)
+
+A route registered under the execution contract that raised `HTTPException` **before** entering
+the pipeline had its status discarded: the guard converted every endpoint exception into a
+`RouteExecutionViolation`, which surfaces as a 500. A stale link that should 404 returned 500, so
+the user-visible symptom of an app contract slip was a wrong status code rather than a recorded
+violation — and a client cannot tell "rejected" from "the server broke" by a 500.
+
+The runtime already disagreed with itself here: an `HTTPException` raised by a **dependency**
+passed through with its status (401 stayed 401), while the same exception from the endpoint body
+became a 500. The two now agree.
+
+**The violation is still recorded — it just stopped being recorded in the status code.** That was
+the part worth getting right: before this, the 500 was the *only* evidence a violation occurred,
+so preserving the status without somewhere else to put it would have traded a wrong status for a
+silent one. New metric:
+
+```
+aindy_route_contract_violations_total{route, outcome}
+  outcome=status_preserved   # a deliberate HTTPException, now passed through intact
+  outcome=converted_500      # anything else — still a RouteExecutionViolation
+```
+
+plus an ERROR log naming the route and the outcome. Only a deliberate `HTTPException` is
+preserved; an unexpected exception from a managed route is still a violation and still a 500.
+
+Both halves of the path had to change together — the route guard and the contract middleware —
+because the middleware re-raises independently. Reverting either one alone puts the 500 back,
+which is now pinned by a test.
+
+### Added — responses now say whether their body is the execution envelope (FR-19, #521)
+
+Routes that pass through `ExecutionPipeline` return `{status, data, trace_id, duration_ms}`;
+every other route returns a bare body. Both share the same URL space and **nothing on the wire
+told them apart**, so every consumer had to carry per-route knowledge of whether that route
+happened to enter a pipeline — knowledge obtainable only by trying it.
+
+The app team reports this as the dominant defect class of their entire live-verification phase:
+five defects on five surfaces, ~40 `safeMap prevented crash` lines inside `@aindy/ui-kit`, fixed
+eleven times in client code. The failure signature is why it cost so much — an envelope where a
+list was expected has no `.length`, so the empty-state branch does not fire either and the
+surface renders **blank, with no error at all**.
+
+Enveloped responses now carry:
+
+```
+X-AINDY-Envelope: v1
+```
+
+**Client rule:** unwrap `data` when the header is present, use the body as-is when it is not —
+one helper instead of one decision per module. The header is deliberately **absent** on error
+responses, handler-built `Response` objects, and routes with a registered response adapter,
+because those bodies are not the envelope; absence means "not enveloped", never "unknown".
+
+`X-Trace-ID` cannot serve this purpose — middleware sets it on every response.
+
+**Also fixed, and it would have made the above useless: none of the runtime's response headers
+were readable by a browser client on another origin.** `allow_headers` governs the *request*
+direction, and a browser exposes only the CORS safelist unless the server names the rest. The
+CORS middleware now sets `expose_headers` for `X-AINDY-Envelope`, `X-Trace-ID`, `X-Request-ID`,
+`X-EU-ID`, `X-API-Version` and `X-Version-Warning`. `X-Trace-ID` has been documented as a
+debugging aid all along while being unreadable from the browser doing the debugging.
+
+Additive: no body shape changes, no existing consumer breaks. Contract documented in
+`SDK_CONTRACT.md` and `UI_CONTRACT.md`.
+
+**Not closed by this:** making every `/apps/*` route enter the pipeline is app-side work, and it
+is their preferred end state. This settles the half only the runtime can — that a client can find
+out which shape it received.
+
+### Added — Webhooks and Dead-Letter Queue panels in the operator console (FR-21, #522)
+
+The runtime serves an operator SPA at `/platform/`. The app team independently grew a second
+one beside it and offered it back rather than keep maintaining two — this adopts the part that
+belongs here.
+
+**The gap was two panels, not five.** They named five as "clearly runtime"; the console already
+shipped four of them (flow engine, agent registry, admin users, executions). The two it did not
+expose were **webhooks** and the **dead-letter queue** — and their check of our served bundle
+found zero occurrences of `webhook`, `dlq`, `dead-letter` or `drain`, so these were capabilities
+with no operator surface rather than duplicated implementations.
+
+Both drive runtime-owned routes:
+
+| Panel | Routes | Actions |
+|---|---|---|
+| Webhooks (`/platform/webhooks` in the SPA) | `GET/POST /platform/webhooks`, `DELETE /platform/webhooks/{id}` | list, create, delete |
+| Dead-Letter Queue (`/platform/dead-letters`) | `GET /platform/queue/health`, `GET /platform/queue/dead-letters`, `POST …/drain`, `POST …/{job_id}/replay`, `DELETE …/{job_id}` | inspect, replay, delete, drain |
+
+Every destructive action is confirm-gated in place, and both panels are admin-gated client-side
+to match the server-side scope (`webhook.manage` / `platform.admin`).
+
+**Note the DLQ ambiguity, because two runtime records share the name:** this panel is the *async
+job queue's* dead-letter queue, whose jobs can be replayed because their payload was preserved.
+`GET /platform/observability/dead-letter` is a different record — dead-lettered **flow runs** —
+and is not what this panel shows.
+
+The SPA's paths for these routes live in `platform/src/api/_routes.js` as `RUNTIME_ROUTES`
+rather than in `@aindy/ui-kit`'s `ROUTES`, so a panel does not wait on a ui-kit release. Fold
+them in on the next one. `UI_CONTRACT.md` lists them as canonical either way.
+
+**Operators: a UI change reaches no container until a release is cut and the Dockerfile pin is
+bumped** — the SPA ships as package data inside the wheel. A running container shows the last
+*released* console.
+
+### Added — the runtime publishes its HTTP route inventory, and CI keeps it current (FR-22, #524)
+
+`AINDY/route_inventory.json` lists every `(method, path)` the runtime serves in the
+`runtime-only` boot profile, with OpenAPI tags. It ships inside the wheel, so a consumer reads
+the surface for the version they installed without booting anything:
+
+```python
+import json
+from importlib.resources import files
+
+inventory = json.loads(files("AINDY").joinpath("route_inventory.json").read_text())
+```
+
+**Why this exists.** The app team's API reference documents ~51 runtime-owned routes, and their
+guard is scoped to `/apps/*` — so the runtime half of their file was a curated inventory nothing
+checked, accurate when written and free to drift afterwards. They deliberately did not extend
+their guard over our routes: an app-side mechanism policing a runtime-owned surface makes the
+app responsible for something it does not own. So the runtime guards its own.
+
+`scripts/check_route_inventory.py` regenerates the file; `--check` fails when it is stale, and
+`tests/unit/test_route_inventory.py` runs that comparison in `Runtime Contracts` — in **both**
+directions, because a route silently leaving the published surface matters more to a pinned
+consumer than one appearing.
+
+**★ Correction worth acting on if you consume our routes: `/apps/*` is not an app-ownership
+boundary.** 35 routes under that prefix — coordination, memory, agent — are served by the
+runtime with no plugins loaded. A guard treating `/apps/*` as "the app's surface" is wrong about
+a third of it. Subtracting this inventory from a booted app's surface gives the genuinely
+app-owned set without curating one by hand.
+
+Two things absence means precisely: the legacy alias surface
+(`AINDY_ENABLE_LEGACY_SURFACE=true`) is excluded — the inventory publishes supported routes, not
+compatibility shims; and there is no version field, because the file is committed and a stamped
+version would make every release bump edit it. **A removal from this file is a breaking change
+for anyone pinned to it.**
+
+
 ## 2.5.0 — 2026-08-20
 
 **★ Read this before upgrading. Two things need an operator decision, not just a `pip install`.**
