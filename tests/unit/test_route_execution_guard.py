@@ -232,7 +232,23 @@ def test_unexpected_dependency_exception_before_endpoint_preserves_original_500(
     assert response.json()["error"] == "internal_error"
 
 
-def test_endpoint_http_exception_before_pipeline_is_contract_violation():
+def _violation_count(route: str, outcome: str) -> float:
+    from AINDY.platform_layer.metrics import REGISTRY
+
+    value = REGISTRY.get_sample_value(
+        "aindy_route_contract_violations_total", {"route": route, "outcome": outcome}
+    )
+    return float(value or 0.0)
+
+
+def test_endpoint_http_exception_before_pipeline_keeps_its_status(monkeypatch):
+    """FR-20 — the caller gets the status the route raised, not an opaque 500.
+
+    The violation is real and is still recorded; what changed is that it is recorded
+    where an operator looks instead of in the status code, which the caller needs for
+    something else. A stale link must 404: a client cannot distinguish "rejected" from
+    "the server broke" by a 500, which is what ROUTE-GUARD-1 cost a day for.
+    """
     router = APIRouter()
 
     @router.get("/endpoint-http-error")
@@ -241,9 +257,31 @@ def test_endpoint_http_exception_before_pipeline_is_contract_violation():
 
     app = _build_managed_test_app(router)
 
+    before = _violation_count("/endpoint-http-error", "status_preserved")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/endpoint-http-error")
+
+    assert response.status_code == 418
+    after = _violation_count("/endpoint-http-error", "status_preserved")
+    assert after == before + 1, "status preserved but the violation went unrecorded"
+
+
+def test_endpoint_non_http_exception_before_pipeline_is_still_a_violation():
+    """The liveness control: only a deliberate status is preserved, nothing else."""
+    router = APIRouter()
+
+    @router.get("/endpoint-exploded")
+    def endpoint_exploded_route(request: Request):
+        raise ValueError("endpoint exploded")
+
+    app = _build_managed_test_app(router)
+
+    before = _violation_count("/endpoint-exploded", "converted_500")
     with TestClient(app, raise_server_exceptions=True) as client:
-        with pytest.raises(RouteExecutionViolation, match="/endpoint-http-error"):
-            client.get("/endpoint-http-error")
+        with pytest.raises(RouteExecutionViolation, match="/endpoint-exploded"):
+            client.get("/endpoint-exploded")
+
+    assert _violation_count("/endpoint-exploded", "converted_500") == before + 1
 
 
 def test_execution_failure_classification_distinguishes_pre_endpoint_cases():

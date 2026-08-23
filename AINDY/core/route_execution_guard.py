@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import logging
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from pathlib import Path
@@ -11,12 +12,15 @@ from typing import Any, Generator, Iterable
 
 from fastapi import Request
 from fastapi.routing import APIRoute
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from AINDY.core.execution_guard import (
     classify_execution_failure,
     is_execution_exempt_path,
     mark_execution_endpoint_entered,
 )
+
+logger = logging.getLogger(__name__)
 
 _PIPELINE_CALLS = {"execute_with_pipeline", "execute_with_pipeline_sync"}
 _ROUTE_WRAPPED_ATTR = "_aindy_execution_wrapped"
@@ -185,6 +189,46 @@ def _is_pipeline_bypass_on_error(request: Request | None) -> bool:
     return bool(getattr(request.state, "execution_contract_required", False))
 
 
+def _record_contract_violation(route: APIRoute, exc: Exception, *, outcome: str) -> None:
+    """Record a violation on the counter an operator reads, not on the status code.
+
+    FR-20 — before this, the *only* record of "a managed route raised before entering
+    the pipeline" was the 500 the caller received. That made one signal carry two
+    meanings: the app's contract slip, and the answer to the request. Preserving a
+    deliberate 4xx therefore requires somewhere else for the violation to land, or the
+    fix would trade a wrong status for a silent one — a straight swap of one defect for
+    a worse one (this repo's `DOCS-COVERAGE-CLAIM-1` shape, applied to enforcement).
+    """
+    logger.error(
+        "%s [outcome=%s]",
+        _route_exception_message(route, exc),
+        outcome,
+        extra={"route": route.path, "outcome": outcome},
+    )
+    try:
+        from AINDY.platform_layer.metrics import route_contract_violations_total
+
+        route_contract_violations_total.labels(route=route.path, outcome=outcome).inc()
+    except Exception:  # pragma: no cover - a metric must never break a request
+        logger.debug("[RouteGuard] violation metric skipped", exc_info=True)
+
+
+def _handle_pipeline_bypass(route: APIRoute, exc: Exception) -> None:
+    """Raise ``RouteExecutionViolation`` unless the endpoint raised a deliberate status.
+
+    FR-20: an `HTTPException` from the endpoint body is the route's *answer*. Replacing
+    it with a 500 tells the caller "the server broke" when the truth was "not found" —
+    and a client cannot tell those apart, which is exactly what `ROUTE-GUARD-1` cost a
+    day for. The violation is real either way and is recorded either way; only the
+    status the caller sees differs.
+    """
+    if isinstance(exc, StarletteHTTPException):
+        _record_contract_violation(route, exc, outcome="status_preserved")
+        return
+    _record_contract_violation(route, exc, outcome="converted_500")
+    raise RouteExecutionViolation(_route_exception_message(route, exc)) from exc
+
+
 def _wrap_route_call(route: APIRoute, endpoint):
     if inspect.iscoroutinefunction(endpoint):
 
@@ -200,7 +244,7 @@ def _wrap_route_call(route: APIRoute, endpoint):
                 if request is not None:
                     classify_execution_failure(request, exc)
                 if _is_pipeline_bypass_on_error(request):
-                    raise RouteExecutionViolation(_route_exception_message(route, exc)) from exc
+                    _handle_pipeline_bypass(route, exc)
                 raise
             _assert_execution_context_entered(route, request)
             return result
@@ -219,7 +263,7 @@ def _wrap_route_call(route: APIRoute, endpoint):
             if request is not None:
                 classify_execution_failure(request, exc)
             if _is_pipeline_bypass_on_error(request):
-                raise RouteExecutionViolation(_route_exception_message(route, exc)) from exc
+                _handle_pipeline_bypass(route, exc)
             raise
         _assert_execution_context_entered(route, request)
         return result
