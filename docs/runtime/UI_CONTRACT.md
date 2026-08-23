@@ -121,10 +121,24 @@ runtime-owned paths a UI kit may target:
 | API keys | `/platform/keys`, `/platform/keys/{key_id}` | `keys_router.py` |
 | Coordination nodes | `/platform/nodes`, `/platform/nodes/{name}` | `nodes_router.py` |
 | Nodus operator | `/platform/nodus/run`, `/platform/nodus/scripts`, `/platform/nodus/schedule`, `/platform/nodus/flow` | `nodus_*_router.py` |
-| Queue / dead-letters | `/platform/queue/health`, `/platform/queue/dead-letters` | `queue_router.py` |
+| Queue / dead-letters | `/platform/queue/health`, `/platform/queue/dead-letters`, `/platform/queue/dead-letters/drain`, `/platform/queue/dead-letters/{job_id}`, `/platform/queue/dead-letters/{job_id}/replay` | `queue_router.py` |
 | Admin | `/platform/admin/users`, `/platform/admin/agents` | `admin_router.py` |
-| Webhooks | `/platform/webhooks` | `webhooks_router.py` |
+| Webhooks | `/platform/webhooks`, `/platform/webhooks/{subscription_id}` | `webhooks_router.py` |
 | Tenant usage | `/platform/tenants/{tenant_id}/usage` | `platform_ops_router.py` |
+
+**FR-21 — where these two groups' paths currently live.** The operator console's Webhooks
+and Dead-Letter Queue panels declare them in `platform/src/api/_routes.js` as
+`RUNTIME_ROUTES`, **not** in `@aindy/ui-kit`'s `ROUTES`, because ui-kit ships on its own
+release train and a panel should not wait on one. That block is a staging area, not a second
+source of truth: fold it into `ROUTES` on the next ui-kit release and delete it. The table
+above stays authoritative either way, and `tests/unit/test_platform_operator_panels.py`
+fails if a declared path is not served — which is the check that matters, since a URL string
+is data and nothing else catches a typo until an operator clicks the tab.
+
+**★ A path typo here cannot be caught by an HTTP probe.** `_SPAStaticFiles` is mounted at
+`/platform` and falls back to `index.html` for any unmatched path, so `GET
+/platform/webhook` (missing the `s`) answers **200 with HTML**, not 404. The test compares
+against the OpenAPI schema for exactly this reason.
 
 > **Runtime routes vs app routes — the ownership line for `ROUTES`.** The paths above are
 > **runtime-owned**: a UI kit built on the runtime should carry these (with the full

@@ -19,6 +19,10 @@ const AgentApprovalInbox = lazy(() => import("./components/platform/AgentApprova
 const AgentRegistry = lazy(() => import("./components/platform/AgentRegistry"));
 const RippleTraceViewer = lazy(() => import("./components/platform/RippleTraceViewer"));
 const AdminUsersPanel = lazy(() => import("./components/platform/AdminUsersPanel"));
+// FR-21 — adopted from the app-side operator SPA; these two drive runtime-owned routes
+// (`/platform/webhooks*`, `/platform/queue/dead-letters*`) that this console did not expose.
+const WebhooksPanel = lazy(() => import("./components/platform/WebhooksPanel"));
+const DeadLetterQueuePanel = lazy(() => import("./components/platform/DeadLetterQueuePanel"));
 
 function platformRoute(name: string, element: ReactNode) {
   return (
@@ -48,6 +52,8 @@ function PlatformRoutes() {
           <Route path="/approvals" element={platformRoute("Approvals", <AgentApprovalInbox />)} />
           <Route path="/registry" element={platformRoute("Registry", <AgentRegistry />)} />
           <Route path="/users" element={platformRoute("Users", <AdminUsersPanel />)} />
+          <Route path="/webhooks" element={platformRoute("Webhooks", <WebhooksPanel />)} />
+          <Route path="/dead-letters" element={platformRoute("Dead-Letter Queue", <DeadLetterQueuePanel />)} />
           {FEATURE_FLAGS.RIPPLETRACE_VIEWER && (
             <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
           )}
