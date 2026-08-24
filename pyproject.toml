@@ -113,7 +113,7 @@ test = [
 ]
 release = [
   "build==1.5.0",
-  "twine==6.2.0",
+  "twine==7.0.0",
 ]
 embeddings-local = [
   # ECOGAP-3 Phase 1: offline/air-gapped memory embeddings via a local model
