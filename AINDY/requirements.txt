@@ -22,7 +22,7 @@ alembic==1.19.0
 Mako==1.4.1
 MarkupSafe==3.0.3
 maturin
-nltk==3.10.0
+nltk==3.10.3
 numpy==2.4.6
 nodus-lang==5.1.0
 openai==2.46.0
