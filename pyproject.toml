@@ -52,7 +52,7 @@ dependencies = [
   "alembic==1.19.0",
   "Mako==1.4.1",
   "MarkupSafe==3.0.3",
-  "nltk==3.10.0",
+  "nltk==3.10.3",
   "nodus-lang==5.1.0",
   "numpy==2.4.6",
   "limits==5.8.0",
