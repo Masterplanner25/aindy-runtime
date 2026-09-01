@@ -77,7 +77,7 @@ dependencies = [
   "ecdsa==0.19.2",
   "python-jose==3.5.0",
   "cryptography==50.0.0",
-  "python-json-logger==4.1.0",
+  "python-json-logger==4.2.0",
   "redis==8.0.1",
   "regex==2026.7.19",
   "requests==2.34.2",
