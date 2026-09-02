@@ -7484,7 +7484,19 @@ Validation` enforces — which is why nothing caught it.
 
 ## FR-15 — dispatch into the execution pipeline is serialised through a 1s single-instance job
 
-**Status: OPEN — P0 (defect), diagnosed 2026-08-15.** Filed by the app team after a Genesis
+**Status: OPEN — P0 (defect), diagnosed 2026-08-15. RE-SCOPED 2026-09-01: the remaining work
+is a BUILD, not the flag flip this entry advertised for two weeks.**
+
+> **Read this first.** `(a)` shipped for **thread mode** on 2026-09-01 and the default is on.
+> **Distributed deployments are UNCHANGED and still starving** — `docker-compose.prod.yml`
+> sets `EXECUTION_MODE: distributed`, so production is very likely the shape that filed this.
+> The severity is unchanged and correct; what was wrong was the *description of the work*.
+> `(a) flip the flag after soak` read as one line for two weeks, and the one line would have
+> silently destroyed every scheduler resume in production — see the distributed finding below.
+> **A cost estimate is not a severity, and this entry had the two tangled: it looked cheap, so
+> it kept being deferred as if it were also low-impact.**
+
+Filed by the app team after a Genesis
 session showed a **177-second** gap with zero events; their writeup is
 `aindy-apps-monolith/docs/handoffs/DEFECT_GENESIS_MESSAGE_LATENCY.md`. They inferred a
 single-slot serialisation from the queueing behaviour and **explicitly declined to claim the
@@ -7546,10 +7558,12 @@ and the mechanism is version-independent.
 
 **Fix options (owner decision, deliberately not taken here).**
 
-- **(a) Flip `AINDY_ASYNC_HEAVY_EXECUTION` on by default.** One line; makes Rules 4/5 live as
-  designed. But it changes execution for `flow`/`agent`/`nodus`/`job` from inline to threaded in
-  every deployment at once, which is a real behaviour change and wants soak — the standing
-  decision puts soak in `aindy-apps-monolith`.
+- **(a) Flip `AINDY_ASYNC_HEAVY_EXECUTION` on by default.** ~~One line~~ — **this option as
+  written was wrong on both halves and is kept only as the record of what was believed.** It is
+  not one line (that flag also gates two HTTP routes into answering `202`), and it is not one
+  deployment shape (in distributed mode the async path drops the callback entirely). It also
+  routed the soak to `aindy-apps-monolith`, which is the deferral `SUBSTRATE-WITNESS-1` records
+  as the reason eight entries never moved. What actually shipped is below.
 - **(b) Decouple dispatch from the heartbeat.** Give `schedule()` its own worker rather than
   borrowing a `max_instances=1` maintenance job, so a slow item cannot starve wait-expiry and
   cleanup even under INLINE.
@@ -7635,10 +7649,26 @@ observed the decision before — an operator could only read an env var),
 `tests/unit/test_scheduler_async_dispatch_gate.py` (25 tests, mutation-tested 5/5) and
 `tests/integration/test_soak_scheduler_dispatch.py` (mutation-tested 5/5).
 
-**Remaining for (a):** flip `_SCHEDULER_ASYNC_DISPATCH_DEFAULT` for thread-mode deployments, and
-decide the distributed half — which is a BUILD, not a flag: the resume must be reconstructible
-from `run_id` rather than carried as a closure. `flow_run_rehydration.py` already does exactly
-that reconstruction on restart, so the shape exists; it overlaps `ORCHESTRATOR-SPLIT-1`.
+**★ FLIPPED 2026-09-01 — thread mode only.** `_SCHEDULER_ASYNC_DISPATCH_DEFAULT = True`, on the
+soak's evidence; `AINDY_ASYNC_SCHEDULER_DISPATCH=0` reverts. Pinned by
+`test_the_shipped_default_dispatches_asynchronously`, which is deliberately the ONLY
+value-dependent test in that file — the rest prove the constant is *consulted* and so stay green
+either way, which is right for the mechanism and useless for the decision.
+
+**★★ WHAT REMAINS, AND IT IS THE WHOLE P0: the distributed resume.** Production still runs the
+serialised dispatch this entry was filed about. The fix is not a flag — `item.run_callback` is a
+closure and cannot cross a process boundary, so a distributed resume needs the run reconstructed
+from `run_id`. **`flow_run_rehydration.py` already performs exactly that reconstruction on
+restart**, so the shape exists and this is assembly rather than invention; it overlaps
+`ORCHESTRATOR-SPLIT-1` and should be settled with it. **Do NOT close FR-15 on the thread-mode
+flip** — that would let the index claim a fixed defect while the deployment that reported it is
+untouched, which is the exact failure this file catalogues.
+
+**★ The general defect found underneath it is FIXED separately (2026-09-01):** `dispatch()` now
+raises `UndistributableWorkError` rather than enqueueing work with no `log_id`. That trap was
+never scheduler-specific — `async_job_service` survived it only by accident of carrying `log_id`,
+and the next caller to omit one would have paid full price. Filed as its own change so the
+revert boundaries stay separate.
 
 ## FR-17 — the async-job path emits `execution.*` from outside a pipeline, so the gate ate it
 

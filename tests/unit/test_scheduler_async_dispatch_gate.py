@@ -138,19 +138,43 @@ def test_scheduler_gate_on_does_not_turn_on_the_route_flag(monkeypatch):
     assert async_heavy_execution_enabled() is False
 
 
-def test_route_flag_on_does_not_turn_on_the_scheduler_gate(monkeypatch):
-    """The other direction, so the two cannot be quietly re-coupled later."""
+def test_route_flag_cannot_influence_the_scheduler_gate(monkeypatch):
+    """The other direction, so the two cannot be quietly re-coupled later.
+
+    ★ Asserts INDEPENDENCE, not a fixed value. An earlier version asserted the gate was
+    `False` here, which passed only because the default was `False` — it was reading the
+    default and calling it a decoupling proof, so flipping the default in a later commit made
+    a correct runtime look broken. Two properties survive any default:
+
+    1. The route flag does not move the gate — both its settings give the same answer.
+    2. An explicit scheduler `off` wins over a route flag that is `on`.
+    """
     from AINDY.core.execution_dispatcher import (
         async_heavy_execution_enabled,
         async_scheduler_dispatch_enabled,
     )
 
     _clear_gate_env(monkeypatch)
-    monkeypatch.setenv("AINDY_ASYNC_HEAVY_EXECUTION", "true")
     monkeypatch.delenv("AINDY_ASYNC_SCHEDULER_DISPATCH", raising=False)
 
+    monkeypatch.setenv("AINDY_ASYNC_HEAVY_EXECUTION", "true")
     assert async_heavy_execution_enabled() is True
-    assert async_scheduler_dispatch_enabled() is False
+    with_route_flag = async_scheduler_dispatch_enabled()
+
+    monkeypatch.setenv("AINDY_ASYNC_HEAVY_EXECUTION", "false")
+    assert async_heavy_execution_enabled() is False
+    without_route_flag = async_scheduler_dispatch_enabled()
+
+    assert with_route_flag == without_route_flag, (
+        "the route flag moved the scheduler gate — the two are re-coupled, which is exactly "
+        "what FR-15 (a) split apart"
+    )
+
+    monkeypatch.setenv("AINDY_ASYNC_HEAVY_EXECUTION", "true")
+    monkeypatch.setenv("AINDY_ASYNC_SCHEDULER_DISPATCH", "false")
+    assert async_scheduler_dispatch_enabled() is False, (
+        "an explicit scheduler 'off' must win over the route flag being on"
+    )
 
 
 def test_the_two_route_call_sites_still_read_the_old_flag():
@@ -233,6 +257,28 @@ def test_unset_outside_test_mode_follows_the_default_constant(monkeypatch):
 
     monkeypatch.setattr(d, "_SCHEDULER_ASYNC_DISPATCH_DEFAULT", False)
     assert d.async_scheduler_dispatch_enabled() is False
+
+
+def test_the_shipped_default_dispatches_asynchronously(monkeypatch):
+    """★ The FR-15 (a) flip itself, pinned as behaviour.
+
+    Every other test here is value-independent on purpose — they prove the constant is
+    *consulted*, so they pass whichever way it is set. That is right for the mechanism and
+    useless for the decision: reverting the flip leaves them all green.
+
+    This one asserts the shipped answer, so an accidental revert fails rather than quietly
+    restoring the serialised dispatch. Editing it should feel deliberate; a default change is
+    exactly the kind of thing that should not slip through as a side effect.
+    """
+    from AINDY.core.execution_dispatcher import async_scheduler_dispatch_enabled
+
+    _clear_gate_env(monkeypatch)
+    monkeypatch.delenv("AINDY_ASYNC_SCHEDULER_DISPATCH", raising=False)
+
+    assert async_scheduler_dispatch_enabled() is True, (
+        "a thread-mode deployment with nothing configured is dispatching INLINE again — the "
+        "scheduler drains its queue synchronously and one slow item starves the rest"
+    )
 
 
 # ── 4. The scheduler actually asks — behaviour, not wiring ───────────────────
