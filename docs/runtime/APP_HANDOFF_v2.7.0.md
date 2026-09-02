@@ -17,9 +17,9 @@ git diff v2.6.0..v2.7.0 -- alembic/versions/                                    
 git diff v2.6.0..v2.7.0 -- AINDY/routes/ | grep enforce_api_key_scope            # no hits
 ```
 
-Two things below are worth reading before you upgrade anyway — one because it changes
-behaviour you did not ask to change, and one because it is a security fix in a dependency.
-Everything after §3 is informational.
+Three sections below are worth reading before you upgrade anyway: §1 changes behaviour you did
+not ask to change, §2 is a set of security fixes in a dependency, and §4 is the answer to the
+question your dependency scanner is about to raise. §5 onward is informational.
 
 ---
 
@@ -102,7 +102,34 @@ The error message says both.
 
 ---
 
-## 4. Informational
+## 4. ★ Your dependency scanner will flag `nltk` on 2.7.0. Here is the answer.
+
+`CVE-2026-81726` / `PYSEC-2026-3740` / `GHSA-8mgp-746c-j5xp` is open against `nltk` 3.10.3 —
+the version 2.7.0 pins — and **has no fix released**. Any scanner you run will report it. This
+section exists so you get the answer from us before you have to ask.
+
+**We carry it as a documented exemption, on verified grounds:**
+
+- `import nltk` has **zero** hits across the entire runtime — `AINDY/`, `tests/`, `scripts/`.
+- nltk arrives only as a transitive dependency of `textstat`, which touches it in exactly one
+  file (`_get_cmudict.py`).
+- `TransitionParser`, the named affected component, has **zero** references anywhere in
+  `textstat`.
+- The vulnerability requires a caller-controlled model path. Nothing in this stack supplies a
+  model path at all.
+
+**Do not "fix" it by pinning nltk back to 3.10.0.** That is strictly worse: 3.10.0 carries
+`PYSEC-2026-3726`, a symlink-based arbitrary file read that **does** have a fix, which is why
+2.7.0 moved to 3.10.3 in the first place. You would be trading a fixed vulnerability for an
+unfixed one to make a scanner quieter.
+
+If your policy requires a written acceptance rather than a pointer, the reasoning and the
+accepted-on date are in `.github/workflows/security-audit.yml` beside the four other nltk
+exemptions this project already carries.
+
+---
+
+## 5. Informational
 
 - **`nltk` 3.10.0 → 3.10.3** clears `PYSEC-2026-3726` / `CVE-2026-62383`, a symlink-based
   arbitrary file read. This runtime never reached the affected code path; the pin exists only to
@@ -123,7 +150,7 @@ The error message says both.
 
 ---
 
-## 5. Verification
+## 6. Verification
 
 Full CI green on the release commit, including `Integration Tests (PostgreSQL + Redis)`,
 `Platform UI Build`, `Runtime Package Build` and `Install Smoke Test`.
@@ -135,4 +162,19 @@ there was no drift for it to detect** — a broken guard and a clean release are
 in that job. The half that carries meaning here is its `negative-control`, which injects
 synthetic drift and requires exit 3; that is what was actually proven.
 
-Sandbox escape gate: see the entry appended to `SANDBOX_ESCAPE_AUDIT.md` for this tag.
+**Sandbox escape gate: 17 / 17 PASS, 0 FAIL, 0 SKIP** on the release tag — Entry 021 in
+`SANDBOX_ESCAPE_AUDIT.md`. Two things that entry records which the number alone would hide, and
+the second matters to you:
+
+- The base image is **not** the one Entries 019–020 ran against (`python:3.11-alpine` was
+  rebuilt), so this is the first pass in the run of four holding across a changed base rather
+  than a re-execution of the same environment.
+- **The Nodus guest VM boundary changed this release and that gate does not test it.** The three
+  `nodus-lang` security fixes in §2 are inside the guest boundary; the escape suite certifies the
+  Tier-2 OCI extension sandbox, which is a different thing. A green 17/17 is not evidence about
+  the guest VM either way — the evidence for that is upstream's own release notes, summarised in
+  §2.
+
+**Published and verified:** `pip install aindy-runtime==2.7.0` resolves from PyPI and brings
+`nodus-lang` 5.9.0 and `nltk` 3.10.3 with it; `aindy-runtime --version` reports `2.7.0`. Checked
+in a clean virtualenv against the published wheel, not inferred from a green build.
