@@ -323,6 +323,70 @@ def _try_claim_job(log_id: str) -> bool:
         db.close()
 
 
+
+def _run_resume(job, resume, q, *, trace_id: str, eu_id: str) -> None:
+    """Rebuild and run a resume that arrived over the queue.
+
+    ★ The failure handling is the point of this function, not the happy path.
+
+    A resume that cannot be rebuilt must **not** be acked as success — that is the exact
+    failure `FR-15`'s distributed half was blocked on, where an unresolvable message is
+    warned about, acknowledged and reported complete while the run stays `waiting` forever.
+    It goes to the dead-letter queue instead, so it is visible and recoverable.
+
+    A resume that *is* rebuilt but whose claim loses to another instance is a different
+    thing entirely, and is a **success**: the rebuilt closure performs its own atomic claim,
+    so a duplicate delivery is a no-op by design rather than an error. Conflating the two
+    would fill the DLQ with correctly-deduplicated messages and hide the real failures in
+    the noise.
+    """
+    from AINDY.core.resume_reconstruction import (
+        ResumeNotReconstructible,
+        require_resume_callback,
+    )
+    from AINDY.db.database import SessionLocal
+
+    run_id, eu_type = resume
+    logger.info(
+        "[Worker] resume_started run_id=%s eu_type=%s trace_id=%s", run_id, eu_type, trace_id
+    )
+
+    db = SessionLocal()
+    try:
+        callback = require_resume_callback(run_id=run_id, eu_type=eu_type, db=db)
+    except ResumeNotReconstructible as exc:
+        logger.error(
+            "[Worker] resume_unreconstructible run_id=%s eu_type=%s: %s", run_id, eu_type, exc
+        )
+        _emit_worker_event(
+            "job_failed",
+            trace_id=trace_id,
+            eu_id=eu_id,
+            job_id=job.job_id,
+            operation_name=f"resume:{eu_type}",
+            task_name=getattr(job, "task_name", None),
+            extra={"error": str(exc), "resume_run_id": run_id},
+        )
+        q.fail(job.job_id, str(exc))
+        return
+    finally:
+        db.close()
+
+    callback()
+    q.ack(job.job_id)
+    logger.info(
+        "[Worker] resume_completed run_id=%s eu_type=%s trace_id=%s", run_id, eu_type, trace_id
+    )
+    _emit_worker_event(
+        "job_completed",
+        trace_id=trace_id,
+        eu_id=eu_id,
+        job_id=job.job_id,
+        operation_name=f"resume:{eu_type}",
+        task_name=getattr(job, "task_name", None),
+    )
+
+
 def _fetch_job_data(log_id: str) -> Optional[tuple[str, dict]]:
     """
     Return ``(operation_name, job_payload)`` from the JobLog.
@@ -638,6 +702,19 @@ def process_one_job(
                 job.job_id,
             )
             q.ack(job.job_id)
+            return True
+
+        # ── FR-15 stage 2: a resume rebuilds from its run, not from a JobLog ──────
+        # The scheduler's work is a closure and cannot be serialised, so a resume travels as
+        # two identifiers and is reconstructed here — the same rebuild `rehydrate_waiting_*`
+        # performs on every boot. Checked BEFORE `_fetch_job_data`, because a resume has no
+        # JobLog: that lookup would miss, and a missing JobLog is ACKed as success, which is
+        # precisely the silent loss this path exists to remove.
+        from AINDY.core.resume_reconstruction import read_resume_context
+
+        resume = read_resume_context(job.context)
+        if resume is not None:
+            _run_resume(job, resume, q, trace_id=trace_id, eu_id=eu_id)
             return True
 
         # Fetch payload from DB (omitted from the queue payload to keep it lean).

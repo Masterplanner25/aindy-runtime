@@ -372,6 +372,11 @@ def _enqueue_distributed(execution_unit: Any, context: dict[str, Any]) -> None:
     Defaults: ``AINDY_RETRY_BACKOFF_BASE_MS=1000``, ``AINDY_RETRY_BACKOFF_MAX_MS=30000``.
     """
     from AINDY.core.distributed_queue import QueueJobPayload, get_queue
+    from AINDY.core.resume_reconstruction import (
+        RESUME_CONTEXT_KEY,
+        RESUME_TASK_NAME,
+        read_resume_context,
+    )
     from AINDY.platform_layer.trace_context import get_trace_id
 
     # ★★ REFUSE work the worker could not rebuild, BEFORE building a payload for it.
@@ -391,13 +396,20 @@ def _enqueue_distributed(execution_unit: Any, context: dict[str, Any]) -> None:
     # ``log_id`` specifically, not "any id": it is what ``_fetch_job_data`` looks up. All
     # three live call sites in ``async_job_service`` pass it, so this refuses nothing that
     # works today.
-    if not context.get("log_id"):
+    # FR-15 stage 2: a resume is the other thing a worker can rebuild. It carries no JobLog
+    # — its durable record is the FlowRun/AgentRun row — so it satisfies this guard by
+    # naming the run instead. Both branches answer the same question: *can the far end
+    # reconstruct this without the closure?*
+    resume = read_resume_context(context)
+    if resume is None and not context.get("log_id"):
         raise UndistributableWorkError(
             "refusing to enqueue work with no 'log_id' onto the distributed queue: the "
             "worker rebuilds a job by resolving that id against JobLog, and treats an "
             "unresolvable job as successfully completed, so the callback would be dropped "
-            "and the loss would be silent. Either give this work a JobLog row (see "
-            "async_job_service.submit_async_job) or keep it out of distributed dispatch. "
+            "and the loss would be silent. Give this work a JobLog row (see "
+            "async_job_service.submit_async_job), or a resume descriptor naming a "
+            "reconstructible run (see core.resume_reconstruction.resume_context), or keep "
+            "it out of distributed dispatch. "
             f"context keys seen: {sorted(context)}"
         )
 
@@ -413,9 +425,18 @@ def _enqueue_distributed(execution_unit: Any, context: dict[str, Any]) -> None:
 
     # Guaranteed non-empty by the guard above. The previous ``or eu_id or uuid4()`` fallback
     # was the silent path itself: it manufactured an id precisely when there was none to use.
-    job_id = str(context["log_id"])
-    operation_name = str(context.get("operation_name") or context.get("task_name", ""))
-    task_name = str(context.get("task_name") or operation_name)
+    #
+    # ★ A resume keys on its RUN id, not a JobLog id. That makes the message identifiable and
+    # gives ``idempotency_key`` a meaningful default: two enqueues of the same resume collapse
+    # to one key, and the rebuilt callback's own atomic claim makes a duplicate delivery a
+    # no-op rather than a double execution.
+    job_id = str(resume[0]) if resume is not None else str(context["log_id"])
+    if resume is not None:
+        operation_name = f"resume:{resume[1]}"
+        task_name = RESUME_TASK_NAME
+    else:
+        operation_name = str(context.get("operation_name") or context.get("task_name", ""))
+        task_name = str(context.get("task_name") or operation_name)
     is_retry = bool(context.get("retry", False))
 
     payload = QueueJobPayload(
@@ -423,6 +444,11 @@ def _enqueue_distributed(execution_unit: Any, context: dict[str, Any]) -> None:
         task_name=task_name,
         # idempotency_key defaults to job_id via QueueJobPayload.__post_init__
         context={
+            # ★ The payload context is REBUILT here, not passed through — so anything the far
+            # end needs must be added explicitly. The resume descriptor is the whole message
+            # for a resume; omitting it enqueues a well-formed job that names a run nobody can
+            # find, and the enqueue side looks entirely correct while doing it.
+            **({RESUME_CONTEXT_KEY: dict(context[RESUME_CONTEXT_KEY])} if resume else {}),
             "trace_id": trace_id,
             "eu_id": eu_id,
             "user_id": str(
