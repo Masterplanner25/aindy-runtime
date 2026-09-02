@@ -258,6 +258,76 @@ def test_worker_dead_letters_a_resume_it_cannot_rebuild():
     assert q.ack.call_count == 0, "it must NOT be acknowledged as completed"
 
 
+class _FakeQueue:
+    """One message, then nothing — enough to drive a single `process_one_job`."""
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.acked: list[str] = []
+        self.failed: list[tuple] = []
+
+    def dequeue(self, timeout: int = 5):
+        payload, self._payload = self._payload, None
+        return payload
+
+    def ack(self, job_id):
+        self.acked.append(job_id)
+
+    def fail(self, job_id, error=""):
+        self.failed.append((job_id, error))
+
+    def get_metrics(self):
+        return {}
+
+    def requeue_stale_jobs(self, timeout_seconds: int = 300):
+        return 0
+
+
+def test_a_resume_survives_process_one_job(monkeypatch):
+    """★★ THE BUG STAGE 2 SHIPPED, and the reason the other worker tests could not see it.
+
+    `_try_claim_job` claims a **JobLog** row and returns `False` when the job is *missing*. A
+    resume has no JobLog by construction, so it is always "missing" — and the miss path warns,
+    **ACKs**, and returns success. With the resume branch below that guard, every resume was
+    discarded silently: the same failure this path removes, through a different door.
+
+    Every other worker test here calls `_run_resume` directly. That is a fine way to test the
+    helper and a useless way to test the *path*, because it starts past the line that was
+    eating the message — catalogue variant 5, gates but does not cover. So this one drives
+    `process_one_job`, the real per-message entry point, with a queue that yields one resume.
+
+    ★ Note what is NOT stubbed: `_try_claim_job` runs for real. Stubbing it would remove the
+    exact guard that was swallowing the message.
+    """
+    import AINDY.worker.worker_loop as wl
+    from AINDY.core.distributed_queue import QueueJobPayload
+    from AINDY.core.resume_reconstruction import RESUME_TASK_NAME
+
+    ran: list[int] = []
+    payload = QueueJobPayload(
+        job_id="run-proc-1", task_name=RESUME_TASK_NAME, context=_ctx("run-proc-1", "flow")
+    )
+    q = _FakeQueue(payload)
+
+    monkeypatch.setattr(wl, "_emit_worker_event", lambda *a, **k: None)
+    monkeypatch.setattr(wl, "_get_semaphore", lambda: None)
+    monkeypatch.setattr(
+        "AINDY.core.resume_reconstruction.require_resume_callback",
+        lambda **kw: (lambda: ran.append(1)),
+    )
+
+    handled = wl.process_one_job(queue_backend=q)
+
+    assert handled is True
+    assert ran == [1], (
+        "the resume never ran. process_one_job reached _try_claim_job first, which reports a "
+        "resume as 'missing' (it has no JobLog), ACKs it and returns success — the silent "
+        "loss this path exists to remove."
+    )
+    assert q.acked == ["run-proc-1"]
+    assert q.failed == []
+
+
 def test_a_resume_never_reaches_the_joblog_lookup():
     """★ Placement, asserted rather than assumed.
 
