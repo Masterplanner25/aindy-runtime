@@ -2,6 +2,184 @@
 
 ## Unreleased
 
+_Nothing yet._
+
+## 2.7.0 — 2026-09-02
+
+### Changed — the scheduler no longer runs drained work on its own heartbeat (`FR-15` (a), thread mode)
+
+- **`AINDY_ASYNC_SCHEDULER_DISPATCH` now defaults to `true`.** A queued item is handed to the
+  thread pool instead of being executed inside the 1-second scheduler tick, so one slow flow no
+  longer blocks every other queued item — or wait expiry, or stale-wait cleanup, which share that
+  tick. Set `AINDY_ASYNC_SCHEDULER_DISPATCH=0` to restore the previous behaviour.
+- *Evidence:* `tests/integration/test_soak_scheduler_dispatch.py` on live PostgreSQL — the drainer
+  is released while dispatched work is still running, nothing is lost or duplicated, and
+  concurrent resumes each obtain their own database session.
+- **★ This reaches thread-mode deployments only, and that is the honest scope rather than a
+  caveat.** The setting has no effect under `EXECUTION_MODE=distributed`, which
+  `docker-compose.prod.yml` sets, because the distributed transport cannot carry the scheduler's
+  resume callback. **If you run the production overlay, nothing about your dispatch behaviour
+  changes and the serialisation described in `FR-15` is still present.** Fixing it there requires
+  reconstructing the resume from `run_id` rather than carrying a closure — a build, still open.
+- `aindy_execution_dispatch_total{mode="async"}` is how you confirm which behaviour a deployment
+  actually has; reading the environment variable cannot tell you, since distributed mode overrides it.
+
+### Changed — `nodus-lang` 5.1.0 → 5.9.0 (all three pin sites)
+
+Eight releases. Read this before upgrading a deployment that runs guest Nodus code: three of the
+fixes in the gap are **security** fixes, and none of them was obvious from the version distance.
+
+- **A capability policy could be bypassed by spelling a call differently** (upstream #616).
+  `agent_call` is governed by the `agent.call` capability; `agent_call_async` carried no
+  capability at all, so a `DenyList("agent.call")` refused one spelling and permitted the other on
+  the same agent under the same policy. Seven builtins could also be shadowed by a host
+  `register_function` — including `chr` — because the "cannot override a builtin" guard read a
+  hand-maintained name set that had drifted from the VM's actual dispatch table by seven entries.
+- **A relocated workflow store fell outside the guest filesystem floor.** `DEFAULT_FLOOR` decided
+  what counted as the runtime's own state by matching a literal `.nodus` path segment, so the
+  *supported* way to move the store also moved it out of the jail — a guest write of
+  `../relocated/pwned.txt` landed in the live run store while the same write to the default
+  location was denied.
+- **A graph response could name another request's graph** (upstream #584) — id, status and full
+  task map including step return values. A cross-request leak on any server handling more than one
+  caller, not merely a wrong label.
+- **The bytecode cache could run a stale program.** The cache key was `sha256(abspath + mtime_ns)`,
+  so any edit landing inside the platform's mtime resolution was invisible and the previous program
+  ran. Entries now carry a hash of the source bytes.
+- Plus closure-across-module fixes (#691, #696) that made a module-exported factory function or a
+  callback passed into a step body execute against the wrong chunk — with five different symptoms
+  depending on what happened to sit at that address, including silently running nothing.
+
+**No runtime code change was needed.** Verified rather than assumed: all eight host functions this
+runtime registers are still accepted (the tightened builtin-shadowing guard refuses none of them),
+`NodusRuntime.__init__` still takes no `**kwargs` so a renamed confinement flag would raise rather
+than silently unconfine a guest, every confinement argument it is given still exists, and the
+`[mcp]` extra still resolves (`nodus-mcp` 0.1.3 requires `nodus-lang>=4.0.0` unbounded).
+
+One upstream change is a **breaking** change that does not affect this repo: a named import of a
+builtin name (`import { sleep } from "./mod.nd"`) is now refused rather than silently ignored. No
+`.nd` source here uses that form.
+
+### Changed — bump `nltk` 3.10.0 → 3.10.3 (PYSEC-2026-3726, #542)
+
+- `nltk` is pinned to `3.10.3` at both pin sites (`pyproject.toml`, `AINDY/requirements.txt`).
+  Versions before 3.10.2 carry a symlink-based arbitrary file read in
+  `IPIPANCorpusReader.{channels,domains,categories,fileids}()` — those methods bypass
+  `nltk.pathsec` validation entirely, so a symlink planted in the corpus root reads any file the
+  process can reach (CVE-2026-62383 / GHSA-3hhw-38pf-pxj6).
+- **No operator action.** Nothing in `AINDY/` imports `nltk`; it is pinned directly only to
+  control the version `textstat` resolves to, and no code path in this runtime reaches the
+  affected reader. A plain upgrade picks the fixed version up.
+- Unlike the four nltk findings already carried as `--ignore-vuln` exemptions in
+  `security-audit.yml`, this one has a fix released, so it is a bump rather than a fifth
+  exemption. `3.10.3` rather than the `3.10.2` named in the advisory: same patch series,
+  `textstat` requires `nltk` unbounded, and taking the tip avoids an immediate follow-up bump.
+- Worth recording for the next time `pip-audit (OSV)` goes red with no diff to explain it: this
+  advisory turned a required check red on an **unchanged `main`** (`a2fe25c` passed on 08-24,
+  failed on 08-31), which blocked four unrelated Dependabot PRs and left a stale green on seven
+  others. A dependency check reports on the state of the world, not the state of the branch.
+
+### Changed — `pip-audit (OSV)` now runs on pushes to `main`, not only on PRs (#543)
+
+- `security-audit.yml` gains `push: branches: [main]`. It previously ran on `pull_request` and a
+  weekly `schedule` only, so the audit gated every PR *into* `main` and never gated `main` itself.
+- **Why that mattered:** on 2026-08-31 `PYSEC-2026-3726` was published against a pinned `nltk` and
+  turned the check red on an *unchanged* branch — `a2fe25c` passed it on 08-24 and failed it on
+  08-31. It was noticed only because Dependabot PRs happened to be open and inherited the failure.
+  With an empty queue, `main` would have sat red on a dependency CVE until the following Monday.
+- **What a green check now means:** a passing `pip-audit` against `main` is a live statement about
+  `main`, not a claim inherited from whichever PR last merged. Expect one extra job per merge.
+- The trigger is deliberately **not** `paths:`-filtered — a filtered required check never reports
+  on unrelated PRs and blocks them forever. `push` is scoped to `main`, so PR branches do not
+  double-run.
+- Also filed as variant 11 in the trusting-a-green-check catalogue in `CLAUDE.md`: the first entry
+  where the check was *correct when it ran*. A dependency audit asks a question about the outside
+  world, so its answer decays with no commit to mark the moment — and `gh pr checks` prints a
+  duration but never a date, which makes a week-old pass indistinguishable from a fresh one.
+
+### Changed — dependency pins refreshed
+
+Every pin that moved this cycle had its release notes read, per the release checklist. The two
+carrying security fixes have their own entries above (`nltk`, `nodus-lang`); these four are the
+remainder, recorded so an operator upgrading can see the whole set rather than only the loud half.
+
+- **`starlette` 1.3.1 → 1.6.0.** No breaking changes and no advisories. Two hardening fixes worth
+  knowing if you serve files through the runtime: `FileResponse` now rejects inverted single-byte
+  ranges and caps a request at 100 ranges. Also adds a `max_body_size` parameter — not adopted
+  here, noted because it is the first request-size control the ASGI layer has offered us.
+- **`setuptools` 83.0.0 → 84.0.0.** A major bump whose changes are confined to the distutils
+  compiler surface — `Compiler.spawn` deprecated for `Compiler.call`, relocated compiler exception
+  types, changed `runtime_library_dir_option` return shape. **This runtime builds a pure-Python
+  wheel plus a Maturin-built Rust crate and touches none of it**; the constraint in
+  `pyproject.toml` remains `>=83.0.0`, so nothing is forced on a consumer.
+- **`pymongo` 4.16.0 → 4.17.0.** No breaking changes, no advisories. `bson.son.SON`'s `has_key`,
+  `iterkeys` and `itervalues` are deprecated for removal in PyMongo 5.0.
+- **`python-json-logger` 4.1.0 → 4.2.0.** No breaking changes, no advisories. Fixes a real
+  side-effect bug: **logging a `dict` no longer mutates it** — `exc_info` and `stack_info` were
+  previously added to the caller's dictionary. If you log a dict and then reuse it, it stops
+  acquiring keys it never had.
+
+### Fixed — distributed dispatch no longer silently discards work it cannot reconstruct
+
+- `dispatch()` now raises `UndistributableWorkError` when work is routed to the distributed
+  queue with no `log_id` in its context, instead of enqueueing a payload keyed on an id no
+  worker can resolve. The refusal happens **before** anything is pushed.
+- *Why this mattered:* `dispatch()` takes a callback. Under `EXECUTION_MODE=distributed` that
+  callback is never carried — the runtime sends a job payload and the worker rebuilds the work
+  by resolving `log_id` against `JobLog`. Without one, the old code manufactured an id
+  (`... or eu_id or uuid4()`) precisely when there was none to use, and a worker treats an
+  unresolvable job as **finished**: it logs `JobLog not found`, acknowledges the message rather
+  than dead-lettering it, and reports success. The work vanished with no dead-letter entry, no
+  retry, and no failed status — every observable signal said it completed.
+- **No operator action, and nothing that works today is refused.** All three live job-submission
+  paths pass `log_id`; that was the entire guarantee, and it was an accident rather than a check.
+  The guard makes it a rule so the next caller to omit one gets an error at the call site instead
+  of a silent permanent loss.
+- Found while scoping `FR-15 (a)`, which would have been the first caller to hit it. Filed and
+  fixed separately because it is a property of `dispatch()`, not of the scheduler.
+
+### Added — the scheduler's async dispatch is its own switch, and it is observable (`FR-15` (a))
+
+- **New: `AINDY_ASYNC_SCHEDULER_DISPATCH`** (default `false`) — may the scheduler hand a drained
+  item to the thread pool instead of running it on the 1-second heartbeat tick? This is the half
+  of `FR-15` that fixes the actual defect: `schedule()` is the only queue drainer and runs each
+  item synchronously, so one slow flow starves every other queued item along with wait expiry and
+  stale-wait cleanup.
+- **`AINDY_ASYNC_HEAVY_EXECUTION` is now route-facing only.** It still gates `POST /agents` and
+  the nodus execute route, both of which answer `202` queued instead of a result when it is on.
+  It no longer influences scheduler dispatch. **Nothing changes for anyone by default** — both
+  flags remain off, and with the new one off the scheduler path is byte-identical to before.
+- *Why split rather than flip:* one variable meant two unrelated things, so turning it on to fix a
+  scheduler defect would also have changed two HTTP response shapes without anyone asking for it.
+  Same repair as `EVENTBUS-PUBLISH-LATCH-1` and FR-17's `AINDY_ASYNC_JOB_LOOP_CLOSURE`.
+- **New metric `aindy_execution_dispatch_total{mode, eu_type}`** — whether an execution ran inline
+  or went to the pool. Nothing observed that decision before; an operator could only read an env
+  var, which cannot distinguish "the async path is on" from "it is on and nothing uses it".
+
+### Fixed — the scheduler can no longer be pointed at a transport that would discard its work
+
+- `AINDY_ASYNC_SCHEDULER_DISPATCH` **has no effect under `EXECUTION_MODE=distributed`**, and
+  refuses it before even an explicit opt-in. Setting it on a production overlay is a documented
+  no-op, not an error.
+- *Why an operator should care:* in distributed mode the async path does not submit to a thread
+  pool — it serialises a job payload and **drops the callback**. The scheduler's work *is* a
+  callback, and there is no `JobLog` row for a worker to recover it from, so the worker would log
+  `JobLog not found`, **acknowledge the message, and report success** while the resume never ran.
+  The flow would sit in `waiting` forever with no dead-letter entry and no retry. That is worse
+  than the starvation being fixed, which at least eventually runs. `docker-compose.prod.yml` sets
+  `EXECUTION_MODE: distributed`, so this is the default production shape.
+
+### Changed — what CI proves about dispatch
+
+- `tests/unit/test_scheduler_async_dispatch_gate.py` (25 tests) pins the gate precedence, the
+  distributed refusal, and — for the first time — `_decide_mode`'s eight type×priority
+  combinations. That decision, which the whole `FR-15` diagnosis rests on, previously had no test.
+- `tests/integration/test_soak_scheduler_dispatch.py` proves the drainer is released while
+  dispatched work is still running, that no item is lost or duplicated, and that concurrent
+  resumes each obtain their own database session on live PostgreSQL. Both suites are
+  mutation-tested 5/5.
+
+
 ## 2.6.0 — 2026-08-22
 
 **Six app-team feature requests (FR-17 through FR-22), two idempotency-gate corrections, and a `nodus-lang` bump. No schema change and no migration — verified against `v2.5.0..2.6.0`: nothing under `AINDY/db/models/`, `alembic/versions/` or `memory_persistence.py` moved, so this one really is a `pip install` upgrade.** The two entries below that need an operator decision rather than an install come first, as the protocol requires.
