@@ -164,6 +164,7 @@ def _check_resources(self, run, state: dict, current_node: str, node_started_eve
             run.state = _json_safe(state)
             self.db.commit()
             try:
+                from AINDY.core.flow_run_rehydration import build_flow_resume_callback
                 from AINDY.core.wait_condition import WaitCondition
                 from AINDY.kernel.scheduler_engine import get_scheduler_engine
 
@@ -174,7 +175,13 @@ def _check_resources(self, run, state: dict, current_node: str, node_started_eve
                     wait_for_event="resource_available",
                     tenant_id=tenant_id,
                     eu_id=eu_id_str,
-                    resume_callback=lambda: self.resume(this_run_id),
+                    resume_callback=build_flow_resume_callback(
+                        r_id=this_run_id,
+                        flow_name=run.flow_name,
+                        user_id=self.user_id,
+                        workflow_type=self.workflow_type or "flow",
+                        eid=eu_id_str,
+                    ),
                     priority=getattr(self, "priority", "normal"),
                     correlation_id=this_trace,
                     trace_id=this_trace,
@@ -293,6 +300,7 @@ def _handle_node_status(
         run.current_node = current_node
         self.db.commit()
         try:
+            from AINDY.core.flow_run_rehydration import build_flow_resume_callback
             from AINDY.core.wait_condition import WaitCondition
             from AINDY.kernel.scheduler_engine import get_scheduler_engine
 
@@ -303,7 +311,13 @@ def _handle_node_status(
                 wait_for_event=wait_for,
                 tenant_id=str(self.user_id or ""),
                 eu_id=str(getattr(self, "_eu_id", "") or ""),
-                resume_callback=lambda: self.resume(wait_run_id),
+                resume_callback=build_flow_resume_callback(
+                    r_id=wait_run_id,
+                    flow_name=run.flow_name,
+                    user_id=self.user_id,
+                    workflow_type=self.workflow_type or "flow",
+                    eid=str(getattr(self, "_eu_id", "") or ""),
+                ),
                 priority=getattr(self, "priority", "normal"),
                 correlation_id=wait_trace,
                 trace_id=wait_trace,

@@ -2,6 +2,38 @@ from AINDY.core.execution_pipeline.context import _route_eu_type
 from AINDY.core.execution_pipeline.shared import Any, logger
 
 
+
+def _build_eu_resume_callback(eu_id: str):
+    """A 0-arg EU resume that opens its own session.
+
+    ★ Replaces `lambda: ExecutionUnitService(db).resume_execution_unit(eu_id)`, which captured
+    the **request-scoped** session. `AGENT_WORKING_RULES` §5 — never share a SQLAlchemy session
+    across threads or requests — and this closure did both: it is handed to the scheduler and
+    fires on a scheduler thread, arbitrarily later, after the request that owned the session has
+    returned and its session has been closed.
+
+    It survived because a closed SQLAlchemy session is not a dead one — it transparently checks
+    out a new connection on next use — so the bug was latent rather than visible. That is
+    precisely the kind that stops being latent under concurrency, and `FR-15 (a)` made scheduler
+    resumes concurrent.
+
+    Capturing only `eu_id` also makes this reconstructible in the sense the rest of `FR-15`
+    means: everything it needs is an identifier, so nothing about it is tied to the process or
+    the request that registered it.
+    """
+    def _resume() -> None:
+        from AINDY.core.execution_unit_service import ExecutionUnitService
+        from AINDY.db.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            ExecutionUnitService(db).resume_execution_unit(eu_id)
+        finally:
+            db.close()
+
+    return _resume
+
+
 def _detect_wait(self, result: Any) -> tuple[str, dict, Any] | None:
     from AINDY.core.execution_gate import ExecutionWaitSignal
 
@@ -53,7 +85,7 @@ def _safe_transition_eu_waiting(self, ctx, *, wait_for: str, wait_condition=None
                 wait_for_event=wait_for,
                 tenant_id=str(ctx.user_id or ""),
                 eu_id=eu_id,
-                resume_callback=lambda: ExecutionUnitService(db).resume_execution_unit(eu_id),
+                resume_callback=_build_eu_resume_callback(eu_id),
                 priority=PRIORITY_NORMAL,
                 correlation_id=trace_id,
                 trace_id=trace_id,
