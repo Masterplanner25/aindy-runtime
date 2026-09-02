@@ -228,6 +228,16 @@ def test_duplicate_delivery_runs_the_work_once(monkeypatch, db_session):
 
     q = _queue(monkeypatch)
     run = _waiting_flow_run(db_session)
+
+    # ★ The rebuild refuses a flow this process does not hold — the guard that stops a worker
+    # ACKing a resume it cannot run. This test drives the REAL rebuild, so it has to register
+    # the flow it is asserting about; without this it would exercise the refusal instead of the
+    # deduplication, and pass for entirely the wrong reason.
+    monkeypatch.setattr(
+        "AINDY.runtime.flow_engine.FLOW_REGISTRY",
+        {run.flow_name: object()},
+        raising=False,
+    )
     run_id = str(run.id)
     executed: list[str] = []
 
