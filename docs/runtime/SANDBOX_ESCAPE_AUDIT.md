@@ -1091,6 +1091,60 @@ native Linux, certified for the `v2.6.0` release commit.
 
 ---
 
+## Entry 021 — 2026-09-02
+
+**Trigger:** `v2.7.0` release tag (`sandbox-escape-linux.yml`, run `33648471784`).
+**Commit:** `f02f40c1292ded1664416f74166ce4f530c2a25a`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146`.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.21s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `33648471784`).
+Six attack vectors: `env_leak`, `filesystem_escape`, `network_escape`, `path_boundary`,
+`privilege_escalation`, `process_escape`.
+
+**The certified boundary is untouched.** `git diff v2.6.0..v2.7.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**.
+
+**★ Unlike Entries 019 and 020, the environment is NOT identical — the image digest moved.**
+Those entries could discount a repeated 17/17 partly on the grounds that the base image was
+byte-for-byte the same, so the run was closer to a re-execution than a re-test.
+`python:3.11-alpine` has been rebuilt since (`6857d2da…` → `0d559200…`), so this is the *first*
+pass in the run of four that holds across a changed Alpine base. That is a slightly stronger
+claim than its predecessors, not a weaker one, and worth recording because the natural reading
+of an unchanged number is the opposite.
+
+**★★ The Nodus guest VM row changed this release, and this gate cannot see it.** Entries 019 and
+020 both recorded that row as *unchanged*. It is not unchanged in `v2.7.0`: `nodus-lang` moved
+5.1.0 → 5.9.0, and three of the eight releases in that span fix security issues **inside the
+guest boundary** — a capability policy bypassable by writing `agent_call_async` instead of
+`agent_call` (the async spelling carried no capability at all, so a `DenyList` refused one and
+permitted the other), a relocated workflow store falling outside `DEFAULT_FLOOR`, and a graph
+response that could return another request's graph state including step return values.
+
+None of that is certified here, because this gate certifies the **Tier-2 OCI extension sandbox**
+and the guest VM is a different boundary. The point of writing it down is that a reader comparing
+Entry 021 against 020 sees the same 17/17 and the same six vectors, and could reasonably conclude
+nothing about isolation moved in this release. Something did — **upstream, in a dependency, on a
+boundary this suite does not test.** Verification for it is in that release's changelog entry.
+
+| Boundary | Certified by this gate? | Status after `v2.7.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | **CHANGED** — three upstream security fixes via `nodus-lang` 5.9.0; `GUEST-CONFINE-1` remains closed |
+| In-process tool seam | **No** — out of scope | unchanged this release. **Undeclared tools still run in-process** — the deliberate remaining gap, carried forward from Entries 019–020 |
+
+**★ One release change that no boundary row covers, recorded so it is not rediscovered as a
+finding:** the scheduler now dispatches drained work to a shared thread pool by default on
+thread-mode deployments (`FR-15` (a)). That moves *where* runtime-owned work executes; it does
+not move a trust boundary — the pool runs first-party runtime code under the same process
+identity the heartbeat tick already had, and no guest or extension code reaches it. It has no
+effect at all on the production overlay, where `EXECUTION_MODE=distributed` and the gate refuses.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.7.0` release commit.
+
+---
 ---
 
 *To add a new entry: run `pytest -m sandbox_escape -v`, note the summary line, and append
