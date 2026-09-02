@@ -17,6 +17,7 @@ from AINDY.platform_layer.deployment_contract import (
     validate_worker_deployment_profile,
 )
 from AINDY.platform_layer import scheduler_service
+from AINDY.platform_layer import registry
 from AINDY.platform_layer.registry import load_plugins
 from AINDY.worker import _wait_for_background_schema, lifecycle_services
 from AINDY.worker.worker_loop import run_worker_loop
@@ -32,6 +33,12 @@ def main() -> None:
     )
 
     load_plugins()
+    # ★ `load_plugins()` COLLECTS flow registrations; `register_flows()` INVOKES them, and only
+    # the second fills FLOW_REGISTRY. The API does both in `startup.py`; the worker did only the
+    # first, so its FLOW_REGISTRY was empty — fine while a worker ran jobs, and not fine now
+    # that it also rebuilds flow resumes (FR-15). Without this a resumed flow is unrunnable
+    # here, and `resume_reconstruction` dead-letters it rather than acknowledging it.
+    registry.register_flows()
     deployment_profile = validate_worker_deployment_profile()
     publish_worker_runtime_state(
         process_role=PROCESS_ROLE_WORKER,
