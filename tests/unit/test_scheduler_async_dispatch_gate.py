@@ -199,22 +199,42 @@ def test_the_two_route_call_sites_still_read_the_old_flag():
 # ── 3. Precedence, and the refusal that prevents silent resume loss ──────────
 
 
-def test_distributed_mode_refuses_even_an_explicit_opt_in(monkeypatch):
-    """★★ THE GUARD THAT MATTERS MOST.
+def test_distributed_mode_does_not_inherit_the_thread_mode_default(monkeypatch):
+    """★★ THE GUARD, RELAXED FROM A REFUSAL TO AN OPT-IN — and the distinction matters.
 
-    `_enqueue_distributed()` drops `handler_fn`. With the scheduler's context there is no
-    JobLog for the worker to re-read, so it warns, **acks**, and returns success while the
-    resume never runs — a permanent silent loss, worse than the starvation being fixed.
+    It used to refuse distributed mode outright, because `_enqueue_distributed` dropped
+    `handler_fn` and the scheduler's work *was* that closure: enqueueing produced a message no
+    worker could resolve, and an unresolvable message is ACKed as success. A resume now travels
+    as a reconstructible descriptor instead, so the refusal is no longer correct.
 
-    Checked BEFORE the explicit opt-in on purpose: an operator setting the variable on a
-    prod overlay must not be able to arm this.
+    What remains correct is that distributed mode must not pick up the thread-mode default. The
+    transport is proven; a separate worker *process*, the scheduler actually routing there, and
+    cross-process concurrency are not — and every defect on this path so far has lived exactly
+    at a process boundary. So an operator turns it on deliberately or it stays off.
     """
+    from AINDY.core.execution_dispatcher import async_scheduler_dispatch_enabled
+
+    _clear_gate_env(monkeypatch)
+    monkeypatch.setenv("EXECUTION_MODE", "distributed")
+    monkeypatch.delenv("AINDY_ASYNC_SCHEDULER_DISPATCH", raising=False)
+
+    assert async_scheduler_dispatch_enabled() is False, (
+        "distributed mode inherited the thread-mode default. That asserts evidence nobody has "
+        "yet — no separate worker process has ever run this path."
+    )
+
+
+def test_distributed_mode_honours_an_explicit_opt_in(monkeypatch):
+    """The other half: the opt-in has to actually work, or it is a refusal with extra words."""
     from AINDY.core.execution_dispatcher import async_scheduler_dispatch_enabled
 
     _clear_gate_env(monkeypatch)
     monkeypatch.setenv("EXECUTION_MODE", "distributed")
     monkeypatch.setenv("AINDY_ASYNC_SCHEDULER_DISPATCH", "true")
 
+    assert async_scheduler_dispatch_enabled() is True
+
+    monkeypatch.setenv("AINDY_ASYNC_SCHEDULER_DISPATCH", "0")
     assert async_scheduler_dispatch_enabled() is False
 
 
