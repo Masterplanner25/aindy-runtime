@@ -29,9 +29,11 @@ which is the only reason evidence for the flip is obtainable at all.
 `_enqueue_distributed()`, which drops `handler_fn` — a closure cannot cross a process
 boundary, and the scheduler's work *is* the closure `item.run_callback`. The worker would
 find no JobLog for the eu_id, warn, **ack**, and return success while the resume never runs.
-`async_scheduler_dispatch_enabled()` refuses distributed mode outright for that reason, and
-`test_the_gate_refuses_distributed_mode` below pins the refusal *here* as well as in the unit
-suite — because this is the file someone reads before deciding the soak was sufficient.
+That is why `async_scheduler_dispatch_enabled()` refused distributed mode outright when this
+file was written. **The refusal was lifted once a resume could cross as a reconstructible
+descriptor** (`FR-15` stage 2); distributed mode is now OPT-IN there and still does not inherit
+the thread-mode default, which `test_distributed_dispatch_is_opt_in_not_default` below pins —
+because this is the file someone reads before deciding the soak was sufficient.
 
 So: green here is evidence for thread-mode deployments only. It says nothing about the
 deployment that filed FR-15.
@@ -336,19 +338,33 @@ def test_concurrent_resumes_each_get_their_own_database_session(monkeypatch):
 # ── The refusal, pinned where a reader of this file will see it ──────────────
 
 
-def test_the_gate_refuses_distributed_mode(monkeypatch):
+def test_distributed_dispatch_is_opt_in_not_default(monkeypatch):
     """Duplicated from the unit suite on purpose.
 
-    This is the file someone opens to decide whether the soak was sufficient evidence for the
-    flip. The single most important thing to know at that moment is that the soak covers
-    thread mode only, and that the production overlay is not thread mode.
+    This is the file someone opens to decide whether the soak was sufficient evidence for a
+    flip, so the single most important thing to know at that moment lives here: **this soak
+    covers thread mode.**
+
+    ★ UPDATED when the distributed refusal was lifted (`FR-15`). It used to assert an outright
+    refusal, because the transport dropped the scheduler's resume closure and the worker ACKed
+    the unresolvable message as success. A resume now crosses as a reconstructible descriptor,
+    so refusing is no longer right — but distributed mode still does not inherit the
+    thread-mode default, because a separate worker *process* remains unexercised. An operator
+    turns it on deliberately.
     """
     from AINDY.core.execution_dispatcher import async_scheduler_dispatch_enabled
 
     monkeypatch.setenv("EXECUTION_MODE", "distributed")
-    monkeypatch.setenv("AINDY_ASYNC_SCHEDULER_DISPATCH", "true")
+    monkeypatch.delenv("AINDY_ASYNC_SCHEDULER_DISPATCH", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
 
     assert async_scheduler_dispatch_enabled() is False, (
-        "the scheduler would enqueue a closure it cannot serialise; the worker acks the "
-        "unresolvable job as SUCCESS and the resume is lost permanently and silently"
+        "distributed mode inherited the thread-mode default. Nothing here exercises a separate "
+        "worker process, which is where every defect on this path has lived."
+    )
+
+    monkeypatch.setenv("AINDY_ASYNC_SCHEDULER_DISPATCH", "true")
+    assert async_scheduler_dispatch_enabled() is True, (
+        "the explicit opt-in does not work, which makes the lifted refusal meaningless"
     )

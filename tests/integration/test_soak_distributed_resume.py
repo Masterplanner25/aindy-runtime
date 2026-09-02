@@ -271,6 +271,113 @@ def test_duplicate_delivery_runs_the_work_once(monkeypatch, db_session):
     )
 
 
+def test_a_real_flow_actually_resumes_over_the_queue(monkeypatch):
+    """★★ THE GAP EVERY OTHER TEST IN THIS FILE LEAVES OPEN.
+
+    Everything above stubs `require_resume_callback` — deliberately, so the assertion can be
+    about what the *transport* delivered. But that means none of it drives the thing the
+    transport exists to deliver: a real flow, actually resuming. The rebuilt callback's body —
+    claim, EU transition, `PersistentFlowRunner.resume()` — is never executed over the queue.
+
+    The gap is not academic. It is precisely where the last defect lived: the callback looked
+    the flow up in `FLOW_REGISTRY`, found nothing because the worker never invoked
+    `register_flows()`, returned silently, and the message was ACKed as completed work. A test
+    that stubs the rebuild cannot see that, and did not.
+
+    So this one stubs **nothing**. A real one-node flow, a real `waiting` FlowRun, enqueued by
+    the real dispatcher, drained by the real `process_one_job`, rebuilt by the real
+    `build_resume_callback`. The assertion is on the run row and its `FlowHistory` — the node
+    either executed or it did not.
+    """
+    from AINDY.db.database import SessionLocal
+    from AINDY.db.models.flow_run import FlowHistory, FlowRun
+    from AINDY.runtime.flow_engine import registry as reg
+    import AINDY.worker.worker_loop as wl
+
+    flow_name = f"soak_e2e_{uuid.uuid4().hex[:8]}"
+    node_name = f"{flow_name}_node"
+    ran: list[str] = []
+
+    @reg.register_node(node_name)
+    def _node(state, context):  # noqa: ANN001
+        ran.append(node_name)
+        return {"status": "SUCCESS"}
+
+    reg.register_flow(flow_name, {"start": node_name, "end": [node_name], "edges": {}})
+
+    # ★ A REAL, COMMITTED session — not the `db_session` fixture.
+    #
+    # That fixture binds every test to one connection inside an outer transaction that never
+    # commits (`join_transaction_mode="create_savepoint"`), so its rows are invisible to any
+    # other connection. The rebuilt callback opens its **own** `SessionLocal` — which is the
+    # very property that makes a resume portable across a process — so against the fixture it
+    # correctly reports "flow run not found" and dead-letters the message.
+    #
+    # That is the system behaving properly and the test asking the wrong question. An
+    # end-to-end resume has to be visible the way a real one is: committed, on its own
+    # connection, cleaned up explicitly.
+    setup = SessionLocal()
+    run_id = None
+    try:
+        run = FlowRun(
+            flow_name=flow_name,
+            status="waiting",
+            current_node=node_name,
+            state={},
+            workflow_type="flow",
+        )
+        setup.add(run)
+        setup.commit()
+        run_id = str(run.id)
+    finally:
+        setup.close()
+
+    try:
+        q = _queue(monkeypatch)
+        _enqueue_resume(q, run_id, monkeypatch)
+
+        # Only the worker's event emission and semaphore are neutralised — never the rebuild,
+        # never the claim, never the ack/fail decision.
+        monkeypatch.setattr(wl, "_emit_worker_event", lambda *a, **k: None)
+        monkeypatch.setattr(wl, "_get_semaphore", lambda: None)
+        handled = wl.process_one_job(queue_backend=q)
+
+        assert handled is True, "the worker did not process the queued resume"
+        assert ran == [node_name], (
+            f"the flow node did not execute (ran={ran!r}). The message crossed the queue and "
+            f"the run was never advanced — which is what every silent-loss variant on this "
+            f"path has looked like from the outside."
+        )
+
+        check = SessionLocal()
+        try:
+            reloaded = check.query(FlowRun).filter(FlowRun.id == run_id).first()
+            assert reloaded is not None and reloaded.status == "success", (
+                f"the run finished in status {getattr(reloaded, 'status', None)!r}, expected "
+                f"'success'. A run left 'waiting' means the resume was acknowledged without "
+                f"happening."
+            )
+            history = (
+                check.query(FlowHistory)
+                .filter(FlowHistory.flow_run_id == run_id, FlowHistory.node_name == node_name)
+                .count()
+            )
+            assert history >= 1, "no FlowHistory row — the node did not durably execute"
+        finally:
+            check.close()
+    finally:
+        reg.FLOW_REGISTRY.pop(flow_name, None)
+        reg.NODE_REGISTRY.pop(node_name, None)
+        cleanup = SessionLocal()
+        try:
+            if run_id:
+                cleanup.query(FlowHistory).filter(FlowHistory.flow_run_id == run_id).delete()
+                cleanup.query(FlowRun).filter(FlowRun.id == run_id).delete()
+                cleanup.commit()
+        finally:
+            cleanup.close()
+
+
 # ── The liveness control ─────────────────────────────────────────────────────
 
 
@@ -304,21 +411,22 @@ def test_a_message_with_no_descriptor_is_the_old_behaviour(monkeypatch, db_sessi
     )
 
 
-def test_the_gate_still_refuses_distributed_mode(monkeypatch):
-    """The flip is NOT part of this change, and the soak is the evidence for taking it later.
+def test_distributed_dispatch_is_opt_in_not_default(monkeypatch):
+    """A green run of this file must not be read as "production is now doing this".
 
-    Pinned here so a reader of this file cannot conclude from a green run that production is
-    fixed. It is not: `async_scheduler_dispatch_enabled()` still returns False under
-    `EXECUTION_MODE=distributed`, so nothing routes a resume there yet.
+    The refusal is lifted — the transport above is why — but distributed mode does not inherit
+    the thread-mode default. Turning it on is an operator's deliberate act, per deployment,
+    while they watch `aindy_execution_dispatch_total` and the dead-letter queue.
     """
     from AINDY.core.execution_dispatcher import async_scheduler_dispatch_enabled
 
     monkeypatch.setenv("EXECUTION_MODE", "distributed")
-    monkeypatch.setenv("AINDY_ASYNC_SCHEDULER_DISPATCH", "true")
-
+    monkeypatch.delenv("AINDY_ASYNC_SCHEDULER_DISPATCH", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
     assert async_scheduler_dispatch_enabled() is False, (
-        "the distributed refusal has been lifted. That is a deliberate, separate change — if "
-        "it was taken, this test should have been updated in the same commit."
+        "distributed dispatch is on by default. The transport is proven; a separate worker "
+        "process and the scheduler actually routing there are not."
     )
 
 

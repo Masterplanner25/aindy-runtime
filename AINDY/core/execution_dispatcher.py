@@ -184,10 +184,34 @@ def async_scheduler_dispatch_enabled() -> bool:
     # do) and that is a build, not a flag.
     from AINDY.config import resolve_execution_mode
 
-    if resolve_execution_mode() == "distributed":
-        return False
-
     raw = os.getenv("AINDY_ASYNC_SCHEDULER_DISPATCH")
+
+    # ★★ DISTRIBUTED MODE REQUIRES AN EXPLICIT OPT-IN. It no longer refuses outright — a resume
+    # now travels as a reconstructible descriptor rather than a closure the transport would
+    # drop — but it does NOT inherit the thread-mode default either.
+    #
+    # The refusal is lifted because the transport is proven: a resume crosses real Redis, is
+    # rebuilt by the real worker path, dead-letters when it cannot be rebuilt, and executes
+    # exactly once under duplicate delivery. A real one-node flow resumes end to end over the
+    # queue with nothing stubbed.
+    #
+    # It stays opt-in because of what that evidence does NOT cover, and the gap is not
+    # theoretical — every defect on this path so far has lived at a process boundary:
+    #
+    #   * a separate worker PROCESS. The soak calls `process_one_job` in-process. The last bug
+    #     was precisely a per-process difference (an empty FLOW_REGISTRY in the worker).
+    #   * the scheduler routing here for real. While this refused, `schedule()` never produced
+    #     a distributed dispatch, so that whole combination has never run.
+    #   * concurrency ACROSS processes. The soak drains sequentially.
+    #
+    # So an operator turns this on deliberately, on one deployment, and watches
+    # `aindy_execution_dispatch_total` and the dead-letter queue. Defaulting it on would be
+    # asserting evidence nobody has yet.
+    if resolve_execution_mode() == "distributed":
+        if raw is None or raw.strip() == "":
+            return False
+        return raw.strip().lower() in {"1", "true", "yes"}
+
     if raw is not None and raw.strip() != "":
         return raw.strip().lower() in {"1", "true", "yes"}
     if _in_test_mode():

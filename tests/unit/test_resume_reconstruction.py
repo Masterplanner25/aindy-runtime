@@ -3,8 +3,9 @@
 The scheduler's work is a closure. In thread mode that closure *is* the work; in distributed
 mode it cannot be, so the resume could not be routed there at all — the payload would key on
 an id no worker resolves, and a worker acknowledges an unresolvable job as **successfully
-completed**. That is why `async_scheduler_dispatch_enabled()` refuses distributed mode, and
-why production still runs the serialised dispatch `FR-15` describes.
+completed**. That is why `async_scheduler_dispatch_enabled()` refused distributed mode when
+this file was written; it is opt-in there now, and a deployment that has not opted in still
+runs the serialised dispatch `FR-15` describes.
 
 ★★ **The durable representation was never missing.** `rehydrate_waiting_flow_runs` and
 `rehydrate_waiting_agent_runs` rebuild exactly this on every boot, because a restart destroys
