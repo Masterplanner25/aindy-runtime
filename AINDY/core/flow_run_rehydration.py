@@ -112,6 +112,123 @@ def derive_wait_condition_from_flow(flow_run) -> "WaitCondition | None":
     return None
 
 
+def build_flow_resume_callback(
+    *,
+    r_id: str,
+    flow_name: str,
+    user_id,
+    workflow_type: str,
+    eid: str,
+):
+    """Build the 0-arg flow resume closure, shared by every path that resumes a run.
+
+    Mirrors ``_build_agent_resume_callback`` deliberately — same contract, same
+    guarantee, so the two halves of the runtime cannot drift apart again. On fire it
+    opens its own ``SessionLocal`` and does an **atomic claim**
+    (``UPDATE flow_runs SET status='executing' WHERE id=? AND status='waiting'``), so
+    exactly one caller proceeds across a duplicate event fire, a second rehydration, or
+    multiple instances.
+
+    ★ **The closure captures only plain values, never a live DB session, runner or
+    request.** That is what makes a resume reconstructible from identifiers rather than
+    carried as state — and therefore what lets one cross a process boundary at all. Every
+    argument here derives from the ``FlowRun`` row, so ``resume_reconstruction`` can rebuild
+    the call from ``run_id`` alone. Do not add a parameter that cannot be read back off that
+    row; doing so silently makes a run un-resumable anywhere but the process that registered
+    it, which is `FR-15`'s remaining half.
+    """
+    def _callback() -> None:
+        from AINDY.db.database import SessionLocal
+        from AINDY.runtime.flow_engine import FLOW_REGISTRY, PersistentFlowRunner
+
+        flow = FLOW_REGISTRY.get(flow_name)
+        if flow is None:
+            logger.warning(
+                "[flow_rehydrate] resume callback: flow=%r not in FLOW_REGISTRY "
+                "for run=%s — skipping resume",
+                flow_name,
+                r_id,
+            )
+            return
+
+        _db = SessionLocal()
+        try:
+            # ── Step 1: FlowRun atomic claim ──────────────────────────
+            # UPDATE WHERE status='waiting' ensures exactly one instance
+            # proceeds.  All others see rowcount=0 and exit immediately.
+            from AINDY.db.models.flow_run import FlowRun as _FlowRun
+            from AINDY.kernel.condition_codes import FlowRunStatus
+
+            claimed = (
+                _db.query(_FlowRun)
+                .filter(
+                    _FlowRun.id == r_id,
+                    _FlowRun.status == FlowRunStatus.WAITING.value,
+                )
+                .update(
+                    {"status": FlowRunStatus.EXECUTING.value},
+                    synchronize_session=False,
+                )
+            )
+            try:
+                _db.commit()
+            except Exception as _claim_exc:
+                logger.warning(
+                    "[flow_rehydrate] claim commit failed for run=%s: %s",
+                    r_id, _claim_exc,
+                )
+                try:
+                    _db.rollback()
+                except Exception:
+                    pass
+                return  # concurrency commit failure — skip safely
+
+            if claimed == 0:
+                logger.info(
+                    "[flow_rehydrate] run=%s already claimed by another instance "
+                    "— skipping EU resume and flow execution",
+                    r_id,
+                )
+                return
+
+            # ── Step 2: EU status transition ──────────────────────────
+            # Only reached by the instance that won the claim.
+            # EU idempotency guard in ExecutionUnitService prevents any
+            # double-transition if this is somehow called twice.
+            if eid:
+                try:
+                    from AINDY.core.execution_unit_service import ExecutionUnitService
+                    ExecutionUnitService(_db).resume_execution_unit(eid)
+                except Exception as _eu_exc:
+                    logger.warning(
+                        "[flow_rehydrate] EU resume failed for eu=%s run=%s "
+                        "(non-fatal, flow execution proceeds): %s",
+                        eid, r_id, _eu_exc,
+                    )
+
+            # ── Step 3: Flow execution ────────────────────────────────
+            # FlowRun status is now "executing"; runner.resume()'s
+            # internal claim guard is bypassed (status != "waiting").
+            runner = PersistentFlowRunner(
+                flow=flow,
+                db=_db,
+                user_id=user_id,
+                workflow_type=workflow_type,
+            )
+            runner.resume(r_id)
+
+        except Exception as _exc:
+            logger.warning(
+                "[flow_rehydrate] resume callback failed for run=%s: %s",
+                r_id,
+                _exc,
+            )
+        finally:
+            _db.close()
+
+    return _callback
+
+
 def rehydrate_waiting_flow_runs(
     db: "Session",
     run_ids: Iterable[str] | None = None,
@@ -250,103 +367,6 @@ def rehydrate_waiting_flow_runs(
         # PersistentFlowRunner.resume() also carries an internal claim guard
         # as a last-line safety net; when called from here, it naturally
         # bypasses that guard because status is already "executing".
-        def _make_resume_callback(
-            r_id: str,
-            flow_name: str,
-            user_id,
-            workflow_type: str,
-            eid: str,
-        ):
-            def _callback() -> None:
-                from AINDY.db.database import SessionLocal
-                from AINDY.runtime.flow_engine import FLOW_REGISTRY, PersistentFlowRunner
-
-                flow = FLOW_REGISTRY.get(flow_name)
-                if flow is None:
-                    logger.warning(
-                        "[flow_rehydrate] resume callback: flow=%r not in FLOW_REGISTRY "
-                        "for run=%s — skipping resume",
-                        flow_name,
-                        r_id,
-                    )
-                    return
-
-                _db = SessionLocal()
-                try:
-                    # ── Step 1: FlowRun atomic claim ──────────────────────────
-                    # UPDATE WHERE status='waiting' ensures exactly one instance
-                    # proceeds.  All others see rowcount=0 and exit immediately.
-                    from AINDY.db.models.flow_run import FlowRun as _FlowRun
-                    from AINDY.kernel.condition_codes import FlowRunStatus
-
-                    claimed = (
-                        _db.query(_FlowRun)
-                        .filter(
-                            _FlowRun.id == r_id,
-                            _FlowRun.status == FlowRunStatus.WAITING.value,
-                        )
-                        .update(
-                            {"status": FlowRunStatus.EXECUTING.value},
-                            synchronize_session=False,
-                        )
-                    )
-                    try:
-                        _db.commit()
-                    except Exception as _claim_exc:
-                        logger.warning(
-                            "[flow_rehydrate] claim commit failed for run=%s: %s",
-                            r_id, _claim_exc,
-                        )
-                        try:
-                            _db.rollback()
-                        except Exception:
-                            pass
-                        return  # concurrency commit failure — skip safely
-
-                    if claimed == 0:
-                        logger.info(
-                            "[flow_rehydrate] run=%s already claimed by another instance "
-                            "— skipping EU resume and flow execution",
-                            r_id,
-                        )
-                        return
-
-                    # ── Step 2: EU status transition ──────────────────────────
-                    # Only reached by the instance that won the claim.
-                    # EU idempotency guard in ExecutionUnitService prevents any
-                    # double-transition if this is somehow called twice.
-                    if eid:
-                        try:
-                            from AINDY.core.execution_unit_service import ExecutionUnitService
-                            ExecutionUnitService(_db).resume_execution_unit(eid)
-                        except Exception as _eu_exc:
-                            logger.warning(
-                                "[flow_rehydrate] EU resume failed for eu=%s run=%s "
-                                "(non-fatal, flow execution proceeds): %s",
-                                eid, r_id, _eu_exc,
-                            )
-
-                    # ── Step 3: Flow execution ────────────────────────────────
-                    # FlowRun status is now "executing"; runner.resume()'s
-                    # internal claim guard is bypassed (status != "waiting").
-                    runner = PersistentFlowRunner(
-                        flow=flow,
-                        db=_db,
-                        user_id=user_id,
-                        workflow_type=workflow_type,
-                    )
-                    runner.resume(r_id)
-
-                except Exception as _exc:
-                    logger.warning(
-                        "[flow_rehydrate] resume callback failed for run=%s: %s",
-                        r_id,
-                        _exc,
-                    )
-                finally:
-                    _db.close()
-
-            return _callback
 
         # ── Register with SchedulerEngine ──────────────────────────────────────
         # For time-based waits, wait_for_event is None; the scheduler uses
@@ -359,12 +379,12 @@ def rehydrate_waiting_flow_runs(
                 wait_for_event=wait_for_event,
                 tenant_id=tenant_id,
                 eu_id=eu_id,
-                resume_callback=_make_resume_callback(
-                    run_id,
-                    run.flow_name,
-                    run.user_id,
-                    run.workflow_type or "flow",
-                    eu_id,
+                resume_callback=build_flow_resume_callback(
+                    r_id=run_id,
+                    flow_name=run.flow_name,
+                    user_id=run.user_id,
+                    workflow_type=run.workflow_type or "flow",
+                    eid=eu_id,
                 ),
                 priority=priority,
                 correlation_id=correlation_id,
