@@ -7088,6 +7088,21 @@ Do that first, then declare the root explicitly (`NODUS_WORKFLOW_STORE_ROOT` or
 `configure_default_workflow_runner(root=…)`). The durable fix is in `ORCHESTRATOR-SPLIT-1`: inject
 a runtime-supplied `WorkflowStore` so the state stops living on a container filesystem at all.
 
+**★ 2026-09-02, from the `nodus-lang` 5.1.0 → 5.9.0 upgrade: the declaration step above got a
+better knob, and the old one got a security fix that is worth reading before using either.**
+`nodus/runtime/state_paths.py` now exists and centralises this. `NODUS_RUN_STATE_ROOT` moves
+**both** the graph state and the workflow records; `NODUS_WORKFLOW_STORE_ROOT` still moves only
+the records, and upstream deliberately did not add a graphs-only variable because a second knob
+re-enables the half-relocated state they were fixing. **The security half matters to us
+specifically:** `DEFAULT_FLOOR` decided "is this the runtime's own state" by matching a literal
+`.nodus` path segment, so *the supported way to relocate the store also moved it outside the
+floor* — upstream demonstrated a guest `fs.write("../relocated/pwned.txt")` landing in the live
+run store with `NODUS_WORKFLOW_STORE_ROOT` set, while the identical write to the default
+location was denied. Fixed in the upgrade (the floor now also asks whether a path is inside a
+root the runtime is *currently* using), but note the shape of the residual they name: **a state
+directory that does not go through `state_paths.py` is still not covered.** So if we relocate,
+relocate through that variable rather than by setting a CWD and hoping.
+
 ---
 
 **Status: CLOSED (2026-08-15)** — for the demonstrated escape; see the residual above. Filed 2026-08-15 from the substrate-boundary audit (F-1),
