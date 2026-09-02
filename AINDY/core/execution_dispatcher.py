@@ -205,6 +205,26 @@ class _JobDispatchStub:
 JOB_DISPATCH_STUB = _JobDispatchStub()
 
 
+class UndistributableWorkError(RuntimeError):
+    """Raised when work is routed to the distributed queue that cannot be reconstructed there.
+
+    ``dispatch()`` takes a ``handler_fn`` closure. In thread mode that closure IS the work.
+    In distributed mode it cannot be — a closure does not cross a process boundary — so
+    ``_enqueue_distributed()`` sends a ``QueueJobPayload`` instead and the worker rebuilds the
+    work from the database. That only functions when the payload carries an id the worker can
+    resolve.
+
+    Every live caller happens to pass one. That is the entire guarantee, and it is an
+    accident: nothing asked for it and nothing checked. The next caller that omits it gets a
+    payload keyed on something the worker cannot look up, and the worker treats an
+    unresolvable job as *done* — warn, ack, return success — so the work is lost permanently
+    with no dead-letter entry, no retry and no failed status anywhere.
+
+    Raising is strictly better than that in every deployment: a caller that cannot be
+    distributed learns at the call site instead of never.
+    """
+
+
 class ExecutionMode(Enum):
     INLINE = "inline"
     ASYNC = "async"
@@ -342,6 +362,33 @@ def _enqueue_distributed(execution_unit: Any, context: dict[str, Any]) -> None:
     from AINDY.core.distributed_queue import QueueJobPayload, get_queue
     from AINDY.platform_layer.trace_context import get_trace_id
 
+    # ★★ REFUSE work the worker could not rebuild, BEFORE building a payload for it.
+    #
+    # ``handler_fn`` is not carried here and cannot be — this function never receives it.
+    # The worker rebuilds the job by looking ``job_id`` up as a JobLog id, so a context with
+    # no ``log_id`` produces a payload keyed on ``eu_id`` (or a fresh uuid) that resolves to
+    # nothing. ``worker_loop`` then warns, ACKs the message rather than dead-lettering it,
+    # and returns success — so the work vanishes and every observable signal says it
+    # completed. This guard is the difference between that and an exception naming the
+    # caller.
+    #
+    # Deliberately a hard refusal rather than a fallback to INLINE: silently running
+    # distributed-routed work on the caller's thread would resurrect the starvation FR-15
+    # exists to remove, in the one deployment shape that had opted out of it.
+    #
+    # ``log_id`` specifically, not "any id": it is what ``_fetch_job_data`` looks up. All
+    # three live call sites in ``async_job_service`` pass it, so this refuses nothing that
+    # works today.
+    if not context.get("log_id"):
+        raise UndistributableWorkError(
+            "refusing to enqueue work with no 'log_id' onto the distributed queue: the "
+            "worker rebuilds a job by resolving that id against JobLog, and treats an "
+            "unresolvable job as successfully completed, so the callback would be dropped "
+            "and the loss would be silent. Either give this work a JobLog row (see "
+            "async_job_service.submit_async_job) or keep it out of distributed dispatch. "
+            f"context keys seen: {sorted(context)}"
+        )
+
     # Capture active trace IDs from ContextVars (set by the root syscall dispatch).
     try:
         from AINDY.kernel.syscall_dispatcher import _EU_ID_CTX, _TRACE_ID_CTX
@@ -352,7 +399,9 @@ def _enqueue_distributed(execution_unit: Any, context: dict[str, Any]) -> None:
         trace_id = get_trace_id() or str(_uuid_mod.uuid4())
         eu_id = str(getattr(execution_unit, "id", "") or "")
 
-    job_id = str(context.get("log_id") or eu_id or _uuid_mod.uuid4())
+    # Guaranteed non-empty by the guard above. The previous ``or eu_id or uuid4()`` fallback
+    # was the silent path itself: it manufactured an id precisely when there was none to use.
+    job_id = str(context["log_id"])
     operation_name = str(context.get("operation_name") or context.get("task_name", ""))
     task_name = str(context.get("task_name") or operation_name)
     is_retry = bool(context.get("retry", False))
