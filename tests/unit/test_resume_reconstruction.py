@@ -100,6 +100,21 @@ def test_the_rehydration_sweep_uses_the_same_builder():
 # ── 2. Divergence between the rebuild and the sweep ──────────────────────────
 
 
+def _register(monkeypatch, *names):
+    """Put `names` in this process's FLOW_REGISTRY for the duration of a test.
+
+    Needed since the rebuild refuses a flow this process does not hold. That refusal is the
+    point (see `test_a_flow_absent_from_this_processes_registry_is_refused`), and it means a
+    test asserting a successful rebuild has to say which flow it is asserting about — the
+    unregistered case is now a different, deliberately-failing path.
+    """
+    monkeypatch.setattr(
+        "AINDY.runtime.flow_engine.FLOW_REGISTRY",
+        {n: object() for n in names},
+        raising=False,
+    )
+
+
 def _captured(callback) -> dict:
     """The values a resume closure carries, read back off the closure itself.
 
@@ -112,7 +127,7 @@ def _captured(callback) -> dict:
     return dict(zip(names, (c.cell_contents for c in (callback.__closure__ or ()))))
 
 
-def test_rebuild_resolves_the_execution_unit_the_way_the_sweep_does(db_session):
+def test_rebuild_resolves_the_execution_unit_the_way_the_sweep_does(db_session, monkeypatch):
     """★ THE TEST THAT CATCHES A WRONG FIELD NAME, and it caught mine.
 
     `getattr(run, "execution_unit_id", "")` compiles, always returns `""`, and produces a
@@ -129,6 +144,7 @@ def test_rebuild_resolves_the_execution_unit_the_way_the_sweep_does(db_session):
     from AINDY.db.models.execution_unit import ExecutionUnit
     from AINDY.db.models.flow_run import FlowRun
 
+    _register(monkeypatch, "demo_flow")
     run = FlowRun(flow_name="demo_flow", status="waiting", workflow_type="flow")
     db_session.add(run)
     db_session.flush()
@@ -150,7 +166,7 @@ def test_rebuild_resolves_the_execution_unit_the_way_the_sweep_does(db_session):
     assert captured["flow_name"] == "demo_flow"
 
 
-def test_a_flow_run_with_no_execution_unit_is_still_reconstructible(db_session):
+def test_a_flow_run_with_no_execution_unit_is_still_reconstructible(db_session, monkeypatch):
     """★ The liveness control for the test above.
 
     Without it, a rebuild that returned `None` whenever it could not find an EU would make
@@ -161,6 +177,7 @@ def test_a_flow_run_with_no_execution_unit_is_still_reconstructible(db_session):
     from AINDY.core.resume_reconstruction import build_resume_callback
     from AINDY.db.models.flow_run import FlowRun
 
+    _register(monkeypatch, "orphan_flow")
     run = FlowRun(flow_name="orphan_flow", status="waiting", workflow_type="flow")
     db_session.add(run)
     db_session.flush()
@@ -173,7 +190,7 @@ def test_a_flow_run_with_no_execution_unit_is_still_reconstructible(db_session):
     assert _captured(callback)["eid"] == ""
 
 
-def test_the_rebuilt_closure_carries_no_live_objects(db_session):
+def test_the_rebuilt_closure_carries_no_live_objects(db_session, monkeypatch):
     """★ THE PORTABILITY INVARIANT, asserted on the actual closure.
 
     This is what lets a resume cross a process boundary at all. A captured `Session`,
@@ -184,6 +201,7 @@ def test_the_rebuilt_closure_carries_no_live_objects(db_session):
     from AINDY.core.resume_reconstruction import build_resume_callback
     from AINDY.db.models.flow_run import FlowRun
 
+    _register(monkeypatch, "portable_flow")
     run = FlowRun(flow_name="portable_flow", status="waiting", workflow_type="flow")
     db_session.add(run)
     db_session.flush()
@@ -216,6 +234,93 @@ def test_rebuild_splits_the_agent_plan_rather_than_reading_it():
     )
     assert '.get("segments")' not in rebuild, (
         "the agent rebuild reads plan['segments'] directly — see above"
+    )
+
+
+def test_a_flow_absent_from_this_processes_registry_is_refused(db_session, monkeypatch):
+    """★★ THE FOURTH SILENT LOSS, and the one that blocked the distributed flip.
+
+    The built callback checks `FLOW_REGISTRY` itself and, finding nothing, logs a warning and
+    **returns normally**. That is right for the rehydration sweep — a flow that is not ours is
+    legitimately skipped — and catastrophic for a caller that has already discarded the
+    closure: it sees a clean return, ACKs the message, and reports the resume completed while
+    the run sits `waiting` forever.
+
+    It is not hypothetical across a process boundary. `register_flow()` only COLLECTS
+    registrations; `register_flows()` invokes them, and only that fills `FLOW_REGISTRY`. The
+    worker called the first and not the second, so its registry was empty — every flow resume
+    would have been acknowledged and lost.
+
+    Refusing here turns it into `ResumeNotReconstructible`, so the message is dead-lettered
+    and visible.
+    """
+    from AINDY.core.resume_reconstruction import build_resume_callback
+    from AINDY.db.models.flow_run import FlowRun
+    from AINDY.runtime.flow_engine import FLOW_REGISTRY
+
+    run = FlowRun(flow_name="a_flow_this_process_does_not_have", status="waiting")
+    db_session.add(run)
+    db_session.flush()
+
+    monkeypatch.setattr(
+        "AINDY.runtime.flow_engine.FLOW_REGISTRY", {}, raising=False
+    )
+    assert "a_flow_this_process_does_not_have" not in FLOW_REGISTRY
+
+    assert build_resume_callback(run_id=str(run.id), eu_type="flow", db=db_session) is None, (
+        "a flow absent from this process's registry must be refused, not handed back as a "
+        "callable that returns silently — the caller would ACK it as completed work"
+    )
+
+
+def test_a_registered_flow_is_still_reconstructible(db_session, monkeypatch):
+    """★ Liveness control for the refusal above.
+
+    Without it, a rebuild that refused *everything* would satisfy the test above while
+    breaking every resume — the refusal has to be specific to an absent flow.
+    """
+    from AINDY.core.resume_reconstruction import build_resume_callback
+    from AINDY.db.models.flow_run import FlowRun
+
+    run = FlowRun(flow_name="a_flow_this_process_has", status="waiting")
+    db_session.add(run)
+    db_session.flush()
+
+    monkeypatch.setattr(
+        "AINDY.runtime.flow_engine.FLOW_REGISTRY",
+        {"a_flow_this_process_has": object()},
+        raising=False,
+    )
+
+    assert build_resume_callback(run_id=str(run.id), eu_type="flow", db=db_session) is not None
+
+
+def test_the_worker_entrypoint_invokes_flow_registration():
+    """★ The other half, and the reason the refusal alone is not enough.
+
+    Refusing an unregistered flow makes the loss visible; it does not make the resume work.
+    The worker has to actually hold the flows, which means calling `register_flows()` — which
+    INVOKES the collected registrations — and not only `load_plugins()`, which merely collects
+    them.
+
+    ★ Asserted over the AST, not the source text. The first version of this test matched the
+    string `"register_flows()"` and a mutation that commented the call out left it green — the
+    fourth time in this work that a source-text assertion proved weaker than it looked. A
+    parsed call node cannot be satisfied by a comment.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("AINDY/worker/__main__.py").read_text(encoding="utf-8"))
+    called = {
+        node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+    assert "register_flows" in called, (
+        "the worker entrypoint does not CALL register_flows(). load_plugins() only collects "
+        "flow registrations — without the invoke its FLOW_REGISTRY is empty, and every flow "
+        "resume routed to a worker is dead-lettered as unreconstructible."
     )
 
 

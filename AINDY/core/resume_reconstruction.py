@@ -112,6 +112,32 @@ def _build_flow(run_id: str, db: "Session") -> Optional[Callable[[], None]]:
         logger.info("[resume_rebuild] flow run %s not found", run_id)
         return None
 
+    # ★★ REFUSE UP FRONT WHEN THE FLOW IS NOT REGISTERED IN *THIS* PROCESS.
+    #
+    # The built callback checks `FLOW_REGISTRY` itself and, finding nothing, logs a warning
+    # and **returns normally** — which is right for the rehydration sweep (a flow that is not
+    # ours is legitimately skipped) and catastrophic here. A caller that has already discarded
+    # the closure sees a clean return, ACKs the message, and reports the resume completed while
+    # the run stays `waiting` forever. That is the fourth distinct way this path has produced a
+    # silent loss.
+    #
+    # It is not hypothetical across a process boundary. `register_flow()` only COLLECTS
+    # registration functions; `register_flows()` invokes them, and that is what fills
+    # FLOW_REGISTRY. Whether a given process has done the second step is a property of that
+    # process, so the API can hold a flow the worker does not.
+    #
+    # Returning None here turns that into `ResumeNotReconstructible` at `require_resume_callback`,
+    # so the message is dead-lettered and visible rather than acknowledged and gone.
+    from AINDY.runtime.flow_engine import FLOW_REGISTRY
+
+    if run.flow_name not in FLOW_REGISTRY:
+        logger.warning(
+            "[resume_rebuild] flow %r is not registered in this process; run %s cannot be "
+            "resumed here (registered: %s)",
+            run.flow_name, run_id, sorted(FLOW_REGISTRY) or "none",
+        )
+        return None
+
     # ★ The EU is reached through ``ExecutionUnit.flow_run_id`` — there is no
     # ``FlowRun.execution_unit_id`` column. The sweep resolves it the same way and treats a
     # miss as fine ("EU context is optional"), so "" is a legitimate value here and not an
