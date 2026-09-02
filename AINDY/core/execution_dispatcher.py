@@ -98,7 +98,19 @@ def async_heavy_execution_enabled() -> bool:
 #: FR-15 (a) — the scheduler-dispatch default, isolated so the flip is one greppable line.
 #: A literal, never an env read at import time: a module-level ``os.getenv`` would be
 #: invisible to behavioural tests (the standing rule in CLAUDE.md, learned three times).
-_SCHEDULER_ASYNC_DISPATCH_DEFAULT = False
+#:
+#: ★ FLIPPED TRUE 2026-09-01 on the evidence in ``test_soak_scheduler_dispatch.py``: the
+#: drainer is released while dispatched work is still running, nothing is lost or
+#: duplicated, and concurrent resumes each obtain their own database session on live
+#: Postgres. Set ``AINDY_ASYNC_SCHEDULER_DISPATCH=0`` to restore the old behaviour.
+#:
+#: ★★ This reaches THREAD-MODE DEPLOYMENTS ONLY, and that is the honest scope, not a
+#: caveat. ``async_scheduler_dispatch_enabled()`` refuses ``EXECUTION_MODE=distributed``,
+#: which ``docker-compose.prod.yml`` sets — so on a prod overlay this constant is inert and
+#: the FR-15 starvation is UNCHANGED there. Fixing it for distributed needs the resume
+#: reconstructed from ``run_id`` instead of carried as a closure; that is a build, and it
+#: is what keeps FR-15 open.
+_SCHEDULER_ASYNC_DISPATCH_DEFAULT = True
 
 
 def _in_test_mode() -> bool:
