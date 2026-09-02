@@ -5,8 +5,9 @@ that closure *is* the work. It cannot be in distributed mode — a closure does 
 process boundary — so the scheduler's resume could not be routed there at all: the payload
 would key on an id no worker could resolve, and a worker treats an unresolvable job as
 **finished** (warn, ack, report success). Every scheduler resume would have been lost
-silently. `async_scheduler_dispatch_enabled()` refuses distributed mode for exactly that
-reason, which is why production still runs the serialised dispatch `FR-15` describes.
+silently. `async_scheduler_dispatch_enabled()` refused distributed mode for exactly that reason
+until this module existed; it is opt-in there now, and a deployment that has not opted in still
+runs the serialised dispatch `FR-15` describes.
 
 ★★ **The durable representation was never missing — it is what restart recovery already
 depends on, every boot.** `rehydrate_waiting_flow_runs` and `rehydrate_waiting_agent_runs`
