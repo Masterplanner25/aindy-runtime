@@ -3,6 +3,17 @@ name: Auth Dependency CVE Audit
 on:
   pull_request:
     branches: [main]
+  push:
+    # Without this, the audit gates every PR and never gates the branch it
+    # protects. On 2026-08-31 a newly published nltk advisory (PYSEC-2026-3726)
+    # turned this check red on an UNCHANGED `main` — no PR was open that
+    # morning to report it, and the next scheduled run was six days out. So
+    # `main` can sit red on a dependency CVE for up to a week with nothing
+    # saying so.
+    # Deliberately NOT `paths:`-filtered: a filtered required check never
+    # reports on unrelated PRs and blocks them forever (see the branch
+    # protection notes in CLAUDE.md).
+    branches: [main]
   schedule:
     # Weekly â€” every Monday 08:00 UTC. Catches post-merge CVE disclosures
     # against deps that passed audit at merge time.

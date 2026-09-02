@@ -502,8 +502,8 @@ normal move, not an optimization.
 
 ## ★ Trusting a green check — read this before citing CI as evidence
 
-**Ten separate times** this repo has shipped something that *looked* covered and was not.
-Assume there will be a ninth — the catalogue exists so you can recognise the shape, and the
+**Eleven separate times** this repo has shipped something that *looked* covered and was not.
+Assume there will be a twelfth — the catalogue exists so you can recognise the shape, and the
 rules below are what it cost to learn:
 
 | # | Variant | How it looked green | Entry |
@@ -518,6 +518,7 @@ rules below are what it cost to learn:
 | 8 | Verification that never runs | the boot-time route AST proof has no call site in the app | `ROUTE-AST-UNWIRED-1` |
 | 9 | **Green because there was nothing to catch** | a check whose condition this release does not contain — `Upgrade Path Guard` passes trivially with no schema change | `FR-8`/`FR-14` |
 | 10 | **The instrument cannot see the thing** | `caplog` silently captured nothing for a warning emitted on a WORKER THREAD by a module logger — so the assertion could not tell *"the mechanism did not fire"* from *"I failed to observe it"* | soak harness |
+| 11 | **The answer went stale, not wrong** | seven PRs carried a green `pip-audit` for a week while the advisory refuting it was published — the check asks a question about the OUTSIDE WORLD, and the world moved without the diff moving | `security-audit.yml` |
 
 **Variant 9 is the one to design against, not just record:** it cannot be fixed by making the
 check better, because the check is fine — the *release* lacks the condition. The only answer
@@ -545,6 +546,30 @@ a **Prometheus counter** — thread-safe, and the same signal production reads.
   half:** a labelled counter has no sample until `.labels()` is first called, so
   "family exists, this label combination unobserved" must read 0 while "no such metric" still
   raises. The guard was right to refuse; the rule was too coarse.
+
+**★ Variant 11 is the only one where the check was RIGHT when it ran, and this is the class to
+expect from every dependency, advisory or license check.** Such a check does not ask a question
+about the branch — it asks one about the OUTSIDE WORLD, so its answer decays on its own, with no
+commit to mark the moment. On 2026-08-31 `pip-audit (OSV)` went red on an **unchanged `main`**:
+`a2fe25c` passed it on 08-24 and failed it on 08-31, because `PYSEC-2026-3726` was published
+against a pinned `nltk` in between.
+
+**The four PRs it turned red were not the hazard — the seven it left green were.** The red ones
+were loud and got looked at. The seven older ones kept a green from 08-24 that any re-run would
+have refuted, and nothing about `gh pr checks` says so: it prints a duration, never a date. A
+week-old green on an external-input check is not evidence, and it is indistinguishable from a
+fresh one at a glance.
+
+**Rules that follow:**
+
+- **For a check whose input is external, the age of the result is part of the result.** Read the
+  run date before citing a dependency/advisory/license check — `gh run list --workflow=<f>
+  --branch <b>` prints `createdAt`; the PR checks view does not.
+- **A required check must gate the branch it protects, not only the PRs into it.** This one ran
+  on `pull_request` + a weekly `schedule` and had no `push` trigger, so `main` could sit red on a
+  CVE for up to a week with nothing surfacing it — and it only surfaced at all because a PR
+  happened to be open. Fixed by adding `push: branches: [main]`; the same question is worth
+  asking of any check whose value is time-varying.
 
 Variants 2 and 3 are fixed at the mechanism level (`tests/unit/conftest.py` defaults the marker;
 `AINDY_REQUIRE_NATIVE_BRIDGE=1` turns a skip into a failure) — but both stay listed, because the
