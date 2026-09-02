@@ -70,7 +70,7 @@ dependencies = [
   "pydantic==2.13.4",
   "pydantic-settings==2.15.0",
   "pydantic_core==2.46.4",
-  "pymongo==4.16.0",
+  "pymongo==4.17.0",
   "pyphen==0.17.2",
   "python-dateutil==2.9.0.post0",
   "python-dotenv==1.2.2",
