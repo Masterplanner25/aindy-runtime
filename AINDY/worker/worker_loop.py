@@ -694,6 +694,31 @@ def process_one_job(
             extra={"idempotency_key": job.idempotency_key},
         )
 
+        # ── FR-15 stage 2: a resume rebuilds from its run, not from a JobLog ──────
+        # The scheduler's work is a closure and cannot be serialised, so a resume travels as
+        # two identifiers and is reconstructed here — the same rebuild `rehydrate_waiting_*`
+        # performs on every boot. Checked BEFORE `_fetch_job_data`, because a resume has no
+        # JobLog: that lookup would miss, and a missing JobLog is ACKed as success, which is
+        # precisely the silent loss this path exists to remove.
+        #
+        # ★★ THIS MUST STAY ABOVE `_try_claim_job`, AND THE REASON IS NOT THE OBVIOUS ONE.
+        # That guard claims a **JobLog** row and returns False when the job is *missing* —
+        # and a resume has no JobLog at all, by construction. So a resume reaching it is
+        # always "missing", and the miss path warns, **ACKs**, and returns success: the exact
+        # silent loss this path exists to remove, reintroduced through a different door. It
+        # shipped that way in stage 2 and was caught while writing the soak, because the unit
+        # tests drove `_run_resume` directly and never crossed this line.
+        #
+        # Moving above it leaves a resume unclaimed by nothing. It is claimed by the REBUILT
+        # CALLBACK, whose own atomic `UPDATE ... WHERE status='waiting'` on the run row is the
+        # correct guard for one; the JobLog claim protects a different thing entirely.
+        from AINDY.core.resume_reconstruction import read_resume_context
+
+        resume = read_resume_context(job.context)
+        if resume is not None:
+            _run_resume(job, resume, q, trace_id=trace_id, eu_id=eu_id)
+            return True
+
         # DB claim safety â€” skip if already claimed by another worker.
         # This is the critical guard after a visibility-timeout re-enqueue.
         if not _try_claim_job(job.job_id):
@@ -702,19 +727,6 @@ def process_one_job(
                 job.job_id,
             )
             q.ack(job.job_id)
-            return True
-
-        # ── FR-15 stage 2: a resume rebuilds from its run, not from a JobLog ──────
-        # The scheduler's work is a closure and cannot be serialised, so a resume travels as
-        # two identifiers and is reconstructed here — the same rebuild `rehydrate_waiting_*`
-        # performs on every boot. Checked BEFORE `_fetch_job_data`, because a resume has no
-        # JobLog: that lookup would miss, and a missing JobLog is ACKed as success, which is
-        # precisely the silent loss this path exists to remove.
-        from AINDY.core.resume_reconstruction import read_resume_context
-
-        resume = read_resume_context(job.context)
-        if resume is not None:
-            _run_resume(job, resume, q, trace_id=trace_id, eu_id=eu_id)
             return True
 
         # Fetch payload from DB (omitted from the queue payload to keep it lean).
