@@ -883,7 +883,7 @@ file — because findings were written where they were discovered instead of whe
 
 ### Open — P0
 
-- **FR-15** — dispatch is serialised: `_scheduler_heartbeat_tick` is the only queue drainer and `schedule()` runs each item **synchronously**. (b)+(c) shipped 2026-08-15/16. **★ (a) SPLIT, SOAKED AND FLIPPED 2026-09-01 — FOR THREAD MODE ONLY. Production is UNCHANGED and still starving** (`docker-compose.prod.yml` sets `EXECUTION_MODE: distributed`, where the gate refuses). **★★ RE-SCOPED: what remains is a BUILD, not the flag flip this entry advertised for two weeks — and that one line would have SILENTLY DESTROYED every scheduler resume in production**, because the distributed transport drops `handler_fn` and the worker ACKs an unresolvable job as SUCCESS. A cost estimate is not a severity; this entry tangled the two, so it looked cheap and kept being deferred as if it were also low-impact. Remaining = reconstruct the resume from `run_id` (`flow_run_rehydration` already does exactly that on restart); settle with `ORCHESTRATOR-SPLIT-1`. **Do NOT close on the thread-mode flip.** ★ The general trap underneath — `dispatch()` accepting undistributable work — is fixed separately. Source: `TECH_DEBT.md` FR-15.
+- **FR-15** — dispatch is serialised: `schedule()` is the only queue drainer and runs each item **synchronously**. (b)+(c) shipped 2026-08-15/16; **(a) thread-mode flipped 2026-09-01**. **★★ The DISTRIBUTED half is BUILT AND OPT-IN 2026-09-02 (#551–#556)** — a resume crosses the queue as `run_id`+`eu_type` and the worker rebuilds it with the call the rehydration sweeps already make every boot; the durable record was never missing. Not refused under `EXECUTION_MODE=distributed` any more, but does NOT inherit the default there. **★★ FOUR silent losses were found on this path, all one shape — an unresolvable message ACKed as SUCCESS — and THREE were introduced by the fix for the previous one.** **★ STAYS OPEN: what remains is EVIDENCE, not code — the soak runs `process_one_job` IN-PROCESS, and a separate worker PROCESS is where every one of those four lived.** Remaining: enable on one distributed deployment, watch `aindy_execution_dispatch_total` vs the DLQ; then migrate live wait registrations. **Do NOT close on the opt-in.** Source: `TECH_DEBT.md` FR-15.
 
 
 ### Open — P1
@@ -964,6 +964,36 @@ file — because findings were written where they were discovered instead of whe
 - **Kernel deterministic replay** — declined in `ECOGAP-1`'s Phase 3 reframe. **★ That entry now carries a three-way taxonomy, because six audits have cited "replay" at us meaning different things: (1) event-sourced state fold — SHIPPED as DUR-4; (2) deterministic code replay (Temporal) — DECLINED; (3) ordering replay — specified in `FLOW-PARALLEL-1`.** #2 stores non-deterministic *results* and re-runs the code with them injected so the world doesn't move; it is declined because determinism is a VM concern not a kernel one, because forward-resume never re-executes code so the problem doesn't arise, and because it is a constraint on every line of workflow code rather than a feature. **The honest residual is not "we lack replay" — it is "the single re-run node's un-mediated side effects."**
 
 ### Standing rule — not an item
+
+- **★★ A TEST-MODE SHORT-CIRCUIT PLACED ABOVE THE REAL DECISION MAKES THE REAL PATH UNTESTABLE
+  WHILE EVERY TEST PASSES.** Two instances, both found in `FR-15`'s own path within a fortnight,
+  and both make a soak vacuous rather than failing:
+
+  - `async_heavy_execution_enabled()` returns False under `TESTING`/`TEST_MODE` **before** reading
+    its flag. `pytest.integration.ini` sets both, so **the ASYNC dispatch branch was unreachable
+    from every test in this repo and always had been.**
+  - `get_queue()` returns an `InMemoryQueueBackend` under the same two variables, **before**
+    checking `REDIS_URL`. So **no test here can reach the Redis backend.** A soak written the
+    obvious way enqueued and dequeued inside one process and passed 6/6 while proving nothing.
+
+  **This is worse than an untested path, because the test that appears to cover it passes.** The
+  second case was caught only by an unrelated hunch — asserting `backend_name == "redis"` on the
+  strength of `QUEUE-DURABILITY-CLASS-1` — which then failed immediately and named the cause.
+
+  **Rules:** when writing a soak, **assert the mechanism you think you are exercising is actually
+  the one running** (the backend, the branch, the mode) before asserting anything about its
+  behaviour. And when adding a test-mode guard, put it **below** the switch it is guarding, or
+  give it an explicit opt-in that test mode cannot veto — `async_scheduler_dispatch_enabled()` is
+  the worked example. Expect a third instance; grep for `TEST_MODE` above a decision, not after it.
+
+- **★ A SOURCE-TEXT ASSERTION IS A SUPPLEMENT, NEVER THE COVERAGE — four failures in one
+  fortnight.** A test that reads code as text cannot tell code from a comment, cannot tell
+  presence from reachability, and cannot tell order from behaviour. Observed: an assertion
+  matching its own explanatory comment that *quoted* the bad pattern; a `register_flows()` string
+  match satisfied by `# register_flows()`; a two-line ordering check that passed with the branch
+  disabled. **Prefer the AST when you must read source** (a comment cannot satisfy a `Call` node),
+  and prefer driving the real entry point when you can. `ROUTE-GUARD-1` said this about routes; it
+  generalises.
 
 - **★ Module-import-time env reads are invisible to behavioural tests.** Three bugs share this shape: FR-10 (`settings = Settings()` at import crash-looped the container), `ResourceManager._get_backend()` (caches the Redis-vs-in-process choice on first call), and the `AINDY_REDIS_URL` alias in `rate_limiter.py` — which survived a cleanup that believed it had removed the alias everywhere, because **nothing about the running limiter differs when the alias is honoured**. **When auditing env-var handling, grep the source; do not trust a passing suite.**
 
