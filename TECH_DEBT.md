@@ -7570,6 +7570,76 @@ the starvation coupling regardless of which dispatch mode is chosen; (a) is the 
 the one that needs soak, and doing it last means the first occurrence after the flip is
 diagnosable because (c) already shipped.
 
+**★★ (a) SPLIT AND SOAKED 2026-09-01 — thread mode only. The flag is NOT yet flipped, and
+the reason is the finding below, not a missing soak.**
+
+**The flag meant two things, so "flip one line" was never one change.** `AINDY_ASYNC_HEAVY_
+EXECUTION` gates both the scheduler decision *and* two live HTTP routes —
+`agents/runtime_api.py:106` (via `agent_router.py:134`) and `routes/memory_router.py:729` —
+which answer **202-queued instead of a result** when it is on. Flipping it would have shipped an
+unannounced response-shape change to the app team as a side effect of fixing a scheduler defect.
+`async_scheduler_dispatch_enabled()` now asks the scheduler's question separately; the routes
+keep asking the old one. Same repair as `EVENTBUS-PUBLISH-LATCH-1` and FR-17's
+`AINDY_ASYNC_JOB_LOOP_CLOSURE` — this repo has now split one flag carrying two meanings three
+times, which is enough to call it a pattern rather than three coincidences.
+
+**★★ THE BLOCKER, and it is why (a) cannot close: in distributed mode the async path SILENTLY
+LOSES THE RESUME.** `dispatch()`'s ASYNC branch is not "submit to a thread pool" — under
+`EXECUTION_MODE=distributed` it calls `_enqueue_distributed()`, which builds a `QueueJobPayload`
+from `context` and **drops `handler_fn` entirely**. A closure cannot cross a process boundary.
+That is correct for `async_job_service`, whose context carries `log_id` so the worker re-reads
+task and payload from the `JobLog` row. **The scheduler has no `JobLog`** — its context is
+`{eu_id, run_id, source}` and its work *is* the closure `item.run_callback`. So the payload keys
+on `eu_id` and `worker_loop.py` does this:
+
+```python
+job_data = _fetch_job_data(job.job_id)      # None - no JobLog with that id
+if job_data is None:
+    logger.warning("[Worker] JobLog not found job_id=%s", job.job_id)
+    q.ack(job.job_id)                       # ACKed, not DLQd
+    return True                             # reported as SUCCESS
+```
+
+A warning, an ack, and a success. The resume never runs, the `FlowRun` stays `waiting` forever,
+nothing retries it and no failure is recorded — **strictly worse than the starvation (a) exists
+to fix**, which at least eventually runs. `docker-compose.prod.yml:39` sets `EXECUTION_MODE:
+distributed`, so this is the PRODUCTION shape and very likely the one that filed this entry.
+`async_scheduler_dispatch_enabled()` therefore **refuses distributed mode before even an explicit
+opt-in**, so an operator cannot arm it on a prod overlay.
+
+**★ Generalise it: the distributed branch silently accepting an unserialisable callback is a trap
+for ANY future `dispatch()` caller.** `async_job_service` survives it only by accident of carrying
+`log_id`. A caller must be able to say whether its work is reconstructible; nothing asks today.
+
+**★ The soak could not be written the obvious way, and this is the reusable part.**
+`async_heavy_execution_enabled()` returns False under `TESTING`/`TEST_MODE` **before** reading its
+flag, and `pytest.integration.ini` sets both *and* pins the flag false. **The ASYNC branch was
+unreachable from every test in this repository and always had been.** A soak copying the IDEM-11
+pattern (`monkeypatch.setenv(FLAG, "true")`, drive, assert) would have passed while running the
+INLINE branch start to finish — catalogue variant 3 arriving as variant 6, not merely unexercised
+but *actively neutralised two lines above the switch it appears to flip*. The new gate honours an
+explicit opt-in that test mode cannot veto, which is the only reason evidence exists at all.
+
+**★ `_decide_mode` had NO TEST.** This entry recorded the eight type×priority combinations as
+"demonstrated"; they were — ad hoc, in a session, never pinned. `grep -rl _decide_mode tests/`
+returned nothing until 2026-09-01.
+
+**★ A wall-clock bound placed AFTER a blocking call cannot fast-fail.** The soak's first draft
+measured `schedule()` and asserted the duration; with the fix mutated out that reported in **277
+seconds**, because the assertion sits after the thing that blocks. Driving `schedule()` on its own
+thread and bounding the *wait* reports in 5s and needs no shorter callback timeouts.
+
+Shipped: `async_scheduler_dispatch_enabled()` + `_SCHEDULER_ASYNC_DISPATCH_DEFAULT` (the flip is
+one greppable line, pinned by a test), `aindy_execution_dispatch_total{mode,eu_type}` (nothing
+observed the decision before — an operator could only read an env var),
+`tests/unit/test_scheduler_async_dispatch_gate.py` (25 tests, mutation-tested 5/5) and
+`tests/integration/test_soak_scheduler_dispatch.py` (mutation-tested 5/5).
+
+**Remaining for (a):** flip `_SCHEDULER_ASYNC_DISPATCH_DEFAULT` for thread-mode deployments, and
+decide the distributed half — which is a BUILD, not a flag: the resume must be reconstructible
+from `run_id` rather than carried as a closure. `flow_run_rehydration.py` already does exactly
+that reconstruction on restart, so the shape exists; it overlaps `ORCHESTRATOR-SPLIT-1`.
+
 ## FR-17 — the async-job path emits `execution.*` from outside a pipeline, so the gate ate it
 
 **Status: FIXED 2026-08-22 (this session).** Filed by the app team 2026-08-16 while verifying

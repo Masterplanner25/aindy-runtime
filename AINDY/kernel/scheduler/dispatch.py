@@ -24,7 +24,10 @@ class SchedulerDispatchMixin:
         import time as _time
 
         import AINDY.kernel.scheduler_engine as compat
-        from AINDY.core.execution_dispatcher import dispatch as _dispatch
+        from AINDY.core.execution_dispatcher import (
+            async_scheduler_dispatch_enabled,
+            dispatch as _dispatch,
+        )
 
         if tick_waits:
             self._check_stale_waits()
@@ -77,6 +80,18 @@ class SchedulerDispatchMixin:
                 )
 
             stub = _ResumedEUStub(id=item.execution_unit_id, type=item.eu_type, priority=item.priority)
+            # FR-15 (a) — the scheduler asks its OWN question about async dispatch, not the
+            # one two HTTP routes ask. ``async_hint`` is Rule 1 of ``_decide_mode``, which
+            # bypasses ``async_heavy_execution_enabled()`` entirely; setting it only when
+            # our own gate is on means that with the gate OFF this path is byte-identical
+            # to the behaviour it has always had.
+            #
+            # ★ Everything the scheduler drains is a resume of already-admitted heavy work
+            # (flow / agent / nodus), so there is no eu_type here for which INLINE is the
+            # right answer once the gate is on — which is why the hint is unconditional
+            # within the gate rather than re-deriving the type rules a second time.
+            if async_scheduler_dispatch_enabled():
+                stub.extra = {"async_hint": True}
             context = {"eu_id": item.execution_unit_id, "run_id": item.run_id, "source": "scheduler.resume"}
             try:
                 _dispatch(stub, item.run_callback, context)
