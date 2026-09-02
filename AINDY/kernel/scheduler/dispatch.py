@@ -28,6 +28,7 @@ class SchedulerDispatchMixin:
             async_scheduler_dispatch_enabled,
             dispatch as _dispatch,
         )
+        from AINDY.core.resume_reconstruction import RESUME_CONTEXT_KEY, resume_context
 
         if tick_waits:
             self._check_stale_waits()
@@ -92,7 +93,21 @@ class SchedulerDispatchMixin:
             # within the gate rather than re-deriving the type rules a second time.
             if async_scheduler_dispatch_enabled():
                 stub.extra = {"async_hint": True}
-            context = {"eu_id": item.execution_unit_id, "run_id": item.run_id, "source": "scheduler.resume"}
+            # FR-15 stage 2: carry a resume descriptor alongside the closure. In thread mode
+            # the closure runs and this is unused; in distributed mode the closure cannot
+            # cross the boundary and this is what the worker rebuilds from. Supplied
+            # unconditionally because the dispatcher — not the scheduler — decides which
+            # transport applies, and a descriptor that costs two strings is cheaper than a
+            # scheduler that has to know.
+            context = {
+                "eu_id": item.execution_unit_id,
+                "run_id": item.run_id,
+                "source": "scheduler.resume",
+            }
+            if item.run_id:
+                context[RESUME_CONTEXT_KEY] = resume_context(
+                    run_id=item.run_id, eu_type=item.eu_type
+                )
             try:
                 _dispatch(stub, item.run_callback, context)
                 dispatched += 1

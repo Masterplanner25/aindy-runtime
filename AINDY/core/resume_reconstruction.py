@@ -46,6 +46,50 @@ logger = logging.getLogger(__name__)
 RECONSTRUCTIBLE_EU_TYPES: frozenset[str] = frozenset({"flow", "agent"})
 
 
+#: Reserved ``task_name`` marking a queue message as a resume rather than a registered job.
+#: Double-underscored so it cannot collide with a handler key — every real one is a dotted
+#: domain name (``agent.create_run``), and a test pins that it is not registered. A collision
+#: would route a resume into a handler, or a job into the rebuild.
+RESUME_TASK_NAME = "__resume__"
+
+#: Key under which the resume descriptor travels inside ``QueueJobPayload.context``.
+RESUME_CONTEXT_KEY = "resume"
+
+
+def resume_context(*, run_id: str, eu_type: str) -> dict[str, Any]:
+    """The descriptor a transport carries in place of a closure it cannot serialise.
+
+    Two identifiers, nothing more — which is the whole point. Everything else the resume
+    needs is read back off the row at the far end by :func:`build_resume_callback`, so the
+    message stays valid however long it sits in a queue and whatever moves in between.
+
+    ★ Putting any *state* in here would reintroduce the problem in a new form: a payload
+    carrying a segment index or a step list is a snapshot, and a snapshot can be stale by the
+    time it is read. An identifier cannot be.
+    """
+    return {"run_id": str(run_id), "eu_type": str(eu_type or "").lower()}
+
+
+def read_resume_context(context: dict[str, Any] | None) -> tuple[str, str] | None:
+    """Extract ``(run_id, eu_type)`` from a carried context, or ``None`` if absent.
+
+    Returns ``None`` rather than raising on a malformed descriptor: a worker reading a message
+    it does not understand must fall through to its ordinary handling, not crash the consumer
+    loop for every subsequent message. A descriptor that is *present but unusable* is caught at
+    the far end by :func:`require_resume_callback`, where there is a run to name in the error.
+    """
+    if not isinstance(context, dict):
+        return None
+    raw = context.get(RESUME_CONTEXT_KEY)
+    if not isinstance(raw, dict):
+        return None
+    run_id = str(raw.get("run_id") or "")
+    eu_type = str(raw.get("eu_type") or "").lower()
+    if not run_id or not eu_type:
+        return None
+    return run_id, eu_type
+
+
 class ResumeNotReconstructible(Exception):
     """Raised when a caller *requires* a rebuild and the run cannot supply one.
 
