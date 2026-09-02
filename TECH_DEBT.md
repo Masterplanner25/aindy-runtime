@@ -7670,14 +7670,47 @@ soak's evidence; `AINDY_ASYNC_SCHEDULER_DISPATCH=0` reverts. Pinned by
 value-dependent test in that file — the rest prove the constant is *consulted* and so stay green
 either way, which is right for the mechanism and useless for the decision.
 
-**★★ WHAT REMAINS, AND IT IS THE WHOLE P0: the distributed resume.** Production still runs the
-serialised dispatch this entry was filed about. The fix is not a flag — `item.run_callback` is a
-closure and cannot cross a process boundary, so a distributed resume needs the run reconstructed
-from `run_id`. **`flow_run_rehydration.py` already performs exactly that reconstruction on
-restart**, so the shape exists and this is assembly rather than invention; it overlaps
-`ORCHESTRATOR-SPLIT-1` and should be settled with it. **Do NOT close FR-15 on the thread-mode
-flip** — that would let the index claim a fixed defect while the deployment that reported it is
-untouched, which is the exact failure this file catalogues.
+**★★ THE DISTRIBUTED RESUME IS BUILT AND OPT-IN 2026-09-02 (six PRs, #551–#556). FR-15 STAYS
+OPEN, and what remains is EVIDENCE, not code.**
+
+`AINDY_ASYNC_SCHEDULER_DISPATCH` is no longer refused under `EXECUTION_MODE=distributed`; it is
+**opt-in there and does not inherit the thread-mode default**. A resume crosses the queue as a
+reconstructible descriptor — `run_id` + `eu_type` — and the worker rebuilds it with the same
+call the rehydration sweeps make on every boot. The durable record was never missing; it is what
+restart recovery already depends on.
+
+**★★ FOUR distinct silent losses were found on this path, all the same shape: an unresolvable
+message ACKed and reported as successfully completed.** Worth listing, because each was invisible
+from one side and three of them were introduced by the fix for the previous one:
+
+1. `_enqueue_distributed` dropped `handler_fn` and manufactured an id no worker resolved.
+2. The payload context is REBUILT, not passed through, so the resume descriptor never reached
+   the wire — a well-formed message naming a run nobody could find.
+3. The resume branch sat below `_try_claim_job`, which reports a resume *missing* (it has no
+   JobLog) and ACKs it. Shipped in the stage-2 PR and caught by writing the soak.
+4. The worker never called `register_flows()`, so its `FLOW_REGISTRY` was empty; the rebuilt
+   callback found no flow, **returned normally**, and the message was ACKed. Caught while
+   preparing to flip — flipping then would have stranded every flow resume in production.
+
+**★ What the evidence covers:** a real one-node flow resuming END TO END over live Redis with
+nothing stubbed (`FlowRun` reaches `success`, `FlowHistory` row exists), dead-lettering of an
+unreconstructible resume measured on real DLQ depth, and exactly-once execution under duplicate
+delivery driving the rebuilt callback's own atomic claim.
+
+**★★ What it does NOT cover, which is why it is opt-in and why this entry stays open: a separate
+worker PROCESS.** The soak calls `process_one_job` in-process. Silent loss (4) was precisely a
+per-process difference, so this is not a theoretical gap — it is the one that has actually bitten.
+Also unexercised: the scheduler routing there for real (while it refused, `schedule()` never
+produced a distributed dispatch, so that combination has never run) and cross-process concurrency.
+
+**Remaining, in order:** (1) enable it on one distributed deployment and watch
+`aindy_execution_dispatch_total{mode="async"}` move while the DLQ stays flat — that is the only
+thing that closes the process-boundary gap and it cannot be manufactured in CI; (2) migrate the
+live wait registrations to reconstruction-primary, including `execution_pipeline/waits.py:56`,
+which hands a **request-scoped session** to the scheduler thread (`AGENT_WORKING_RULES` §5).
+
+**Do NOT close FR-15 on the opt-in** — a capability nothing has enabled is not a fixed defect,
+and `SUBSTRATE-WITNESS-1` is this file's own record of what deferring that evidence costs.
 
 **★ The general defect found underneath it is FIXED separately (2026-09-01):** `dispatch()` now
 raises `UndistributableWorkError` rather than enqueueing work with no `log_id`. That trap was
