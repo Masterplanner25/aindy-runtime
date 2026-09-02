@@ -52,8 +52,25 @@ jobs:
           #   2026-05-25; nltk JSON tag decoder is never called by this codebase.
           # PYSEC-2026-597 (CVE-2026-12243): nltk url2pathname() percent-encoded path traversal â€”
           #   no fix released. Accepted 2026-07-02; incomplete-fix follow-up to PYSEC-2026-97.
-          #   Not reachable: nltk is a transitive dep of textstat; this codebase never calls
-          #   nltk.data.load()/find(), so no attacker-controlled resource name reaches url2pathname().
+          #   Not reachable. CORRECTED 2026-09-02 — the original reason said "this codebase never
+          #   calls nltk.data.load()/find()", which is true of AINDY/ and FALSE of the dependency
+          #   that pulls nltk in: textstat's _get_cmudict.py calls nltk.data.find("corpora/cmudict").
+          #   The acceptance still holds and for a better-stated reason — that argument is a
+          #   HARDCODED literal, so no attacker-controlled resource name reaches url2pathname().
+          #   Kept as a correction rather than a rewrite: the accepted-on date is unchanged, and a
+          #   security exemption resting on a claim nobody re-checked is worth more than the
+          #   tidier text that hid it.
+          # PYSEC-2026-3740 (CVE-2026-81726 / GHSA-8mgp-746c-j5xp): nltk model-artifact APIs treat
+          #   caller-controlled model paths as ordinary filenames, bypassing nltk path security —
+          #   no fix released (pip-audit reports fix_versions: []). Accepted 2026-09-02. NOT
+          #   REACHABLE, verified rather than assumed: `import nltk` has ZERO hits across AINDY/,
+          #   tests/ and scripts/; nltk arrives solely as a transitive dep of textstat; and
+          #   `TransitionParser` — the named affected component — has ZERO references anywhere in
+          #   textstat, which touches nltk only in _get_cmudict.py. Nothing here supplies a model
+          #   path at all, let alone a caller-controlled one.
+          #   ★ This landed on 3.10.3, the version bumped to hours earlier to clear PYSEC-2026-3726.
+          #   Do NOT "fix" it by reverting: 3.10.3 remains strictly better, because that advisory
+          #   HAD a fix and this one does not.
           # `set +e` around the call is load-bearing. This step runs under `bash -e`, and
           # `pip-audit ...; AUDIT_EXIT=$?` does NOT protect the command from it — the `;`
           # leaves the failure uncaught, so a findings exit of 1 killed the step before
@@ -67,6 +84,7 @@ jobs:
             --ignore-vuln PYSEC-2026-97 \
             --ignore-vuln GHSA-rf74-v2fm-23pw \
             --ignore-vuln PYSEC-2026-597 \
+            --ignore-vuln PYSEC-2026-3740 \
             --format json --output audit-results.json
           AUDIT_EXIT=$?
           set -e

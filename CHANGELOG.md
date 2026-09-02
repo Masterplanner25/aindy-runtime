@@ -6,6 +6,24 @@ _Nothing yet._
 
 ## 2.7.0 — 2026-09-02
 
+### Security — a second `nltk` advisory, accepted as not reachable (`PYSEC-2026-3740`)
+
+- `CVE-2026-81726` / `GHSA-8mgp-746c-j5xp` was published against `nltk` 3.10.3 — the version this
+  release bumps *to*, hours after the bump — and **has no fix released**. It is carried as a
+  documented `--ignore-vuln` exemption alongside the four already there.
+- **Not reachable, verified rather than assumed.** `import nltk` has zero hits across `AINDY/`,
+  `tests/` and `scripts/`; nltk arrives solely as a transitive dependency of `textstat`; and
+  `TransitionParser`, the named affected component, has zero references anywhere in `textstat`.
+  Nothing here supplies a model path at all, let alone a caller-controlled one.
+- **Do not resolve this by reverting the pin.** 3.10.3 remains strictly better than 3.10.0: the
+  advisory it clears had a fix, and this one does not.
+- While confirming that, an *existing* exemption's stated reason turned out to be imprecise and is
+  corrected in place. `PYSEC-2026-597` was accepted on the grounds that *"this codebase never
+  calls `nltk.data.load()/find()`"* — true of `AINDY/`, false of the dependency that pulls nltk
+  in, since `textstat` calls `nltk.data.find("corpora/cmudict")`. The acceptance still holds, and
+  for a better reason: that argument is a hardcoded literal, so no attacker-controlled resource
+  name reaches `url2pathname()`. The accepted-on date is unchanged.
+
 ### Changed — the scheduler no longer runs drained work on its own heartbeat (`FR-15` (a), thread mode)
 
 - **`AINDY_ASYNC_SCHEDULER_DISPATCH` now defaults to `true`.** A queued item is handed to the
