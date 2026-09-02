@@ -67,6 +67,7 @@ from typing import Any, Callable, Optional
 from sqlalchemy.orm import Session
 
 from AINDY.db.models.job_log import JobLog
+from AINDY.platform_layer.metrics import execution_dispatch_total
 from AINDY.platform_layer.user_ids import parse_user_id
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,95 @@ def async_heavy_execution_enabled() -> bool:
     if os.getenv("TEST_MODE", "false").lower() in {"1", "true", "yes"}:
         return False
     return os.getenv("AINDY_ASYNC_HEAVY_EXECUTION", "false").lower() in {"1", "true", "yes"}
+
+
+#: FR-15 (a) — the scheduler-dispatch default, isolated so the flip is one greppable line.
+#: A literal, never an env read at import time: a module-level ``os.getenv`` would be
+#: invisible to behavioural tests (the standing rule in CLAUDE.md, learned three times).
+_SCHEDULER_ASYNC_DISPATCH_DEFAULT = False
+
+
+def _in_test_mode() -> bool:
+    """True when TESTING or TEST_MODE marks this process as a test run."""
+    return (
+        os.getenv("TESTING", "false").lower() in {"1", "true", "yes"}
+        or os.getenv("TEST_MODE", "false").lower() in {"1", "true", "yes"}
+    )
+
+
+def async_scheduler_dispatch_enabled() -> bool:
+    """
+    Whether the SCHEDULER may hand a drained item to the thread pool.
+
+    Split from ``async_heavy_execution_enabled()`` on purpose — FR-15 (a). That flag
+    carries two unrelated meanings, and flipping it would ship both at once:
+
+      1. *May heavy work run off the scheduler heartbeat?*  The actual FR-15 defect:
+         ``schedule()`` is the only queue drainer and runs each item synchronously, so
+         one slow flow starves every other queued item and the wait/cleanup jobs with it.
+      2. *Do two HTTP routes answer 202-queued instead of a result?*
+         ``agents/runtime_api.py`` and ``routes/memory_router.py`` branch on the same
+         variable, so the flip would also change two live response shapes.
+
+    Only (1) is the defect. Fixing it should not renegotiate an API contract as a side
+    effect, so the scheduler now asks this question and the routes keep asking the old
+    one. Precedent: ``EVENTBUS-PUBLISH-LATCH-1`` (operator switch + runtime latch in one
+    field) and FR-17's ``AINDY_ASYNC_JOB_LOOP_CLOSURE`` — both were split, not flipped.
+
+    Precedence, and the middle rule is the load-bearing one:
+
+      - ``AINDY_ASYNC_SCHEDULER_DISPATCH`` set explicitly  → honoured, test mode included.
+      - unset, and this is a test run                      → False.
+      - unset otherwise                                    → ``_SCHEDULER_ASYNC_DISPATCH_DEFAULT``.
+
+    ★ Why explicit beats test mode here, when it does NOT in
+    ``async_heavy_execution_enabled()``: that function returns False under TESTING/TEST_MODE
+    *before* reading its flag, and ``pytest.integration.ini`` sets both — so the async path
+    is unreachable from every test in this repository and always has been. A soak written
+    the obvious way (monkeypatch the flag, drive load) would pass while executing the
+    INLINE branch throughout. That is the catalogue's variant 3 arriving as variant 6: not
+    merely unexercised, actively neutralised two lines above the switch it appears to test.
+    An opt-in that test mode cannot veto is what makes the evidence for the flip obtainable
+    at all. Nothing sets this variable by default, so ordinary runs stay inline.
+    """
+    # ★★ HARD REFUSAL, checked before anything else — including an explicit opt-in.
+    #
+    # In distributed mode ``dispatch()`` does not submit to a thread pool; it calls
+    # ``_enqueue_distributed()``, which builds a QueueJobPayload from ``context`` and
+    # **drops handler_fn entirely** — a closure cannot cross a process boundary. That is
+    # correct for ``async_job_service``, whose context carries ``log_id`` so the worker
+    # re-reads task_name/payload from the JobLog row. The scheduler has no JobLog: its
+    # context is {eu_id, run_id, source} and its work IS the closure ``item.run_callback``.
+    #
+    # So the payload would key on ``eu_id``, and the worker would do this:
+    #
+    #     job_data = _fetch_job_data(job.job_id)      # None — no JobLog with that id
+    #     if job_data is None:
+    #         logger.warning("[Worker] JobLog not found job_id=%s", job.job_id)
+    #         q.ack(job.job_id)                       # ACKed, not DLQd
+    #         return True                             # reported as SUCCESS
+    #
+    # A warning, an ack, and a success. The resume never runs, the FlowRun stays
+    # ``waiting`` forever, and nothing retries it or records a failure — strictly worse
+    # than the inline starvation FR-15 (a) exists to fix, which at least eventually runs.
+    #
+    # ``docker-compose.prod.yml`` sets ``EXECUTION_MODE: distributed``, so this is the
+    # PRODUCTION shape, not an edge case. Fail closed here rather than trusting an
+    # operator not to set the variable; a durable distributed resume needs the run
+    # reconstructed from ``run_id`` (which ``flow_run_rehydration`` already knows how to
+    # do) and that is a build, not a flag.
+    from AINDY.config import resolve_execution_mode
+
+    if resolve_execution_mode() == "distributed":
+        return False
+
+    raw = os.getenv("AINDY_ASYNC_SCHEDULER_DISPATCH")
+    if raw is not None and raw.strip() != "":
+        return raw.strip().lower() in {"1", "true", "yes"}
+    if _in_test_mode():
+        return False
+    return _SCHEDULER_ASYNC_DISPATCH_DEFAULT
+
 
 # Execution types that always go to the thread pool (when async is enabled).
 _ASYNC_EU_TYPES: frozenset[str] = frozenset({"flow", "agent", "nodus", "job"})
@@ -413,6 +503,13 @@ def dispatch(
     """
     meta: dict[str, Any] = context or {}
     mode = _decide_mode(execution_unit)
+
+    # ★ Counted here, at the ONE place the decision becomes an action, and deliberately
+    # not wrapped in try/except: a metric that silently no-ops makes "the async path never
+    # fired" indistinguishable from "I failed to observe it", which is the whole reason
+    # this counter exists. If the registry is broken the dispatcher should say so.
+    _eu_type_label = str(getattr(execution_unit, "type", "") or "unknown").lower()
+    execution_dispatch_total.labels(mode=mode.value, eu_type=_eu_type_label).inc()
 
     if mode is ExecutionMode.INLINE:
         logger.debug(

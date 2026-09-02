@@ -68,6 +68,22 @@ scheduler_queue_wait_seconds = Histogram(
     registry=REGISTRY,
 )
 
+# FR-15 (a) — WHERE an execution ran. The queue metrics above say how long work waited;
+# this says whether it then blocked the caller's thread or went to the pool, which is the
+# only signal that distinguishes "the async path is on" from "the async path is on and
+# nothing is using it". Before this existed the INLINE/ASYNC decision was observable only
+# by reading an env var, so an operator could not tell the two deployments apart at all.
+#
+# ★ Labelled, so it has NO SAMPLE until the first dispatch of a given (mode, eu_type).
+# A reader must treat an unobserved combination as 0 and a missing FAMILY as an error —
+# `soak_harness.read_metric` already draws that line; do not collapse it to None-as-zero.
+execution_dispatch_total = Counter(
+    "aindy_execution_dispatch_total",
+    "Executions dispatched, by mode and execution-unit type",
+    ["mode", "eu_type"],  # mode: inline | async
+    registry=REGISTRY,
+)
+
 # ── Nodus warm-worker pool (NODUS-WARMPOOL-1) ────────────────────────────────
 
 nodus_warm_pool_events_total = Counter(
