@@ -232,8 +232,38 @@ def resolve_effect_record(
 
 
 def complete_effect_record(db, action_id: str, status: str, result_payload) -> None:
-    """Finalize an effect slot (``success``/``failed``), caching a dict result for replay."""
-    from AINDY.db.models.effect_record import EffectRecord
+    """Finalize an effect slot, caching a dict result for replay.
+
+    ``status`` must be one of :data:`TERMINAL_EFFECT_STATUSES` — ``success``, ``failed``,
+    ``partial`` (`EFFECT-PARTIAL-1`) or ``unknown`` (`EFFECT-OUTCOME-UNKNOWN-1`).
+
+    ★ Validated rather than documented. The column is a plain ``String(32)`` with no CHECK and
+    this function accepted any ``str``, so the "vocabulary" was a docstring and a habit: a typo
+    wrote a status nothing would ever query for, and the TTL job — which reaps by
+    ``status != "pending"`` — would have quietly treated it as terminal. A vocabulary that
+    cannot refuse a value is not one.
+
+    ★ ``pending`` is refused here specifically. It is the *initial* state, and moving a row back
+    to it would make the row invisible to TTL cleanup and start the stale-handler warning
+    against a completed effect.
+    """
+    from AINDY.db.models.effect_record import (
+        EFFECT_STATUS_PENDING,
+        TERMINAL_EFFECT_STATUSES,
+        EffectRecord,
+    )
+
+    if status not in TERMINAL_EFFECT_STATUSES:
+        raise ValueError(
+            f"cannot complete effect {action_id!r} with status {status!r}. A completed effect "
+            f"must be one of {sorted(TERMINAL_EFFECT_STATUSES)}"
+            + (
+                f" — {EFFECT_STATUS_PENDING!r} is the initial state, and returning a row to it "
+                f"hides it from TTL cleanup and reads as a stuck handler."
+                if status == EFFECT_STATUS_PENDING
+                else "."
+            )
+        )
 
     record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
     if record is not None:

@@ -23,6 +23,63 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from AINDY.db.database import Base
 
 
+#: The complete set of lifecycle values ``EffectRecord.status`` may hold.
+#:
+#: ★ Declared rather than conventional. This used to be a docstring listing three strings while
+#: ``complete_effect_record`` accepted any ``str``, which is how a vocabulary acquires values
+#: nobody agreed to and loses the ability to say what it does not cover.
+EFFECT_STATUS_PENDING = "pending"
+EFFECT_STATUS_SUCCESS = "success"
+EFFECT_STATUS_FAILED = "failed"
+
+#: `EFFECT-PARTIAL-1` — some units of a batched effect were applied and some were not.
+#:
+#: The envelope is binary (``success | error``), so a 5-unit effect with 2 failures forced
+#: through it is either a **lie** (``success``, silently partial) or a **waste** (``error``,
+#: discarding the 3 that landed). Neither is recoverable from afterwards, because the record
+#: does not say which units applied. This value exists so the *record* can be honest even where
+#: the envelope cannot be.
+#:
+#: ★ It is not "mostly succeeded". A ``partial`` record without a payload naming which units
+#: landed is strictly worse than ``failed`` — it says something went wrong and removes the
+#: ability to say what. Write the per-unit outcome into ``result_payload`` or do not use this.
+EFFECT_STATUS_PARTIAL = "partial"
+
+#: `EFFECT-OUTCOME-UNKNOWN-1` — dispatched, outcome unobserved. Genuinely ambiguous.
+#:
+#: The narrow case from the outcome-ambiguity design: a **read timeout after a full request
+#: write**. Everything on either side of that is knowable — DNS failure, connection refused and
+#: an incomplete write are *definitely not dispatched*; an ack or an observed result is
+#: *definitely landed*. Only that one window is a true unknown, and collapsing it into either
+#: neighbour is what makes a human look at something a machine could have decided.
+#:
+#: ★★ DO NOT REACH FOR ``pending`` INSTEAD. The TTL cleanup job warns on any ``pending`` row
+#: older than an hour as a stuck handler, so recording an honest ambiguity there would read as a
+#: malfunction — and it would also be excluded from TTL cleanup, because that job hard-excludes
+#: pending rows and this one is never going to resolve on its own.
+#:
+#: ★ It is a claim about the WORLD, not about the runtime's confidence. Do not use it to mean
+#: "an exception we did not classify"; that is ``failed``.
+EFFECT_STATUS_UNKNOWN = "unknown"
+
+#: Every legal value.
+EFFECT_STATUSES = frozenset({
+    EFFECT_STATUS_PENDING,
+    EFFECT_STATUS_SUCCESS,
+    EFFECT_STATUS_FAILED,
+    EFFECT_STATUS_PARTIAL,
+    EFFECT_STATUS_UNKNOWN,
+})
+
+#: Values a *completed* effect may hold — everything except ``pending``.
+#:
+#: ★ The distinction is load-bearing for the TTL cleanup job, which reaps rows by
+#: ``status != "pending"`` and hard-excludes pending ones. ``partial`` and ``unknown`` are
+#: terminal, so they are reaped like any other finished effect. An "unknown" that is never
+#: cleaned up is an unbounded table, and one that is warned about hourly is noise.
+TERMINAL_EFFECT_STATUSES = frozenset(EFFECT_STATUSES - {EFFECT_STATUS_PENDING})
+
+
 class EffectRecord(Base):
     __tablename__ = "effect_records"
 
@@ -67,8 +124,17 @@ class EffectRecord(Base):
     not part of the dedup hash — on a replayed action the row keeps the FIRST writer's
     session, which is the correct "which session produced the effect" answer."""
 
-    status = Column(String(32), nullable=False, default="pending")
-    """Lifecycle status: 'pending' | 'success' | 'failed'."""
+    status = Column(String(32), nullable=False, default=EFFECT_STATUS_PENDING)
+    """Lifecycle status — one of :data:`EFFECT_STATUSES`.
+
+    ``pending`` | ``success`` | ``failed`` | ``partial`` | ``unknown``. The last two were added
+    2026-09-02 for `EFFECT-PARTIAL-1` and `EFFECT-OUTCOME-UNKNOWN-1`; see the module docstring
+    for what each one means and, more importantly, what it must not be used for.
+
+    Still a plain ``String(32)`` with no CHECK constraint, so adding values needs no migration —
+    but the set is no longer a docstring convention: ``complete_effect_record`` validates
+    against :data:`TERMINAL_EFFECT_STATUSES` and refuses anything else.
+    """
 
     result_payload = Column(JSONB, nullable=True)
     """Stored result returned by the handler on success. Used for cache replay."""
