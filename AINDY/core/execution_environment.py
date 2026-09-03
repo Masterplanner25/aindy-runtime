@@ -54,6 +54,7 @@ paid for repeatedly.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
@@ -317,6 +318,84 @@ GUEST_FLOOR = ExecutionEnvironmentSpec(
 def guest_floor() -> ExecutionEnvironmentSpec:
     """Floor for the Nodus guest VM. See :data:`GUEST_FLOOR`."""
     return GUEST_FLOOR
+
+
+#: ★ The tool floor — what an ISOLATED TOOL's worker subprocess may never exceed.
+#:
+#: **Permissive on purpose, and the reason matters.** A tool is first-party code an operator
+#: registered, not submitted content: the honest-posture defence that does *not* transfer to a
+#: `.nd` script arriving over HTTP does transfer here. Clamping tools to the guest floor would
+#: break every isolated tool that legitimately reads a credential for the service it calls, and
+#: a floor that breaks its subjects gets removed rather than obeyed.
+#:
+#: So this floor is today's behaviour written down, and its whole value is that a tool can now
+#: **narrow** it — `visibility.env = allow` with an allow-list, a scoped filesystem, a shorter
+#: wall clock. A spec may only ever narrow (§11.2), so nothing a tool declares can widen this.
+#:
+#: ★★ What this makes visible, which was invisible before: an isolated tool's worker inherits
+#: the **entire server environment** — `SECRET_KEY`, `DATABASE_URL`, every provider API key — and
+#: the server's working directory. `TOOL-SEAM-ISOLATION-1` moved the tool out of the process; it
+#: did not narrow what that process can *see*. Isolation was process-level, never visibility-level,
+#: and until a tool could declare otherwise there was no way to say so.
+TOOL_FLOOR = ExecutionEnvironmentSpec()
+
+
+def tool_floor() -> ExecutionEnvironmentSpec:
+    """Floor for an isolated tool's worker subprocess. See :data:`TOOL_FLOOR`."""
+    return TOOL_FLOOR
+
+
+def subprocess_confinement(
+    spec: ExecutionEnvironmentSpec,
+    *,
+    scratch_root: str,
+    default_timeout_s: float,
+) -> dict[str, Any]:
+    """Translate an effective spec into ``subprocess.run(**kwargs)`` for a worker.
+
+    Returns only the keys a spec actually determines — ``env``, ``cwd``, ``timeout``. The caller
+    merges them, so a key absent here keeps whatever the caller was already doing.
+
+    ★★ ``env`` is the axis that was silently wide open. A worker spawned with no ``env=``
+    inherits the parent's entire environment, so a tool that declared isolation still saw every
+    secret the server holds. Declaring ``env=allow`` now produces a subprocess environment
+    containing only the named variables plus the minimum an interpreter needs to start
+    (``PATH``, ``PYTHONPATH``, ``SYSTEMROOT`` on Windows) — omit those and the worker cannot
+    launch, which would turn a confinement declaration into a crash and get it switched off.
+
+    ★ ``cwd`` matters for the same reason it did on the guest path: nothing set the worker's
+    working directory, so it inherited the server's — ``/home/aindy`` in Docker, which holds
+    ``alembic/``, and the repo root in dev, which holds ``AINDY/.env``. A scoped filesystem gets
+    a per-execution scratch root; the caller owns that directory's lifetime.
+
+    ★ This CANNOT enforce ``authority.network`` or ``authority.subprocess``. A bare subprocess
+    shares the host's network namespace and can spawn children, and no argument here changes
+    that — which is exactly why ``_host_assurance`` reports ``insecure-dev`` for this tier and
+    why the container runner exists. Returning kwargs that silently ignore those axes while the
+    record claimed they were applied is the failure this whole entry is about, so the caller
+    records the assurance it *achieved*, not the one that was asked for.
+    """
+    kwargs: dict[str, Any] = {}
+
+    if spec.visibility.env in (ENV_NONE, ENV_ALLOWLIST):
+        allowed = set(spec.visibility.env_allow or ())
+        # Without these the interpreter does not start, and a confinement that cannot launch is
+        # a confinement nobody keeps.
+        essential = ("PATH", "PYTHONPATH", "PYTHONHOME", "SYSTEMROOT", "TEMP", "TMP")
+        env: dict[str, str] = {
+            k: v for k, v in os.environ.items() if k in allowed or k in essential
+        }
+        kwargs["env"] = env
+
+    if spec.visibility.filesystem in (FS_SCOPED, FS_NONE):
+        kwargs["cwd"] = scratch_root
+
+    wall_ms = spec.resources.wall_time_ms
+    if wall_ms:
+        # Narrow only: a declared budget may shorten the worker's leash, never lengthen it.
+        kwargs["timeout"] = min(default_timeout_s, wall_ms / 1000.0)
+
+    return kwargs
 
 
 def nodus_runtime_kwargs(spec: ExecutionEnvironmentSpec, *, scratch_root: str) -> dict[str, Any]:
