@@ -194,6 +194,85 @@ def test_every_provider_client_meters_its_response():
         )
 
 
+def test_a_chat_call_is_metered_exactly_once(monkeypatch):
+    """★★ DOUBLE-COUNTING IS WORSE THAN NOT COUNTING, and I walked into it writing this.
+
+    `chat()` delegates to the raw response method — `chat_completion_response` /
+    `messages_create`. Metering the raw path (needed, because a caller wanting tool blocks can
+    only use that one) while *also* metering inside `chat()` counts every chat call twice.
+
+    A gap in a graph is a known unknown. A number that is silently 2× is a **fabricated
+    measurement**, and it is the failure the meter's own design rejects outright — the same
+    reason an unreadable response is counted separately instead of recorded as zero tokens. A
+    governor reserving against a doubled meter would refuse calls that were within budget.
+    """
+    from AINDY.platform_layer.openai_client import OpenAILLMClient
+
+    labels = {"provider": "openai", "model": "once-probe", "kind": "prompt"}
+    before = _read("aindy_llm_tokens_total", labels)
+
+    client = OpenAILLMClient.__new__(OpenAILLMClient)  # no API key needed; the SDK call is stubbed
+
+    class _Msg:
+        content = "ok"
+
+    class _Choice:
+        message = _Msg()
+
+    class _ChatResponse(_Response):
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kw):
+            # A response shaped enough for BOTH halves: usage for the meter, choices for the
+            # text extraction chat() performs afterwards. A stub carrying only usage would fail
+            # in extraction and never reach the assertion.
+            return _ChatResponse(_Usage(prompt_tokens=5, completion_tokens=1))
+
+    class _Chat:
+        completions = _Completions()
+
+    class _SDK:
+        chat = _Chat()
+
+    object.__setattr__(client, "_client", _SDK())
+    object.__setattr__(client, "_chat_timeout", 30.0)
+
+    client.chat(model="once-probe", messages=[{"role": "user", "content": "hi"}])
+
+    assert _read("aindy_llm_tokens_total", labels) == before + 5, (
+        "a single chat() call did not record exactly its prompt tokens. +10 means both chat() "
+        "and the raw path it delegates to are metering — every chat call counted twice."
+    )
+
+
+def test_only_the_raw_path_carries_the_meter():
+    """★ Structural companion to the test above, so the reason survives a refactor.
+
+    Each client must call `observe_llm_usage` exactly once. Two call sites in one client is the
+    double-count; zero is an unmetered provider.
+    """
+    import ast
+    from pathlib import Path
+
+    for rel in (
+        "AINDY/platform_layer/openai_client.py",
+        "AINDY/platform_layer/azure_openai_client.py",
+        "AINDY/platform_layer/anthropic_client.py",
+    ):
+        tree = ast.parse(Path(rel).read_text(encoding="utf-8"))
+        calls = [
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == "observe_llm_usage"
+        ]
+        assert len(calls) == 1, (
+            f"{rel} has {len(calls)} observe_llm_usage call sites, expected exactly 1. "
+            f"Two means chat() and the raw path it delegates to both meter, doubling every "
+            f"chat call; zero means the provider is unmetered."
+        )
+
+
 def test_the_labels_deliberately_exclude_tenant():
     """★ Recorded so the omission is not 'fixed' by someone reading it as an oversight.
 
