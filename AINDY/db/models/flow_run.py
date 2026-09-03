@@ -45,6 +45,20 @@ class FlowRun(Base):
     trace_id = Column(String, nullable=True, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
     job_log_id = Column(String, nullable=True)
+    graph_signature = Column(String(64), nullable=True)
+    """FLOW-GRAPH-SIGNATURE-1: sha256 of the flow's SHAPE when this run started.
+
+    Compared on resume; a positive disagreement quarantines the run instead of executing it
+    against a definition it was never planned for. Covers node identities and edge topology
+    only — see ``runtime/flow_engine/graph_signature.py`` for what is deliberately excluded and
+    why.
+
+    ★ Nullable, and that is load-bearing rather than incidental. A run created before this
+    column existed has no signature, and an absent signature means "cannot tell", never
+    "mismatch". Making it required — or treating NULL as a conflict — would quarantine every
+    in-flight run the moment it deployed, which is exactly how a guard like this gets switched
+    off within a week.
+    """
     error_detail = Column(JSON, nullable=True)
     error_message = Column(Text, nullable=True)
     dead_letter_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

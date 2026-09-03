@@ -100,6 +100,7 @@ class PersistentFlowRunner:
 
     def start(self, initial_state: dict, flow_name: str = "default") -> dict:
         from AINDY.db.models.flow_run import FlowRun
+        from AINDY.runtime.flow_engine.graph_signature import flow_topology_signature
         from AINDY.platform_layer.async_execution_context import (
             activate_async_execution_context,
             deactivate_async_execution_context,
@@ -119,6 +120,10 @@ class PersistentFlowRunner:
             trace_id=str(trace_id),
             user_id=self.user_id,
             job_log_id=self.job_log_id,
+            # FLOW-GRAPH-SIGNATURE-1: what shape this run was planned against. Recorded at
+            # start because that is the only moment the answer is unambiguous — by resume time
+            # the registry may hold a different definition, which is the whole point.
+            graph_signature=flow_topology_signature(self.flow),
         )
         self.db.add(run)
         self.db.commit()
@@ -222,6 +227,10 @@ class PersistentFlowRunner:
             activate_async_execution_context,
             deactivate_async_execution_context,
         )
+        from AINDY.runtime.flow_engine.graph_signature import (
+            flow_topology_signature,
+            signatures_conflict,
+        )
 
         async_token = activate_async_execution_context()
         db_run_id = str(run_id)
@@ -232,6 +241,41 @@ class PersistentFlowRunner:
                     status="FAILED",
                     trace_id=db_run_id,
                     result={"error": f"FlowRun {run_id} not found"},
+                    events=[],
+                    next_action=None,
+                    run_id=db_run_id,
+                )
+            finally:
+                deactivate_async_execution_context(async_token)
+
+        # ── FLOW-GRAPH-SIGNATURE-1 ────────────────────────────────────────────
+        # Does the shape this run was planned against still match the definition loaded now?
+        #
+        # ★ Checked BEFORE the claim, deliberately. `move_to_dead_letter` transitions from
+        # `waiting`, and `_claim_waiting_run` moves the row to `executing` — so claiming first
+        # would leave a quarantined run stuck in `executing` with nothing driving it, which is
+        # a worse outcome than the silent resume this guard replaces.
+        #
+        # ★ Absent on either side means "cannot tell", never "mismatch" — a run predating the
+        # column, or a flow no longer registered, must proceed exactly as before. See
+        # `signatures_conflict`.
+        recorded = getattr(run, "graph_signature", None)
+        current = flow_topology_signature(self.flow)
+        if signatures_conflict(recorded, current):
+            reason = (
+                f"flow topology changed while run was suspended: planned against "
+                f"{recorded[:12]}…, definition loaded now is {current[:12]}…. Resuming would "
+                f"execute this run against a graph it was never planned for."
+            )
+            logger.error("[FlowRun %s] QUARANTINED — %s", db_run_id, reason)
+            try:
+                from AINDY.agents.dead_letter_service import move_to_dead_letter
+
+                move_to_dead_letter(self.db, db_run_id, reason=reason)
+                return _format_execution_response(
+                    status="FAILED",
+                    trace_id=str(run.trace_id or db_run_id),
+                    result={"error": reason, "quarantined": True},
                     events=[],
                     next_action=None,
                     run_id=db_run_id,
