@@ -120,7 +120,13 @@ class AnthropicLLMClient(LLMClient):
         if system:
             params["system"] = system
         try:
-            return self._client.messages.create(**params, **kwargs)
+            response = self._client.messages.create(**params, **kwargs)
+            # COST-GOVERNOR-1 phase 0: the RAW path a structured caller uses. Metering
+            # only chat() left this unmetered — and chat() is not the method a caller
+            # needing tool blocks can use, so the one real consumer would route through
+            # the seam and still measure nothing.
+            observe_llm_usage(provider="anthropic", model=str(model), response=response)
+            return response
         except Exception as exc:
             raise LLMCallError("anthropic messages.create failed") from exc
 
@@ -138,8 +144,9 @@ class AnthropicLLMClient(LLMClient):
             system=system,
             max_tokens=max_tokens,
         )
-        # COST-GOVERNOR-1: the usage object exists here and was discarded one line later.
-        observe_llm_usage(provider="anthropic", model=str(model), response=response)
+        # NOT metered here: chat() delegates to the raw response method above, which
+        # meters. Counting in both places would DOUBLE-COUNT every chat call, and a
+        # fabricated measurement is the one failure the meter's design rejects outright.
         return _extract_message_text(response)
 
     def is_available(self) -> bool:

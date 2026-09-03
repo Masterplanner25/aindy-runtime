@@ -124,12 +124,16 @@ class OpenAILLMClient(LLMClient):
         **kwargs: Any,
     ) -> Any:
         try:
-            return self._client.chat.completions.create(
+            response = self._client.chat.completions.create(
                 model=model,
                 messages=messages,
                 timeout=self._chat_timeout if timeout is None else timeout,
                 **kwargs,
             )
+            # COST-GOVERNOR-1 phase 0: the RAW path a structured caller uses — see the
+            # anthropic client for why metering chat() alone was not enough.
+            observe_llm_usage(provider="openai", model=str(model), response=response)
+            return response
         except Exception as exc:
             raise LLMCallError("openai chat completion failed") from exc
 
@@ -164,8 +168,9 @@ class OpenAILLMClient(LLMClient):
             temperature=temperature,
             max_tokens=max_tokens,
         )
-        # COST-GOVERNOR-1: the usage object exists here and was discarded one line later.
-        observe_llm_usage(provider="openai", model=str(model), response=response)
+        # NOT metered here: chat() delegates to the raw response method above, which
+        # meters. Counting in both places would DOUBLE-COUNT every chat call, and a
+        # fabricated measurement is the one failure the meter's design rejects outright.
         return _extract_message_text(response)
 
     def is_available(self) -> bool:
