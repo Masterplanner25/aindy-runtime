@@ -10927,7 +10927,7 @@ place.
 
 ## FLOW-GRAPH-SIGNATURE-1 — a suspended run resumes against whatever flow definition exists now
 
-**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`.
+**Status: CLOSED (2026-09-03), shipped in #559.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`.
 **Independent of `FLOW-PARALLEL-1` — do not bundle them.**
 
 **The gap.** `flow_run_rehydration` restores a `FlowRun` against whatever definition
@@ -11654,7 +11654,8 @@ reified. Same shape here. See `COMPARATIVE_RESEARCH_INDEX.md` §4b.
 
 ## COST-GOVERNOR-1 — every quota exists except the one that matters for an LLM runtime
 
-**Status: OPEN — P1.** Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
+**Status: OPEN — P1. METER SHIPPED 2026-09-03 (#563, #564); the governor is blocked on adoption,
+not on design — see `docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`.** Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
 (`C:\codev\MetaGPT research\`, 2026-08-15, its **M2**), verified against source at `v2.4.0`.
 **The last verified-but-unfiled gap across ten comparative research folders.**
 
