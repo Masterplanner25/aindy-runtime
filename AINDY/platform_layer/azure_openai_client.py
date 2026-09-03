@@ -22,6 +22,7 @@ from AINDY.platform_layer.llm_client import (
     LLMCallError,
     LLMClient,
 )
+from AINDY.platform_layer.token_meter import observe_llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,8 @@ class AzureOpenAILLMClient(LLMClient):
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        # COST-GOVERNOR-1: the usage object exists here and was discarded one line later.
+        observe_llm_usage(provider="azure_openai", model=str(model), response=response)
         return _extract_message_text(response)
 
     def is_available(self) -> bool:

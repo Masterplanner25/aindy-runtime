@@ -84,6 +84,34 @@ execution_dispatch_total = Counter(
     registry=REGISTRY,
 )
 
+# ── LLM token usage (COST-GOVERNOR-1, the meter half) ────────────────────────
+#
+# The runtime enforced a 300s wall-clock and 256MiB memory ceiling on work whose dominant
+# cost is tokens, and did not measure tokens at all — every provider client returned the
+# message text and discarded the usage object, so the quantity existed for one stack frame.
+#
+# ★ Labels stop at provider and model DELIBERATELY. Tenant is the more useful partition for a
+# governor and is omitted here on purpose: a Prometheus label is a series per distinct value,
+# so a tenant label grows cardinality with the customer list. Per-tenant accounting belongs in
+# the counter the governor will check — a cache, keyed and expiring — not in this surface.
+llm_tokens_total = Counter(
+    "aindy_llm_tokens_total",
+    "Tokens consumed by LLM calls, by provider, model and direction",
+    ["provider", "model", "kind"],  # kind: prompt | completion
+    registry=REGISTRY,
+)
+
+# ★ A response whose usage cannot be read is COUNTED, not swallowed. Without this, a flat
+# token count means either 'no calls happened' or 'every call was unreadable', and a meter
+# that cannot tell those apart is not evidence of anything. Rising here next to a flat
+# llm_tokens_total is a legible state; silence would not be.
+llm_usage_unreadable_total = Counter(
+    "aindy_llm_usage_unreadable_total",
+    "LLM responses that carried no readable token usage",
+    ["provider", "model"],
+    registry=REGISTRY,
+)
+
 # ── Nodus warm-worker pool (NODUS-WARMPOOL-1) ────────────────────────────────
 
 nodus_warm_pool_events_total = Counter(
