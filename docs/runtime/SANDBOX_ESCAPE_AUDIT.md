@@ -1145,6 +1145,51 @@ effect at all on the production overlay, where `EXECUTION_MODE=distributed` and 
 native Linux, certified for the `v2.7.0` release commit.
 
 ---
+## Entry 022 — 2026-09-03
+
+**Trigger:** `v2.8.0` release tag (`sandbox-escape-linux.yml`, run `33705625217`).
+**Commit:** `58fec1eb2cf63a0353503c5ef604df2d4ac6cbfa`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entry 021.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 4.45s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `33705625217`).
+Six attack vectors: `env_leak`, `filesystem_escape`, `network_escape`, `path_boundary`,
+`privilege_escalation`, `process_escape`.
+
+**The certified boundary is untouched.** `git diff v2.7.0..v2.8.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**.
+
+**★★ THIS RELEASE MOVED WHERE RUNTIME WORK CAN EXECUTE, AND THAT IS NOT WHAT THIS GATE
+TESTS.** `FR-15`'s distributed half means a scheduler resume can now be rebuilt and run **in a
+different process from the one that registered it** — a worker, opt-in under
+`EXECUTION_MODE=distributed`. Every previous entry could say "the isolation posture is
+unchanged" and mean it; this one has to be more careful, because *where* first-party code runs
+did change even though *what may confine it* did not.
+
+It is not a trust-boundary change: the worker runs first-party runtime code under the same
+process identity and the same deployment's credentials, and no guest or extension code reaches
+the resume path. But it is the first release where a 17/17 on this suite is answering a
+narrower question than the one a reader might bring to it, so the distinction is recorded
+rather than left implicit.
+
+| Boundary | Certified by this gate? | Status after `v2.8.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | unchanged this release (Entry 021 recorded the `nodus-lang` 5.9.0 upstream fixes; no further movement) |
+| In-process tool seam | **No** — out of scope | unchanged. **Undeclared tools still run in-process** — the deliberate remaining gap, carried from Entries 019–021 |
+| Cross-process execution of runtime work | **No** — not a boundary this suite models | **CHANGED** — a resume may execute in a worker process (opt-in). First-party code, same identity; recorded because the gate cannot see it either way |
+
+**★ One release change that no boundary row covers.** `flow_runs.graph_signature`
+(`FLOW-GRAPH-SIGNATURE-1`) quarantines a run whose flow topology moved while it was suspended.
+That is a *correctness* guard, not an isolation one — it stops a run executing against a graph
+it was never planned for, which no sandbox boundary was ever going to catch. Noted so the next
+auditor does not look for it in this suite's coverage.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.8.0` release commit.
+
+---
 ---
 
 *To add a new entry: run `pytest -m sandbox_escape -v`, note the summary line, and append
