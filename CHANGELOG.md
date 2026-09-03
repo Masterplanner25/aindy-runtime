@@ -4,6 +4,213 @@
 
 _Nothing yet._
 
+## 2.8.0 — 2026-09-03
+
+### Added — a suspended run can no longer resume into a changed flow (`FLOW-GRAPH-SIGNATURE-1`)
+
+**★ This release changes the schema.** One additive, nullable column — `flow_runs.graph_signature`
+(Alembic `0018`). Per `FR-14`, an additive runtime column makes a bare `bootstrap-schema` exit
+**3**; under `set -e` with `restart: unless-stopped` that is a crash loop, not a warning. Existing
+deployments must run `aindy-runtime bootstrap-schema --reconcile`, or branch on exit code 3.
+
+- A `FlowRun` was restored against whatever definition `register_flows()` produced *that* boot.
+  Nothing recorded what the run was planned against, so a node renamed or an edge rerouted
+  between suspend and resume executed against a definition the run was never planned for —
+  **silently, and reported as success.**
+- A run now records a hash of its flow's **shape** at start; a resume compares it and
+  **quarantines the run** (`status="dead_letter"`, with a reason) instead of executing it. The
+  check runs before the claim, so a quarantined run is not left stranded in `executing`.
+- **Why this matters more than when it was filed:** the recent `FR-15` work made a resume a
+  durable queue message rather than an in-process closure, so one can now sit in a queue **across
+  a deploy** and be picked up by a worker running different code.
+
+**What the signature covers, because that is the whole design.** Node identities and edge
+topology: the start node, the terminal set, every edge source, each source's targets *in order*
+(the runtime takes the first matching edge, so order is meaning), and *whether* an edge is
+predicate-gated.
+
+**What it deliberately excludes:** node bodies, `node_configs`, and predicate implementations
+*and their names*. A hash that moved on every deploy would quarantine every in-flight run and be
+switched off within a week.
+
+**The blind spot, stated rather than left to be discovered:** a changed predicate that reroutes
+control flow is **not** caught. This detects a moved graph, not a changed decision.
+
+**Nothing is quarantined on upgrade.** An absent signature means "cannot tell" and proceeds
+exactly as before — runs created before this column, and flows no longer registered, are
+unaffected. A conflict requires two known signatures that differ.
+
+### Added — an effect record can now say "partly applied" and "outcome unobserved"
+
+`EffectRecord.status` gains two values, and the set becomes enforced rather than conventional.
+**No migration** — the column is a plain `String(32)` with no CHECK constraint.
+
+- **`partial`** (`EFFECT-PARTIAL-1`) — some units of a batched effect applied and some did not.
+  The syscall envelope is binary, so a five-unit effect with two failures forced through it was
+  either a **lie** (`success`, silently partial) or a **waste** (`error`, discarding the three
+  that landed), and neither was recoverable from afterwards because the record did not say which
+  units applied. Write the per-unit outcome into `result_payload`: a `partial` with no such
+  record is strictly worse than `failed`, since it reports that something went wrong and removes
+  the ability to say what.
+- **`unknown`** (`EFFECT-OUTCOME-UNKNOWN-1`) — dispatched, outcome unobserved. Narrowly: a read
+  timeout after a full request write, which is the *only* genuinely ambiguous phase. A DNS
+  failure, a refused connection or an incomplete write are knowably **not dispatched**; an
+  acknowledgement is knowably **landed**. It is a claim about the world, not about the runtime's
+  confidence — an unclassified exception is still `failed`.
+- **`pending` is now refused as a completion status**, with an error that says why. It was the
+  obvious thing to reach for when an outcome is unobserved and it is wrong twice over: the TTL
+  cleanup job hard-excludes pending rows, so an honest ambiguity parked there would never be
+  cleaned up, and the stale-handler warning would fire on it hourly as a malfunction.
+- **`complete_effect_record` now validates.** It previously accepted any `str` against a column
+  with no constraint, so the vocabulary was a docstring and a habit — a typo wrote a status
+  nothing would query for, and the TTL reaper would silently treat it as terminal.
+
+**Nothing emits the new values yet.** This is the vocabulary; the surfaces that would produce
+them are separate changes. The envelope stays binary — widening it is a consumer-visible response
+change and is deliberately not bundled here.
+
+### Added — distributed deployments can now opt in to async scheduler dispatch (`FR-15`)
+
+- `AINDY_ASYNC_SCHEDULER_DISPATCH` **is no longer refused under `EXECUTION_MODE=distributed`.**
+  A resume crosses the queue as a reconstructible descriptor rather than a closure the transport
+  would drop, so the reason for the refusal is gone.
+- **It is opt-in there, and does not inherit the thread-mode default.** Set it explicitly to
+  enable it. Nothing changes for any existing deployment.
+- *Why opt-in rather than on:* the transport is proven — a real one-node flow now resumes end to
+  end over live Redis with nothing stubbed, an unreconstructible resume is dead-lettered, and
+  duplicate delivery executes once. What is **not** proven is a separate worker *process*, the
+  scheduler actually routing there, and cross-process concurrency. Every defect found on this
+  path so far has lived at a process boundary, including the last one — a worker whose flow
+  registry was empty. Defaulting it on would assert evidence nobody has.
+- **What to watch after enabling:** `aindy_execution_dispatch_total{mode="async"}` should move,
+  and the dead-letter queue should not. A resume that cannot be rebuilt is dead-lettered by
+  design, so a DLQ entry is a signal to read rather than a silent loss.
+- Thread-mode deployments are unaffected — that half shipped in 2.7.0 and its default is unchanged.
+
+### Changed — what CI proves about a distributed resume (`FR-15`)
+
+- `tests/integration/test_soak_distributed_resume.py` drives the whole path on **live Redis and
+  live PostgreSQL**: the real dispatcher enqueues a resume, the real `process_one_job` dequeues
+  and rebuilds it, and the assertions are on what the far end received. It pins that an
+  unreconstructible resume is **dead-lettered rather than acknowledged**, and that duplicate
+  delivery of the same resume executes the work exactly once.
+- **This was evidence, not a behaviour change.** When it landed,
+  `AINDY_ASYNC_SCHEDULER_DISPATCH` still refused `EXECUTION_MODE=distributed`, so a green run
+  could not be mistaken for production being fixed. **A later change in this same release lifted
+  that refusal** — see *"distributed deployments can now opt in"* below for the state you
+  actually get.
+
+### Fixed — a soak that could not see the thing it tested
+
+- **`get_queue()` returns an in-memory backend whenever `TESTING` or `TEST_MODE` is set, and
+  checks that *before* `REDIS_URL`.** `pytest.integration.ini` sets both, so **no test in this
+  repository could reach the Redis queue backend.** The first version of this soak passed 6/6
+  while enqueueing and dequeueing inside one process, proving nothing about the transport it
+  existed to exercise.
+- The soak now constructs the Redis backend directly, on an isolated key namespace, and
+  **asserts the backend is Redis and not degraded** before running anything — so the vacuum
+  cannot recur silently. `QUEUE-DURABILITY-CLASS-1`'s in-memory fallback is the other way this
+  same vacuum can appear, and the assertion covers both.
+- Worth recording for the next person: this is the **second** instance of the shape in
+  `FR-15`'s own path. `async_heavy_execution_enabled()` also returns False under those two
+  variables before reading its flag. A test-mode short-circuit placed above the real decision
+  makes the real path untestable while every test passes.
+
+### Added — a scheduler resume can now cross a process boundary (`FR-15`, stage 2)
+
+- A resume travels the distributed queue as **two identifiers** — the run id and its execution
+  type — instead of a callback that cannot be serialised. The worker rebuilds it at the far end
+  with the same call the restart-rehydration sweeps make on every boot.
+- **No behaviour change from this entry.** It built the path and proved it, in the
+  build-prove-flip order stage (a) used; `AINDY_ASYNC_SCHEDULER_DISPATCH` still refused
+  `EXECUTION_MODE=distributed` at that point. **The flip is also in this release** — see
+  *"distributed deployments can now opt in"* below.
+- **An unreconstructible resume is dead-lettered, not acknowledged.** That is the whole point:
+  a worker treats an unresolvable message as *finished* — warn, ack, report success — so the
+  previous behaviour would have stranded a run in `waiting` forever with nothing to retry and
+  no dead-letter entry. The resume branch is checked **before** the JobLog lookup for the same
+  reason: a resume legitimately has no JobLog, and reaching that lookup means falling into the
+  silent-loss path.
+- A resume whose claim is lost to another instance is a **success**, not a failure. The rebuilt
+  callback performs its own atomic claim, so duplicate delivery is a no-op by design; failing
+  those would fill the dead-letter queue with correctly-deduplicated messages.
+- The descriptor carries no state — only identifiers. A payload holding a segment index or a
+  step list would be a snapshot, and a snapshot can be stale by the time it is read.
+
+### Fixed — a resume callback no longer carries a database session to the scheduler thread (`FR-15`)
+
+- Two wait registrations passed an inline closure that captured request-bound state:
+  `runner_steps.py` registered `lambda: self.resume(run_id)`, holding the flow runner and its
+  session, and `execution_pipeline/waits.py` registered a closure over the **request-scoped**
+  session directly. Both now build the callback from identifiers and open their own session.
+- **`AGENT_WORKING_RULES` §5** — never share a SQLAlchemy session across threads or requests —
+  and these did both: the callback is handed to the scheduler and fires later, on a scheduler
+  thread, after the request that owned the session has returned.
+- *Why it had not bitten:* a closed SQLAlchemy session is not a dead one — it transparently
+  checks out a new connection on next use — so the violation was latent rather than visible.
+  That is the kind that stops being latent under concurrency, and the `FR-15 (a)` flip made
+  scheduler resumes concurrent.
+- **Every wait registration in the runtime is now reconstruction-primary**, so the live path and
+  the restart-rehydration sweep build the *same* callback for a run rather than two different
+  ones. A new guard walks the AST of `AINDY/` and fails if any `resume_callback=` argument is an
+  inline lambda.
+
+### Fixed — a queued resume was discarded before it could be rebuilt (`FR-15`, stage 2 follow-up)
+
+- The worker's resume branch sat **below** its JobLog claim guard. That guard returns "not
+  claimed" when a job row is *missing*, and a resume has no JobLog by construction — so every
+  resume was reported missing, **acknowledged**, and recorded as successfully completed
+  without ever running. This is the same silent loss stage 2 was written to remove, arriving
+  through a different door, and it was live for exactly one release-less window.
+- The branch now runs before that guard. A resume is not left unclaimed by the move: it is
+  claimed by the rebuilt callback's own atomic `UPDATE … WHERE status='waiting'` on the run
+  row, which is the correct guard for one. The JobLog claim protects a different thing.
+- **No operator impact.** `AINDY_ASYNC_SCHEDULER_DISPATCH` still refused
+  `EXECUTION_MODE=distributed` while this defect existed, so nothing enqueued a resume in the
+  interim and no deployment was ever exposed to it.
+- *Why the existing tests missed it:* they called the resume helper directly, which starts
+  past the line that was eating the message. The new test drives `process_one_job` — the real
+  per-message entry point — with `_try_claim_job` left unstubbed, since stubbing it would
+  remove the very guard that was swallowing the work.
+
+### Added — a resume can be rebuilt from its run id, not only carried as a closure (`FR-15`)
+
+- New `AINDY/core/resume_reconstruction.py`: `build_resume_callback(run_id=…, eu_type=…, db=…)`
+  returns the zero-argument call that resumes a run, or `None` when the run cannot be resumed
+  from its identifier. `require_resume_callback(…)` is the raising variant, for a caller that
+  has already discarded the live callback and cannot do anything sensible with `None`.
+- **No schema change and no behaviour change in this entry.** Nothing routes through it yet;
+  this is the primitive the distributed half of `FR-15` needs, landed on its own so it can be
+  reviewed and reverted independently of the transport work that will use it.
+- *Why this is smaller than it sounds:* the durable representation was never missing. The
+  rehydration sweeps rebuild exactly this on every boot, because a restart destroys the live
+  closure. This gives that an entry point for **one** run instead of only a whole sweep.
+- `build_flow_resume_callback` is now module-level in `flow_run_rehydration.py` rather than
+  nested inside the sweep, so the sweep and a by-id rebuild are one implementation. It mirrors
+  `_build_agent_resume_callback`, which already had this shape and three callers — the agent
+  half of the runtime was already reconstruction-primary and the flow half was not.
+
+### Fixed — a flow resume in a worker process would have been acknowledged and lost (`FR-15`)
+
+- **The worker never populated `FLOW_REGISTRY`.** `load_plugins()` only *collects* flow
+  registrations; `register_flows()` invokes them, and only the invoke fills the registry. The
+  API does both at startup; the worker entrypoint did only the first. Harmless while a worker
+  ran jobs, and not harmless now that it also rebuilds flow resumes. The worker now registers
+  flows.
+- **And the rebuild now refuses a flow this process does not hold**, rather than returning a
+  callable that does nothing. The built callback checks the registry itself and, finding
+  nothing, logs a warning and returns *normally* — correct for the restart sweep, where a flow
+  that is not ours is legitimately skipped, and catastrophic for a caller that has already
+  given up the closure: it sees a clean return, acknowledges the message, and reports the
+  resume completed while the run stays `waiting` forever.
+- The refusal surfaces as a dead-lettered message instead. **Both fixes are needed** — the
+  first makes resumes work, the second makes their failure visible if a deployment ever gets
+  the first wrong again.
+- Found while preparing to lift the distributed refusal, which is **not** taken in this entry.
+  It would have been the wrong call: with an empty registry, flipping would have stranded every
+  flow resume in production, silently, which is worse than the starvation it fixes.
+
+
 ## 2.7.0 — 2026-09-02
 
 ### Security — a second `nltk` advisory, accepted as not reachable (`PYSEC-2026-3740`)

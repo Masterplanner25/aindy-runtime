@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # SPA dist via package-data. `packaging` is a declared dependency but pip
 # treats it as a bootstrap package and skips it in --prefix installs; force
 # it in so it propagates to the runtime stage.
-RUN pip install --prefix=/install "aindy-runtime==2.7.0" \
+RUN pip install --prefix=/install "aindy-runtime==2.8.0" \
     && pip install --prefix=/install --ignore-installed "packaging>=24.0"
 
 
