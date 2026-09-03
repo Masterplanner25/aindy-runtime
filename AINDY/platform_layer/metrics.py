@@ -84,6 +84,19 @@ execution_dispatch_total = Counter(
     registry=REGISTRY,
 )
 
+# ── Cancellation reach (CANCEL-REACH-1) ──────────────────────────────────────
+#
+# A cancelled run used to be observed only BETWEEN SEGMENTS, so every remaining tool in the
+# current segment ran to completion. This counts effects refused because their run was
+# already cancelled — without it, a run that stopped early and one that ran three more tools
+# look identical from outside, and the narrowing this change claims is unmeasurable.
+run_cancel_observed_total = Counter(
+    "aindy_run_cancel_observed_total",
+    "Effects refused because their run was already cancelled",
+    ["surface"],  # tool | syscall
+    registry=REGISTRY,
+)
+
 # ── LLM token usage (COST-GOVERNOR-1, the meter half) ────────────────────────
 #
 # The runtime enforced a 300s wall-clock and 256MiB memory ceiling on work whose dominant
