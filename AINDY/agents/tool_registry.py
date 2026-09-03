@@ -384,6 +384,9 @@ def register_tool_suggestion_provider(provider: Callable) -> Callable:
     return provider
 
 
+from AINDY.kernel.cancellation import is_run_cancelled, note_effect_refused
+
+
 def execute_tool(
     tool_name: str,
     args: dict,
@@ -640,6 +643,29 @@ def execute_tool(
             if _isolated.get("success"):
                 _check_tool_return(tool_name, entry, _isolated.get("result"))
             return _isolated
+
+        # ── CANCEL-REACH-1: observe cancellation BEFORE the effect, not after ────
+        # `sys.v1.agent.cancel` commits a terminal status in a separate session, and the Nodus
+        # chain only checked it between SEGMENTS — so every remaining tool in the current
+        # segment ran to completion. Checking here narrows that to effect granularity.
+        #
+        # ★ Cooperative, not preemptive: a tool already running is not interrupted, the NEXT one
+        # is refused. Hard-kill is a function of isolation class and belongs to
+        # TOOL-SEAM-ISOLATION-1; in-process degrades to this and says so.
+        #
+        # ★ Placed immediately before `entry["fn"]` and after the effect-ledger reservation, so
+        # a refusal cannot leave a reserved effect that never resolves.
+        if is_run_cancelled(run_id):
+            note_effect_refused(surface="tool")
+            logger.info(
+                "[AgentTool] %s refused — run %s is cancelled", tool_name, run_id
+            )
+            return {
+                "success": False,
+                "result": None,
+                "error": f"run {run_id} was cancelled; tool {tool_name!r} not executed",
+                "cancelled": True,
+            }
 
         _tool_db = RevocableToolSession(db, tool_name=tool_name)
         try:
