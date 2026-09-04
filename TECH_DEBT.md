@@ -9419,7 +9419,49 @@ enforcement is a failure mode this repository already names — it is the whole 
 
 ## FLOW-PARALLEL-1 — the flow engine has no fan-out, join, or barrier
 
-**Status: OPEN — P1.** Filed 2026-08-15 from the Codex comparative audit (G4), verified.
+**Status: CONFLICT HALF SETTLED 2026-09-03 (#569) — OPEN (P1) for the scheduling half.**
+Filed 2026-08-15 from the Codex comparative audit (G4), verified.
+
+**What shipped: `AINDY/runtime/flow_engine/state_merge.py`** — a declared per-cell conflict
+policy (`state_policies` on the flow definition), with three policies and a loud refusal.
+
+★★ **WHY THE CONFLICT HALF HAD TO COME FIRST, AND SEPARATELY.** `state.update(patch)` is
+last-write-wins, harmless today only because there is never a second writer. The moment fan-out
+exists it silently becomes a **completion-order** race: two branches writing one cell yield
+whichever finished last, which varies run to run and is unreproducible from the record. Adding
+the policy *after* fan-out is far more expensive — by then flows exist that depend on the
+accidental ordering, and every one has to be audited to find out which. Landing it first means
+fan-out arrives into a runtime that already refuses the ambiguous case.
+
+★ **It picks no default.** An undeclared double-write raises. Choosing a default would be
+choosing one flow's correct answer for all flows: last-write-wins is right for a latest-reading
+cell and wrong for a counter, and a silently-wrong merge produces a plausible number nobody
+checks. LangGraph reached the same conclusion with three declared channel types and no implicit
+one. **Branches writing different cells need no declaration** — requiring one would make fan-out
+unusable for its most common shape.
+
+★ **Determinism is the property under test, not merging.** `last_write_wins` resolves in
+**declaration order**, never completion order. `reduce` accepts only **commutative and
+associative** operators, so its result does not depend on order at all — a non-commutative
+operator is refused rather than supported, because it would reintroduce completion-order
+dependence under a name implying order does not matter. `barrier` refuses to resolve a cell from
+partial input and names the missing writer.
+
+★ **The open decision is settled: barrier-as-commit-boundary vs independent branch commits.**
+Both are answered by `EFFECT-PARTIAL-1`'s vocabulary — a superstep in which some branches succeed
+and others fail is a **partial** outcome, and a branch is a unit. The barrier is where the
+outcome is decided, and it is decided with the per-unit detail that entry requires.
+
+★ It is wired onto the **live** path (`runner_steps._handle_node_status`), not beside it: with a
+single patch `merge_state` is exactly `state.update(patch)`, so nothing changes today, but the
+first fan-out is written against the real seam rather than an unused one (`ROUTE-AST-UNWIRED-1`).
+
+★ `state_policies` is deliberately **not** in the graph signature. `FLOW-GRAPH-SIGNATURE-1`
+hashes topology, not semantics, and excludes `node_configs` for the same reason: a policy edited
+between suspend and resume must not quarantine every in-flight run.
+
+**Remaining: the scheduler.** Nothing yet runs branches concurrently — that is the whole of the
+open half, and it now has a defined merge semantics to commit into.
 
 `resolve_next_node()` (`flow_engine/node_executor.py:49`) returns exactly one successor or
 `None`, and the runner advances one node at a time; plan steps execute strictly sequentially.
@@ -10722,7 +10764,41 @@ absorbable thing is the scope vocabulary, not a resource-specific verb.
 
 ## EFFECT-PARTIAL-1 — the envelope has two states and a batched effect has three
 
-**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17` (its B2).
+**Status: CLOSED 2026-09-03 (#569).** Filed 2026-08-17. Provenance:
+`AIDER-PORTABILITY-2026-08-17` (its B2). Vocabulary shipped #560; the envelope and ledger halves
+shipped #569.
+
+**What closed it.** `AINDY/kernel/syscall_outcome.py` resolves a handler's outcome claim at **one
+point**, and that point feeds both the response envelope and the `EffectRecord` write. A handler
+opts in by returning a reserved `_outcome` key, stripped before output-schema validation so a
+handler never has to widen its own declared schema in order to report the truth.
+
+★★ **THE DEFECT THAT ACTUALLY MATTERED WAS THE LEDGER, AND A MUTATION FOUND IT, NOT REVIEW.**
+#560 added `partial` to `EffectRecord.status`; the dispatcher's ledger write passed a hardcoded
+`"success"`. So the column could hold the value and **no code path could ever put it there** —
+the vocabulary was complete and inert. The first mutation run against the new suite reverted that
+write and **all seventeen tests stayed green**, because everything written up to then asserted on
+the envelope. The envelope is what a caller sees once; the record is what an operator reconciles
+from afterwards, which makes the untested half the one that mattered more.
+
+★ **Widening a value set every consumer branches on was safe here for two reasons, and the
+second was FALSE when it was first written down.** (1) Nothing emits the new values, so upgrading
+changes no response. (2) Every dispatch-envelope consumer branches `!= "success"`, so an unaware
+one reads a `partial` as a failure — the waste, never the lie. **(2) was reached by grepping for
+one form and generalising.** Four sites consumed a dispatch envelope with `== "error"` —
+`platform_ops_router` (the `/platform/syscall` route), `nodus_execution_service`, and two in the
+flow engine's `entrypoints` — and at each a `partial` would have fallen straight through to the
+success path. They were fixed as part of the change and a test now prevents a fifth. Route-level
+canonical responses carry their own `status` in a separate value space and are out of scope.
+
+★ **A `partial` naming no units is REFUSED — an error envelope, recorded `failed`.** That is this
+entry's own reading: a partial that cannot say which units landed is strictly worse than a
+failure. It is refused rather than raised, because the effect has already happened and raising
+would discard the handler's data and hand the caller an exception instead of an answer.
+
+**Residual, and it is adoption rather than capability: nothing emits it.** No batched-effect
+syscall exists today that needs it; the first one should use it. `AT_MOST_ONCE` remains absent
+from the guarantee frozenset — that half stays with `EFFECT-OUTCOME-UNKNOWN-1`.
 Carried unchanged from the June lens audit through the August re-verification — the only absorb
 candidate in that document that survived two passes untouched.
 

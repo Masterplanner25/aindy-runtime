@@ -238,7 +238,8 @@ def run_nodus_script_via_flow(
     if node_max_retries is not None:
         _nodus_payload["node_max_retries"] = node_max_retries
     result = get_dispatcher().dispatch("sys.v1.nodus.execute", _nodus_payload, ctx)
-    if result["status"] == "error":
+    # EFFECT-PARTIAL-1 — a `partial`/`unknown` envelope must not read as success here.
+    if result["status"] != "success":
         raise RuntimeError(
             f"sys.v1.nodus.execute failed: {result.get('error', '')}"
         )

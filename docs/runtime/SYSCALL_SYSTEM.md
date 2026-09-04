@@ -1,6 +1,6 @@
 ---
 title: "Syscall System"
-last_verified: "2026-06-03"
+last_verified: "2026-09-03"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -85,7 +85,8 @@ All calls return the same shape:
 
 ```json
 {
-    "status":            "success" | "error",
+    "status":            "success" | "partial" | "unknown" | "error",
+    "outcome":           dict | None,   # per-unit detail when partial/unknown
     "data":              {},
     "trace_id":          "run-123",
     "execution_unit_id": "run-123",
@@ -96,6 +97,12 @@ All calls return the same shape:
     "warning":           null
 }
 ```
+
+**★ `status` gained `partial` and `unknown` (`EFFECT-PARTIAL-1`).** A batched effect where some
+units applied and some did not is neither `success` nor `error` — forcing it into one is a lie or
+a waste. **A consumer must treat any status that is not `success` as not-success and reconcile;
+never branch on `== "error"`.** `outcome` carries the per-unit detail (`None` otherwise). Nothing
+emits the new values yet: a handler opts in via `AINDY.kernel.syscall_outcome`.
 
 - `version` — always present; the parsed ABI version string.
 - `warning` — set when the syscall is deprecated; null otherwise.

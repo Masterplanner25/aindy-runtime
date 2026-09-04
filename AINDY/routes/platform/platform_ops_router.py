@@ -235,7 +235,10 @@ def dispatch_syscall(request: Request, body: SyscallDispatchRequest, current_use
         capabilities = _resolve_dispatch_capabilities(body.name, current_user)
         syscall_ctx = make_syscall_ctx_from_tool(user_id=user_id, capabilities=capabilities)
         result = get_dispatcher().dispatch(body.name, body.payload, syscall_ctx)
-        if result["status"] == "error":
+        # EFFECT-PARTIAL-1 — `!= "success"`, never `== "error"`. A `partial` or `unknown`
+        # envelope falling through to the success path would report a half-applied effect
+        # as fully applied: the lie that vocabulary exists to prevent.
+        if result["status"] != "success":
             msg = result.get("error", "syscall error")
             if "Permission denied" in msg or "capability" in msg:
                 raise HTTPException(status_code=403, detail={"error": msg})

@@ -89,7 +89,8 @@ def execute_intent(intent_data: dict, db: Session, user_id: str = None) -> dict:
         {"intent_data": intent_data},
         ctx,
     )
-    if result["status"] == "error":
+    # EFFECT-PARTIAL-1 — a `partial`/`unknown` envelope must not read as success here.
+    if result["status"] != "success":
         raise RuntimeError(
             f"sys.v1.flow.execute_intent failed: {result.get('error', '')}"
         )
@@ -159,7 +160,8 @@ def run_flow(flow_name: str, state: dict, db: Session = None, user_id: str = Non
         },
         ctx,
     )
-    if result["status"] == "error":
+    # EFFECT-PARTIAL-1 — a `partial`/`unknown` envelope must not read as success here.
+    if result["status"] != "success":
         error_msg = result.get("error", "")
         if "not registered" in error_msg or "unknown flow" in error_msg.lower():
             raise KeyError(error_msg)
