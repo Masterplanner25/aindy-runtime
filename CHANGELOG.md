@@ -4,6 +4,201 @@
 
 _Nothing yet._
 
+## 2.9.0 — 2026-09-04
+
+### Changed — the response envelope can say "partly applied" and "outcome unobserved" (`EFFECT-PARTIAL-1`, `EFFECT-OUTCOME-UNKNOWN-1`)
+
+**Operators and API consumers must read this before upgrading.**
+
+- **`status` in the syscall response envelope may now be `partial` or `unknown`, not only
+  `success` or `error`.** A batched effect where some units applied and some did not was
+  previously forced through a binary envelope, making it either a **lie** (`success`, silently
+  partial) or a **waste** (`error`, discarding the units that landed). Neither was recoverable
+  afterwards, because nothing recorded which units applied.
+- **The contract for consumers: treat any status that is not `success` as not-success and
+  reconcile.** Do not branch on `== "error"`. Four in-runtime sites did, and at each of them a
+  `partial` would have fallen through to the success path — they were fixed here, and a test now
+  prevents a fifth.
+- **Nothing emits the new values yet, so this release changes no response you receive.** A
+  handler opts in explicitly via `AINDY.kernel.syscall_outcome`; a test asserts none does today.
+  The widening ships first precisely so that consumers can be ready before the first emitter.
+- **The envelope gains an `outcome` key** — `None` normally, and `{"units": [...], "detail": ...}`
+  for a partial or unknown outcome. Present on every envelope including errors, so the key shape
+  is stable.
+- **`EffectRecord.status` is now written from the same resolution.** #560 added `partial` to the
+  column and the dispatcher's ledger write passed a hardcoded `"success"`, so the value could be
+  stored and no code path could ever store it. The record is what an operator reconciles from
+  once the response is gone, which makes this the half that mattered most.
+- **A `partial` that cannot name its units is refused**, returning an error envelope and
+  recording `failed` — the entry's own reading of that situation. It is refused rather than
+  raised, because the effect has already happened and raising would discard the handler's data.
+- New metrics: `aindy_syscall_outcome_total{syscall,status}` and
+  `aindy_syscall_outcome_refused_total{syscall,reason}`. A non-zero refusal count is a handler
+  bug, not a workload property.
+
+### Fixed — two registry entries described gaps their own PRs had already closed, and one closed gap was not closed
+
+- `CANCEL-REACH-1` and `EXEC-ENV-BIND-1` were re-filed accurately after #566 and #567 shipped
+  against them. Both registry lines still described the pre-fix state; anyone scanning for open
+  work got a wrong answer and nothing said so. This is the third such correction in a week
+  (#557, #565), which is why the *reason* is recorded here rather than only the fix: an entry is
+  most likely to be stale in the hours right after its own PR merges.
+- **`CANCEL-REACH-1` keeps two residuals that were previously unrecorded.** The syscall
+  dispatcher chokepoint the entry proposed was never taken — `SyscallContext` carries no run
+  identity, so it needs a new field rather than a hot-path lookup, and that is the same missing
+  identity `INITIATOR-IDENTITY-1` and `COST-GOVERNOR-1` hit at their own seams.
+- **An over-claim shipped with #566 and is corrected here.** The out-of-process tool worker
+  passes `run_id=None`, documented as safe "because that path is hard-killable by its isolation
+  class instead." That capability exists and **nothing invokes it on cancel** — the worker is
+  killed by `subprocess.run(timeout=…)` and by nothing else, so a cancelled run's in-flight
+  isolated tool still runs to completion. Source and test docstrings now say so. No behaviour
+  changes in this PR; what changes is that the gap is visible.
+
+### Added — designs for the three remaining P1 entries that are not code-shaped
+
+- `docs/runtime/AUTHORITY_NEGOTIATION_DESIGN.md` (`AUTHORITY-NEGOTIATION-1`) — design only, no
+  code. **It overturns the primitive the entry itself proposed:** `amend_token` is not needed for
+  the downgrade path, because a fallback requiring capabilities the run's token *already grants*
+  needs nothing minted, amended, or re-approved. The executable condition is
+  `required(fallback) ⊆ token.allowed_capabilities` — not a subset of the *denied* capability,
+  which is the tempting formulation and says nothing about whether the token grants it either.
+- `docs/runtime/WITNESS_AND_BASELINE_SCOPE.md` (`SUBSTRATE-WITNESS-1`, `PERF-BASELINE-1`) — both
+  re-measured rather than read from the registry. `PERF-BASELINE-1`'s blocking half is closed
+  (metric readback 0→7 files, concurrency drivers 0→7, soak suites 0→4); what remains is one
+  latency assertion, and the scope argues against closing it with wall-clock thresholds.
+  `SUBSTRATE-WITNESS-1` is unchanged: `execute_tool` and `EffectRecord` still appear zero times
+  in the flagship consumer's own source.
+- No behaviour change. Documentation and registry accuracy only.
+
+### Changed — cancelling a run now stops it at the next effect, not the next segment (`CANCEL-REACH-1`)
+
+- `sys.v1.agent.cancel` commits a terminal status in a separate session, and the execution chain
+  observed that only **between segments**. Every remaining tool in the current segment ran to
+  completion. A cancelled run now refuses its **next tool call**, which narrows the window from
+  segment granularity to effect granularity.
+- **It is cooperative, and that is the contract, not a limitation to discover later.** A tool
+  already executing is not interrupted; the next one is refused, and the result says so
+  (`{"success": false, "cancelled": true}`). The runtime can hard-kill a Nodus worker and a
+  sandboxed plugin and cannot hard-kill a tool it invoked in-process — that asymmetry is
+  `TOOL-SEAM-ISOLATION-1`'s half of the same design, where terminate strength follows the
+  isolation class.
+- **It fails open, deliberately and unlike every other guard here.** An unreadable cancellation
+  state means "not cancelled". Refusing an effect because a database blip made the answer
+  unreadable would abort live work nobody cancelled — a missed cancel costs one more effect, a
+  false cancel costs the run.
+- **It does not query per effect.** A cancellation check on a hot tool path is exactly the shape
+  that exhausted the connection pool once (`RT-MEMTXN-LEAK-1`) and produced an N+1 (`MEM-RECALL-N1-1`),
+  so it uses its own short-lived session, at most once per run per two seconds, and caches a
+  `cancelled` answer permanently because cancellation is terminal. It never touches the caller's
+  session.
+- **New metric `aindy_run_cancel_observed_total{surface}`** — without it, a run that stopped early
+  and a run that ran three more tools look identical from outside, and the narrowing this change
+  claims would be unmeasurable.
+
+### Added — LLM token usage is now measured (`COST-GOVERNOR-1`, the meter half)
+
+- Two new metrics: **`aindy_llm_tokens_total{provider, model, kind}`** (`kind` is `prompt` or
+  `completion`) and **`aindy_llm_usage_unreadable_total{provider, model}`**. Recorded for the
+  OpenAI, Azure OpenAI and Anthropic clients.
+- **Why this was a gap and not merely an omission:** the runtime enforces a 300-second wall-clock
+  ceiling and a 256 MiB memory ceiling on execution units whose dominant cost is **tokens**, which
+  it did not measure at all. Four quota dimensions existed — wall time, memory, syscalls,
+  concurrency — and none of them was the one that matters for an LLM runtime.
+- **And the quantity was discarded, not just uncapped.** Every provider client returned
+  `str(response.choices[0].message.content)`, so the usage object on the response lived for one
+  stack frame and was dropped. Nothing downstream could have metered spend; there was nothing
+  left to meter.
+- **A response whose usage cannot be read is counted, not ignored.** Without that second counter,
+  a flat token count would mean either "no calls happened" or "every call was made and none of
+  its usage could be read" — states that demand opposite responses from an operator.
+- **Metering can never fail a call that already succeeded.** The tokens are spent either way; an
+  accounting problem must not become a user-visible error.
+- **Labels stop at provider and model deliberately.** Tenant is the more useful partition for a
+  governor and is omitted on purpose: a Prometheus label is a time series per distinct value, so
+  a tenant label grows cardinality with the customer list. Per-tenant accounting belongs in the
+  counter a governor checks — a cache, keyed and expiring — not in the observability surface.
+
+**This is the meter, not the governor.** Nothing here refuses a call and no budget exists yet.
+Admission control needs *reserve → call → reconcile*, and it needs this first: you cannot
+reconcile against an actual you never recorded.
+
+### Added — an isolated tool can declare what its worker may see (`EXEC-ENV-BIND-1` phase 3)
+
+- `register_tool(..., env_spec={...})` lets a tool declare its execution environment. The
+  worker subprocess is then spawned with that environment applied — an `env` allow-list, a scoped
+  working directory, a shorter wall clock.
+- **Why this was open:** `TOOL-SEAM-ISOLATION-1` moved a declared tool *out of the process* but
+  did not narrow what that process can **see**. The worker was spawned with no `env=` and no
+  `cwd=`, so it inherited the **entire server environment** — `SECRET_KEY`, `DATABASE_URL`, every
+  provider API key — and the server's working directory, which holds `alembic/` in Docker and
+  `AINDY/.env` in dev. Isolation was process-level and never visibility-level.
+- **Nothing changes for a tool that declares nothing.** The tool floor is today's behaviour
+  written down, and it produces no spawn arguments at all — same environment, same working
+  directory, same timeout. This is deliberately not the guest floor: a tool is first-party code
+  an operator registered, and clamping tools to the guest's floor would break every one that
+  legitimately reads a credential for the service it calls.
+- **A declaration can only ever narrow.** A tool cannot widen its own environment by declaring a
+  permissive descriptor, and a declared wall clock can shorten the worker's leash but never
+  lengthen it.
+- **A malformed declaration is refused at registration**, not at first call — an operator sees it
+  at startup rather than the first time someone happens to invoke that tool.
+- **What this still cannot enforce:** `authority.network` and `authority.subprocess`. A bare
+  subprocess shares the host's network namespace and can spawn children, and no spawn argument
+  changes that — which is why this tier reports `insecure-dev` and why the container runner
+  exists. The record says what was achieved, not what was asked for.
+
+### Added — a flow can declare how two writers resolve one state cell (`FLOW-PARALLEL-1`)
+
+- Flow definitions accept `state_policies: {cell: {...}}`, declaring per-cell conflict
+  resolution: `last_write_wins`, `reduce` (with a commutative, associative operator), or
+  `barrier` (every named writer must have written).
+- **Why this lands before fan-out exists.** The engine merged node output with
+  `state.update(patch)` — last-write-wins, harmless only because plan steps are strictly
+  sequential and there is never a second writer. The moment fan-out is added that silently
+  becomes a *completion-order* race: two branches writing one cell yield whichever finished
+  last, varying between runs and unreproducible from the record. Adding the policy afterwards
+  costs far more, because by then flows exist that depend on the accidental ordering and each
+  has to be audited to find out which.
+- **An undeclared double-write raises rather than resolving.** The runtime does not pick a
+  default: last-write-wins is right for a "latest reading" cell and wrong for a counter, and a
+  silently-wrong merge produces a plausible value nobody checks. Branches writing *different*
+  cells need no declaration.
+- **Determinism is the property, not merging.** `last_write_wins` resolves in declaration order,
+  never completion order; `reduce` accepts only commutative, associative operators, so its result
+  does not depend on order at all — a non-commutative operator is refused rather than supported.
+- **No behaviour change today.** With a single writer the merge is exactly `state.update(patch)`.
+  It is wired onto the live path rather than beside it so the first fan-out is written against
+  the real seam.
+- `state_policies` is deliberately **not** part of the flow graph signature: `FLOW-GRAPH-SIGNATURE-1`
+  hashes topology, not semantics, so editing a policy does not quarantine in-flight runs.
+
+### Fixed — the LLM path a structured caller actually uses was not metered (`COST-GOVERNOR-1`)
+
+- `observe_llm_usage` was wired into `chat()` only. `chat()` returns **a string**, so a caller
+  needing tool blocks or the raw response cannot use it — and the raw methods
+  (`messages_create`, `chat_completion_response`) were unmetered. The meter therefore covered the
+  path a real consumer cannot take.
+- Metering now sits on the raw response path in each client, which `chat()` delegates to. The
+  meter in `chat()` was **removed at the same time**: leaving both would double-count every chat
+  call, and a number that is silently 2× is a fabricated measurement — worse than a gap, and the
+  one failure this meter's design rejects outright. A governor reserving against a doubled meter
+  would refuse calls that were within budget.
+- Pinned two ways: a `chat()` call is asserted to record exactly its prompt tokens, and each
+  client is asserted over its AST to hold exactly one metering call site — two means the
+  double-count, zero means an unmetered provider.
+
+### Added — scope for routing a real consumer through the LLM seam
+
+`docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`. **Read it before building `COST-GOVERNOR-1`'s
+governor half.** The seam has no consumer: nothing in the runtime outside `platform_layer` imports
+an LLM client, and every real call in the ecosystem constructs its own SDK client directly. A
+budget enforcer built there would refuse zero calls while passing every test written for it.
+
+The scope records why the obvious integration does not work (the seam is text-shaped; its one real
+candidate needs structured tool output), the path that does, the diagnosability regression it
+trades for, and what the governor still needs beyond adoption.
+
+
 ## 2.8.0 — 2026-09-03
 
 ### Added — a suspended run can no longer resume into a changed flow (`FLOW-GRAPH-SIGNATURE-1`)
