@@ -88,9 +88,14 @@ def is_run_cancelled(run_id: Optional[str], *, ttl_seconds: float = DEFAULT_TTL_
     """Whether ``run_id`` has been cancelled. Cheap to call in a loop; never raises.
 
     ``None``/empty returns ``False``: an effect with no run to belong to cannot be cancelled by
-    one. That is the out-of-process tool worker's case, which passes ``run_id=None`` — and it is
-    the right answer there rather than an oversight, because that path is hard-killable by its
-    isolation class instead.
+    one. That is the out-of-process tool worker's case, which passes ``run_id=None``.
+
+    ★ **That is a known gap, not a solved case.** The reasoning for it — "the isolated path is
+    hard-killable by its isolation class instead" — describes a capability nothing invokes: the
+    worker is killed by ``subprocess.run(timeout=…)`` and by nothing else, so no cancel reaches
+    it. Recorded as `CANCEL-REACH-1` residual 2. **Do not close that by passing ``run_id`` into
+    the worker** — that runs the check in a process that cannot act on it; kill the subprocess
+    from the cancel path instead.
     """
     if not run_id:
         return False

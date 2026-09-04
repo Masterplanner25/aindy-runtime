@@ -64,8 +64,12 @@ def test_a_live_run_is_not():
 def test_no_run_id_is_never_cancelled():
     """The out-of-process tool worker passes `run_id=None`.
 
-    That is the right answer there rather than a gap: an effect with no run to belong to cannot
-    be cancelled by one, and that path is hard-killable by its isolation class instead.
+    An effect with no run to belong to cannot be cancelled by one, so `False` is the right return.
+
+    ★ But it is a GAP, and this docstring said otherwise when it shipped. The justification —
+    "that path is hard-killable by its isolation class instead" — names a capability nothing
+    invokes: the worker dies on `subprocess.run(timeout=…)` and on nothing else, so a cancelled
+    run's in-flight isolated tool still runs to completion. `CANCEL-REACH-1` residual 2.
     """
     from AINDY.kernel.cancellation import is_run_cancelled
 
