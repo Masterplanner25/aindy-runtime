@@ -140,8 +140,21 @@ def test_closed_sections_are_not_empty():
 # already have a larger record in `TECH_DEBT.md`, so the detail has somewhere to go, and an
 # entry that cannot be trimmed without loss is one whose text was never indexed anywhere.
 
-_MAX_ENTRY_BYTES = 1150
-_MAX_CLOSED_ENTRY_BYTES = 850
+_MAX_ENTRY_BYTES = 1144
+_MAX_CLOSED_ENTRY_BYTES = 833
+
+
+def _size(line: str) -> int:
+    """Size of a registry line in **bytes**, not characters.
+
+    ★ These caps used to be applied with `len(line)`, while the constants said BYTES and the
+    failure message printed "B". Every measurement of this file's growth in `CLAUDE.md` is in
+    bytes, so the guard was enforcing a different quantity from the one the policy is written
+    in — and it drifted in the loose direction precisely because these entries are dense with
+    the multibyte characters this file uses most (`★`, `—`, `→`). Two entries sat over the
+    stated cap with the guard green. Measure what the policy measures.
+    """
+    return len(line.encode("utf-8"))
 
 
 def _cap_for(heading: str) -> int:
@@ -151,10 +164,10 @@ def _cap_for(heading: str) -> int:
 def test_no_registry_entry_exceeds_its_size_cap():
     """★ One line per item. Detail belongs in `TECH_DEBT.md`, which is 6x this file."""
     oversized = [
-        (heading, line[:60], len(line), _cap_for(heading))
+        (heading, line[:60], _size(line), _cap_for(heading))
         for heading, entries in _registry_sections().items()
         for line in entries
-        if len(line) > _cap_for(heading)
+        if _size(line) > _cap_for(heading)
     ]
 
     assert not oversized, (
@@ -175,8 +188,8 @@ def test_the_size_cap_is_a_ratchet_not_a_ceiling_we_are_far_below():
     reason to delete this test.
     """
     sections = _registry_sections()
-    largest_open = max((len(line) for h, e in sections.items() if h.startswith("Open") for line in e), default=0)
-    largest_closed = max((len(line) for h, e in sections.items() if h.startswith("Closed") for line in e), default=0)
+    largest_open = max((_size(line) for h, e in sections.items() if h.startswith("Open") for line in e), default=0)
+    largest_closed = max((_size(line) for h, e in sections.items() if h.startswith("Closed") for line in e), default=0)
 
     assert largest_open > _MAX_ENTRY_BYTES * 0.7, (
         f"largest open entry is {largest_open}B against a {_MAX_ENTRY_BYTES}B cap — the cap is "
