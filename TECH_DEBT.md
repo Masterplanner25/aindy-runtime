@@ -7396,7 +7396,53 @@ call, not skip the boundary.
 
 ## CANCEL-REACH-1 — cancellation is durable but never reaches an in-flight effect
 
-**Status: OPEN — P1.** Filed 2026-08-15 from the substrate-boundary audit (F-3), verified.
+**Status: NARROWED 2026-09-03 (#566) — still OPEN (P1) for two residuals below.** Filed
+2026-08-15 from the substrate-boundary audit (F-3), verified.
+
+**What shipped.** `AINDY/kernel/cancellation.py` — `is_run_cancelled()` checked in `execute_tool`
+immediately before `entry["fn"]`, so a cancelled run refuses its **next** tool call. The window
+moves from *segment* granularity to *effect* granularity, and
+`aindy_run_cancel_observed_total{surface}` makes the narrowing measurable — without it a run that
+stopped early and a run that ran three more tools look identical from outside.
+
+★★ **It fails OPEN, which is the opposite of every other guard here, and is the property most
+likely to be "fixed" into a bug.** An unreadable cancellation state means *not cancelled*.
+Refusing an effect because a database blip made the answer unreadable aborts live work nobody
+cancelled, and an aborted effect is not recovered by retrying the check. **A missed cancel costs
+one more effect; a false cancel costs the run.** A test asserting only "cancelled runs are
+refused" passes equally against a predicate that refuses everything, so the fail-open cases carry
+as much weight as the positive one.
+
+★ **The per-effect-query constraint was honoured as filed:** its own short-lived `SessionLocal`,
+never the caller's, at most one read per run per 2s TTL, and a `cancelled` answer cached forever
+because cancellation is terminal. `_read_status(run_id)` deliberately takes **no session
+parameter** — a pinned test asserts the signature, because accepting one is exactly how the
+request-shared session gets used on a slow path.
+
+---
+
+### Residual 1 — the syscall dispatcher chokepoint was NOT taken, and the reason is structural
+
+The filing proposed **two** chokepoints; only `execute_tool` was taken. `_dispatch` before
+`entry.handler` was not, because **`SyscallContext` carries no run identity** — its six fields are
+`execution_unit_id`, `user_id`, `capabilities`, `trace_id`, `memory_context`, `metadata`. The
+predicate keys on an `AgentRun` id, so wiring it there needs either a run↔EU resolution on the
+hot path (the N+1 shape this entry exists to avoid) or a new field on the context. **Pick the
+field, not the lookup** — and note it is the same missing-identity problem `INITIATOR-IDENTITY-1`
+and `COST-GOVERNOR-1` §6 both hit at their own seams, so settle it once.
+
+### Residual 2 — an over-claim to correct, not a gap to fill
+
+The out-of-process tool worker passes `run_id=None`, documented as correct "because that path is
+hard-killable by its isolation class instead." **That capability exists and nothing invokes it on
+cancel.** `AINDY/agents/tool_registry.py` kills the worker only via `subprocess.run(timeout=…)`;
+no cancel path terminates it. So a cancelled run's in-flight *isolated* tool runs to completion
+exactly as before, and the justification for `run_id=None` describes an unused mechanism.
+
+★ This is the `ROUTE-AST-UNWIRED-1` shape at small scale — the defect is the claim, and it was
+written by the same change that shipped the fix. **Do not close residual 2 by passing `run_id`
+into the worker**; that gets the check running in a process that cannot act on it. Close it by
+killing the subprocess from the cancel path, or by deleting the claim.
 
 `sys.v1.agent.cancel` (`kernel/syscall_registry.py:1005`) flips a non-terminal run to
 `cancelled` via an atomic CAS in a separate session, and the Nodus execution chain observes it
@@ -8273,7 +8319,41 @@ is the cost. Roll out per domain.
 
 ## EXEC-ENV-BIND-1 — an execution unit cannot declare the environment it needs
 
-**Status: PHASES 1 AND 2 SHIPPED 2026-08-19 — still OPEN (P1) for phases 3–4.**
+**Status: PHASES 1, 2 AND 3 SHIPPED — still OPEN (P1) for phase 4 only.**
+
+**Phase 3 = the TOOL seam asks (2026-09-03, #567).** `register_tool(..., env_spec={...})` lets a
+tool declare its environment; the isolated worker is then spawned with an `env` allow-list, a
+scoped working directory and a shorter wall clock, derived through `subprocess_confinement()`.
+
+★★ **What was actually open here is sharper than "a phase was unfinished."**
+`TOOL-SEAM-ISOLATION-1` moved a declared tool *out of the process* and never narrowed what that
+process can **see**. The worker was spawned with no `env=` and no `cwd=`, so it inherited the
+entire server environment — `SECRET_KEY`, `DATABASE_URL`, every provider API key — and the
+server's working directory (`/home/aindy` in Docker, holding `alembic/`; the repo root in dev,
+holding `AINDY/.env`). Isolation was process-level and never visibility-level. That is
+`GUEST-CONFINE-1`'s residual — an undeclared inherited default — arriving at a second seam.
+
+★ **`TOOL_FLOOR` is deliberately NOT `GUEST_FLOOR`, and the distinction is load-bearing.** The
+guest floor exists because a `.nd` script arriving over HTTP is data from an authenticated
+session. A registered tool is first-party code an operator deployed; clamping tools to the guest
+floor would break every one that legitimately reads a credential for the service it calls, and a
+floor that breaks its subjects gets removed rather than obeyed. So the tool floor is *today's
+behaviour written down*, and it produces **no spawn kwargs at all** — which is the property that
+made landing this safe, and the one to check first if anything here is ever refactored.
+
+★ **A malformed declaration is refused at REGISTRATION, not at first call.** The guest path can
+fall back at call time because its payload already passed a gate; there is no such gate here, so
+the failure has to be a startup error an operator sees.
+
+★ **What phase 3 still cannot enforce: `authority.network` and `authority.subprocess`.** A bare
+subprocess shares the host's network namespace and can spawn children, and no spawn argument
+changes that. This is why the tier reports `insecure-dev` and why the container runner exists —
+the record says what was *achieved*, not what was *asked for*.
+
+**Phase 4 — resources become enforcing — is gated on `COST-GOVERNOR-1`'s governor half, which is
+itself gated on the LLM seam acquiring a consumer (`LLM_SEAM_ADOPTION_SCOPE.md`). Do not start it
+first: an enforcing resources axis whose dominant dimension is unmeasured spend enforces the two
+dimensions that were never the problem.**
 
 **Phase 2 = the guest path asks.** `nodus_worker` derives every confinement argument from an
 `ExecutionEnvironmentSpec` clamped to `GUEST_FLOOR` instead of three hardcoded `False` literals,
