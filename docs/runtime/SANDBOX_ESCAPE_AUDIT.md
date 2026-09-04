@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-08-20"
+last_verified: "2026-09-04"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1188,6 +1188,70 @@ auditor does not look for it in this suite's coverage.
 
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v2.8.0` release commit.
+
+---
+
+## Entry 023 — 2026-09-04
+
+**Trigger:** `v2.9.0` release tag (`sandbox-escape-linux.yml`, run `33841235675`).
+**Commit:** `303032650730e1ba06b6bcb78b2a7d5f5b75482a`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–022.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.02s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `33841235675`).
+Six attack vectors: `env_leak`, `filesystem_escape`, `network_escape`, `path_boundary`,
+`privilege_escalation`, `process_escape`.
+
+**The certified boundary is untouched.** `git diff v2.8.0..v2.9.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**.
+
+**★★ THIS RELEASE IMPROVED AN ISOLATION POSTURE THAT THIS GATE DOES NOT MEASURE — the first
+entry where that is true in the *favourable* direction.** `EXEC-ENV-BIND-1` phase 3 lets a
+registered tool declare an `env_spec`, and the isolated tool worker is then spawned with an
+environment allow-list, a scoped working directory and a shortened wall clock. Before this
+release that worker was spawned with **no `env=` and no `cwd=`**, so it inherited the entire
+server environment — `SECRET_KEY`, `DATABASE_URL`, every provider API key — and the server's
+working directory. `TOOL-SEAM-ISOLATION-1` had moved such a tool *out of the process* and never
+narrowed what that process could **see**.
+
+**Three qualifications, and each is the reason this does not upgrade any tier:**
+
+- **It confines nothing unless a tool declares it.** The tool floor is today's behaviour written
+  down and produces no spawn arguments at all. **No tool in the tree declares an `env_spec`
+  today**, so the posture in production is unchanged — the vocabulary exists and has no user.
+  A reader must not take this row as evidence that any deployed tool is confined.
+- **It cannot enforce `authority.network` or `authority.subprocess`.** A bare subprocess shares
+  the host's network namespace and can spawn children; no spawn argument changes that. This is
+  exactly why that seam reports `insecure-dev` and why the OCI runner — the thing this gate
+  actually certifies — exists.
+- **Undeclared tools still run in-process**, the deliberate gap carried from Entries 019–022.
+
+**★ A second thing this gate cannot see, recorded because it is a limitation rather than an
+improvement.** `CANCEL-REACH-1` narrowed cancellation from segment to effect granularity — but
+**a tool already executing inside the isolated worker is not reached by it.** That worker is
+terminated by its own `subprocess.run` timeout and by nothing else; no cancel path kills it. So
+a cancelled run's in-flight isolated tool still runs to completion. It is filed as that entry's
+residual; it is noted here because "the isolated seam got stronger this release" is true of
+visibility and false of terminability, and a reader could reasonably conflate them.
+
+| Boundary | Certified by this gate? | Status after `v2.9.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | unchanged this release |
+| In-process tool seam | **No** — out of scope | **CHANGED** — a *declared* tool's worker now gets a bounded env, cwd and clock (`EXEC-ENV-BIND-1` phase 3). **Nothing declares one yet**, and undeclared tools still run in-process |
+| Terminability of an isolated tool | **No** — not a boundary this suite models | **unchanged, and now explicitly stated** — only the worker's own timeout kills it; a cancel does not |
+| Cross-process execution of runtime work | **No** — not a boundary this suite models | unchanged since Entry 022 (a resume may execute in a worker process, opt-in) |
+
+**★ One release change that no boundary row covers.** The syscall response envelope gained
+`partial` and `unknown` (`EFFECT-PARTIAL-1`). That is a *correctness and accountability* change
+— it lets a half-applied effect be recorded as such instead of as a success or a total failure —
+and no sandbox boundary was ever going to catch its absence. Noted so the next auditor does not
+look for it in this suite's coverage.
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.9.0` release commit.
 
 ---
 ---
