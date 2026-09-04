@@ -96,6 +96,7 @@ def register_tool(
     egress_scope: str,
     execution_guarantee: str = "AT_LEAST_ONCE",
     isolation: Optional[str] = None,
+    env_spec: Optional[dict] = None,
 ):
     """Register an agent tool implementation with platform metadata.
 
@@ -139,6 +140,23 @@ def register_tool(
                 f"boundary than it asked for."
             )
 
+    # EXEC-ENV-BIND-1 phase 3 — validate a declared environment at REGISTRATION.
+    #
+    # ★ Fails at declare time, like `isolation` above, not at first call. A tool whose spec is
+    # malformed should be a startup error an operator sees, not a runtime refusal the first time
+    # someone happens to invoke it — the guest path can fall back to its floor because a payload
+    # reaching the worker was already accepted by a gate, and there is no such gate here.
+    if env_spec is not None:
+        from AINDY.core.execution_environment import ExecutionEnvironmentSpec
+
+        try:
+            ExecutionEnvironmentSpec.from_dict(env_spec)
+        except Exception as exc:
+            raise ValueError(
+                f"register_tool({name!r}): env_spec is not a valid execution environment "
+                f"declaration ({type(exc).__name__}: {exc})"
+            ) from exc
+
     def wrapper(fn: Callable) -> Callable:
         TOOL_REGISTRY[name] = {
             "fn": fn,
@@ -150,6 +168,7 @@ def register_tool(
             "egress_scope": egress_scope,
             "execution_guarantee": execution_guarantee,
             "isolation": isolation,
+            "env_spec": env_spec,
         }
         return fn
 
@@ -173,6 +192,61 @@ def _tool_isolation_enforced() -> bool:
 _TOOL_WORKER_TIMEOUT_S = 120.0
 
 
+def _worker_confinement(tool_name: str):
+    """``(subprocess.run kwargs, scratch dir or None)`` for this tool's worker.
+
+    EXEC-ENV-BIND-1 phase 3 — the tool seam asks instead of inheriting.
+
+    ★★ **An undeclared tool gets ``({}, None)`` and nothing about its execution changes.**
+    ``tool_floor()`` is today's behaviour written down, and `subprocess_confinement` returns only
+    the keys a spec actually determines — so with nothing declared there is no `env=`, no `cwd=`,
+    and the same timeout as before. That is what makes this safe to land on a live tool set.
+
+    ★ A declared spec is **clamped** to the floor and can only ever narrow it. A tool cannot
+    widen its own environment by declaring a permissive descriptor — the same property that made
+    it safe to accept a spec from the guest path.
+
+    ★ A malformed spec falls back to the floor rather than raising, *and that is a different
+    judgement from the guest path's*. There, the payload had already passed a gate, so failing
+    late would move a validation error to the wrong boundary. Here `register_tool` validates at
+    declaration, so a spec that is still unusable at call time means something changed underneath
+    us — the safe direction is the most restrictive option available, which is the floor.
+    """
+    import tempfile
+
+    from AINDY.core.execution_environment import (
+        ExecutionEnvironmentSpec,
+        clamp_to_floor,
+        subprocess_confinement,
+        tool_floor,
+    )
+
+    entry = TOOL_REGISTRY.get(tool_name) or {}
+    raw = entry.get("env_spec")
+    if not raw:
+        return {}, None
+
+    try:
+        effective, _widened = clamp_to_floor(
+            ExecutionEnvironmentSpec.from_dict(raw), tool_floor()
+        )
+    except Exception as exc:  # noqa: BLE001 — fall back to the floor, never widen
+        logger.warning(
+            "[AgentTool] %s declared env_spec unusable, falling back to the tool floor: %s",
+            tool_name, exc,
+        )
+        return {}, None
+
+    scratch = tempfile.TemporaryDirectory(prefix="aindy-tool-")
+    kwargs = subprocess_confinement(
+        effective, scratch_root=scratch.name, default_timeout_s=_TOOL_WORKER_TIMEOUT_S
+    )
+    if not kwargs:
+        scratch.cleanup()
+        return {}, None
+    return kwargs, scratch
+
+
 def _run_tool_out_of_process(tool_name: str, args: dict, user_id: str) -> dict:
     """Execute a tool in a one-shot worker subprocess (step C2). Returns an execute_tool envelope.
 
@@ -192,6 +266,20 @@ def _run_tool_out_of_process(tool_name: str, args: dict, user_id: str) -> dict:
 
     payload = json.dumps({"tool_name": tool_name, "args": args or {}, "user_id": user_id})
     cmd = [sys.executable, "-m", "AINDY.agents.tool_worker"]
+
+    # ── EXEC-ENV-BIND-1 phase 3: the tool seam ASKS ──────────────────────────────
+    # TOOL-SEAM-ISOLATION-1 moved a declared tool out of the process. It did not narrow what
+    # that process can SEE: with no `env=`, the worker inherits the entire server environment —
+    # SECRET_KEY, DATABASE_URL, every provider key — and with no `cwd=`, the server's working
+    # directory. Isolation was process-level and never visibility-level.
+    #
+    # ★ A tool declares; the declaration is CLAMPED to `tool_floor()` and can only narrow.
+    # ★ The floor is today's behaviour, so an undeclared tool produces NO kwargs and nothing
+    #   about its execution changes — the safety of this change rests on that.
+    # ★ The scratch directory is held for the subprocess's lifetime and released in the `finally`
+    # below — the same shape the guest path uses, and for the same reason: dropping it early
+    # would remove the only directory the worker is permitted to treat as its own, mid-run.
+    spawn_kwargs, _scratch = _worker_confinement(tool_name)
     try:
         proc = subprocess.run(
             cmd,
@@ -199,6 +287,7 @@ def _run_tool_out_of_process(tool_name: str, args: dict, user_id: str) -> dict:
             capture_output=True,
             text=True,
             timeout=_TOOL_WORKER_TIMEOUT_S,
+            **spawn_kwargs,
         )
     except subprocess.TimeoutExpired:
         logger.error("[AgentTool] %s worker exceeded %ss", tool_name, _TOOL_WORKER_TIMEOUT_S)
@@ -221,6 +310,10 @@ def _run_tool_out_of_process(tool_name: str, args: dict, user_id: str) -> dict:
                 f"declaration, so it was refused."
             ),
         }
+
+    finally:
+        if _scratch is not None:
+            _scratch.cleanup()
 
     if proc.returncode != 0 or not (proc.stdout or "").strip():
         logger.error(
