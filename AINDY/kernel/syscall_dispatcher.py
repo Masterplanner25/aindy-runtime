@@ -19,8 +19,9 @@ Standard response envelope
 All calls return::
 
     {
-        "status":            "success" | "error",
+        "status":            "success" | "partial" | "unknown" | "error",
         "data":              dict,      # handler output on success, {} on error
+        "outcome":           dict|None, # per-unit detail when status is partial/unknown
         "trace_id":          str,
         "execution_unit_id": str,
         "syscall":           str,       # fully-qualified syscall name
@@ -29,6 +30,12 @@ All calls return::
         "error":             str | None,
         "warning":           str | None # set when syscall is deprecated
     }
+
+``status`` gained ``partial`` and ``unknown`` in `EFFECT-PARTIAL-1`. **A consumer must treat
+any unrecognised status as *not success* and reconcile** — a batched effect that half-applied is
+neither of the two original values, and forcing it into one is either a lie or a waste. Nothing
+emits the new values until a handler opts in via `AINDY.kernel.syscall_outcome`; see that module
+for why widening the set was safe to land.
 
 The dispatcher never raises for transient or expected errors — every such path
 returns the envelope. The one exception is SyscallContractViolation, which is
@@ -124,6 +131,33 @@ __all__ = [
 # writing a new token.
 _TRACE_ID_CTX: ContextVar[str] = ContextVar("syscall_trace_id", default="")
 _EU_ID_CTX: ContextVar[str] = ContextVar("syscall_eu_id", default="")
+
+
+from AINDY.kernel.syscall_outcome import (
+    ENVELOPE_STATUS_ERROR,
+    ENVELOPE_STATUS_SUCCESS,
+    resolve_outcome,
+)
+
+
+def _count_outcome(name: str, status: str) -> None:
+    """Record the envelope status this dispatch resolved to. Never fatal."""
+    try:
+        from AINDY.platform_layer.metrics import syscall_outcome_total
+
+        syscall_outcome_total.labels(syscall=name, status=status).inc()
+    except Exception:  # pragma: no cover - metrics optional
+        logger.debug("[SyscallDispatcher] outcome metric skipped", exc_info=True)
+
+
+def _count_outcome_refused(name: str, reason: str) -> None:
+    """Record a malformed outcome claim. ★ A handler bug, not a workload property."""
+    try:
+        from AINDY.platform_layer.metrics import syscall_outcome_refused_total
+
+        syscall_outcome_refused_total.labels(syscall=name, reason=reason).inc()
+    except Exception:  # pragma: no cover - metrics optional
+        logger.debug("[SyscallDispatcher] refusal metric skipped", exc_info=True)
 
 
 def _is_uuid(value: Any) -> bool:
@@ -695,6 +729,30 @@ class SyscallDispatcher:
                 t_start,
                 version=parsed_version,
             )
+        # ── EFFECT-PARTIAL-1 — resolve any outcome claim BEFORE schema validation ──
+        # The reserved key is stripped here so a strict `additionalProperties: false` output
+        # schema never sees it. A handler must not have to widen its own declared schema in
+        # order to report that its effect half-applied.
+        data, _outcome = resolve_outcome(data)
+        if _outcome.refusal is not None:
+            # ★ Refused, not raised. The effect has already happened; raising would discard the
+            # handler's data and give the caller an exception instead of an answer.
+            logger.error(
+                "[SyscallDispatcher] '%s' made a malformed outcome claim: %s", name, _outcome.refusal
+            )
+            _count_outcome_refused(name, "malformed_claim")
+            self._emit_syscall_event(name, context, "error")
+            if _gate_db is not None and _gate_action_id is not None:
+                # ``failed`` is the entry's own reading of an unaccountable partial.
+                _complete_effect_record(_gate_db, _gate_action_id, _outcome.ledger_status, None)
+                _gate_db.close()
+                _gate_db = None
+            return self._error_envelope(
+                name, context,
+                f"Syscall handler outcome contract violation: {_outcome.refusal}",
+                t_start, version=parsed_version,
+            )
+
         if entry.output_schema:
             out_errors = validate_output(entry.output_schema, data)
             if out_errors:
@@ -749,7 +807,9 @@ class SyscallDispatcher:
                 )
                 _gate_payload = None
             try:
-                _complete_effect_record(_gate_db, _gate_action_id, "success", _gate_payload)
+                _complete_effect_record(
+                    _gate_db, _gate_action_id, _outcome.ledger_status, _gate_payload
+                )
             except Exception as _finalize_exc:
                 # Degrade to AT_LEAST_ONCE: the handler already succeeded and its effect is
                 # real, so a ledger failure must never turn that into a caller-visible error.
@@ -774,14 +834,19 @@ class SyscallDispatcher:
 
         # Step 5 â€" emit observability event (non-fatal)
         try:
-            self._emit_syscall_event(name, context, "success")
+            self._emit_syscall_event(
+                name, context,
+                "success" if _outcome.status == ENVELOPE_STATUS_SUCCESS else _outcome.status,
+            )
         except Exception as exc:
             logger.debug("[SyscallDispatcher] observability skipped for '%s': %s", name, exc)
+        _count_outcome(name, _outcome.status)
 
         # Step 6 â€" return structured result
         return {
-            "status": "success",
+            "status": _outcome.status,
             "data": data,
+            "outcome": _outcome.outcome,
             "trace_id": context.trace_id,
             "execution_unit_id": context.execution_unit_id,
             "syscall": name,
@@ -799,9 +864,15 @@ class SyscallDispatcher:
         t_start: float,
         version: str = "unknown",
     ) -> dict[str, Any]:
+        # ★ THE ONLY place an `error` outcome is counted. Every error path in the dispatcher
+        # funnels through here, so counting at the call sites as well would double-count —
+        # the exact failure the LLM token meter walked into (a silently-2x number is a
+        # fabricated measurement, which is worse than a gap).
+        _count_outcome(name, ENVELOPE_STATUS_ERROR)
         return {
             "status": "error",
             "data": {},
+            "outcome": None,
             "trace_id": context.trace_id,
             "execution_unit_id": context.execution_unit_id,
             "syscall": name,

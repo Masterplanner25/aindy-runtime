@@ -249,6 +249,9 @@ def _record_resource_usage(self, exec_ms: int) -> None:
         logger.debug("[Flow] resource record skipped: %s", exc)
 
 
+from AINDY.runtime.flow_engine.state_merge import declared_policies, merge_state
+
+
 def _handle_node_status(
     self,
     run,
@@ -261,7 +264,16 @@ def _handle_node_status(
     node_started_event_id,
 ):
     if node_status == "SUCCESS":
-        state.update(patch)
+        # FLOW-PARALLEL-1 — the merge goes through the policy seam even though there is exactly
+        # one writer today. With a single patch `merge_state` IS `state.update(patch)`, so this
+        # changes nothing; what it buys is that the seam is on the live path rather than beside
+        # it. A conflict policy that exists and is never consulted is `ROUTE-AST-UNWIRED-1`, and
+        # the first fan-out would have been written against the un-wired version.
+        merge_state(
+            state,
+            [(current_node, patch)],
+            policies=declared_policies(getattr(self, "flow", {}) or {}),
+        )
     elif node_status == "RETRY":
         attempts = context["attempts"].get(current_node, 0)
         node_cfg = self.flow.get("node_configs", {}).get(current_node, {})

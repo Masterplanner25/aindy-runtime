@@ -90,6 +90,29 @@ execution_dispatch_total = Counter(
 # current segment ran to completion. This counts effects refused because their run was
 # already cancelled — without it, a run that stopped early and one that ran three more tools
 # look identical from outside, and the narrowing this change claims is unmeasurable.
+# ── syscall outcome vocabulary (EFFECT-PARTIAL-1 / EFFECT-OUTCOME-UNKNOWN-1) ─
+#
+# ★ These read zero until a handler opts in, and that is the intended state on the release that
+# introduces them — the envelope widened before anything emits the new values, deliberately.
+# A non-zero `partial` is the signal that a batched effect is routinely landing incomplete;
+# a non-zero refused count is a HANDLER BUG, not a workload property.
+syscall_outcome_total = Counter(
+    "aindy_syscall_outcome_total",
+    "Syscall dispatch outcomes by envelope status: success | partial | unknown | error",
+    ["syscall", "status"],
+    registry=REGISTRY,
+)
+
+# ★ A malformed outcome claim is counted rather than swallowed. Without this, a handler that
+# claims 'partial' and cannot name its units is indistinguishable from one that genuinely
+# failed — and the whole point of the partial vocabulary is to stop collapsing those.
+syscall_outcome_refused_total = Counter(
+    "aindy_syscall_outcome_refused_total",
+    "Handler outcome claims refused as malformed, by reason",
+    ["syscall", "reason"],
+    registry=REGISTRY,
+)
+
 run_cancel_observed_total = Counter(
     "aindy_run_cancel_observed_total",
     "Effects refused because their run was already cancelled",
