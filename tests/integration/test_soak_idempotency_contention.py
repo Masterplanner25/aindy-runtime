@@ -198,7 +198,10 @@ def test_the_gate_degrades_to_at_least_once_under_contention(monkeypatch, testin
     ) as degraded, metric_window(
         "aindy_effect_gate_outcomes_total", labels={"outcome": "degraded_gate_error"}
     ) as degraded_error:
-        outcome = _drive(name, str(uuid.uuid4()), {"x": 1})
+        # Bound rather than inlined: the second wave below must target the SAME action_id,
+        # which is derived from (syscall name, payload, scope=eu_id).
+        eu_id, payload = str(uuid.uuid4()), {"x": 1}
+        outcome = _drive(name, eu_id, payload)
 
     assert outcome.ok, (
         f"{len(outcome.failures)} of {WORKERS} concurrent callers raised — the gate must "
@@ -207,12 +210,21 @@ def test_the_gate_degrades_to_at_least_once_under_contention(monkeypatch, testin
     )
     assert set(r.get("status") for r in outcome.results) == {"success"}
 
-    # The guarantee that DOES hold: the gate dedups the large majority.
-    assert 1 <= len(runs) < WORKERS, (
-        f"handler ran {len(runs)} times across {WORKERS} concurrent calls. 1 would mean strict "
-        f"at-most-once (the gate does not claim it); {WORKERS} would mean the gate does nothing "
-        f"under contention, which would make the flag worthless exactly where it matters."
-    )
+    # ★★ THIS ASSERTION USED TO READ `1 <= len(runs) < WORKERS`, AND IT WAS WRONG IN THE SAME
+    # WAY THE ORIGINAL `== 1` WAS — one step less strict, and still stricter than the contract.
+    #
+    # It failed CI on 2026-09-04 with `8 < 8` and passed on an immediate re-run of the SAME
+    # commit. That is the signature of an assertion on a race outcome, not a regression: the
+    # contract says a caller that loses the insert race to a live pending row degrades to
+    # AT_LEAST_ONCE, and with WORKERS barrier-synchronised callers it is entirely legal for ALL
+    # of them to lose it. So `< WORKERS` can fail on a completely correct runtime, which makes
+    # it the shape `CLAUDE.md` catalogues as variant 10: an instrument that cannot distinguish
+    # "the gate is broken" from "the threads happened to be tightly synchronised".
+    #
+    # The upper bound was reaching for something real — "the gate must not be a no-op" — so it
+    # is replaced rather than deleted. What replaces it is the SECOND WAVE below, which tests
+    # that property deterministically instead of depending on scheduler luck.
+    assert len(runs) >= 1, "no caller ran the handler at all; the drive did not dispatch"
 
     # ★ The degradation must be COUNTABLE. It is the only signal an operator gets that
     # EXACTLY_ONCE did not hold for a given call.
@@ -227,6 +239,27 @@ def test_the_gate_degrades_to_at_least_once_under_contention(monkeypatch, testin
             f"know that EXACTLY_ONCE did not hold for those calls. If this fires again, look "
             f"for a THIRD path to AT_LEAST_ONCE that nothing counts."
         )
+
+    # ── ★★ THE SECOND WAVE — what the deleted upper bound was actually reaching for ─────────
+    #
+    # The first wave races the INSERT, and how many callers lose that race is scheduler luck.
+    # This wave races nothing: the record is committed and terminal before it starts, so every
+    # caller must resolve it as already-done and REPLAY. That is the guarantee the contract
+    # actually makes, and it holds regardless of timing.
+    #
+    # ★ It is also the liveness control the file was missing. If the gate became a total no-op,
+    # the old bound would only catch it when the scheduler happened to cooperate; this catches
+    # it every time.
+    before = len(runs)
+    second = _drive(name, eu_id, payload)
+    second.assert_all_succeeded()
+
+    assert len(runs) == before, (
+        f"the handler ran {len(runs) - before} more time(s) on a second wave against an "
+        f"already-COMPLETED effect record. Nothing was racing: the row was committed and "
+        f"terminal before this wave started, so every caller had to replay it. This is the "
+        f"gate doing nothing, and unlike the contention case it is unambiguous."
+    )
 
 
 def test_the_ledger_holds_exactly_one_row_for_the_raced_key(
