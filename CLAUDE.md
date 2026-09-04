@@ -1102,7 +1102,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Runtime → SDK contract | `docs/runtime/SDK_CONTRACT.md` |
 | Runtime → UI contract | `docs/runtime/UI_CONTRACT.md` |
 | **Nodus-side A2A/MCP packaging handoff (name collision + caps) — all fixes are Nodus's, none are ours** | `docs/runtime/NODUS_HANDOFF_a2a_mcp_packaging.md` |
-| Latest app-team handoff | `docs/runtime/APP_HANDOFF_v2.8.0.md` — **NOT a plain `pip install`**: §1 is the mandatory `bootstrap-schema --reconcile` (FR-14, exit 3), §2 the flow-topology quarantine, §3 why distributed dispatch is opt-in and not defaulted |
+| Latest app-team handoff | `docs/runtime/APP_HANDOFF_v2.9.0.md` — **IS a plain `pip install`, no schema step** (2.8.0 was not; they alternate, so do not pattern-match). §1 is the one required consumer change: the envelope's `status` gained `partial`/`unknown`, so branch on `!= "success"`, never `== "error"` |
 | Release verification checklist | `docs/runtime/RELEASE_CHECKLIST.md` |
 | Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
 | **Soak harness — concurrency + metric readback** | `tests/integration/soak_harness.py`; guarded by `tests/unit/test_soak_harness.py` |
