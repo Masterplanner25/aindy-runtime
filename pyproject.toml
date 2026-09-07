@@ -141,7 +141,7 @@ mcp = [
   # `AttributeError: 'Server' object has no attribute 'list_tools'`, so the extra is
   # broken at import-of-server time, not merely in tests. Lift the cap when a nodus-mcp
   # release targets the 2.x API.
-  "mcp>=1.0.0,<2",
+  "mcp>=1.0.0,<3",
   # SSE server transport (aindy-runtime mcp-server --transport sse).
   "uvicorn>=0.30.0",
   "starlette>=0.37.0",
