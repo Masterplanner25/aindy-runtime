@@ -73,7 +73,7 @@ dependencies = [
   "pymongo==4.17.0",
   "pyphen==0.17.2",
   "python-dateutil==2.9.0.post0",
-  "python-dotenv==1.2.2",
+  "python-dotenv==1.2.3",
   "ecdsa==0.19.2",
   "python-jose==3.5.0",
   "cryptography==50.0.0",
