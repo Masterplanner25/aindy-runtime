@@ -4803,6 +4803,33 @@ Grouped in `.github/dependabot.yml` 2026-09-08 so the pair can only arrive ancho
 **`pydantic-settings` is deliberately excluded** — it depends on a pydantic *range*, not an `==`
 pin, so it resolves independently and is not on this release train.
 
+**★★ CORRECTION, 2026-09-08 (same day, by #584) — the sentence above is WRONG, and is left
+standing rather than rewritten so the error is legible.** Grouping does **not** make the pair
+arrive anchored. Dependabot resolves each group member to its own latest **independently** and
+merely bundles the results into one PR. The very first grouped PR, #584, shipped
+`pydantic==2.13.5` beside `pydantic_core==2.48.0` and died with the identical failure as #575:
+
+```
+pydantic 2.13.5 depends on pydantic-core==2.46.5
+aindy-runtime 2.9.0 depends on pydantic_core==2.48.0
+ERROR: ResolutionImpossible
+```
+
+**What grouping actually buys is one failing PR instead of two, and a single place to hand-align
+— not a resolvable bump.** The `==`-pinned pair still has to be aligned by hand every time.
+
+**★ The uncomfortable part: this entry ALREADY SAID SO about the otel cluster** — *"grouping is
+necessary but not sufficient — dependabot resolves each package independently, so hand-align and
+verify with `pip install --dry-run`"* — and the pydantic text was written without applying it.
+The lesson had been paid for once and was re-derived at the cost of a second dead PR. **When
+adding a group here, read the otel paragraphs first; they are the specification, not history.**
+
+Correct aligned bump taken instead: `pydantic` 2.13.4 → **2.13.5** with `pydantic_core` 2.46.4 →
+**2.46.5**, verified resolvable with `pip install --dry-run` before pushing. Note the dry-run
+must be run with `--no-cache-dir`: a stale local pip index cache reported *"Could not find a
+version that satisfies pydantic==2.13.5"* for a version that had been on PyPI for some time,
+which reads exactly like a genuine resolution failure.
+
 **Reopen/resolve:** when the OTel line is bumped as a group. The UI unit is done; the
 `pydantic` train is grouped.
 
