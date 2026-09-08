@@ -28,7 +28,7 @@ classifiers = [
   "Topic :: System :: Distributed Computing",
 ]
 dependencies = [
-  "annotated-doc==0.0.4",
+  "annotated-doc==0.0.5",
   "annotated-types==0.7.0",
   "anyio==4.15.0",
   "apscheduler==3.11.3",
