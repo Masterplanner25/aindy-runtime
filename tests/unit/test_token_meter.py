@@ -166,6 +166,60 @@ def test_metering_never_raises_on_a_hostile_response():
 # ── the wiring: every provider client must actually call it ──────────────────
 
 
+# --------------------------------------------------------------------------------------
+# ★ The census is DERIVED, not written down — see `test_the_client_census_is_derived`.
+# --------------------------------------------------------------------------------------
+
+#: Methods that hand a caller the provider's raw response object. A module defining one of
+#: these is a provider client and owes the meter a call; a module that only delegates (the
+#: `LLMClient` protocol, the circuit-breaker wrapper) defines none and is correctly excluded.
+_RAW_RESPONSE_METHODS = frozenset({"messages_create", "chat_completion_response"})
+
+
+def _provider_client_modules() -> list[str]:
+    """Every platform_layer module that exposes a raw provider response.
+
+    ★ Derived from the source rather than listed, because the listed version was wrong: this
+    file previously enumerated three paths in a test named `every_provider_client...`, and
+    `deepseek_client.py` was simply absent from the literal. The guard was AST-based, correct,
+    and blind to the one client it did not name — so the provider it missed shipped unmetered
+    from #564 until 2026-09-08. A hand-maintained census inside a guard is a second thing to
+    keep in sync, and it is the half nobody re-checks.
+    """
+    import ast
+    from pathlib import Path
+
+    found: list[str] = []
+    for path in sorted(Path("AINDY/platform_layer").glob("*_client.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        methods = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        if methods & _RAW_RESPONSE_METHODS:
+            found.append(path.as_posix())
+    return found
+
+
+def test_the_client_census_is_derived():
+    """★ Liveness for the discovery above — a census that finds nothing passes every guard.
+
+    Pinned at four (anthropic, azure_openai, deepseek, openai) with a floor rather than an
+    equality, so adding a fifth provider does not fail this while still catching a discovery
+    that has stopped matching the file layout.
+    """
+    found = _provider_client_modules()
+
+    assert len(found) >= 4, (
+        f"provider-client discovery found {len(found)} modules ({found}); it has probably "
+        f"stopped matching the source layout, which would make every guard below vacuous"
+    )
+    assert any("deepseek" in f for f in found), (
+        "deepseek_client.py is not in the derived census — it is the client the previous "
+        "hand-written list omitted, and its absence is the regression this test exists for"
+    )
+
 def test_every_provider_client_meters_its_response():
     """★ The seam is the point — the usage object exists there and was discarded one line later.
 
@@ -176,12 +230,7 @@ def test_every_provider_client_meters_its_response():
     import ast
     from pathlib import Path
 
-    clients = {
-        "AINDY/platform_layer/openai_client.py",
-        "AINDY/platform_layer/azure_openai_client.py",
-        "AINDY/platform_layer/anthropic_client.py",
-    }
-    for rel in clients:
+    for rel in _provider_client_modules():
         tree = ast.parse(Path(rel).read_text(encoding="utf-8"))
         called = {
             node.func.id
@@ -255,11 +304,7 @@ def test_only_the_raw_path_carries_the_meter():
     import ast
     from pathlib import Path
 
-    for rel in (
-        "AINDY/platform_layer/openai_client.py",
-        "AINDY/platform_layer/azure_openai_client.py",
-        "AINDY/platform_layer/anthropic_client.py",
-    ):
+    for rel in _provider_client_modules():
         tree = ast.parse(Path(rel).read_text(encoding="utf-8"))
         calls = [
             n for n in ast.walk(tree)
