@@ -9716,6 +9716,23 @@ modules an environment loaded, so dev legitimately differs from prod; a malforme
 `degraded_variant` is a deterministic coding error, wrong in dev for the same reason it is wrong
 in prod. Matches `register_tool`'s treatment of a misspelled `isolation` class.
 
+**★★ The first cut of phase 0 was NOT inert, and it is worth knowing how it got through.** The
+sweep opened with `_ensure_tools_loaded()` — which runs `_ensure_runtime_agent_defaults()`, a
+trusted bootstrap registration — so a platform-only boot went from `bootstrap_registration_count:
+0` to `1` and failed `tests/api/test_version_api.py`. **Validating a registry is not a reason to
+populate one.** The sweep now reads whatever is registered when it runs, and the startup log
+prints how many tools it EXAMINED, so a sweep that ran before anything registered is visible
+rather than silently reassuring.
+
+**★ The unit suite could not have caught it, structurally.** Every test in
+`test_authority_negotiation_declaration.py` patches `_ensure_tools_loaded` to a no-op to isolate
+the registry — correct for what it isolates, and it makes any assertion about *how that
+dependency is used* impossible. **A fixture that neutralises a dependency also neutralises any
+test of how that dependency is used.** The guard that closes it asserts the call does not happen,
+which a no-op patch can never do. Related to green-check variant 12 (the check is right, its
+scope is not) but distinct: here the blindness came from the *fixture*, not from a hand-written
+census.
+
 **★ Inert by construction today** — the real registry has 0 declarations, so the sweep examines
 nothing and cannot change any boot. The startup log prints the count deliberately, so *"no tool
 declares one"* and *"the sweep never ran"* stay distinguishable (`ROUTE-AST-UNWIRED-1`).

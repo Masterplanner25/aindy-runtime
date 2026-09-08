@@ -260,6 +260,42 @@ def test_nothing_in_the_execution_path_consults_the_field(registry):
     )
 
 
+def test_the_sweep_does_not_force_tools_to_load():
+    """★★ THE REGRESSION THIS SUITE MISSED, and CI caught instead.
+
+    The first version of `validate_degraded_variants()` opened with `_ensure_tools_loaded()` —
+    reasonable-looking, and wrong. That function runs `_ensure_runtime_agent_defaults()`, which
+    IS a trusted bootstrap registration, so calling it took a platform-only boot from
+    `bootstrap_registration_count: 0` to `1` and failed `tests/api/test_version_api.py`.
+    **Phase 0 is meant to be inert and that made it observable on an audit surface.**
+
+    ★ Why the rest of this file could not see it: every test here patches `_ensure_tools_loaded`
+    to a no-op so the registry stays isolated. That fixture is correct for what it isolates and
+    it made the suite structurally blind to the side effect — the guard has to assert the call
+    does not happen, which a no-op patch can never do. **A fixture that neutralises a dependency
+    also neutralises any test of how that dependency is used.**
+    """
+    from AINDY.agents import tool_registry as tr
+
+    calls = []
+    original = tr.TOOL_REGISTRY
+    try:
+        tr.TOOL_REGISTRY = {}
+        real_ensure = tr._ensure_tools_loaded
+        tr._ensure_tools_loaded = lambda: calls.append(1)
+        tr.validate_degraded_variants()
+    finally:
+        tr._ensure_tools_loaded = real_ensure
+        tr.TOOL_REGISTRY = original
+
+    assert calls == [], (
+        "validate_degraded_variants() called _ensure_tools_loaded(). That registers runtime "
+        "agent defaults, which is a trusted bootstrap registration and changes "
+        "bootstrap_registration_count on the version API. Validating a registry is not a reason "
+        "to populate one."
+    )
+
+
 def test_the_inertness_guard_is_not_vacuous():
     """Liveness — the guard above must actually be able to see a read.
 

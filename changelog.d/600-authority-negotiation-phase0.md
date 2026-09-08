@@ -28,3 +28,14 @@
   any boot; the startup log prints the count so "none declared" and "never ran" stay distinct.
 - Mutation-verified 5/5, including a mutation that simulates phase 1 arriving early — a stray read
   of the field on an execution path fails the inertness guard.
+- **★★ The first version of this was not inert, and CI caught what the unit suite could not.**
+  `validate_degraded_variants()` opened with `_ensure_tools_loaded()`, which runs
+  `_ensure_runtime_agent_defaults()` — a trusted bootstrap registration. That took a platform-only
+  boot from `bootstrap_registration_count: 0` to `1` and failed `tests/api/test_version_api.py`.
+  The sweep no longer forces loading; it validates the tools registered when it runs, and the
+  startup log says how many it examined so a vacuous sweep is visible rather than reassuring.
+- **★ Why the unit suite was structurally blind to it:** every test in the new file patches
+  `_ensure_tools_loaded` to a no-op so the registry stays isolated — correct for what it isolates,
+  and it makes any assertion about *how that dependency is used* impossible. **A fixture that
+  neutralises a dependency also neutralises any test of how that dependency is used.** A guard
+  that asserts the call does not happen now exists, and re-adding the call fails it.

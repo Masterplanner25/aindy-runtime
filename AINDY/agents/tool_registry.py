@@ -246,8 +246,19 @@ def validate_degraded_variants() -> list[str]:
     declaration and blame the operator's typo for what may be an unloaded provider. That is
     green-check variant 10 in reverse: an instrument that cannot see the thing, reporting a
     confident answer. The message says which of the two it is.
+
+    ★★ **This does NOT call ``_ensure_tools_loaded()``, and that omission is load-bearing.** The
+    first version did, and it broke `test_version_api.py`: `_ensure_tools_loaded` runs
+    ``_ensure_runtime_agent_defaults()``, which IS a trusted bootstrap registration, so forcing
+    it took a platform-only boot from ``bootstrap_registration_count: 0`` to ``1``. **Phase 0 is
+    supposed to be inert and that made it observable on an audit surface** — the exact thing the
+    phase promises not to touch. Validating a registry is not a reason to populate one.
+
+    ★ **The honest scope, stated rather than implied: this validates the tools registered AT THE
+    MOMENT IT RUNS.** In an API boot ``load_plugins()`` has already run, so plugin-declared tools
+    are covered. A tool registered later is not seen by that sweep. The startup log prints the
+    number examined so a vacuous run is visible rather than silently reassuring.
     """
-    _ensure_tools_loaded()
     from AINDY.agents.capability_service import _get_capabilities_for_tool
 
     problems: list[str] = []

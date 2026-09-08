@@ -588,8 +588,9 @@ def _verify_degraded_variant_declarations() -> None:
         if isinstance(entry, dict) and entry.get("degraded_variant")
     )
     logger.info(
-        "[startup] degraded_variant declarations verified: %d declared of %d tool(s) "
-        "(phase 0 — declarations are validated and consulted by nothing).",
+        "[startup] degraded_variant declarations verified: %d declared of %d tool(s) EXAMINED "
+        "(phase 0 — validated, consulted by nothing). A count of 0 tools means the sweep ran "
+        "before any were registered, not that all declarations are well-formed.",
         declared,
         len(TOOL_REGISTRY),
     )
