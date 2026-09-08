@@ -503,8 +503,8 @@ normal move, not an optimization.
 
 ## ★ Trusting a green check — read this before citing CI as evidence
 
-**Eleven separate times** this repo has shipped something that *looked* covered and was not.
-Assume there will be a twelfth — the catalogue exists so you can recognise the shape, and the
+**Twelve separate times** this repo has shipped something that *looked* covered and was not.
+Assume there will be a thirteenth — the catalogue exists so you can recognise the shape, and the
 rules below are what it cost to learn:
 
 | # | Variant | How it looked green | Entry |
@@ -520,6 +520,7 @@ rules below are what it cost to learn:
 | 9 | **Green because there was nothing to catch** | a check whose condition this release does not contain — `Upgrade Path Guard` passes trivially with no schema change | `FR-8`/`FR-14` |
 | 10 | **The instrument cannot see the thing** | `caplog` silently captured nothing for a warning emitted on a WORKER THREAD by a module logger — so the assertion could not tell *"the mechanism did not fire"* from *"I failed to observe it"* | soak harness |
 | 11 | **The answer went stale, not wrong** | seven PRs carried a green `pip-audit` for a week while the advisory refuting it was published — the check asks a question about the OUTSIDE WORLD, and the world moved without the diff moving | `security-audit.yml` |
+| 12 | **The check is right; its CENSUS is hand-written** | `test_every_provider_client_meters_its_response` walked the AST — correctly, per rule 7 — over three file paths typed out by hand, and a fourth client shipped unmetered | `COST-GOVERNOR-1` ph.0 |
 
 **Variant 9 is the one to design against, not just record:** it cannot be fixed by making the
 check better, because the check is fine — the *release* lacks the condition. The only answer
@@ -571,6 +572,22 @@ fresh one at a glance.
   CVE for up to a week with nothing surfacing it — and it only surfaced at all because a PR
   happened to be open. Fixed by adding `push: branches: [main]`; the same question is worth
   asking of any check whose value is time-varying.
+
+**★ Variant 12 is the one that survives every rule above it, which is why it is worth its own
+line.** The test was not lazy: it parsed the AST specifically so a comment could not satisfy it
+(rule 7), it ran in a collecting job (rule 2), it gated (rule 4), and breaking the thing it
+covered *did* turn it red. All of that rigour went into **how** it checked, and none into **what
+it checked over** — a literal set of three paths inside a test named `every`. **★ The census was
+incomplete the day it was authored, not through drift:** `deepseek_client.py` had existed since
+the initial repo extraction, three and a half months before the guard was written. This is what
+separates it from variant 11 — nothing decayed, the check never covered what its name claimed.
+
+**The rule: a guard that iterates a collection must DERIVE that collection from the source, and
+assert the derivation is non-empty.** A hand-maintained census inside a check is a second thing
+to keep in sync, and it is the half nobody re-reads — the check's own name becomes the lie. Where
+a literal is genuinely wanted (pinning an exact expected set), it must be compared *against* a
+derived set, never used *as* one. **The derivation then needs its own liveness assertion**, or an
+empty census silently satisfies every guard built on it — variant 6 arriving one level up.
 
 Variants 2 and 3 are fixed at the mechanism level (`tests/unit/conftest.py` defaults the marker;
 `AINDY_REQUIRE_NATIVE_BRIDGE=1` turns a skip into a failure) — but both stay listed, because the
