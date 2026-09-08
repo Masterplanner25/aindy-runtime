@@ -1,7 +1,7 @@
 ---
 title: "Scope — Routing a Real Consumer Through the LLM Seam"
 api_version: "1.0"
-last_verified: "2026-09-03"
+last_verified: "2026-09-08"
 status: current
 owner: "platform-team"
 ---
@@ -100,6 +100,22 @@ adoption work done and no signal to show for it.
 call at the same kind of seam, and the omission is mine — I metered the path the runtime's own
 `LLMClient` protocol exposes and not the escape hatch a real caller needs.
 
+> **★ DONE — in #564, the same PR that wrote this section, and shipped in v2.9.0.** The text
+> above is the finding; it is kept because the reasoning still explains *why* the meter sits on
+> `messages_create` rather than `chat()`. **Nothing here blocks phase 1 any more.** Verified:
+> `git tag --contains 538d3c7` → `v2.9.0`.
+>
+> **★★ It was done for THREE of four clients.** `deepseek_client.py` was missed and stayed
+> unmetered until #597 (2026-09-08). The guard that should have caught it existed and was
+> properly AST-based — but `test_every_provider_client_meters_its_response` enumerated three
+> file paths **by hand**, so a test named *every* meant *these three*. Its census is now derived
+> from the source: a `platform_layer/*_client.py` defining `messages_create` or
+> `chat_completion_response` must meter, with a liveness assertion so a census that finds
+> nothing fails loudly instead of passing vacuously.
+>
+> **Carry forward: an AST guard with a hand-written file list is only as complete as the list,
+> and the list is the half nobody re-reads.**
+
 **★ Do not meter inside `chat()` *and* rely on `chat()` calling `messages_create`** — it does not
 in every client, and double-counting a call is worse than not counting it: a fabricated
 measurement is the one failure mode the meter's design explicitly rejects.
@@ -158,14 +174,25 @@ things still have to be true at the call site:
 
 | | | |
 |---|---|---|
-| **0** | Meter the raw response paths (`messages_create`, `chat_completion_response`) | runtime, small, no consumer needed |
+| ~~**0**~~ | ~~Meter the raw response paths (`messages_create`, `chat_completion_response`)~~ | **DONE — #564 (3 clients) + #597 (deepseek, the one missed). In v2.9.0; deepseek lands next release.** |
 | **1** | Route `planner_anthropic.py` through `get_llm_client("anthropic").call_method(...)`, reading `exc.__cause__` for detail | **app repo** |
 | **2** | Confirm `aindy_llm_tokens_total` moves in a real deployment | evidence, not code |
 | **3** | Thread run/tenant identity to the call site, and count unattributed calls | runtime + app |
 | **4** | The governor: reserve → call → reconcile, against a cache, refusing on breach | runtime |
 
-**Phase 0 is worth doing regardless of whether 1–4 happen** — it closes a gap in shipped code.
+~~**Phase 0 is worth doing regardless of whether 1–4 happen**~~ — done; it closed a gap in
+shipped code, and #597 closed the quarter of it that was missed. **Phase 1 is unblocked: every
+prerequisite is in v2.9.0**, which is the current release, so no new runtime release is needed
+to start it.
+
 Phases 1 and 3 are app-repo changes and are not the runtime's to make unilaterally.
+
+**★ One thing phase 1 must check first, found 2026-09-08:** `aindy-apps-monolith` *declares*
+`aindy-runtime>=2.9.0,<3.0` but its `venv/` had **2.6.0** installed, which predates phase 0.
+Writing the adoption against that environment would route the planner through the seam and leave
+`aindy_llm_tokens_total` at zero — the exact failure §4 exists to prevent, presenting as *"the
+seam didn't work"*. `DEBT-COMPAT-1`'s shape: a declared range nothing verifies against what is
+installed. **Confirm the installed version, not the declared one, before starting phase 1.**
 
 ---
 
