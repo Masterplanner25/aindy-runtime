@@ -54,7 +54,7 @@ def test_runtime_package_metadata_declares_console_entrypoints():
         "memory/native/memory_bridge_rs/target/**",
     ]
     assert pyproject["project"]["optional-dependencies"]["release"] == [
-        "build==1.5.0",
+        "build==1.6.0",
         "twine==7.0.0",
     ]
     assert callable(runtime_only_entrypoint_main)
