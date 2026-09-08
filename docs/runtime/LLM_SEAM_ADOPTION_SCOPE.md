@@ -20,6 +20,13 @@ not started, and it is not a design objection — the design is settled.
 
 **Those counters will read zero indefinitely, because nothing calls those clients.**
 
+> **★★ RESOLVED 2026-09-08 — this section is the FINDING, not the current state.** `aindy-apps-monolith`
+> #321 routes the Claude planner through `get_llm_client("anthropic").call_method("messages_create", …)`,
+> exactly as §3 describes, keeping the forced tool call and reading `exc.__cause__` for provider
+> detail as §5 recommends. The table below is a snapshot of `672f4c7` and is kept because the
+> *reasoning* — why a governor at an unused seam refuses zero calls — is what phases 2–4 still rest on.
+> **The counters are no longer structurally zero; they are unobserved, which is phase 2.**
+
 | | verified at `672f4c7` |
 |---|---|
 | `AINDY/` outside `platform_layer` importing an LLM client | **zero** |
@@ -175,8 +182,8 @@ things still have to be true at the call site:
 | | | |
 |---|---|---|
 | ~~**0**~~ | ~~Meter the raw response paths (`messages_create`, `chat_completion_response`)~~ | **DONE — #564 (3 clients) + #597 (deepseek, the one missed). In v2.9.0; deepseek lands next release.** |
-| **1** | Route `planner_anthropic.py` through `get_llm_client("anthropic").call_method(...)`, reading `exc.__cause__` for detail | **app repo** |
-| **2** | Confirm `aindy_llm_tokens_total` moves in a real deployment | evidence, not code |
+| ~~**1**~~ | ~~Route `planner_anthropic.py` through `get_llm_client("anthropic").call_method(...)`, reading `exc.__cause__` for detail~~ | **DONE — app #321, 2026-09-08.** Also picked up the circuit breaker, which this table did not anticipate |
+| **2** | Confirm `aindy_llm_tokens_total` moves in a real deployment | **NEXT** — evidence, not code. **★ The meter shipped in v2.9.0: an environment on anything older routes through the seam and records nothing, which reads as *"the adoption failed"*. Verify the INSTALLED version, not the declared range** — the app declares `>=2.9.0` and its dev venv was on 2.6.0 |
 | **3** | Thread run/tenant identity to the call site, and count unattributed calls | runtime + app |
 | **4** | The governor: reserve → call → reconcile, against a cache, refusing on breach | runtime |
 

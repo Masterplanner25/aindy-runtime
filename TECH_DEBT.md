@@ -11900,10 +11900,45 @@ reified. Same shape here. See `COMPARATIVE_RESEARCH_INDEX.md` §4b.
 
 ## COST-GOVERNOR-1 — every quota exists except the one that matters for an LLM runtime
 
-**Status: OPEN — P1. METER SHIPPED 2026-09-03 (#563, #564); the governor is blocked on adoption,
-not on design — see `docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`.** Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
+**Status: OPEN — P1. METER SHIPPED 2026-09-03 (#563, #564); ADOPTED 2026-09-08 (app #321).
+The governor is blocked on EVIDENCE and IDENTITY, no longer on adoption — see
+`docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`.** Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
 (`C:\codev\MetaGPT research\`, 2026-08-15, its **M2**), verified against source at `v2.4.0`.
 **The last verified-but-unfiled gap across ten comparative research folders.**
+
+**★★ THE BLOCKER MOVED, 2026-09-08 — and the old one must not be quoted at it any more.**
+This entry and `CLAUDE.md`'s index both said *"the seam has NO CONSUMER"*: nothing in `AINDY/`
+outside `platform_layer` imported an LLM client, the app built its own SDK clients, and a
+governor at that seam would have refused **zero** calls while passing every test written for it
+(`ROUTE-AST-UNWIRED-1` repeated). **That is no longer true.** `aindy-apps-monolith` #321 routes
+the Claude planner through `get_llm_client("anthropic").call_method("messages_create", …)` —
+the most expensive LLM call that app makes, and the one a budget would most want to refuse. It
+keeps the forced tool call (`chat()` returns a string and would discard the `tool_use` block),
+and unwraps `exc.__cause__` so provider status/type/request-id survive the seam's `LLMCallError`.
+
+**★ Naming the wrong blocker is how the governor gets built early.** Two things still have to be
+true and neither is adoption:
+
+1. **Evidence** — `aindy_llm_tokens_total{provider="anthropic"}` must be observed MOVING in a
+   real deployment. **★ Gotcha with teeth: the meter landed in v2.9.0, so an environment running
+   anything earlier routes through the seam and records NOTHING.** The app declares
+   `aindy-runtime>=2.9.0,<3.0` and its dev venv was found on **2.6.0** on 2026-09-08 — the
+   adoption would look broken when it is the environment that is behind (`DEBT-COMPAT-1`'s shape:
+   a declared range nothing verifies against what is installed). **Check the INSTALLED version.**
+2. **Identity at the call site** — the provider client has no tenant and no run. Unattributed
+   calls need the `INITIATOR-IDENTITY-1` rule (*allow, and count separately*; an asserted
+   identity may constrain, never widen), with the unattributed fraction visible before anyone
+   relies on a cap.
+
+**★ Why the meter sits on the RAW path and not `chat()`, recorded here because it is a live trap
+rather than history.** `chat()` delegates to `messages_create` / `chat_completion_response`;
+metering both **double-counts every chat call**, and a silently-2x number is worse than no
+number — a governor would reserve budget against a fabricated measurement. `chat()` is also the
+wrong door for the one real consumer, since it returns a string and drops the tool block. Pinned
+by `test_token_meter.py::test_a_chat_call_is_metered_exactly_once` and
+`::test_only_the_raw_path_carries_the_meter`, whose census is derived from source after #597
+found `deepseek_client.py` unmetered because that census had been written out by hand
+(`CLAUDE.md` green-check variant 12).
 
 **The gap, measured.** `kernel/resource_manager.py:71-74` defines exactly four quota dimensions:
 
