@@ -27,6 +27,26 @@ updates:
         patterns:
           - "opentelemetry-*"
 
+      # pydantic and pydantic-core are the same shape as the otel cluster above:
+      # pydantic X hard-pins `pydantic-core==Y` with `==`, so a solo pydantic-core
+      # bump can never resolve. #575 proved it — every install-shaped job died with
+      #     pydantic 2.13.4 depends on pydantic-core==2.46.4
+      #     aindy-runtime 2.9.0 depends on pydantic_core==2.48.0
+      #     ERROR: ResolutionImpossible
+      # and there was no fix to write: no released pydantic consumed 2.48.0 at all
+      # (2.13.5, the newest, still wanted 2.46.5). pydantic-core is published on its
+      # own cadence and runs AHEAD of the pydantic that will consume it, so ungrouped
+      # it produces unmergeable PRs on a schedule. Grouped, the pair arrives only when
+      # a pydantic release exists to anchor it.
+      #
+      # pydantic-settings is deliberately NOT here: it depends on a pydantic RANGE,
+      # not an `==` pin, so it resolves on its own and is not part of this train.
+      pydantic:
+        patterns:
+          - "pydantic"
+          - "pydantic-core"
+          - "pydantic_core"
+
   # GitHub Actions — keeps pinned action SHAs up to date.
   - package-ecosystem: "github-actions"
     directory: "/"
