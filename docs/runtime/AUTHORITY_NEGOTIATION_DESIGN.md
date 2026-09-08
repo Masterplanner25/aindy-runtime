@@ -1,14 +1,14 @@
 ---
 title: "Authority Negotiation — Design"
 api_version: "1.0"
-last_verified: "2026-09-03"
+last_verified: "2026-09-08"
 status: current
 owner: "platform-team"
 ---
 
 # Authority negotiation — design
 
-**`AUTHORITY-NEGOTIATION-1`. Design only; no code exists.** Read this before building it — §2
+**`AUTHORITY-NEGOTIATION-1`. PHASE 0 SHIPPED 2026-09-08 (#600); phases 1–3 are design only.** Read this before building it — §2
 overturns the mechanism the entry itself proposes, and §7 is the list of things not to build.
 
 ---
@@ -176,7 +176,7 @@ and had nothing to offer, which is the expected steady state until tools start d
 
 | | | |
 |---|---|---|
-| **0** | `degraded_variant=` on `register_tool`, validated at registration, **consulted by nothing** | declare/refuse/record; no execution path changes |
+| ~~**0**~~ | ~~`degraded_variant=` on `register_tool`, validated at registration, **consulted by nothing**~~ | **DONE — #600.** One correction to this row: validation had to SPLIT. Local checks are in the decorator; the three cross-tool rules are a STARTUP sweep (`validate_degraded_variants`), because a forward reference is legitimate and the capability *definitions* the subset rule needs load later, from plugin providers. "At registration" was not achievable as written |
 | **1** | The negotiation stage at the two `CAPABILITY_DENIED` sites, gated default-off | the behaviour change |
 | **2** | The WAIT-gate fallback kind | reuses the durable wait; no new machinery |
 | **3** | Flip the default once a real tool declares a variant and a denial has been observed | evidence, not code |
@@ -185,4 +185,12 @@ Phase 0 is worth landing alone: it is inert, it makes the vocabulary reviewable,
 same declare-then-enforce sequence that made `EXEC-ENV-BIND-1` safe to land in pieces.
 
 ★ **Do not close this entry on phase 0.** A declaration nothing consults is `G4a` — built and
-inert — and this repository already has one of those.
+inert — and this repository already has one of those. **Phase 0 shipped 2026-09-08 and the entry
+stays OPEN.** Its inertness is pinned by
+`tests/unit/test_authority_negotiation_declaration.py::test_nothing_in_the_execution_path_consults_the_field`,
+an AST scan that fails the moment any execution path reads the field. **When phase 1 lands, that
+test must be REPLACED deliberately with one asserting the negotiation behaviour — not deleted
+because it went red.**
+
+★ **One thing phase 0 found that this document had wrong:** it specified validation "at
+registration", which is not achievable for the cross-tool rules. See the phase table above.
