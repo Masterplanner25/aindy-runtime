@@ -39,6 +39,17 @@ updates:
       # it produces unmergeable PRs on a schedule. Grouped, the pair arrives only when
       # a pydantic release exists to anchor it.
       #
+      # ★ CORRECTION 2026-09-08, same day, by #584 — the line above OVER-CLAIMS and is left
+      # standing so the error is legible. Grouping does NOT make the pair arrive anchored.
+      # Dependabot resolves each member to its own latest INDEPENDENTLY and merely bundles
+      # the result into one PR: #584 shipped `pydantic==2.13.5` beside `pydantic_core==2.48.0`
+      # and died with the identical `ResolutionImpossible` that #575 did. What grouping buys
+      # is ONE failing PR instead of two, and one place to hand-align — not a resolvable bump.
+      # DEP-UPGRADE-DEFERRED-1 already said exactly this about the otel cluster ("grouping is
+      # necessary but not sufficient — dependabot resolves each package independently, so
+      # hand-align and verify with `pip install --dry-run`") and it was not applied here.
+      # Expect to hand-align every pydantic bump; the group is where you do it, not a fix.
+      #
       # pydantic-settings is deliberately NOT here: it depends on a pydantic RANGE,
       # not an `==` pin, so it resolves on its own and is not part of this train.
       pydantic:
