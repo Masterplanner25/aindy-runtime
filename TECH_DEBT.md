@@ -4824,6 +4824,44 @@ verify with `pip install --dry-run`"* — and the pydantic text was written with
 The lesson had been paid for once and was re-derived at the cost of a second dead PR. **When
 adding a group here, read the otel paragraphs first; they are the specification, not history.**
 
+**★★ RESOLVED 2026-09-08 (#591) — by REMOVING THE PIN, and the grouping fix was wrong twice
+over.** #590 failed a third way within minutes of the group going live: `pydantic` was already
+at its newest, so the group had exactly one member with an update and bumped `pydantic_core`
+alone, 2.46.5 → 2.48.0. Same `ResolutionImpossible`, now produced *by the fix*.
+
+**★ The general rule, which the grouping theory missed: a group bumps whichever members have
+updates, EACH TO ITS OWN LATEST.** For an `==`-linked pair that is valid only in the coincidence
+where the newest `pydantic-core` is exactly the one the newest `pydantic` pins. Off that
+coincidence it fails whether it moves one member or both — so grouping could not have fixed
+this in any configuration, and the two failing PRs it produced were not bad luck.
+
+**★★ The real cause sat upstream of dependabot the whole time: `pydantic-core`'s version is not
+ours to choose.** `pydantic` fixes it with `==`. Pinning it ourselves pinned a **derived value**,
+and a hand-maintained copy of a derived value can only drift from the thing deriving it — every
+bump was a chance for the two to disagree, and three of them took it. The pin is now absent from
+both `pyproject.toml` and `AINDY/requirements.txt`; pip resolves it from `pydantic`, verified:
+
+```
+$ pip install --dry-run --no-cache-dir pydantic==2.13.5 pydantic-settings==2.15.0
+  pip derived: pydantic 2.13.5
+  pip derived: pydantic_core 2.46.5
+```
+
+**★ Reproducibility is NOT weakened, which is the objection to expect** — it never came from our
+line, it came from `pydantic`'s own `==`. Removing ours deletes a second, unauthoritative copy.
+
+**★ The generalisation worth carrying to the next `==`-linked pair: pin what you CHOOSE, never
+what is DERIVED.** A transitive whose version is fixed by an exact requirement upstream must not
+be pinned locally, and the whole fully-pinned-`requirements.txt` convention has this one
+principled exception. The group is kept only as a guard rail if the pin is ever re-added.
+
+**★ Near miss worth recording: `tests/unit/test_dependency_pin_agreement.py::
+test_no_installed_package_forbids_our_declared_pins` would have caught all three at a developer's
+desk** — it asserts every declared `==` pin against every installed distribution's stated
+requirements, and would have said *"pydantic 2.13.5 requires pydantic-core==2.46.5 but we pin
+==2.48.0"*. It was never run locally on any of them; CI found each one instead, three times, one
+per week of dependabot cadence. **Run that file before pushing a pin change.**
+
 Correct aligned bump taken instead: `pydantic` 2.13.4 → **2.13.5** with `pydantic_core` 2.46.4 →
 **2.46.5**, verified resolvable with `pip install --dry-run` before pushing. Note the dry-run
 must be run with `--no-cache-dir`: a stale local pip index cache reported *"Could not find a
