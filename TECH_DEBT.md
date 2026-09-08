@@ -4779,7 +4779,32 @@ Two dependabot upgrades that cannot be taken as individual auto-bumps:
   and it would be paid for a vulnerability we do not have. **Re-assess** when react-router 8
   is scheduled on its own merits, or immediately if the SPA ever adopts RSC or SSR.
 
-**Reopen/resolve:** when the OTel line is bumped as a group. The UI unit is done.
+
+**Same mechanism, a new package line — 2026-09-08, `pydantic` / `pydantic-core` (#575,
+closed).** One new wrinkle worth recording. `pydantic 2.13.4` hard-pins `pydantic-core==2.46.4` with `==`
+and we pin **both** in `pyproject.toml` and `AINDY/requirements.txt`, so dependabot's solo
+`pydantic-core` 2.46.4 → 2.48.0 failed every install-shaped job:
+
+```
+pydantic 2.13.4 depends on pydantic-core==2.46.4
+aindy-runtime 2.9.0 depends on pydantic_core==2.48.0
+ERROR: ResolutionImpossible
+```
+
+**★ The wrinkle: unlike the otel case, there was no grouped version of the PR to write.** The
+otel PRs failed because they arrived *split*; a group fixed them. Here **no released `pydantic`
+consumed `pydantic-core` 2.48.0 at all** — 2.13.5, the newest, still required 2.46.5. So the
+target had no anchor: `pydantic-core` publishes on its own cadence and runs **ahead** of the
+`pydantic` that will eventually consume it, which means an ungrouped bump does not merely arrive
+in the wrong shape, it names a version that is not yet usable by anything. Verify against PyPI
+(`/pypi/pydantic/<v>/json` → `requires_dist`) before assuming a pair exists to bump *to*.
+
+Grouped in `.github/dependabot.yml` 2026-09-08 so the pair can only arrive anchored.
+**`pydantic-settings` is deliberately excluded** — it depends on a pydantic *range*, not an `==`
+pin, so it resolves independently and is not on this release train.
+
+**Reopen/resolve:** when the OTel line is bumped as a group. The UI unit is done; the
+`pydantic` train is grouped.
 
 ---
 
