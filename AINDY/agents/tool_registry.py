@@ -97,6 +97,7 @@ def register_tool(
     execution_guarantee: str = "AT_LEAST_ONCE",
     isolation: Optional[str] = None,
     env_spec: Optional[dict] = None,
+    degraded_variant: Optional[str] = None,
 ):
     """Register an agent tool implementation with platform metadata.
 
@@ -128,6 +129,27 @@ def register_tool(
     A misspelled class raises at REGISTRATION rather than being silently downgraded — the
     ``register_syscall`` lesson (``IDEM-11``), where an unforwarded parameter left every plugin
     syscall at the weakest setting with no way to opt in.
+
+    degraded_variant (AUTHORITY-NEGOTIATION-1 phase 0): the name of a registered tool that may be
+    attempted **once** when this tool is refused for lack of authority. ``None`` (the default)
+    declares nothing and is the state of every tool today.
+
+    ★★ **PHASE 0 IS INERT. Nothing consults this field yet** — no denial path negotiates, and a
+    tool declaring a variant behaves in every respect as it did before. This ships the
+    *vocabulary* so it is reviewable, on the declare-then-enforce sequence that let
+    ``EXEC-ENV-BIND-1`` land in pieces. Reading it as working recovery would be exactly the
+    "built and inert" failure ``ECOGAP-4``'s G4a already records.
+
+    ★ **The TOOL declares it, never the plan and never the model** — the same rule that makes
+    ``env_spec`` safe: the thing being constrained must not choose its own constraint. A model
+    that was just refused must not get to nominate what counts as its lower-authority option.
+
+    ★ Only *local* checks happen here (non-empty, not self-referential). The three cross-tool
+    rules — the target is registered, its capabilities are a **strict** subset of this tool's,
+    and it declares no variant of its own — are swept at STARTUP by
+    ``validate_degraded_variants()``, because at decorator time the target may not be registered
+    yet and the capability *definitions* the comparison needs are loaded later still, by plugin
+    providers. Validating locally here and cross-tool there is the only order that works.
     """
     if isolation is not None:
         from AINDY.core.execution_environment import ASSURANCE_ORDER
@@ -157,6 +179,24 @@ def register_tool(
                 f"declaration ({type(exc).__name__}: {exc})"
             ) from exc
 
+    # AUTHORITY-NEGOTIATION-1 phase 0 — LOCAL validation only; see validate_degraded_variants().
+    if degraded_variant is not None:
+        if not isinstance(degraded_variant, str) or not degraded_variant.strip():
+            raise ValueError(
+                f"register_tool({name!r}): degraded_variant must be a non-empty tool name, got "
+                f"{degraded_variant!r}. Declaring nothing is spelled `degraded_variant=None`."
+            )
+        if degraded_variant.strip() == name:
+            # ★ Caught here rather than in the sweep because it is self-evident from one
+            # declaration and needs no registry: a tool that falls back to itself is a
+            # one-element cycle, and the sweep's no-chains rule would report it as a chain,
+            # which is a true statement that names the wrong mistake.
+            raise ValueError(
+                f"register_tool({name!r}): degraded_variant names the tool itself. A fallback "
+                f"must be a DIFFERENT tool at strictly lower authority; falling back to the "
+                f"same tool would retry the call that was just refused."
+            )
+
     def wrapper(fn: Callable) -> Callable:
         TOOL_REGISTRY[name] = {
             "fn": fn,
@@ -169,10 +209,106 @@ def register_tool(
             "execution_guarantee": execution_guarantee,
             "isolation": isolation,
             "env_spec": env_spec,
+            "degraded_variant": degraded_variant.strip() if degraded_variant else None,
         }
         return fn
 
     return wrapper
+
+
+def validate_degraded_variants() -> list[str]:
+    """AUTHORITY-NEGOTIATION-1 phase 0 — the cross-tool rules, swept over the whole registry.
+
+    Returns a list of human-readable problems; empty means every declaration is well-formed.
+    Callers decide what to do with them — ``startup._verify_degraded_variant_declarations``
+    raises, because a malformed declaration is a coding error in a registration and is
+    deterministic, not environment-dependent.
+
+    ★ **Why a sweep and not a check inside the decorator.** Two things are unavailable at
+    decorator time and neither can be worked around by ordering: the target tool may be
+    registered *later* (a forward reference is legitimate), and a tool's capability SET comes
+    from ``_get_capabilities_for_tool``, which resolves against capability *definitions*
+    supplied by plugin providers that load after the module-import pass. Checking early would
+    force declaration order to encode a dependency the registry does not otherwise have — the
+    ordering coupling ``TEST-ORDER-REGISTRY-1`` is filed for.
+
+    The three rules, from the design's section 3:
+
+    1. the named fallback is a registered tool;
+    2. ``caps(fallback)`` is a **STRICT** subset of ``caps(original)`` — strict, so a "fallback"
+       cannot be a lateral move to different authority wearing the word *degraded*;
+    3. the fallback declares no ``degraded_variant`` of its own (no chains, section 4).
+
+    ★★ **Rule 2 reports UNEVALUABLE separately from FAILED, and that distinction is the point.**
+    ``_get_capabilities_for_tool`` returns ``[]`` both when a tool genuinely requires nothing and
+    when the capability lookup could not run — it catches its own exceptions and warns. An empty
+    set for the ORIGINAL makes a strict subset impossible, so a naive check would refuse the
+    declaration and blame the operator's typo for what may be an unloaded provider. That is
+    green-check variant 10 in reverse: an instrument that cannot see the thing, reporting a
+    confident answer. The message says which of the two it is.
+
+    ★★ **This does NOT call ``_ensure_tools_loaded()``, and that omission is load-bearing.** The
+    first version did, and it broke `test_version_api.py`: `_ensure_tools_loaded` runs
+    ``_ensure_runtime_agent_defaults()``, which IS a trusted bootstrap registration, so forcing
+    it took a platform-only boot from ``bootstrap_registration_count: 0`` to ``1``. **Phase 0 is
+    supposed to be inert and that made it observable on an audit surface** — the exact thing the
+    phase promises not to touch. Validating a registry is not a reason to populate one.
+
+    ★ **The honest scope, stated rather than implied: this validates the tools registered AT THE
+    MOMENT IT RUNS.** In an API boot ``load_plugins()`` has already run, so plugin-declared tools
+    are covered. A tool registered later is not seen by that sweep. The startup log prints the
+    number examined so a vacuous run is visible rather than silently reassuring.
+    """
+    from AINDY.agents.capability_service import _get_capabilities_for_tool
+
+    problems: list[str] = []
+    for tool_name, entry in sorted(TOOL_REGISTRY.items()):
+        if not isinstance(entry, dict):
+            continue
+        variant = entry.get("degraded_variant")
+        if not variant:
+            continue
+
+        # Rule 1 — the target exists.
+        target = TOOL_REGISTRY.get(variant)
+        if not isinstance(target, dict):
+            problems.append(
+                f"{tool_name}: degraded_variant={variant!r} is not a registered tool"
+            )
+            continue
+
+        # Rule 3 — no chains. Checked before rule 2 because it needs no capability data, so a
+        # chain is reported as a chain even in an environment where rule 2 is unevaluable.
+        if target.get("degraded_variant"):
+            problems.append(
+                f"{tool_name}: degraded_variant={variant!r} itself declares "
+                f"degraded_variant={target['degraded_variant']!r}. Chains are refused "
+                f"structurally — an unbounded walk down the authority lattice, executed "
+                f"automatically, at the moment the runtime has least reason to trust the plan."
+            )
+            continue
+
+        # Rule 2 — strict subset, with unevaluable reported as such.
+        original_caps = set(_get_capabilities_for_tool(tool_name))
+        variant_caps = set(_get_capabilities_for_tool(variant))
+        if not original_caps:
+            problems.append(
+                f"{tool_name}: cannot verify degraded_variant={variant!r} — no capabilities "
+                f"resolved for {tool_name!r}, so a strict-subset check is unevaluable. This is "
+                f"NOT proof the declaration is wrong: it is equally consistent with the "
+                f"capability definitions not being loaded. Check the capability provider before "
+                f"changing the declaration."
+            )
+            continue
+        if not variant_caps < original_caps:
+            problems.append(
+                f"{tool_name}: degraded_variant={variant!r} requires {sorted(variant_caps)}, "
+                f"which is not a STRICT subset of {sorted(original_caps)}. A fallback must ask "
+                f"for strictly less authority; equal sets are a no-op and a disjoint set is a "
+                f"lateral move to different authority wearing the word 'degraded'."
+            )
+
+    return problems
 
 
 def _tool_isolation_enforced() -> bool:

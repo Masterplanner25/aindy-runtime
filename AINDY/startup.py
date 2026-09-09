@@ -557,6 +557,45 @@ def _verify_required_syscalls_registered() -> None:
         )
 
 
+def _verify_degraded_variant_declarations() -> None:
+    """AUTHORITY-NEGOTIATION-1 phase 0 — refuse a malformed fallback declaration at startup.
+
+    ★ Raises unconditionally, unlike ``_verify_required_syscalls_registered`` above, which
+    downgrades to a warning outside prod. The difference is what the two are measuring: a missing
+    syscall depends on which bootstrap modules an environment loaded, so a dev box legitimately
+    differs from prod. A malformed ``degraded_variant`` is a coding error in a registration —
+    deterministic, identical everywhere, and wrong in dev for exactly the reason it is wrong in
+    prod. It matches ``register_tool``'s own treatment of a misspelled ``isolation`` class.
+
+    ★ Inert today by construction: no tool declares a variant, so the sweep examines nothing and
+    this cannot change any boot. The log line is deliberate — it makes the count visible, so
+    "no tool declares one" and "the sweep never ran" are distinguishable, which is the ambiguity
+    ``ROUTE-AST-UNWIRED-1`` is filed for.
+    """
+    from AINDY.agents.tool_registry import TOOL_REGISTRY, validate_degraded_variants
+
+    problems = validate_degraded_variants()
+    if problems:
+        for problem in problems:
+            logger.error("[startup] degraded_variant declaration refused: %s", problem)
+        raise RuntimeError(
+            f"Malformed degraded_variant declaration(s) refused at startup: {problems}"
+        )
+
+    declared = sum(
+        1
+        for entry in TOOL_REGISTRY.values()
+        if isinstance(entry, dict) and entry.get("degraded_variant")
+    )
+    logger.info(
+        "[startup] degraded_variant declarations verified: %d declared of %d tool(s) EXAMINED "
+        "(phase 0 — validated, consulted by nothing). A count of 0 tools means the sweep ran "
+        "before any were registered, not that all declarations are well-formed.",
+        declared,
+        len(TOOL_REGISTRY),
+    )
+
+
 def _log_async_job_capacity_advisory() -> None:
     """Log startup guidance for async job capacity in thread mode."""
     if settings.is_testing:
@@ -1351,6 +1390,7 @@ def _register_domain_handlers() -> None:
     from AINDY.kernel.syscall_handlers import register_all_domain_handlers
     register_all_domain_handlers()
     _verify_required_syscalls_registered()
+    _verify_degraded_variant_declarations()
 
 
 def _register_flow_engine() -> None:

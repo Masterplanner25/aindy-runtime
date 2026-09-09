@@ -9677,7 +9677,77 @@ hand-rolled in a `while` loop, or improvised with `asyncio.create_task`.
 
 ## AUTHORITY-NEGOTIATION-1 — a capability denial has no bounded recovery path
 
-**Status: OPEN — P1.** Filed 2026-08-15 from the Codex comparative audit (G5), verified.
+**Status: OPEN — P1. PHASE 0 SHIPPED 2026-09-08 (#600): the vocabulary exists and is validated;
+nothing consults it.** Filed 2026-08-15 from the Codex comparative audit (G5), verified.
+
+**★★ DO NOT CLOSE ON PHASE 0.** A declaration nothing consults is `ECOGAP-4`'s G4a — built and
+inert — and this repository already carries one of those. The behaviour change is phase 1, at the
+two `CAPABILITY_DENIED` sites, gated default-off.
+
+**What phase 0 landed.** `register_tool(..., degraded_variant="other_tool")` on the same surface
+as `isolation` and `env_spec` (deliberately: `FS-SCOPE-1` warns against a fourth independent
+vocabulary there). The tool declares it, never the plan and never the model — the thing being
+constrained must not choose its own constraint, or a model that was just refused would nominate
+its own "lower authority" option.
+
+**★ Validation is SPLIT, and the split is forced rather than chosen.** Local checks (non-empty,
+not self-referential) run in the decorator. The three cross-tool rules — target registered,
+`caps(fallback) ⊊ caps(original)`, target declares no variant of its own — run in
+`validate_degraded_variants()`, swept at startup from
+`startup._verify_degraded_variant_declarations`. **Two things are simply unavailable at decorator
+time:** a forward reference is legitimate (the target may register later), and a tool's capability
+SET comes from `_get_capabilities_for_tool`, which resolves against capability *definitions*
+supplied by plugin providers that load after the module-import pass. Checking early would make
+declaration order encode a dependency the registry does not otherwise have — the coupling
+`TEST-ORDER-REGISTRY-1` exists to warn about.
+
+**★★ The subtlety worth keeping: UNEVALUABLE is reported separately from FAILED.**
+`_get_capabilities_for_tool` returns `[]` both when a tool requires nothing and when the lookup
+could not run — it catches its own exceptions and warns. An empty set for the ORIGINAL makes a
+strict subset impossible, so the naive check refuses the declaration and blames an operator's
+typo for what may be an unloaded provider. That is green-check **variant 10 in reverse**: an
+instrument that cannot see the thing, answering confidently anyway. Rule 3 (chains) is therefore
+evaluated *before* rule 2, so a structural error is still named correctly in an environment where
+capabilities do not resolve.
+
+**★ The startup sweep raises unconditionally**, unlike `_verify_required_syscalls_registered`
+which warns outside prod. Different quantity: a missing syscall depends on which bootstrap
+modules an environment loaded, so dev legitimately differs from prod; a malformed
+`degraded_variant` is a deterministic coding error, wrong in dev for the same reason it is wrong
+in prod. Matches `register_tool`'s treatment of a misspelled `isolation` class.
+
+**★★ The first cut of phase 0 was NOT inert, and it is worth knowing how it got through.** The
+sweep opened with `_ensure_tools_loaded()` — which runs `_ensure_runtime_agent_defaults()`, a
+trusted bootstrap registration — so a platform-only boot went from `bootstrap_registration_count:
+0` to `1` and failed `tests/api/test_version_api.py`. **Validating a registry is not a reason to
+populate one.** The sweep now reads whatever is registered when it runs, and the startup log
+prints how many tools it EXAMINED, so a sweep that ran before anything registered is visible
+rather than silently reassuring.
+
+**★ The unit suite could not have caught it, structurally.** Every test in
+`test_authority_negotiation_declaration.py` patches `_ensure_tools_loaded` to a no-op to isolate
+the registry — correct for what it isolates, and it makes any assertion about *how that
+dependency is used* impossible. **A fixture that neutralises a dependency also neutralises any
+test of how that dependency is used.** The guard that closes it asserts the call does not happen,
+which a no-op patch can never do. Related to green-check variant 12 (the check is right, its
+scope is not) but distinct: here the blindness came from the *fixture*, not from a hand-written
+census.
+
+**★ Inert by construction today** — the real registry has 0 declarations, so the sweep examines
+nothing and cannot change any boot. The startup log prints the count deliberately, so *"no tool
+declares one"* and *"the sweep never ran"* stay distinguishable (`ROUTE-AST-UNWIRED-1`).
+
+**★ `amend_token` is NOT needed for this path** — the entry's own proposed primitive, overturned
+in `AUTHORITY_NEGOTIATION_DESIGN.md` §2. A fallback requiring capabilities the token already
+grants needs nothing minted: the condition is `required(fallback) ⊆ token.allowed_capabilities`,
+**not** `⊆` the denied capability, which is the tempting form and says nothing about whether the
+token grants it either. `amend_token` stays worth having for `AUTHORITY-LIFETIME-1` (narrowing a
+token that outlived its run) — do not fold the two.
+
+**★ Automatic `simulate` substitution is EXCLUDED by decision.** Feeding predicted output
+downstream means every later step computes on data describing an effect that never happened — a
+lie in `EFFECT-PARTIAL-1`'s sense. Simulate belongs at the WAIT gate, informing a human deciding
+whether to grant authority.
 
 A denied capability check terminates the step — `CAPABILITY_DENIED` is emitted at
 `nodus_adapter.py:188` and `nodus_execution_service.py:334`, and there is no path that asks
