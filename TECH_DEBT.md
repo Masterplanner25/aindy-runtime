@@ -7839,6 +7839,56 @@ per-process difference, so this is not a theoretical gap — it is the one that 
 Also unexercised: the scheduler routing there for real (while it refused, `schedule()` never
 produced a distributed dispatch, so that combination has never run) and cross-process concurrency.
 
+### ★★ Evidence step ATTEMPTED 2026-09-08 and BLOCKED — the blocker is not FR-15's code
+
+A distributed stack was brought up to gather step (1): `EXECUTION_MODE=distributed`,
+`AINDY_ASYNC_SCHEDULER_DISPATCH=1`, `REDIS_URL=redis://redis:6379/0`,
+`docker compose --profile full up -d`, against the **published `aindy-runtime==2.9.0` wheel**
+the Dockerfile pins (FR-15's distributed half shipped in 2.8.0, `58fec1e`, contained in that tag).
+
+**Both `api` and `worker` crash-loop.** `EXECUTION_MODE=distributed` does more than select a
+queue: it moves the API onto deployment profile `distributed-api` and the worker onto
+`distributed-worker`. Both are **production-safe** profiles, and
+`validate_plugin_sandbox_profile_policy` (`deployment_contract.py:651`) then demands, one
+fail-closed error at a time: an explicit sandbox runner (not `auto`), a configured
+`AINDY_PLUGIN_CONTAINER_IMAGE`, a **digest-pinned** runtime identity, a trusted identity chain,
+and platform support.
+
+**★★ It is not satisfiable from the shipped compose files.** Measured *inside* the running
+container rather than inferred from the host:
+
+```
+platform: linux
+container_sandbox: unsupported      <- cannot launch OCI containers (no daemon access)
+strong_sandbox:    unsupported
+contained_process: supported (insecure-dev)   <- explicitly refused for production-safe profiles
+```
+
+Neither `docker-compose.yml` nor `docker-compose.prod.yml` mounts a docker socket or sets any
+`AINDY_PLUGIN_SANDBOX_*` variable. So the worker's mandatory profile requires a capability its
+own image does not have and no shipped topology grants.
+
+**★ `AINDY_DEPLOYMENT_PROFILE` is not an escape hatch, which was the obvious next idea and is
+wrong.** `resolve_worker_deployment_profile()` (`:365`) raises on any value other than
+`distributed-worker` for a worker process — *"Workers support only 'distributed-worker'."* A
+lower profile swaps one refusal for another rather than relaxing the chain.
+
+**★ The guards are behaving correctly.** Nothing here is a defect in the deployment contract; it
+is refusing to run a production-safe profile on a host that cannot provide the sandbox it
+declares. The gap is that **`docker-compose.yml` documents a distributed recipe it cannot
+deliver** — its own comments tell an operator to set `EXECUTION_MODE=distributed` and run
+`--profile full`, which is precisely what crash-loops. Comment corrected in that file.
+
+**★★ This is `SUBSTRATE-WITNESS-1`'s shape in the deployment layer: distributed mode is
+supported, tested, and has never been stood up end to end by anyone** — which is exactly why the
+first attempt hit four consecutive guards nobody had met in sequence before.
+
+**What unblocking costs:** giving the worker container real sandbox capability (a mounted docker
+socket, or a nested container runtime), which is an infrastructure and security decision rather
+than a config change, and one that wants its own review. **Until then step (1) cannot be
+performed on this topology, and FR-15 stays open with its evidence unobtained.** Do not read a
+green unit or soak suite as substituting for it.
+
 **Remaining, in order:** (1) enable it on one distributed deployment and watch
 `aindy_execution_dispatch_total{mode="async"}` move while the DLQ stays flat — that is the only
 thing that closes the process-boundary gap and it cannot be manufactured in CI; (2) migrate the
