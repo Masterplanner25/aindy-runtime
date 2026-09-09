@@ -11867,7 +11867,7 @@ aspirational.**
 
 | Layer | Unit | Durable write ordering | Recovery |
 |---|---|---|---|
-| **Flow** | a node | `runner.py:347-359` commits a `FlowHistory` row carrying `input_state` + `output_patch` **before** the snapshot and `current_node` advance | resumes at the next node; the completed node's patch is already durable |
+| **Flow** | a node | the `FlowHistory(...)` add + `self.db.commit()` in `runner.py` (`:392`–`:403` at 2026-09-08; **recorded here as `:347-359`, which had rotted into the node-execution call by the time it was re-read — cite the symbols**) commits a `FlowHistory` row carrying `input_state` + `output_patch` **before** the snapshot and `current_node` advance | resumes at the next node; the completed node's patch is already durable |
 | **Agent** | a **segment** | `AgentStep` is a **post-segment batch write** — its own docstring says so (`agent_continuation.py:11`) | `_count_completed_segments` (`:110-118`) advances only on `total + n <= completed_steps`, so **a partially-executed segment restarts from step one** |
 
 `DUR-4`'s fold docstring states the flow-layer ordering explicitly: *"the last FlowHistory row
