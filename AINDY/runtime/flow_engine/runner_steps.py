@@ -252,6 +252,44 @@ def _record_resource_usage(self, exec_ms: int) -> None:
 from AINDY.runtime.flow_engine.state_merge import declared_policies, merge_state
 
 
+def _merge_superstep(self, state: dict, outcomes: list[dict]) -> dict:
+    """FLOW-PARALLEL-1 phase 0 — merge a superstep's successful branches into ``state``.
+
+    ``outcomes`` is the superstep's branches in **declaration order** — the order they appear in
+    the flow definition, never the order they completed. Today a superstep is exactly one node,
+    so this is a one-element list and `merge_state` is byte-for-byte ``state.update(patch)``.
+
+    ★ **This is the widened transaction, and it is on the live path deliberately.** The first
+    fan-out has to be written against the seam the engine actually uses; a merge helper that
+    exists beside the real path is `ROUTE-AST-UNWIRED-1`, which this repository has catalogued.
+
+    ★ **Only SUCCESS branches contribute.** That is not a new rule — it is what the engine did
+    when the merge lived in `_handle_node_status`'s SUCCESS branch, and a WAIT branch's patch was
+    never merged. Preserved exactly, because changing it here would be a behaviour change
+    smuggled inside a refactor.
+
+    ★ **One `merge_state` call for the whole superstep, never one per branch.** Per-branch calls
+    would apply patches in completion order regardless of the declared policy, which is the
+    nondeterminism `state_merge` exists to prevent.
+
+    ★ Merging on the RUNNER's session, single-threaded, is design section 3c: branches will hold
+    their own sessions (`AGENT_WORKING_RULES` section 5 forbids sharing one), so shared state
+    must be written by exactly one writer.
+    """
+    successful = [
+        (outcome["node"], outcome.get("patch") or {})
+        for outcome in outcomes
+        if outcome.get("status") == "SUCCESS"
+    ]
+    if not successful:
+        return state
+    return merge_state(
+        state,
+        successful,
+        policies=declared_policies(getattr(self, "flow", {}) or {}),
+    )
+
+
 def _handle_node_status(
     self,
     run,
@@ -264,16 +302,19 @@ def _handle_node_status(
     node_started_event_id,
 ):
     if node_status == "SUCCESS":
-        # FLOW-PARALLEL-1 — the merge goes through the policy seam even though there is exactly
-        # one writer today. With a single patch `merge_state` IS `state.update(patch)`, so this
-        # changes nothing; what it buys is that the seam is on the live path rather than beside
-        # it. A conflict policy that exists and is never consulted is `ROUTE-AST-UNWIRED-1`, and
-        # the first fan-out would have been written against the un-wired version.
-        merge_state(
-            state,
-            [(current_node, patch)],
-            policies=declared_policies(getattr(self, "flow", {}) or {}),
-        )
+        # FLOW-PARALLEL-1 phase 0 — the merge MOVED OUT of here, to `_merge_superstep` on the
+        # runner. It is not gone: state is already merged by the time this is called.
+        #
+        # ★ Why it could not stay: a merge belongs to the SUPERSTEP, not to one node's status.
+        # `merge_state` must receive every successful branch's patch together, in declaration
+        # order, or `last_write_wins` resolves by completion order and the module's whole
+        # determinism guarantee is void. Called per node it can only ever see one patch — so
+        # this location was correct exactly while a superstep was guaranteed to be one node,
+        # and fan-out is the change that ends that guarantee.
+        #
+        # ★ It also has to run on the RUNNER's session, single-threaded (design section 3c):
+        # branches get their own sessions and must not write shared state.
+        pass
     elif node_status == "RETRY":
         attempts = context["attempts"].get(current_node, 0)
         node_cfg = self.flow.get("node_configs", {}).get(current_node, {})

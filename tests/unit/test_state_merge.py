@@ -227,28 +227,30 @@ def test_policies_are_read_from_the_flow_definition():
 def test_the_engine_merges_through_the_seam():
     """★★ `ROUTE-AST-UNWIRED-1` — a policy that exists and is never consulted is not a policy.
 
-    Driven through the real `_handle_node_status` rather than asserted over source text: a
-    string match would be satisfied by a commented-out call, which this repository has already
-    been caught by.
+    ★ **This test MOVED with the code it guards (FLOW-PARALLEL-1 phase 0), it was not weakened.**
+    The merge used to live in `_handle_node_status`'s SUCCESS branch and this drove that
+    function. The merge now belongs to the SUPERSTEP (`_merge_superstep`), because called per
+    node it can only ever see one patch — and `last_write_wins` resolving over one patch at a
+    time is completion order, which is the exact nondeterminism `state_merge` exists to prevent.
+    So the assertion follows the seam, and is *stronger* than before: it now also pins that
+    every successful branch reaches the merge together, in declaration order.
+
+    Driven through the real function rather than asserted over source text: a string match would
+    be satisfied by a commented-out call, which this repository has already been caught by.
     """
     from unittest.mock import patch
 
     import AINDY.runtime.flow_engine.runner_steps as rs
 
     calls: list = []
+    runner = type("R", (), {"flow": {"state_policies": {"c": {"policy": "reduce", "op": "sum"}}}})()
+
     with patch.object(rs, "merge_state", side_effect=lambda s, p, **kw: calls.append((s, p, kw))):
-        try:
-            rs._handle_node_status(
-                type("R", (), {"flow": {"state_policies": {"c": {"policy": "reduce", "op": "sum"}}}})(),
-                run=None, state={}, context={"attempts": {}}, current_node="n1",
-                result={}, patch={"c": 1}, node_status="SUCCESS", node_started_event_id=None,
-            )
-        except Exception:
-            # The merge is the FIRST thing the SUCCESS branch does; everything after it is
-            # completion bookkeeping this stub deliberately does not model. Building a full
-            # runner here would test the runner, not the seam — and would fail for reasons
-            # that have nothing to do with whether policies reach the merge.
-            pass
+        rs._merge_superstep(
+            runner,
+            {},
+            [{"node": "n1", "patch": {"c": 1}, "status": "SUCCESS"}],
+        )
 
     assert calls, "the flow engine does not merge through the policy seam"
     _, patches, kwargs = calls[0]
@@ -256,4 +258,112 @@ def test_the_engine_merges_through_the_seam():
     assert kwargs["policies"] == {"c": {"policy": "reduce", "op": "sum"}}, (
         "the engine did not pass the flow's declared policies, so a declaration would be "
         "silently ignored at the only place it matters"
+    )
+
+
+def test_the_seam_passes_every_successful_branch_together_in_declaration_order():
+    """★★ The property the move exists to make possible, and the reason it could not stay put.
+
+    `merge_state` guarantees determinism only if it sees the whole superstep at once. One call
+    per branch would apply patches in completion order no matter what the policy says.
+    """
+    from unittest.mock import patch
+
+    import AINDY.runtime.flow_engine.runner_steps as rs
+
+    calls: list = []
+    runner = type("R", (), {"flow": {"state_policies": {"c": {"policy": "last_write_wins"}}}})()
+
+    with patch.object(rs, "merge_state", side_effect=lambda s, p, **kw: calls.append(p)):
+        rs._merge_superstep(
+            runner,
+            {},
+            [
+                {"node": "a", "patch": {"c": 1}, "status": "SUCCESS"},
+                {"node": "b", "patch": {"c": 2}, "status": "SUCCESS"},
+            ],
+        )
+
+    assert len(calls) == 1, (
+        f"the superstep merged in {len(calls)} calls; merging per branch applies patches in "
+        f"completion order and defeats every declared policy"
+    )
+    assert calls[0] == [("a", {"c": 1}), ("b", {"c": 2})], "declaration order was not preserved"
+
+
+def test_only_successful_branches_contribute_a_patch():
+    """★ Preserved behaviour, pinned because a refactor is exactly where it could be lost.
+
+    When the merge lived in the SUCCESS branch, a WAIT or FAILED node's patch was never merged.
+    That is unchanged — and it had to be checked rather than assumed, because widening a merge is
+    a natural place to accidentally start including patches that were previously dropped.
+    """
+    from unittest.mock import patch
+
+    import AINDY.runtime.flow_engine.runner_steps as rs
+
+    calls: list = []
+    runner = type("R", (), {"flow": {}})()
+
+    with patch.object(rs, "merge_state", side_effect=lambda s, p, **kw: calls.append(p)):
+        rs._merge_superstep(
+            runner,
+            {},
+            [
+                {"node": "ok", "patch": {"a": 1}, "status": "SUCCESS"},
+                {"node": "waiting", "patch": {"b": 2}, "status": "WAIT"},
+                {"node": "broken", "patch": {"c": 3}, "status": "FAILURE"},
+            ],
+        )
+
+    assert calls[0] == [("ok", {"a": 1})], (
+        "a non-SUCCESS branch's patch reached the merge; that is a behaviour change smuggled "
+        "inside a refactor"
+    )
+
+
+def test_a_superstep_with_no_successful_branch_does_not_merge_at_all():
+    """No writers means no merge call — not an empty merge, which would still consult policies."""
+    from unittest.mock import patch
+
+    import AINDY.runtime.flow_engine.runner_steps as rs
+
+    calls: list = []
+    runner = type("R", (), {"flow": {}})()
+
+    with patch.object(rs, "merge_state", side_effect=lambda s, p, **kw: calls.append(p)):
+        result = rs._merge_superstep(runner, {"untouched": True}, [
+            {"node": "broken", "patch": {"c": 3}, "status": "FAILURE"},
+        ])
+
+    assert calls == []
+    assert result == {"untouched": True}
+
+
+def test_the_runner_actually_calls_the_merge_seam():
+    """★★ `ROUTE-AST-UNWIRED-1` — restored after the phase 0 move nearly lost it.
+
+    The original version of `test_the_engine_merges_through_the_seam` drove
+    `_handle_node_status`, which **was** the function the runner calls, so it proved wiring for
+    free. Relocating it to `_merge_superstep` made it drive the seam *directly* — one step
+    removed from the live path — and a runner that silently stopped calling the seam would have
+    kept every merge test green. That is precisely the failure this repository catalogues.
+
+    Checked over the AST rather than by string match: a commented-out call must not satisfy it.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("AINDY/runtime/flow_engine/runner.py").read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_merge_superstep"
+    ]
+
+    assert calls, (
+        "runner.py never calls _merge_superstep — declared state policies would be silently "
+        "ignored on every run while the merge suite stayed green"
     )

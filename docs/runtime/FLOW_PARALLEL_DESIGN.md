@@ -8,7 +8,7 @@ owner: "platform-team"
 
 # Flow fan-out and supersteps — design
 
-**`FLOW-PARALLEL-1`, the scheduling half. Proposal only; no code exists.**
+**`FLOW-PARALLEL-1`, the scheduling half. PHASE 0 SHIPPED 2026-09-08 (#603); phases 1–4 are design only.**
 
 Written because `AGENT_WORKING_RULES.md` **§8 Proposal-First Rule** requires an approved
 proposal before implementing a large refactor, a runtime behaviour change, or a cross-layer
@@ -133,6 +133,11 @@ Three candidates, and this needs a decision before code:
    > this document is trying not to inherit. Corrected in that entry too.
 3. **Refuse `WAIT` inside a fan-out group in phase 1**, and lift it later.
 
+> **★ DECIDED 2026-09-08: option (3), approved.** A `WAIT` raised inside a fan-out group refuses
+> at the barrier, naming the branch, and the limitation is declared rather than discovered. Phase
+> 1 implements it; lifting it to (2) is later work and stays coupled to `RECOVERY-GRANULARITY-1`
+> rather than to this.
+
 **Recommendation: (3) for phase 1, then (2).** (1) invents a durable record for a case that may
 never be wanted; (2) is right but couples this work to `RECOVERY-GRANULARITY-1`; (3) is a loud,
 declared limitation that keeps phase 1 reviewable and cannot silently lose anything. A `WAIT`
@@ -188,7 +193,7 @@ cheapest guard, and it belongs in the same PR as the shape.
 
 | | | |
 |---|---|---|
-| **0** | The superstep seam: the runner loop takes a **frontier** (a set of nodes) that is always a singleton today; ordinals allocated for the frontier in declaration order | inert — identical behaviour, real seam |
+| ~~**0**~~ | ~~The superstep seam~~ | **DONE — #603**, with one deliberate narrowing: no `resolve_frontier()` was added. Nothing can produce a frontier of >1 until phase 1 declares fan-out edges, and shipping an unused resolver is exactly the `ROUTE-AST-UNWIRED-1` shape this phase is meant to avoid. What shipped is the part that IS on the live path today: barrier ordinal allocation (§4) and the central merge (§3c) |
 | **1** | `FanOutEdgeGroup` declared in the flow graph, executed with **bounded** width and **per-branch sessions**; `WAIT` inside a group refused | the behaviour change, default-off |
 | **2** | `FanInEdgeGroup` / join policies (`all`, `any`, `quorum(k)`) resolved at the barrier, partial outcomes per `EFFECT-PARTIAL-1` | |
 | **3** | Named predicates, then `SwitchCaseEdgeGroup` as a constrained fan-out; closes `FLOW-GRAPH-SIGNATURE-1`'s blind spot | separable, see §6 |
