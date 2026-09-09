@@ -503,8 +503,8 @@ normal move, not an optimization.
 
 ## ★ Trusting a green check — read this before citing CI as evidence
 
-**Twelve separate times** this repo has shipped something that *looked* covered and was not.
-Assume there will be a thirteenth — the catalogue exists so you can recognise the shape, and the
+**Thirteen separate times** this repo has shipped something that *looked* covered and was not.
+Assume there will be a fourteenth — the catalogue exists so you can recognise the shape, and the
 rules below are what it cost to learn:
 
 | # | Variant | How it looked green | Entry |
@@ -521,6 +521,7 @@ rules below are what it cost to learn:
 | 10 | **The instrument cannot see the thing** | `caplog` silently captured nothing for a warning emitted on a WORKER THREAD by a module logger — so the assertion could not tell *"the mechanism did not fire"* from *"I failed to observe it"* | soak harness |
 | 11 | **The answer went stale, not wrong** | seven PRs carried a green `pip-audit` for a week while the advisory refuting it was published — the check asks a question about the OUTSIDE WORLD, and the world moved without the diff moving | `security-audit.yml` |
 | 12 | **The check is right; its CENSUS is hand-written** | `test_every_provider_client_meters_its_response` walked the AST — correctly, per rule 7 — over three file paths typed out by hand, and a fourth client shipped unmetered | `COST-GOVERNOR-1` ph.0 |
+| 13 | **The FIXTURE blinds the test** | the suite patched `_ensure_tools_loaded` to a no-op to isolate the registry, so no test in it could observe that the code under test *called* it — and the call was the bug | `AUTHORITY-NEGOTIATION-1` ph.0 |
 
 **Variant 9 is the one to design against, not just record:** it cannot be fixed by making the
 check better, because the check is fine — the *release* lacks the condition. The only answer
@@ -588,6 +589,21 @@ to keep in sync, and it is the half nobody re-reads — the check's own name bec
 a literal is genuinely wanted (pinning an exact expected set), it must be compared *against* a
 derived set, never used *as* one. **The derivation then needs its own liveness assertion**, or an
 empty census silently satisfies every guard built on it — variant 6 arriving one level up.
+
+**★ Variant 13 is variant 12's cousin, and the difference is where the blindness comes from.**
+In 12 the check enumerated its subjects by hand; here the check was fine and the **fixture**
+removed what it needed to see. A phase-0 sweep called `_ensure_tools_loaded()`, which performs a
+trusted bootstrap registration and so was not inert at all — but every test in its own suite
+patched that function to a no-op *in order to isolate the registry*, which is a correct thing to
+isolate. **The isolation and the blindness were the same line.** CI caught it through an
+unrelated audit-surface assertion (`bootstrap_registration_count: 0` became `1`).
+
+**The rule: a fixture that neutralises a dependency also neutralises any test of HOW that
+dependency is used.** Stubbing something out is a claim that the interaction does not matter —
+so when it does, assert on the interaction *outside* the fixture that hides it. A no-op patch can
+never prove a call did not happen; only a spy or a real invocation can. **When a change claims to
+be inert, at least one test must exercise the real entry point**, because inertness is a property
+of the whole path and a suite scoped to one layer cannot see the other.
 
 Variants 2 and 3 are fixed at the mechanism level (`tests/unit/conftest.py` defaults the marker;
 `AINDY_REQUIRE_NATIVE_BRIDGE=1` turns a skip into a failure) — but both stay listed, because the
