@@ -29,6 +29,31 @@
 #   # the worker is idle and jobs remain ephemeral (lost on restart).
 #   docker compose --profile full up -d
 #
+# ★★ VERIFIED 2026-09-08: THE THREE LINES ABOVE ARE NOT SUFFICIENT, AND FOLLOWING THEM
+# CRASH-LOOPS BOTH api AND worker. Attempted while gathering FR-15's production evidence.
+#
+# EXECUTION_MODE=distributed does more than choose a queue: it moves the API onto deployment
+# profile `distributed-api` and the worker onto `distributed-worker`. Both are PRODUCTION-SAFE
+# profiles, and those demand an explicit third-party plugin sandbox runner, a configured and
+# DIGEST-PINNED plugin container image, a trusted identity chain, and platform support for it.
+# The guard chain is in deployment_contract.py:651 and it fails closed, one error at a time.
+#
+# ★ It cannot be satisfied from this file as written. Measured INSIDE the running container:
+#       platform: linux
+#       container_sandbox: unsupported     <- cannot launch OCI containers (no daemon access)
+#       strong_sandbox:    unsupported
+#       contained_process: supported (insecure-dev)  <- explicitly refused for production-safe
+#   and neither this file nor docker-compose.prod.yml mounts a docker socket or sets any
+#   AINDY_PLUGIN_SANDBOX_* variable.
+#
+# ★ AINDY_DEPLOYMENT_PROFILE is NOT an escape hatch: resolve_worker_deployment_profile()
+#   (deployment_contract.py:365) refuses any value other than 'distributed-worker' for a worker
+#   process, so a lower profile swaps one refusal for another.
+#
+# Making the worker bootable means giving its container real sandbox capability (a docker
+# socket, or a nested runtime) — an infrastructure and security decision, not a config tweak.
+# Tracked as FR-15's evidence blocker in TECH_DEBT.md.
+#
 # With metrics:
 #   docker compose --profile full --profile monitoring up -d
 #
