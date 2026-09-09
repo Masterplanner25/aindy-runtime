@@ -9509,7 +9509,30 @@ enforcement is a failure mode this repository already names — it is the whole 
 
 ## FLOW-PARALLEL-1 — the flow engine has no fan-out, join, or barrier
 
-**Status: CONFLICT HALF SETTLED 2026-09-03 (#569) — OPEN (P1) for the scheduling half.**
+**Status: CONFLICT HALF SETTLED 2026-09-03 (#569); SCHEDULER PHASE 0 SHIPPED 2026-09-08 (#603)
+— OPEN (P1) for phases 1–4.** Design and impact analysis: `docs/runtime/FLOW_PARALLEL_DESIGN.md`.
+
+**★★ Phase 0 widened the TRANSACTION, not the concurrency.** Two things moved onto the live path:
+`_allocate_sequence_numbers(run, count)` allocates `FlowHistory` ordinals for a whole **superstep
+at the barrier** — the `max()+1` it replaced carried a comment stating its own precondition
+(*"a run's nodes execute sequentially (no concurrent writers)"*), which is exactly what fan-out
+removes — and `_merge_superstep` moved the merge **out of per-node status handling**, because
+called per node `merge_state` can only ever see one patch, and one patch at a time IS completion
+order, defeating the policy module entirely.
+
+**★ Deliberately NOT shipped in phase 0: a `resolve_frontier()`.** Nothing can produce a frontier
+wider than one until phase 1 declares fan-out edges, and an unused resolver is the
+`ROUTE-AST-UNWIRED-1` shape this phase exists to avoid.
+
+**★ The relocation nearly cost a guarantee, which is worth keeping.** The pre-existing seam test
+drove `_handle_node_status` — the function the runner calls — so it proved *wiring* for free.
+Moving it to drive `_merge_superstep` directly left the runner free to stop calling the seam with
+every merge test still green. An AST wiring guard was added to restore what the move removed:
+**when a test moves with its code, check whether the old location was carrying a property the new
+one does not.**
+
+**★ Phase 1 needs its own approval.** It introduces concurrency, which `AGENT_WORKING_RULES` §2
+lists under *"Refactoring Must Not: modify the runtime concurrency model"*.
 Filed 2026-08-15 from the Codex comparative audit (G4), verified.
 
 **What shipped: `AINDY/runtime/flow_engine/state_merge.py`** — a declared per-cell conflict

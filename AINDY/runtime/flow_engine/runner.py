@@ -8,6 +8,7 @@ from AINDY.runtime.flow_engine.runner_steps import (
     _claim_waiting_run,
     _execute_current_node,
     _handle_node_status,
+    _merge_superstep,
     _queue_node_failure,
     _record_resource_usage,
 )
@@ -63,6 +64,43 @@ class PersistentFlowRunner:
     _queue_node_failure = _queue_node_failure
     _record_resource_usage = _record_resource_usage
     _handle_node_status = _handle_node_status
+    _merge_superstep = _merge_superstep
+
+    def _allocate_sequence_numbers(self, run, count: int) -> list[int]:
+        """FLOW-PARALLEL-1 phase 0 — a contiguous block of `FlowHistory` ordinals for one superstep.
+
+        Returns ``count`` ordinals in ascending order, to be consumed in **declaration order**.
+
+        ★★ **This exists because the allocation it replaces documented its own precondition, and
+        fan-out is what removes it.** The previous code read ``max(sequence_number) + 1`` under
+        the comment *"max()+1 is safe: a run's nodes execute sequentially (no concurrent
+        writers)"*. That is true today and is exactly what a fan-out group ends — two branches
+        allocating concurrently would collide, and `DUR-4`'s fold depends on the ordinal being a
+        deterministic total order.
+
+        ★ Allocating for the whole superstep **at the barrier**, rather than per branch as it
+        finishes, is what keeps history order and merge order identical: both are declaration
+        order, by construction rather than by luck. Design section 4.
+
+        ★ The runner is the only caller and the only `FlowHistory` writer (design section 3c), so
+        one read-then-write needs no lock here. **If a second writer is ever introduced this
+        becomes a race** — that, not the arithmetic, is the part to protect.
+        """
+        if count < 1:
+            return []
+        from sqlalchemy import func as _sqlfunc
+
+        # Imported here, not at module scope: `runtime_only.py`'s CLI entry depends on this
+        # module chain not pulling in `AINDY.db` at import time (see CLAUDE.md, CLI entry point).
+        from AINDY.db.models.flow_run import FlowHistory
+
+        highest = (
+            self.db.query(_sqlfunc.max(FlowHistory.sequence_number))
+            .filter(FlowHistory.flow_run_id == run.id)
+            .scalar()
+            or 0
+        )
+        return [highest + offset for offset in range(1, count + 1)]
     _advance_to_next_node = _advance_to_next_node
 
     def __init__(
@@ -376,18 +414,10 @@ class PersistentFlowRunner:
                 patch = result.get("output_patch", {})
                 exec_ms = result.get("_execution_time_ms", 0) or execute_response["exec_ms"]
 
-                # DUR-4 — monotonic per-run ordinal so FlowHistory is a deterministically
-                # ordered, fold-able event log. max()+1 is safe: a run's nodes execute
-                # sequentially (no concurrent writers), and it continues correctly across a
-                # resume (seeds from the highest existing sequence).
-                from sqlalchemy import func as _sqlfunc
-
-                _next_seq = (
-                    self.db.query(_sqlfunc.max(FlowHistory.sequence_number))
-                    .filter(FlowHistory.flow_run_id == run.id)
-                    .scalar()
-                    or 0
-                ) + 1
+                # DUR-4 / FLOW-PARALLEL-1 phase 0 — ordinals are allocated for the whole
+                # SUPERSTEP at the barrier, in declaration order, not per branch as it finishes.
+                # A superstep is one node today, so this is exactly the max()+1 it replaces.
+                _next_seq = self._allocate_sequence_numbers(run, 1)[0]
                 self.db.add(
                     FlowHistory(
                         flow_run_id=run.id,
@@ -421,6 +451,14 @@ class PersistentFlowRunner:
                         "error": result.get("error"),
                     },
                     required=True,
+                )
+
+                # FLOW-PARALLEL-1 phase 0 — the superstep's branches, in DECLARATION order.
+                # One node today; the list is what fan-out lengthens, and it is built here rather
+                # than inside per-node status handling because the merge belongs to the superstep.
+                self._merge_superstep(
+                    state,
+                    [{"node": current_node, "patch": patch, "status": node_status}],
                 )
 
                 node_response = self._handle_node_status(
