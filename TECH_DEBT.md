@@ -9001,6 +9001,8 @@ be incomplete. **Either way the runtime must declare a choice**, because the fai
 not choosing wrongly, it is having never chosen. That is a runtime behaviour change and needs a
 proposal under `AGENT_WORKING_RULES` §8 — it is not an agent's call to make.
 
+**★ PROPOSAL FILED 2026-09-09 for the configuration half:** `docs/runtime/WORKFLOW_STORE_DECLARATION_PROPOSAL.md`, under `AGENT_WORKING_RULES` §8. It proposes declaring backend + root + sweep rather than migrating, on the measured finding that **store 4 is write-only from the runtime** — guest scripts create records via an appended `run_workflow(…)` and the host reads none of them, resuming through `PersistentFlowRunner` instead. That is why the truncated migration census in §1 above is a nodus problem and not our exposure. **It does not attempt the split, and does not pre-empt (b).**
+
 **Assessment: (b) first.** The split may well be correct — three engines with three failure
 domains is a defensible design — but it is currently *undocumented*, which means it cannot be
 relied on or reviewed. Writing the contract is cheap, and it is the prerequisite for deciding
