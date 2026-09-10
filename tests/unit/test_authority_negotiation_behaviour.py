@@ -484,3 +484,43 @@ def test_a_refused_negotiation_leaves_the_denial_exactly_as_it_was(adapter_harne
     assert not [e for e in events if e.get("event_type") == "AUTHORITY_NEGOTIATED"]
     step = result["output_patch"]["step_results"][-1]
     assert "negotiated_from" not in step
+
+
+def test_negotiated_from_survives_into_what_flow_history_persists(adapter_harness, monkeypatch):
+    """§6 asks for both attempts in FlowHistory. This closes the last link in that chain.
+
+    ★ The two halves were each proven and the JOIN between them was not, which is how a claim
+    ends up true-by-inspection. `PersistentFlowRunner` stores a node's `output_patch` as
+    `FlowHistory.output_patch = _json_safe(patch)` (`runner.py:427`), so the question is only
+    whether `negotiated_from` survives that serialisation — asserted here against the runner's
+    real `_json_safe`, not a stand-in for it.
+    """
+    nodus_adapter, executed, events = adapter_harness
+    from AINDY.agents import authority_negotiation as an
+    from AINDY.runtime.flow_engine.serialization import _json_safe
+
+    monkeypatch.setattr(
+        nodus_adapter, "check_tool_capability",
+        lambda **kw: (
+            {"ok": True, "error": None, "granted_tools": [], "allowed_capabilities": []}
+            if kw["tool_name"] == "queue_for_review"
+            else {"ok": False, "error": "denied", "granted_tools": [],
+                  "allowed_capabilities": []}
+        ),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        an, "negotiate_capability_denial",
+        lambda **kw: an.NegotiationOutcome(an.OUTCOME_SUCCEEDED, variant="queue_for_review"),
+        raising=True,
+    )
+
+    result = _drive(nodus_adapter, tool_name="send_email")
+    persisted = _json_safe(result["output_patch"])
+
+    step = persisted["step_results"][-1]
+    assert step["negotiated_from"] == "send_email", (
+        "negotiated_from did not survive the serialisation FlowHistory stores through, so the "
+        "history would show only the fallback — a run that never hit a denial"
+    )
+    assert step["tool"] == "queue_for_review"
