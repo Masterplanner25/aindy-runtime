@@ -9012,6 +9012,100 @@ whether (a) is worth doing. This is also the natural home for `QUEUE-DURABILITY-
 
 ---
 
+## GUEST-BUILTINS-DEAD-1 — the documented guest `event`/`memory` API is unreachable, and a green test guards it
+
+**Status: OPEN — P2.** Filed 2026-09-10, measured at HEAD. Nothing is broken at runtime; what is
+wrong is that the runtime *documents and tests* a guest-facing API no execution path can reach.
+
+**`AINDY/runtime/nodus_builtins.py` (530 lines) has ZERO importers under `AINDY/`.** Verified
+repo-wide. The module defines three things, all unreachable:
+
+| Symbol | What it claims to be | Reachable? |
+|---|---|---|
+| `NodusEventBuiltins` | the guest `event` namespace — `emit`, and `wait` with a resume path | **never instantiated, anywhere** |
+| `NodusMemoryBuiltins` | the guest `memory` namespace | never instantiated |
+| `NodusWaitSignal` | raised by `event.wait()` to suspend the flow | never raised outside its own module |
+
+**★ Demonstrated, not inferred.** `event.wait()` carries a full docstring with a worked example
+(`payload = event.wait("approval.received")`). Run that example on the default execution path:
+
+```
+run_one({"script": 'let p = event.wait("approval.received")'})
+  → status: failure, error: Undefined variable: event
+```
+
+The worker never imports `nodus_builtins`; its guest globals are `state`, `memory_context`,
+`input_payload`, `user_id`, `execution_unit_id`, `trace_id`, plus a `memory_bridge` host global.
+There is no `event`.
+
+**★ The wait itself is live — reachable only by an undocumented magic state key.** The worker
+checks `state["nodus_wait_requested"]` *after* execution, so a guest can trip it with
+`set_state`:
+
+```
+set_state("nodus_wait_requested", true); set_state("nodus_wait_event_type", "approval.received")
+  → status: waiting, wait_for: approval.received
+```
+
+So the capability exists and the only documented way to ask for it does not work. **The
+supported-looking API fails; the unsupported one works.**
+
+**★ `WorkerWaitSignal` (`nodus_worker.py:28`) is the vestigial twin.** Defined, caught at `:558`,
+and **raised nowhere in `AINDY/`** — nor reachable by a guest, since `host_globals` passes only
+`memory_bridge`. Its catch branch builds the same `status: "waiting"` payload the live state-flag
+branch at `:535` already builds, so it is a duplicate of a working path, not a stub for a missing
+one.
+
+**★ Why nothing is actually broken: waits are handled at the HOST level, by segmentation.**
+`agent_plan_compiler` splits a plan at each wait step into segments carrying a
+`{"event_type", "correlation_key"}` descriptor (`:273`). The wait never appears in guest script
+text, which is precisely why no execution path needed `event.wait()` and why its absence went
+unnoticed. `nodus_builtins.py` is a vestige of an earlier design in which the guest asked.
+
+**★★ And `CLAUDE.md` documents a syscall that does not exist.** Its Architecture section says
+*"When a node calls `sys.v1.event.wait`, the flow suspends"*. There is no such syscall — the
+registry holds 23 and `sys.v1.event.emit` is the only `event.*` one. **Everything after that
+clause is accurate** (`FlowRun` → `waiting`, the `_waiting` dict, the EventBus broadcast,
+rehydration): it is the *trigger* that is misdescribed, not the mechanism. The real triggers are
+`execution_gate.py`'s `{"status": "WAIT", "wait_for": …}` and the guest path's state flag.
+
+### ★★ A fourteenth variant for the green-check catalogue: the check is fine, its SUBJECT is dead
+
+`MEM-NODETYPE-1` (`32d239b`, 2026-06-27) fixed a real bug in `sys.v1.memory.write` — a default
+`node_type` the validator rejected — and fixed *"the same bug"* in `nodus_builtins.py` at the same
+time. **The second half was never a bug**, because nothing can call that code.
+`tests/unit/test_mem_nodetype_default.py` pins it via `inspect.signature(NodusMemoryBuiltins.write)`,
+so the test is green, gates, covers real source, and reads a signature on a class no execution path
+instantiates. **It cannot fail for a real reason, and it cannot notice if the live half regresses
+in a way the dead half does not.**
+
+This is adjacent to variants 12 and 13 and distinct from both: 12 is a hand-written *census*, 13 is
+a *fixture* that blinds an otherwise-good check. Here the census is right, the fixture is fine, and
+the **subject is unreachable**. The rule that follows: **a test that asserts on a symbol should be
+able to say what calls it.** `inspect.signature` and other reflection-based assertions are the ones
+to check first, because they never execute the thing they describe.
+
+### What to do, and what NOT to do
+
+**Do not delete 530 lines as the first move.** The module is a *design record* of a guest-asks
+model, and the decision of record is that waits are host-level. The cheap, correct sequence:
+
+1. **Fix the `CLAUDE.md` claim** — a documented syscall that does not exist is the only part
+   actively misleading a reader. *(Done in the filing PR.)*
+2. **Decide the guest wait contract.** Either the guest gets no wait API and the magic state key is
+   made explicit and documented, or `event.wait()` is wired into the worker path. **These are
+   different products**, and `WAIT-TYPED-CONTRACT-1` is the entry that should decide it — a guest
+   that can ask for a wait is a resume payload from a less-trusted caller, which is exactly the
+   promotion trigger that entry names.
+3. **Only then** delete or wire the module, and re-point `test_mem_nodetype_default.py`'s second
+   assertion at whatever survives.
+
+**Related:** `WAIT-TYPED-CONTRACT-1` (owns the decision in step 2), `MEM-NODETYPE-1` (closed — the
+fix that half-landed in dead code), `NODUS-SYS-SURFACE-1` (closed — the other case of a guest
+surface that does not reach the runtime the way its name implies).
+
+---
+
 ## AUDIT-CORRELATION-1 — three joins the audit trail cannot make
 
 **Status: OPEN — P2.** Filed 2026-08-15 from the Hermes architectural map (§14), verified.
