@@ -591,12 +591,72 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     return result_payload
 
 
+# ── ORCHESTRATOR-SPLIT-1 store 4 — declare the guest's durable-state substrate ──────
+#
+# nodus's workflow framework keeps its own run records (`.nodus/workflow_framework`),
+# created inside the guest VM because the runtime appends `run_workflow(<name>)` to the
+# guest script source. The host reads none of them — it resumes through
+# `PersistentFlowRunner.resume()` — so the records have no consumer here.
+#
+# That does not make the substrate a non-decision. At nodus 6.0.0 the default store flips
+# `LocalWorkflowStore` (JSON) → `SQLiteWorkflowStore`, and the two do not see each other's
+# records. **The defect is never having chosen**: an undeclared host changes durability
+# substrate on a schedule it does not set. Approved under AGENT_WORKING_RULES §8; see
+# `docs/runtime/WORKFLOW_STORE_DECLARATION_PROPOSAL.md`.
+#
+# ★ `setdefault` semantics, never assignment. An operator who sets one of these has
+#   answered the question; the runtime's job is to ensure it is answered, not to win.
+#   A *blank* value counts as unset, matching nodus's own `workflow_store_backend_from_env`,
+#   which returns None for an empty string.
+#
+# ★ Called from the entry points, NOT at module import. The test suite imports this module
+#   in-process, so a module-level mutation would leak into the session's environment — the
+#   global mutable state §5 forbids. `nodus_worker.py` is only ever spawned by path, so the
+#   entry points are the complete set of places a guest can start here.
+#
+# ★ The ROOT (`NODUS_RUN_STATE_ROOT`) is deliberately NOT defaulted here. There is no
+#   portable correct absolute path, and inventing an `AINDY_`-prefixed alias would be a
+#   second vocabulary for a question nodus already has a name for. Deployment sets it;
+#   `docker-compose.yml` does, backed by a volume. Note it must be `NODUS_RUN_STATE_ROOT`
+#   and not the legacy `NODUS_WORKFLOW_STORE_ROOT`, which relocates only the record half
+#   and leaves `.nodus/graphs/` behind.
+_GUEST_STATE_DECLARATIONS: dict[str, str] = {
+    # Where 6.0.0 is heading, and one file rather than one per run. The records have no
+    # consumer, so moving abandons nothing and needs no migration — which is fortunate,
+    # because `migrate-store` silently carries only what `list_runs` enumerates.
+    "NODUS_WORKFLOW_STORE_BACKEND": "sqlite",
+    # nodus auto-starts a 30s sweep thread per long-lived process, and the warm pool being
+    # default-on is what makes those processes long-lived. It calls `expire_wait_timeouts()`
+    # WITHOUT `release_schedules=True`, so by nodus's own #733 comment it "has no way to
+    # resume anything" — it can terminally dead-letter a waiting record and never execute
+    # one. Declaring a durable root while an unowned thread mutates it is worse than the
+    # ephemeral status quo, so the root and this travel together.
+    "NODUS_WORKFLOW_AUTOSWEEP": "0",
+}
+
+
+def declare_guest_state_environment(env: Optional[dict] = None) -> dict[str, str]:
+    """Declare the guest workflow store's backend and sweep policy; return what was applied.
+
+    Idempotent, and never overrides a value an operator already set. Returns only the keys
+    this call actually wrote, so a caller can tell "declared by us" from "already answered".
+    """
+    target = os.environ if env is None else env
+    applied: dict[str, str] = {}
+    for key, value in _GUEST_STATE_DECLARATIONS.items():
+        if not str(target.get(key) or "").strip():
+            target[key] = value
+            applied[key] = value
+    return applied
+
+
 def main() -> int:
     """One-shot entry: read a single JSON payload from stdin, run it, write the result.
 
     The default execution path — the adapter spawns a fresh worker per execution unless
     the warm pool (NODUS-WARMPOOL-1) is enabled.
     """
+    declare_guest_state_environment()
     raw = sys.stdin.read()
     payload = json.loads(raw or "{}")
     sys.stdout.write(json.dumps(run_one(payload)))
@@ -621,6 +681,8 @@ def _read_exact(stream, n: int) -> "bytes | None":
 
 def serve_forever() -> int:
     import struct
+
+    declare_guest_state_environment()
 
     # Frame over a private dup of stdout, then point fd 1 at devnull so nothing written
     # during a request can corrupt the protocol stream. (run_one already redirects
