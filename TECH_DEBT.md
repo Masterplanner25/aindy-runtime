@@ -9106,6 +9106,60 @@ surface that does not reach the runtime the way its name implies).
 
 ---
 
+## AGENT-EVENT-VOCAB-1 — the agent-event vocabulary was fiction at both layers
+
+**Status: CLOSED 2026-09-10 (#615).** Kept in full because the *cause* generalises to any
+vocabulary anyone is tempted to put beside its model.
+
+**Measured before the fix.** `AGENT_EVENT_TYPES` existed twice and neither copy described reality:
+
+| Where | Names | Consulted? |
+|---|---|---|
+| `AINDY/db/models/agent_event.py` | 9 | **no importers at all** |
+| `AINDY/agents/agent_event_service.py` | 14 | yes — warn-only |
+| **actually emitted in source** | **22** | — |
+
+Eight types were emitted and undeclared — `AGENT_STEP_COMPLETED`, `AGENT_STEP_FAILED`,
+`COLLABORATION_STARTED`, `FAILED` and the four `DELEGATION_*` — so each logged
+*"Unknown event type"* on every emission and was written anyway.
+
+**★★ The cause is structural and is the part worth keeping.** `scripts/check_schema_version.py`
+content-hashes **every** file under `AINDY/db/models/`. Adding one string to a set there trips the
+schema contract and demands a `SCHEMA_CONTRACT_VERSION` bump, a baseline regeneration and two
+hardcoded test-assertion edits — for a change with **zero DDL**, because `event_type` is a plain
+`String(32)` with no constraint or enum. **Demonstrated, not inferred:** adding a dummy type there
+and running the checker produces *"ORM models have changed but SCHEMA_CONTRACT_VERSION has not
+been updated."*
+
+So every one of the commits that added a type put it in the service-side list only, which was the
+**rational** choice each time. This was not carelessness; the location taxed correctness.
+**Rule: never define a vocabulary under `AINDY/db/models/`.** A test now enforces it.
+
+**★ The fix follows `SystemEventTypes`, which had the missing half all along.** One canonical list
+in `AINDY/agents/agent_event_types.py`, re-exported by the service; a SHA-256 baseline
+(`tests/baselines/agent_event_contract.json`); an ORM column guard. **The runtime still WARNS and
+still writes** — `SystemEventTypes` is not enforced at runtime either, and losing an audit row is
+strictly worse than recording one with an undeclared name. The guard makes a new name
+*intentional*; the warning makes it *visible*.
+
+**★★ A hash pins a list against ITSELF and cannot notice it stopped describing the code.** That is
+why the load-bearing test is the AST census asserting every *emitted* type is declared — without
+it this closes the duplicate and leaves the drift. **Its own first draft proved the point:** it
+read only `event_type="LITERAL"`, so it missed names assigned to a variable first
+(`DELEGATION_ACCEPTED`/`REJECTED`) and the `else` branch of a ternary (`AGENT_STEP_FAILED`,
+`COLLABORATION_STARTED`). **The original survey reported SIX undeclared types; the truth was
+EIGHT**, and only mutation testing surfaced it — removing an emitted type from the vocabulary
+failed the *hash* guard and not the census, which is what exposed the blind spot.
+
+**★ `FAILED` is declared because it is emitted, not because it is a good name.** It sits beside
+`EXECUTION_FAILED` and `VERIFY_FAILED` with no indication of what failed. Renaming it is a
+separate change: an event type is a **stored** value, so old rows keep the old name.
+
+**Related:** `GUEST-BUILTINS-DEAD-1` (the other duplicate-vocabulary find of the same week),
+`KERNEL-INIT-DUPLICATE-1` (closed — a byte-identical model copy producing two different classes).
+
+---
+
 ## AUDIT-CORRELATION-1 — three joins the audit trail cannot make
 
 **Status: OPEN — P2.** Filed 2026-08-15 from the Hermes architectural map (§14), verified.

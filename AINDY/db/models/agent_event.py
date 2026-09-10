@@ -11,17 +11,18 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from AINDY.db.database import Base
 
 
-AGENT_EVENT_TYPES = {
-    "PLAN_CREATED",
-    "APPROVED",
-    "REJECTED",
-    "EXECUTION_STARTED",
-    "COMPLETED",
-    "EXECUTION_FAILED",
-    "CAPABILITY_DENIED",
-    "RECOVERED",
-    "REPLAY_CREATED",
-}
+# The agent-event vocabulary lives in `AINDY/agents/agent_event_types.py`, NOT here.
+#
+# ★ A copy used to sit at this spot and was four types stale with zero importers. It rotted
+#   for a structural reason worth not recreating: `scripts/check_schema_version.py`
+#   content-hashes every file under `AINDY/db/models/`, so adding one string to a set here
+#   trips the schema contract and demands a version bump, a baseline regeneration and two
+#   test-assertion edits — for a change with no DDL at all, since `event_type` below is a
+#   plain String(32) with no constraint. Every commit that added a type paid the cheap path
+#   instead, which was the rational choice each time.
+#
+# ★ Do NOT reintroduce a list here "for locality". The vocabulary is pinned by
+#   `tests/unit/test_agent_event_contract.py`; locality is what cost it four types.
 
 
 class AgentEvent(Base):
