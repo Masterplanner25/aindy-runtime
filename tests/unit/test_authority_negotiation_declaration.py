@@ -1,15 +1,22 @@
-"""`AUTHORITY-NEGOTIATION-1` phase 0 — a tool can DECLARE a lower-authority fallback.
+"""`AUTHORITY-NEGOTIATION-1` — a tool can DECLARE a lower-authority fallback (the declaration half).
 
-Phase 0 ships the vocabulary and nothing else: `degraded_variant=` is accepted, validated, and
-**consulted by nothing**. The design (`docs/runtime/AUTHORITY_NEGOTIATION_DESIGN.md` §8) phases
-it this way deliberately, on the declare-then-enforce sequence that let `EXEC-ENV-BIND-1` land in
-pieces.
+Phase 0 shipped the vocabulary: `degraded_variant=` accepted, validated locally at the decorator
+and across tools by a startup sweep. **Phase 1 (#613-onward) made it consulted** — see
+`test_authority_negotiation_behaviour.py` for the negotiation itself. This file still owns the
+DECLARATION: what a valid declaration is, what is refused, and what the sweep reports.
 
-★★ **The inertness is the risky part to test, not the validation.** A declaration nothing
-consults is `ECOGAP-4`'s G4a — built and inert — and this repository already has one of those.
-So `test_the_declaration_changes_nothing_about_execution` is the load-bearing test here: it
-pins that a tool declaring a variant behaves exactly as one that does not. When phase 1 lands,
-that test is the one that must be deliberately changed, which is the point.
+★★ **Updated at phase 1, deliberately.** Two things here were written against phase 0's
+inertness and were changed rather than deleted when it ended:
+
+- `test_nothing_in_the_execution_path_consults_the_field` became
+  `test_only_the_negotiation_module_consults_the_field`. The property worth protecting was never
+  "nobody reads this" — it was **"the set of readers is small and known"**, and that survives the
+  phase change. It did its job on the way out: landing phase 1 turned it red with exactly the
+  message it was written to emit.
+- `test_the_declaration_changes_nothing_about_execution` is unchanged, because what it actually
+  asserts — that declaring a variant adds exactly one key to the registry entry and alters
+  nothing else — is as true in phase 1 as in phase 0. Its docstring overstated it as an
+  execution claim; that is corrected below.
 """
 from __future__ import annotations
 
@@ -192,15 +199,17 @@ def test_a_chain_is_still_named_a_chain_when_capabilities_are_unresolvable(regis
 
 
 # --------------------------------------------------------------------------------------
-# ★★ Phase 0 is inert — the load-bearing guarantee
+# ★★ The declaration is exactly one key — unchanged by phase 1
 # --------------------------------------------------------------------------------------
 
 
 def test_the_declaration_changes_nothing_about_execution(registry, monkeypatch):
-    """★★ THE test for this phase. A declared tool must execute exactly like an undeclared one.
+    """A declaration adds exactly one key to the registry entry and alters nothing else.
 
-    When phase 1 lands, this is the test that must be deliberately changed. Until then it is what
-    separates "shipped a vocabulary" from "shipped a behaviour nobody reviewed".
+    ★ The name and the old docstring said "changes nothing about EXECUTION", which overstated
+    it — this compares registry entries, not behaviour. The narrower claim is the one it can
+    actually make, and it survives phase 1 untouched: negotiation reads the key, it does not
+    change the shape of what declaring one produces.
     """
     _register(registry, "declared", variant="fallback")
     _register(registry, "fallback")
@@ -222,19 +231,28 @@ def test_the_declaration_changes_nothing_about_execution(registry, monkeypatch):
     )
 
 
-def test_nothing_in_the_execution_path_consults_the_field(registry):
-    """★ Pins the phase boundary over the AST, so a comment cannot satisfy it.
+def test_only_the_negotiation_module_consults_the_field(registry):
+    """★ REPLACED at phase 1, deliberately — not deleted because it went red.
 
-    `degraded_variant` may be READ only where it is declared, swept, or logged. A read anywhere
-    on an execution path means phase 1 has arrived — at which point this test should be replaced
-    deliberately, not deleted quietly because it went red.
+    Phase 0's version asserted that NOTHING read ``degraded_variant`` outside its declaration
+    and validation sites, and it did its job: landing phase 1 turned it red with exactly the
+    message it was written to emit.
+
+    The guard is inverted rather than dropped, because the property worth protecting survived
+    the phase change. It was never "nobody reads this" — it was **"the set of readers is small
+    and known"**. A negotiation that grew a second, ad-hoc reader somewhere in the execution
+    path is the thing to catch, and deleting the test would have stopped catching it.
+
+    ``AINDY/agents/authority_negotiation.py`` is the one execution-path reader. The declaration
+    and sweep sites are unchanged.
     """
     import ast
     from pathlib import Path
 
     allowed = {
-        "AINDY/agents/tool_registry.py",   # declaration + sweep
-        "AINDY/startup.py",                # the startup refusal
+        "AINDY/agents/tool_registry.py",          # declaration + startup sweep
+        "AINDY/startup.py",                       # the startup refusal
+        "AINDY/agents/authority_negotiation.py",  # phase 1 — the single execution-path reader
     }
     offenders = []
     for path in Path("AINDY").rglob("*.py"):
@@ -254,10 +272,32 @@ def test_nothing_in_the_execution_path_consults_the_field(registry):
                 break
 
     assert not offenders, (
-        f"degraded_variant is read outside its declaration and validation sites: {offenders}. "
-        f"Phase 0 is declare/refuse/record with NO execution path changes. If this is phase 1, "
-        f"replace this test with one asserting the negotiation behaviour."
+        f"degraded_variant is read outside the declaration, sweep and negotiation sites: "
+        f"{offenders}. Phase 1 routes every consultation through "
+        f"authority_negotiation.negotiate_capability_denial(); a second reader means the "
+        f"single bounded attempt is no longer structurally guaranteed."
     )
+
+
+def test_the_negotiation_module_actually_reads_it(registry):
+    """Liveness for the guard above — the allow-list must name a real reader, not a stale path.
+
+    Without this, the guard degrades into a list of files that happen not to exist, and it would
+    pass just as happily if phase 1 were reverted and the allow-list left behind.
+    """
+    import ast
+    from pathlib import Path
+
+    path = Path("AINDY/agents/authority_negotiation.py")
+    assert path.is_file(), "the phase 1 module is gone; this allow-list entry is now a lie"
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    reads = [
+        n for n in ast.walk(tree)
+        if (isinstance(n, ast.Constant) and n.value == "degraded_variant")
+        or (isinstance(n, ast.Attribute) and n.attr == "degraded_variant")
+    ]
+    assert reads, "authority_negotiation.py is allow-listed but never reads degraded_variant"
 
 
 def test_the_sweep_does_not_force_tools_to_load():

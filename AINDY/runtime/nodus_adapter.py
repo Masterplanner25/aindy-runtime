@@ -153,6 +153,66 @@ def agent_execute_step(state: dict, context: dict) -> dict:
             user_id=user_id,
             tool_name=tool_name,
         )
+    # ── AUTHORITY-NEGOTIATION-1 phase 1 (default-OFF) ─────────────────────────
+    # A denied capability terminates the step, and approval is whole-plan, so the only recovery
+    # today is a human approving an entirely new run — which discards the durable state the
+    # original accumulated. Offer exactly one downgrade to a fallback the TOOL declared at
+    # registration, if the token in hand already authorises it.
+    #
+    # ★ This is the ONLY one of the four CAPABILITY_DENIED sites that can negotiate, and the
+    #   design's "two sites" is a miscount corrected here. `execution.py:51` denies for a
+    #   MISSING token (there is nothing to check a fallback against) and
+    #   `nodus_execution_service.py:335`/`:1056` deny the run-level `execute_flow` capability,
+    #   where there is no tool and therefore no `degraded_variant` to declare. Negotiation
+    #   belongs where a TOOL was refused.
+    #
+    # ★ Rebinding `tool_name` is the whole mechanism, and it grants nothing: `execute_tool`
+    #   below runs its own `check_tool_capability`, so the fallback passes exactly the gate an
+    #   ordinary tool passes. Negotiation chooses what to attempt; the chokepoint still decides
+    #   what may run.
+    negotiated_from = None
+    if not capability_check["ok"]:
+        from AINDY.agents.authority_negotiation import negotiate_capability_denial
+
+        _negotiation = negotiate_capability_denial(
+            tool_name=tool_name,
+            token=execution_token,
+            run_id=agent_run_id,
+            user_id=user_id,
+        )
+        if _negotiation.granted:
+            record_agent_event(
+                run_id=agent_run_id,
+                user_id=user_id,
+                event_type="AUTHORITY_NEGOTIATED",
+                db=db,
+                correlation_id=state.get("correlation_id"),
+                payload={
+                    "step_index": idx,
+                    "denied_tool": tool_name,
+                    "denied_error": capability_check["error"],
+                    "fallback_tool": _negotiation.variant,
+                    "outcome": _negotiation.outcome,
+                },
+                required=True,
+            )
+            logger.warning(
+                "[NodusAdapter] step %s: capability denied for %s (%s); "
+                "negotiated down to declared fallback %s",
+                idx, tool_name, capability_check["error"], _negotiation.variant,
+            )
+            negotiated_from = tool_name
+            tool_name = _negotiation.variant
+            # Re-run the ordinary check for the fallback so the value carried forward is the
+            # real one — not a hand-written {"ok": True} that would diverge the moment
+            # check_tool_capability learns a new rule.
+            capability_check = check_tool_capability(
+                token=execution_token,
+                run_id=agent_run_id,
+                user_id=user_id,
+                tool_name=tool_name,
+            )
+
     if not capability_check["ok"]:
         error_msg = (
             f"Capability denied for step {idx} ({tool_name}): "
@@ -353,6 +413,11 @@ def agent_execute_step(state: dict, context: dict) -> dict:
         "result": tool_result.get("result"),
         "error": tool_result.get("error"),
     }
+    # AUTHORITY-NEGOTIATION-1 §6 — both attempts, not just the one that ran. A record showing
+    # only the successful fallback describes a run that never hit a denial. Absent (rather than
+    # None) on the ordinary path, so it cannot be mistaken for "negotiation ran and declined".
+    if negotiated_from is not None:
+        step_result_dict["negotiated_from"] = negotiated_from
     new_step_results = list(state.get("step_results", [])) + [step_result_dict]
 
     if not tool_result["success"]:

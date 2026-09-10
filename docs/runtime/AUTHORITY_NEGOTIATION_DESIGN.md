@@ -1,14 +1,14 @@
 ---
 title: "Authority Negotiation — Design"
 api_version: "1.0"
-last_verified: "2026-09-08"
+last_verified: "2026-09-10"
 status: current
 owner: "platform-team"
 ---
 
 # Authority negotiation — design
 
-**`AUTHORITY-NEGOTIATION-1`. PHASE 0 SHIPPED 2026-09-08 (#600); phases 1–3 are design only.** Read this before building it — §2
+**`AUTHORITY-NEGOTIATION-1`. PHASES 0 AND 1 SHIPPED (0: 2026-09-08 #600; 1: 2026-09-10); phases 2–3 are design only.** Read this before building it — §2
 overturns the mechanism the entry itself proposes, and §7 is the list of things not to build.
 
 ---
@@ -19,6 +19,23 @@ A denied capability check **terminates the step**. `CAPABILITY_DENIED` is emitte
 `nodus_adapter.py:188` and `nodus_execution_service.py:335`, and the handler returns
 `{"status": "FAILED", ...}`. There is no path that asks *"this step was refused at the authority
 it requested; may it proceed at a lower one?"*
+
+> **★★ CORRECTED at phase 1 — this section named two sites and there are FOUR emissions, of which
+> exactly ONE can negotiate.** The census above was written by hand and was wrong in the way
+> `CLAUDE.md`'s green-check variant 12 describes: a literal list inside a spec, never re-derived.
+> Measured at HEAD:
+>
+> | Site | What is denied | Negotiable? |
+> |---|---|---|
+> | `nodus_adapter.py:188` | a **tool**, via `check_tool_capability` | **yes — this is the one** |
+> | `agent_runtime/execution.py:51` | a **missing token** | no — nothing to check a fallback against |
+> | `nodus_execution_service.py:335` | run-level `execute_flow` | no — no tool, so no `degraded_variant` |
+> | `nodus_execution_service.py:1056` | run-level `execute_flow` | no — same |
+>
+> `degraded_variant` is declared on a **tool**, so negotiation is only meaningful where a tool was
+> refused. Phase 1 wires that one site. **This is not a reduction in scope** — the other three
+> were never reachable by this mechanism, and wiring them would have produced a call that could
+> only ever return `no_variant`.
 
 Because approval is **whole-plan**, the only recovery is a human approving an entirely new run —
 which **discards the durable state the original accumulated**. A run that did nine steps of real
@@ -177,7 +194,7 @@ and had nothing to offer, which is the expected steady state until tools start d
 | | | |
 |---|---|---|
 | ~~**0**~~ | ~~`degraded_variant=` on `register_tool`, validated at registration, **consulted by nothing**~~ | **DONE — #600.** One correction to this row: validation had to SPLIT. Local checks are in the decorator; the three cross-tool rules are a STARTUP sweep (`validate_degraded_variants`), because a forward reference is legitimate and the capability *definitions* the subset rule needs load later, from plugin providers. "At registration" was not achievable as written |
-| **1** | The negotiation stage at the two `CAPABILITY_DENIED` sites, gated default-off | the behaviour change |
+| ~~**1**~~ | ~~The negotiation stage at the two `CAPABILITY_DENIED` sites, gated default-off~~ | **DONE.** Two corrections to this row: it is **one** site, not two (see §1's correction), and the subset rule of §2 is **asked of `check_tool_capability` rather than reimplemented** — a hand-rolled set comparison beside the real one would have omitted the granted-tools test and the agent capabilities that function also enforces |
 | **2** | The WAIT-gate fallback kind | reuses the durable wait; no new machinery |
 | **3** | Flip the default once a real tool declares a variant and a denial has been observed | evidence, not code |
 
