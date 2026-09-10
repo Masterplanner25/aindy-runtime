@@ -640,11 +640,36 @@ runtime mechanism rather than a test.
   an orphan). The merge succeeding proves the *merged* head was green, not that it was your
   latest. **Compare `gh pr view --json headRefOid` against `git rev-parse HEAD` before merging.**
   The tell that was missed: the remote branch survived `--delete-branch`.
-- **A local suite run that stops partway measures how far it got, not whether it passed.** Three
-  full-suite runs died at 31%, 57% and killed; each time "zero failures so far" was reported as
-  evidence and CI then found real failures in files the run never reached alphabetically. On this
-  machine a partial sweep is a *different measurement*, not a weaker one — report it as progress.
-  A targeted subset that finishes is worth more than a broad one that does not.
+- **A local suite run that stops partway measures how far it got, not whether it passed.** Four
+  full-suite runs died at 31%, 57%, killed and 65%; each time "zero failures so far" was reported
+  as evidence and CI then found real failures in files the run never reached alphabetically. A
+  partial sweep is a *different measurement*, not a weaker one — report it as progress, and a
+  targeted subset that finishes is worth more than a broad one that does not.
+
+  **★★ CORRECTED 2026-09-09 — the cause is the MACHINE'S MEMORY, and it is checkable before you
+  start.** This bullet used to say "on this machine" as though the box could never finish a
+  sweep, and that inference outlived its evidence: after clearing ~14 GB of commit and rebooting,
+  `pytest -m runtime_only` completed **1,760 tests, exit 0, zero failures** — the first clean
+  local sweep on record. Same suite, same commit; the only variable was the host.
+
+  The four kills were memory pressure, measured: **9,593 hard page faults/sec with 575 MB
+  available**, against **18/sec with 1,248 MB available** on the run that finished. Check before
+  blaming the suite:
+
+  ```powershell
+  (Get-Counter '\Memory\Available MBytes').CounterSamples[0].CookedValue      # want > ~1500
+  (Get-Counter '\Memory\Pages Input/sec').CounterSamples[0].CookedValue       # want < ~100
+  ```
+
+  **★ The host is 7.7 GB of ON-PACKAGE memory — platform max 8 GB, four channels populated, not
+  upgradable.** So the lever is never "get more RAM", it is running less at once: Docker Desktop
+  idles at ~3.8 GB with zero containers, and stray `npm run dev` / `vite` servers were found
+  holding 1.85 GB three days after anyone used them. `explorer.exe` also leaks (1.1 GB / 11k
+  handles over 15 days), which a reboot clears.
+
+  **★ The rule that survives the correction: a partial run is still not evidence.** What changed
+  is that "it got killed again" is now a symptom with a cause and a number, not a property of the
+  box — so the first question is *how much memory is free*, not *which test is flaky*.
 - **A low mutation score is often bad mutations, not weak tests.** Two runs scored 2/4, and in
   both cases every survivor was a defective mutation — one edited code the fixture disabled, one
   added an unused class while the real branch still ran. **A mutation that does not change
