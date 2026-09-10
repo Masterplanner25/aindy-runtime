@@ -1254,6 +1254,66 @@ look for it in this suite's coverage.
 native Linux, certified for the `v2.9.0` release commit.
 
 ---
+
+## Entry 024 — 2026-09-10
+
+**Trigger:** `v2.10.0` release tag (`sandbox-escape-linux.yml`, run `34430920328`).
+**Commit:** `12e0faa0f248e05ef22c77db07b0aca3c02ff2b0`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–023.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.13s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `34430920328`).
+
+**The certified boundary is untouched.** `git diff v2.9.0..v2.10.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**.
+
+**★★ A LOCAL RUN OF THIS SUITE WAS PRODUCED FIRST AND IS DELIBERATELY NOT THE BASIS OF THIS
+ENTRY.** It also reported 17/17, on the same image, minutes earlier — and its results artifact
+recorded `host_platform: windows` (Docker Desktop, WSL2 backend). Every entry in this file
+certifies on `ubuntu-latest` with a native Linux containers backend, and that is not decoration:
+per `C3`, both supported-platform tuples are `(PLATFORM_LINUX,)`, so a non-Linux host reaches
+`container-sandbox-certified` and **not** `strong-sandbox-certified`. A Windows run showing the
+same 17/17 therefore does not support the same claim, and appending it here would have made this
+file assert something no run had established. **The number matching is exactly what makes the
+substitution tempting; the platform line is the part that carries the claim.**
+
+**★ Nothing in this release changed what this gate measures**, and two things in it could be
+misread as having done so:
+
+- **`nodus-lang` 5.9.0 → 5.13.0 is a security release upstream — for a surface this runtime does
+  not use.** nodus `#843` gave `nodus serve` a default filesystem confinement; code posted to its
+  `POST /execute` could previously read and write anywhere the server process could. **This
+  runtime has zero references to `RuntimeService` or `nodus serve`** — it embeds `NodusRuntime`
+  directly and passes `allowed_paths` explicitly (`GUEST-CONFINE-1`). So the guest-VM row is
+  unchanged in both directions: the runtime was never exposed to that defect, and it gains no
+  boundary strength from the fix. **Do not read a security bump in a dependency as a
+  strengthened boundary here.**
+- **`AUTHORITY-NEGOTIATION-1` phase 0 shipped, and changes what no tool may do.**
+  `register_tool(..., degraded_variant=)` is validated and **consulted by nothing**; no denial
+  path negotiates. A reader seeing "authority negotiation" in the 2.10.0 notes should not infer
+  any change to what authority a refused tool can reach.
+
+**★ One capability arrived that a future entry may need to cover, and was not adopted.** nodus
+5.13.0 adds `max_memory_mb` to `NodusRuntime.__init__` — a per-execution memory ceiling on the
+guest path, the bound `SYSMAX-3` records as "requires OS integration". **Nothing passes it**, so
+no resource bound changed this release. Recorded here because the day it *is* passed, the guest
+VM row acquires a dimension this suite does not currently model.
+
+| Boundary | Certified by this gate? | Status after `v2.10.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | unchanged — the 5.13.0 upstream fix is for `nodus serve`, which this runtime does not use |
+| In-process tool seam | **No** — out of scope | unchanged — `env_spec` exists since `v2.9.0` and **still nothing declares one**; undeclared tools run in-process |
+| Guest per-execution memory ceiling | **No** — not modelled | **newly AVAILABLE, not adopted** (`max_memory_mb`, nodus 5.13.0) |
+| Terminability of an isolated tool | **No** — not a boundary this suite models | unchanged — only the worker's own timeout kills it; a cancel does not |
+| Cross-process execution of runtime work | **No** — not a boundary this suite models | unchanged since Entry 022 |
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.10.0` release commit.
+
+---
 ---
 
 *To add a new entry: run `pytest -m sandbox_escape -v`, note the summary line, and append

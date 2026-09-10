@@ -291,11 +291,32 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
 
+  # ★★ The published artifact is booted as part of releasing it, not incidentally later.
+  #
+  # Before 2026-09-10 nothing did this. `Boot Smoke` skips green on a pre-publish
+  # version-bump PR (the version is not on PyPI yet, by construction), and its own comment
+  # claimed it "re-runs for real once the tag publishes" — it did not: its triggers were
+  # push/pull_request/workflow_dispatch only. So a release published and the wheel stayed
+  # unbooted until an unrelated push to main happened along. On v2.10.0 the newest Boot
+  # Smoke run predated the publish by ten minutes and had skipped against a 404.
+  #
+  # ★ Why this is a `uses:` and not `on: release: [published]` over in that workflow: the
+  # release below is created with the default GITHUB_TOKEN, and GitHub does not start new
+  # workflow runs from events raised by that token. A `release:` trigger would never fire —
+  # the same "green because nothing ran" failure, reintroduced by its own fix.
+  #
+  # It runs BEFORE github-release deliberately: if the published wheel cannot boot, the
+  # release notes should not exist yet.
+  verify-published-wheel:
+    name: Boot the published wheel
+    needs: [publish-pypi]
+    uses: ./.github/workflows/smoke-postgres.yml
+
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [publish-pypi]
+    needs: [publish-pypi, verify-published-wheel]
     permissions:
       contents: write
 
