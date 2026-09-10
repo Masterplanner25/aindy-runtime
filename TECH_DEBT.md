@@ -8877,7 +8877,9 @@ and the two do not see each other's records.** Migration exists and is non-destr
 `NODUS_WORKFLOW_STORE_BACKEND=local` pins the JSON store deliberately instead.
 
 **★ It is NOT live today, and saying so precisely matters.** All 623 records are terminal —
-**zero waiting or pending** — so the flip would strand nothing right now. What the count
+**zero waiting or pending** — so the flip would strand nothing right now. *(★ "all terminal"
+corrected 2026-09-09 — two are `running`; see the correction block below. The conclusion holds:
+the flip endangers `waiting`, and there are none.)* What the count
 establishes is that the store is real, accumulating, unconfigured and unowned, not that an
 incident is pending. A waiting run present at flip time is the failure; none exists yet.
 
@@ -8926,9 +8928,78 @@ longer vague: it is *"write a `WorkflowStore` implementation,"* and it should be
 rather than carried as an aspiration.
 
 **★ Interim, if neither is done soon:** at minimum set `NODUS_WORKFLOW_STORE_ROOT` to a declared,
-runtime-owned, volume-backed path. That does not fix the split — two stores still disagree after a
+runtime-owned, volume-backed path. **★★ DO NOT USE THAT VARIABLE — corrected 2026-09-09, it is the
+wrong one and moves only half the state. `NODUS_RUN_STATE_ROOT` is the supported knob; see the
+correction block below.** That does not fix the split — two stores still disagree after a
 crash — but it stops the losing half of the problem, which is state written somewhere nobody
 declared and nothing preserves.
+
+### ★★ CORRECTIONS 2026-09-09 — measured against nodus-lang 5.13.0, installed
+
+Four claims above are wrong or superseded. Three came from re-measuring; the fourth is a nodus
+change (`#585`) that landed after this entry was written. **The nodus-side defects found doing
+this are written up in `docs/runtime/NODUS_HANDOFF_workflow_store_migration.md`** — none of them
+is runtime work.
+
+**1. ★★ The mitigation this entry relies on does not carry the whole store, and says nothing
+about it.** `nodus workflow migrate-store --dry-run`, run against our 629 records:
+
+```
+"migrated_count": 432, "skipped_count": 0, "failed_count": 0, "waiting_count": 0
+```
+
+**432 of 629, with nothing accounting for the missing 197.** `migrate_workflow_store` iterates
+`source.list_runs()`, and `LocalWorkflowStore._list_runs_unlocked` (`store.py:952`) drops any file
+whose **mtime** is older than `terminal_max_age_days` (default **30**) before loading it. An
+independent mtime count gives 432 within / 197 outside — an exact match, so this is the mechanism,
+demonstrated. **The predicate is mtime, not status**, despite a comment saying *"old completed
+runs"* — so a `waiting` run parked on a webhook for 31 days is exactly what it drops, and
+`waiting` is the state that by definition produces no writes. `--dry-run` reports the same
+truncated number, so rehearsing cannot surface it. **Do not treat a clean migration report as
+evidence the store moved.**
+
+**2. ★ The interim fix names the wrong variable, and the right one exists because the wrong one was
+a security hole.** nodus `#585` added **`NODUS_RUN_STATE_ROOT`**, which moves both halves of a
+run's state together. `NODUS_WORKFLOW_STORE_ROOT` moves only the record half; `nodus/runtime/
+state_paths.py` now calls it *"the narrower, legacy gesture"*. It is worse than incomplete: the
+Floor identified runtime-owned state by a literal `.nodus` path segment, so relocating with the
+legacy variable **moved the store out of the Floor's reach** — nodus demonstrates a guest
+`fs.write("../relocated/pwned.txt", …)` succeeding when relocated and denied at the default path.
+Closed upstream by `run_state_roots()`. **Taking this entry's own interim advice would have
+partially undone `GUEST-CONFINE-1`.**
+
+**3. ★ Stores 3 and 4 are two halves of one run's state, not two independent stores.** nodus `#476`
+gave `.nodus/graphs/` and `.nodus/workflow_framework/` a shared *lifecycle*; `#585` gave them a
+shared *location*. Measured here: `runs/` **629** records against `graphs/` **631** files —
+near-identical, as two halves of one thing should be. The numbered list above still reads as
+though fix (a) reaches 3 and not 4; that is true of `set_effect_store` and false of location and
+lifecycle. **The argument for why 4 is categorically different — that it reimplements this
+runtime's durability vocabulary — is untouched.**
+
+**4. ★ "All terminal" is wrong, and the exception is unreapable.** Of 629, **2 are `running`**
+(`g_22e08bd3`, `g_7a927542`), both `claim: null` / `wait: null` — orphans of processes that died
+mid-run. `running` is not in `TERMINAL_RUN_STATUSES`, and `_prune_terminal_runs` only ever removes
+terminal runs, so **no retention setting can ever reap them**. Zero `waiting`, so the flip risk is
+unchanged.
+
+**★ "Nothing prunes it" is right, and the reason is sharper than assumed.**
+`terminal_max_age_days` looks like retention and is not — it bounds the *scan*, not the directory
+(`store.py:682`, explicit). The real ceiling is `max_terminal_runs`, **opt-in and off by default**,
+and it is **not reachable through `create_workflow_store()`** — only `LocalWorkflowStore(…)` takes
+it, so using it means constructing a store and injecting it via
+`configure_default_workflow_runner(runner=…)`. That is the same injection point option (a) needs.
+
+**★ The size figure was the whole tree at block allocation.** ~5.4 MB is `.nodus/` including
+`graphs/`; actual content is ~1.3 MB (629 tiny files against 4 KB blocks). Immaterial to the
+argument, corrected because the entry states it as a measurement.
+
+**★ What this does not change: the deadline, or the ordering.** Nothing here is in-flight (zero
+`waiting`), 5.12.0 ships the tooling, and (b) is still first. What it changes is that **pinning is
+now the cheaper half of the decision than migrating** — `NODUS_WORKFLOW_STORE_BACKEND=local` is
+one declared value and carries no census risk, where migrating means trusting a report §1 shows to
+be incomplete. **Either way the runtime must declare a choice**, because the failure at 6.0.0 is
+not choosing wrongly, it is having never chosen. That is a runtime behaviour change and needs a
+proposal under `AGENT_WORKING_RULES` §8 — it is not an agent's call to make.
 
 **Assessment: (b) first.** The split may well be correct — three engines with three failure
 domains is a defensible design — but it is currently *undocumented*, which means it cannot be
