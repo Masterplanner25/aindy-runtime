@@ -8,8 +8,23 @@ name: Boot Smoke (PostgreSQL)
 # Installs the published wheel from PyPI: `pip install aindy-runtime==<version>`
 # (version read from AINDY/_version.py in the checkout). On a pre-publish
 # version-bump PR the version is not on PyPI yet, so the job skips gracefully
-# (green, with a ::notice) instead of failing — it re-runs for real once the tag
-# publishes. See the "Check whether this version is published on PyPI" gate step.
+# (green, with a ::notice) instead of failing. See the "Check whether this
+# version is published on PyPI" gate step.
+#
+# ★★ THE SKIP IS ONLY SAFE BECAUSE SOMETHING ARRANGES THE UN-SKIPPED RUN, and
+# until 2026-09-10 nothing did. This comment used to end "it re-runs for real
+# once the tag publishes" — that was FALSE, and the false half is the dangerous
+# half: a release published, the pre-publish run skipped green, and the wheel was
+# never booted until an unrelated push to main happened by. Verified on v2.10.0,
+# where the newest run predated the publish by ten minutes.
+#
+# ★ `workflow_call` is why the fix works, and `release:` is why the obvious fix
+# does NOT. `publish.yml` creates the GitHub release with the default
+# `GITHUB_TOKEN`, and GitHub deliberately does not start new workflow runs from
+# events raised by that token — so `on: release: [published]` here would be a
+# trigger that never fires, which is the same "green because nothing ran" shape
+# this whole change exists to close. Calling this workflow from inside
+# `publish.yml` stays within one run and needs no cross-workflow event.
 
 on:
   push:
@@ -17,6 +32,9 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  # Invoked by publish.yml immediately after publish-pypi, so the published
+  # artifact is booted as part of releasing it rather than incidentally later.
+  workflow_call:
 
 permissions:
   contents: read
