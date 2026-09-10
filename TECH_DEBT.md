@@ -9989,6 +9989,26 @@ hand-rolled in a `while` loop, or improvised with `asyncio.create_task`.
 
 ## AUTHORITY-NEGOTIATION-1 — a capability denial has no bounded recovery path
 
+**★★ PHASE 1 SHIPPED 2026-09-10 — the negotiation is wired, default-OFF. Open for 2–3.**
+`AINDY/agents/authority_negotiation.py` offers exactly one downgrade on a tool capability denial,
+gated by `AINDY_AUTHORITY_NEGOTIATION` (opt-IN; anything unrecognised reads as off).
+**★★ It cannot grant authority, structurally rather than carefully: it decides only WHICH TOOL to
+attempt, and `execute_tool` then runs its own `check_tool_capability`** — so a negotiated tool
+passes exactly the gate an ordinary one passes. §7's "do not build a widening path" is unreachable
+rather than merely unauthorised. **★ The §2 subset rule is ASKED of `check_tool_capability`, not
+reimplemented** — a hand-rolled `required ⊆ allowed` check would silently omit the granted-tools
+test and the AGENT capabilities that function also enforces. **★★ The design said "the two
+`CAPABILITY_DENIED` sites" and there are FOUR, of which exactly ONE is negotiable** (variant 12:
+a hand-written census in a spec) — the other three deny a MISSING TOKEN or the run-level
+`execute_flow`, where there is no tool and so no `degraded_variant`; corrected in §1.
+**★ Phase 0's inertness guard was REPLACED, not deleted — inverted into a bounded-readers guard,
+because the property was never "nobody reads this" but "the readers are few and known".**
+**★ Arguments carry over unchanged: declaring a variant IS the promise that it accepts the
+original's arguments — the one part a declaration cannot express, so it is stated rather than
+validated.** Two extra counter labels beyond §6's four (`disabled`, `chain_refused`), both
+explained on the metric. Mutation-tested 6/6.
+
+
 **Status: OPEN — P1. PHASE 0 SHIPPED 2026-09-08 (#600): the vocabulary exists and is validated;
 nothing consults it.** Filed 2026-08-15 from the Codex comparative audit (G5), verified.
 

@@ -44,6 +44,9 @@ AGENT_EVENT_TYPES = {
     "CANCELLED",  # AGENT-HARDEN-1 — operator-driven cooperative cancel (terminal)
     "VERIFIED",  # AGENT-HARDEN-6 — post-conditions checked and held
     "VERIFY_FAILED",  # AGENT-HARDEN-6 — post-conditions did not hold (terminal)
+    # AUTHORITY-NEGOTIATION-1 phase 1 — a capability denial was offered exactly one
+    # downgrade to a tool-declared fallback. Recorded whether or not it was taken.
+    "AUTHORITY_NEGOTIATED",
 }
 
 

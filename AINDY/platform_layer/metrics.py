@@ -120,6 +120,31 @@ run_cancel_observed_total = Counter(
     registry=REGISTRY,
 )
 
+# ── Authority negotiation (AUTHORITY-NEGOTIATION-1 phase 1) ──────────────────
+#
+# ★ Not optional decoration. Without this counter, "negotiation never fires because denials
+# are rare" and "negotiation is not wired to anything" are indistinguishable — which is the
+# ambiguity that made CANCEL-REACH-1 ship a counter and the class ROUTE-AST-UNWIRED-1
+# catalogues. `no_variant` matters most: it says the mechanism RAN and had nothing to offer,
+# which is the expected steady state until tools start declaring variants.
+#
+# Design §6 names four labels. Two more are emitted, deliberately:
+#   disabled       — the flag is off. Separating it from `no_variant` is what distinguishes
+#                    "switched off" from "on, and nothing declared a fallback"; collapsing them
+#                    would recreate the exact ambiguity the counter exists to remove.
+#   chain_refused  — a fallback that declares its own fallback, refused at negotiation time.
+#                    Should be unreachable (startup sweeps refuse chains), so a non-zero value
+#                    means a tool was registered after the sweep ran.
+authority_negotiation_total = Counter(
+    "aindy_authority_negotiation_total",
+    "Authority negotiation outcomes on a capability denial: succeeded (a declared fallback was "
+    "attempted), no_variant (ran, nothing declared), variant_denied (the fallback needs "
+    "capabilities the token lacks), refused_not_granted (the fallback is not a granted tool), "
+    "disabled (flag off), chain_refused (the fallback declares its own fallback).",
+    ["outcome"],
+    registry=REGISTRY,
+)
+
 # ── LLM token usage (COST-GOVERNOR-1, the meter half) ────────────────────────
 #
 # The runtime enforced a 300s wall-clock and 256MiB memory ceiling on work whose dominant
