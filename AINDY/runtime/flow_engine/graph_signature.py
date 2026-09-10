@@ -61,7 +61,22 @@ def _canonical_edges(edges: Any) -> dict[str, list[Any]]:
 
         targets: list[Any] = []
         for edge in raw:
-            if isinstance(edge, dict):
+            if type(edge).__name__ == "FanOutEdgeGroup":
+                # FLOW-PARALLEL-1 phase 1 — the THIRD shape. Matched by type NAME so this module
+                # keeps importing nothing from the engine it describes.
+                #
+                # ★★ Encoded as a NEW key rather than by re-encoding the existing two shapes.
+                #   Every suspended run is hashed under today's canonicalisation, so a
+                #   canonicaliser that reordered or re-spelled a bare string or a gated dict would
+                #   quarantine every in-flight run on upgrade. That is the mistake
+                #   `FLOW-GRAPH-SIGNATURE-1`'s *absent ≠ mismatch* rule exists to prevent, and
+                #   `test_existing_flow_signatures_are_unchanged` pins it.
+                #
+                # ★ Adding a group to a flow SHOULD change that flow's signature: it is a
+                #   topology change, and a run planned against the sequential shape must
+                #   quarantine. That is the mechanism working.
+                targets.append({"fan_out": [str(t) for t in edge.targets]})
+            elif isinstance(edge, dict):
                 # A conditional edge. The target and the fact that it is gated are topology;
                 # the callable under "condition" is an implementation and is not read at all.
                 targets.append({"target": str(edge.get("target") or ""), "gated": True})

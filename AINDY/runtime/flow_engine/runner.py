@@ -8,6 +8,7 @@ from AINDY.runtime.flow_engine.runner_steps import (
     _claim_waiting_run,
     _execute_current_node,
     _handle_node_status,
+    _execute_superstep,
     _merge_superstep,
     _queue_node_failure,
     _record_resource_usage,
@@ -65,6 +66,7 @@ class PersistentFlowRunner:
     _record_resource_usage = _record_resource_usage
     _handle_node_status = _handle_node_status
     _merge_superstep = _merge_superstep
+    _execute_superstep = _execute_superstep
 
     def _allocate_sequence_numbers(self, run, count: int) -> list[int]:
         """FLOW-PARALLEL-1 phase 0 — a contiguous block of `FlowHistory` ordinals for one superstep.
@@ -358,6 +360,10 @@ class PersistentFlowRunner:
         }
         self._current_run = run
         self._current_state = state
+        # FLOW-PARALLEL-1 phase 1 — a superstep's branches need the execution context, and
+        # `_advance_to_next_node` (where the frontier is resolved) does not receive it. Stashed
+        # beside the run and state that are already kept here for the same reason.
+        self._current_context = context
         self._root_event_id = root_event_id
 
         try:
