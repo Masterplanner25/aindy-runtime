@@ -67,6 +67,13 @@ COPY --from=builder /install /usr/local
 RUN groupadd --system --gid 1000 aindy \
     && useradd --system --uid 1000 --gid aindy --create-home aindy
 
+# Guest workflow run state (ORCHESTRATOR-SPLIT-1 store 4). Created here, owned by
+# aindy, BEFORE the volume is mounted over it: Docker seeds a named volume from the
+# image path it covers, so a directory absent from the image is created root:root and
+# the non-root runtime cannot write to it. The store would then fail to open on the
+# first guest workflow rather than at boot, which is a bad place to find out.
+RUN mkdir -p /var/lib/aindy/nodus-state && chown -R aindy:aindy /var/lib/aindy
+
 USER aindy
 WORKDIR /home/aindy
 

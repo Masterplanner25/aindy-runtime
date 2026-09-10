@@ -114,8 +114,19 @@ services:
       # The default (127.0.0.1) would accept connections only from inside
       # the container — unreachable from the host via published ports.
       AINDY_HOST: "0.0.0.0"
+      # ORCHESTRATOR-SPLIT-1 store 4. nodus's workflow framework writes guest run
+      # records relative to the worker process's CWD, which no spawn path sets -- so
+      # without this they land in /home/aindy, a directory with no volume, and are
+      # container-ephemeral. Declared here rather than left to the default because at
+      # nodus 6.0.0 the store flips JSON -> SQLite and the two cannot read each other.
+      # ★ NODUS_RUN_STATE_ROOT, not the legacy NODUS_WORKFLOW_STORE_ROOT: the latter
+      #   relocates only the record half and leaves .nodus/graphs/ behind.
+      # ★ WAL is unsafe on network filesystems, so this must stay a local named volume
+      #   and must not be pointed at an NFS/CIFS bind mount.
+      NODUS_RUN_STATE_ROOT: /var/lib/aindy/nodus-state
     volumes:
       - ./AINDY/.env:/etc/aindy/.env:ro
+      - nodus_state:/var/lib/aindy/nodus-state
     ports:
       - "8000:8000"
     depends_on:
@@ -181,8 +192,19 @@ services:
       # whatever EXECUTION_MODE is set in .env so the worker is never silently
       # idle while the API dispatches to its own thread pool instead of Redis.
       EXECUTION_MODE: distributed
+      # ORCHESTRATOR-SPLIT-1 store 4. nodus's workflow framework writes guest run
+      # records relative to the worker process's CWD, which no spawn path sets -- so
+      # without this they land in /home/aindy, a directory with no volume, and are
+      # container-ephemeral. Declared here rather than left to the default because at
+      # nodus 6.0.0 the store flips JSON -> SQLite and the two cannot read each other.
+      # ★ NODUS_RUN_STATE_ROOT, not the legacy NODUS_WORKFLOW_STORE_ROOT: the latter
+      #   relocates only the record half and leaves .nodus/graphs/ behind.
+      # ★ WAL is unsafe on network filesystems, so this must stay a local named volume
+      #   and must not be pointed at an NFS/CIFS bind mount.
+      NODUS_RUN_STATE_ROOT: /var/lib/aindy/nodus-state
     volumes:
       - ./AINDY/.env:/etc/aindy/.env:ro
+      - nodus_state:/var/lib/aindy/nodus-state
     depends_on:
       postgres:
         condition: service_healthy
@@ -274,6 +296,9 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  # Guest workflow run state (ORCHESTRATOR-SPLIT-1 store 4). Local driver on purpose:
+  # the SQLite store runs in WAL mode, which is unsafe over a network filesystem.
+  nodus_state:
   mongo_data:
   prometheus_data:
   grafana_data:

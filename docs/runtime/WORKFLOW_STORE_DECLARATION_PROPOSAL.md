@@ -8,7 +8,9 @@ owner: "platform-team"
 
 # Proposal — declaring the guest workflow store
 
-**Status: PROPOSAL, awaiting approval. No code change accompanies this document.**
+**Status: APPROVED 2026-09-09 — option B+C+D. Implemented in #612.**
+
+*Kept as written, including the options not taken, because the reasoning is the record of why this posture and not another. The one thing implementation changed: the Docker image must create the state directory owned by `aindy` before the volume mounts over it — a named volume covering a path absent from the image is created `root:root`, and the non-root runtime cannot write to it. That would have surfaced on the first guest workflow rather than at boot.*
 
 Written under `AGENT_WORKING_RULES` §8, which requires a proposal before a runtime behaviour
 change. Choosing where guest run state is written, in what format, and whether an unowned
