@@ -649,8 +649,9 @@ runtime mechanism rather than a test.
   **★★ CORRECTED 2026-09-09 — the cause is the MACHINE'S MEMORY, and it is checkable before you
   start.** This bullet used to say "on this machine" as though the box could never finish a
   sweep, and that inference outlived its evidence: after clearing ~14 GB of commit and rebooting,
-  `pytest -m runtime_only` completed **1,760 tests, exit 0, zero failures** — the first clean
-  local sweep on record. Same suite, same commit; the only variable was the host.
+  `pytest -m runtime_only` completed **2,556 tests, exit 0, zero failures** — the first clean
+  local sweep on record. (#605 said 1,760; that was counted off progress dots rather than from
+  `--collect-only`, and was wrong. The count is the only thing that changed.) Same suite, same commit; the only variable was the host.
 
   The four kills were memory pressure, measured: **9,593 hard page faults/sec with 575 MB
   available**, against **18/sec with 1,248 MB available** on the run that finished. Check before
