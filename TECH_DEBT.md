@@ -4041,6 +4041,21 @@ because it may reduce to items 2 and 3.
 
 **Resolution direction:** When per-EU memory limits become production-critical (multi-tenant SaaS, hostile-third-party profile with untrusted extensions), wire `resource.getrusage(RUSAGE_SELF).ru_maxrss` into the quota check and enforce `MAX_MEMORY_BYTES_PER_EXECUTION`. On Linux, `ru_maxrss` is kilobytes; on macOS, bytes — the platform difference must be normalized.
 
+**★★ PARTLY AVAILABLE 2026-09-09 WITHOUT THE OS WORK — on the guest path only.** nodus-lang
+5.13.0 adds **`max_memory_mb`** to `NodusRuntime.__init__` (absent in 5.9.0; found by diffing the
+signature during #606). That is a per-execution memory ceiling on the one path where untrusted
+code actually runs, supplied by the VM rather than by `resource.getrusage()` — so the "requires
+OS integration" blocker does **not** apply to it.
+
+**★ It does not close this entry.** The gap here is per-EU enforcement across *every* execution
+unit; `max_memory_mb` bounds the nodus guest and nothing else. An agent run or a flow node that
+OOMs the API process is still unbounded. What changed is that the highest-risk path — arbitrary
+guest script — is now boundable cheaply, and `EXEC-ENV-BIND-1`'s `resources` descriptor is the
+natural place to declare it, which makes this a candidate for that entry's phase 4 rather than
+for the OS integration described above.
+
+**★ Not adopted.** #606 changed pins only; nothing passes `max_memory_mb` yet.
+
 **Reopen trigger:** First OOM incident in a production deployment, or when `hostile-third-party` deployment profile becomes the active default.
 
 ---
@@ -8807,7 +8822,15 @@ Provenance: `CREWAI_ON_NODUS_IMPLEMENTATION_STUDY.md` §6 (`C:\codev\Crewai rese
 re-verified against Nodus at **`v5.0.4-2`** on 2026-08-17.
 
 4. **Nodus `src/nodus_lang_workflow/`** — `models.py` (176) + `runner.py` (1 053) +
-   `store.py` (1 103), a **SQLite** `LocalWorkflowStore` behind a `WorkflowStore(ABC)`.
+   `store.py` (1 103), a `LocalWorkflowStore` behind a `WorkflowStore(ABC)`.
+
+   > **★ CORRECTION 2026-09-09 — this line said "a SQLite `LocalWorkflowStore`" and that
+   > conflated two classes.** `LocalWorkflowStore` (`store.py:516`) is the **JSON** store and is
+   > today's default; `SQLiteWorkflowStore` (`store.py:1037`) is a *separate* class selected by
+   > `NODUS_WORKFLOW_STORE_BACKEND`. The distinction is not cosmetic — see the measurement below,
+   > where the flip between them is the thing with a deadline. The vocabulary-reimplementation
+   > citations that follow are at `store.py:201`–`:344`, ahead of both classes, so they are
+   > record-level helpers and the argument they support is unaffected.
 
 **★ This one is categorically different from store 3 and that is why it was missed.**
 `task_graph.py` is a *checkpoint file*. `nodus_lang_workflow` is an **independent
@@ -8832,6 +8855,31 @@ re-drives a crashed run from the last *fully completed* segment — `_count_comp
 partially-executed segment restarts from its first step.** If the guest independently rehydrates
 its own claim/wait/retry state from SQLite while the host re-runs that segment from step one, the
 two disagree about what has already happened, and nothing detects it.
+
+**★★ MEASURED 2026-09-09, and it now has a deadline.** This entry has argued from inspection
+since August that store 4 "roots relative to the worker's CWD — which no spawn path sets — in a
+directory with NO compose volume." `nodus check --staged` (new in nodus 5.12.0) found it and
+counted it:
+
+```
+C:\devindy-runtime\.nodus\workflow_framework
+uns: 623 run record(s) in the file-backed
+JSON store, which is not the default at 6.0.0. Runs recorded here are not visible to a SQLite
+store, so an in-flight waiting run would become unresumable rather than move.
+```
+
+**623 records, 5.4 MB, in the repo root** — gitignored (`/.nodus/`), so invisible to every
+review, and rooted exactly where the entry predicted. The inference is now evidence.
+
+**★ The deadline: at nodus 6.0.0 the default store flips `LocalWorkflowStore` → `SQLiteWorkflowStore`,
+and the two do not see each other's records.** Migration exists and is non-destructive
+(`nodus workflow migrate-store --to sqlite`, with a real `--dry-run`);
+`NODUS_WORKFLOW_STORE_BACKEND=local` pins the JSON store deliberately instead.
+
+**★ It is NOT live today, and saying so precisely matters.** All 623 records are terminal —
+**zero waiting or pending** — so the flip would strand nothing right now. What the count
+establishes is that the store is real, accumulating, unconfigured and unowned, not that an
+incident is pending. A waiting run present at flip time is the failure; none exists yet.
 
 **★ Why this is worse than a missing layer, and the reason it stays open rather than being
 deferred:** two well-built durability implementations that have never been tested against each
@@ -9622,6 +9670,28 @@ first fan-out is written against the real seam rather than an unused one (`ROUTE
 ★ `state_policies` is deliberately **not** in the graph signature. `FLOW-GRAPH-SIGNATURE-1`
 hashes topology, not semantics, and excludes `node_configs` for the same reason: a policy edited
 between suspend and resume must not quarantine every in-flight run.
+
+**★★ A BARRIER PRIMITIVE NOW EXISTS ONE LAYER DOWN, 2026-09-09.** nodus-lang 5.11.0 shipped
+`#578`: **a `state` cell can declare its own join — `with { barrier: true }`.** That is this
+entry's `barrier` policy, at the language layer, on the substrate our guest scripts already run.
+
+**★ It does NOT supply the scheduling half and must not be read as doing so.** A nodus `state`
+cell joins writers *inside one guest program*; `FLOW-PARALLEL-1` is about the flow engine running
+**flow nodes** concurrently, which is a different executor, a different durability story
+(`FlowHistory`, `sequence_number`, the superstep barrier from phase 0) and a different session
+constraint (design §3). Nothing about `with { barrier: true }` moves phase 1.
+
+**★ What it IS worth: a second, independent design landing on the same answer.** This entry chose
+a *declared* per-cell join with no implicit default, over completion-order merging; LangGraph's
+`NamedBarrierValue` was the first witness, and nodus arriving at declared-barrier-on-the-cell is
+the second — from a team that did not read this file. **`state_merge.py`'s `barrier` policy is
+the shape to keep**, and the convergence is evidence it is not idiosyncratic.
+
+**★ The trap to avoid if the two are ever bridged:** the guest's barrier and the host's are
+separate joins over separate state. A `.nd` script that barriers internally while the host
+barriers a superstep around it has two joins that do not know about each other — the same
+overlap-only failure `ORCHESTRATOR-SPLIT-1` records for the durability stores, arriving in the
+concurrency vocabulary. Do not fold them without deciding which one owns the join.
 
 **Remaining: the scheduler.** Nothing yet runs branches concurrently — that is the whole of the
 open half, and it now has a defined merge semantics to commit into.
