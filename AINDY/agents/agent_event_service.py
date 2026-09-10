@@ -25,29 +25,20 @@ from sqlalchemy.orm import Session
 from AINDY.core.execution_signal_helper import queue_system_event
 from AINDY.core.system_event_service import SystemEventEmissionError
 from AINDY.platform_layer.trace_context import get_parent_event_id
+from AINDY.agents.agent_event_types import AGENT_EVENT_TYPES as _CANONICAL_AGENT_EVENT_TYPES
 from AINDY.platform_layer.trace_context import get_trace_id
 from AINDY.utils.uuid_utils import normalize_uuid
 
 logger = logging.getLogger(__name__)
 
-AGENT_EVENT_TYPES = {
-    "PLAN_CREATED",
-    "APPROVED",
-    "REJECTED",
-    "EXECUTION_STARTED",
-    "COMPLETED",
-    "EXECUTION_FAILED",
-    "CAPABILITY_DENIED",
-    "RECOVERED",
-    "REPLAY_CREATED",
-    "WAITING",  # RTR-1 Phase 2e — agent run parked on a mid-plan WAIT step
-    "CANCELLED",  # AGENT-HARDEN-1 — operator-driven cooperative cancel (terminal)
-    "VERIFIED",  # AGENT-HARDEN-6 — post-conditions checked and held
-    "VERIFY_FAILED",  # AGENT-HARDEN-6 — post-conditions did not hold (terminal)
-    # AUTHORITY-NEGOTIATION-1 phase 1 — a capability denial was offered exactly one
-    # downgrade to a tool-declared fallback. Recorded whether or not it was taken.
-    "AUTHORITY_NEGOTIATED",
-}
+# The vocabulary lives in `agent_event_types` and is pinned by
+# `tests/unit/test_agent_event_contract.py`. Re-exported here because 40+ call sites and
+# tests import it from this module; moving the DEFINITION was the point, not the import path.
+#
+# ★ It is deliberately NOT in `AINDY/db/models/`, where a stale copy used to live: that
+#   directory is content-hashed by the schema contract, so adding one string there costs a
+#   SCHEMA_CONTRACT_VERSION bump for a change with no DDL. That tax is why the copy rotted.
+AGENT_EVENT_TYPES = _CANONICAL_AGENT_EVENT_TYPES
 
 
 def emit_event(
