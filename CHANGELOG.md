@@ -2,7 +2,191 @@
 
 ## Unreleased
 
-_Nothing yet._
+## 2.10.0 — 2026-09-09
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No schema step.** `SCHEMA_CONTRACT_VERSION` and the Alembic
+  head are unchanged from 2.9.0, so `bootstrap-schema --reconcile` is not needed. *(2.8.0 did
+  need one and 2.9.0 did not; they alternate, so do not pattern-match — check, as here.)*
+- **`pydantic-core` is no longer pinned by this package.** If you were holding it to our number
+  to make a resolution work, you can stop. See the entry below.
+- **`nodus-lang` moves 5.9.0 → 5.13.0, which is a security release upstream — and this runtime
+  was not exposed to the vulnerability.** nodus `#843` confined `nodus serve`'s filesystem by
+  default; `RuntimeService` and `nodus serve` have zero references in `AINDY/`, because the
+  runtime embeds `NodusRuntime` directly and passes `allowed_paths` explicitly. Stated plainly
+  so nobody has to infer their exposure from a version number.
+
+### Changed — `pydantic-core` is no longer pinned by this package (#591)
+
+- **`pydantic_core==` is removed from `pyproject.toml` and `AINDY/requirements.txt`.** Consumers
+  resolving against `aindy-runtime` no longer have to satisfy an exact `pydantic-core` version
+  from us; pip derives it from `pydantic`, which fixes it with `==` of its own. Anyone who was
+  holding `pydantic-core` to our number to keep a resolution working can stop.
+- **Reproducibility is unchanged.** It never came from our line — it comes from `pydantic`'s own
+  exact requirement. Ours was a second, unauthoritative copy of a value we do not choose, and a
+  hand-maintained copy of a derived value can only drift from the thing deriving it. It drifted
+  three times in a week: #575, #584 and #590 each failed with `ResolutionImpossible`.
+- **Why grouping did not fix it, since #583 shipped claiming it would:** a dependabot group bumps
+  whichever members have updates, *each to its own latest*. For an `==`-linked pair that is valid
+  only in the coincidence where the newest `pydantic-core` is the exact one the newest `pydantic`
+  pins — so it fails whether it moves one member or both. The group is kept only as a guard rail
+  in case the pin is ever re-added.
+- **The convention this makes an exception to:** `AINDY/requirements.txt` otherwise pins
+  transitives exactly. The rule that survives is **pin what you choose, never what is derived** —
+  a transitive whose version is fixed by an exact requirement upstream must not be pinned here.
+- Recorded under `DEP-UPGRADE-DEFERRED-1`, including that
+  `tests/unit/test_dependency_pin_agreement.py::test_no_installed_package_forbids_our_declared_pins`
+  would have caught all three at a developer's desk and was not run on any of them.
+
+### Fixed — the DeepSeek client did not meter token usage (`COST-GOVERNOR-1` phase 0, #597)
+
+- `DeepSeekLLMClient.chat_completion_response` returned the provider response without calling
+  `observe_llm_usage`, so `aindy_llm_tokens_total` recorded **nothing** for DeepSeek. Phase 0
+  (#564, in v2.9.0) metered the raw response path for anthropic, openai and azure_openai and
+  missed the fourth client. Nothing routes through it today, so no spend was lost from a bill —
+  but any adoption of that provider would have measured zero, which is the precise failure
+  phase 0 existed to prevent.
+- **The guard that should have caught it existed and was not wrong — its census was.**
+  `test_every_provider_client_meters_its_response` parsed the AST rather than matching strings
+  (deliberately, per `CLAUDE.md`), but iterated **three file paths written by hand**. A test
+  named *every* meant *these three*. The census is now derived from the source: any
+  `AINDY/platform_layer/*_client.py` defining `messages_create` or `chat_completion_response`
+  must meter exactly once, so a fifth provider is covered on arrival rather than on remembering.
+- A liveness assertion pins the discovery at four or more clients and names `deepseek`
+  explicitly, so a census that silently stops matching the layout fails instead of passing
+  vacuously — the empty-set-satisfies-everything shape catalogued in `CLAUDE.md`.
+- Mutation-verified 3/3: deleting the deepseek meter fails two guards, metering in `chat()` as
+  well fails the exactly-once guard, and breaking discovery fails the liveness guard.
+- `docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md` §4 and §7 corrected — they described phase 0 as
+  outstanding work when the same PR that wrote them (#564) had already done it, which made the
+  seam look blocked when it was not.
+
+### Added — a tool can declare a lower-authority fallback (`AUTHORITY-NEGOTIATION-1` phase 0, #600)
+
+- `register_tool(..., degraded_variant="other_tool")` names a registered tool that may one day be
+  attempted when this tool is refused for lack of authority. It sits beside `isolation` and
+  `env_spec` on the same declaration surface rather than inventing a fourth vocabulary there.
+- **★★ Phase 0 is INERT and that is the whole design.** Nothing consults the field: no denial
+  path negotiates, and a tool declaring a variant behaves in every observable respect as it did
+  before. This ships the vocabulary so it is reviewable, on the declare-then-enforce sequence that
+  let `EXEC-ENV-BIND-1` land in pieces. **The entry stays open** — a declaration nothing reads is
+  `ECOGAP-4`'s G4a, and this repo already carries one of those.
+- **The tool declares it, never the plan and never the model.** Same rule that makes `env_spec`
+  safe: the thing being constrained must not choose its own constraint, or a model that was just
+  refused could nominate whatever it liked as its "lower authority" option.
+- **Validation splits, of necessity.** Local checks (non-empty, not self-referential) happen in
+  the decorator; the three cross-tool rules — target is registered, `caps(fallback)` is a
+  **strict** subset of `caps(original)`, target declares no variant of its own — are swept at
+  startup. A forward reference is legitimate, and a tool's capability set resolves against
+  definitions supplied by plugin providers that load after the import pass, so "at registration"
+  was not achievable for those three. The design doc said it was; it is corrected.
+- **★ Unevaluable is reported separately from failed.** `_get_capabilities_for_tool` returns `[]`
+  both when a tool requires nothing and when the lookup could not run. An empty set for the
+  original makes a strict subset impossible, so a naive check would blame an operator's typo for
+  an unloaded capability provider — green-check variant 10 in reverse. Chain detection runs first,
+  so a structural error is still named correctly where capabilities do not resolve.
+- The startup sweep **raises unconditionally**, unlike the syscall check beside it which warns
+  outside prod: a malformed declaration is a deterministic coding error, not an environment
+  difference. No tool declares a variant today, so the sweep examines nothing and cannot change
+  any boot; the startup log prints the count so "none declared" and "never ran" stay distinct.
+- Mutation-verified 5/5, including a mutation that simulates phase 1 arriving early — a stray read
+  of the field on an execution path fails the inertness guard.
+- **★★ The first version of this was not inert, and CI caught what the unit suite could not.**
+  `validate_degraded_variants()` opened with `_ensure_tools_loaded()`, which runs
+  `_ensure_runtime_agent_defaults()` — a trusted bootstrap registration. That took a platform-only
+  boot from `bootstrap_registration_count: 0` to `1` and failed `tests/api/test_version_api.py`.
+  The sweep no longer forces loading; it validates the tools registered when it runs, and the
+  startup log says how many it examined so a vacuous sweep is visible rather than reassuring.
+- **★ Why the unit suite was structurally blind to it:** every test in the new file patches
+  `_ensure_tools_loaded` to a no-op so the registry stays isolated — correct for what it isolates,
+  and it makes any assertion about *how that dependency is used* impossible. **A fixture that
+  neutralises a dependency also neutralises any test of how that dependency is used.** A guard
+  that asserts the call does not happen now exists, and re-adding the call fails it.
+
+### Changed — flow history ordinals and state merge are now per-superstep (`FLOW-PARALLEL-1` phase 0, #603)
+
+- **No behaviour change.** A superstep is one node today, so ordinals and merges resolve exactly
+  as before. This widens the *transaction* so fan-out has a reviewed seam to arrive into; it does
+  not add concurrency, and the runtime concurrency model is untouched.
+- `FlowHistory.sequence_number` is allocated by `_allocate_sequence_numbers(run, count)` for a
+  whole superstep **at the barrier**, in declaration order. The `max(sequence_number) + 1` it
+  replaces carried a comment stating its own precondition — *"a run's nodes execute sequentially
+  (no concurrent writers)"* — which is precisely what fan-out removes. With `count=1` the result
+  is identical, pinned by a parametrised equality test.
+- The state merge moved out of `_handle_node_status`'s SUCCESS branch into `_merge_superstep` on
+  the runner. **Called per node, `merge_state` can only ever see one patch, and one patch at a
+  time is completion order** — which defeats `last_write_wins`, the policy module's entire point.
+  Only SUCCESS branches contribute, preserving exactly what the previous location did with a
+  WAIT branch's patch (nothing).
+- **★ The relocation nearly removed a guarantee.** The pre-existing seam test drove
+  `_handle_node_status` — the function the runner calls — so it proved *wiring* for free. Driving
+  `_merge_superstep` directly left the runner free to stop calling the seam with every merge test
+  green. An AST wiring guard restores it. **When a test moves with its code, check whether the
+  old location was carrying a property the new one does not.**
+- Mutation-verified 4/4: per-branch ordinal allocation, per-branch merging, dropping the SUCCESS
+  filter, and unwiring the seam each fail a specific guard.
+- Design and impact analysis: `docs/runtime/FLOW_PARALLEL_DESIGN.md`. **Phase 1 introduces
+  concurrency and needs its own approval** — branches cannot share the runner's DB session, and a
+  fan-out width of N spends N connections from a budget shared with request handling.
+
+### Changed — `nodus-lang` 5.9.0 → 5.13.0 (`NODUS-UPGRADE-1`, #606)
+
+- Bumped across **all three pin sites** the entry names — `pyproject.toml`,
+  `AINDY/requirements.txt`, and the `Install MCP extra` CI step, which installs directly and so
+  re-resolves a constraint fixed only in the first two.
+- **No breaking change at our call site, verified rather than assumed.** `NodusRuntime.__init__`
+  has no `**kwargs`, so a renamed confinement argument raises instead of silently unconfining the
+  guest. Signatures were diffed between 5.9.0 and 5.13.0 in a throwaway venv: **nothing removed**,
+  two parameters added (`extensions`, `max_memory_mb`). All four arguments
+  `nodus_runtime_kwargs()` passes — `allowed_paths`, `allow_subprocess`, `allow_network`,
+  `allow_env` — are present in both.
+- **`aindy-runtime[mcp]` stays installable** (`MCP-SDK-2X-1`): `nodus-mcp` 0.1.3 requires only
+  `nodus-lang>=4.0.0`, so no cap blocks the major-line move, and a clean-venv plan resolves
+  `nodus-lang 5.13.0` + `nodus-mcp 0.1.3` + `mcp 1.30.0` with the `<2` cap intact.
+- **★ 5.13.0 carries a security fix we were not exposed to** — `nodus serve` confined the
+  filesystem by default (`#843`); code posted to `POST /execute` could previously read and write
+  anywhere the server process could. `RuntimeService` and `nodus serve` have **zero references**
+  in `AINDY/`; we embed `NodusRuntime` directly and pass `allowed_paths` explicitly. Recorded
+  because `NODUS-UPGRADE-2`'s rule is to read the intervening notes before assigning severity —
+  a severity taken from version distance is not an assessment.
+- New capability worth noting against open entries: **`max_memory_mb`** on the guest runtime is
+  the per-execution memory ceiling `SYSMAX-3` records as "needs OS integration", now available on
+  the nodus path. Not adopted here; this bump changes pins only.
+
+### Fixed — the registry size guard measured characters while its constant said bytes
+
+- `tests/unit/test_debt_registry_accuracy.py` capped registry entries with `len(line)` —
+  **characters** — while the constant was named `_MAX_ENTRY_BYTES` and the failure message
+  printed "B". Every measurement of `CLAUDE.md`'s growth in that file is in bytes, so the guard
+  enforced a different quantity from the policy it implements.
+- **It drifted in the loose direction for a specific reason:** these entries are dense with the
+  multibyte characters this file uses most (`★`, `—`, `→`), so the effective byte budget ran
+  systematically above the stated one. **Four entries sat over the documented cap with the guard
+  green.** Those are trimmed, and the caps are ratcheted to the new high-water mark (1150→1144,
+  850→833).
+- Also corrects `FS-SCOPE-1`: `EXEC-ENV-BIND-1` phase 3 gave the tool seam a scoped `cwd`, which
+  is a default *location*, not a boundary — `roots` is still unenforced there, and a bare
+  subprocess can open any path the OS allows. The entry previously read as though the remaining
+  work was only "the other seams".
+
+### Fixed — a soak assertion could fail on a correct runtime (`IDEM-11`'s contention test)
+
+- `test_the_gate_degrades_to_at_least_once_under_contention` asserted
+  `1 <= len(runs) < WORKERS`. The upper bound is a **race outcome, not a guarantee**: the
+  idempotency contract says a caller that loses the insert race to a live pending row degrades
+  to `AT_LEAST_ONCE`, and with barrier-synchronised callers it is entirely legal for *all* of
+  them to lose it. It failed CI with `8 < 8` and passed on an immediate re-run of the same
+  commit — the signature of an assertion on timing rather than a regression.
+- **Replaced rather than deleted, because it was reaching for something real** ("the gate must
+  not be a no-op"). A **second wave** now dispatches the same action after the first completes:
+  the record is committed and terminal, nothing is racing, so every caller must replay it. That
+  is the guarantee the contract actually makes, and it holds regardless of scheduler timing.
+- **Mutation-verified against live Postgres and Redis**, and the first mutation was not good
+  enough: disabling the gate entirely was caught by the *pre-existing* degradation-counter
+  assertion before the new one ran, which would have proved nothing about the new code. Killing
+  only the completed-record replay reaches it, and it fires with its own message.
+
 
 ## 2.9.0 — 2026-09-04
 
