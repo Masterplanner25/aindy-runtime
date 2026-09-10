@@ -1,4 +1,4 @@
-### Changed — the runtime now declares the guest workflow store (#612)
+### Changed — the runtime now declares the guest workflow store (#611)
 
 **Operators: read this before upgrading if you run guest Nodus workflows.** Two of the three
 changes below alter where guest run state is written and how long it survives.
