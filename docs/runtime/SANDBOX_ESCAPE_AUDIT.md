@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-04"
+last_verified: "2026-09-10"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1313,6 +1313,73 @@ VM row acquires a dimension this suite does not currently model.
 **Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
 native Linux, certified for the `v2.10.0` release commit.
 
+## Entry 025 — 2026-09-10
+
+**Trigger:** `v2.11.0` release tag (`sandbox-escape-linux.yml`, run `34546083289`).
+**Commit:** `c166d75ffbbd254b32ce71ceb17399148977b0db`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–024.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.65s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `34546083289`).
+
+**The certified boundary is untouched.** `git diff v2.10.0..v2.11.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty** — across a release
+of 3,857 insertions.
+
+**★★ This release MOVED WHERE GUEST WORKFLOW STATE IS WRITTEN, which is the one change here that
+sits next to a certified vector, and the distinction matters.** Vector 1 is filesystem escape.
+What changed is **not** the guest's reach:
+
+- **The guest's writable path is unchanged.** `nodus_worker` still derives `allowed_paths` from a
+  spec clamped to `GUEST_FLOOR` and passes an explicit per-execution `TemporaryDirectory` scratch
+  root (`GUEST-CONFINE-1`, `EXEC-ENV-BIND-1` phase 2). No guest gained a path.
+- **What moved is nodus's OWN bookkeeping** — the workflow framework's run records, written by
+  the framework inside the worker process, not by guest script code. They previously landed in
+  the worker's working directory (`/home/aindy`, no volume) and were lost on every container
+  recreate; `NODUS_RUN_STATE_ROOT` now places them on a declared volume.
+- **★ Verified rather than assumed, because this file must not assert a boundary property it has
+  not checked:** with `NODUS_RUN_STATE_ROOT` set, the relocated store is **inside** nodus's Floor
+  deny-list (`run_state_roots()` reports it and `is_inside_run_state()` catches a path under it).
+  A guest therefore cannot write into the runtime's own relocated state.
+- **★ The variable choice was load-bearing and is recorded for the next reader.** The legacy
+  `NODUS_WORKFLOW_STORE_ROOT` relocates only the record half and leaves `.nodus/graphs/` behind
+  — confirmed at 5.13.0. Its historic Floor escape (relocated state had no literal `.nodus`
+  segment, so the deny-list missed it) **is closed upstream by `run_state_roots()`**, so this is
+  now a half-relocation problem rather than a containment one. `ORCHESTRATOR-SPLIT-1` used to
+  recommend the legacy variable; it no longer does.
+
+**★ Two features shipped that a reader could mistake for boundary changes. Neither is.**
+
+- **`AUTHORITY-NEGOTIATION-1` phase 1 — the declaration is now CONSULTED**, where Entry 024
+  recorded it as consulted by nothing. A refused tool may be offered exactly one downgrade to a
+  fallback the *tool* declared. **It cannot grant authority, and that is structural rather than
+  careful:** negotiation only chooses *which tool to attempt*, and `execute_tool` then runs its
+  own `check_tool_capability`, so a negotiated tool passes exactly the gate an ordinary one
+  passes. Downgrade-only, bounded to one attempt, and **default-off**. No authority any tool can
+  reach changed.
+- **`FLOW-PARALLEL-1` phase 1 — the first concurrency in the flow engine.** A declared fan-out
+  group runs branches on separate threads with **separate database sessions**. This is flow
+  orchestration, not extension execution: it does not run guest or extension code through any new
+  path, and the OCI runner is reached only from `plugin_host.py`, which is untouched.
+  **Default-off.** Recorded because "concurrency arrived in the engine" is the kind of fact a
+  later entry may need, not because this gate's measurement changed.
+
+| Boundary | Certified by this gate? | Status after `v2.11.0` |
+|---|---|---|
+| Tier-2 extension sandbox (OCI runner) | **Yes** — 17/17 | unchanged this release |
+| Nodus guest VM | **No** — out of scope | **guest reach unchanged**; only the framework's own run-record location moved, and it remains inside the Floor's deny-list |
+| In-process tool seam | **No** — out of scope | unchanged — `env_spec` exists since `v2.9.0` and **still nothing declares one**; undeclared tools run in-process |
+| Guest per-execution memory ceiling | **No** — not modelled | **still newly AVAILABLE, still not adopted** (`max_memory_mb`, nodus 5.13.0) — unchanged from Entry 024 |
+| Terminability of an isolated tool | **No** — not a boundary this suite models | unchanged — only the worker's own timeout kills it; a cancel does not |
+| Cross-process execution of runtime work | **No** — not a boundary this suite models | unchanged since Entry 022 |
+| Concurrent execution of runtime work | **No** — not a boundary this suite models | **new this release** — fan-out branches run on threads with their own sessions, default-off |
+
+**Claim supported:** `container-grade-sandbox` tier for `ContainerizedOciSandboxRunner` on
+native Linux, certified for the `v2.11.0` release commit.
+
+---
 ---
 ---
 
