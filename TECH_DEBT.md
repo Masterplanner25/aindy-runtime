@@ -9830,6 +9830,28 @@ enforcement is a failure mode this repository already names — it is the whole 
 
 ## FLOW-PARALLEL-1 — the flow engine has no fan-out, join, or barrier
 
+**★★ PHASE 1 SHIPPED 2026-09-10 (#616) — declared fan-out, default-OFF. Open for 2–4.**
+`FanOutEdgeGroup` declares a node's successors; the group runs as one superstep with per-branch
+sessions, one contiguous ordinal block allocated at the barrier, and a central merge on the
+runner's session. **★★ Three decisions the design did not make, taken while building:**
+**(a) the width bound is PROCESS-WIDE, not per-run** — §3(a) reads as per-run and that is not
+enough, because runners are created from request handlers, syscall dispatch, rehydration AND
+scheduler recovery, so a per-run width W allows *runs × W* sessions against the budget shared
+with request handling; one pool, sized like the scheduler's lanes and pinned by a headroom test.
+**(b) the flag gates CONCURRENCY, not SEMANTICS** — a group runs in declaration order either way,
+so "off" cannot become a second, less-tested semantics. **(c) phase 1 ENFORCES convergence on one
+successor** (the degenerate `all` join) rather than picking silently — without it the flow's
+continuation depends on which branch the runner asked first. **★ Existing flow signatures verified
+UNCHANGED against the live `AGENT_FLOW`/`NODUS_SCRIPT_FLOW`/`NODUS_COMPILE_AND_RUN_FLOW` digests
+— §7's "the one that would bite", since a re-encoded canonicaliser quarantines every suspended
+run on upgrade.** **★★ Mutation testing found the ONE untested thing that mattered: "branches
+share the runner's session" survived every other test — the §5 constraint the whole design is
+shaped around, whose failure mode is SILENT corruption.** Mutation-tested 12/12 after that fix.
+**★ STILL OPEN: fan-out without a join is half a primitive** — phase 2 replaces enforced
+convergence with declared policies (`all`/`any`/`quorum(k)`) and is where a partially-failed
+superstep starts reporting `partial` instead of failing whole.
+
+
 **Status: CONFLICT HALF SETTLED 2026-09-03 (#569); SCHEDULER PHASE 0 SHIPPED 2026-09-08 (#603)
 — OPEN (P1) for phases 1–4.** Design and impact analysis: `docs/runtime/FLOW_PARALLEL_DESIGN.md`.
 

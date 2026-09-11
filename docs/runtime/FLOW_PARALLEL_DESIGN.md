@@ -1,14 +1,14 @@
 ---
 title: "Flow Fan-Out and Supersteps — Design"
 api_version: "1.0"
-last_verified: "2026-09-08"
+last_verified: "2026-09-10"
 status: current
 owner: "platform-team"
 ---
 
 # Flow fan-out and supersteps — design
 
-**`FLOW-PARALLEL-1`, the scheduling half. PHASE 0 SHIPPED 2026-09-08 (#603); phases 1–4 are design only.**
+**`FLOW-PARALLEL-1`, the scheduling half. PHASES 0 AND 1 SHIPPED (0: 2026-09-08 #603; 1: 2026-09-10); phases 2–4 are design only.**
 
 Written because `AGENT_WORKING_RULES.md` **§8 Proposal-First Rule** requires an approved
 proposal before implementing a large refactor, a runtime behaviour change, or a cross-layer
@@ -194,7 +194,7 @@ cheapest guard, and it belongs in the same PR as the shape.
 | | | |
 |---|---|---|
 | ~~**0**~~ | ~~The superstep seam~~ | **DONE — #603**, with one deliberate narrowing: no `resolve_frontier()` was added. Nothing can produce a frontier of >1 until phase 1 declares fan-out edges, and shipping an unused resolver is exactly the `ROUTE-AST-UNWIRED-1` shape this phase is meant to avoid. What shipped is the part that IS on the live path today: barrier ordinal allocation (§4) and the central merge (§3c) |
-| **1** | `FanOutEdgeGroup` declared in the flow graph, executed with **bounded** width and **per-branch sessions**; `WAIT` inside a group refused | the behaviour change, default-off |
+| ~~**1**~~ | ~~`FanOutEdgeGroup`, bounded width, per-branch sessions, `WAIT` refused~~ | **DONE.** Three things this row did not say, decided while building: **(a) the bound is PROCESS-WIDE, not per-run** — runners are created from request handlers, syscall dispatch, rehydration and scheduler recovery, so a per-run width of W allows *runs × W* sessions; one shared pool, sized like the scheduler's lanes. **(b) the flag gates CONCURRENCY, not SEMANTICS** — a group runs its branches in declaration order either way, so flipping it off changes timing and nothing else. **(c) phase 1 requires branches to CONVERGE on one successor, enforced** — the degenerate `all` join, because §8 is right that fan-out without a join is half a primitive and the half needs defined semantics rather than none |
 | **2** | `FanInEdgeGroup` / join policies (`all`, `any`, `quorum(k)`) resolved at the barrier, partial outcomes per `EFFECT-PARTIAL-1` | |
 | **3** | Named predicates, then `SwitchCaseEdgeGroup` as a constrained fan-out; closes `FLOW-GRAPH-SIGNATURE-1`'s blind spot | separable, see §6 |
 | **4** | Flip the default once a real flow declares a group and a superstep has been observed | evidence, not code |
@@ -255,5 +255,12 @@ frontier of one, which is today's path.
 
 ## 11. What is being asked
 
-Approval to implement **phase 0** as described in §8, and a decision on **§5** (the recommendation
-is option 3: refuse `WAIT` inside a group in phase 1, lift it in a later phase).
+~~Approval to implement **phase 0** as described in §8, and a decision on **§5**.~~
+
+**Both granted.** §5 decided 2026-09-08 (option 3, refuse `WAIT` in a group); phase 0 shipped in
+#603 and **phase 1 on 2026-09-10**, approved under §2 (the concurrency model) with §10 above
+serving as the §8 impact analysis.
+
+**Still to be asked, when phase 2 is taken:** join policies (`all`, `any`, `quorum(k)`) replace
+the enforced convergence phase 1 ships with, and that is where a partially-failed superstep starts
+reporting `partial` rather than failing whole.

@@ -1,5 +1,5 @@
 from AINDY.core.retry_policy import is_retryable_error
-from AINDY.runtime.flow_engine.node_executor import resolve_next_node
+from AINDY.runtime.flow_engine.node_executor import resolve_frontier, resolve_next_node
 from AINDY.runtime.flow_engine.registry import FLOW_REGISTRY
 from AINDY.runtime.flow_engine.runner_completion import maybe_finalize_completion
 from AINDY.runtime.flow_engine.serialization import (
@@ -417,6 +417,105 @@ def _handle_node_status(
     )
 
 
+def _execute_superstep(
+    self,
+    run,
+    state: dict,
+    context: dict,
+    branches: list[str],
+    node_started_event_id,
+) -> str:
+    """FLOW-PARALLEL-1 phase 1 — run a declared fan-out group as ONE superstep.
+
+    Returns the node the flow continues from. Raises `FanOutWaitRefused` if a branch WAITs and
+    `ValueError` if the branches do not converge.
+
+    ★★ **Phase 1 requires all branches to converge on the SAME successor**, and enforces it
+    rather than picking one. This is the degenerate join — an implicit `all` — and it is the
+    narrowest thing that makes fan-out coherent without the join policies phase 2 owns. The
+    design says *"fan-out without a join is half a primitive"*; this is the half, made explicit
+    instead of left undefined. Declared join policies (`all`, `any`, `quorum(k)`) generalise it.
+
+    ★ **The branches never become `run.current_node`.** The run stays parked on the node that
+    declared the group until the whole superstep commits, so a crash mid-superstep resumes by
+    re-running the group. That is at-least-once for the branches, which is the guarantee the rest
+    of the runtime already assumes — `DUR-2` is what stops mediated effects double-firing.
+
+    ★ **The runner's session is the only `FlowHistory` writer** (design §3c). Branches ran on
+    their own sessions and returned patches; everything below is on `self.db`, single-threaded.
+    """
+    from AINDY.runtime.flow_engine.fan_out import FanOutWaitRefused, run_fan_out_branches
+    from AINDY.db.models.flow_run import FlowHistory
+
+    def _execute(node, branch_state, branch_context):
+        from AINDY.runtime import flow_engine as flow_engine_module
+
+        return flow_engine_module.execute_node(node, branch_state, branch_context)
+
+    input_snapshot = dict(state)
+    results = run_fan_out_branches(branches, state, context, _execute)
+
+    # ★ Refuse WAIT before writing anything. Design §5 option 3, approved 2026-09-08: a
+    #   suspended branch would need a durable partial-superstep record, and lifting this is
+    #   coupled to RECOVERY-GRANULARITY-1. Loud and declared, never discovered.
+    waiting = [r["node"] for r in results if (r["result"] or {}).get("status") == "WAIT"]
+    if waiting:
+        raise FanOutWaitRefused(
+            f"branch(es) {waiting} returned WAIT inside the fan-out group from "
+            f"{run.current_node!r}. A WAIT inside a group is refused in phase 1: the other "
+            "branches' patches would have to be held durably across the suspension, and no "
+            "such record exists. Move the waiting node out of the group."
+        )
+
+    # ★ Ordinals for the WHOLE superstep, at the barrier, in declaration order (§4). History
+    #   order and merge order are then identical by construction rather than by luck.
+    ordinals = self._allocate_sequence_numbers(run, len(results))
+
+    patches: list[dict] = []
+    for ordinal, entry in zip(ordinals, results):
+        node = entry["node"]
+        result = entry["result"] or {"status": "FAILURE", "error": entry["error"]}
+        status = result.get("status", "FAILURE")
+        patch = result.get("output_patch", {}) or {}
+        self.db.add(
+            FlowHistory(
+                flow_run_id=run.id,
+                node_name=node,
+                status=status,
+                input_state=_json_safe(input_snapshot),
+                output_patch=_json_safe(patch),
+                execution_time_ms=result.get("_execution_time_ms", 0) or 0,
+                error_message=result.get("error") or entry["error"],
+                sequence_number=ordinal,
+            )
+        )
+        patches.append({"node": node, "patch": patch, "status": status})
+    self.db.commit()
+
+    # The central merge, on the runner's session, in declaration order (§3c).
+    self._merge_superstep(state, patches)
+
+    failed = [p["node"] for p in patches if p["status"] == "FAILURE"]
+    if failed:
+        raise ValueError(
+            f"branch(es) {failed} failed in the fan-out group from {run.current_node!r}. "
+            "Phase 1 has no join policy, so a failed branch fails the superstep; `any` and "
+            "`quorum(k)` are phase 2."
+        )
+
+    # ★ Convergence, enforced. Resolved AFTER the merge so each branch's successor is chosen
+    #   against the merged state, which is what a sequential run would have seen.
+    successors = {node: resolve_next_node(node, state, self.flow) for node in branches}
+    distinct = set(successors.values())
+    if len(distinct) != 1 or None in distinct:
+        raise ValueError(
+            f"fan-out branches from {run.current_node!r} did not converge: {successors}. "
+            "Phase 1 requires every branch of a group to resolve to the same successor "
+            "(the degenerate `all` join). Declared join policies are phase 2."
+        )
+    return distinct.pop()
+
+
 def _advance_to_next_node(
     self,
     run,
@@ -424,7 +523,28 @@ def _advance_to_next_node(
     current_node: str,
     node_started_event_id,
 ):
-    next_node = resolve_next_node(current_node, state, self.flow)
+    # FLOW-PARALLEL-1 phase 1 — the frontier, not the successor.
+    #
+    # ★ A frontier of ONE is today's path byte-for-byte: `resolve_frontier` delegates to
+    #   `resolve_next_node` for both existing edge shapes, so every flow that declares no group
+    #   takes exactly the code it took before. That is what makes this a small diff against a
+    #   reviewed seam rather than a rewrite of the loop.
+    frontier = resolve_frontier(current_node, state, self.flow)
+
+    if len(frontier) > 1:
+        try:
+            next_node = self._execute_superstep(
+                run, state, self._current_context, frontier, node_started_event_id
+            )
+        except Exception as exc:  # a refused WAIT, a failed branch, or a non-convergence
+            return self._fail_execution(
+                str(exc),
+                failed_node=current_node,
+                parent_event_id=str(node_started_event_id) if node_started_event_id else None,
+            )
+    else:
+        next_node = frontier[0] if frontier else None
+
     if not next_node:
         return self._fail_execution(
             f"No next node from {current_node} - flow graph incomplete",
