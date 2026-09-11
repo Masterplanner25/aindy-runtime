@@ -1161,7 +1161,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | **Nodus-side A2A/MCP packaging handoff (name collision + caps) — all fixes are Nodus's, none are ours** | `docs/runtime/NODUS_HANDOFF_a2a_mcp_packaging.md` |
 | **Nodus-side workflow-store handoff — `migrate-store` reports a TRUNCATED census; read before trusting it as the 6.0.0 mitigation** | `docs/runtime/NODUS_HANDOFF_workflow_store_migration.md` |
 | **Guest workflow store declaration proposal (`ORCHESTRATOR-SPLIT-1` store 4) — §8 proposal, AWAITING APPROVAL** | `docs/runtime/WORKFLOW_STORE_DECLARATION_PROPOSAL.md` |
-| Latest app-team handoff | `docs/runtime/APP_HANDOFF_v2.9.0.md` — **IS a plain `pip install`, no schema step** (2.8.0 was not; they alternate, so do not pattern-match). §1 is the one required consumer change: the envelope's `status` gained `partial`/`unknown`, so branch on `!= "success"`, never `== "error"` |
+| Latest app-team handoff | `docs/runtime/APP_HANDOFF_v2.11.0.md` — **★★ LEAD WITH §0: the app's venv is on 2.6.0 while its `pyproject` declares `>=2.9.0` and its own handoff says 2.9.0 (measured 2026-09-10), so "plain `pip install`" is FALSE for them — they still owe 2.8.0's `bootstrap-schema --reconcile`.** No required code change in 2.10.0 or 2.11.0 (2.10.0 shipped with no handoff; folded in). `SCHEMA_CONTRACT_VERSION` moved and the DB did not |
 | Release verification checklist | `docs/runtime/RELEASE_CHECKLIST.md` |
 | Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
 | **Soak harness — concurrency + metric readback** | `tests/integration/soak_harness.py`; guarded by `tests/unit/test_soak_harness.py` |
