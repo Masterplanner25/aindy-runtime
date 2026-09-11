@@ -2,6 +2,170 @@
 
 ## Unreleased
 
+_Nothing yet._
+
+## 2.11.0 — 2026-09-10
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No migration.** The Alembic head is unchanged at `0018`.
+  **`SCHEMA_CONTRACT_VERSION` DID move (2026-09-02.1 → 2026-09-10) and the database did not** —
+  the bump is the ORM content hash reacting to a *deleted constant*, with no DDL behind it. That
+  pairing normally implies a schema change; here it does not, so **`bootstrap-schema --reconcile`
+  is not needed.** *(2.8.0 needed a schema step and 2.9.0/2.10.0 did not — they alternate, so do
+  not pattern-match; check, as here.)*
+- **★ Guest Nodus workflow state becomes DURABLE in Docker for the first time.** It previously
+  wrote to the worker's working directory (`/home/aindy`, no volume) and was lost on every
+  container recreate. `docker-compose.yml` now declares `NODUS_RUN_STATE_ROOT` behind a new
+  `nodus_state` named volume. **This directory grows and nothing prunes it** — see the entry
+  below before deciding your retention.
+- **Two new features ship DEFAULT-OFF and change nothing until you enable them:** authority
+  negotiation (`AINDY_AUTHORITY_NEGOTIATION`) and flow fan-out (`AINDY_FLOW_FAN_OUT`). Both are
+  phase 1 of multi-phase work and neither is exercised by any shipped flow or tool yet.
+- **Eight spurious `Unknown event type` warnings per affected agent run disappear.** They were
+  real emissions against an incomplete declaration, not a new behaviour.
+
+### Changed — the runtime now declares the guest workflow store (#611)
+
+**Operators: read this before upgrading if you run guest Nodus workflows.** Two of the three
+changes below alter where guest run state is written and how long it survives.
+
+Nodus's workflow framework keeps its own run records, created inside the guest VM. The runtime
+reads none of them — it resumes through `PersistentFlowRunner` — but it had never *declared* the
+substrate they live on, and at Nodus 6.0.0 the default store flips from `LocalWorkflowStore`
+(file-backed JSON) to `SQLiteWorkflowStore`, which cannot read the other's records. An undeclared
+host changes durability substrate on a schedule it does not set, so the runtime now states its
+choice. See `docs/runtime/WORKFLOW_STORE_DECLARATION_PROPOSAL.md`.
+
+- **The store backend is now `sqlite`.** `NODUS_WORKFLOW_STORE_BACKEND` is declared by the Nodus
+  worker itself, so no configuration is required. One database file replaces one JSON file per
+  run. **Existing JSON records are not migrated and are not read** — they have no consumer in
+  this runtime, so nothing that mattered is lost. Do **not** run `nodus workflow migrate-store`
+  expecting completeness: it enumerates only what `list_runs()` returns, which silently drops
+  records whose file mtime is older than 30 days (measured: 432 of 629 carried, reported as a
+  clean success). Details in `docs/runtime/NODUS_HANDOFF_workflow_store_migration.md`.
+- **Nodus's background sweep thread is now off.** `NODUS_WORKFLOW_AUTOSWEEP=0`. Nodus auto-starts
+  a 30-second sweep per long-lived process, which the default-on warm pool made real. It can
+  terminally dead-letter a waiting guest record and — calling `expire_wait_timeouts()` without
+  `release_schedules=True` — cannot resume anything. Leaving an unowned thread mutating a store
+  the runtime now preserves durably would have been worse than the ephemeral status quo.
+- **Guest run state is durable in Docker for the first time.** `docker-compose.yml` sets
+  `NODUS_RUN_STATE_ROOT=/var/lib/aindy/nodus-state` on both `api` and `worker`, backed by a new
+  `nodus_state` named volume. Previously the store rooted at the worker process's working
+  directory — `/home/aindy`, with no volume — so guest run state was lost on every container
+  recreate. **This grows over time and nothing prunes it**; Nodus's `terminal_max_age_days` bounds
+  the *scan*, not the directory.
+
+**Both declared values respect an operator who has already set them** — a non-blank existing value
+is never overwritten, so `NODUS_WORKFLOW_STORE_BACKEND=local` remains a supported way to pin the
+JSON store deliberately.
+
+**Two things to get right if you set the root yourself:** use `NODUS_RUN_STATE_ROOT`, not the
+legacy `NODUS_WORKFLOW_STORE_ROOT` (which relocates only the record half and leaves
+`.nodus/graphs/` behind); and point it at local storage, because the SQLite store runs in WAL
+mode, which is unsafe on NFS/CIFS.
+
+The Docker image now creates `/var/lib/aindy/nodus-state` owned by `aindy` before the volume is
+mounted over it — a named volume covering a path absent from the image is created `root:root`, and
+the non-root runtime could not write to it.
+
+Tracked as `ORCHESTRATOR-SPLIT-1` store 4. This declares the store's configuration; it does not
+resolve the split, and the ownership contract is still owed.
+
+### Added — one bounded downgrade attempt on a capability denial, default-off (#614)
+
+`AUTHORITY-NEGOTIATION-1` phase 1. **Off by default**; set `AINDY_AUTHORITY_NEGOTIATION=1` to
+enable. Phase 0 (#600) shipped `register_tool(..., degraded_variant=)` and deliberately consulted
+it from nothing; this makes it consulted.
+
+A denied capability terminates the step, and because approval is whole-plan, the only recovery was
+a human approving an entirely new run — which discards the durable state the original accumulated.
+A run that did nine steps of real work and was refused on the tenth started again from zero. With
+the flag on, such a denial is offered **exactly one** downgrade to a fallback the *tool* declared
+at registration, and only if the capability token already authorises it.
+
+- **It cannot grant authority.** Negotiation decides only *which tool to attempt*; the fallback is
+  then executed through `execute_tool`, which runs its own capability check. A negotiated tool
+  passes exactly the gate an ordinary one passes — there is no new token, no amendment, and no
+  widening path.
+- **Bounded and downgrade-only.** One attempt per denial. A fallback may not declare its own
+  fallback, so the bound is a property of the registry rather than a counter.
+- **Recorded.** A new `AUTHORITY_NEGOTIATED` agent event carries the denied tool, the fallback and
+  the outcome; the step result records `negotiated_from` so the history shows what was refused as
+  well as what ran. New counter `aindy_authority_negotiation_total{outcome}` —
+  `succeeded | no_variant | variant_denied | refused_not_granted | disabled | chain_refused`.
+- **Arguments carry over unchanged.** Declaring `degraded_variant=X` is the tool author's promise
+  that `X` accepts the original's arguments. There is no argument-mapping vocabulary, so a
+  mismatched variant fails at execution rather than at declaration.
+
+Only the tool-level denial site negotiates. The other `CAPABILITY_DENIED` emissions refuse a
+missing token or the run-level `execute_flow` capability, where there is no tool and therefore no
+`degraded_variant` to declare.
+
+**Nothing changes with the flag off**, which is every existing deployment: the denial path is
+byte-for-byte what it was, and the counter reports `disabled`.
+
+### Fixed — the agent-event vocabulary is now one list, and pinned (#615)
+
+The set of valid `AgentEvent.event_type` values existed in **two** places and neither described
+reality. `AINDY/db/models/agent_event.py` held 9 names and had **zero importers**;
+`agent_event_service.py` held 14 and was the one consulted; **22 were actually in use**. Eight
+types — `AGENT_STEP_COMPLETED`, `AGENT_STEP_FAILED`, `COLLABORATION_STARTED`, `FAILED` and the
+four `DELEGATION_*` — logged `Unknown event type` on every emission and were written anyway.
+
+- **One canonical list**, `AINDY/agents/agent_event_types.py`, with all 22 names declared.
+  `agent_event_service.AGENT_EVENT_TYPES` re-exports it, so existing imports are unaffected.
+- **The stale copy under `AINDY/db/models/` is removed**, and a test prevents one returning there.
+  That location is the *cause*: `scripts/check_schema_version.py` content-hashes every file under
+  `db/models/`, so adding one string cost a `SCHEMA_CONTRACT_VERSION` bump, a baseline
+  regeneration and two test-assertion edits — for a change with **no DDL**, since `event_type` is
+  a plain `String(32)`. Every commit that added a type took the cheaper path, which was the
+  rational choice each time. A vocabulary that costs a schema ceremony to correct stays wrong.
+- **A contract test now pins it**, mirroring `SystemEventTypes`: a SHA-256 baseline
+  (`tests/baselines/agent_event_contract.json`), an ORM column guard, and — the part a hash
+  cannot do — a check that every type *emitted in source* is declared.
+
+**Behaviour is unchanged.** `emit_event` still warns on an unknown type and still writes it:
+losing an audit row is worse than recording one with an undeclared name. The guard is a test, as
+it is for system events; it makes a new name intentional, while the warning makes it visible.
+
+Operators will see **eight fewer spurious `Unknown event type` warnings** per affected run.
+`SCHEMA_CONTRACT_VERSION` is `2026-09-10` (no migration — the ORM change is a deleted constant).
+
+### Added — declared fan-out in the flow engine, default-off (#616)
+
+`FLOW-PARALLEL-1` phase 1. **Off by default**; set `AINDY_FLOW_FAN_OUT=1` to run a declared
+group's branches concurrently. Phase 0 (#603) widened the transaction — ordinals allocated per
+superstep at a barrier, the merge moved out of per-node status handling — and both already took a
+list of one. This is what lengthens it.
+
+A flow can now declare `FanOutEdgeGroup(["b", "c", "d"])` as a node's successors. The group runs
+as **one superstep**: branches execute in declaration order, each on **its own database session**,
+their patches merge centrally on the runner's session, and the whole group gets one contiguous
+block of `FlowHistory` ordinals allocated at the barrier.
+
+- **The flag gates concurrency, not semantics.** With it off, a declared group runs its branches
+  sequentially in declaration order — same patches, same merge, same ordinals, same history. Only
+  the timing differs, so turning it off can never change what a flow computes.
+- **Width is bounded process-wide**, not per flow run. Runners are created from request handlers,
+  syscall dispatch, rehydration and scheduler recovery, so a per-run bound would allow
+  *runs × width* concurrent sessions against a connection budget shared with request handling.
+  One shared pool, defaulting to 4, overridable with `AINDY_FLOW_FAN_OUT_MAX_WIDTH`.
+- **`WAIT` inside a group is refused**, loudly and by decision. Holding the other branches'
+  patches across a suspension would need a durable partial-superstep record that does not exist.
+- **Branches must converge on the same successor**, enforced rather than chosen. Declared join
+  policies (`all`, `any`, `quorum(k)`) are phase 2; until then a failed branch fails the superstep.
+
+**No existing flow changes.** A flow that declares no group resolves a frontier of one and takes
+exactly the previous code path. **Graph signatures of existing flows are unchanged** — verified
+against the live `AGENT_FLOW`, `NODUS_SCRIPT_FLOW` and `NODUS_COMPILE_AND_RUN_FLOW` digests, so no
+suspended run quarantines on upgrade. Adding a group to a flow *does* change that flow's
+signature, which is correct: it is a topology change, and a run planned against the sequential
+shape must quarantine.
+
+No schema change and no migration: a superstep is N existing `FlowHistory` rows, not a new table.
+
+
 ## 2.10.0 — 2026-09-09
 
 **Operator notes — read before upgrading.**
