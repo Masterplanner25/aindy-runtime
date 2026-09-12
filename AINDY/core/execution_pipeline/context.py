@@ -35,8 +35,21 @@ class ExecutionContext:
                 metadata={},
             )
 
+        # FR-26 — prefer the id `log_requests` already assigned to this request. It reads
+        # only the INCOMING headers before this, and a browser sends neither, so every
+        # request under the middleware got a SECOND uuid here: the response's `X-Trace-ID`
+        # (the middleware's) and its body `trace_id` (this one) disagreed, and resolved to
+        # two different event graphs — the pipeline's `execution.*` under this id, and
+        # everything the handler did (which reads the contextvar) under the other. The id
+        # most likely to be copied out of a client showed a route that ran and produced
+        # nothing. An explicit `metadata["trace_id"]` to `execute_with_pipeline` still wins;
+        # this only changes the default. ★ Deliberately NOT the same decision as honouring
+        # a client-sent `X-Trace-ID` in the middleware — that is a trust boundary. The
+        # header fallbacks below now apply only to a Request that did not pass through
+        # `log_requests` (a mounted app, a test harness).
         request_id = (
-            request.headers.get("X-Trace-ID")
+            getattr(getattr(request, "state", None), "trace_id", None)
+            or request.headers.get("X-Trace-ID")
             or request.headers.get("X-Request-ID")
             or str(uuid.uuid4())
         )

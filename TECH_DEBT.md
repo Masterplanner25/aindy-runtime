@@ -8402,8 +8402,7 @@ the plugin stack for a genuinely wrong name.
 
 ## FR-26 — the execution pipeline mints a second trace id instead of adopting the request's
 
-**Status: OPEN, verified 2026-09-11. One-line default; runtime behaviour + response-shape change,
-so it needs approval before it ships.** Filed 🔴 observability; found by the app 2026-07-22,
+**Status: SHIPPED 2026-09-11 (#621), approved by the owner the same day.** *(Filed as: one-line default; runtime behaviour + response-shape change, so it needed approval before it shipped.)* Filed 🔴 observability; found by the app 2026-07-22,
 root-caused 2026-09-11 (their `TRACE-ID-DUAL-1`).
 
 **Verified.** `middleware.py:106–108` (`log_requests`) mints `trace_id`, sets
@@ -8427,7 +8426,9 @@ in the middleware** — that is a trust-boundary question (a client choosing its
 collide with or spoof another's) and the app explicitly did not ask for it. Adopting the id the
 middleware minted is safe; adopting one the client sent is a separate entry.
 
-**What to test when built:** a route under the pipeline with no incoming header → body
+**★ What the build found: the pipeline was honouring a CLIENT-SENT `X-Trace-ID` for the body's id while the middleware ignored it for the header** — so before the fix a client could choose the id half its request was recorded under. Adopting the middleware's id closes that as a side effect; it is pinned by a test so it cannot quietly reopen. Mutation-tested 2/2.
+
+**Tested (as planned):** a route under the pipeline with no incoming header → body
 `trace_id == X-Trace-ID`; with an explicit `metadata["trace_id"]` → the override still wins; and
 a direct `from_request` call with no `request.state` (the non-HTTP construction) still mints.
 `AUDIT-CORRELATION-1` gains a join from this.
