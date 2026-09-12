@@ -1,12 +1,48 @@
 ---
 title: "App Handoff — Runtime v2.11.0"
 api_version: "1.0"
-last_verified: "2026-09-10"
+last_verified: "2026-09-11"
 status: current
 owner: "platform-team"
 ---
 
 # App handoff — runtime v2.11.0
+
+> ## ★★ CORRECTION 2026-09-11 — read this before the callout below it
+>
+> The callout under this one was written on 2026-09-10 and is left as written (it is the record
+> of what we believed). Two things in it are wrong, and the app team's reply
+> (`aindy-apps-monolith/docs/runtime/RUNTIME_2_11_0_UPGRADE.md` §1) is wrong in a third way.
+> Everything below was **re-measured on 2026-09-11 in your repo**, from the directory your
+> `pytest` runs in:
+>
+> | | Was claimed | Measured |
+> |---|---|---|
+> | Your **dev venv** | 2.6.0 (us) / *"an editable install of the sibling checkout, nothing runs it"* (you) | **2.6.0, installed 2026-08-22, non-editable.** There is **no** `.pth` link to `../aindy-runtime` in `venv/Lib/site-packages`. |
+> | What your **`pytest` imports** | *(not stated)* | **2.6.0** — a probe test in `tests/unit/` printed `AINDY.__path__` = `venv\Lib\site-packages\AINDY`. So the "1,222 passed" in your 2.11.0 doc, and the suites in your 2.9.0 doc, ran against **2.6.0**. |
+> | Your **deployment** | *(we implied 2.6.0)* | **2.11.0** — the container installs `constraints.txt`'s pin, was 2.9.0 before the rebuild, and the database is past `0018`. **§1 of this handoff does not apply to it, and never did.** |
+> | *"import says 2.11.0"* | you | True **only when the interpreter's cwd is `C:\dev\aindy-runtime`** — Python puts cwd first on `sys.path`, so the sibling checkout shadows `site-packages`. From your repo root the same venv says 2.6.0. |
+>
+> **★ The instrument is the finding, and it bit both sides of the handoff the same day.**
+> `importlib.metadata.version`, `pip show`, and `import AINDY._version` all answer for whichever
+> `AINDY` `sys.path` resolves first, and cwd is on it. Our §0 and §7 recommend `importlib.metadata`;
+> your reply recommends `import AINDY._version`; **both are cwd-sensitive and neither says where
+> the answer came from.** Use this, from the directory the thing you are asking about runs in:
+>
+> ```bash
+> python -c "import AINDY, AINDY._version as v; print(v.__version__, list(AINDY.__path__))"
+> ```
+>
+> If the path is not the one you expect, the number is not the one you think.
+>
+> **What this changes:** nothing about the release, nothing about the schema step (your deployment
+> has it). What it changes is **which runtime your verification exercised** — your local suites
+> have not yet run against 2.11.0, or 2.9.0. `pip install -e ../aindy-runtime --no-deps` in that
+> venv (your own `CLAUDE.md` line 14) fixes it in one command; then re-run the probe above.
+>
+> `DEBT-COMPAT-1` now carries your repo as its second instance — the stronger one, because you
+> *do* declare a bounded range, which is exactly the argument that a declaration nobody reads is
+> not a guard.
 
 > ## ★★ Before anything else: you are almost certainly **not** on the version you think you are.
 >

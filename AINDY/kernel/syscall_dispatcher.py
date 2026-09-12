@@ -372,7 +372,7 @@ class SyscallDispatcher:
                 "[SyscallDispatcher] unhandled exception for '%s': %s",
                 name, exc, exc_info=True,
             )
-            return self._error_envelope(name, context, str(exc), t_start)
+            return self._error_envelope(name, context, str(exc), t_start, already_logged=True)
         finally:
             if _tok_trace is not None:
                 _TRACE_ID_CTX.reset(_tok_trace)
@@ -529,6 +529,7 @@ class SyscallDispatcher:
                     "Quota backend unavailable: syscall execution is blocked until quota enforcement recovers.",
                     t_start,
                     version=parsed_version,
+                    already_logged=True,
                 )
         else:
             if not quota_ok:
@@ -700,7 +701,7 @@ class SyscallDispatcher:
             if isinstance(exc, CircuitOpenError):
                 message = f"HTTP_503:{message}"
             return self._error_envelope(name, context, message, t_start,
-                                        version=parsed_version)
+                                        version=parsed_version, already_logged=True)
 
         # Step 3b — output type check.
         # EXACTLY_ONCE: non-dict is a hard contract violation → raise SyscallContractViolation.
@@ -728,6 +729,7 @@ class SyscallDispatcher:
                 f"Syscall handler contract violation: '{name}' returned {type(data).__name__}, expected dict",
                 t_start,
                 version=parsed_version,
+                already_logged=True,
             )
         # ── EFFECT-PARTIAL-1 — resolve any outcome claim BEFORE schema validation ──
         # The reserved key is stripped here so a strict `additionalProperties: false` output
@@ -751,6 +753,7 @@ class SyscallDispatcher:
                 name, context,
                 f"Syscall handler outcome contract violation: {_outcome.refusal}",
                 t_start, version=parsed_version,
+                already_logged=True,
             )
 
         if entry.output_schema:
@@ -774,6 +777,7 @@ class SyscallDispatcher:
                         f"Stable syscall output validation failed for {name!r}: {detail}",
                         t_start,
                         version=parsed_version,
+                        already_logged=True,
                     )
                 logger.warning(
                     "[SyscallDispatcher] output schema mismatch for experimental '%s': %s",
@@ -863,12 +867,27 @@ class SyscallDispatcher:
         message: str,
         t_start: float,
         version: str = "unknown",
+        *,
+        already_logged: bool = False,
     ) -> dict[str, Any]:
         # ★ THE ONLY place an `error` outcome is counted. Every error path in the dispatcher
         # funnels through here, so counting at the call sites as well would double-count —
         # the exact failure the LLM token meter walked into (a silently-2x number is a
         # fabricated measurement, which is worse than a gap).
         _count_outcome(name, ENVELOPE_STATUS_ERROR)
+        # ★ And, since FR-25 (a), THE ONLY place an error is LOGGED. Thirteen paths reach
+        # here and eleven of them said nothing anywhere — "Permission denied: requires
+        # capability X" existed only inside a returned dict that a correctly defensive caller
+        # (`!= "success"` → return 0) discards. The app team spent a session on three failing
+        # syscalls with no message to read; the outcome counter told them *that* it failed and
+        # nothing said *why*. Same single-funnel property as the metric: one line here cannot
+        # double-count. The two call sites that already log (with a traceback, or the reason
+        # a fail-closed quota check failed) pass `already_logged=True` rather than repeating.
+        if not already_logged:
+            logger.warning(
+                "[SyscallDispatcher] %s -> error (eu=%s trace=%s): %s",
+                name, context.execution_unit_id, context.trace_id, message,
+            )
         return {
             "status": "error",
             "data": {},
