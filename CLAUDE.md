@@ -1161,6 +1161,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | **Liveness-probe event digest (FR-18) — read before touching `/health` event payloads** | `AINDY/core/health_liveness_signal.py` — digest + emit-on-change; counter `aindy_health_liveness_events_total` |
 | Async-job execution-boundary scope (FR-17) | `AINDY/platform_layer/async_execution_context.py` — `async_execution_scope()`; the contract gate's only exemption besides an active pipeline |
 | **Tool seam isolation scope (TOOL-SEAM-ISOLATION-1) — read before acting on that entry** | `docs/runtime/TOOL_SEAM_ISOLATION_SCOPE.md` |
+| **FR-27 advisory-lock design (strict at-most-once) — DESIGN + prototype results, awaiting approval** | `docs/runtime/FR27_ADVISORY_LOCK_DESIGN.md` |
 | **Authority negotiation design (AUTHORITY-NEGOTIATION-1) — §2 overturns the entry's own proposed primitive** | `docs/runtime/AUTHORITY_NEGOTIATION_DESIGN.md` |
 | **Witness + baseline scope (SUBSTRATE-WITNESS-1, PERF-BASELINE-1) — both are consumer-shaped, not code-shaped** | `docs/runtime/WITNESS_AND_BASELINE_SCOPE.md` |
 | **CLI as an execution surface — scope (CLI-EXEC-SURFACE-1)** | `docs/runtime/CLI_EXECUTION_SURFACE_SCOPE.md` |
