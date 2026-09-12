@@ -8,6 +8,8 @@ from AINDY.db.database import get_db
 from AINDY.db.models.agent import Agent
 from AINDY.db.models.user import User
 from AINDY.services.auth_service import require_admin_principal
+from AINDY.routes.path_params import UUIDPath
+from AINDY.utils.uuid_utils import normalize_uuid
 
 router = APIRouter()
 
@@ -51,12 +53,15 @@ def list_users(
 @router.post("/admin/users/{user_id}/promote", response_model=None)
 def promote_user(
     request: Request,
-    user_id: str,
+    user_id: UUIDPath,
     db: Session = Depends(get_db),
     _admin: dict = Depends(require_admin_principal),
 ):
     """Grant admin privileges to a user. Grant-only — never revokes."""
-    user = db.query(User).filter(User.id == user_id).first()
+    # ADMIN-PROMOTE-UUID-1 (closed with FR-25 b): `User.id` is `UUID(as_uuid=True)`; comparing
+    # it to the raw string worked on Postgres (the driver casts) and 500'd on SQLite (the bind
+    # wants a UUID object). Normalise once, so both engines answer the handler's own 404.
+    user = db.query(User).filter(User.id == normalize_uuid(user_id)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     if user.is_admin:

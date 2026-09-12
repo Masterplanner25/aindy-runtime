@@ -9,6 +9,7 @@ from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.routes.platform.schemas import APIKeyCreate
 from AINDY.auth.api_key_auth import Scopes
 from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
+from AINDY.routes.path_params import UUIDPath
 
 router = APIRouter()
 
@@ -125,7 +126,7 @@ def list_keys(request: Request, db: Session = Depends(get_db), current_user: dic
 
 @router.get("/keys/{key_id}", response_model=None)
 @limiter.limit("60/minute")
-def get_key(request: Request, key_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
+def get_key(request: Request, key_id: UUIDPath, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
     def handler(ctx):
         from AINDY.platform_layer.api_key_service import get_api_key
 
@@ -139,7 +140,7 @@ def get_key(request: Request, key_id: str, db: Session = Depends(get_db), curren
 
 @router.delete("/keys/{key_id}", status_code=204, response_model=None)
 @limiter.limit("30/minute")
-def revoke_key(request: Request, key_id: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
+def revoke_key(request: Request, key_id: UUIDPath, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user), _scope: None = _REQUIRE_PLATFORM_ADMIN):
     def handler(ctx):
         from AINDY.platform_layer.api_key_service import revoke_api_key
 
