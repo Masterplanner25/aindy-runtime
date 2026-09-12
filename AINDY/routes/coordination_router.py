@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 from AINDY.agents.agent_coordinator import detect_memory_write_conflict
 from AINDY.agents.agent_coordinator import detect_run_conflict
 from AINDY.core.execution_helper import execute_with_pipeline_sync
-from AINDY.agents.agent_message_bus import acknowledge_message
+from AINDY.agents.agent_message_bus import (
+    MessageNotFoundError,
+    MessageNotOwnedError,
+    acknowledge_message,
+)
 from AINDY.agents.agent_message_bus import get_inbox
 from AINDY.agents.agent_runtime.shared import LOCAL_AGENT_ID
 from AINDY.agents.agent_coordinator import _is_stale
@@ -351,19 +355,27 @@ def get_coordination_inbox(
 @limiter.limit("60/minute")
 def acknowledge_coordination_message(
     request: Request,
-    message_id: str,
+    message_id: UUIDPath,
     body: MessageAcknowledgeRequest,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     _scope: None = _REQUIRE_AGENT,
 ):
     def handler(ctx):
-        ack_id = acknowledge_message(
-            db,
-            message_id=message_id,
-            agent_id=body.agent_id,
-            user_id=str(current_user["sub"]),
-        )
+        # FR-28 — acknowledge only a real message addressed to the acking agent. A missing
+        # message is a 404; one addressed to someone else is a 403. Before this the ack was
+        # emitted unconditionally (phantom acks + cross-agent inbox suppression).
+        try:
+            ack_id = acknowledge_message(
+                db,
+                message_id=message_id,
+                agent_id=body.agent_id,
+                user_id=str(current_user["sub"]),
+            )
+        except MessageNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except MessageNotOwnedError as exc:
+            raise HTTPException(status_code=403, detail=str(exc))
         return {
             "acknowledged": True,
             "message_id": message_id,
