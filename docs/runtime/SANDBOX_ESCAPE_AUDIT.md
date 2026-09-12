@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-10"
+last_verified: "2026-09-12"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1385,3 +1385,32 @@ native Linux, certified for the `v2.11.0` release commit.
 
 *To add a new entry: run `pytest -m sandbox_escape -v`, note the summary line, and append
 a new entry following the format above. Do not edit prior entries.*
+
+## Entry 026 — 2026-09-12
+
+**Trigger:** `v2.12.0` release tag (`sandbox-escape-linux.yml`, run `34716171717`).
+**Commit:** `f0626548433a324cefceed6686125eb38e5cef78`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–025.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 7.34s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `34716171717`).
+
+**The certified boundary is untouched.** `git diff v2.11.0..v2.12.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**.
+
+**Nothing in this release changed what this gate measures.** 2.12.0 is one opt-in feature, one
+deprecation, and four fixes, none of which touch the sandbox boundary:
+
+- **`FR-27` (strict at-most-once idempotency)** is a Postgres advisory lock on the effect gate —
+  a concurrency-correctness change in `syscall_dispatcher`/`effect_ledger`, default-off, with no
+  bearing on guest or tool confinement.
+- **`FR-23` (ABI deprecation of `platform_layer.register_syscall` / `register_agent_tool`)** adds
+  a `DeprecationWarning` to two dead registration seams; it removes nothing and grants nothing.
+- **`FR-25`/`FR-26`/`FR-28`** are failure-legibility, trace-id, malformed-id, and acknowledge
+  authorization fixes on HTTP/dispatch surfaces, all outside the sandboxed execution path.
+
+**No dependency pin moved this release** (`git diff v2.11.0..v2.12.0 -- pyproject.toml
+AINDY/requirements.txt` is empty), so unlike 2.10.0/2.11.0 there is no nodus bump to misread as a
+boundary change in either direction.
