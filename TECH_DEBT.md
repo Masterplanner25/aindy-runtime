@@ -843,7 +843,8 @@ every other assertion in the file. It pins two routes of identical shape whose o
 is the `require_execution_context` dependency: managed still violates, unmanaged returns 418.
 The pre-existing `test_route_execution_guard.py` suite is unchanged and green.
 
-**Flagged, not fixed — `ADMIN-PROMOTE-UUID-1`:** `POST /platform/admin/users/{user_id}/promote`
+**`ADMIN-PROMOTE-UUID-1` — CLOSED 2026-09-11 with FR-25 (b) (#623): `normalize_uuid` before the
+compare, malformed id is a 422 via `UUIDPath`.** *(As flagged:)* `POST /platform/admin/users/{user_id}/promote`
 also 500s for a missing user, but for an unrelated reason. It passes the raw path string into
 `User.id == user_id`, and the SQLite UUID binding raises
 `AttributeError: 'str' object has no attribute 'hex'` before the 404 branch is reached. That is
@@ -8359,7 +8360,7 @@ refusal; and `SYSEVENT-RETENTION-1` means every new emitter is a growth term. **
 error refused BEFORE the handler leaves no durable row.** Revisit when the retention class per
 event type exists.
 
-### (b) `parent_run_id: str` turns a malformed id into a 500 — OPEN
+### (b) `parent_run_id: str` turns a malformed id into a 500 — SHIPPED 2026-09-11 (#623)
 
 `coordination_router.py:277` declares `parent_run_id: str`; the handler calls
 `normalize_uuid()`, which raises `ValueError` → 500 carrying the parser's own message
@@ -8375,6 +8376,39 @@ looking for 500 rather than 422** — and it must confirm the valid-id case stil
 because a stricter type can start rejecting good input (the app hit exactly that on their side
 and checked both halves). **Route contract change → approval before touching.** `ROUTE-GUARD-1`
 applies: the test must **call** the route.
+
+**★ What the build measured (2026-09-11), and it is the method that is worth keeping.** Every
+parameterised runtime-served route (derived from `route_inventory.json`, 40 of them) was called
+with `not-a-uuid` through the booted app — on SQLite, then on live Postgres. **Exactly six
+answered 500 on both engines**; the six above. The Postgres-only class (a raw string bound against
+a UUID column, which SQLite cannot show) was **empty** — the memory-node paths normalise before
+they query. **Two ways the first Postgres runs lied, both harness, both worth remembering:** (1) the
+fixture binds every session to ONE connection inside ONE outer transaction, so the first
+`DataError` aborts it and every later request 500s with *"transaction has been rolled back"* —
+a `String`-keyed route (`/flows/runs/{run_id}`) was "failing" on a bad id; fresh app per route
+fixed it. (2) an admin override with a random `sub` and no `users` row trips FK checks on the
+pipeline's own event writes on Postgres, which SQLite does not enforce — every pipeline route
+500'd for a reason that had nothing to do with the id. A real user + JWT fixed it. **The clean
+measurement took three runs; the first two would each have shipped the wrong fix.**
+
+**Fix shape:** `AINDY.routes.path_params.UUIDPath` — `Annotated[str, AfterValidator(uuid.UUID)]`,
+NOT `uuid.UUID`, so handlers keep their `str` (one compares it to a string sentinel, several
+forward it to services typed `str`) and the acceptance rule is by construction the one the
+handlers already applied — a stricter type could have rejected good input; this cannot. The
+census test is derived from the inventory and asserts non-empty; the six get a positive control
+(a well-formed unknown id must reach the handler's 404, never a 422). Mutation-tested 2/2.
+`ADMIN-PROMOTE-UUID-1` closed in passing (see ROUTE-GUARD-1 above).
+
+**Found by the probe, NOT fixed here — filed:**
+- `POST /apps/coordination/messages/{message_id}/acknowledge` answers **200 `acknowledged: true`
+  for a message that does not exist** — the ack event is recorded against a phantom id. A
+  correctness defect in the coordination path, not a status-code one; wants its own entry.
+- Three GETs echo a malformed id back with 200 and empty data (`/memory/agents/{namespace}/recall`,
+  `/memory/nodes/{node_id}/history`, `/observability/execution_graph/{trace_id}`) — arguably fine
+  (a namespace and a trace id are strings; history of nothing is empty), noted so nobody re-probes.
+- The deprecated runtime copy of `agent_router` (`/apps/agent/runs/{run_id}/recover|resume`) 500s
+  too, but the runtime does not serve it (the app owns those routes) — variant 14's shape; fixing
+  unreachable code was declined.
 
 ### (c) `_ensure_tools_loaded` swallowed plugin-load failure at DEBUG — SHIPPED
 

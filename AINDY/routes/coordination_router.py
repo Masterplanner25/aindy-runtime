@@ -24,6 +24,7 @@ from AINDY.memory.memory_persistence import MemoryNodeModel
 from AINDY.auth.api_key_auth import Scopes
 from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 from AINDY.utils.uuid_utils import normalize_uuid
+from AINDY.routes.path_params import UUIDPath
 
 
 # ── HTTP-SCOPE-GAP-1 — scope gates for the coordination surface ───────────────────────────
@@ -161,7 +162,7 @@ def register_agent(
 @limiter.limit("60/minute")
 def heartbeat_agent(
     request: Request,
-    agent_id: str,
+    agent_id: UUIDPath,
     body: AgentHeartbeatRequest | None = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
@@ -207,7 +208,7 @@ def heartbeat_agent(
 @limiter.limit("10/minute")
 def deregister_agent(
     request: Request,
-    agent_id: str,
+    agent_id: UUIDPath,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     _scope: None = _REQUIRE_AGENT,
@@ -274,7 +275,7 @@ def get_coordination_runs(
 @limiter.limit("60/minute")
 def get_coordination_run_children(
     request: Request,
-    parent_run_id: str,
+    parent_run_id: UUIDPath,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     _scope: None = _REQUIRE_EXECUTION_READ,
