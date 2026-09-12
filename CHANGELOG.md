@@ -4,6 +4,197 @@
 
 _Nothing yet._
 
+## 2.12.0 — 2026-09-12
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No migration.** The Alembic head is unchanged at `0018` and
+  `SCHEMA_CONTRACT_VERSION` did not move — no `AINDY/db/models/` or `memory_persistence.py` change
+  this release. `bootstrap-schema --reconcile` is not needed.
+- **`FR-27` adds a new opt-in flag, default OFF — nothing changes until you enable it.**
+  `AINDY_SYSCALL_IDEMPOTENCY_STRICT=1` makes the `EXACTLY_ONCE` gate serialise concurrent
+  duplicates on a Postgres advisory lock instead of degrading to at-least-once. If you turn it
+  on, a blocked duplicate holds one pooled connection while it waits (default 300s), so size
+  `DB_POOL_SIZE`/`DB_MAX_OVERFLOW` for your duplicate fan-in. PostgreSQL only.
+- **`FR-23` deprecates two extension-ABI functions** — `platform_layer.register_syscall` and
+  `register_agent_tool` now emit a `DeprecationWarning` (they were never reachable by dispatch).
+  **Nothing is removed yet**; removal is no earlier than two minor releases out. An out-of-tree
+  plugin calling either will start logging warnings.
+- **`FR-26` changes one response field:** an enveloped `/apps/*` response's body `trace_id` now
+  equals its `X-Trace-ID` header instead of a separate id. A client that relied on the two
+  differing — none known — would notice.
+
+### Fixed — a runtime failure now arrives where it can be read (FR-25 a + c) (#620)
+
+Filed by the app team after two sessions lost to the same shape: the runtime had the message,
+computed it, and put it somewhere nobody looks.
+
+- **Every dispatcher error path now logs once, at `WARNING`, from the `_error_envelope` funnel**
+  — `[SyscallDispatcher] <syscall> -> error (eu=… trace=…): <message>`, carrying the same
+  string the envelope returns. Before this, 7 of the 13 error paths (unknown syscall, unknown
+  version, **permission denied**, tenant violation, runtime-owned-call metadata, quota exceeded,
+  input validation) said nothing anywhere; the message existed only
+  inside a returned dict that a correctly defensive caller (`!= "success"` → return 0) discards.
+  Since 2.9.0 `aindy_syscall_outcome_total{status="error"}` told an operator *that* a syscall
+  failed; now the log says *why*. The six paths that already logged (with a traceback, or the
+  reason a fail-closed quota check failed) are unchanged and do not double-log.
+- **A plugin-load failure in `_ensure_tools_loaded` is now a `WARNING` that names the resolved
+  manifest and the exception**, instead of `DEBUG`. In the Nodus worker subprocess this is the
+  only plugin-load entry point; when it failed, the run silently continued on the runtime-only
+  registry and the caller's first symptom was `Unknown syscall` for a name correctly registered
+  in the parent. Logged once per distinct failure (the function is re-entered on every tool
+  call; repeats stay at DEBUG). The worker's `Unknown syscall` error now appends the recorded
+  load failure when there is one — only for that error, and cleared on the next successful load.
+  The fallback behaviour itself is unchanged.
+
+**Operator note:** a deployment with a chronic misconfiguration (a caller lacking a capability
+it asks for every request, a worker that cannot import the app package) will start emitting
+WARNING lines it never emitted before. That is the fix working; the lines name the syscall and
+the cause.
+
+FR-25 (b) — `parent_run_id: str` answering 500 rather than 422 on a malformed id — is filed and
+not in this release (route contract change).
+
+### Fixed — an enveloped response now carries ONE trace id, not two (FR-26) (#621)
+
+- `ExecutionContext.from_request` now prefers the trace id `log_requests` already assigned to
+  the request (`request.state.trace_id`) over the incoming `X-Trace-ID` / `X-Request-ID`
+  headers, minting a fresh uuid only when neither exists. Before this, every request under the
+  middleware got a second id here — a browser sends neither header — so the response's
+  `X-Trace-ID` and its body `trace_id` disagreed and resolved to **two different event
+  graphs**: the pipeline's `execution.started/completed` under the body's id, and everything
+  the handler did (flow run, syscalls, memory writes — which read the contextvar) under the
+  header's. The id most likely to be copied out of a client showed a route that ran and
+  produced nothing. Filed by the app team as `TRACE-ID-DUAL-1` (found 2026-07-22).
+- An explicit `execute_with_pipeline(metadata={"trace_id": …})` still wins; only the default
+  changed.
+- **Behaviour change worth knowing:** a *client-sent* `X-Trace-ID` no longer becomes the
+  pipeline's id when the request passes through `log_requests` — the middleware never honoured
+  it for the header, and the pipeline quietly did for the body, so a client could choose the id
+  half its request was recorded under. Both halves now use the middleware's. The header
+  fallbacks keep their old meaning for a Request that did not pass through the middleware (a
+  mounted app, a test harness). Honouring a client-chosen id is a trust-boundary decision and
+  is deliberately not made here.
+
+### Fixed — `/platform/observability/system` no longer reports 0 syscalls and 0 tools on a live deployment (FR-23) (#622)
+
+- `registry.syscall_count` now counts `kernel.syscall_registry.SYSCALL_REGISTRY` — the
+  registry the dispatcher resolves against — instead of `platform_layer.registry._syscalls`,
+  a dict **nothing dispatches from** (every app registers through the kernel path). On a full
+  app boot it read **0** while ~90 were live.
+- `registry.tool_count` now counts `agents.tool_registry.TOOL_REGISTRY` — what `execute_tool`
+  resolves against — instead of the static `register_agent_tool` model, which no app uses. It
+  read **0** while 16 tools were live.
+- New field `registry.run_tool_provider_run_types` (list of run types with a registered tool
+  provider), so the tool model apps actually use is visible on the surface. Additive; no
+  existing key changed name or type.
+- `platform_layer.register_syscall` now logs a **WARNING** naming the reachable path. It is a
+  capability-gated in-process ABI entry that validates a handler and stores it where dispatch
+  never looks — it accepted work silently. It is not removed here (that is an ABI decision,
+  filed as FR-23's open half); it just stops being silent. Its handler contract is also
+  single-parameter, unlike the kernel's `(payload, ctx)`, which is the tell that the two were
+  never one registry.
+
+**Operator note:** an app that registers through `platform_layer.register_syscall` will see
+one WARNING per registration at boot. That app's syscalls have never been callable; the line
+says where to register them.
+
+### Fixed — a malformed id in a path is now a 422, not a 500 (FR-25 b) (#623)
+
+- Six runtime routes answered **500** with the UUID parser's own message
+  (`badly formed hexadecimal UUID string`) when the path id was not a UUID, because the
+  parameter was declared `str` and the handler parsed it itself. They now answer **422** with
+  the structured validation error, and the OpenAPI schema no longer advertises the parameter
+  as free text:
+  `POST /apps/coordination/agents/{agent_id}/heartbeat`, `DELETE /apps/coordination/agents/{agent_id}`,
+  `GET /apps/coordination/runs/{parent_run_id}/children`, `GET|DELETE /platform/keys/{key_id}`,
+  `POST /platform/admin/users/{user_id}/promote`.
+- **The population was measured, not guessed:** every parameterised runtime-served route was
+  called with a malformed id through the booted app, on SQLite and again on live Postgres. These
+  six were the only 500s on either engine; the Postgres-only class (a raw string bound against a
+  UUID column) turned out to be empty.
+- New shared type `AINDY.routes.path_params.UUIDPath` — `Annotated[str, …]`, validated with the
+  same `uuid.UUID(value)` call the handlers already made, so **no id a handler accepted before is
+  rejected now** (the compact 32-hex form included) and handlers keep receiving a `str`.
+- `POST /platform/admin/users/{user_id}/promote` also no longer 500s on a **well-formed unknown**
+  id under SQLite (`ADMIN-PROMOTE-UUID-1`, flagged in ROUTE-GUARD-1): the handler now normalises
+  the id before comparing it to the `UUID` column. Postgres behaviour is unchanged (404).
+
+**Client note:** a client that matched on the 500 to detect a bad id (there is no evidence one
+did) will now see 422. A well-formed id that matches nothing is still the route's own 404.
+
+### Changed — the two dead extension-registration seams are deprecated (FR-23 ABI half) (#626)
+
+`platform_layer.registry.register_syscall` and `register_agent_tool` are **deprecated** and will
+be removed **no earlier than two minor releases after 2.11** (the stable-ABI minimum window).
+
+- Both write to dicts nothing reads: `register_syscall` → `_syscalls`, which the dispatcher never
+  resolves against (it uses `kernel.syscall_registry.SYSCALL_REGISTRY`); `register_agent_tool` →
+  the static `_agent_tools` model, which `execute_tool` does not resolve against. A handler or
+  tool registered through either has never been reachable. (FR-23's metric half, #622, stopped
+  `/observability/system` from counting these dead dicts.)
+- Both now emit a `DeprecationWarning` naming the replacement, and keep their existing
+  operator-facing WARNING log. They still record what they are given, so an out-of-tree extension
+  is not broken during the window.
+- **Replacements:** register a syscall through `AINDY.kernel.syscall_registry.register_syscall`
+  (note: the kernel handler contract is `(payload, ctx)`, while the deprecated seam validated a
+  single-parameter handler — it is an adaptation, not a rename); register a tool through
+  `register_run_tool_provider` (the provider model apps use) or `agents.tool_registry.register_tool`.
+- The `INPROC_CAP_REGISTER_SYSCALL` / `INPROC_CAP_REGISTER_AGENT_TOOL` capabilities remain in the
+  audited capability set until removal. `EXTENSION_ABI.md` gains a "Deprecated registration
+  functions" section; removal will be announced in the changelog per the ABI deprecation policy.
+
+### Added — strict at-most-once under contention for the idempotency gate (FR-27) (#627)
+
+**Default-off, opt-in via `AINDY_SYSCALL_IDEMPOTENCY_STRICT=1`. PostgreSQL only.**
+
+The `EXACTLY_ONCE` gate is a replay cache for *sequential* duplicates; under *concurrent*
+duplicates it degraded every loser of the insert race to `AT_LEAST_ONCE` and ran the handler —
+N barrier-released callers of one action ran the handler up to **N** times (a *pending* row does
+not protect anything until it is `success`). This was measured and is the gap MEB-1a's docstring
+named.
+
+- Strict mode takes a session-scoped `pg_advisory_lock` keyed on the `action_id`, on a dedicated
+  connection (never `_gate_db`, never the handler's session), held across `reserve → handler →
+  complete`. A concurrent duplicate **blocks** until the winner finishes and then **replays**.
+  Measured: handler runs exactly once across 2/4/8/16-way contention; a winner whose handler
+  fails is one reclaim+retry, not N.
+- New env vars (read at call time, no restart hazard): `AINDY_SYSCALL_IDEMPOTENCY_STRICT`
+  (default off) and `AINDY_SYSCALL_IDEMPOTENCY_STRICT_WAIT_SECONDS` (default `300`, the syscall
+  wall-clock ceiling). A loser that waits longer than the wait degrades honestly under a new
+  `aindy_effect_gate_outcomes_total{outcome="degraded_lock_timeout"}` label — distinct from
+  `degraded` (now: lock not attempted — non-PG or flag off) and `degraded_gate_error`.
+- **Not a guarantee:** exactly-once across a winner *process* crash (a `pending` row whose lock
+  dropped on disconnect still degrades until the stale threshold). Explicitly out of scope.
+- Non-PostgreSQL backends return `unsupported` and behave exactly as before (degrade under
+  contention). Nothing changes with the flag off.
+
+**Operator note:** turning strict mode on, a blocked duplicate holds one pooled connection while
+it waits — size `DB_POOL_SIZE`/`DB_MAX_OVERFLOW` for the expected duplicate fan-in. Design and
+measured prototype: `docs/runtime/FR27_ADVISORY_LOCK_DESIGN.md`; contract: `IDEMPOTENCY_CONTRACT.md`.
+
+### Fixed — acknowledge only a real message addressed to the acking agent (FR-28) (#628)
+
+`POST /coordination/messages/{message_id}/acknowledge` emitted an `agent.message.acknowledged`
+event **unconditionally** — `acknowledge_message` never checked the id. Two defects:
+
+- **Phantom ack:** any id (including one that is not a message) answered `200 acknowledged: true`
+  and recorded an acknowledgement of a message that never existed.
+- **Cross-agent inbox suppression:** `get_inbox` builds its suppression set from every
+  acknowledgement for the user, so one agent could acknowledge another agent's message by id and
+  make it vanish from that agent's inbox.
+
+`acknowledge_message` now **resolves** the message (by id, scoped to the user, and only
+`agent.message.*` types), **authorises** the caller as its `recipient_agent_id` (case-insensitive,
+matching `get_inbox`), and only then emits. It raises `MessageNotFoundError` (absent, malformed,
+or not a message → **404**) and `MessageNotOwnedError` (addressed to another agent → **403**); the
+route maps both. The `message_id` path param is now `UUIDPath`, so a malformed id is a **422** at
+the boundary rather than reaching the handler. Acknowledging one's own message is unchanged (200).
+
+The cross-agent suppression is closed at the source: an acknowledgement can now only be created by
+the message's own recipient, so nothing another agent does can suppress your inbox.
+
+
 ## 2.11.0 — 2026-09-10
 
 **Operator notes — read before upgrading.**
