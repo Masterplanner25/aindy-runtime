@@ -235,6 +235,28 @@ def _syscall_idempotency_enabled() -> bool:
     return os.getenv("AINDY_SYSCALL_IDEMPOTENCY", "").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _syscall_idempotency_strict_enabled() -> bool:
+    """FR-27 strict at-most-once. **Default OFF — opt-in.** ``AINDY_SYSCALL_IDEMPOTENCY_STRICT=1``
+    (or true/yes/on) makes a concurrent-duplicate loser BLOCK on an advisory lock until the winner
+    finishes and then replay, instead of degrading to AT_LEAST_ONCE and running the handler. No
+    effect unless the base gate is engaged (EXACTLY_ONCE or a durable run, flag on, PG backend)."""
+    return os.getenv("AINDY_SYSCALL_IDEMPOTENCY_STRICT", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _syscall_idempotency_strict_wait_seconds() -> float:
+    """FR-27 loser wait before a timed-out loser degrades (``degraded_lock_timeout``). Default 300s
+    — the syscall wall-clock ceiling — so only a pathologically slow handler trips it. Read at call
+    time (never import) so a deployment can retune without a restart surprise."""
+    raw = os.getenv("AINDY_SYSCALL_IDEMPOTENCY_STRICT_WAIT_SECONDS", "").strip()
+    if not raw:
+        return 300.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 300.0
+    return value if value >= 0 else 300.0
+
+
 def _child_context_clamp_enabled() -> bool:
     """AUTHORITY-VALUE-1 gate. **Default ON since 2026-08-19** — a child narrows, never widens.
 
@@ -570,6 +592,7 @@ class SyscallDispatcher:
         # poison the handler's connection (#157); on any failure we degrade to AT_LEAST_ONCE.
         _gate_db = None
         _gate_action_id = None
+        _gate_lock = None
         _entry_guarantee = str(getattr(entry, "execution_guarantee", "AT_LEAST_ONCE")).upper()
         # DUR-2 — a continued run's per-run at-most-once signal engages the gate for ANY
         # syscall (declaration-free), independent of the per-syscall guarantee + master flag.
@@ -590,6 +613,24 @@ class SyscallDispatcher:
             try:
                 from AINDY.db.database import SessionLocal
                 _gate_db = SessionLocal()
+                # FR-27 — strict mode: block on an advisory lock so a concurrent duplicate
+                # replays instead of running the handler. Opt-in, PG-only; a non-PG backend or
+                # flag-off returns immediately and the gate behaves as before.
+                if _syscall_idempotency_strict_enabled():
+                    from AINDY.kernel.effect_ledger import acquire_effect_lock as _acquire_lock
+                    _lock_state, _gate_lock = _acquire_lock(
+                        _gate_db, _gate_action_id,
+                        wait_seconds=_syscall_idempotency_strict_wait_seconds(),
+                    )
+                    if _lock_state == "timeout":
+                        # The machinery gave up after the wait — an honest degrade, and a
+                        # DIFFERENT signal from contention: a handler is slower than the wait.
+                        _count_gate_outcome("degraded_lock_timeout")
+                        logger.warning(
+                            "[SyscallDispatcher] strict idempotency lock timed out for %r after "
+                            "%ss; proceeding AT_LEAST_ONCE",
+                            name, _syscall_idempotency_strict_wait_seconds(),
+                        )
                 _already_done, _cached = _resolve_effect_record(
                     _gate_db, _gate_action_id, name, payload,
                     # MEB-3b — attribute the effect to the caller (tenant_id == user_id in
@@ -606,6 +647,9 @@ class SyscallDispatcher:
                     except Exception:
                         pass
                     try:
+                        if _gate_lock is not None:
+                            _gate_lock.release()
+                            _gate_lock = None
                         _gate_db.close()
                     except Exception:
                         pass
@@ -628,6 +672,9 @@ class SyscallDispatcher:
                 )
             else:
                 if _already_done:
+                    if _gate_lock is not None:
+                        _gate_lock.release()
+                        _gate_lock = None
                     _gate_db.close()
                     _gate_db = None
                     return {
@@ -695,6 +742,9 @@ class SyscallDispatcher:
             self._emit_syscall_event(name, context, "error")
             if _gate_db is not None and _gate_action_id is not None:
                 _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
+                if _gate_lock is not None:
+                    _gate_lock.release()
+                    _gate_lock = None
                 _gate_db.close()
                 _gate_db = None
             message = str(exc)
@@ -717,6 +767,9 @@ class SyscallDispatcher:
             self._emit_syscall_event(name, context, "error")
             if _gate_db is not None and _gate_action_id is not None:
                 _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
+                if _gate_lock is not None:
+                    _gate_lock.release()
+                    _gate_lock = None
                 _gate_db.close()
                 _gate_db = None
                 raise SyscallContractViolation(
@@ -747,6 +800,9 @@ class SyscallDispatcher:
             if _gate_db is not None and _gate_action_id is not None:
                 # ``failed`` is the entry's own reading of an unaccountable partial.
                 _complete_effect_record(_gate_db, _gate_action_id, _outcome.ledger_status, None)
+                if _gate_lock is not None:
+                    _gate_lock.release()
+                    _gate_lock = None
                 _gate_db.close()
                 _gate_db = None
             return self._error_envelope(
@@ -769,6 +825,9 @@ class SyscallDispatcher:
                     self._emit_syscall_event(name, context, "error")
                     if _gate_db is not None and _gate_action_id is not None:
                         _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
+                        if _gate_lock is not None:
+                            _gate_lock.release()
+                            _gate_lock = None
                         _gate_db.close()
                         _gate_db = None
                     return self._error_envelope(
@@ -821,6 +880,9 @@ class SyscallDispatcher:
                     "[SyscallDispatcher] %s effect finalize failed: %s", name, _finalize_exc
                 )
             try:
+                if _gate_lock is not None:
+                    _gate_lock.release()
+                    _gate_lock = None
                 _gate_db.close()
             except Exception:  # pragma: no cover - defensive
                 logger.debug("[SyscallDispatcher] gate session close failed", exc_info=True)

@@ -114,6 +114,90 @@ def _count_gate(outcome: str) -> None:
         pass
 
 
+# FR-27 — strict at-most-once under contention. The gate below degrades every concurrent
+# duplicate (measured N−1 of N, pinned at N with a slow handler) because a *pending* row
+# protects nothing until it is *success*. An advisory lock keyed on the action_id, held across
+# reserve→handler→complete, makes a loser BLOCK until the winner finishes and then replay.
+#
+# ★ The lock lives on a DEDICATED connection, never ``_gate_db`` (which commits between reserve
+# and complete — a transaction-scoped lock would release on that commit) and never the handler's
+# session (#157). Session-scoped ``pg_advisory_lock`` with an EXPLICIT unlock (the §4.1 decision,
+# 2026-09-12): the connection is closed on release, which also drops the lock, so a missed
+# release cannot outlive the pool connection. Opt-in, PostgreSQL-only; everywhere else the gate
+# behaves exactly as before (degrade under contention).
+_STRICT_LOCK_POLL_SECONDS = 0.02
+
+
+def _lock_key(action_id: str) -> int:
+    """A stable signed 64-bit key for pg_advisory_lock from the action_id."""
+    return int.from_bytes(hashlib.sha256(action_id.encode()).digest()[:8], "big", signed=True)
+
+
+class EffectLock:
+    """A held session-scoped advisory lock on a dedicated connection. ``release()`` is idempotent
+    and always closes the connection (which itself drops the lock, so release cannot leak it)."""
+
+    def __init__(self, conn, key: int) -> None:
+        self._conn = conn
+        self._key = key
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        from sqlalchemy import text
+
+        try:
+            self._conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": self._key})
+        except Exception:  # pragma: no cover - defensive; the close below still drops the lock
+            logger.warning("[effect_ledger] advisory unlock failed for key=%s", self._key)
+        finally:
+            try:
+                self._conn.close()
+            except Exception:  # pragma: no cover
+                pass
+
+
+def acquire_effect_lock(db, action_id: str, *, wait_seconds: float = 300.0):
+    """Acquire the strict-mode advisory lock for ``action_id``.
+
+    Returns ``(state, lock)`` where state is ``"acquired"`` (hold ``lock``, release it at the end),
+    ``"timeout"`` (waited ``wait_seconds``, gave up — caller proceeds and is counted
+    ``degraded_lock_timeout``), or ``"unsupported"`` (non-PostgreSQL — caller proceeds as today).
+
+    The lock is taken on a fresh connection from the same engine, in AUTOCOMMIT, so it is
+    independent of both ``_gate_db`` and the request's session.
+    """
+    import time
+
+    from sqlalchemy import text
+
+    bind = db.get_bind()
+    engine = getattr(bind, "engine", bind)
+    if engine.dialect.name != "postgresql":
+        return "unsupported", None
+
+    key = _lock_key(action_id)
+    conn = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    try:
+        while True:
+            got = conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar()
+            if got:
+                return "acquired", EffectLock(conn, key)
+            if time.monotonic() >= deadline:
+                conn.close()
+                return "timeout", None
+            time.sleep(_STRICT_LOCK_POLL_SECONDS)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:  # pragma: no cover
+            pass
+        raise
+
+
 def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session):
     """Decide what to do about an EffectRecord row that already exists.
 

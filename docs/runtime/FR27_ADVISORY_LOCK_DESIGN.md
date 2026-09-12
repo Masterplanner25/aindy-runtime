@@ -1,12 +1,14 @@
 ---
 title: "FR-27 — Advisory-locked idempotency gate (strict at-most-once under contention) — Design"
 api_version: "1.0"
-last_verified: "2026-09-11"
+last_verified: "2026-09-12"
 status: current
 owner: "platform-team"
 ---
 
 # FR-27 — strict at-most-once under contention, via an advisory lock
+
+> **APPROVED & SHIPPED 2026-09-12 (#627), default-off behind `AINDY_SYSCALL_IDEMPOTENCY_STRICT`.** §10 decisions: **session-lock + explicit-unlock** (§4.1), **wait default 300s** (§4.2), **across-crash exactly-once out of scope** (§4.3). This document is the record of the design and the measured prototype; the shipped implementation follows it. See `IDEMPOTENCY_CONTRACT.md` → *Strict at-most-once under contention* for the operator-facing contract.
 
 **`FR-27` / `IDEMPOTENCY-CONTENTION-UNVERIFIED-1` (app), the concurrency half of `IDEM-11`.
 DESIGN ONLY — no runtime change ships with this document.** `AGENT_WORKING_RULES.md` §5
