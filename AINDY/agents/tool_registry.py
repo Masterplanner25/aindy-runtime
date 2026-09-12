@@ -17,10 +17,34 @@ logger = logging.getLogger(__name__)
 TOOL_REGISTRY: dict[str, dict] = {}
 _SUGGESTION_PROVIDERS: list[Callable] = []
 _LOADING_PLUGINS = False
+# FR-25 (c) — the most recent plugin-load failure, or None when the last attempt succeeded.
+# Kept so the point of use can say "the app plugin stack failed to load" instead of only
+# "Unknown syscall" — see `last_plugin_load_failure()` and `nodus_worker.dispatch_worker_syscall`.
+_LAST_PLUGIN_LOAD_FAILURE: str | None = None
+
+
+def last_plugin_load_failure() -> str | None:
+    """The message of the last failed `_ensure_tools_loaded` attempt, or None."""
+    return _LAST_PLUGIN_LOAD_FAILURE
+
+
+def _describe_plugin_load_target() -> str:
+    """Name what `load_plugins()` was about to read, for the failure message.
+
+    Best-effort: this runs inside an except handler, and the resolution itself can be what
+    raised. A message that names nothing is still better than one that does not fire.
+    """
+    try:
+        from AINDY.platform_layer.registry import _resolve_manifest_path
+
+        path, source, owner = _resolve_manifest_path()
+        return f"manifest={path} (source={source}, owner={owner})"
+    except Exception as exc:  # pragma: no cover - defensive, see docstring
+        return f"manifest=<unresolved: {exc}>"
 
 
 def _ensure_tools_loaded() -> None:
-    global _LOADING_PLUGINS
+    global _LOADING_PLUGINS, _LAST_PLUGIN_LOAD_FAILURE
     if _LOADING_PLUGINS:
         return
     _LOADING_PLUGINS = True
@@ -47,8 +71,30 @@ def _ensure_tools_loaded() -> None:
         # scopes here too, so the (dormant) enforce_capability_policy / resolve_secret gates
         # in execute_tool are active in EVERY process. No-op unless the config env is set.
         _ensure_capability_governance()
+        _LAST_PLUGIN_LOAD_FAILURE = None
     except Exception as exc:
-        logger.debug("agent tool plugin load skipped: %s", exc)
+        # FR-25 (c) — this used to be `logger.debug(...)`. In the Nodus worker subprocess
+        # this function is the ONLY plugin-load entry point, so when it fails the run
+        # continues on a registry holding just the runtime's own syscalls, and the caller's
+        # first symptom is "Unknown syscall" for something correctly registered in the
+        # parent — three layers away from the cause (`ModuleNotFoundError: No module named
+        # 'apps'`, in the case that cost the app team a session). The fallback is correct
+        # and stays; only the level and the *what was being loaded* were missing.
+        # ★ Once per distinct failure: `_ensure_tools_loaded` is re-entered on every tool
+        # call and every `sys()` dispatch, so an unconditional WARNING here is a log flood
+        # on a persistent misconfiguration. The repeat is kept at DEBUG.
+        message = f"{type(exc).__name__}: {exc}"
+        target = _describe_plugin_load_target()
+        if message != _LAST_PLUGIN_LOAD_FAILURE:
+            logger.warning(
+                "agent tool plugin load FAILED — continuing on the runtime-only registry;"
+                " app syscalls and tools will resolve as unknown in this process."
+                " %s; %s",
+                target, message,
+            )
+        else:
+            logger.debug("agent tool plugin load still failing (%s): %s", target, message)
+        _LAST_PLUGIN_LOAD_FAILURE = message
     finally:
         _LOADING_PLUGINS = False
 

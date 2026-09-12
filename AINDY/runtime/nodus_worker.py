@@ -239,11 +239,40 @@ def dispatch_worker_syscall(name: str, payload: Any, *, user_id: str) -> Any:
         call_payload.setdefault("user_id", user_id)
         db = SessionLocal()
         try:
-            return dispatch_syscall(name, call_payload, db=db, user_id=user_id)
+            result = dispatch_syscall(name, call_payload, db=db, user_id=user_id)
         finally:
             db.close()
+        return _annotate_unknown_syscall(result)
     except Exception as exc:
         return {"status": "error", "error": str(exc), "data": None, "syscall": name}
+
+
+def _annotate_unknown_syscall(result: Any) -> Any:
+    """FR-25 (c), ask 3 — say WHY a syscall is unknown when this process knows.
+
+    An ``"Unknown syscall"`` in the worker has two causes that look identical to the caller:
+    the name is wrong, or the app plugin stack never loaded here (so the registry holds only
+    the runtime's own syscalls). ``_ensure_tools_loaded`` records the second; this appends it
+    to the error the caller actually reads. The envelope shape and status are untouched.
+    """
+    try:
+        if not isinstance(result, dict) or result.get("status") == "success":
+            return result
+        error = result.get("error")
+        if not isinstance(error, str) or not error.startswith("Unknown syscall"):
+            return result
+        from AINDY.agents.tool_registry import last_plugin_load_failure
+
+        failure = last_plugin_load_failure()
+        if failure:
+            result = dict(result)
+            result["error"] = (
+                f"{error} (the app plugin stack failed to load in this worker process,"
+                f" so only runtime syscalls are registered: {failure})"
+            )
+    except Exception:  # pragma: no cover - annotation must never break the dispatch
+        pass
+    return result
 
 
 def _environment_kwargs(payload: dict[str, Any]) -> tuple[dict[str, Any], "tempfile.TemporaryDirectory[str]"]:

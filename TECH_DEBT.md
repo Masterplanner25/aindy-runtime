@@ -407,7 +407,7 @@ A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — ver
 item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
 blocked on a token-delivery channel (FR-1). **FR-7** (memory recall defects) shipped in
 v2.0.0. **FR-8, FR-9 and FR-10 arrived 2026-08-03 and shipped 2026-08-05 — see below; all
-three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate, #518) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database, #517) arrived 2026-08-22 and were fixed the same day; both have their own sections. **FR-19/20/21/22 arrived 2026-08-22** and were fixed the same day — 19's runtime half (#521), 20 (#520), 21 (#522), 22 (route inventory); each has its own section. Next available: **FR-23**.
+three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate, #518) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database, #517) arrived 2026-08-22 and were fixed the same day; both have their own sections. **FR-19/20/21/22 arrived 2026-08-22** and were fixed the same day — 19's runtime half (#521), 20 (#520), 21 (#522), 22 (route inventory); each has its own section. **FR-24** (`nltk` CVE) shipped in 2.7.0 unfiled. **FR-23/25/26/27 filed 2026-09-11** — 23 had sat a month in their document while this line said "next available: FR-23"; 25 (a)+(c) shipped the same day (#620); 23, 25 (b), 26, 27 open, each with its own section below. Next available: **FR-28**.
 
 ### FR-8/9/10 — the 2.0.0 upgrade trio (SHIPPED 2026-08-05)
 
@@ -2592,6 +2592,38 @@ advertised floor, without anything anywhere raising a word.
 `ROUTE-AST-UNWIRED-1` and `DOCS-COVERAGE-CLAIM-1` (the published-and-unconsumed family),
 `PYPI-PUBLISH-1` (release protocol, which does pin the Dockerfile — the one place a version *is*
 checked).
+
+---
+
+**★★ SECOND INSTANCE 2026-09-11 — `aindy-apps-monolith`, and it is the stronger one.** Claw
+declares nothing; the monolith declares `aindy-runtime>=2.11.0,<3.0` in `pyproject.toml`, pins
+`==2.11.0` in `constraints.txt`, and its container genuinely runs 2.11.0. **And its dev venv —
+the interpreter its own `pytest` imports from — is `aindy_runtime-2.6.0`, installed 2026-08-22,
+non-editable, with no `.pth` link to the sibling checkout.** Measured by dropping a probe test
+into their `tests/unit/` that printed `AINDY.__path__`: `venv\Lib\site-packages\AINDY`, 2.6.0.
+So the "1,222 passed" in their 2.11.0 upgrade doc, and the suites in their 2.9.0 doc, verified
+adoptions of releases the suite never imported.
+
+**★ Both sides of the handoff mis-measured it the same day, with different instruments, and each
+was confident.** Our `APP_HANDOFF_v2.11.0.md` §0 read `dist-info` and `__version__` → 2.6.0 and
+implied it was the deployment (it was not — the container was on 2.9.0). Their reply read
+`importlib.metadata` → 2.0.1 and `import AINDY._version` → 2.11.0 and concluded *"an editable
+install of the sibling checkout, nothing here runs the venv"* — but no such link exists; the
+2.11.0 came from **cwd being `C:\dev\aindy-runtime`**, which Python puts first on `sys.path`, so
+the checkout shadowed `site-packages`. From their own repo root the same venv answers 2.6.0.
+**Every version instrument is cwd-sensitive and none of them says where the answer came from.**
+The only honest one-liner prints the path beside the number:
+`python -c "import AINDY, AINDY._version as v; print(v.__version__, list(AINDY.__path__))"`.
+
+**What this adds to the entry, beyond a second data point:** a declared range with a container
+pin is the *correct* consumer posture — and it still let a dev environment sit five releases
+behind for three weeks while every green suite said otherwise. **The declaration guards the
+install step; nothing guards what the tests import.** The runtime-side fix is unchanged (one
+comparison where `/api/version` is already fetched, warn never refuse), but the consumer-side
+recommendation gains a line: **a test that asserts on the runtime's declared range should also
+assert `AINDY._version.__version__` satisfies it** — their `test_runtime_dependency_contract.py`
+checks that the specifier and the pin agree with each other, which is a check about two strings
+in two files and not about the interpreter running it. Sent to them in the handoff correction.
 
 ---
 
@@ -8268,6 +8300,238 @@ the next one, rank event types by `pg_total_relation_size` share, not by whether
 important — the events that dominate a table are the ones emitted by a loop, and a loop's
 events are the least likely to be read.
 
+## FR-23/25/26/27 — filed 2026-09-11 from the app's `RUNTIME_FEATURE_REQUESTS.md`
+
+**Received together** on 2026-09-11 (FR-23 had been sitting in that document since 2026-08-22
+with our registry still reading *"next available: FR-23"* — a month unfiled; FR-24, the `nltk`
+CVE, shipped in 2.7.0 without ever being filed here either). **All four premises verified against
+source before filing.** Where the reported mechanism differs from the code, the correction is
+recorded in the entry; two of the four counts in the requests were wrong, in the direction that
+made the problem sound bigger.
+
+---
+
+## FR-25 — three places a runtime failure is less legible than it needs to be
+
+**Status: (a) and (c) SHIPPED 2026-09-11 (#620). (b) OPEN — route contract change, needs approval.**
+
+Filed 🔴 observability. All three are one shape: *a failure the runtime already knows about,
+arriving somewhere it cannot be read.* None needed new behaviour — the message existed, was
+accurate, and was emitted one level below anywhere anyone looks. (a) and (c) each cost the app
+team a session.
+
+### (a) The dispatcher's error funnel counted and returned, and did not log
+
+Every dispatcher error path returns through `_error_envelope`, which since 2.9.0 increments
+`aindy_syscall_outcome_total{status="error"}` — **which is how the app noticed three syscalls
+failing at all.** But the funnel did not log, so the message it had just computed
+(*"Permission denied: requires capability X"*) existed only inside a returned dict. A correctly
+defensive caller — `if result.get("status") != "success": return 0`, the exact shape our own
+2.9.0 handoff asked everyone to adopt — discards it, and the surface reports a **confident wrong
+number** ("0 agent runs") with nothing anywhere to contradict it.
+
+**★ The count in the request was wrong, in the loud direction: "11 of 13 paths are silent" — it
+was 7 of 13.** Six sites already logged on their own: the unhandled-exception belt-and-suspenders
+(with a traceback), the fail-closed quota check, the **handler exception** path, the **handler
+contract violation**, the **malformed outcome claim** and the **stable output mismatch** — the
+last four are in the handler-execution block, which the app's reading of the funnel did not
+reach. The request listed three of those as silent. This mattered for the fix: logging
+unconditionally at the funnel would have double-logged six paths, and a doubled line is how a
+reader concludes two things failed.
+
+**Fix:** one `WARNING` at the funnel — `[SyscallDispatcher] <name> -> error (eu=… trace=…):
+<message>` — carrying the **same string the envelope carries**, so the operator's log and the
+caller's dict cannot drift. The six self-logging sites pass `already_logged=True`.
+
+**★ The guard on the flag is DERIVED, not enumerated — and its first draft was not.** The first
+census test pinned *"exactly two sites declare already_logged"* from the request's count; the
+behavioural test found a third, then the derived rule found a sixth. Now: a site may pass
+`already_logged=True` **only if a `logger.*` call precedes it in the same statement block**, and
+a site that logs in-block **must** pass it. Both directions are asserted, with liveness controls
+on each side (some sites declare it; some do not). Mutation-tested 6/6 — including *"add the flag
+to a silent site"*, which is the regression this exists to catch.
+
+**Not taken — emitting `SYSCALL_EXECUTED{status=error}` from the funnel.** The app said they would
+take the log line alone, and the event half is not free: five error paths already emit it (the
+handler-block ones), so a funnel emit double-records those; the pre-handler paths (unknown
+syscall, permission denied, quota) fire on misconfiguration and would each open a DB session per
+refusal; and `SYSEVENT-RETENTION-1` means every new emitter is a growth term. **Residual: an
+error refused BEFORE the handler leaves no durable row.** Revisit when the retention class per
+event type exists.
+
+### (b) `parent_run_id: str` turns a malformed id into a 500 — OPEN
+
+`coordination_router.py:277` declares `parent_run_id: str`; the handler calls
+`normalize_uuid()`, which raises `ValueError` → 500 carrying the parser's own message
+(`badly formed hexadecimal UUID string`). The route's own 403/404 handling is correct; only
+the type is missing. Fix is `parent_run_id: UUID` → FastAPI answers **422** and the OpenAPI
+schema stops advertising a free-form string.
+
+**★ The population is larger than the request's bound.** They counted `grep '_id: str,'
+AINDY/routes/*.py` = 36; **`AINDY/routes/platform/*.py` adds ~20 more** (keys, webhooks,
+queue, nodus routers). Confirmed 500: one. The others may never uuid-parse and be fine as
+strings. **The only reliable check is empirical — one request per route with a malformed id,
+looking for 500 rather than 422** — and it must confirm the valid-id case still answers 200,
+because a stricter type can start rejecting good input (the app hit exactly that on their side
+and checked both halves). **Route contract change → approval before touching.** `ROUTE-GUARD-1`
+applies: the test must **call** the route.
+
+### (c) `_ensure_tools_loaded` swallowed plugin-load failure at DEBUG — SHIPPED
+
+In the Nodus worker subprocess this function is the **only** plugin-load entry point
+(`nodus_worker.py`'s own FR-5b comment). When it failed, nothing above DEBUG said so, the run
+continued on a registry holding just the runtime's own syscalls (24 of 91 in their stack), and
+the caller saw `"Unknown syscall: 'sys.v1.analytics.…'"` for a name correctly registered in the
+parent — three layers from the cause (`ModuleNotFoundError: No module named 'apps'`: the
+worker's cwd is not on `sys.path`, and their app package was not pip-installed in that venv;
+**that half is theirs and is fixed on their side**).
+
+**Fix (their asks 1–3):** `WARNING`, naming the resolved manifest (path, source, owner) and the
+exception; **once per distinct failure** — the function is re-entered on every tool call and
+every `sys()` dispatch, so an unconditional WARNING is a flood on a persistent misconfiguration
+(the repeat stays at DEBUG; a *different* failure warns again). The failure is recorded on the
+module (`last_plugin_load_failure()`) and cleared on the next successful load, and the worker's
+`dispatch_worker_syscall` appends it to an `"Unknown syscall"` error — **only that error**; a
+permission denial with a failed plugin stack is still a permission denial. Envelope shape and
+status untouched. **★ Clearing on success matters:** a stale failure would make the worker blame
+the plugin stack for a genuinely wrong name.
+
+**Not changed:** the spawn. The fallback is correct and stays.
+
+---
+
+## FR-26 — the execution pipeline mints a second trace id instead of adopting the request's
+
+**Status: OPEN, verified 2026-09-11. One-line default; runtime behaviour + response-shape change,
+so it needs approval before it ships.** Filed 🔴 observability; found by the app 2026-07-22,
+root-caused 2026-09-11 (their `TRACE-ID-DUAL-1`).
+
+**Verified.** `middleware.py:106–108` (`log_requests`) mints `trace_id`, sets
+`request.state.trace_id` and the `_trace_id_ctx` contextvar, and writes it to `X-Trace-ID`.
+`core/execution_pipeline/context.py:38–41` (`ExecutionContext.from_request`) then reads only the
+**incoming** headers — `X-Trace-ID`, `X-Request-ID`, else `uuid4()`. A browser sends neither, so
+every `/apps/*` response carries **two** ids: `X-Trace-ID` and `data.trace_id` (the flow run,
+syscalls, memory writes — 16 events in their probe) vs. the body's top-level `trace_id` (the
+pipeline's `execution.started/completed` — 4 events). **The id most likely to be copied out of a
+client resolves to a route that ran and produced nothing.**
+
+**The ask, and it is right:** prefer the id the middleware already assigned —
+`request.state.trace_id`, then the two headers, then mint. `execute_with_pipeline` already accepts
+`metadata["trace_id"]` as an override, so everything below the default is sound; only the default
+is wrong.
+
+**★ Why not the app-side workaround:** `metadata={"trace_id": get_current_trace_id()}` at every
+`execute_with_pipeline` call is ~40 sites of scaffolding for a one-line default, and the next
+router someone writes forgets it. **★ Not the same decision as honouring an INCOMING `X-Trace-ID`
+in the middleware** — that is a trust-boundary question (a client choosing its own trace id can
+collide with or spoof another's) and the app explicitly did not ask for it. Adopting the id the
+middleware minted is safe; adopting one the client sent is a separate entry.
+
+**What to test when built:** a route under the pipeline with no incoming header → body
+`trace_id == X-Trace-ID`; with an explicit `metadata["trace_id"]` → the override still wins; and
+a direct `from_request` call with no `request.state` (the non-HTTP construction) still mints.
+`AUDIT-CORRELATION-1` gains a join from this.
+
+---
+
+## FR-23 — `/observability/system` reports 0 syscalls and 0 tools while ~90 and 16 are live
+
+**Status: OPEN, verified 2026-09-11.** Filed 🔴 observability on 2026-08-22 — **sat a month in
+their document while our registry said "next available: FR-23".** A confident wrong number on an
+operator surface, from two causes.
+
+**Cause 1 — verified: two functions named `register_syscall`, and dispatch reads only one.**
+`platform_layer/registry.py:482` validates a handler and stores it in a module dict `_syscalls`;
+`SyscallDispatcher` resolves against the kernel `SYSCALL_REGISTRY` and **never reads that
+dict**. Every app registers through `kernel.syscall_registry.register_syscall`, so `_syscalls` is
+empty after a full boot — and `observability_router.py:491` computes `syscall_count` as
+`sum(1 for _ in iter_syscalls())` over it. **`platform_layer.register_syscall` is a seam that
+accepts registrations, validates them, and routes them nowhere a call can reach.** Its only
+consumer is the metric that reads zero. (Their own `CLAUDE.md` had documented it as the path to
+use; corrected on their side.)
+
+**Cause 2 — verified: the tool metric counts the extension model nobody uses.** Static
+`register_agent_tool` → `_agent_tools` (walked by `iter_agent_tools`, line 492) coexists with
+`register_run_tool_provider` → `_agent_run_tools[run_type]`, resolved by `get_tools_for_run`.
+No app uses the static form. So `tool_count == 0` is accurate about that dict and wrong as a
+count of tools.
+
+**The fix is two different sizes and should not be one PR.** (1) Point both numbers at the live
+sources — `len(SYSCALL_REGISTRY)` and the resolved provider count — smallest possible change,
+stops the surface asserting zero. (2) **Decide what `platform_layer.register_syscall` is for.** A
+validating function that routes nowhere is worse than an absent one, because it accepts work
+silently; deprecate-or-delete or wire-into-dispatch is a decision, and the same question applies
+to `register_agent_tool`. **★ Check who calls it before deleting — `grep` found no runtime
+importer outside the router, but `platform_layer.registry` is the extension ABI surface, so an
+external plugin could.** Ship (1) now; file (2) as a decision with a deprecation window.
+
+**Not claimed:** that dispatch is broken. It is not — this is a reporting defect plus an unwired
+seam.
+
+---
+
+## FR-27 — the idempotency gate degrades every concurrent duplicate; measured N−1 of N
+
+**Status: OPEN, verified 2026-09-11. Proposal-first — concurrency behaviour, `AGENT_WORKING_RULES`
+§5/§8.** Filed 🔴 correctness (their `IDEMPOTENCY-CONTENTION-UNVERIFIED-1`, now measured).
+
+**The measurement, on 2.11.0 + PostgreSQL, `sys.v1.event.emit` (`EXACTLY_ONCE`), one scope, one
+payload, N callers barrier-released from separate sessions:**
+
+| callers | reserved | degraded | effect ran |
+|---|---|---|---|
+| 2 / 4 / 8 / 16 | 1 | N−1 | **N×** |
+
+Sequentially, four identical calls → `reserved 1, replayed 3`, one execution. **The gate is a
+replay cache for sequential duplicates and gives no protection to concurrent ones.**
+
+**★ This sharpens `IDEM-11`'s own number, which was "8 concurrent → ran TWICE".** Same mechanism;
+the difference is release timing. Ours were not barrier-synchronised, so most callers' opening
+`SELECT` landed after the winner's `COMPLETE` and took `replayed`; theirs all lost the insert race
+while the winner's row was still `pending`. **The bound is N, not 2**, and a soak asserting
+`< WORKERS` (`PERF-BASELINE-1`'s caution about asserting stricter than the contract) would go
+green on the worst case.
+
+**Mechanism, verified:** `effect_ledger.py:147` — a live `pending` row (younger than
+`STALE_PENDING_THRESHOLD_SECONDS`) → `_count_gate("degraded")` → `(False, None)` → the caller
+executes. No wait, no re-read, no lock. **A pending row protects nothing until it is completed.**
+The docstring has said *"strict at-most-once needs advisory locking"* since MEB-1a.
+
+**The ask (correct as far as it goes):** `pg_advisory_xact_lock(hash(action_id))` around the
+reserve-or-replay decision so a loser **blocks** until the winner completes and then takes
+`replayed`; on non-PostgreSQL keep today's behaviour and say so; **`degraded` should then mean
+"the gate machinery lost", not "someone else was faster".**
+
+**★ What the proposal must settle before code — these are the parts that are NOT one line:**
+
+1. **The lock spans the handler, not the decision.** Locking only the reserve/replay *decision*
+   changes nothing — the loser re-reads a `pending` row and is back where it started. The winner
+   must hold the lock across `reserve → handler → complete`, which is a **transaction-scoped
+   advisory lock held across an external call** — exactly the shape `RT-MEMTXN-LEAK-1` forbids on
+   a request-shared session. It needs its **own session**, and `_gate_db` is already one.
+2. **Handler wall-clock becomes the loser's wait.** A 300s handler makes N−1 callers block 300s.
+   `lock_timeout` on the losers, and a timed-out loser is *then* `degraded` — honestly, because the
+   machinery gave up. Which reintroduces N× under a slow handler, bounded and counted.
+3. **Winner crash mid-handler.** Its transaction rolls back; the advisory lock releases; the row
+   is `pending` with no owner. A loser then reads `pending` + young → today's degrade. `reclaimed`
+   only fires past `STALE_PENDING_THRESHOLD_SECONDS`. The app explicitly did not ask for this
+   case; say so in the contract rather than half-handle it.
+4. **`durable_effects_active` (DUR-2) engages the gate for ANY syscall** — so the lock lands on
+   that path too. Check the effect on `FLOW-PARALLEL-1`: two branches of one fan-out issuing the
+   same effect would now serialise on it, which is correct, and would hold a per-branch session
+   against the shared budget for the handler's duration, which is `SYSMAX-5`'s shape.
+5. **Non-PG:** SQLite has no advisory locks; the unit suite runs on it. The soak that proves this
+   lives in `tests/integration/` (live PG) and must first **assert the backend is PostgreSQL** —
+   the standing rule about test-mode short-circuits: prove the mechanism you think you are
+   exercising is the one running.
+
+**Metric change to expect:** `degraded` drops to ~0 under contention and `replayed` rises;
+`degraded_gate_error` is unaffected. **Do NOT close on the counter alone** — the app's five-line
+barrier probe is the witness, and they have said they will re-run it against the release.
+
+**Not asking for (theirs, kept):** exactly-once across process crashes; any change to
+`AT_LEAST_ONCE` handlers.
+
 ## SYSEVENT-RETENTION-1 — `system_events` grows without bound and nothing prunes it
 
 **Status: OPEN — P2, filed 2026-08-22 out of `FR-18`.** The runtime prunes stale job logs
@@ -8339,6 +8603,8 @@ retry — only `reversed` should, or a transient compensator failure would becom
 reversal depend on an environment variable, which is the shape `IDEM-10` already paid for.
 
 ## IDEM-11 — at-most-once is built, tested, and shipped disabled
+
+**★ 2026-09-11 — the contention number is sharper than this entry says: `FR-27` measured N−1 of N (2/4/8/16 barrier-released callers → the handler ran 2/4/8/16 times). "Ran twice" was a timing artefact of our unsynchronised callers, not a bound. See `FR-27`.**
 
 **Status: OPEN — P0, audit half DONE (2026-08-15).** Filed 2026-08-15 from the Hermes
 architectural map (G2), verified. Numbered `IDEM-11` per the registry's own rule rather than
