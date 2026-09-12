@@ -1,6 +1,6 @@
 ---
 title: "Extension ABI"
-last_verified: "2026-06-15"
+last_verified: "2026-09-12"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -54,6 +54,23 @@ support window:
    newer stable version shipped (e.g. if `v2` ships in `1.4.0`, `v1` is not removed before `1.6.0`).
 4. Removal is announced in the runtime changelog and the `EXTENSION_ABI.md` policy doc is
    updated to reflect the new `ABI_VERSIONS` set before the release that removes it.
+
+### Deprecated registration functions
+
+Two in-process registration functions are **deprecated (FR-23, 2026-09-12)** and will be removed
+**no earlier than two minor releases after 2.11** (the same minimum window as a stable ABI
+version). Both remain callable through the window and still record what they are given, so an
+out-of-tree extension is not broken mid-window; both now emit a `DeprecationWarning` and an
+operator-facing WARNING log on every call.
+
+| Deprecated | Why it is dead | Register through instead |
+|---|---|---|
+| `platform_layer.registry.register_syscall` | Writes to `_syscalls`, which `SyscallDispatcher` never reads — the handler is not callable as a syscall. | `AINDY.kernel.syscall_registry.register_syscall` (note the different handler contract: the kernel takes `(payload, ctx)`, this seam validated a single-parameter handler — it is an adaptation, not a rename). |
+| `platform_layer.registry.register_agent_tool` | Writes to the static `_agent_tools` model, which `execute_tool` does not resolve against. | `register_run_tool_provider` (the provider model apps use), or `agents.tool_registry.register_tool` (the executable `TOOL_REGISTRY`). |
+
+Their `INPROC_CAP_REGISTER_SYSCALL` / `INPROC_CAP_REGISTER_AGENT_TOOL` capabilities stay in the
+audited capability set until removal (a plugin declaring them is still honoured). Removal will be
+announced in the changelog and this section updated, per the policy above.
 
 **Experimental ABI versions** (all `v1alpha*` surfaces) carry no support window. They may be
 changed or removed in any minor or patch release without a deprecation period. Plugin authors
