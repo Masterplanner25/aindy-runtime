@@ -8520,8 +8520,7 @@ Mutation-tested 3/3.
 
 ## FR-27 — the idempotency gate degrades every concurrent duplicate; measured N−1 of N
 
-**Status: OPEN, verified 2026-09-11. Proposal-first — concurrency behaviour, `AGENT_WORKING_RULES`
-§5/§8.** Filed 🔴 correctness (their `IDEMPOTENCY-CONTENTION-UNVERIFIED-1`, now measured).
+**Status: OPEN — DESIGN WRITTEN & PROTOTYPED 2026-09-11, awaiting approval. Proposal-first — concurrency behaviour, `AGENT_WORKING_RULES` §5/§8.** Design + measured prototype results: `docs/runtime/FR27_ADVISORY_LOCK_DESIGN.md`. Defect reproduced on PG (N−1 of N, pinned at N with a slow handler); prototype (advisory lock on a dedicated AUTOCOMMIT connection) gave handler_ran==1 across 2/4/8/16 and one-retry-not-N on winner-fail, then was reverted. No code ships until the §10 decisions are made. Filed 🔴 correctness (their `IDEMPOTENCY-CONTENTION-UNVERIFIED-1`, now measured).
 
 **The measurement, on 2.11.0 + PostgreSQL, `sys.v1.event.emit` (`EXACTLY_ONCE`), one scope, one
 payload, N callers barrier-released from separate sessions:**
