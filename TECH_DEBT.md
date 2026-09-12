@@ -8437,7 +8437,7 @@ a direct `from_request` call with no `request.state` (the non-HTTP construction)
 
 ## FR-23 — `/observability/system` reports 0 syscalls and 0 tools while ~90 and 16 are live
 
-**Status: OPEN, verified 2026-09-11.** Filed 🔴 observability on 2026-08-22 — **sat a month in
+**Status: METRIC HALF SHIPPED 2026-09-11 (#622); the ABI decision is OPEN.** Filed 🔴 observability on 2026-08-22 — **sat a month in
 their document while our registry said "next available: FR-23".** A confident wrong number on an
 operator surface, from two causes.
 
@@ -8468,6 +8468,19 @@ external plugin could.** Ship (1) now; file (2) as a decision with a deprecation
 
 **Not claimed:** that dispatch is broken. It is not — this is a reporting defect plus an unwired
 seam.
+
+**★ What shipped (#622), and what the build found.** Both numbers now read the sources dispatch and
+`execute_tool` resolve against (`SYSCALL_REGISTRY`, `TOOL_REGISTRY`), plus an additive
+`run_tool_provider_run_types` so the provider model is visible. `platform_layer.register_syscall`
+now WARNS at registration naming the kernel path — not removed, because it is an
+`INPROC_CAP_REGISTER_SYSCALL`-gated ABI entry that `test_extension_ownership.py` audits by name.
+**★ The tell that they were never one registry: the platform-layer seam validates a SINGLE-parameter
+handler; the kernel's takes `(payload, ctx)`.** A handler written for one cannot be registered in
+the other, so "wire it into dispatch" is not a copy — it is an adapter or a deprecation.
+**Open half, owner's call:** deprecate `platform_layer.register_syscall` (and `register_agent_tool`)
+with a window, or adapt them into the kernel registries. The metric tests include a mutation
+control — entries placed in the OLD dicts must not move the numbers — so the fix cannot drift back.
+Mutation-tested 3/3.
 
 ---
 

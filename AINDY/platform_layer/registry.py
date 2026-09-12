@@ -480,9 +480,27 @@ def get_legacy_root_routers() -> list[Any]:
 
 
 def register_syscall(name: str, handler: Handler) -> Handler:
+    """Record a syscall handler in the platform-layer registry.
+
+    ★ FR-23 — **a handler registered here is not reachable by dispatch.** `SyscallDispatcher`
+    resolves names against `kernel.syscall_registry.SYSCALL_REGISTRY`, and nothing copies
+    `_syscalls` into it; the only reader of this dict was an operator metric that therefore
+    read zero. Every app registers through `kernel.syscall_registry.register_syscall`. This
+    function stays because it is a capability-gated entry of the in-process extension ABI
+    (`INPROC_CAP_REGISTER_SYSCALL`; audited by `test_extension_ownership.py`), so removing
+    it is an ABI decision — but a seam that validates and then routes nowhere must not
+    accept work *silently*. Whether to wire it into dispatch or deprecate it with a window
+    is the open half of FR-23.
+    """
     _require_in_process_extension_capability(INPROC_CAP_REGISTER_SYSCALL)
     validate_syscall_handler(name, handler)
     _syscalls[name] = handler
+    logger.warning(
+        "platform_layer.register_syscall(%r): this registry is NOT read by the dispatcher;"
+        " the handler will not be callable as a syscall. Register through"
+        " AINDY.kernel.syscall_registry.register_syscall (FR-23).",
+        name,
+    )
     return handler
 
 
@@ -958,6 +976,12 @@ def get_tools_for_run(run_type: str, context: dict[str, Any] | None = None) -> l
 
 def register_agent_run_tools(run_type: str, handler: Handler) -> Handler:
     return register_run_tool_provider(run_type, handler)
+
+
+def list_run_tool_provider_run_types() -> list[str]:
+    """The run types that have a tool provider — the tool model apps actually use (FR-23)."""
+    _ensure_runtime_agent_defaults()
+    return sorted(_agent_run_tools)
 
 
 def register_agent_completion_hook(run_type: str, handler: Handler) -> Handler:
