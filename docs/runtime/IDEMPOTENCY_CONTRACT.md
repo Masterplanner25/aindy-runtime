@@ -1,6 +1,6 @@
 ---
 title: "Idempotency Contract"
-last_verified: "2026-05-24"
+last_verified: "2026-09-12"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -229,6 +229,55 @@ contract violation: the `EffectRecord` is finalized as `"failed"` and
 `SyscallContractViolation` is raised from `dispatch()`, propagating to the caller.
 `AT_LEAST_ONCE` handlers that return a non-dict produce a normal error envelope; no
 `SyscallContractViolation` is raised and no `EffectRecord` is created.
+
+## Strict at-most-once under contention (FR-27)
+
+**Default-off, opt-in via `AINDY_SYSCALL_IDEMPOTENCY_STRICT=1`. PostgreSQL only.**
+
+The base gate is a replay cache for *sequential* duplicates. Under *concurrent* duplicates it
+degrades every loser of the insert race to `AT_LEAST_ONCE` and runs the handler — a *pending*
+row protects nothing until it is `success`, so N barrier-released callers of one `EXACTLY_ONCE`
+action run the handler up to **N** times (measured; pinned at N with a handler slower than the
+insert race). This is the gap MEB-1a's docstring named ("strict at-most-once needs advisory
+locking").
+
+Strict mode closes it with a session-scoped `pg_advisory_lock` keyed on the `action_id`, taken
+on a **dedicated** connection (never `_gate_db`, which commits mid-gate; never the handler's
+session — `#157`) and held across `reserve → handler → complete`. A loser **blocks** on the lock
+until the winner finishes, then resolves the now-`success` row and **replays**. Result:
+handler runs exactly once per `action_id` under any contention width.
+
+- **Loser wait:** `AINDY_SYSCALL_IDEMPOTENCY_STRICT_WAIT_SECONDS` (default `300`, the syscall
+  wall-clock ceiling). A loser that waits longer than this degrades honestly, counted
+  `degraded_lock_timeout` — a *different* signal from contention: a handler is slower than the
+  wait. Set it ≥ the slowest legitimate handler or that handler's losers degrade needlessly.
+- **Winner handler failure:** leaves a `failed` row and releases the lock; the next caller
+  reclaims and retries **once**, the rest replay — one retry, not N.
+- **Winner process crash (not a guarantee):** leaves a `pending` row; Postgres drops the session
+  lock on disconnect, and the next caller sees `pending`-young and degrades until
+  `STALE_PENDING_THRESHOLD_SECONDS`. **Across-process-crash exactly-once is explicitly out of
+  scope** (decided 2026-09-12) — stated here, not half-built.
+- **Pool cost:** a blocked loser holds one pooled connection while it polls, up to the wait. The
+  lock serialises same-`action_id` callers, so this is bounded per key, but a deployment turning
+  strict mode on should size `DB_POOL_SIZE`/`DB_MAX_OVERFLOW` for its expected duplicate fan-in.
+
+### Gate outcome labels after FR-27 (`aindy_effect_gate_outcomes_total{outcome}`)
+
+| label | meaning | expected under healthy strict-mode contention |
+|---|---|---|
+| `reserved` | won the insert, ran the handler | 1 per distinct `action_id` |
+| `replayed` | resolved an already-terminal row (cached success, or post-lock) | N−1 |
+| `degraded` | lock **not attempted** — non-PG, or strict mode off | 0 on PG with strict on |
+| `degraded_lock_timeout` | waited the full wait, gave up, ran anyway | 0 unless a handler exceeds the wait |
+| `degraded_gate_error` | the gate machinery itself failed | 0 |
+| `reclaimed` | took over a `failed`/stale row | 0 unless a winner failed |
+
+A non-zero `degraded` on PostgreSQL with strict mode on now means **misconfiguration**, not
+contention — the operator signal inverts in a useful direction.
+
+Design + measured prototype: `docs/runtime/FR27_ADVISORY_LOCK_DESIGN.md`.
+
+---
 
 ---
 
