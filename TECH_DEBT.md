@@ -8518,6 +8518,62 @@ Mutation-tested 3/3.
 
 ---
 
+## FR-28 — `acknowledge_message` acknowledges a message that does not exist 🔴 correctness
+
+**Status: OPEN, filed 2026-09-12. Found by the FR-25 (b) probe, verified against source.** Not a
+status-code defect — a correctness one in the coordination path.
+
+### What the probe hit
+
+`POST /coordination/messages/{message_id}/acknowledge` with `message_id = not-a-uuid` (and a
+well-formed body) answered **200 `{"acknowledged": true, "message_id": "not-a-uuid",
+"acknowledgment_event_id": "<uuid>"}`** on both SQLite and live Postgres. There is no such
+message; the ack was recorded against a phantom id.
+
+### The mechanism, from source
+
+`acknowledge_message` (`AINDY/agents/agent_message_bus.py:220`) emits an
+`agent.message.acknowledged` `SystemEvent` **unconditionally**. It never checks that:
+
+1. a `SystemEvent` with `id == message_id` exists,
+2. that row is a message type (`agent.message.*`),
+3. that message is addressed to the acking `agent_id` (`payload.recipient_agent_id`).
+
+A "message" is just a `SystemEvent` of type `agent.message.*` carrying a `recipient_agent_id`
+(`get_inbox`, same file). The ack is a second event whose `acknowledged_message_id` is whatever
+string the caller passed. `message_id` is also typed `str` on the route, so it is not even a
+UUID — it is never looked up, so `UUIDPath` (FR-25 b) is deliberately **not** the fix here.
+
+### Two facets, and the second is the one with teeth
+
+- **Phantom ack (audit integrity):** an ack event exists for a message that never did. The
+  coordination audit trail records an acknowledgement of nothing.
+- **★ Cross-agent inbox suppression:** `get_inbox` builds `acked_refs` from **every**
+  `agent.message.acknowledged` event for the user, filtered by `user_id` only — **not** by the
+  acking `agent_id`. So agent A can acknowledge a message addressed to agent B (by id) and it
+  **vanishes from B's inbox**. Within one tenant, an agent can suppress another agent's messages.
+  This is the facet that makes it 🔴 rather than cosmetic, though it is bounded to one user's
+  own agents (not cross-tenant — `INITIATOR-IDENTITY-1` territory, separate).
+
+### Shape of the fix (not built — app-coordination behaviour, wants its own PR)
+
+1. **Resolve the message first.** Load the `SystemEvent` by `id`, 404 if absent, 400/409 if it
+   is not an `agent.message.*` type. This alone closes the phantom-ack facet.
+2. **Authorise the ack against the recipient.** Refuse (403) when
+   `payload.recipient_agent_id != agent_id` — an agent may only acknowledge its own messages.
+   Closes the suppression facet.
+3. **Then emit the ack event** as today.
+
+★ Do **not** close this by typing `message_id` as `UUIDPath` — the id is never parsed, so that
+changes nothing; the missing thing is the existence-and-ownership check, not the type. ★ Verify
+with a route test that **calls the route** (`ROUTE-GUARD-1`): ack of a real message addressed to
+me → 200; ack of a non-existent id → 404; ack of a message addressed to another agent → 403; and
+that a suppressed-inbox regression test drives `get_inbox` before/after to prove B still sees its
+message. ★ A `SystemEvent` is append-only and `SYSEVENT-RETENTION-1` prunes by type — the ack
+event itself is fine to keep; the defect is that it should never have been written.
+
+---
+
 ## FR-27 — the idempotency gate degrades every concurrent duplicate; measured N−1 of N
 
 **Status: OPEN — DESIGN WRITTEN & PROTOTYPED 2026-09-11, awaiting approval. Proposal-first — concurrency behaviour, `AGENT_WORKING_RULES` §5/§8.** Design + measured prototype results: `docs/runtime/FR27_ADVISORY_LOCK_DESIGN.md`. Defect reproduced on PG (N−1 of N, pinned at N with a slow handler); prototype (advisory lock on a dedicated AUTOCOMMIT connection) gave handler_ran==1 across 2/4/8/16 and one-retry-not-N on winner-fail, then was reverted. No code ships until the §10 decisions are made. Filed 🔴 correctness (their `IDEMPOTENCY-CONTENTION-UNVERIFIED-1`, now measured).
