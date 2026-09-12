@@ -11,6 +11,7 @@ import importlib
 import json
 import logging
 import os
+import warnings
 from collections import defaultdict
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -492,11 +493,28 @@ def register_syscall(name: str, handler: Handler) -> Handler:
     accept work *silently*. Whether to wire it into dispatch or deprecate it with a window
     is the open half of FR-23.
     """
+    # FR-23 — DEPRECATED 2026-09-12, removal no earlier than two minor releases out (see
+    # EXTENSION_ABI.md "Deprecated registration functions"). This seam routes nowhere: the
+    # dispatcher resolves names against kernel.syscall_registry.SYSCALL_REGISTRY and nothing
+    # copies _syscalls into it, so a handler registered here has never been callable. Kept
+    # through the window because it is a capability-gated ABI entry; it still records the
+    # handler so an out-of-tree caller is not broken mid-window.
+    warnings.warn(
+        "platform_layer.register_syscall is deprecated (FR-23): it is not read by the "
+        "dispatcher, so the handler is not callable as a syscall. Register through "
+        "AINDY.kernel.syscall_registry.register_syscall instead. This seam will be removed "
+        "no earlier than two minor releases after 2.11.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     _require_in_process_extension_capability(INPROC_CAP_REGISTER_SYSCALL)
     validate_syscall_handler(name, handler)
     _syscalls[name] = handler
+    # ★ The operator-facing half stays a WARNING log — a plugin author reads DeprecationWarning,
+    # an operator tailing logs reads this, and FR-25 is the lesson that a signal must reach the
+    # audience that acts on it.
     logger.warning(
-        "platform_layer.register_syscall(%r): this registry is NOT read by the dispatcher;"
+        "platform_layer.register_syscall(%r): DEPRECATED and NOT read by the dispatcher;"
         " the handler will not be callable as a syscall. Register through"
         " AINDY.kernel.syscall_registry.register_syscall (FR-23).",
         name,
@@ -895,9 +913,26 @@ def get_memory_significance_rule(event_type: str) -> float | None:
 
 
 def register_agent_tool(name: str, tool: Any) -> Any:
+    # FR-23 — DEPRECATED 2026-09-12, same window as register_syscall. The static _agent_tools
+    # model is not the one execute_tool resolves against (that is agents.tool_registry.TOOL_REGISTRY,
+    # populated by register_run_tool_provider / register_tool). No app registers here. Kept
+    # through the window because it is a capability-gated ABI entry; still records the tool.
+    warnings.warn(
+        "platform_layer.register_agent_tool is deprecated (FR-23): the static tool model it "
+        "writes to is not resolved by execute_tool. Register a run-tool provider via "
+        "register_run_tool_provider (or a tool via agents.tool_registry.register_tool) instead. "
+        "This seam will be removed no earlier than two minor releases after 2.11.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     _require_in_process_extension_capability(INPROC_CAP_REGISTER_AGENT_TOOL)
     validate_agent_tool(name, tool)
     _agent_tools[name] = tool
+    logger.warning(
+        "platform_layer.register_agent_tool(%r): DEPRECATED and NOT resolved by execute_tool;"
+        " register via register_run_tool_provider or agents.tool_registry.register_tool (FR-23).",
+        name,
+    )
     return tool
 
 

@@ -8516,6 +8516,15 @@ with a window, or adapt them into the kernel registries. The metric tests includ
 control — entries placed in the OLD dicts must not move the numbers — so the fix cannot drift back.
 Mutation-tested 3/3.
 
+**★ ABI HALF DECIDED 2026-09-12 (#626): DEPRECATE WITH A WINDOW** (owner's call, over adapt-in
+and remove-now). Both seams now emit a `DeprecationWarning` + keep the operator WARNING, still
+record through the window, and are documented in `EXTENSION_ABI.md` → *Deprecated registration
+functions*; removal no earlier than two minor releases after 2.11, capabilities stay audited until
+then. **★ Why not adapt-in: the kernel handler contract is `(payload, ctx)` and this seam validated
+a single-parameter handler — wiring it would be an adapter that changes the contract's meaning,
+more live surface for a seam nothing uses. Remove-now was an ABI break with no window for an
+out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
+
 ---
 
 ## FR-28 — `acknowledge_message` acknowledges a message that does not exist 🔴 correctness
