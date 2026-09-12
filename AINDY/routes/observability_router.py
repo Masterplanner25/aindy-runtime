@@ -423,8 +423,7 @@ def get_system_state(
             get_loaded_extensions,
             get_registered_apps,
             get_scheduled_jobs,
-            iter_agent_tools,
-            iter_syscalls,
+            list_run_tool_provider_run_types,
         )
 
         registered_apps = get_registered_apps()
@@ -452,6 +451,21 @@ def get_system_state(
         ]
 
         event_types = sorted(get_event_types())
+
+        # FR-23 — these two numbers read ZERO on a full 16-app boot while ~90 syscalls and
+        # 16 tools were live, because they counted the wrong dicts:
+        #   * `platform_layer.registry.iter_syscalls()` walks `_syscalls`, which
+        #     `platform_layer.register_syscall` fills and **the dispatcher never reads** —
+        #     every app registers through `kernel.syscall_registry.register_syscall`.
+        #   * `iter_agent_tools()` walks the static `register_agent_tool` model, which no
+        #     app uses; tools arrive through `register_run_tool_provider` and are executed
+        #     from `agents.tool_registry.TOOL_REGISTRY`.
+        # Count what dispatch and `execute_tool` actually resolve against. A confident
+        # zero on an operator surface is worse than no number.
+        from AINDY.agents.tool_registry import TOOL_REGISTRY, _ensure_tools_loaded
+        from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY
+
+        _ensure_tools_loaded()  # idempotent; the same call every execute_tool makes
 
         flow_rows = (
             db.query(FlowRun.status, func.count(FlowRun.id).label("cnt"))
@@ -488,8 +502,9 @@ def get_system_state(
             "connected_apps": connected_apps,
             "domain_health": domain_health,
             "registry": {
-                "syscall_count": sum(1 for _ in iter_syscalls()),
-                "tool_count": sum(1 for _ in iter_agent_tools()),
+                "syscall_count": len(SYSCALL_REGISTRY),
+                "tool_count": len(TOOL_REGISTRY),
+                "run_tool_provider_run_types": list_run_tool_provider_run_types(),
                 "extension_count": len(get_loaded_extensions()),
                 "scheduled_job_count": len(get_scheduled_jobs()),
                 "event_type_count": len(event_types),
