@@ -8529,8 +8529,7 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ## FR-28 — `acknowledge_message` acknowledges a message that does not exist 🔴 correctness
 
-**Status: OPEN, filed 2026-09-12. Found by the FR-25 (b) probe, verified against source.** Not a
-status-code defect — a correctness one in the coordination path.
+**Status: SHIPPED 2026-09-12 (#628).** Found by the FR-25 (b) probe, verified against source; a correctness defect in the coordination path, not a status-code one.
 
 ### What the probe hit
 
@@ -8580,6 +8579,8 @@ me → 200; ack of a non-existent id → 404; ack of a message addressed to anot
 that a suppressed-inbox regression test drives `get_inbox` before/after to prove B still sees its
 message. ★ A `SystemEvent` is append-only and `SYSEVENT-RETENTION-1` prunes by type — the ack
 event itself is fine to keep; the defect is that it should never have been written.
+
+**★ SHIPPED as designed: resolve → authorise → emit in `acknowledge_message`, with `MessageNotFoundError` (404) / `MessageNotOwnedError` (403) mapped by the route, and `UUIDPath` on the param (422 for a malformed id — now appropriate BECAUSE the id is finally resolved, which the filing said UUIDPath alone would not fix; it is complementary, not the fix). Cross-agent suppression closed at the source — only a message's recipient can create its ack, so `get_inbox`'s user-scoped `acked_refs` needed no change. Route tests assert the 200/404/403/422 MAPPING via patch (pre-seeding through the savepoint session makes `test_user` invisible to the pipeline's EU write on PG — the FR-25 b harness artifact); the bus tests drive the REAL resolve/authorise on live PG, and a suppression-regression test proves A can no longer hide B's inbox. Mutation-tested: drop ownership check → 2 red, drop existence check → 1 red.**
 
 ---
 

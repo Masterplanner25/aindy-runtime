@@ -217,6 +217,18 @@ def get_inbox(
     return [_serialize_inbox_message(row) for row in addressed[:limit]]
 
 
+class MessageNotFoundError(Exception):
+    """No message with this id exists (for this user), or the id is not a message at all."""
+
+
+class MessageNotOwnedError(Exception):
+    """The message exists but is addressed to a different agent than the one acknowledging it."""
+
+
+def _message_event_types() -> list[str]:
+    return [f"agent.message.{mt}" for mt in MESSAGE_TYPES]
+
+
 def acknowledge_message(
     db,
     *,
@@ -224,6 +236,42 @@ def acknowledge_message(
     agent_id: str,
     user_id: str | None = None,
 ) -> str | None:
+    """Acknowledge a message addressed to ``agent_id`` (FR-28: resolve → authorise → emit).
+
+    Before FR-28 this emitted an ``agent.message.acknowledged`` event unconditionally — so it
+    acknowledged a message that never existed (audit integrity) and, because ``get_inbox`` builds
+    its suppression set from every ack for the user, let one agent acknowledge another agent's
+    message by id and make it vanish from that agent's inbox. Both are closed here by refusing to
+    emit until the message is resolved and the caller is shown to be its recipient.
+
+    Raises :class:`MessageNotFoundError` when ``message_id`` is not a live message (absent,
+    malformed, or not an ``agent.message.*`` type) for this user, and :class:`MessageNotOwnedError`
+    when it is addressed to a different agent. Recipient comparison is case-insensitive, matching
+    ``get_inbox``.
+    """
+    try:
+        normalized_id = normalize_uuid(message_id)
+    except (ValueError, AttributeError, TypeError):
+        # A malformed id is not a message — treat it as absent rather than a 500. The route also
+        # types the param as UUIDPath, but the bus defends for any non-route caller.
+        raise MessageNotFoundError(f"Message {message_id!r} not found")
+
+    query = db.query(SystemEvent).filter(
+        SystemEvent.id == normalized_id,
+        SystemEvent.type.in_(_message_event_types()),
+    )
+    if user_id:
+        query = query.filter(SystemEvent.user_id == normalize_uuid(user_id))
+    message = query.first()
+    if message is None:
+        raise MessageNotFoundError(f"Message {message_id!r} not found")
+
+    recipient = str((message.payload or {}).get("recipient_agent_id") or "")
+    if recipient.lower() != str(agent_id).lower():
+        raise MessageNotOwnedError(
+            f"Message {message_id!r} is not addressed to agent {agent_id!r}"
+        )
+
     return str(
         queue_system_event(
             db=db,
