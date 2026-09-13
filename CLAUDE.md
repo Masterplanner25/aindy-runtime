@@ -1006,7 +1006,7 @@ file — because findings were written where they were discovered instead of whe
 - **SYSMAX-1 / -3 / -4** — thread-mode 100-job cap still the `.env.example` default (prod overlay enforces distributed); memory bytes not enforced per EU (needs OS integration); per-EU syscall and wall-time caps advisory. **★ SYSMAX-3 2026-09-09: nodus 5.13.0 adds `max_memory_mb` to `NodusRuntime`, so a per-execution ceiling on the GUEST path needs no OS integration — the stated blocker does not apply there. Does NOT close it (other EU types still unbounded); belongs on `EXEC-ENV-BIND-1`'s resources descriptor. Not adopted.**
 - **TIER3-10** — `async_job_service` coupling. Architectural, no bounded fix.
 - **DEPLOY-TARGET-1 / -2** — cloud deployment manifests; multi-tenant SaaS readiness gate. Triggers: first cloud deployment / first multi-tenant operator.
-- **BILLING-1..5** — deferred until commercial launch. Source: `docs/runtime/MONETIZATION_AUDIT.md`.
+- **BILLING-1..5** — deferred until commercial launch. Source: `docs/archive/MONETIZATION_AUDIT.md` (findings carried in `TECH_DEBT.md`).
 - **LAYER-1..5** — layer boundary violations. All deferred.
 - **ROUTE-EXTRACT-\*** — remaining candidates: `memory_router` (split required), `coordination_router` (AgentRegistry ownership gap).
 - **PACK-DEBT-\*, DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — packaging, dependency and architectural gaps.
@@ -1218,7 +1218,6 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | WSL2 / macOS backend detection | `AINDY/platform_layer/sandbox_runner.py` — `_detect_wsl2()` |
 | Open questions tracker | `docs/runtime/OPEN_QUESTIONS.md` |
 | Cloud deployment targets + readiness | `docs/runtime/DEPLOYMENT_TARGETS.md` |
-| Monetization and billing architecture audit | `docs/runtime/MONETIZATION_AUDIT.md` |
 | Route ownership inventory | `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md` |
 | nginx plain HTTP config | `nginx/nginx.conf` |
 | nginx TLS config (Let's Encrypt) | `nginx/nginx.tls.conf` |

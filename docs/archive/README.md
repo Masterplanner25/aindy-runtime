@@ -273,3 +273,26 @@ content without a successor, and that is deliberate — `CLAUDE.md`'s release-st
 records why hand-maintained numbers were removed rather than corrected. `DECISION_LOG.md`'s
 related-docs pointer now cites the archive path; the `RUNTIME_DOC_INDEX.md` listing and the
 `CLAUDE.md` key-file row are removed.
+
+## `docs/runtime/` — the audit files, archived 2026-09-13
+
+Five of the six `*_AUDIT.md` / plan files in `docs/runtime/`, each checked for what it still
+owed before moving. **`SANDBOX_ESCAPE_AUDIT.md` stays** — it is an append-only log with an entry
+per release gate (Entry 027 on 2026-09-13), not a point-in-time audit.
+
+| Document | Written | What it was | Why it can go |
+|---|---|---|---|
+| [`INFINITY_LOOP_AUDIT.md`](INFINITY_LOOP_AUDIT.md) | 2026-07-05 | The runtime end of a cross-repo Core Test on Intent→Plan→Execute→Observe→Memory→Recall→Score→Improve — fifteen section verdicts and five structural loop-closure gaps. | Its own *Verdict* section says all five gaps closed 2026-07-08 (`INFINITY-RUNTIME-1`, #194–#198), and the follow-on it deferred — acting on `NextAction` — shipped 2026-07-09 (#213, behind `AINDY_NEXT_ACTION_ACTING`). Nothing forward-looking remains. |
+| [`LOCAL_AND_CLOUD_AUDIT.md`](LOCAL_AND_CLOUD_AUDIT.md) | 2026-06-05 | Gaps the local + cloud distribution framing made visible: `TENANT-1..4`, `CLOUD-1..4`, `DATA-1..2`, `COMPAT-2..3`, `LOCAL-1..2`, `PLATFORM-UI-ENV-1`. | **Every finding now has a `TECH_DEBT.md` home.** `TENANT-2`, `DATA-1`, `COMPAT-2`, `LOCAL-1`, `PLATFORM-UI-ENV-1` had entries already; `TENANT-1/3/4` are enumerated under `DEPLOY-TARGET-2`; **`CLOUD-1..4`, `COMPAT-3` and `DATA-2` had no record but this file** and were folded into `DEPLOY-TARGET-2` before the move (same trigger, severity low). `TENANT-1` is `INITIATOR-IDENTITY-1`'s defect; `LOCAL-2` is satisfied by `aindy-runtime --version`. |
+| [`MONETIZATION_AUDIT.md`](MONETIZATION_AUDIT.md) | 2026-06-07 | The gap between the runtime and a billable product: `BILLING-1..5`, each with a reopen trigger. | All five are self-contained `TECH_DEBT.md` entries with resolution direction and trigger; the audit is their provenance. Deliberately untouched work — "deferred until commercial launch" — which is a reason to keep the entries, not the audit. |
+| [`RUNTIME_DOC_ALIGNMENT_AUDIT.md`](RUNTIME_DOC_ALIGNMENT_AUDIT.md) | 2026-05-31 | An alignment map of the older docset against the governing docs written that session — per-document `aligned` / `partially aligned` / `conflict` labels. | A snapshot of labels that were true on 05-31 and were **cited by a live governance doc as if current** three and a half months later. Its recommendations were executed the same day (below). |
+| [`HIGH_CONFLICT_DOC_RECONCILIATION_PLAN.md`](HIGH_CONFLICT_DOC_RECONCILIATION_PLAN.md) | 2026-05-31 | The plan for the three docs the audit rated highest-conflict: `ARCHITECTURE.md`, `EXTENSION_TRUST_MODEL.md`, `REPO_COMPATIBILITY_POLICY.md`. | **Executed in `99c4b90`, 2026-05-31** — the same commit that wrote it: each of the three gained a *Current Posture* section and the stale monolith framing was replaced. Its three *Done When* conditions are prose ("a reader cannot mistake ambition for support level") and were checked by reading the three docs as they stand. Not an audit, but the audit's twin; one without the other is half a record. |
+
+**Two things this pass fixed beyond the moves.** `RUNTIME_DOC_INDEX.md` still listed
+`KERNEL_CAPABILITY_AUDIT.md` — archived on 2026-08-06 — so the index has had a dangling entry for
+five weeks; removed. And its *Current Highest-Conflict Older Docs* section still told readers to
+consult the alignment audit and plan "before editing" three docs that were reconciled the day
+those were written; replaced with what happened.
+
+**Not archived, and why:** `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (live log). The
+`*_SCOPE.md` / `*_DESIGN.md` / `*_PROPOSAL.md` cluster was not part of this pass.

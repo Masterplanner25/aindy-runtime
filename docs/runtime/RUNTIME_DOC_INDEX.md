@@ -117,11 +117,11 @@ These docs define how runtime changes should be reviewed and shipped.
 
 ## Docset Alignment And Reconciliation
 
-These docs explain how the current runtime docset is being tightened.
+These docs explain how the runtime docset is governed.
 
-- `RUNTIME_DOC_ALIGNMENT_AUDIT.md`
-- `HIGH_CONFLICT_DOC_RECONCILIATION_PLAN.md`
 - `RUNTIME_DOCSET_GOVERNANCE.md`
+- `../archive/README.md` — every archive pass, with per-document reasons; the 2026-05-31
+  alignment audit and its reconciliation plan (both executed) are there
 
 ---
 
@@ -129,8 +129,7 @@ These docs explain how the current runtime docset is being tightened.
 
 Docs for developers integrating with or scripting against the runtime.
 
-- `KERNEL_CAPABILITY_AUDIT.md` — what the kernel enables: syscall map, confirmed capabilities, gaps, boundary risks, strategic interpretation
-- `INFINITY_LOOP_AUDIT.md` — Core Test verdict: which parts of Intent→Plan→Execute→Observe→Memory→Recall→Score→Improve close today, and the five gaps that remain
+- `../archive/INFINITY_LOOP_AUDIT.md` — the 2026-07-05 Core Test verdict on Intent→Plan→Execute→Observe→Memory→Recall→Score→Improve; all five gaps closed 2026-07-08 (`INFINITY-RUNTIME-1`), archived
 - `NODUS_DEVELOPER_GUIDE.md` — writing Nodus scripts in A.I.N.D.Y.: injected globals, built-ins, WAIT/RESUME, error semantics
 - `SYSCALL_REFERENCE.md` — all registered syscalls with payloads and return shapes
 - `SYSCALL_SYSTEM.md` — dispatcher pipeline, ABI versioning, registration guide
@@ -208,17 +207,11 @@ These remain important, but should be read through the governing docs above.
 
 ## Current Highest-Conflict Older Docs
 
-These are the first older docs to reconcile in place:
-
-- `EXTENSION_TRUST_MODEL.md`
-- `ARCHITECTURE.md`
-- `REPO_COMPATIBILITY_POLICY.md`
-
-Use:
-- `RUNTIME_DOC_ALIGNMENT_AUDIT.md`
-- `HIGH_CONFLICT_DOC_RECONCILIATION_PLAN.md`
-
-before editing them.
+The three docs the 2026-05-31 alignment audit rated highest-conflict — `ARCHITECTURE.md`,
+`EXTENSION_TRUST_MODEL.md`, `REPO_COMPATIBILITY_POLICY.md` — were reconciled in place the same
+day (`99c4b90`: each gained a *Current Posture* section). The audit and its plan are archived.
+There is no standing list of high-conflict docs; drift is caught by `Runtime Docs Validation`
+and by reading a doc against source before citing it.
 
 ---
 
