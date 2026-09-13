@@ -19,7 +19,7 @@ background thread runs against it is such a change; §5 additionally covers the 
 Scope: `ORCHESTRATOR-SPLIT-1` store 4 only. This proposal **does not** attempt the split.
 
 Measured against `nodus-lang` **5.13.0**, installed, 2026-09-09. Nodus-side defects found while
-measuring are in `NODUS_HANDOFF_workflow_store_migration.md`; none of them is runtime work.
+measuring are in `docs/handoffs/NODUS_HANDOFF_workflow_store_migration.md`; none of them is runtime work.
 
 ---
 

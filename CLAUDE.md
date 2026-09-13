@@ -1171,8 +1171,9 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Cross-repo compatibility policy | `docs/runtime/CROSS_REPO_COMPATIBILITY.md` |
 | Runtime → SDK contract | `docs/runtime/SDK_CONTRACT.md` |
 | Runtime → UI contract | `docs/runtime/UI_CONTRACT.md` |
-| **Nodus-side A2A/MCP packaging handoff (name collision + caps) — all fixes are Nodus's, none are ours** | `docs/runtime/NODUS_HANDOFF_a2a_mcp_packaging.md` |
-| **Nodus-side workflow-store handoff — `migrate-store` reports a TRUNCATED census; read before trusting it as the 6.0.0 mitigation** | `docs/runtime/NODUS_HANDOFF_workflow_store_migration.md` |
+| **Outbound handoffs index — what this repo is asking of Nodus, with per-ask status** | `docs/handoffs/README.md` |
+| **Nodus-side A2A/MCP packaging handoff (name collision + caps) — all fixes are Nodus's, none are ours** | `docs/handoffs/NODUS_HANDOFF_a2a_mcp_packaging.md` |
+| **Nodus-side workflow-store handoff — `migrate-store` reports a TRUNCATED census; read before trusting it as the 6.0.0 mitigation** | `docs/handoffs/NODUS_HANDOFF_workflow_store_migration.md` |
 | **Guest workflow store declaration proposal (`ORCHESTRATOR-SPLIT-1` store 4) — §8 proposal, AWAITING APPROVAL** | `docs/runtime/WORKFLOW_STORE_DECLARATION_PROPOSAL.md` |
 | **Upgrade index — start here for any version-to-version move; one row per release, schema steps in bold** | `docs/upgrades/README.md` |
 | Latest app-team handoff | `docs/upgrades/APP_HANDOFF_v2.13.0.md` — pin bump + rebuild, no schema step, no required code change. **★ The one consumer-visible change: `sys.v1.flow.run` can return `partial` — only for a flow declaring a lenient-join fan-out group, which the app does not (checked: 0 `FanOutEdgeGroup`); its two `== "error"` sites are not syscall envelopes.** Three opt-in knobs, sized against the planner's `max_tokens=4096` (~5.2k reserved per call). **★ Verify a version by PRINTING `AINDY.__path__` beside the number, IN THE CONTAINER** — the 2.11.0 handoff's correction records the cwd trap that bit both repos; the app's dev venv is now on real site-packages (2.12.0 on 2026-09-13) |

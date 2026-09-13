@@ -5947,7 +5947,7 @@ odus-a2a`, which really is the coordinator. **A SECOND package, also named
    real one on our side, `INITIATOR-IDENTITY-1` — `token_validator` returns a bool, which
    authenticates the connection and not the peer, so every remote caller collapses to one identity.
    **The wire turned out to be the cheap part.** All Nodus-side items are handed off in
-   `docs/runtime/NODUS_HANDOFF_a2a_mcp_packaging.md`.
+   `docs/handoffs/NODUS_HANDOFF_a2a_mcp_packaging.md`.
 2. **The executable registration is `register_tool` → `TOOL_REGISTRY`, not `register_agent_tool`.**
    `register_agent_tool` writes to `_agent_tools`, read only by observability/listing — never by
    `execute_tool`. (Latent ABI gap: the "official" agent-tool plugin surface is discovery-only;
@@ -9619,7 +9619,7 @@ declared and nothing preserves.
 
 Four claims above are wrong or superseded. Three came from re-measuring; the fourth is a nodus
 change (`#585`) that landed after this entry was written. **The nodus-side defects found doing
-this are written up in `docs/runtime/NODUS_HANDOFF_workflow_store_migration.md`** — none of them
+this are written up in `docs/handoffs/NODUS_HANDOFF_workflow_store_migration.md`** — none of them
 is runtime work.
 
 **1. ★★ The mitigation this entry relies on does not carry the whole store, and says nothing
