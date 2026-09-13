@@ -1,4 +1,4 @@
-### Added — `docs/upgrades/`: the per-release handoffs, and the index that did not exist (docs/upgrades-folder)
+### Added — `docs/upgrades/`: the per-release handoffs, and the index that did not exist (#644)
 
 Fifteen `APP_HANDOFF_v*.md` files (v1.11.0 → v2.13.0) move from `docs/runtime/` (and one from
 `docs/archive/`) into `docs/upgrades/`, with a `README.md` that indexes them: one row per release
