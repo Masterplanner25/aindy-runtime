@@ -104,8 +104,8 @@ was believed at release time is part of what these files are for.
 
 ## What is not here
 
-- **`NODUS_HANDOFF_*.md`** (still in `docs/runtime/`) go the other direction — they are requests
-  *to* the Nodus repository, not upgrade guides for this one.
+- **[`docs/handoffs/`](../handoffs/README.md)** goes the other direction — requests *to* the
+  Nodus repository, not upgrade guides for this one.
 - **The app repository's own copies** (`RUNTIME_<version>_UPGRADE.md` in `aindy-apps-monolith`)
   are the app team's working versions of these; where a handoff here cites one, that is the
   app-side name for the same release.
