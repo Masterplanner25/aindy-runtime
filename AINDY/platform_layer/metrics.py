@@ -216,6 +216,21 @@ llm_calls_total = Counter(
     registry=REGISTRY,
 )
 
+# ── COST-GOVERNOR-1 phase 4 — the governor's own record ──────────────────────
+#
+# ★ `refused` is the one that matters and the one to alarm on: a refusal is a real call that
+# did not happen because a budget said so. `degraded` means the store the budget reads was
+# unreachable and the call was let through (dev/test) — a governor that is silently not
+# governing is the ROUTE-AST-UNWIRED-1 shape, so it is counted rather than logged only.
+llm_budget_outcomes_total = Counter(
+    "aindy_llm_budget_outcomes_total",
+    "LLM budget reservation outcomes by scope (execution | tenant) and outcome: reserved (the "
+    "call was admitted), refused (over budget — the call did not happen), degraded (the budget "
+    "store failed and the call was admitted anyway, dev/test only).",
+    ["scope", "outcome"],
+    registry=REGISTRY,
+)
+
 # ── Nodus warm-worker pool (NODUS-WARMPOOL-1) ────────────────────────────────
 
 nodus_warm_pool_events_total = Counter(

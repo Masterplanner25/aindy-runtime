@@ -297,6 +297,7 @@ def generate_plan(
 ) -> Optional[dict]:
     try:
         compat = get_runtime_compat_module()
+        compat._plan_failure.error = None
 
         objective_text = compat._resolve_objective(objective, values)
         run_type = "default"
@@ -373,5 +374,10 @@ def generate_plan(
         compat = get_runtime_compat_module()
 
         compat._plan_failure.reason = f"{type(exc).__name__}: {exc}"
+        # COST-GOVERNOR-1 phase 4 — keep the exception itself, not only its text, so the
+        # route can answer a budget refusal with 429 rather than folding it into the generic
+        # "Failed to generate plan" 500 (a client cannot tell "refused" from "broken" by a 500
+        # — ROUTE-GUARD-1). Thread-local, like `reason`; consumed by `create_agent_run_runtime`.
+        compat._plan_failure.error = exc
         logger.warning("[AgentRuntime] Plan generation failed: %s", exc)
         return None

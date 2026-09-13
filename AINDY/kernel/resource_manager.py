@@ -11,14 +11,16 @@ Quota defaults
   MAX_MEMORY_BYTES           268 435 456  (256 MiB)
   MAX_SYSCALLS_PER_EXECUTION 100
   MAX_CONCURRENT_PER_TENANT  5
-  (tokens: ACCRUED per unit and per tenant since COST-GOVERNOR-1 phase 3, NOT enforced —
-   the ceiling is phase 4, gated on evidence the meter moves in a real deployment)
+  MAX_TOKENS_PER_EXECUTION   0  (unlimited — COST-GOVERNOR-1 phase 4, opt-in)
+  MAX_TOKENS_PER_TENANT_WINDOW 0 (unlimited — opt-in; window = TENANT_KEY_TTL_SECONDS)
 
 These can be overridden via environment variables:
   AINDY_QUOTA_CPU_MS         (sets MAX_WALL_TIME_MS; env var name kept for compatibility)
   AINDY_QUOTA_MEMORY_BYTES
   AINDY_QUOTA_MAX_SYSCALLS
   AINDY_QUOTA_MAX_CONCURRENT
+  AINDY_QUOTA_MAX_TOKENS          (per execution unit / agent run; 0 = unlimited)
+  AINDY_QUOTA_MAX_TENANT_TOKENS   (per tenant window; 0 = unlimited)
 
 Usage
 -----
@@ -86,6 +88,13 @@ MAX_WALL_TIME_MS: int = _int_env("AINDY_QUOTA_CPU_MS", 300_000)  # env var kept 
 MAX_MEMORY_BYTES: int = _int_env("AINDY_QUOTA_MEMORY_BYTES", 256 * 1024 * 1024)
 MAX_SYSCALLS_PER_EXECUTION: int = _int_env("AINDY_QUOTA_MAX_SYSCALLS", 100)
 MAX_CONCURRENT_PER_TENANT: int = _int_env("AINDY_QUOTA_MAX_CONCURRENT", 5)
+# COST-GOVERNOR-1 phase 4 — the LLM token ceilings. ★ Default 0 = UNLIMITED, i.e. the governor
+# ships OPT-IN: a budget that refuses nothing until an operator names a number. Every other
+# ceiling here has a non-zero default because its dimension self-limits; spend does not, and a
+# wrong default here refuses real work — so the operator sets it against a measured baseline
+# (`aindy_llm_tokens_total`, which phase 2 proved moves).
+MAX_TOKENS_PER_EXECUTION: int = _int_env("AINDY_QUOTA_MAX_TOKENS", 0)
+MAX_TOKENS_PER_TENANT_WINDOW: int = _int_env("AINDY_QUOTA_MAX_TENANT_TOKENS", 0)
 
 RESOURCE_LIMIT_EXCEEDED = "RESOURCE_LIMIT_EXCEEDED"
 EU_KEY_TTL_SECONDS = 3600
@@ -1133,6 +1142,84 @@ class ResourceManager:
         with self._lock:
             return self._tenant_tokens.get(tid, (0, 0.0))[0]
 
+    # ── Token reservation (COST-GOVERNOR-1 phase 4) ───────────────────────────
+    #
+    # ★ Admission and accounting are ONE operation. A read-then-compare lets N concurrent
+    # callers all pass the same check; a reservation pre-fills the counter it will be checked
+    # against, so the (N+1)th caller sees the N reservations already there. On Redis that is
+    # INCRBY-then-compare with a compensating DECRBY on refusal; in memory it is one critical
+    # section. The reservation is an ESTIMATE and never becomes the record: the meter records
+    # the ACTUAL inside the call, and `release_*` takes the estimate back out.
+
+    def reserve_tokens(self, eu_id: str, count: int, cap: int, *, tenant_id: str | None = None) -> bool:
+        """Pre-fill `count` tokens onto a unit if that keeps it within `cap`. False = refused."""
+        eid = str(eu_id)
+        delta = int(count)
+        if cap <= 0 or delta <= 0:
+            return True
+        shared = self._backend_add_tokens(eid, delta)
+        if shared is not None:
+            if shared > cap:
+                self._backend_add_tokens(eid, -delta)
+                return False
+            with self._lock:
+                if eid not in self._usage:
+                    self._usage[eid] = UsageSnapshot(eu_id=eid, tenant_id=str(tenant_id or ""))
+                self._usage[eid].tokens += delta
+            return True
+        with self._lock:
+            if eid not in self._usage:
+                self._usage[eid] = UsageSnapshot(eu_id=eid, tenant_id=str(tenant_id or ""))
+            snap = self._usage[eid]
+            if snap.tokens + delta > cap:
+                return False
+            snap.tokens += delta
+            return True
+
+    def release_tokens(self, eu_id: str, count: int) -> None:
+        """Take a reservation back out (the actual has been recorded by the meter, or the call never happened)."""
+        eid = str(eu_id)
+        delta = int(count)
+        if delta <= 0:
+            return
+        with self._lock:
+            snap = self._usage.get(eid)
+            if snap is not None:
+                snap.tokens = max(0, snap.tokens - delta)
+        self._backend_add_tokens(eid, -delta)
+
+    def reserve_tenant_tokens(self, tenant_id: str, count: int, cap: int) -> bool:
+        """Pre-fill `count` tokens onto a tenant's window if that keeps it within `cap`."""
+        tid = str(tenant_id)
+        delta = int(count)
+        if cap <= 0 or delta <= 0 or not tid:
+            return True
+        shared = self._backend_add_tenant_tokens(tid, delta)
+        if shared is not None:
+            if shared > cap:
+                self._backend_add_tenant_tokens(tid, -delta)
+                return False
+            with self._lock:
+                current, started = self._tenant_tokens.get(tid, (0, time.monotonic()))
+                self._tenant_tokens[tid] = (current + delta, started)
+            return True
+        with self._lock:
+            current, started = self._tenant_tokens.get(tid, (0, time.monotonic()))
+            if current + delta > cap:
+                return False
+            self._tenant_tokens[tid] = (current + delta, started)
+            return True
+
+    def release_tenant_tokens(self, tenant_id: str, count: int) -> None:
+        tid = str(tenant_id)
+        delta = int(count)
+        if delta <= 0 or not tid:
+            return
+        with self._lock:
+            current, started = self._tenant_tokens.get(tid, (0, time.monotonic()))
+            self._tenant_tokens[tid] = (max(0, current - delta), started)
+        self._backend_add_tenant_tokens(tid, -delta)
+
     def record_usage(self, eu_id: str, usage: dict) -> None:
         """Accumulate resource usage for an ExecutionUnit.
 
@@ -1205,6 +1292,8 @@ class ResourceManager:
                     "max_memory_bytes": MAX_MEMORY_BYTES,
                     "max_syscalls_per_execution": MAX_SYSCALLS_PER_EXECUTION,
                     "max_concurrent_executions": MAX_CONCURRENT_PER_TENANT,
+                    "max_tokens_per_execution": MAX_TOKENS_PER_EXECUTION,
+                    "max_tokens_per_tenant_window": MAX_TOKENS_PER_TENANT_WINDOW,
                 },
             }
 

@@ -185,7 +185,7 @@ things still have to be true at the call site:
 | ~~**1**~~ | ~~Route `planner_anthropic.py` through `get_llm_client("anthropic").call_method(...)`, reading `exc.__cause__` for detail~~ | **DONE — app #321, 2026-09-08.** Also picked up the circuit breaker, which this table did not anticipate |
 | ~~**2**~~ | ~~Confirm `aindy_llm_tokens_total` moves in a real deployment~~ | **DONE — 2026-09-13.** One planner call on the apps-monolith container (runtime 2.12.0, path printed): `{provider="anthropic",model="claude-opus-4-8"}` prompt 2021 / completion 223, unreadable none. Record in `TECH_DEBT.md`. The old caveat, kept — evidence, not code. **★ The meter shipped in v2.9.0: an environment on anything older routes through the seam and records nothing, which reads as *"the adoption failed"*. Verify the INSTALLED version, not the declared range** — the app declares `>=2.9.0` and its dev venv was on 2.6.0 |
 | ~~**3**~~ | ~~Thread run/tenant identity to the call site, and count unattributed calls~~ | **DONE — #635, 2026-09-13.** `llm_attribution_scope` set by `generate_plan` (tenant — the run does not exist yet at planning time) and `execute_run` (tenant + run); tokens accrue in `ResourceManager` per unit and per tenant window; `aindy_llm_calls_total{attributed}` counts the unattributed fraction. **The app half was nothing** — #321's call already sits inside `generate_plan`'s span |
-| **4** | The governor: reserve → call → reconcile, against a cache, refusing on breach | **NEXT — unblocked.** runtime. ★ Design around the phase-3 finding: planning has no run id, so the run budget cannot catch a runaway planner — the tenant window must |
+| ~~**4**~~ | ~~The governor: reserve → call → reconcile, against a cache, refusing on breach~~ | **DONE — #638, 2026-09-13.** `llm_budget.py` at the seam, outside the breaker; opt-in via `AINDY_QUOTA_MAX_TOKENS` / `AINDY_QUOTA_MAX_TENANT_TOKENS`; **verified live** (admit, admit, 429). Two live findings fixed in-PR: embeddings were being reserved for; the refusal surfaced as 500 through the app's rewrap |
 
 ~~**Phase 0 is worth doing regardless of whether 1–4 happen**~~ — done; it closed a gap in
 shipped code, and #597 closed the quarter of it that was missed. **Phase 1 is unblocked: every
@@ -214,6 +214,4 @@ installed. **Confirm the installed version, not the declared one, before startin
   the right first consumer: it is where the token spend actually is, it already has a clean
   injection point (`_make_client`, isolated *for test monkeypatching*), and it is the call a
   budget would most want to refuse.
-- **Do not close `COST-GOVERNOR-1` on the meter.** The entry's own argument is that an agent
-  cannot bound its own spend credibly — which only holds while the runtime is in the call path.
-  Today it is not.
+- ~~**Do not close `COST-GOVERNOR-1` on the meter.**~~ Closed on the GOVERNOR, 2026-09-13 — the runtime is now in the call path and refuses.
