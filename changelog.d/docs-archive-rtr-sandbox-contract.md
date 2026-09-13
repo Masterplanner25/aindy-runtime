@@ -5,8 +5,9 @@ invariants across the three seams where the runtime runs code it did not author 
 guest VM, tool worker), each naming its enforcement point and the test that pins it, a runner
 matrix of what each runner actually delivers, and a §7 stating what is *not* guaranteed so it
 cannot be inferred from silence. Two coverage gaps it surfaced are recorded in the document
-rather than hidden: the `hostile-third-party` post-launch kill has no direct test, and the strong
-runner's launcher flags are verified only by the live `/proc` probe, never in CI.
+rather than hidden and filed as `SANDBOX-EVIDENCE-1` / `-2`: the `hostile-third-party`
+post-launch kill has no direct test, and the strong runner's launcher flags are verified only by
+the live `/proc` probe, never in CI.
 
 ### Changed — `EXTENSION_TRUST_MODEL.md` regains its Assurance Reporting section
 

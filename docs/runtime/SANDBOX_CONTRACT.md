@@ -164,7 +164,7 @@ red if the invariant is broken, per the repo's rule that a job name is not evide
     `test_plugin_host.py` (`…rejects_container_runner_in_hostile_profile`) and
     `test_deployment_profiles.py` for the **pre-spawn** refusal. **The post-launch kill path
     has no direct test** — no unit test drives a host whose attestation fails *after* launch
-    and asserts termination. Recorded here rather than claimed; see §8.
+    and asserts termination. Recorded here rather than claimed — `SANDBOX-EVIDENCE-1`.
 
 12. **A container or strong runner will not launch without a configured image, a valid runtime
     identity, and — for strong — a Linux host and a launcher on `PATH`.**
@@ -365,9 +365,11 @@ check*: the escape suite skips silently when Docker is absent, so its result is 
 when `sandbox_escape_test_posture()` reports `all_pass` with a recent `last_run`.
 
 **Coverage gaps in this table, stated so they are not inferred as covered:** invariant 11's
-post-launch termination has no direct test; the strong runner's argv is asserted by
-`test_sandbox_runner.py` but its launcher (`aindy-sandbox-vm`) is out-of-tree, so what those
-flags *do* is verified only by the post-launch `/proc` probe on a live Linux host, never in CI.
+post-launch termination has no direct test (`SANDBOX-EVIDENCE-1`); the strong runner's argv is
+asserted by `test_sandbox_runner.py` but its launcher (`aindy-sandbox-vm`) is out-of-tree, and its
+launch attestation marks fields verified by checking that argv, so what those flags *do* is
+verified only by the post-launch `/proc` probe on a live Linux host, never in CI
+(`SANDBOX-EVIDENCE-2`).
 
 **Before changing anything in §4:** mutation-test it. The sandbox tests are heavy on source and
 posture assertions; a hardening flag removed from argv should turn `test_sandbox_runner.py` red
