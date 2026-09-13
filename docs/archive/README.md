@@ -165,3 +165,38 @@ a baseline regen and two test-assertion edits for a change with no DDL — the t
 `AGENT-EVENT-VOCAB-1` records. `git grep IDEMPOTENCY_AUDIT` still resolves the bare name to
 this directory. The `TECH_DEBT.md` mention (in the closed `IDEM-9` entry) is historical and
 stays as written.
+
+## Repository root — archived 2026-09-13 (third)
+
+| Document | Written | What it was | Superseded by |
+|---|---|---|---|
+| [`ISOLATION_MODEL_PLAN.md`](ISOLATION_MODEL_PLAN.md) | 2026-05-23; status corrected 2026-08-16 (`ISOLATION-DOC-STATUS-1`) | The plan behind the **Tiered Isolation Contract** (Tier 1 trusted-operator kernel-resident / Tier 2 externalized): seven gaps, a work plan of seven items (A1–A3 docs, B1–B2 code+tests, C1–C2 deferred), and the rationale for choosing a two-tier model over a third "capability-confined in-process" class. | `docs/runtime/EXTENSION_TRUST_MODEL.md` (the contract), `AINDY/platform_layer/extension_execution_model.py` (the two classes, published), `docs/runtime/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md` (the live remainder), `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (the evidence, per release). |
+
+**Is the plan complete?** Yes — verified per item against source on 2026-09-13, not read
+from the plan's own status notes (which contradicted each other once already):
+
+- **A1, A2, B1, B2 — done and still true.** Zero occurrences of the retired "exception"
+  vocabulary; both tiers named in the three target docs; `extension_execution_model.py`
+  publishes exactly two classes; `test_runtime_public_contract.py` passes with no reference
+  to the removed third class.
+- **A3 — done, then its target section was deleted.** The Tier 1 attestation-exclusion
+  paragraph was written into `EXTENSION_TRUST_MODEL.md` §Assurance Reporting, and the
+  2026-05-31 docset reconciliation (`99c4b90`) removed that whole section. The substance
+  survives in §Tier 1 Trusted Kernel Code (*"trusted because the operator controls and
+  deploys it, not because it is sandboxed at execution time"*). **Side finding, not this
+  plan's:** the glossary for *assurance class / attestation / certification tier* went with
+  that section and was not re-homed. The terms are defined only as constants in
+  `sandbox_runner.py` and used across four live docs without a prose definition.
+- **C1 — deferred by decision, residual disclosed.** Scope B1 shipped (unprivileged `/proc`
+  evidence; `verification_method: kernel-observable`, ceiling `kernel-observable-verified` on
+  Linux). Scope B2 — a privileged launcher — has a stated reopen condition and, by the plan's
+  own text, *"no current condition to reopen"*. It was never filed as an issue, correctly.
+- **C2 — closed 2026-05-24.** Its Linux-only remainder is `C3`, tracked in the registry.
+
+**Live citation retained on purpose.** `sandbox_runner.py`'s `ceiling_note` — a
+runtime-emitted string in the sandbox posture report, not a docstring — says *"See Gap C1 in
+ISOLATION_MODEL_PLAN.md"* when kernel-observable evidence has not yet been collected. That
+pointer is doing real work for an operator reading the posture output, so it was updated to the
+archive path rather than removed; no test pins the string. `C2_SANDBOX_AUDIT.md` (still at the
+root) cites this plan by bare name twice and is left as-is. `TECH_DEBT.md`, `CHANGELOG.md` and
+`AINDY_RUNTIME_REPLACEMENT_COST_AUDIT.md` mentions are historical.
