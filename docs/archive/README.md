@@ -100,3 +100,43 @@ else:
 ```bash
 git grep -l -F "FILENAME.md" -- '*.py' '*.md' '*.yml' | grep -v '^docs/archive/'
 ```
+
+## Repository root — archived 2026-09-13
+
+One document, and the reason is different from every entry above: `RTR.md` was **not**
+unreferenced. It was listed in `CLAUDE.md`'s key-file table as *"Roadmap reading aid (digest
+of `TECH_DEBT.md`; NOT the source of truth)"*. It was archived because the thing it digested
+now has its own reading aid, and a second one that is not maintained is a liability.
+
+| Document | Written | What it was | Superseded by |
+|---|---|---|---|
+| [`RTR.md`](RTR.md) | 2026-07-11, tracked 2026-08-01 (#319), last verified 2026-08-13 | A one-page digest of open runtime work — "genuinely open, most remaining work first", the soak-then-flip flag list, and a release note for v1.11.0. | `CLAUDE.md` → *TECH_DEBT.md — prefix registry*, which is one line per item, CI-enforced against regrowth and against closed entries sitting under `### Open`. `TECH_DEBT.md` remains the source. |
+
+**Why now.** It self-described as a digest that *"goes stale fast"* and was right. Its own
+history shows the shape: it was frozen at 2026-07-11 with six shipped items marked open when
+it was first tracked (#319), and two more wrong claims (NATIVE-CI-1 open, vite as the UI
+blocker) were found and corrected on 2026-08-13 (#398). One month on, at 2026-09-13:
+
+- **The headline is wrong.** *"C3's non-Linux strong sandbox is the only genuine big rock
+  left"* — the registry now carries `FR-15` at P0 and `FLOW-PARALLEL-1`,
+  `AUTHORITY-NEGOTIATION-1`, `FS-SCOPE-1`, `SUBSTRATE-WITNESS-1`, `PERF-BASELINE-1` at P1,
+  none of which it names.
+- **Closed items are listed as open.** `MEM-RECALL-N1-1` (closed 2026-08-16) and
+  `DEP-UPGRADE-DEFERRED-1`'s OTel + UI cluster (both closed) are in its "Dependency / CI
+  debt" section.
+- **The release section describes v1.11.0 as being prepared.** The current release is
+  2.13.0, twelve releases later.
+- **The one section that mostly survives** — the soak-then-flip flag list — is stale in one
+  entry (`AINDY_NODUS_WARM_POOL` has defaulted **on** since 2026-08-19, not "off in
+  production") and is otherwise covered by `CLAUDE.md`'s *SOAK HAPPENS HERE* paragraph,
+  which also corrects the premise: those flags were waiting on app-side traffic that was
+  never going to arrive, and the soak apparatus now lives in this repo.
+
+**What was not done, deliberately.** The document was not corrected a third time. Each prior
+correction was accurate the day it was written and decayed identically — the same class
+`CLAUDE.md`'s release-state paragraph removed its version numbers for. A digest maintained
+by hand beside a CI-enforced index is the "hand-copied list … slower, wrong second copy" that
+the Alembic-head note in `CLAUDE.md` describes; the fix is one fewer copy, not a fresher one.
+
+The `TECH_DEBT.md` mention of `RTR.md` (in the closed native-bridge doc-verification entry)
+is historical narrative and stays as written.

@@ -1185,7 +1185,6 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | MAS / native / OS-layer / event-bus suites | `tests/unit/test_memory_address_space.py`, `test_memory_native_scorer.py`, `test_os_layer.py`, `test_event_bus.py` |
 | Event-bus wire test (needs live Redis) | `tests/integration/test_event_bus_wire.py` — marked `redis`, **not** `integration` |
 | Tech debt tracker | `TECH_DEBT.md` |
-| Roadmap reading aid (digest of `TECH_DEBT.md`; NOT the source of truth) | `RTR.md` |
 | Docker compose | `docker-compose.yml` |
 | Dockerfile | `Dockerfile` |
 | pgvector init script | `docker/init-pgvector.sql` |
