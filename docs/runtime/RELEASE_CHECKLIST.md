@@ -285,6 +285,10 @@ deployment that introduces TLS termination.
   guard and a clean release are indistinguishable there. `negative-control` injects synthetic
   drift and requires exit 3, so it is the half that carries meaning on such a release. **Say
   which case applied in the handoff** — "the guard was green" means different things in each.
+- [ ] **Write the app handoff as `docs/upgrades/APP_HANDOFF_v<version>.md` and add its row to
+  `docs/upgrades/README.md`.** The index is hand-maintained; a release with a handoff and no
+  row is invisible to anyone upgrading across it. Two releases (2.0.1, 2.10.0) shipped with
+  neither — their rows point at `CHANGELOG.md`, which is the fallback, not the norm.
 - [ ] **★ If runtime-owned schema changed, the app handoff SAYS SO and names the step.**
 
   `FR-14`: an additive runtime column makes a bare `bootstrap-schema` exit non-zero, which
