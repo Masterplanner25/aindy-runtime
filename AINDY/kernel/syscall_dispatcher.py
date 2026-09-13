@@ -59,6 +59,7 @@ Usage
 """
 from __future__ import annotations
 
+import contextlib as _contextlib
 import json as _json
 import logging
 import os
@@ -166,6 +167,31 @@ def _count_outcome_refused(name: str, reason: str) -> None:
 # decides who reaps the unit: a named unit belongs to whoever named it; a minted one belongs
 # to the dispatch that carried it and dies with it.
 _EU_MINTED_KEY = "_eu_minted"
+
+
+@_contextlib.contextmanager
+def bind_execution_unit(eu_id: str, trace_id: str | None = None):
+    """Make every dispatch inside the block NESTED under `eu_id` — accrue on it, be checked
+    against its ceilings — without touching what the caller's own context names.
+
+    The bridge the pipeline builds per request and `worker_loop` builds per job, as one
+    reusable form (EXEC-ENV-BIND-1 phase 4: the guest `sys()` seam and the agent execution span
+    use it when `AINDY_RUN_SCOPED_QUOTA` is on). ★ Accounting only: the idempotency gate keys on
+    the id the CALLER's context arrived with (`_orig_eu_id`), which this does not change. Both
+    ids are set — a trace with no unit would make nested dispatches inherit `""` as their unit.
+    Token-holding; nothing outlives the block.
+    """
+    eid = str(eu_id or "")
+    if not eid:
+        yield
+        return
+    tok_trace = _TRACE_ID_CTX.set(str(trace_id or eid))
+    tok_eu = _EU_ID_CTX.set(eid)
+    try:
+        yield
+    finally:
+        _EU_ID_CTX.reset(tok_eu)
+        _TRACE_ID_CTX.reset(tok_trace)
 
 
 def _count_unowned_unit(name: str) -> None:

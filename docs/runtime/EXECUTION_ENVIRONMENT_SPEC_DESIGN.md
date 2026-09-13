@@ -1,7 +1,7 @@
 ---
 title: "ExecutionEnvironmentSpec — Design (EXEC-ENV-BIND-1)"
 api_version: "1.0"
-last_verified: "2026-08-19"
+last_verified: "2026-09-13"
 status: current
 owner: "platform-team"
 ---
@@ -156,9 +156,10 @@ ExecutionEnvironmentSpec
     processes         { subprocess: bool }
 
   resources           how much the execution may USE
-    wall_time_ms      declared ceiling
-    memory_bytes      declared ceiling
-    syscalls          declared ceiling
+    wall_time_ms      declared ceiling — ENFORCED (phase 4)
+    memory_bytes      declared ceiling — recorded, NOT enforced (SYSMAX-3)
+    syscalls          declared ceiling — ENFORCED (phase 4)
+    tokens            declared ceiling — ENFORCED by the token governor (phase 4)
 
   min_assurance       insecure-dev | container-grade-sandbox | strong-sandbox-tier
 ```
@@ -192,7 +193,7 @@ this, and none of them knows about the others.**
 | authority | `network.egress_scope` | **`EGRESS-INPROC-1`** — a re-homing, not a build |
 | authority | `processes.subprocess` | **`GUEST-CONFINE-1`** residual + `TOOL-SEAM-ISOLATION-1` |
 | resources | ceilings | `resource_manager`, `SYSMAX-1/-3/-4` |
-| *(future)* | spend | **`COST-GOVERNOR-1`** — a fourth axis, and it will want to live here |
+| resources | `tokens` | **`COST-GOVERNOR-1`** — landed here in phase 4, as predicted |
 
 `COST-GOVERNOR-1` is the argument against the two-axis version in miniature: the moment a token
 budget exists, it is a per-execution declared ceiling, and it will want exactly this row.
@@ -302,7 +303,7 @@ the moment it is most interesting. Settle before implementing.
 | **1** | ✅ **SHIPPED** — spec type, three columns, resolution + refusal at `require_execution_unit`, per-run record | **no execution path changed**; mutation-tested 7/7 |
 | **2** | ✅ **SHIPPED** — the guest path asks; `nodus_worker` derives every confinement arg from a spec clamped to `GUEST_FLOOR`, with an explicit per-execution scratch root. Closes `GUEST-CONFINE-1`'s residual | confinement suite re-run against the real VM, green; mutation-tested 6/6 |
 | **3** | the tool seam asks — `TOOL-SEAM-ISOLATION-1`'s command transform reads the descriptor | the P0 |
-| **4** | resources axis becomes enforcing, not just declared; `COST-GOVERNOR-1` adds spend | touches `resource_manager` |
+| **4** | ✅ **SHIPPED (#639, 2026-09-13)** — `resources.tokens` added; `require_execution_unit` declares effective ceilings to `resource_manager`, which enforces `min(global, declared)` for wall time, syscalls and (via the governor) tokens; `env_applied.resources_enforced` records which bind; `AINDY_RUN_SCOPED_QUOTA` (default off) makes the run the subject for guest `sys()` and agent spans | touched `resource_manager`; mutation-tested 5/5 |
 
 Phase 1 is deliberately the whole accountability story and none of the enforcement story.
 

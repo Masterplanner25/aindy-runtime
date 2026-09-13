@@ -91,11 +91,11 @@ def estimate_reservation(args: tuple, kwargs: dict) -> int:
     return max(1, completion + prompt)
 
 
-def _caps() -> tuple[int, int]:
-    """Read the ceilings per call — the FR-10 rule: never cache an env read at import."""
+def _tenant_cap() -> int:
+    """Read the tenant ceiling per call — the FR-10 rule: never cache an env read at import."""
     from AINDY.kernel import resource_manager as rm_mod
 
-    return int(rm_mod.MAX_TOKENS_PER_EXECUTION or 0), int(rm_mod.MAX_TOKENS_PER_TENANT_WINDOW or 0)
+    return int(rm_mod.MAX_TOKENS_PER_TENANT_WINDOW or 0)
 
 
 def _may_fail_open() -> bool:
@@ -115,24 +115,26 @@ def llm_budget_reservation(*, provider: str, args: tuple = (), kwargs: dict | No
     from AINDY.platform_layer.llm_client import LLMBudgetExceededError
 
     kwargs = kwargs or {}
-    exec_cap, tenant_cap = _caps()
-    if exec_cap <= 0 and tenant_cap <= 0:
-        yield
-        return
-
     from AINDY.kernel.resource_manager import get_resource_manager
     from AINDY.platform_layer.token_meter import resolve_llm_subject
 
     rm = get_resource_manager()
     try:
         tenant_id, unit_key, _attributed = resolve_llm_subject()
+        # EXEC-ENV-BIND-1 phase 4 — the execution cap is min(global, the unit's DECLARED token
+        # ceiling), so a spec's `resources.tokens` is enforced here, narrow-only.
+        exec_cap = rm.effective_limit(unit_key, "tokens") if unit_key else 0
     except Exception:  # noqa: BLE001 - see fail-open note in the module docstring
         if _may_fail_open():
             _count("execution", "degraded")
             yield
             return
         raise
+    tenant_cap = _tenant_cap()
 
+    if exec_cap <= 0 and tenant_cap <= 0:
+        yield
+        return
     if not tenant_id and not unit_key:
         # Nothing to charge. Admitted and, by the meter, counted as attributed="none".
         yield

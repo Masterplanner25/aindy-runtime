@@ -96,6 +96,28 @@ MAX_CONCURRENT_PER_TENANT: int = _int_env("AINDY_QUOTA_MAX_CONCURRENT", 5)
 MAX_TOKENS_PER_EXECUTION: int = _int_env("AINDY_QUOTA_MAX_TOKENS", 0)
 MAX_TOKENS_PER_TENANT_WINDOW: int = _int_env("AINDY_QUOTA_MAX_TENANT_TOKENS", 0)
 
+#: Global ceiling per enforced dimension, by the name the descriptor uses. 0 = unlimited.
+_GLOBAL_LIMITS = {
+    "wall_time_ms": lambda: MAX_WALL_TIME_MS,
+    "syscalls": lambda: MAX_SYSCALLS_PER_EXECUTION,
+    "tokens": lambda: MAX_TOKENS_PER_EXECUTION,
+}
+
+
+def run_scoped_quota_enabled() -> bool:
+    """EXEC-ENV-BIND-1 phase 4 — is the RUN the quota subject for guest `sys()` calls and agent
+    execution spans? Default OFF. Read per call (FR-10: never cache an env read at import).
+
+    ★ What flipping it changes: a guest script's `sys()` calls and every dispatch under an
+    agent run's execution span accrue on the RUN's unit and are checked against ITS ceilings —
+    so `MAX_SYSCALLS_PER_EXECUTION` (100) becomes real for a long guest script or a multi-step
+    run for the first time. Today each of those dispatches mints and reaps its own unit
+    (`QUOTA-ACCRUAL-ORPHAN-1`), so the cap is vacuous for them. The evidence to flip on is
+    `aindy_syscall_unowned_unit_total` on a deployment: it names exactly the callers this
+    moves. Accounting only — the idempotency gate keys on the caller's own id and is untouched.
+    """
+    return str(os.getenv("AINDY_RUN_SCOPED_QUOTA", "")).strip().lower() in ("1", "true", "yes", "on")
+
 RESOURCE_LIMIT_EXCEEDED = "RESOURCE_LIMIT_EXCEEDED"
 EU_KEY_TTL_SECONDS = 3600
 TENANT_KEY_TTL_SECONDS = 86400
@@ -130,6 +152,9 @@ class UsageSnapshot:
     # `token_meter.observe_llm_usage`. The dominant cost of an LLM execution unit, and until
     # this field existed the one dimension the quota system did not carry.
     tokens: int = 0
+    # EXEC-ENV-BIND-1 phase 4 — ceilings DECLARED for this unit by its ExecutionEnvironmentSpec
+    # (effective, i.e. already clamped to the floor). Name → int. Absent = the global applies.
+    limits: dict = field(default_factory=dict, compare=False)
     # Monotonic creation time — the in-memory store's analogue of the Redis backend's
     # EU_KEY_TTL_SECONDS expiry (QUOTA-ACCRUAL-ORPHAN-1). Not part of to_dict().
     created_at: float = field(default_factory=time.monotonic, compare=False, repr=False)
@@ -142,6 +167,7 @@ class UsageSnapshot:
             "memory_bytes": self.memory_bytes,
             "syscall_count": self.syscall_count,
             "tokens": self.tokens,
+            "limits": dict(self.limits),
         }
 
 
@@ -196,6 +222,9 @@ return 1
 
     def _tenant_tokens_key(self, tenant_id: str) -> str:
         return f"aindy:rm:tenant:{tenant_id}:tokens"
+
+    def _limits_key(self, eu_id: str) -> str:
+        return f"aindy:rm:eu:{eu_id}:limits"
 
     def increment_tenant_active(self, tenant_id: str) -> int:
         key = self._tenant_key(tenant_id)
@@ -258,12 +287,25 @@ return 1
         value = self._redis.get(self._tenant_tokens_key(tenant_id))
         return int(value) if value is not None else 0
 
+    def set_limits(self, eu_id: str, limits: dict) -> None:
+        key = self._limits_key(eu_id)
+        mapping = {k: str(int(v)) for k, v in limits.items() if v is not None}
+        if not mapping:
+            return
+        self._redis.hset(key, mapping=mapping)
+        self._redis.expire(key, EU_KEY_TTL_SECONDS)
+
+    def get_limits(self, eu_id: str) -> dict:
+        raw = self._redis.hgetall(self._limits_key(eu_id)) or {}
+        return {str(k): int(v) for k, v in raw.items()}
+
     def delete_eu(self, eu_id: str) -> None:
         self._redis.delete(
             self._cpu_key(eu_id),
             self._syscalls_key(eu_id),
             self._memory_key(eu_id),
             self._tokens_key(eu_id),
+            self._limits_key(eu_id),
         )
 
     def reset_all(self) -> None:
@@ -655,6 +697,30 @@ class ResourceManager:
                 return None
             raise
 
+    def _backend_set_limits(self, eu_id: str, limits: dict) -> None:
+        if self._backend is None:
+            return
+        try:
+            self._backend.set_limits(eu_id, limits)
+        except Exception as exc:
+            import redis  # type: ignore[import]
+            if isinstance(exc, redis.RedisError):
+                logger.warning("[ResourceManager] redis set_limits failed eu=%s error=%s", eu_id, exc)
+                return
+            raise
+
+    def _backend_get_limits(self, eu_id: str) -> dict | None:
+        if self._backend is None:
+            return None
+        try:
+            return self._backend.get_limits(eu_id)
+        except Exception as exc:
+            import redis  # type: ignore[import]
+            if isinstance(exc, redis.RedisError):
+                logger.warning("[ResourceManager] redis get_limits failed eu=%s error=%s", eu_id, exc)
+                return None
+            raise
+
     def _backend_delete_eu(self, eu_id: str) -> None:
         if self._backend is None:
             return
@@ -780,18 +846,22 @@ class ResourceManager:
         if redis_syscall_count is None:
             redis_syscall_count = local_syscall_count
 
-        if redis_wall_time_ms > MAX_WALL_TIME_MS:
+        # EXEC-ENV-BIND-1 phase 4 — a unit's DECLARED ceilings narrow the global ones.
+        wall_cap = self.effective_limit(eid, "wall_time_ms")
+        syscall_cap = self.effective_limit(eid, "syscalls")
+
+        if wall_cap > 0 and redis_wall_time_ms > wall_cap:
             reason = (
                 f"{RESOURCE_LIMIT_EXCEEDED}: eu {eu_id!r} exceeded "
-                f"wall_time_ms limit ({redis_wall_time_ms} > {MAX_WALL_TIME_MS})"
+                f"wall_time_ms limit ({redis_wall_time_ms} > {wall_cap})"
             )
             logger.warning("[ResourceManager] %s", reason)
             return False, reason
 
-        if redis_syscall_count > MAX_SYSCALLS_PER_EXECUTION:
+        if syscall_cap > 0 and redis_syscall_count > syscall_cap:
             reason = (
                 f"{RESOURCE_LIMIT_EXCEEDED}: eu {eu_id!r} exceeded "
-                f"syscall_count limit ({redis_syscall_count} > {MAX_SYSCALLS_PER_EXECUTION})"
+                f"syscall_count limit ({redis_syscall_count} > {syscall_cap})"
             )
             logger.warning("[ResourceManager] %s", reason)
             return False, reason
@@ -1141,6 +1211,69 @@ class ResourceManager:
             return shared
         with self._lock:
             return self._tenant_tokens.get(tid, (0, 0.0))[0]
+
+    # ── Declared ceilings (EXEC-ENV-BIND-1 phase 4) ──────────────────────────
+
+    def declare_limits(
+        self,
+        eu_id: str,
+        *,
+        wall_time_ms: int | None = None,
+        syscalls: int | None = None,
+        tokens: int | None = None,
+        memory_bytes: int | None = None,
+        tenant_id: str | None = None,
+    ) -> None:
+        """Record the ceilings an ExecutionEnvironmentSpec declared for a unit.
+
+        Called from `require_execution_unit` with the EFFECTIVE (floor-clamped) resources, so a
+        declared value can only ever be narrower than the host's. `check_quota` and the token
+        governor then enforce `min(global, declared)`. `memory_bytes` is stored for the record
+        and not enforced (`SYSMAX-3`). Mirrored to Redis so a worker in another process that
+        binds this unit sees the same ceilings.
+        """
+        eid = str(eu_id)
+        limits = {
+            k: int(v) for k, v in (
+                ("wall_time_ms", wall_time_ms), ("syscalls", syscalls),
+                ("tokens", tokens), ("memory_bytes", memory_bytes),
+            ) if v is not None and int(v) > 0
+        }
+        if not limits:
+            return
+        with self._lock:
+            if eid not in self._usage:
+                self._usage[eid] = UsageSnapshot(eu_id=eid, tenant_id=str(tenant_id or ""))
+            self._usage[eid].limits.update(limits)
+        self._backend_set_limits(eid, limits)
+
+    def declared_limits(self, eu_id: str) -> dict:
+        """The ceilings declared for a unit — local first, else the shared store's copy."""
+        eid = str(eu_id)
+        with self._lock:
+            snap = self._usage.get(eid)
+            if snap is not None and snap.limits:
+                return dict(snap.limits)
+        shared = self._backend_get_limits(eid)
+        if shared:
+            with self._lock:
+                if eid in self._usage:
+                    self._usage[eid].limits.update(shared)
+            return dict(shared)
+        return {}
+
+    def effective_limit(self, eu_id: str | None, dimension: str) -> int:
+        """`min(global, declared)` for an enforced dimension; 0 = unlimited.
+
+        A declared ceiling narrows the global one and never widens it — a unit that declares
+        `syscalls: 500` against a global of 100 is capped at 100, and the clamp in
+        `resolve_environment` has already said so on the row.
+        """
+        global_cap = int(_GLOBAL_LIMITS.get(dimension, lambda: 0)() or 0)
+        declared = int(self.declared_limits(eu_id).get(dimension, 0) or 0) if eu_id else 0
+        if global_cap > 0 and declared > 0:
+            return min(global_cap, declared)
+        return global_cap or declared
 
     # ── Token reservation (COST-GOVERNOR-1 phase 4) ───────────────────────────
     #

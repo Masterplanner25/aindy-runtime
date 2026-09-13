@@ -547,7 +547,19 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         _durable_cm = durable_effects_scope()
     else:
         _durable_cm = contextlib.nullcontext()
-    with _durable_cm, contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stdout_buffer):
+    # EXEC-ENV-BIND-1 phase 4 — under AINDY_RUN_SCOPED_QUOTA the guest's sys() calls accrue on
+    # the RUN's unit and are checked against its ceilings, instead of each minting a one-call
+    # unit (vacuous budget). Accounting only; the effect gate's scope is untouched. Off by
+    # default: it makes the 100-syscall cap real for a long guest script for the first time.
+    from AINDY.kernel.resource_manager import run_scoped_quota_enabled
+
+    if run_scoped_quota_enabled() and execution_unit_id:
+        from AINDY.kernel.syscall_dispatcher import bind_execution_unit
+
+        _unit_cm = bind_execution_unit(execution_unit_id, trace_id)
+    else:
+        _unit_cm = contextlib.nullcontext()
+    with _durable_cm, _unit_cm, contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stdout_buffer):
         try:
             raw_result = runtime.run_source(
                 script,
