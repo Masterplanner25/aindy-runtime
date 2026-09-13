@@ -137,7 +137,12 @@ def test_auth_hook_sets_session_identity_and_handler_uses_it():
     # The auth_hook resolves a per-session identity; the handler dispatches as THAT id,
     # overriding the configured fallback.
     pytest.importorskip("nodus_mcp_aindy")
+    from AINDY.kernel import effect_ledger
+
     token = mcp_server._SESSION_IDENTITY.set(None)
+    # The hook also sets the ambient effect attribution (MEB-3b); reset that too, or every
+    # later test runs attributed to "tenant-7" (TEST-ORDER-CONTEXTVAR-1).
+    attr_token = effect_ledger.set_effect_attribution(tenant_id=None, session_id=None)
     try:
         hook = mcp_server.build_auth_hook()
         with patch.object(mcp_server, "_resolve_session_identity", return_value="tenant-7"):
@@ -152,6 +157,7 @@ def test_auth_hook_sets_session_identity_and_handler_uses_it():
         # Dispatched as the per-session identity, not the configured fallback.
         assert m.call_args.kwargs["user_id"] == "tenant-7"
     finally:
+        effect_ledger.reset_effect_attribution(attr_token)
         mcp_server._SESSION_IDENTITY.reset(token)
 
 

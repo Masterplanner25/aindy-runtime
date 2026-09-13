@@ -22,7 +22,6 @@ from AINDY.runtime.flow_engine.shared import (
     SystemEventTypes,
     emit_event,
     emit_system_event,
-    ensure_trace_id,
     get_trace_id,
     logger,
     normalize_uuid,
@@ -147,9 +146,27 @@ class PersistentFlowRunner:
         )
 
         async_token = activate_async_execution_context()
-        trace_id = ensure_trace_id(
-            initial_state.get("trace_id") if isinstance(initial_state, dict) else None
-        ) or str(uuid.uuid4())
+        # TEST-ORDER-CONTEXTVAR-1 — this used `ensure_trace_id`, which SETS the ambient trace
+        # id with no token when none is current, and nothing here ever reset it. Inside a
+        # request the middleware has already set one, so nothing changed; on a scheduler
+        # thread (no ambient trace) the first flow pinned that thread's trace id for every
+        # later flow it ran — unrelated runs sharing a trace_id. Same value, now with a token,
+        # released in the finally below.
+        ambient_trace = get_trace_id()
+        requested_trace = initial_state.get("trace_id") if isinstance(initial_state, dict) else None
+        trace_id = ambient_trace or str(requested_trace or uuid.uuid4())
+        ensure_token = None if ambient_trace else set_trace_id(trace_id)
+        try:
+            return self._start_run(initial_state, flow_name, trace_id)
+        finally:
+            if ensure_token is not None:
+                reset_trace_id(ensure_token)
+            deactivate_async_execution_context(async_token)
+
+    def _start_run(self, initial_state: dict, flow_name: str, trace_id: str) -> dict:
+        from AINDY.db.models.flow_run import FlowRun
+        from AINDY.runtime.flow_engine.graph_signature import flow_topology_signature
+
         run = FlowRun(
             id=str(uuid.uuid4()),
             flow_name=flow_name,
@@ -213,7 +230,6 @@ class PersistentFlowRunner:
         finally:
             reset_parent_event_id(parent_token)
             reset_trace_id(trace_token)
-            deactivate_async_execution_context(async_token)
 
     def _initialize_execution_unit(self, run, flow_name: str) -> None:
         try:

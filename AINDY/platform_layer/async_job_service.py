@@ -1298,7 +1298,6 @@ def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]
                 _emit_job_log_written(log_id)
                 db.refresh(log)
             reset_parent_event_id(job_parent_token)
-            reset_trace_id(trace_token)
     except Exception as exc:
         db.rollback()
         log = db.query(JobLog).filter(JobLog.id == log_id).first()
@@ -1413,6 +1412,12 @@ def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]
                 deactivate_async_execution_context(async_ctx_token)
             except Exception:
                 logger.debug("[AsyncJob] async context deactivate skipped for %s", log_id, exc_info=True)
+        # TEST-ORDER-CONTEXTVAR-1 — the trace and parent-event tokens were reset only on
+        # the path that reached the handler; an early return (no JobLog, no handler) left
+        # both set. Invisible in production (each job runs in a copy_context()), visible
+        # the moment the unit sweep checked for leaks. LIFO with the inner resets above.
+        reset_parent_event_id(parent_token)
+        reset_trace_id(trace_token)
 
 
 def _execute_job(log_id: str, task_name: str, payload: dict[str, Any]) -> None:

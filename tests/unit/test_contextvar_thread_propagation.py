@@ -26,6 +26,8 @@ import pytest
 from AINDY.platform_layer.trace_context import (
     _trace_id_ctx,
     _pipeline_active_ctx,
+    reset_pipeline_active,
+    reset_trace_id,
     set_trace_id,
     set_pipeline_active,
 )
@@ -60,7 +62,10 @@ class _CapturingExecutor:
 
 def test_trace_id_propagates_to_thread():
     expected_trace = str(uuid.uuid4())
-    set_trace_id(expected_trace)
+    # TEST-ORDER-CONTEXTVAR-1 — keep the token and reset. This file set three
+    # ContextVars and reset none, so every test after it in the sweep ran with
+    # pipeline_active=True and stale trace/unit ids.
+    token = set_trace_id(expected_trace)
 
     seen: list[str] = []
 
@@ -80,6 +85,7 @@ def test_trace_id_propagates_to_thread():
         f"Worker saw trace_id={seen!r}, expected {expected_trace!r}. "
         "copy_context() must be called before submit()."
     )
+    reset_trace_id(token)
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +94,7 @@ def test_trace_id_propagates_to_thread():
 
 def test_eu_id_propagates_to_thread():
     expected_eu = str(uuid.uuid4())
-    _EU_ID_CTX.set(expected_eu)
+    token = _EU_ID_CTX.set(expected_eu)
 
     seen: list[str] = []
 
@@ -105,6 +111,7 @@ def test_eu_id_propagates_to_thread():
         executor.shutdown(wait=False)
 
     assert seen == [expected_eu]
+    _EU_ID_CTX.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +119,7 @@ def test_eu_id_propagates_to_thread():
 # ---------------------------------------------------------------------------
 
 def test_pipeline_active_propagates_to_thread():
-    set_pipeline_active(True)
+    token = set_pipeline_active(True)
 
     seen: list[bool] = []
 
@@ -129,3 +136,4 @@ def test_pipeline_active_propagates_to_thread():
         executor.shutdown(wait=False)
 
     assert seen == [True]
+    reset_pipeline_active(token)
