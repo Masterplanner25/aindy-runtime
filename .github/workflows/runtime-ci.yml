@@ -49,7 +49,10 @@ jobs:
           import sys
 
           required_frontmatter = {"title", "last_verified", "api_version", "status", "owner"}
-          docs_root = Path("docs/runtime")
+          # docs/upgrades/ holds the per-release app handoffs (moved out of docs/runtime/
+          # 2026-09-13). Same rules apply; a folder outside this loop is unchecked by
+          # construction (CLAUDE.md, "Trusting a green check", variant 2).
+          docs_roots = [Path("docs/runtime"), Path("docs/upgrades")]
           missing = []
 
           # DOCS-STALE-1 (closed 2026-08-13). Seven docs declared a last_verified EARLIER
@@ -60,7 +63,7 @@ jobs:
           # the build on the very docs that prompted it.
           REPO_EPOCH = "2026-05-17"  # 0d5d382 Initial runtime repo extraction
 
-          for path in sorted(docs_root.glob("*.md")):
+          for path in sorted(p for root in docs_roots for p in root.glob("*.md")):
               text = path.read_text(encoding="utf-8")
               if not text.startswith("---\n"):
                   missing.append(f"{path}: missing YAML frontmatter")
@@ -105,7 +108,7 @@ jobs:
               print("\n".join(missing))
               sys.exit(1)
 
-          print(f"validated {len(list(docs_root.glob('*.md')))} runtime docs "
+          print(f"validated {sum(len(list(r.glob('*.md'))) for r in docs_roots)} runtime + upgrade docs "
                 f"(frontmatter keys + last_verified >= {REPO_EPOCH})")
           PY
 
