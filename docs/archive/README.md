@@ -229,10 +229,12 @@ distinction; Q4 — `_detect_wsl2()` (C3 phase 1) separates *running inside WSL2
 **One recommendation was never actioned, and is recorded here rather than filed:** the
 audit's *After This Audit* section proposed `docs/runtime/SANDBOX_CONTRACT.md` — a peer to
 `EXECUTION_CONTRACT.md` and `IDEMPOTENCY_CONTRACT.md` with the sandbox guarantees as
-numbered invariants. It does not exist; those guarantees remain prose spread across
-`EXTENSION_TRUST_MODEL.md`, `SECURITY_MATRIX.md`, `OS_ISOLATION_LAYER.md` and the threat
-model in `SANDBOX_ESCAPE_AUDIT.md`. Whether that consolidation is wanted is a docset
-decision, not a defect.
+numbered invariants. For three and a half months it did not exist and those guarantees
+were prose spread across `EXTENSION_TRUST_MODEL.md`, `SECURITY_MATRIX.md`,
+`OS_ISOLATION_LAYER.md` and the threat model in `SANDBOX_ESCAPE_AUDIT.md`. **Written
+2026-09-13**, the same day this audit was archived — sixteen invariants, each with its
+enforcement point and pin, and a §7 that states what is *not* guaranteed so it cannot be
+inferred from silence.
 
 The two `Source:` pointer lines in `TECH_DEBT.md` (`C2`, `C3`) now cite the archive path;
 the narrative mention in `ISOLATION-DOC-STATUS-1` stays as written.

@@ -704,6 +704,9 @@ Implication:
   `EXACTLY_ONCE` syscalls are deduplicated via the `EffectRecord` table. The gate sits
   inside `SyscallDispatcher._dispatch()` and depends on the `ExecutionUnit` record that
   this contract requires to exist before work begins.
+- **Sandbox Contract** (`docs/runtime/SANDBOX_CONTRACT.md`) — defines how far an execution
+  unit can reach when the runtime runs code it did not author: the three seams, what
+  refuses to start, and which guarantees are verified versus asserted.
 - **Retry Policy** (`docs/runtime/RETRY_POLICY.md`) — defines retry semantics and the
   `is_retryable_error()` classifier. The idempotency gate and retry policy interact:
   retries of `EXACTLY_ONCE` syscalls return the cached result rather than re-executing.

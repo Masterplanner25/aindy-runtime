@@ -1136,6 +1136,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Runtime Alembic head constant + stamp helper | `AINDY/db/alembic_head.py` — `RUNTIME_ALEMBIC_HEAD_REVISION`, `stamp_runtime_alembic_head()` |
 | `bootstrap-schema` CLI command | `AINDY/runtime_only.py` — `_bootstrap_schema()` |
 | Idempotency contract | `docs/runtime/IDEMPOTENCY_CONTRACT.md` |
+| **Sandbox contract — numbered invariants, three seams, what is verified vs asserted** | `docs/runtime/SANDBOX_CONTRACT.md` |
 | Nodus developer guide (scripts + builtins) | `docs/runtime/NODUS_DEVELOPER_GUIDE.md` |
 | Syscall API reference (all registered calls) | `docs/runtime/SYSCALL_REFERENCE.md` |
 | Connector registration hook (FR-1) | `AINDY/platform_layer/registry.py` — `register_connector`; dispatch in `connector_service.py` |
