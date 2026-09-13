@@ -112,7 +112,6 @@ These docs define how runtime changes should be reviewed and shipped.
 - `TEST_STRATEGY.md`
 - `CHANGE_IMPACT_MATRIX.md`
 - `INVARIANT_TEST_MAPPING.md`
-- `AINDY_RUNTIME_90_DAY_CHECKLIST.md`
 
 ---
 

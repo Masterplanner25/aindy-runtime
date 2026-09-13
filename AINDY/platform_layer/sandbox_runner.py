@@ -108,7 +108,7 @@ def sandbox_runner_assurance_posture(runner_type: str) -> dict[str, str]:
                     "Post-launch verification relies on worker self-report via authenticated RPC. "
                     "Kernel-observable verification (cgroups, seccomp, namespace inspection from "
                     "outside the worker) is reported only after live Linux /proc evidence has "
-                    "been collected for a worker. See Gap C1 in ISOLATION_MODEL_PLAN.md."
+                    "been collected for a worker. See Gap C1 in docs/archive/ISOLATION_MODEL_PLAN.md."
                 )
             ),
             "verification_method": (

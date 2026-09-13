@@ -145,3 +145,4 @@ Stability is governed by `PUBLIC_RUNTIME_SURFACES.md` and
 | Cross-repo compatibility | [CROSS_REPO_COMPATIBILITY.md](./CROSS_REPO_COMPATIBILITY.md) |
 | Boot and startup contract | [RUNTIME_ONLY_DEPLOYMENT.md](./RUNTIME_ONLY_DEPLOYMENT.md) |
 | Idempotency and effect records | [IDEMPOTENCY_CONTRACT.md](./IDEMPOTENCY_CONTRACT.md) |
+| Sandbox boundaries, admission and evidence | [SANDBOX_CONTRACT.md](./SANDBOX_CONTRACT.md) |

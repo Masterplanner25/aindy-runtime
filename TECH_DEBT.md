@@ -2292,7 +2292,7 @@ two layers as a dedicated effort — this is the kernel's most correctness-sensi
 
 Status: CLOSED (2026-05-24)
 
-Source: `ISOLATION_MODEL_PLAN.md` Gap 4 / `C2_SANDBOX_AUDIT.md`.
+Source: `docs/archive/ISOLATION_MODEL_PLAN.md` Gap 4 / `docs/archive/C2_SANDBOX_AUDIT.md` (both archived 2026-09-13).
 
 Reopen condition was: a non-Linux host platform produces a sandbox runner type passing
 the shared worker policy certification suite with assurance class at or above
@@ -2340,7 +2340,7 @@ Closing C3 fully needs a platform-native strong-VM runner. **Preparation plan sc
 `docs/runtime/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`** (Windows-native + macOS tracks) so
 either track can start the day a trigger lands.
 
-Source: `C2_SANDBOX_AUDIT.md` "What This Audit Does NOT Cover" / `ISOLATION_MODEL_PLAN.md` Gap 4 (C3 remainder).
+Source: `docs/archive/C2_SANDBOX_AUDIT.md` "What This Audit Does NOT Cover" / `docs/archive/ISOLATION_MODEL_PLAN.md` Gap 4 (C3 remainder). Both archived 2026-09-13; the C3 remainder is unchanged.
 
 **Phase 0 (2026-06-04) — Adversarial escape test suite: COMPLETE**
 
@@ -2421,6 +2421,85 @@ assurance on a non-Linux host.
 Condition to close C3 fully: A non-Linux host platform gains a supported sandbox runner type
 with assurance class `strong-sandbox-tier`, verified through the escape test suite and the
 shared worker policy certification suite (`tier_status: certified` at `strong-sandbox-certified`).
+
+---
+
+## SANDBOX-EVIDENCE-1 — the `hostile-third-party` post-launch kill has no test
+
+**Status: OPEN (P2).** Filed 2026-09-13 while writing `docs/runtime/SANDBOX_CONTRACT.md`
+(invariant 11); found by trying to name the pin and finding none.
+
+**The claim.** Under `hostile-third-party`, admission is checked twice. Before spawn,
+`validate_external_third_party_plugin_runtime_policy()` refuses anything but
+`strong_sandbox_vm`. **After launch**, `_start_record()` (`plugin_host.py:858-880`) evaluates
+`hostile_third_party_attestation_violations()` against the live snapshot and, on any violation,
+marks the record `contract_violation`, calls `_terminate_record_process(force_kill=True)` and
+raises. `/health/deep` then lists `plugin_sandbox_attestation` as a failure (503).
+
+**What is pinned.** The pre-spawn refusal —
+`test_plugin_host.py::test_external_third_party_plugin_host_rejects_container_runner_in_hostile_profile`
+and `test_deployment_profiles.py::test_hostile_third_party_profile_accepts_explicit_strong_plugin_runner`.
+
+**What is not.** `git grep` for the kill's error strings (`"did not satisfy hostile-third-party
+sandbox attestation"`, `"attestation requirements were not verified"`) and for
+`_terminate_record_process` / `force_kill` under `tests/` returns **nothing**. No test starts a
+host that *passes* pre-spawn policy and *fails* live attestation, then asserts the process was
+terminated and the record marked. The kill path is the one that matters — pre-spawn policy is
+configuration, post-launch attestation is what the launcher actually did — and it is the one
+with no witness.
+
+★ **Why this is the catalogue's shape and not merely "add a test".** The pre-spawn test is
+green, gating, and named for the hostile profile, so a reader scanning for coverage finds it and
+stops. It covers the cheap half. This is `ROUTE-GUARD-1`'s lesson one layer down: the guard was
+written, and nothing proves the caller receives its answer — here, that the process is dead.
+
+**Shape of the fix.** A unit test with a fake runner whose `metadata()`/launch attestation is
+strong-tier-shaped except for one required field, under `AINDY_DEPLOYMENT_PROFILE=hostile-third-party`;
+assert `RuntimeError` naming the violation, `record.state == "failed"`, `kind ==
+"contract_violation"`, and that the runner's `shutdown(force=True)` was called. **Mutation-test
+it**: remove the `_terminate_record_process` call and confirm the test goes red — a test that
+only checks the raised message passes with the process still alive, which is the exact hole.
+Do NOT close by asserting on the health endpoint alone; that proves reporting, not termination.
+
+---
+
+## SANDBOX-EVIDENCE-2 — the strong runner's launcher flags are verified only by a live probe, never in CI
+
+**Status: OPEN (P2). Record-first: the gap is structural, and the honest fix may be "document
+the boundary of what CI can prove" rather than a new test.** Filed 2026-09-13 with
+`SANDBOX-EVIDENCE-1`, from `SANDBOX_CONTRACT.md` §4 and §8.
+
+**The claim.** `StrongSandboxVmRunner._process_args()` (`sandbox_runner.py:2007`) builds an
+argv for the out-of-tree `aindy-sandbox-vm` launcher: `--mount-readonly`, `--deny-host-paths`,
+`--network-deny-default`, `--tmpfs`, `--pids-limit`, `--memory`. The launch attestation
+(`:1833-1955`) then reports `mount_mode.verified` and `network_policy.verified` **by checking
+whether those strings are in the argv it just built** (`:1865-1910`: `"--mount-readonly" in
+args`). That is a claim about what the runtime *asked for*, not what the launcher *did*.
+
+**What is verified, and where.** The post-launch probe (`plugin_host._verify_post_launch_state`)
+reads `/proc/<pid>/status` (seccomp), `/proc/<pid>/cgroup` and `/proc/<pid>/ns/` for a live
+worker on Linux — that is real, kernel-observable evidence that the boundary exists. It runs
+only on a Linux host with the launcher installed, i.e. in a deployment, **never in CI**: no
+workflow installs `aindy-sandbox-vm`, and the escape suite (`tests/sandbox/`, 17 tests) targets
+`containerized_oci` only.
+
+**What CI proves today.** `test_sandbox_runner.py` asserts the argv contains the flags. A
+regression that *removes* a flag is caught; a launcher that *ignores* one is not, and the
+attestation would still say `verified: True` for it — the check reads its own input.
+
+★ **Why record-first.** The launcher is not in this repo. A CI job that proves what it does
+needs either (a) a launcher in tree or vendored, or (b) a Linux CI runner with the real launcher
+installed and an escape suite written against it — a second `tests/sandbox/` for a second runner.
+(b) is the honest fix and is real work; (a) is a scope decision. Until one lands, the correct
+state is that `strong-sandbox-certified` is a **deployment-time** claim, reached only after a
+live probe, and the contract says so. What must NOT happen: an argv-string assertion being cited
+as evidence the strong sandbox works. It is variant 7 of the catalogue (asserts the source, not
+the behaviour) and — because the attestation itself checks the argv — the runtime's own
+`verified: True` is that same variant emitted at runtime.
+
+**Related, not the same.** `C3` is about *non-Linux* strong sandbox; this is about evidence for
+the *Linux* one. ISOLATION plan C1 Scope B2 (privileged launcher with BPF introspection) would
+strengthen the live probe, not bring it into CI.
 
 ---
 

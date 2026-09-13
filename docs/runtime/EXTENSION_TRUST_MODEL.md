@@ -1,6 +1,6 @@
 ---
 title: "Extension Trust Model"
-last_verified: "2026-05-29"
+last_verified: "2026-09-13"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -187,6 +187,69 @@ This definition holds the runtime to delivering Linux container semantics —
 pinned OCI images, runtime-managed read-only mounts, kernel-level hardening
 controls active inside the container — regardless of the host OS that supplies
 the kernel. Strong-sandbox guarantees remain Linux-host-specific.
+
+## Assurance Reporting
+
+Operator surfaces (`/health` and `/health/deep` under `plugin_sandbox_posture`, and
+`/api/version`) report third-party plugin execution with five distinct vocabularies. They
+are related but not interchangeable, and every one of them is a claim about **Tier 2**
+only. Constants live in `AINDY/platform_layer/sandbox_runner.py`,
+`sandbox_certification.py` and `deployment_contract.py`; this section is the prose
+reading of them.
+
+- **Assurance class** — the *category* of the runner currently selected:
+  `insecure-dev` (`insecure_dev_subprocess`), `container-grade-sandbox`
+  (`containerized_oci`), or `strong-sandbox-tier` (`strong_sandbox_vm`). It says what the
+  runtime is *trying* to provide, not what it has verified.
+- **Attestation** — what the runtime actually *observed* at launch: backend identity,
+  runtime identity (pinned OCI digest), mount mode, and resource-limit mode, each
+  carrying its own `verified` flag. Attestation is narrower than a blanket sandbox
+  guarantee — it covers the launch, not the running worker's state.
+- **Verification method** — how any *post-launch* claim was established:
+  `worker-self-report` (an authenticated RPC probe the worker answers about its own
+  guard state), `kernel-observable` (unprivileged `/proc/<pid>` evidence for seccomp,
+  cgroup and namespace membership, collected on Linux hosts after a live worker PID
+  exists), or `none`.
+- **Assurance ceiling** — the strongest claim the *current evidence* can support:
+  `no-isolation-guarantee`, `worker-self-report-verified`, or
+  `kernel-observable-verified`. A stronger assurance class does not raise the ceiling;
+  only evidence does. Non-Linux hosts stay at `worker-self-report-verified`.
+- **Certification tier** — what the runtime can *justify* from verified attestation plus
+  the shared worker-policy suite: `contained-process-certified`,
+  `container-sandbox-certified`, or `strong-sandbox-certified`. The tier is computed,
+  never configured, and `tier_status` is `certified` only when every requirement of the
+  tier for the *selected runner* is met. A runner that is merely selected is
+  `not_certified_for_runner`.
+
+Rules that follow from the separation:
+
+- a stronger assurance class does not by itself imply a certification tier
+- verified attestation is narrower than a certification tier, which also needs the
+  policy suite and (for strong) a passed post-launch probe
+- readiness does not imply a higher assurance class than the runtime reports
+- `strong-sandbox-certified` is reachable on Linux hosts only
+  (`STRONG_SANDBOX_SUPPORTED_HOST_PLATFORMS`); other hosts cap at
+  `container-sandbox-certified` — this is the open `C3` remainder
+
+Profile expectations (`plugin_sandbox_profile_requirements`):
+
+| Deployment profile | Required assurance class | Required certification tier |
+|---|---|---|
+| `single-instance` | none | none |
+| `distributed-api` / `distributed-worker` | `container-grade-sandbox` | none at startup |
+| `hostile-third-party` | `strong-sandbox-tier` | `strong-sandbox-certified` |
+
+**Tier 1 surfaces are outside all five vocabularies.** Manifest bootstrap for
+`runtime-built-in` and `first-party-app`, kernel-resident callables, and runtime-built-in
+plugin nodes are excluded from plugin sandbox attestation and carry no assurance class,
+ceiling or certification tier. They are trusted kernel code deployed by the same operator
+running the runtime; they do not require a process isolation boundary, so sandbox
+attestation is not applicable to them. Their absence from the posture report is by
+design, not a gap in coverage.
+
+*(This section was first written for the Tiered Isolation Contract plan (A3), removed in the
+2026-05-31 docset reconciliation, and restored 2026-09-13 against the current constants —
+the vocabulary had been in use across four documents with no definition in between.)*
 
 ## Reading Rule
 
