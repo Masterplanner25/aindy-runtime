@@ -1,4 +1,4 @@
-### Added — `docs/runtime/SANDBOX_CONTRACT.md` (docs/archive-rtr)
+### Added — `docs/runtime/SANDBOX_CONTRACT.md` (#643)
 
 The sandbox contract the C2 audit recommended on 2026-05-24 and nobody wrote: sixteen numbered
 invariants across the three seams where the runtime runs code it did not author (plugin host,
