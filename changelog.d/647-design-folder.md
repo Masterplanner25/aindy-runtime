@@ -1,4 +1,4 @@
-### Changed — `docs/design/`: the thirteen scope/design/program/proposal docs get their own folder and a status index (docs/design-folder)
+### Changed — `docs/design/`: the thirteen scope/design/program/proposal docs get their own folder and a status index (#647)
 
 They were neither contracts (`docs/runtime/` says what the runtime guarantees now) nor dead
 (`docs/archive/`) — source cites most of them by path as the reasoning behind live code. Four
