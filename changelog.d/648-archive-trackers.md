@@ -1,4 +1,4 @@
-### Changed — three completed trackers archived; `DECISION_LOG.md` corrected in place (docs/archive-trackers)
+### Changed — three completed trackers archived; `DECISION_LOG.md` corrected in place (#648)
 
 `TEST_GAP_BACKLOG.md` / `TEST_GAP_WORK_ITEMS.md` (every one of ten gaps has a test today) and
 `OPEN_QUESTIONS.md` (all eleven resolved by 2026-06-06; two named residuals were closed before
