@@ -13030,9 +13030,9 @@ reified. Same shape here. See `COMPARATIVE_RESEARCH_INDEX.md` §4b.
 ## COST-GOVERNOR-1 — every quota exists except the one that matters for an LLM runtime
 
 **Status: OPEN — P1. METER SHIPPED 2026-09-03 (#563, #564); ADOPTED 2026-09-08 (app #321);
-★ PHASE 3 (identity + accrual) SHIPPED 2026-09-13 (#635). The governor is now blocked on
-EVIDENCE only (phase 2 — a read of a running deployment) — see
-`docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`.** Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
+★ PHASE 3 (identity + accrual) SHIPPED 2026-09-13 (#635). ★★ PHASE 2 EVIDENCE OBTAINED
+2026-09-13 — the meter MOVES on a real deployment (below). THE GOVERNOR (phase 4) IS UNBLOCKED.**
+See `docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`. Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
 (`C:\codev\MetaGPT research\`, 2026-08-15, its **M2**), verified against source at `v2.4.0`.
 **The last verified-but-unfiled gap across ten comparative research folders.**
 
@@ -13059,6 +13059,34 @@ true and neither is adoption:
    calls need the `INITIATOR-IDENTITY-1` rule (*allow, and count separately*; an asserted
    identity may constrain, never widen), with the unattributed fraction visible before anyone
    relies on a cap.
+
+### ★★ Phase 2 — the meter moves in a real deployment (2026-09-13)
+
+Read off the apps-monolith container, brought up for this purpose (`docker-compose.prod.yml
+--profile full`; Redis is behind that profile and the API's `REDIS_URL` points at it
+unconditionally — without the profile the API thrashes on reconnects and `/health` never
+answers). **The installed version was printed, not inferred** — the `DEBT-COMPAT-1` trap:
+
+```
+$ docker exec aindy-apps-monolith-api-1 python -c "import AINDY, AINDY._version as v; print(v.__version__, list(AINDY.__path__))"
+2.12.0 ['/usr/local/lib/python3.11/site-packages/AINDY']
+
+before  GET /metrics/   aindy_llm_tokens_total — family registered, NO samples
+trigger POST /apps/agent/run  {"goal": "Recall any memory about … and summarise it in one sentence."}
+        → 200, PENDING_APPROVAL, a one-step plan (the app's Claude planner, #321, through the seam)
+after   aindy_llm_tokens_total{kind="prompt",model="claude-opus-4-8",provider="anthropic"}      2021
+        aindy_llm_tokens_total{kind="completion",model="claude-opus-4-8",provider="anthropic"}   223
+        aindy_llm_usage_unreadable_total — no sample (nothing unreadable)
+```
+
+One planner call, 2 244 tokens, the right provider and model. **★ "No samples" before the call
+is the CORRECT reading of an unfired labelled counter** (`CLAUDE.md` soak-harness rule: a family
+exists, the label combination is unobserved) — it is not "the meter is absent", which is what
+`# HELP` being present rules out. `aindy_llm_calls_total` (phase 3) is absent from this
+container because 2.13.0 is unreleased; do not read that as a phase-3 failure either.
+
+**Note `/metrics` is a mount and answers 307 → `/metrics/`.** A bare `curl /metrics` without
+`-L` reads an empty body and 0 families — a five-minute detour recorded so it is a zero-minute one.
 
 ### ★ Phase 3 — tokens are a resource dimension with a subject (2026-09-13, #635)
 
