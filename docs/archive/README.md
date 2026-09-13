@@ -170,7 +170,7 @@ stays as written.
 
 | Document | Written | What it was | Superseded by |
 |---|---|---|---|
-| [`ISOLATION_MODEL_PLAN.md`](ISOLATION_MODEL_PLAN.md) | 2026-05-23; status corrected 2026-08-16 (`ISOLATION-DOC-STATUS-1`) | The plan behind the **Tiered Isolation Contract** (Tier 1 trusted-operator kernel-resident / Tier 2 externalized): seven gaps, a work plan of seven items (A1–A3 docs, B1–B2 code+tests, C1–C2 deferred), and the rationale for choosing a two-tier model over a third "capability-confined in-process" class. | `docs/runtime/EXTENSION_TRUST_MODEL.md` (the contract), `AINDY/platform_layer/extension_execution_model.py` (the two classes, published), `docs/runtime/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md` (the live remainder), `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (the evidence, per release). |
+| [`ISOLATION_MODEL_PLAN.md`](ISOLATION_MODEL_PLAN.md) | 2026-05-23; status corrected 2026-08-16 (`ISOLATION-DOC-STATUS-1`) | The plan behind the **Tiered Isolation Contract** (Tier 1 trusted-operator kernel-resident / Tier 2 externalized): seven gaps, a work plan of seven items (A1–A3 docs, B1–B2 code+tests, C1–C2 deferred), and the rationale for choosing a two-tier model over a third "capability-confined in-process" class. | `docs/runtime/EXTENSION_TRUST_MODEL.md` (the contract), `AINDY/platform_layer/extension_execution_model.py` (the two classes, published), `docs/design/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md` (the live remainder), `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (the evidence, per release). |
 
 **Is the plan complete?** Yes — verified per item against source on 2026-09-13, not read
 from the plan's own status notes (which contradicted each other once already):
@@ -208,7 +208,7 @@ root) cites this plan by bare name twice and is left as-is. `TECH_DEBT.md`, `CHA
 
 | Document | Written | What it was | Superseded by |
 |---|---|---|---|
-| [`C2_SANDBOX_AUDIT.md`](C2_SANDBOX_AUDIT.md) | 2026-05-24 | The audit that closed `C2` — eight findings (`NF-1..8`) on why `container-sandbox-certified` was unreachable off Linux when the container backend delivered Linux semantics anyway, four open operational questions, and a verification strategy. Its "What This Audit Does NOT Cover" section is where `C3` was born. | `TECH_DEBT.md` `C2` (closed 2026-05-24, live-verified on Windows + Docker Desktop) and `C3` (the tracked remainder); `docs/runtime/EXTENSION_TRUST_MODEL.md` §Available Platform Sandbox Mechanism Matrix and §Container-Backed Third-Party Plugin Isolation Semantics; `docs/runtime/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`. |
+| [`C2_SANDBOX_AUDIT.md`](C2_SANDBOX_AUDIT.md) | 2026-05-24 | The audit that closed `C2` — eight findings (`NF-1..8`) on why `container-sandbox-certified` was unreachable off Linux when the container backend delivered Linux semantics anyway, four open operational questions, and a verification strategy. Its "What This Audit Does NOT Cover" section is where `C3` was born. | `TECH_DEBT.md` `C2` (closed 2026-05-24, live-verified on Windows + Docker Desktop) and `C3` (the tracked remainder); `docs/runtime/EXTENSION_TRUST_MODEL.md` §Available Platform Sandbox Mechanism Matrix and §Container-Backed Third-Party Plugin Isolation Semantics; `docs/design/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`. |
 
 **Verified per item on 2026-09-13.** `NF-1..7` are in `sandbox_runner.py` —
 `_detect_linux_container_backend()` (`docker info` → `OSType`), the

@@ -393,7 +393,7 @@ def require_execution_unit(
     ExecutionEnvironmentSpec (EXEC-ENV-BIND-1)
     ------------------------------------------
     ``env_spec`` is an optional declarative environment request. Design:
-    ``docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md``.
+    ``docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md``.
 
     * ``None`` (the default, and every pre-existing caller) — behaviour is byte-for-byte
       what it was. Nothing is resolved, nothing is recorded, nothing can be refused.

@@ -1,6 +1,6 @@
 """AUTHORITY-NEGOTIATION-1 phase 1 — one bounded downgrade attempt on a capability denial.
 
-Design: ``docs/runtime/AUTHORITY_NEGOTIATION_DESIGN.md``. Read §2 and §7 before changing this.
+Design: ``docs/design/AUTHORITY_NEGOTIATION_DESIGN.md``. Read §2 and §7 before changing this.
 
 **The problem.** A denied capability terminates the step, and approval is whole-plan, so the only
 recovery is a human approving an entirely new run — which discards the durable state the original

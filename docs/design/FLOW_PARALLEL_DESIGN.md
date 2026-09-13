@@ -8,7 +8,7 @@ owner: "platform-team"
 
 # Flow fan-out and supersteps — design
 
-**`FLOW-PARALLEL-1`, the scheduling half. PHASES 0 AND 1 SHIPPED (0: 2026-09-08 #603; 1: 2026-09-10); phases 2–4 are design only.**
+**`FLOW-PARALLEL-1`, the scheduling half. PHASES 0, 1 AND 2 SHIPPED (0: 2026-09-08 #603; 1: 2026-09-10; 2: 2026-09-13 #640 — the join policies, the runtime's first `partial` emitter); phases 3–4 are design only.**
 
 Written because `AGENT_WORKING_RULES.md` **§8 Proposal-First Rule** requires an approved
 proposal before implementing a large refactor, a runtime behaviour change, or a cross-layer

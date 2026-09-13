@@ -1,12 +1,14 @@
 ---
 title: "Mediated Effect Boundary — program plan (MEB)"
 api_version: "1.0"
-last_verified: "2026-07-11"
+last_verified: "2026-09-13"
 status: current
 owner: "platform-team"
 ---
 
 # Mediated Effect Boundary (MEB) — program plan
+
+**Status: PROGRAM COMPLETE 2026-07-11 — MEB-0 through MEB-3b shipped (#224–#233). The gate it built defaulted ON in 2.5.0 (`IDEM-11`, 2026-08-19); the live contract is `docs/runtime/IDEMPOTENCY_CONTRACT.md`.** This is the design record; `syscall_dispatcher.py`, `effect_ledger.py` and `tool_registry.py` cite it for the reasoning behind the chokepoints.
 
 A consolidated, source-verified plan for three runtime concerns that were being tracked
 separately but share one substrate:

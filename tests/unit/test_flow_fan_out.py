@@ -1,6 +1,6 @@
 """FLOW-PARALLEL-1 phase 1 — declared fan-out, bounded width, per-branch sessions.
 
-Design: `docs/runtime/FLOW_PARALLEL_DESIGN.md`. Phase 0 (#603) widened the transaction — ordinals
+Design: `docs/design/FLOW_PARALLEL_DESIGN.md`. Phase 0 (#603) widened the transaction — ordinals
 allocated for a whole superstep at the barrier, the merge moved out of per-node status handling.
 Both already took a list of one. This is what lengthens it.
 

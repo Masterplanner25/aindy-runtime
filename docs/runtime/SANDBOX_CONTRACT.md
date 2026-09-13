@@ -270,13 +270,13 @@ running a third-party plugin in the development runner.
   state, produces traceable output, and its externalization is a first-class execution fact
   (`execution_model_class` on the surface matrix, `runner_type` and attestation on the plugin
   host record). Crash containment is a sandbox property; crash *continuation* is
-  `DURABLE_EXECUTION_PROGRAM.md`'s.
+  `../design/DURABLE_EXECUTION_PROGRAM.md`'s.
 - **Idempotency Contract.** The boundary carries no effect semantics. A plugin's `tool.invoke`
   reaches `execute_tool` and therefore the `EffectRecord` chokepoint; a guest's `sys()` reaches
   `dispatch_syscall` and the gate. Nothing a sandboxed unit does directly (a file under its
   scratch root, a computation) is an effect the ledger knows about — by design, since the
   boundary is what makes those actions unable to reach the world.
-- **`ExecutionEnvironmentSpec`** (`EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`) is the shared
+- **`ExecutionEnvironmentSpec`** (`../design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`) is the shared
   vocabulary: what an execution *requires* (`min_assurance`, visibility, authority, resources),
   clamped to the seam's floor. This contract is about what each seam *delivers*; the spec is how
   a unit asks. Resource ceilings on the spec (`wall_time_ms`, `syscalls`, `tokens`) are
@@ -322,7 +322,7 @@ recorded reason or an open item with a `TECH_DEBT.md` entry.
   open any path the OS allows. `cwd` is a default location, not a boundary. Enforcement needs
   the container runner at that seam, not another spawn argument (`FS-SCOPE-1`).
 - **`strong-sandbox-certified` and `hostile-third-party` are Linux-host-only** (`C3`;
-  preparation plan in `C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`).
+  preparation plan in `../design/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`).
 - **The container and strong runners are unreachable from inside a container.** The distributed
   profiles require `containerized_oci`, but a runtime that is itself the container cannot
   launch one — so no shipped compose satisfies distributed mode's sandbox chain, and

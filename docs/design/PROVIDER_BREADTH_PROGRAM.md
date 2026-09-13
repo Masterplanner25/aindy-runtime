@@ -1,12 +1,14 @@
 ---
 title: "ECOGAP-3 — Provider Breadth Program (Embedding SPOF + LLM Breadth)"
 api_version: "1.0"
-last_verified: "2026-07-12"
+last_verified: "2026-09-13"
 status: current
 owner: "platform-team"
 ---
 
 # ECOGAP-3 — Provider Breadth Program
+
+**Status: BOTH PHASES SHIPPED 2026-07-12 (#241) — embedding-provider abstraction with configurable dimension + `memory reembed`, and the LLM provider registry. Residual is additional concrete providers on demand (Gemini, Bedrock), not program work.** `embedding_providers.py` and `config.py` cite §3.2 for the dimension-migration constraint.
 
 > Scope + implementation plan for ECOGAP-3 / `MEMORY-EMBEDDING-PROVIDER-1` / G3.
 > **Sequencing decision (owner):** Phase 1 (embedding SPOF) ships first, then Phase 2 (LLM

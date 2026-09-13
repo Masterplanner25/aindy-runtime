@@ -1,12 +1,14 @@
 ---
 title: "Durable Execution — ECOGAP-1 Phase 3 program plan"
 api_version: "1.0"
-last_verified: "2026-07-12"
+last_verified: "2026-09-13"
 status: current
 owner: "platform-team"
 ---
 
 # Durable Execution (ECOGAP-1 Phase 3) — program plan
+
+**Status: PROGRAM COMPLETE 2026-07-12 — DUR-1 through DUR-4 shipped (#235–#240), opt-in / default-off. What remains is soak-then-flip of `AINDY_DURABLE_CONTINUATION[_ALL]`, tracked in `CLAUDE.md` §*SOAK HAPPENS HERE*, not here.** This is the design record for the shipped mechanism; source cites it as such.
 
 A source-verified plan for the last and largest piece of ECOGAP-1: **transparent crash
 continuation without a per-flow/per-agent safety declaration.** Phases 1/2/2a shipped an

@@ -1,6 +1,6 @@
 """FLOW-PARALLEL-1 phases 1+2 — declared fan-out, bounded width, per-branch sessions, join policies.
 
-Design: `docs/runtime/FLOW_PARALLEL_DESIGN.md`. Read §3 before changing anything here; it is a
+Design: `docs/design/FLOW_PARALLEL_DESIGN.md`. Read §3 before changing anything here; it is a
 hard constraint that narrows this more than the topology model does.
 
 Phase 0 (#603) widened the *transaction*: ordinals are allocated for a whole superstep at the

@@ -1,14 +1,14 @@
 ---
 title: "Tool Seam Isolation — Scope (TOOL-SEAM-ISOLATION-1)"
 api_version: "1.0"
-last_verified: "2026-08-19"
+last_verified: "2026-09-13"
 status: current
 owner: "platform-team"
 ---
 
 # Tool seam isolation — scope
 
-**Status: SCOPE. No code, no design commitment.** `TOOL-SEAM-ISOLATION-1` has been cited by three
+**Status: CLOSED 2026-08-19 — steps A, B, C1 and C2 all shipped (see the status table below); this header read "SCOPE. No code" until 2026-09-13.** Kept as the record of how the seam was measured before anything was built. `TOOL-SEAM-ISOLATION-1` has been cited by three
 independent comparative audits and carries accumulated recommendations from four more. This
 document measures the seam against source at `03d5a87` before any of that is acted on, because
 several of the accumulated claims turn out to be wrong in ways that change what should be built.

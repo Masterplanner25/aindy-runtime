@@ -1,6 +1,6 @@
 """EXEC-ENV-BIND-1 phase 1 — declare, refuse, record.
 
-Design: ``docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md``.
+Design: ``docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md``.
 
 ★ **Two of these tests assert an ABSENCE and are vacuous without a liveness control.**
 "an undeclared unit is not refused" and "a satisfiable spec is not refused" both pass when the

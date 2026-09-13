@@ -70,7 +70,7 @@ from contextvars import ContextVar
 # MEB-1a — the EffectRecord idempotency primitive is shared with the agent tool path
 # (MEB-0) in kernel/effect_ledger.py. The dispatcher gate uses it via these aliases;
 # the previously-duplicated private copies were removed here. See
-# docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
+# docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
 from AINDY.kernel.effect_ledger import (
     STALE_PENDING_THRESHOLD_SECONDS,
     complete_effect_record as _complete_effect_record,
@@ -386,7 +386,7 @@ class SyscallContractViolation(Exception):
 # _resolve_effect_record / _complete_effect_record now live in kernel/effect_ledger.py
 # (imported as the private aliases at the top of this module). MEB-1a removed the
 # duplicated copies; the gate call sites below are unchanged. See
-# docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
+# docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
 
 
 class SyscallDispatcher:

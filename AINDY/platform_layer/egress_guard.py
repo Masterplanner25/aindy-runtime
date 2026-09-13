@@ -21,7 +21,7 @@ per-context) is denied — a raw IP literal cannot be validated against a hostna
 so it is fail-closed.
 
 Honest limits (the truly non-bypassable version is the sandbox ``--network none`` +
-mediated-proxy path — see docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md MEB-2b):
+mediated-proxy path — see docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md MEB-2b):
   * A tool that resolves/connects on a **thread that does not inherit the contextvar**
     escapes the scope (raw ``threading.Thread`` does not copy context; asyncio executors
     do). Closing this in-process would require globally wrapping ``threading.Thread`` —

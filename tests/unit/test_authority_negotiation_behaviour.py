@@ -4,7 +4,7 @@ Phase 0 shipped `degraded_variant=` and pinned that nothing consulted it. This i
 that consults it: on a capability denial, offer **exactly one** downgrade to a fallback the TOOL
 declared, and only if the token in hand already authorises it.
 
-Design: `docs/runtime/AUTHORITY_NEGOTIATION_DESIGN.md`. §2 (no new token is needed), §4 (bounded,
+Design: `docs/design/AUTHORITY_NEGOTIATION_DESIGN.md`. §2 (no new token is needed), §4 (bounded,
 no chains) and §7 (what not to build) are the sections these tests encode.
 
 ★ **The two properties worth more than the happy path**, because they are what makes the feature

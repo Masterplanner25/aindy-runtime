@@ -120,6 +120,10 @@ These docs define how runtime changes should be reviewed and shipped.
 These docs explain how the runtime docset is governed.
 
 - `RUNTIME_DOCSET_GOVERNANCE.md`
+- `../design/README.md` — every scope / design / program / proposal document with its status;
+  the *why* behind the contracts in this folder. Source cites these by path.
+- `../upgrades/README.md` — per-release handoffs indexed by schema step
+- `../handoffs/README.md` — outbound asks of sibling repos, with status
 - `../archive/README.md` — every archive pass, with per-document reasons; the 2026-05-31
   alignment audit and its reconciliation plan (both executed) are there
 

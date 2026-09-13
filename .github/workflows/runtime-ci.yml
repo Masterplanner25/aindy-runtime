@@ -53,7 +53,8 @@ jobs:
           # 2026-09-13). Same rules apply; a folder outside this loop is unchecked by
           # construction (CLAUDE.md, "Trusting a green check", variant 2).
           # docs/handoffs/ holds outbound handoffs to sibling repos (same date).
-          docs_roots = [Path("docs/runtime"), Path("docs/upgrades"), Path("docs/handoffs")]
+          # docs/design/ holds design records with a status (2026-09-13).
+          docs_roots = [Path("docs/runtime"), Path("docs/upgrades"), Path("docs/handoffs"), Path("docs/design")]
           missing = []
 
           # DOCS-STALE-1 (closed 2026-08-13). Seven docs declared a last_verified EARLIER
@@ -109,7 +110,7 @@ jobs:
               print("\n".join(missing))
               sys.exit(1)
 
-          print(f"validated {sum(len(list(r.glob('*.md'))) for r in docs_roots)} runtime + upgrade + handoff docs "
+          print(f"validated {sum(len(list(r.glob('*.md'))) for r in docs_roots)} runtime + upgrade + handoff + design docs "
                 f"(frontmatter keys + last_verified >= {REPO_EPOCH})")
           PY
 

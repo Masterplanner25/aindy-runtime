@@ -1,6 +1,6 @@
 """TOOL-SEAM-ISOLATION-1 step B — a tool can DECLARE the isolation it needs.
 
-Scope: ``docs/runtime/TOOL_SEAM_ISOLATION_SCOPE.md``.
+Scope: ``docs/design/TOOL_SEAM_ISOLATION_SCOPE.md``.
 
 ★ **What this is not.** A tool that is *allowed* to run still runs **in-process** with the
 process's ambient authority. Nothing here confines anything — step C is the process boundary and
