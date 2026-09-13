@@ -1144,7 +1144,6 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Connector registration hook (FR-1) | `AINDY/platform_layer/registry.py` — `register_connector`; dispatch in `connector_service.py` |
 | Authorized outbound boundary (FR-1) | `AINDY/platform_layer/external_call_service.py` — `authorized_external_call`; client `outbound_http.py` |
 | Connector + outbound contract (FR-1) | `docs/runtime/CONNECTOR_CONTRACT.md` |
-| 90-day hardening checklist | `AINDY_RUNTIME_90_DAY_CHECKLIST.md` |
 | **What the runtime is (category + what a consumer inherits)** | `docs/runtime/WHAT_THE_RUNTIME_IS.md` |
 | Runtime module map (tagged inventory) | `docs/runtime/RUNTIME_MODULE_MAP.md` |
 | **Comparative research index (8 systems: what each produced, what is settled, recurring errors)** | `docs/runtime/COMPARATIVE_RESEARCH_INDEX.md` |

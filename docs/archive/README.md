@@ -15,7 +15,7 @@ audit trail is complete for everyone rather than for one workstation.
 | Document | Written | What it was | Superseded by |
 |---|---|---|---|
 | [`AINDY audit 6_6_26_237pm.md`](<AINDY audit 6_6_26_237pm.md>) | 2026-06-06 | A system-classification audit scoring the runtime across maturity axes with evidence. The timestamp in the filename is the giveaway: a snapshot, never intended as a living document. | `TECH_DEBT.md` for open items; `docs/runtime/ARCHITECTURE_RISK.md` for complexity and blast-radius assessment |
-| [`AINDY_RUNTIME_MATURITY.md`](AINDY_RUNTIME_MATURITY.md) | 2026-06-04 | A maturity rubric evaluating the runtime as an OS-like platform. Linked *out* to the 90-day checklist; nothing linked *in*. | `AINDY_RUNTIME_90_DAY_CHECKLIST.md` (still at root, still maintained) |
+| [`AINDY_RUNTIME_MATURITY.md`](AINDY_RUNTIME_MATURITY.md) | 2026-06-04 | A maturity rubric evaluating the runtime as an OS-like platform. Linked *out* to the 90-day checklist; nothing linked *in*. | `AINDY_RUNTIME_90_DAY_CHECKLIST.md` (*was* at root; itself archived 2026-09-13 — see below) |
 | [`AINDY_ORIENTATION.md`](AINDY_ORIENTATION.md) | 2026-05-23 | A full re-orientation pass over the runtime and the apps boundary, written just after the repo split. Was gitignored until 2026-08-05; nothing tracked ever cited it. | `README.md` and `docs/runtime/RUNTIME_MODULE_MAP.md` for current structure |
 | [`RUNTIME_SIGNOFF.md`](RUNTIME_SIGNOFF.md) | 2026-05-17 | The extraction sign-off for the runtime/apps split — records the smoke check passing at 17 tests. Cited only by `AINDY_ORIENTATION.md`, which was itself uncited. | superseded by CI; `Runtime Contracts` is the live equivalent |
 
@@ -238,3 +238,38 @@ inferred from silence.
 
 The two `Source:` pointer lines in `TECH_DEBT.md` (`C2`, `C3`) now cite the archive path;
 the narrative mention in `ISOLATION-DOC-STATUS-1` stays as written.
+
+## Repository root — archived 2026-09-13 (fifth)
+
+| Document | Written | What it was | Superseded by |
+|---|---|---|---|
+| [`AINDY_RUNTIME_REPLACEMENT_COST_AUDIT.md`](AINDY_RUNTIME_REPLACEMENT_COST_AUDIT.md) | 2026-08-19, against `e9efcf7` / v2.4.0 | A 155 KB adversarial estimate of what a conventional organization would have paid to hold the artifact — every capability claim traced to source and test. A valuation, not a working document; **zero inbound references** from any tracked file, and it was never used to plan from. | Nothing needs to. It is a point-in-time measurement of a codebase eleven releases ago; the audit trail is the reason to keep it. |
+| [`AINDY_RUNTIME_90_DAY_CHECKLIST.md`](AINDY_RUNTIME_90_DAY_CHECKLIST.md) | 2026-05-31; final review 2026-06-04 | The 90-day hardening plan (Codex-authored, reviewed) — three 30-day phases, milestone gates at 75/80/85, and a weekly operating checklist. **Completed in four days**, not ninety: the *Final 90-Day Review* section was filled in on 2026-06-04 at 79.5/100 against a 76–80 target. | `CLAUDE.md`'s prefix registry and `TECH_DEBT.md` for what is open; `docs/runtime/RUNTIME_STABILITY_INDEX.md` and `RELEASE_GATES.md` for maturity and release posture. There is no live maturity score any more, by design — see the release-state note in `CLAUDE.md`. |
+
+**Completion check for the checklist, 2026-09-13.** 104 boxes checked, 29 not. Of the 29, 27
+are lists that were never meant to be ticked once — the weekly review questions, the guardrails,
+the three milestone gates (worded as outcomes, with the score recorded elsewhere), and *Risks to
+Avoid*. The two real work items left open on 2026-06-04:
+
+- *Add integration checks for Redis/Postgres-backed execution paths* — **done, well past the
+  ask.** `tests/integration/` now holds 19 files including the event-bus wire test, multi-instance
+  resume, EffectRecord cleanup end-to-end, and four soak suites on live Postgres + Redis, and
+  `Integration Tests (PostgreSQL + Redis)` is a required check on `main` (2026-08-14).
+- *Review whether coverage thresholds are defensible for runtime-critical modules* —
+  **superseded by a decision, not done.** `--cov-fail-under=35` is unchanged. The repo's
+  position since (`CI_OWNERSHIP.md`: *"coverage thresholds are operational baselines, not proof
+  of runtime-grade assurance"*; `PERF-BASELINE-1`: *count work, not percentages*; the
+  fourteen-variant catalogue in `CLAUDE.md`) is that a coverage percentage is not the bar, so
+  raising it would be the wrong instrument. Closed as declined.
+
+**The three "blockers to 85+" it named are all closed** — `API-MODULE-DRIFT-1` and
+`ROUTES-CONSUMER-SPLIT-1` on 2026-06-03, `AGENT-RESLIMIT-001` on 2026-06-05. The first two were
+therefore already closed when the 06-04 review listed them as blockers: the review was written
+from the plan's own earlier text rather than from `TECH_DEBT.md`, which is the same drift shape
+the registry accuracy guard now catches for `CLAUDE.md`.
+
+**Nothing was lost.** The checklist's category-delta table and its scoring rubric are the only
+content without a successor, and that is deliberate — `CLAUDE.md`'s release-state paragraph
+records why hand-maintained numbers were removed rather than corrected. `DECISION_LOG.md`'s
+related-docs pointer now cites the archive path; the `RUNTIME_DOC_INDEX.md` listing and the
+`CLAUDE.md` key-file row are removed.

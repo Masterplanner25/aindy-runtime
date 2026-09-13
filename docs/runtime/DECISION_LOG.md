@@ -152,7 +152,7 @@ Current maturity risks are mostly about scope ambiguity, security posture limits
 
 **Related Docs**
 - `RUNTIME_BOUNDARY.md`
-- `AINDY_RUNTIME_90_DAY_CHECKLIST.md`
+- `../archive/AINDY_RUNTIME_90_DAY_CHECKLIST.md` (completed 2026-06-04; archived 2026-09-13)
 
 ---
 
