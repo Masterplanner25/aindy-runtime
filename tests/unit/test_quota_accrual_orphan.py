@@ -199,9 +199,14 @@ def test_pipeline_binds_only_when_it_has_both_ids():
     from AINDY.core.execution_pipeline.pipeline import ExecutionPipeline
 
     pipeline = ExecutionPipeline()
+    # Assert against whatever is AMBIENT, not against "": an earlier test in the sweep can
+    # leave these ContextVars set, and "unchanged" is the property — "empty" was an
+    # order-dependent accident (the TEST-ORDER-REGISTRY-1 shape; it failed in CI, not locally).
+    ambient = (sd._EU_ID_CTX.get(), sd._TRACE_ID_CTX.get())
+
     no_unit = SimpleNamespace(metadata={"trace_id": "t-1"})
     assert pipeline._safe_bind_syscall_unit(no_unit) is None
-    assert sd._EU_ID_CTX.get() == "" and sd._TRACE_ID_CTX.get() == ""
+    assert (sd._EU_ID_CTX.get(), sd._TRACE_ID_CTX.get()) == ambient
 
     both = SimpleNamespace(metadata={"trace_id": "t-1", "eu_id": "eu-1"})
     tokens = pipeline._safe_bind_syscall_unit(both)
@@ -209,7 +214,7 @@ def test_pipeline_binds_only_when_it_has_both_ids():
         assert sd._EU_ID_CTX.get() == "eu-1" and sd._TRACE_ID_CTX.get() == "t-1"
     finally:
         pipeline._safe_unbind_syscall_unit(tokens)
-    assert sd._EU_ID_CTX.get() == "" and sd._TRACE_ID_CTX.get() == ""
+    assert (sd._EU_ID_CTX.get(), sd._TRACE_ID_CTX.get()) == ambient
 
 
 # ── ResourceManager: admission is decided once; unreaped snapshots expire ─────────────────
