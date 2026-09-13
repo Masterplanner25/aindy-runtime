@@ -160,6 +160,24 @@ def _count_outcome_refused(name: str, reason: str) -> None:
         logger.debug("[SyscallDispatcher] refusal metric skipped", exc_info=True)
 
 
+# QUOTA-ACCRUAL-ORPHAN-1 — metadata key set by the context builders when THEY minted the
+# execution unit id rather than the caller naming one. The dispatcher cannot tell a caller's
+# run id from a helper's uuid4() by looking at the string, and the distinction is what
+# decides who reaps the unit: a named unit belongs to whoever named it; a minted one belongs
+# to the dispatch that carried it and dies with it.
+_EU_MINTED_KEY = "_eu_minted"
+
+
+def _count_unowned_unit(name: str) -> None:
+    """Record a root dispatch that had to mint its own execution unit. Never fatal."""
+    try:
+        from AINDY.platform_layer.metrics import syscall_unowned_unit_total
+
+        syscall_unowned_unit_total.labels(syscall=name).inc()
+    except Exception:  # pragma: no cover - metrics optional
+        logger.debug("[SyscallDispatcher] unowned-unit metric skipped", exc_info=True)
+
+
 def _is_uuid(value: Any) -> bool:
     """True when ``value`` is a bare UUID (str or uuid.UUID)."""
     if isinstance(value, _uuid.UUID):
@@ -384,6 +402,9 @@ class SyscallDispatcher:
         """
         t_start = time.monotonic()
         _orig_eu_id = context.execution_unit_id or ""
+        # A unit is "minted" when nobody upstream named one: either the caller passed "" and
+        # _resolve_trace_context fills it, or a context builder filled it and said so.
+        _minted = (not _orig_eu_id) or bool(context.metadata.get(_EU_MINTED_KEY))
         context, _tok_trace, _tok_eu = self._resolve_trace_context(context)
         try:
             return self._dispatch(name, payload, context, t_start, _orig_eu_id)
@@ -400,8 +421,33 @@ class SyscallDispatcher:
                 _TRACE_ID_CTX.reset(_tok_trace)
             if _tok_eu is not None:
                 _EU_ID_CTX.reset(_tok_eu)
+                # QUOTA-ACCRUAL-ORPHAN-1 — a ROOT dispatch whose unit was minted rather than
+                # named is the unit's only owner, so it reaps it here. Step 4 accrues usage
+                # onto context.execution_unit_id; before this, a minted unit was created by
+                # that accrual and cleared by nothing (only the pipeline and the flow runner
+                # call mark_completed, and neither knows this id), so every id-less caller —
+                # the MCP server, agent tools, the nodus worker's sys() — left one snapshot
+                # per call in the process singleton for its whole lifetime. Reaping the unit
+                # in the same frame that established it is one lifecycle in one place, not a
+                # second reaper for someone else's unit. A NESTED dispatch (_tok_eu is None)
+                # inherited a unit it does not own and leaves it alone.
+                if _minted:
+                    self._reap_minted_unit(name, context.execution_unit_id)
 
     # â"€â"€ Private â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+    def _reap_minted_unit(self, name: str, eu_id: str) -> None:
+        """Purge the usage snapshot of a unit this dispatch minted, and count it.
+
+        The count is the point as much as the purge: a minted unit's budget is one call,
+        so ``aindy_syscall_unowned_unit_total{syscall}`` is the list of callers to which no
+        per-execution quota applies. Never fatal.
+        """
+        _count_unowned_unit(name)
+        try:
+            _get_rm().purge_eu(eu_id)
+        except Exception as _purge_exc:
+            logger.debug("[SyscallDispatcher] minted-unit purge skipped: %s", _purge_exc)
 
     def _resolve_trace_context(
         self,
@@ -1113,12 +1159,20 @@ def make_syscall_ctx_from_tool(
         SyscallContext ready to pass to get_dispatcher().dispatch().
     """
     execution_unit_id = run_id or str(_uuid.uuid4())
+    meta = dict(metadata or {})
+    if not run_id:
+        # QUOTA-ACCRUAL-ORPHAN-1 — tell the dispatcher this id is ours, not the caller's, so
+        # the root dispatch that carries it reaps it on return. Still minted here rather than
+        # left blank because the idempotency gate keys on the id the CALLER's context arrived
+        # with (`_orig_eu_id`), and this helper's callers have relied on that for their
+        # ledger rows; only ownership changes, not gating.
+        meta[_EU_MINTED_KEY] = True
     return SyscallContext(
         execution_unit_id=execution_unit_id,
         user_id=str(user_id or ""),
         capabilities=list(capabilities) if capabilities is not None else list(DEFAULT_NODUS_CAPABILITIES),
         trace_id=str(trace_id or execution_unit_id),
-        metadata=dict(metadata or {}),
+        metadata=meta,
     )
 
 

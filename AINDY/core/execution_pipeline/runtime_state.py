@@ -98,6 +98,52 @@ def _safe_reset_current_execution_context(self, token: Any) -> None:
         logger.debug("execution.current_ctx_reset_skipped", exc_info=True)
 
 
+def _safe_bind_syscall_unit(self, ctx) -> Any:
+    """Hand the dispatcher the unit this pipeline claimed (QUOTA-ACCRUAL-ORPHAN-1).
+
+    The pipeline claims an ExecutionUnit, admits it, ``mark_started``s it and reaps it —
+    and then, until this existed, never told ``SyscallDispatcher`` which unit that was. So
+    every syscall a route dispatched minted its OWN unit, accrued its usage there, and the
+    pipeline's reap cleared a snapshot no syscall had touched. Measured: five
+    ``POST /platform/syscall`` calls left five orphan snapshots with ``tenant_id=""`` that
+    survived the purge sweep, while the request's own unit read ``syscall_count: 0``.
+
+    Setting the dispatcher's ContextVars for the handler's duration makes every dispatch
+    inside the route NESTED under the request's unit — the same bridge ``worker_loop``
+    already builds for a distributed job. Consequences, all intended: usage accrues on the
+    unit that is reaped; ``check_quota`` guards a subject that owns the budget; the
+    envelope's ``trace_id`` is the request's (FR-26 extended to the syscall envelope);
+    and provenance written from ``context.execution_unit_id`` names a real unit.
+
+    Only when BOTH ids exist. Binding a trace with no unit would make nested dispatches
+    inherit ``""`` as their unit — the bucket-named-``""`` this entry was filed about.
+    """
+    eu_id = ctx.metadata.get("eu_id")
+    trace_id = ctx.metadata.get("trace_id")
+    if not eu_id or not trace_id:
+        return None
+    try:
+        from AINDY.kernel.syscall_dispatcher import _EU_ID_CTX, _TRACE_ID_CTX
+
+        return (_TRACE_ID_CTX.set(str(trace_id)), _EU_ID_CTX.set(str(eu_id)))
+    except Exception:
+        logger.debug("execution.syscall_unit_bind_skipped", exc_info=True)
+        return None
+
+
+def _safe_unbind_syscall_unit(self, tokens: Any) -> None:
+    if not tokens:
+        return
+    try:
+        from AINDY.kernel.syscall_dispatcher import _EU_ID_CTX, _TRACE_ID_CTX
+
+        tok_trace, tok_eu = tokens
+        _EU_ID_CTX.reset(tok_eu)
+        _TRACE_ID_CTX.reset(tok_trace)
+    except Exception:
+        logger.debug("execution.syscall_unit_unbind_skipped", exc_info=True)
+
+
 def _inject_execution_envelope(self, ctx, result, duration_ms: float):
     if not isinstance(result, dict):
         return result

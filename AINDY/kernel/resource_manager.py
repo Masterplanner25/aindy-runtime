@@ -45,12 +45,24 @@ import logging
 import os
 import threading
 import time
+import uuid as _uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterator, Optional
 
 from AINDY.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _count_evicted(n: int) -> None:
+    """Record snapshots evicted unreaped. Never fatal — metrics are optional."""
+    try:
+        from AINDY.platform_layer.metrics import resource_usage_evicted_total
+
+        resource_usage_evicted_total.inc(n)
+    except Exception:  # pragma: no cover - metrics optional
+        logger.debug("[ResourceManager] eviction metric skipped", exc_info=True)
 
 # Redis key schema
 # ----------------
@@ -76,6 +88,10 @@ MAX_CONCURRENT_PER_TENANT: int = _int_env("AINDY_QUOTA_MAX_CONCURRENT", 5)
 RESOURCE_LIMIT_EXCEEDED = "RESOURCE_LIMIT_EXCEEDED"
 EU_KEY_TTL_SECONDS = 3600
 TENANT_KEY_TTL_SECONDS = 86400
+# QUOTA-ACCRUAL-ORPHAN-1 — how often the in-memory store looks for snapshots past
+# EU_KEY_TTL_SECONDS. The sweep is O(n) over the store, so it is rate-limited rather than
+# run on every admission check.
+_EVICTION_SWEEP_INTERVAL_SECONDS = 60.0
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
@@ -99,6 +115,9 @@ class UsageSnapshot:
     wall_time_ms: int = 0
     memory_bytes: int = 0
     syscall_count: int = 0
+    # Monotonic creation time — the in-memory store's analogue of the Redis backend's
+    # EU_KEY_TTL_SECONDS expiry (QUOTA-ACCRUAL-ORPHAN-1). Not part of to_dict().
+    created_at: float = field(default_factory=time.monotonic, compare=False, repr=False)
 
     def to_dict(self) -> dict:
         return {
@@ -285,6 +304,7 @@ class ResourceManager:
         # eu_id → tenant_id (for cleanup on mark_completed with unknown eu_id)
         self._eu_tenant: dict[str, str] = {}
         self._pending_purge: set[str] = set()
+        self._last_eviction_sweep: float = time.monotonic()
         # AGENT-HARDEN-8 PR2 — per-capability fixed-window rate counters (in-memory
         # fallback when Redis is absent): key → (bucket, count).
         self._rate_windows: dict[str, tuple[int, int]] = {}
@@ -585,12 +605,7 @@ class ResourceManager:
             (True, None) if execution is allowed.
             (False, reason_str) if a quota is exceeded.
         """
-        if self._pending_purge:
-            with self._lock:
-                for eid in list(self._pending_purge):
-                    self._usage.pop(eid, None)
-                    self._eu_tenant.pop(eid, None)
-                self._pending_purge.clear()
+        self._sweep()
 
         if settings.is_testing:
             return True, None
@@ -636,20 +651,22 @@ class ResourceManager:
             (True, None) if within limits.
             (False, reason_str) if a quota is exceeded.
         """
+        self._sweep()
+
         if settings.is_testing:
             return True, None
 
         eid = str(eu_id)
 
-        with self._lock:
-            snap = self._usage.get(eid)
-            if snap is None:
-                return True, None
-
-        can_run, concurrency_reason = self.can_execute(snap.tenant_id, eu_id)
-        if not can_run:
-            return False, concurrency_reason
-
+        # ★ QUOTA-ACCRUAL-ORPHAN-1 — this used to re-run `can_execute(snap.tenant_id)` here,
+        # i.e. re-decide ADMISSION for a unit that is already admitted and therefore already
+        # in the tenant's active count. At exactly MAX_CONCURRENT_PER_TENANT that refused
+        # every syscall of the last unit admitted (5/5 >= 5). It never fired only because no
+        # dispatch snapshot carried a tenant — each dispatch minted its own unit with
+        # tenant_id="" — and the moment the pipeline hands the dispatcher its real unit
+        # (which has one) it would have. Admission is decided once, before mark_started;
+        # a mid-execution check is about THIS unit's budget, which is what the docstring
+        # has always said.
         with self._lock:
             snap = self._usage.get(eid)
             if snap is None:
@@ -682,6 +699,76 @@ class ResourceManager:
             return False, reason
 
         return True, None
+
+    # ── Store hygiene (QUOTA-ACCRUAL-ORPHAN-1) ────────────────────────────────
+
+    def _sweep(self) -> None:
+        """Drop reaped snapshots, and — at most once per minute — expired ones.
+
+        Two populations, deliberately distinct:
+
+        * ``_pending_purge`` holds units whose owner called ``mark_completed``. Dropping
+          them is the normal reap; it is deferred to here so a caller can still read final
+          usage after completion.
+        * Anything older than ``EU_KEY_TTL_SECONDS`` with no ``mark_completed`` is a unit
+          nobody owned — accrued by a dispatch whose caller supplied no execution unit, or
+          re-opened by work that inherited a unit after its owner returned (an async job
+          submitted from a request keeps the request's ids on purpose, for trace
+          continuity). The Redis backend already bounds these with the same TTL; the
+          in-memory store did not, so a long-lived process grew one snapshot per such call
+          forever. **Evictions are counted and logged** — a silent prune would be
+          indistinguishable from a reap, and a non-zero count is the list of callers that
+          still dispatch without owning a unit.
+        """
+        if self._pending_purge:
+            with self._lock:
+                for eid in list(self._pending_purge):
+                    self._usage.pop(eid, None)
+                    self._eu_tenant.pop(eid, None)
+                self._pending_purge.clear()
+
+        now = time.monotonic()
+        if now - self._last_eviction_sweep < _EVICTION_SWEEP_INTERVAL_SECONDS:
+            return
+        self._last_eviction_sweep = now
+        cutoff = now - EU_KEY_TTL_SECONDS
+        with self._lock:
+            expired = [eid for eid, snap in self._usage.items() if snap.created_at < cutoff]
+            for eid in expired:
+                self._usage.pop(eid, None)
+                self._eu_tenant.pop(eid, None)
+        if expired:
+            _count_evicted(len(expired))
+            logger.warning(
+                "[ResourceManager] evicted %d usage snapshot(s) older than %ds that no owner "
+                "reaped (QUOTA-ACCRUAL-ORPHAN-1) — a caller is dispatching without an "
+                "execution unit; see aindy_syscall_unowned_unit_total for which syscalls",
+                len(expired), EU_KEY_TTL_SECONDS,
+            )
+
+    @contextmanager
+    def owned_execution(self, tenant_id: str, eu_id: str | None = None) -> Iterator[str]:
+        """Own an execution unit's quota lifecycle for the duration of a block.
+
+        The rule this exists to make cheap: **a caller that dispatches syscalls must own an
+        execution unit — admit it, start it, and reap it.** The pipeline does this for
+        routes; a transport that dispatches on its own (the MCP server) has to do it
+        itself, or every call it makes accrues onto a unit nothing ever clears.
+
+        Admission (``can_execute``) is decided once, here; the unit is then started under
+        ``tenant_id`` and marked completed on exit whatever the block did. Yields the unit
+        id to pass as ``execution_unit_id``. Raises ``ResourceLimitError`` when the tenant
+        is at its concurrency limit — the caller decides how that surfaces.
+        """
+        eid = str(eu_id or _uuid.uuid4())
+        ok, reason = self.can_execute(tenant_id, eid)
+        if not ok:
+            raise ResourceLimitError(reason or RESOURCE_LIMIT_EXCEEDED)
+        self.mark_started(tenant_id, eid)
+        try:
+            yield eid
+        finally:
+            self.mark_completed(tenant_id, eid)
 
     # ── Lifecycle hooks ───────────────────────────────────────────────────────
 
@@ -973,6 +1060,7 @@ class ResourceManager:
             self._active_counts.clear()
             self._eu_tenant.clear()
             self._pending_purge.clear()
+            self._last_eviction_sweep = time.monotonic()
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────
