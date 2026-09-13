@@ -6,7 +6,7 @@ of them. **That does not make the substrate a non-decision**: at nodus 6.0.0 the
 store flips ``LocalWorkflowStore`` (JSON) → ``SQLiteWorkflowStore`` and the two cannot read
 each other's records, so an undeclared host changes durability substrate on a schedule it
 does not set. Approved under ``AGENT_WORKING_RULES`` §8; see
-``docs/runtime/WORKFLOW_STORE_DECLARATION_PROPOSAL.md``.
+``docs/design/WORKFLOW_STORE_DECLARATION_PROPOSAL.md``.
 
 ★ **What this file is careful about, and why.** The easy version of these tests asserts that
 a dict got two keys — which would pass just as happily if nothing ever called the function,

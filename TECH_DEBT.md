@@ -1931,7 +1931,7 @@ someone eventually clears.
 ★ **Method note, worth more than the bug.** This was filed wrong first: read from source,
 labelled "measured", and stated as *"the quota is vacuous for an id-less caller"* — the exact
 opposite of what happens. It survived into a draft of
-`docs/runtime/CLI_EXECUTION_SURFACE_SCOPE.md`, a document that cites the
+`docs/design/CLI_EXECUTION_SURFACE_SCOPE.md`, a document that cites the
 `trusting-a-green-check` catalogue, and it is catalogue **variant 7** (asserting the source,
 not the behaviour). Running it took four minutes. The wrong version is preserved in that
 doc's §3 on purpose.
@@ -1941,7 +1941,7 @@ doc's §3 on purpose.
 ## CLI-EXEC-SURFACE-1 — the operator half of the runtime is not in the syscall vocabulary
 
 **Status:** Open — P2. Filed 2026-08-22, **REFRAMED the same day — read this section first, the
-rest is the evidence that produced it.** Scope doc: `docs/runtime/CLI_EXECUTION_SURFACE_SCOPE.md`.
+rest is the evidence that produced it.** Scope doc: `docs/design/CLI_EXECUTION_SURFACE_SCOPE.md`.
 
 ### ★★ THE REFRAME — this is not a CLI entry, and the name is now narrower than the finding
 
@@ -2210,7 +2210,7 @@ row count so unbounded growth is detected without polling.
 ## IDEM-10 — The EXACTLY_ONCE idempotency gate is dead in production; agent tool calls bypass it entirely
 
 **PLAN:** consolidated into the Mediated Effect Boundary program —
-`docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`. IDEM-10 is delivered by **MEB-0**
+`docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`. IDEM-10 is delivered by **MEB-0**
 (tool-path effect boundary — gives agent tool calls idempotency, the part that actually
 matters) + **MEB-1** (repair the dispatcher gate to key on a stable scope, not the
 unaddressable EU PK). The finding below is the verified source of that plan.
@@ -2337,7 +2337,7 @@ release gate, Phase 5 macOS CI certification workflow. See the per-phase bodies 
 `HOSTILE_THIRD_PARTY_SUPPORTED_HOST_PLATFORMS = (PLATFORM_LINUX,)` are unchanged. Non-Linux
 hosts reach `container-sandbox-certified` (C2 — closed) but not `strong-sandbox-certified`.
 Closing C3 fully needs a platform-native strong-VM runner. **Preparation plan scoped in
-`docs/runtime/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`** (Windows-native + macOS tracks) so
+`docs/design/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`** (Windows-native + macOS tracks) so
 either track can start the day a trigger lands.
 
 Source: `docs/archive/C2_SANDBOX_AUDIT.md` "What This Audit Does NOT Cover" / `docs/archive/ISOLATION_MODEL_PLAN.md` Gap 4 (C3 remainder). Both archived 2026-09-13; the C3 remainder is unchanged.
@@ -3232,7 +3232,7 @@ Settings fields from this repo immediately (see STRIPE-SETTINGS-CLEANUP-1).
 ## MEMORY-EMBEDDING-PROVIDER-1 — OpenAI is the sole embedding provider; no abstraction layer
 
 **Status:** RESOLVED at mechanism level 2026-07-12 (in working tree, uncommitted) as ECOGAP-3
-Phase 1 — see `docs/runtime/PROVIDER_BREADTH_PROGRAM.md` + §ECOGAP-3 above. `EmbeddingProvider`
+Phase 1 — see `docs/design/PROVIDER_BREADTH_PROGRAM.md` + §ECOGAP-3 above. `EmbeddingProvider`
 abstraction (`embedding_providers.py`, OpenAI default + local sentence-transformers), configurable
 column dimension (`AINDY_EMBEDDING_DIMENSIONS`), and a re-embed migration
 (`aindy-runtime memory reembed`, real-PG verified) make a local/offline embedding backend usable
@@ -3282,7 +3282,7 @@ content cannot use the memory subsystem without code changes.
 the offline / air-gapped deployment profile is formally supported.
 
 **Scoped 2026-07-12 as Phase 1 of the Provider Breadth Program —
-`docs/runtime/PROVIDER_BREADTH_PROGRAM.md`.** Verified-against-code update to the sketch below:
+`docs/design/PROVIDER_BREADTH_PROGRAM.md`.** Verified-against-code update to the sketch below:
 (a) the embedding funnel is exactly two functions (`generate_embedding` /
 `generate_query_embedding`) so the seam is a clean insertion point; (b) the resolution sketch's
 "pgvector is planned / upstream unlock" framing is **stale — pgvector already shipped**
@@ -5685,7 +5685,7 @@ map onto existing entries (noted per item); do not double-track.
 
 ### ECOGAP-1 — Event-sourced durable execution / transparent crash continuation
 
-**Status:** ★ **Phase 3 (Durable Execution) COMPLETE 2026-07-12** — DUR-1→DUR-4 all shipped (transparent crash continuation without per-flow declaration, at-most-once runtime-mediated effects, event-sourced fold for torn-snapshot recovery; one additive schema bump; all opt-in/default-off; remaining is soak-then-flip-defaults). Phases 1 + 2 + 2a shipped (2026-07-08, opt-in); **Phase 3 scoped + reframed 2026-07-12 → `docs/runtime/DURABLE_EXECUTION_PROGRAM.md` (DUR-1..4); DUR-1 + DUR-2 + DUR-2b + DUR-2c SHIPPED 2026-07-12** (DUR-1 opt-in `AINDY_MEMORY_IDEMPOTENCY` position-keyed memory-write dedup; DUR-2 per-run `durable_effects_scope()` engages all 3 chokepoints declaration-free, set by the continuation drivers; DUR-2b threads the signal into the nodus subprocess payload + per-segment memory-scope discriminator; DUR-2c gates the immediate in-subprocess bridge writes (remember/record_outcome, cached-id replay; share is idempotent) — so ALL runtime-mediated effects on a continued run are now at-most-once (only raw un-mediated node side effects remain); DUR-3 flips continuation default-safe via opt-in `AINDY_DURABLE_CONTINUATION_ALL` (all flows/agents except an opt-out deny-list `mark_flow/agent_type_continuation_unsafe`) — **the ECOGAP-1 headline (transparent crash continuation without per-flow declaration) is DELIVERED, opt-in**; all PG/unit-verified. Remaining: DUR-4 optional FlowHistory fold (the only schema bump); flip the default after soak) — roadmap (P0)
+**Status:** ★ **Phase 3 (Durable Execution) COMPLETE 2026-07-12** — DUR-1→DUR-4 all shipped (transparent crash continuation without per-flow declaration, at-most-once runtime-mediated effects, event-sourced fold for torn-snapshot recovery; one additive schema bump; all opt-in/default-off; remaining is soak-then-flip-defaults). Phases 1 + 2 + 2a shipped (2026-07-08, opt-in); **Phase 3 scoped + reframed 2026-07-12 → `docs/design/DURABLE_EXECUTION_PROGRAM.md` (DUR-1..4); DUR-1 + DUR-2 + DUR-2b + DUR-2c SHIPPED 2026-07-12** (DUR-1 opt-in `AINDY_MEMORY_IDEMPOTENCY` position-keyed memory-write dedup; DUR-2 per-run `durable_effects_scope()` engages all 3 chokepoints declaration-free, set by the continuation drivers; DUR-2b threads the signal into the nodus subprocess payload + per-segment memory-scope discriminator; DUR-2c gates the immediate in-subprocess bridge writes (remember/record_outcome, cached-id replay; share is idempotent) — so ALL runtime-mediated effects on a continued run are now at-most-once (only raw un-mediated node side effects remain); DUR-3 flips continuation default-safe via opt-in `AINDY_DURABLE_CONTINUATION_ALL` (all flows/agents except an opt-out deny-list `mark_flow/agent_type_continuation_unsafe`) — **the ECOGAP-1 headline (transparent crash continuation without per-flow declaration) is DELIVERED, opt-in**; all PG/unit-verified. Remaining: DUR-4 optional FlowHistory fold (the only schema bump); flip the default after soak) — roadmap (P0)
 
 **Phase 3 reframe (2026-07-12, source-audited).** A four-front audit reframed Phase 3 away from
 "event-sourced deterministic replay in the kernel." Findings: (1) continuation resumes *forward*
@@ -5699,7 +5699,7 @@ kernel deterministic replay is **out of scope** — wrong layer (determinism is 
 keystone/standalone win, no schema); **DUR-2** per-run at-most-once signal (declaration-free);
 **DUR-3** flip continuation default-safe (drop the continuation-safe declaration gate); **DUR-4**
 (optional) FlowHistory canonicalization + fold (the only schema bump). Core DUR-1→3 needs no
-schema change. Full plan + file:line evidence: `docs/runtime/DURABLE_EXECUTION_PROGRAM.md`.
+schema change. Full plan + file:line evidence: `docs/design/DURABLE_EXECUTION_PROGRAM.md`.
 
 aindy-runtime marks non-waiting `running` flows FAILED on restart; there is no replay log.
 WAIT/RESUME + `flow_run_rehydration` + ResumeWatchdog already cover *suspended* flows — the
@@ -5845,7 +5845,7 @@ debt. Reconcile the external v2 aggregate + OpenHands/OI/SWE per-project audits 
 **Status:** RESOLVED at mechanism level 2026-07-12 (in working tree, uncommitted) — both phases
 built. See §MEMORY-EMBEDDING-PROVIDER-1 above (Phase 1 embedding abstraction + reembed migration,
 real-PG verified) and its Phase 2 note (LLM registry + Anthropic/Azure providers, real-SDK
-verified), and `docs/runtime/PROVIDER_BREADTH_PROGRAM.md`. Remaining: additional concrete providers
+verified), and `docs/design/PROVIDER_BREADTH_PROGRAM.md`. Remaining: additional concrete providers
 (Gemini/Bedrock) on demand; soak. Original roadmap note follows.
 
 Only OpenAI + DeepSeek concretely in tree; OpenAI hard-required for embeddings. The embedding
@@ -5855,7 +5855,7 @@ cross-loop cache-breakpoint, Devika 7-backend registry, litellm reach (Aider/SWE
 broadly cited concrete weakness (9/12 projects). Mechanically straightforward behind the
 existing client seam.
 
-**Scoped 2026-07-12 — `docs/runtime/PROVIDER_BREADTH_PROGRAM.md`.** Two phases, sequenced by
+**Scoped 2026-07-12 — `docs/design/PROVIDER_BREADTH_PROGRAM.md`.** Two phases, sequenced by
 owner: **Phase 1 = embedding SPOF** (the `MEMORY-EMBEDDING-PROVIDER-1` half — no seam today,
 harder: dimensionality de-hardcode + existing-vector migration is the crux), **Phase 2 = LLM
 hosted breadth** (seam already exists behind `FallbackLLMClient`/`resolve_provider_chain`).
@@ -5901,7 +5901,7 @@ SDK-SYSCALL-GRANT-1). **Decisions:** single configured identity `AINDY_MCP_SERVE
 opts in writes, `AINDY_MCP_SERVER_TOOLS` overrides). Verified write→read-back on real Postgres.
 **Deferred:** SSE transport (nodus-mcp #7 — `run_sse_app` omits `/messages/` mount) + multi-tenant
 per-session auth. The multi-tenant work is **MEB-3** in the Mediated Effect Boundary program
-(`docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`): per-session identity via
+(`docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`): per-session identity via
 `NodusServer.auth_hook` → `mint_token` + tenant/session columns on EffectRecord, on top of the
 MEB-0/1 effect boundary. Doc: `docs/runtime/MCP_INTEGRATION.md`.
 
@@ -6010,7 +6010,7 @@ Grounded against source so the reopen scope is real, not aspirational:
   graduate those repos to plugins through this ABI.
 
 **PLAN (G4a):** consolidated into the Mediated Effect Boundary program —
-`docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`. G4a is **MEB-2**: *2a thin activation*
+`docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`. G4a is **MEB-2**: *2a thin activation*
 (register a real `CapabilityPolicy` + secret scopes + a real `resolve_secret` path) and *2b
 strong* (a true socket/httpx egress chokepoint — the static `extract_domains`/`extract_recipients`
 scan is insufficient). The multi-tenant MCP identity work is **MEB-3**. Both hang off **MEB-0**
@@ -8816,7 +8816,7 @@ event itself is fine to keep; the defect is that it should never have been writt
 
 ## FR-27 — the idempotency gate degrades every concurrent duplicate; measured N−1 of N
 
-**Status: SHIPPED 2026-09-12 (#627), default-off behind `AINDY_SYSCALL_IDEMPOTENCY_STRICT`.** §10 approved the same day: session-lock + explicit-unlock; wait default **300s** (the handler ceiling); across-crash exactly-once **OUT of scope**. Design + measured prototype: `docs/runtime/FR27_ADVISORY_LOCK_DESIGN.md`; contract: `IDEMPOTENCY_CONTRACT.md` → *Strict at-most-once under contention*. Shipped as approved: session-scoped `pg_advisory_lock` on a DEDICATED connection held across reserve→handler→complete; the 7 gate close-sites each release it (parity with the existing `_gate_db`-close discipline — idempotent release, connection-close drops the lock even if unlock fails). Live-PG soak: handler_ran==1 across 2/4/8/16, winner-fail = one reclaim+retry; mutation-tested (never-acquire and release-before-handler both caught 5 failures). SQLite → `unsupported`, unchanged. **Residual (deliberate): across-process-crash exactly-once (§4.3) unbuilt — a `pending` row whose lock dropped on disconnect still degrades until the stale threshold.** Filed 🔴 correctness (their `IDEMPOTENCY-CONTENTION-UNVERIFIED-1`, measured).
+**Status: SHIPPED 2026-09-12 (#627), default-off behind `AINDY_SYSCALL_IDEMPOTENCY_STRICT`.** §10 approved the same day: session-lock + explicit-unlock; wait default **300s** (the handler ceiling); across-crash exactly-once **OUT of scope**. Design + measured prototype: `docs/design/FR27_ADVISORY_LOCK_DESIGN.md`; contract: `IDEMPOTENCY_CONTRACT.md` → *Strict at-most-once under contention*. Shipped as approved: session-scoped `pg_advisory_lock` on a DEDICATED connection held across reserve→handler→complete; the 7 gate close-sites each release it (parity with the existing `_gate_db`-close discipline — idempotent release, connection-close drops the lock even if unlock fails). Live-PG soak: handler_ran==1 across 2/4/8/16, winner-fail = one reclaim+retry; mutation-tested (never-acquire and release-before-handler both caught 5 failures). SQLite → `unsupported`, unchanged. **Residual (deliberate): across-process-crash exactly-once (§4.3) unbuilt — a `pending` row whose lock dropped on disconnect still degrades until the stale threshold.** Filed 🔴 correctness (their `IDEMPOTENCY-CONTENTION-UNVERIFIED-1`, measured).
 
 **The measurement, on 2.11.0 + PostgreSQL, `sys.v1.event.emit` (`EXACTLY_ONCE`), one scope, one
 payload, N callers barrier-released from separate sessions:**
@@ -9234,7 +9234,7 @@ default that ships off is a pattern this registry keeps recording as a mistake.
 **Remaining (phases 2–4):** the guest path asks (also closes `GUEST-CONFINE-1`'s `cwd` residual) →
 the tool seam asks (`TOOL-SEAM-ISOLATION-1`, the P0) → the resources axis becomes enforcing and
 `COST-GOVERNOR-1` adds spend. Design and phasing table:
-`docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`.
+`docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`.
 
 ---
 
@@ -9340,7 +9340,7 @@ a trust decision on that is misled by the runtime, not by their own configuratio
 **★★ CORRECTION 2026-08-19 — this proposal named a resolution point that does not run, and the
 repo already knew.** It said "resolved at `execution_gate.gate_and_dispatch`
 (`execution_gate.py:294`)". **`gate_and_dispatch` has ZERO callers repo-wide**, is not re-exported
-from any `__init__.py`, and `docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md:50` states plainly
+from any `__init__.py`, and `docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md:50` states plainly
 that it *"is dead code with no callers."* Two documents, opposite implications, and the one an
 implementer would read is this one. Building resolution there is `ROUTE-AST-UNWIRED-1` exactly —
 a mechanism that exists and never runs.
@@ -9366,7 +9366,7 @@ it means **declare + refuse + record changes no execution path at all**.
 is a command **transform** — a different shape. The descriptor must resolve to a **policy**, not
 to that ABC, or it silently assumes every seam is a long-lived worker; the tool seam is not.
 
-**★ DESIGN SETTLED 2026-08-19 — `docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`.** Owner chose
+**★ DESIGN SETTLED 2026-08-19 — `docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`.** Owner chose
 the **three-axis** shape (visibility / authority / resources) over the flat toggle list, and
 design-doc-before-code. That doc carries the field list, the storage decision (three real columns,
 not `extra`), the phasing, and the open decisions — read it before writing anything here. Invariant: an execution
@@ -9682,7 +9682,7 @@ be incomplete. **Either way the runtime must declare a choice**, because the fai
 not choosing wrongly, it is having never chosen. That is a runtime behaviour change and needs a
 proposal under `AGENT_WORKING_RULES` §8 — it is not an agent's call to make.
 
-**★ PROPOSAL FILED 2026-09-09 for the configuration half:** `docs/runtime/WORKFLOW_STORE_DECLARATION_PROPOSAL.md`, under `AGENT_WORKING_RULES` §8. It proposes declaring backend + root + sweep rather than migrating, on the measured finding that **store 4 is write-only from the runtime** — guest scripts create records via an appended `run_workflow(…)` and the host reads none of them, resuming through `PersistentFlowRunner` instead. That is why the truncated migration census in §1 above is a nodus problem and not our exposure. **It does not attempt the split, and does not pre-empt (b).**
+**★ PROPOSAL FILED 2026-09-09 for the configuration half:** `docs/design/WORKFLOW_STORE_DECLARATION_PROPOSAL.md`, under `AGENT_WORKING_RULES` §8. It proposes declaring backend + root + sweep rather than migrating, on the measured finding that **store 4 is write-only from the runtime** — guest scripts create records via an appended `run_workflow(…)` and the host reads none of them, resuming through `PersistentFlowRunner` instead. That is why the truncated migration census in §1 above is a nodus problem and not our exposure. **It does not attempt the split, and does not pre-empt (b).**
 
 **★★ CONFIGURATION HALF SHIPPED 2026-09-09 (#611) — B+C+D, and this does NOT close the entry.** The worker now declares `NODUS_WORKFLOW_STORE_BACKEND=sqlite` and `NODUS_WORKFLOW_AUTOSWEEP=0` (`nodus_worker.declare_guest_state_environment`, called from both entry points — **not at module import, because the suite imports this module in-process and a module-level mutation would leak into the test session**); compose sets `NODUS_RUN_STATE_ROOT=/var/lib/aindy/nodus-state` behind a named volume, making guest run state durable in Docker for the first time. **★ Declared values never overwrite an operator's, and a BLANK value counts as unset — matching nodus's own reader, and because an unset compose interpolation leaves `""` behind, which would otherwise read as *answered*.** **★ The image creates the state dir owned by `aindy` first: a named volume over a path absent from the image is created `root:root`.** **★ The ROOT is deliberately not defaulted in code — no portable correct absolute path, and an `AINDY_` alias would be a second vocabulary for a name nodus already has.** **★★ STILL OPEN: this configures a durability layer, it does not remove one. (a) — a `WorkflowStore` over Postgres, collapsing 4 into 1 — and (b) the ownership contract are both untouched.** Mutation-tested 5/5.
 
@@ -9868,7 +9868,7 @@ standalone.
 
 ## TOOL-SEAM-ISOLATION-1 — every authority check at the tool seam is advisory with respect to the code that runs next
 
-**Status: OPEN — P0. SCOPED 2026-08-19 → `docs/runtime/TOOL_SEAM_ISOLATION_SCOPE.md`.**
+**Status: OPEN — P0. SCOPED 2026-08-19 → `docs/design/TOOL_SEAM_ISOLATION_SCOPE.md`.**
 Filed 2026-08-15 from the Codex comparative audit (G1), verified.
 Third of three convergent isolation findings — see `EXEC-ENV-BIND-1` for the convergence table.
 
@@ -10559,7 +10559,7 @@ blind spot) and phase 4 (flip `AINDY_FLOW_FAN_OUT` on the evidence of a real flo
 
 
 **Status: CONFLICT HALF SETTLED 2026-09-03 (#569); SCHEDULER PHASE 0 SHIPPED 2026-09-08 (#603)
-— OPEN (P1) for phases 1–4.** Design and impact analysis: `docs/runtime/FLOW_PARALLEL_DESIGN.md`.
+— OPEN (P1) for phases 1–4.** Design and impact analysis: `docs/design/FLOW_PARALLEL_DESIGN.md`.
 
 **★★ Phase 0 widened the TRANSACTION, not the concurrency.** Two things moved onto the live path:
 `_allocate_sequence_numbers(run, count)` allocates `FlowHistory` ordinals for a whole **superstep
@@ -13221,7 +13221,7 @@ reified. Same shape here. See `COMPARATIVE_RESEARCH_INDEX.md` §4b.
 **Status: CLOSED (2026-09-13, #638) — THE GOVERNOR SHIPPED, OPT-IN, AND WAS VERIFIED LIVE.**
 Meter #563/#564 (2026-09-03) → adopted app #321 (09-08) → phase 3 identity + accrual #635 →
 phase 2 evidence #637 → phase 4 governor #638, all 2026-09-13. Residuals (not blockers) at the
-end of the phase 4 section. See `docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`. Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
+end of the phase 4 section. See `docs/design/LLM_SEAM_ADOPTION_SCOPE.md`. Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
 (`C:\codev\MetaGPT research\`, 2026-08-15, its **M2**), verified against source at `v2.4.0`.
 **The last verified-but-unfiled gap across ten comparative research folders.**
 

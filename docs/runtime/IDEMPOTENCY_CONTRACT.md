@@ -275,7 +275,7 @@ handler runs exactly once per `action_id` under any contention width.
 A non-zero `degraded` on PostgreSQL with strict mode on now means **misconfiguration**, not
 contention — the operator signal inverts in a useful direction.
 
-Design + measured prototype: `docs/runtime/FR27_ADVISORY_LOCK_DESIGN.md`.
+Design + measured prototype: `docs/design/FR27_ADVISORY_LOCK_DESIGN.md`.
 
 ---
 

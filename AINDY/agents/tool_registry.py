@@ -813,7 +813,7 @@ def execute_tool(
     # AINDY_TOOL_IDEMPOTENCY flag AND a per-tool execution_guarantee of EXACTLY_ONCE, with a
     # stable run scope. Default AT_LEAST_ONCE = current behavior (no dedup). Keys only on
     # EffectRecord.action_id (text) — never the ExecutionUnit UUID — so it sidesteps the
-    # #157 lookup path. See docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md (MEB-0).
+    # #157 lookup path. See docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md (MEB-0).
     # DUR-2 — a continued run's per-run at-most-once signal engages the gate for ANY tool
     # (declaration-free), independent of the tool's guarantee + AINDY_TOOL_IDEMPOTENCY.
     from AINDY.kernel.effect_ledger import durable_effects_active

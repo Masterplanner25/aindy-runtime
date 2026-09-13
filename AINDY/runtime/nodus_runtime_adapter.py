@@ -115,7 +115,7 @@ class NodusExecutionContext:
     # nodes' writes collide on (eu_id, ordinal). Set to the flow node name on the flow-node
     # path (nodus_adapter); left "" on direct callers whose execution_unit_id is per-call
     # unique. Only consulted when AINDY_MEMORY_IDEMPOTENCY is on. See
-    # docs/runtime/DURABLE_EXECUTION_PROGRAM.md (DUR-1).
+    # docs/design/DURABLE_EXECUTION_PROGRAM.md (DUR-1).
     effect_scope: str = ""
     # AGENT-HARDEN-4 — effect simulation. When True, the call_tool seam routes to
     # the shadow executor (simulate_agent_tool): tools are NOT executed, a predicted
@@ -467,7 +467,7 @@ def _apply_deferred_memory_writes(
     # regardless of non-deterministic content and never collapses two distinct writes. The
     # per-node ``effect_scope`` is load-bearing: flow nodes share the run's
     # execution_unit_id, so without it two nodes' writes would collide on the same ordinal.
-    # Default off = current behavior (no dedup). See docs/runtime/DURABLE_EXECUTION_PROGRAM.md.
+    # Default off = current behavior (no dedup). See docs/design/DURABLE_EXECUTION_PROGRAM.md.
     # DUR-2 — a continued run's per-run at-most-once signal engages the gate even when the
     # global AINDY_MEMORY_IDEMPOTENCY flag is off (scoped to the re-driven run).
     from AINDY.kernel.effect_ledger import durable_effects_active

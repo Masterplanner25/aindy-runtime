@@ -10,7 +10,7 @@ Three additive, nullable columns on ``execution_units``:
 * ``env_applied``         JSONB   — the EFFECTIVE spec after clamping to the host floor
 * ``env_evidence_class``  VARCHAR — ``"<assurance_class>/<assurance_ceiling>"`` of the resolved runner
 
-Design: ``docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md``.
+Design: ``docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md``.
 
 **Why three columns and not one.** They answer three different questions — what was asked for,
 what was actually in force, and how well verified the boundary was. Collapsing them into one

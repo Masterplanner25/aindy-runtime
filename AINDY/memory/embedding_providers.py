@@ -19,7 +19,7 @@ Dimensionality note (ECOGAP-3 Phase 1, follow-up increment): the ``memory_nodes`
 pgvector column is fixed at ``MEMORY_EMBEDDING_COLUMN_DIMENSIONS`` (1536). A provider
 whose vectors have a different dimension is fail-closed here until the deferred
 schema-configurable-dimension + re-embed migration lands (see
-``docs/runtime/PROVIDER_BREADTH_PROGRAM.md`` §3.2).
+``docs/design/PROVIDER_BREADTH_PROGRAM.md`` §3.2).
 """
 from __future__ import annotations
 
@@ -198,5 +198,5 @@ def validate_embedding_configuration(provider: EmbeddingProvider) -> None:
             f"but the configured memory_nodes column dimension (AINDY_EMBEDDING_DIMENSIONS) is "
             f"{column_dimensions}. Set AINDY_EMBEDDING_DIMENSIONS to {provider.dimensions} and run "
             "`aindy-runtime memory reembed` to alter the column + re-embed "
-            "(see docs/runtime/PROVIDER_BREADTH_PROGRAM.md §3.2)."
+            "(see docs/design/PROVIDER_BREADTH_PROGRAM.md §3.2)."
         )

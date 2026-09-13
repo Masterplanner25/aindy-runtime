@@ -8,8 +8,7 @@ owner: "platform-team"
 
 # Scope — routing a real consumer through the LLM seam
 
-**Read this before building `COST-GOVERNOR-1`'s governor half.** It is the reason that work is
-not started, and it is not a design objection — the design is settled.
+**Superseded by events: `COST-GOVERNOR-1`'s governor half shipped 2026-09-13 (#638) and the entry is CLOSED.** This scope was the reason that work waited — a consumer had to be routed through the seam first, which phases 2–3 (#635, #637) did. Kept as the record of *why* the ordering was consumer-first.
 
 ---
 

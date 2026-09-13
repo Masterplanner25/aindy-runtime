@@ -1,6 +1,6 @@
 """TOOL-SEAM-ISOLATION-1 step A — the tool gets a revocable handle, not the live session.
 
-Scope: ``docs/runtime/TOOL_SEAM_ISOLATION_SCOPE.md``.
+Scope: ``docs/design/TOOL_SEAM_ISOLATION_SCOPE.md``.
 
 ★ **What these tests do NOT claim.** Step A narrows one argument. A tool holding this handle can
 still ``import os``, spawn a thread, or open a socket, so nothing here should be read as evidence

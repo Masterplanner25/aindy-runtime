@@ -128,4 +128,4 @@ aindy-runtime mcp-server --transport sse --host 0.0.0.0 --port 8080
 
 **Deferred (MEB-3b):** tenant/session attribution columns on `EffectRecord` (records *which*
 session produced each effect — the program's only schema-contract bump) and an optional
-per-session capability-ceiling token. See `MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`.
+per-session capability-ceiling token. See `../design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`.

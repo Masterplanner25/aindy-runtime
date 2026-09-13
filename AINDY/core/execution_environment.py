@@ -1,7 +1,7 @@
 """
 ExecutionEnvironmentSpec — the *requesting* half of the isolation contract (EXEC-ENV-BIND-1).
 
-Design: ``docs/runtime/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md``. Read it before changing anything
+Design: ``docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md``. Read it before changing anything
 here; the shape was settled deliberately and the reasoning does not survive in the code.
 
 What this is

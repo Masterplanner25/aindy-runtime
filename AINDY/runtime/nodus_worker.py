@@ -643,7 +643,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
 # `LocalWorkflowStore` (JSON) → `SQLiteWorkflowStore`, and the two do not see each other's
 # records. **The defect is never having chosen**: an undeclared host changes durability
 # substrate on a schedule it does not set. Approved under AGENT_WORKING_RULES §8; see
-# `docs/runtime/WORKFLOW_STORE_DECLARATION_PROPOSAL.md`.
+# `docs/design/WORKFLOW_STORE_DECLARATION_PROPOSAL.md`.
 #
 # ★ `setdefault` semantics, never assignment. An operator who sets one of these has
 #   answered the question; the runtime's job is to ensure it is answered, not to win.

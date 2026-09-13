@@ -1,5 +1,5 @@
 """EffectRecord idempotency ledger — the reusable primitive for the Mediated Effect
-Boundary program (MEB). See docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
+Boundary program (MEB). See docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
 
 Write-ahead effect-record upsert giving side-effecting calls at-most-once semantics:
 write a ``pending`` row keyed by a deterministic ``action_id``, execute, then finalize
@@ -74,7 +74,7 @@ def current_effect_attribution() -> tuple[Optional[str], Optional[str]]:
 # i.e. declaration-free at-most-once, scoped to the re-driven run. Like all contextvars it
 # stays within one execution context: it reaches parent-side effects (deferred memory
 # writes) and in-process dispatches, but NOT a nodus worker subprocess (that propagation is
-# DUR-2b). See docs/runtime/DURABLE_EXECUTION_PROGRAM.md (DUR-2).
+# DUR-2b). See docs/design/DURABLE_EXECUTION_PROGRAM.md (DUR-2).
 _durable_effects: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "aindy_durable_effects", default=False
 )

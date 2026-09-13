@@ -1,6 +1,6 @@
 """A revocable handle over the DB session handed to a tool (TOOL-SEAM-ISOLATION-1, step A).
 
-Scope and reasoning: ``docs/runtime/TOOL_SEAM_ISOLATION_SCOPE.md``.
+Scope and reasoning: ``docs/design/TOOL_SEAM_ISOLATION_SCOPE.md``.
 
 The principle, from the Linux fd model
 --------------------------------------

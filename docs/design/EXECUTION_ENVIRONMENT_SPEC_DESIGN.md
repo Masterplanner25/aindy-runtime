@@ -8,7 +8,7 @@ owner: "platform-team"
 
 # `ExecutionEnvironmentSpec` — design
 
-**Status: PHASES 1 AND 2 SHIPPED 2026-08-19. Phases 3–4 are still design.** This document
+**Status: ALL FOUR PHASES SHIPPED — 1+2 on 2026-08-19, 3 on 2026-09-03 (#567), 4 on 2026-09-13 (#639); `EXEC-ENV-BIND-1` is CLOSED.** This is now the design *record*: the vocabulary is `AINDY/core/execution_environment.py`, what each seam delivers is `docs/runtime/SANDBOX_CONTRACT.md`. This document
 settled the *shape* before anything landed, because a column added under the schema-contract
 protocol is expensive to take back and the descriptor is a semi-public surface.
 
@@ -62,7 +62,7 @@ discovered during implementation instead.
 **`gate_and_dispatch` has zero callers, repo-wide.** It is not re-exported from any `__init__.py`
 and nothing references it outside its own definition.
 
-**The repo already knew.** `docs/runtime/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md:50` states it
+**The repo already knew.** `docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md:50` states it
 plainly: *"`gate_and_dispatch` (`execution_gate.py:364`) is dead code with no callers."* Two
 documents, opposite implications, neither aware of the other — and the debt entry is the one an
 implementer would read.
