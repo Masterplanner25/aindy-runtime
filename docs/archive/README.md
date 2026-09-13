@@ -185,8 +185,11 @@ from the plan's own status notes (which contradicted each other once already):
   survives in §Tier 1 Trusted Kernel Code (*"trusted because the operator controls and
   deploys it, not because it is sandboxed at execution time"*). **Side finding, not this
   plan's:** the glossary for *assurance class / attestation / certification tier* went with
-  that section and was not re-homed. The terms are defined only as constants in
-  `sandbox_runner.py` and used across four live docs without a prose definition.
+  that section and was not re-homed — for three and a half months the terms were defined
+  only as constants in `sandbox_runner.py` and used across four live docs without a prose
+  definition. **Restored 2026-09-13**, rewritten against the current constants rather than
+  pasted back from the diff (the 05-31 version predates the assurance ceiling and the
+  kernel-observable verification method).
 - **C1 — deferred by decision, residual disclosed.** Scope B1 shipped (unprivileged `/proc`
   evidence; `verification_method: kernel-observable`, ceiling `kernel-observable-verified` on
   Linux). Scope B2 — a privileged launcher — has a stated reopen condition and, by the plan's
