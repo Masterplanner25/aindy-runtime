@@ -255,9 +255,16 @@ def _resolve_env_columns(
         )
         raise
 
+    from AINDY.core.execution_environment import enforced_resources
+
+    applied = resolution.effective.to_dict()
+    # Phase 4 — which declared ceilings the runtime will actually enforce for this unit. A
+    # reader of the row must not infer enforcement from a declared value alone (memory is
+    # declared and NOT enforced, SYSMAX-3); this list is what says so, per dimension.
+    applied["resources_enforced"] = enforced_resources(resolution.effective)
     return {
         "env_spec": resolution.declared.to_dict(),
-        "env_applied": resolution.effective.to_dict(),
+        "env_applied": applied,
         "env_evidence_class": resolution.evidence_class,
     }
 
@@ -323,6 +330,34 @@ def _record_refusal(
         unsat.required,
         unsat.available,
     )
+
+
+def _declare_resource_limits(eu, env_columns: dict[str, Any], user_id: str) -> None:
+    """EXEC-ENV-BIND-1 phase 4 — hand the unit's EFFECTIVE ceilings to the resource manager.
+
+    This is the seam where declared becomes enforcing: from here `check_quota` bounds the unit's
+    wall time and syscalls by `min(global, declared)` and the token governor uses the declared
+    token ceiling. Effective (floor-clamped) values only, so nothing here can widen. Never fatal
+    — a unit that cannot register its ceilings runs under the globals, which is what it did
+    before this existed; the row still records what was declared.
+    """
+    applied = (env_columns or {}).get("env_applied") or {}
+    resources = applied.get("resources") or {}
+    if not resources or not getattr(eu, "id", None):
+        return
+    try:
+        from AINDY.kernel.resource_manager import get_resource_manager
+
+        get_resource_manager().declare_limits(
+            str(eu.id),
+            wall_time_ms=resources.get("wall_time_ms"),
+            syscalls=resources.get("syscalls"),
+            tokens=resources.get("tokens"),
+            memory_bytes=resources.get("memory_bytes"),
+            tenant_id=str(user_id or ""),
+        )
+    except Exception:
+        logger.debug("[ExecutionGate] resource limit declaration skipped", exc_info=True)
 
 
 def require_execution_unit(
@@ -415,6 +450,7 @@ def require_execution_unit(
                 getattr(eu, "id", None),
                 merged_extra["retry_policy"],
             )
+            _declare_resource_limits(eu, env_columns, user_id)
         else:
             eus.update_status(eu.id, "executing")
             # Backfill retry_policy on existing EU if not yet stored.

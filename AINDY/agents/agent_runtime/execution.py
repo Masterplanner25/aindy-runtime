@@ -188,6 +188,7 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
         execution_plan["memory_context"] = execution_memory_context
         run.plan = execution_plan
         db.commit()
+        eu = None
         try:
             from AINDY.core.execution_unit_service import ExecutionUnitService
 
@@ -223,10 +224,32 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
         # run's score event so per-run spend is durable in the trace.
         llm_tokens = 0
         try:
-            from AINDY.kernel.resource_manager import get_resource_manager
+            import contextlib as _contextlib
+
+            from AINDY.kernel.resource_manager import get_resource_manager, run_scoped_quota_enabled
 
             _rm = get_resource_manager()
-            with _rm.observed_unit(str(user_db_id or ""), str(run.id)), llm_attribution_scope(
+            # EXEC-ENV-BIND-1 phase 4 — the run's accounting key is run.id (phase 3's choice);
+            # its EU row is the audit record. Copy the row's EFFECTIVE resource ceilings onto
+            # the accounting key so the governor (tokens, always) and check_quota (wall time,
+            # syscalls — only when the flag binds the unit below) enforce what was declared.
+            _declared = ((getattr(eu, "env_applied", None) or {}) if eu is not None else {}).get("resources") or {}
+            if _declared:
+                _rm.declare_limits(
+                    str(run.id),
+                    wall_time_ms=_declared.get("wall_time_ms"),
+                    syscalls=_declared.get("syscalls"),
+                    tokens=_declared.get("tokens"),
+                    memory_bytes=_declared.get("memory_bytes"),
+                    tenant_id=str(user_db_id or ""),
+                )
+            if run_scoped_quota_enabled():
+                from AINDY.kernel.syscall_dispatcher import bind_execution_unit
+
+                _unit_cm = bind_execution_unit(str(run.id), run.trace_id or get_trace_id())
+            else:
+                _unit_cm = _contextlib.nullcontext()
+            with _rm.observed_unit(str(user_db_id or ""), str(run.id)), _unit_cm, llm_attribution_scope(
                 tenant_id=str(user_db_id) if user_db_id else None, run_id=str(run.id)
             ):
                 try:

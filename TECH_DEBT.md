@@ -8978,7 +8978,9 @@ is the cost. Roll out per domain.
 
 ## EXEC-ENV-BIND-1 — an execution unit cannot declare the environment it needs
 
-**Status: PHASES 1, 2 AND 3 SHIPPED — still OPEN (P1) for phase 4 only.**
+**Status: CLOSED (2026-09-13, #639) — ALL FOUR PHASES SHIPPED.** Phase 4 (resources become
+enforcing) landed the day `COST-GOVERNOR-1`'s governor did, which was its gate. Residuals at the
+end of the phase 4 section; none is a hole in the mechanism.
 
 **Phase 3 = the TOOL seam asks (2026-09-03, #567).** `register_tool(..., env_spec={...})` lets a
 tool declare its environment; the isolated worker is then spawned with an `env` allow-list, a
@@ -9009,10 +9011,64 @@ subprocess shares the host's network namespace and can spawn children, and no sp
 changes that. This is why the tier reports `insecure-dev` and why the container runner exists —
 the record says what was *achieved*, not what was *asked for*.
 
-**Phase 4 — resources become enforcing — is gated on `COST-GOVERNOR-1`'s governor half, which is
-itself gated on the LLM seam acquiring a consumer (`LLM_SEAM_ADOPTION_SCOPE.md`). Do not start it
-first: an enforcing resources axis whose dominant dimension is unmeasured spend enforces the two
-dimensions that were never the problem.**
+~~**Phase 4 — resources become enforcing — is gated on `COST-GOVERNOR-1`'s governor half**~~ —
+gate cleared 2026-09-13 (#638); phase 4 shipped the same day (#639):
+
+### ★ Phase 4 — the resources axis becomes enforcing (2026-09-13, #639)
+
+**Three things, one seam each.**
+
+1. **`resources.tokens`** — the descriptor's fourth dimension, the row the design doc said
+   `COST-GOVERNOR-1` would want (§4). Clamped narrow-only like the other three; on the row like
+   the other three.
+2. **Declared becomes enforcing at `require_execution_unit`.** After the EU row is created, the
+   gate hands the EFFECTIVE (floor-clamped) resources to `ResourceManager.declare_limits`
+   (in-memory + a Redis hash `aindy:rm:eu:{id}:limits`, so a worker in another process that
+   binds the unit sees the same ceilings). From there `check_quota` bounds wall time and
+   syscalls by **`min(global, declared)`** and the token governor uses the declared token
+   ceiling as the execution cap. **A declaration narrows; it can never widen** — `syscalls: 500`
+   against a global of 100 is 100, and the clamp already said so on the row.
+   **`env_applied.resources_enforced`** lists which declared ceilings actually bind — memory is
+   declared and NOT enforced (`SYSMAX-3`, no OS integration), and a row must say so per
+   dimension rather than let a reader infer enforcement from a declared value.
+3. **The subject decision, settled as THE RUN, rolled out behind `AINDY_RUN_SCOPED_QUOTA`
+   (default OFF).** This is the decision `QUOTA-ACCRUAL-ORPHAN-1` and `COST-GOVERNOR-1` phase 3
+   both filed here. On: a guest's `sys()` calls (`nodus_worker`) and an agent run's execution
+   span (`execute_run`) bind the run's unit via `syscall_dispatcher.bind_execution_unit` — the
+   bridge the pipeline builds per request and `worker_loop` per job, as one reusable form — so
+   they accrue on the run and are checked against ITS ceilings. **Accounting only:** the
+   idempotency gate keys on the caller's own id (`_orig_eu_id`) and is untouched.
+   **★ Why flagged, and what flipping it changes:** today each of those dispatches mints and
+   reaps a one-call unit, so `MAX_SYSCALLS_PER_EXECUTION` (100) is VACUOUS for a guest script
+   and for a multi-step agent run. On, the 101st `sys()` in a script and the 101st dispatch
+   under a run are refused — real for the first time. The evidence to flip on is
+   `aindy_syscall_unowned_unit_total` on a deployment: it names exactly the callers this moves,
+   with counts. Raise `AINDY_QUOTA_MAX_SYSCALLS` if a legitimate workload needs it
+   (`SYSMAX-4`); do not leave the flag off because a number was never looked at.
+   **★ The agent run's accounting key is `run.id`** (phase 3's choice; the EU row is the audit
+   record) — `execute_run` copies the row's effective ceilings onto that key, ALWAYS, so a
+   declared token ceiling binds the run's LLM spend even with the flag off; wall/syscalls bind
+   only when the flag also routes the dispatches there.
+
+**Mutation-tested 5/5** (`tests/unit/test_exec_env_resources_enforcing.py`): gate-no-declare,
+global-only, no-enforced-list, bind-regardless-of-flag, no-tokens-clamp. The guest test drives
+the real `nodus_worker.run_one` with a `sys()` call under both flag states; the run test drives
+the real `execute_run` with a fake EU row carrying `env_applied.resources`.
+
+**Residuals — recorded, none a hole:**
+- **Memory is still declared-only.** `SYSMAX-3`'s answer stands: the guest path can bound it via
+  nodus `max_memory_mb` (5.13.0) — the natural next use of this descriptor — but nothing passes
+  it yet; every other unit type needs OS integration.
+- **Nothing DECLARES a spec today except tests and the tool seam's `env_spec`.** Enforcement is
+  live; the callers that would benefit (an app declaring a per-run token budget on
+  `create_run`) have to send one. `11.4` (defaults per `eu_type`) is still deferred, on purpose.
+- **A refusal mid-run is between effects, not during one** (`CANCEL-REACH-1`'s limitation,
+  inherited).
+- **Distributed:** the declared ceilings reach a worker through the Redis hash; the in-memory
+  backend is per-process, so a subprocess without Redis enforces the globals plus whatever the
+  host declared before spawning only if it re-declares — the guest path does not. Stated, not
+  hidden; `FR-15`'s evidence gap covers the same shape.
+
 
 **★ Input for phase 4, filed 2026-09-13 out of `QUOTA-ACCRUAL-ORPHAN-1` (#632): the per-execution
 syscall/wall-time budget has a KNOWN population it does not apply to, and the runtime now counts

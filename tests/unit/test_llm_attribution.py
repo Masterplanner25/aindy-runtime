@@ -183,7 +183,7 @@ def test_observed_unit_gives_tokens_a_subject_without_admitting_it(rm):
         rm.record_tokens(eu, 9)
         assert rm.get_usage(eu) == {
             "eu_id": "run-o", "tenant_id": "tenant-o", "wall_time_ms": 0,
-            "memory_bytes": 0, "syscall_count": 0, "tokens": 9,
+            "memory_bytes": 0, "syscall_count": 0, "tokens": 9, "limits": {},
         }
     assert "run-o" not in rm._usage, "purged on exit"
     with rm.owned_execution("tenant-o") as eu:

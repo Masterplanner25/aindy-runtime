@@ -167,6 +167,10 @@ class Resources:
     wall_time_ms: Optional[int] = None
     memory_bytes: Optional[int] = None
     syscalls: Optional[int] = None
+    # Phase 4 — the fourth axis the design doc said COST-GOVERNOR-1 would want here: a
+    # per-execution LLM token ceiling, enforced by the governor (`llm_budget`) as the
+    # execution cap in preference to the global AINDY_QUOTA_MAX_TOKENS (narrow-only).
+    tokens: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +201,7 @@ class ExecutionEnvironmentSpec:
                 "wall_time_ms": self.resources.wall_time_ms,
                 "memory_bytes": self.resources.memory_bytes,
                 "syscalls": self.resources.syscalls,
+                "tokens": self.resources.tokens,
             },
             "min_assurance": self.min_assurance,
         }
@@ -270,6 +275,7 @@ class ExecutionEnvironmentSpec:
                 wall_time_ms=_opt_int(res, "wall_time_ms"),
                 memory_bytes=_opt_int(res, "memory_bytes"),
                 syscalls=_opt_int(res, "syscalls"),
+                tokens=_opt_int(res, "tokens"),
             ),
             min_assurance=str(min_assurance),
         )
@@ -489,6 +495,9 @@ def clamp_to_floor(
     sysc, w = _narrower_int(declared.resources.syscalls, floor.resources.syscalls)
     if w:
         widened.append("resources.syscalls")
+    toks, w = _narrower_int(declared.resources.tokens, floor.resources.tokens)
+    if w:
+        widened.append("resources.tokens")
 
     # min_assurance narrows UPWARD: a higher floor demands more, so the effective minimum is the
     # stronger of the two. This is the one axis where "more restrictive" means a larger value.
@@ -501,7 +510,7 @@ def clamp_to_floor(
         declared,
         visibility=replace(declared.visibility, filesystem=fs, env=env_mode),
         authority=replace(declared.authority, network=net, subprocess=subprocess_allowed),
-        resources=Resources(wall_time_ms=wall, memory_bytes=mem, syscalls=sysc),
+        resources=Resources(wall_time_ms=wall, memory_bytes=mem, syscalls=sysc, tokens=toks),
         min_assurance=effective_assurance,
     )
     return effective, tuple(widened)
@@ -542,6 +551,22 @@ def _host_assurance() -> tuple[str, str]:
             "[ExecEnv] host assurance resolution failed; reporting weakest class: %s", exc
         )
         return ASSURANCE_INSECURE_DEV, f"{ASSURANCE_INSECURE_DEV}/resolution-failed"
+
+
+#: The resources dimensions the runtime ENFORCES from a declared spec (phase 4). Memory is
+#: deliberately absent: it is declared and recorded, and `SYSMAX-3` says why it is not enforced
+#: (no OS integration; the value the runtime tracks is an estimate, not RSS). A row's
+#: `env_applied.resources_enforced` lists exactly these, filtered to what was declared, so
+#: "was this ceiling enforced?" is answerable per dimension from the row.
+RESOURCES_ENFORCED: tuple[str, ...] = ("wall_time_ms", "syscalls", "tokens")
+
+
+def enforced_resources(spec: ExecutionEnvironmentSpec) -> list[str]:
+    """The declared resource ceilings on `spec` that the runtime will actually enforce."""
+    return [
+        name for name in RESOURCES_ENFORCED
+        if getattr(spec.resources, name, None) is not None
+    ]
 
 
 @dataclass(frozen=True)
