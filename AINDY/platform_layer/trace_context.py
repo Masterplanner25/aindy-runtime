@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
-from typing import Any
+from typing import Any, Iterator
 
 
 _trace_id_ctx: ContextVar[str] = ContextVar("trace_id", default="-")
@@ -30,12 +31,43 @@ def reset_trace_id(token: Token) -> None:
 
 
 def ensure_trace_id(trace_id: str | None = None) -> str:
+    """Return the current trace id, establishing one FOR THE REST OF THIS CONTEXT if absent.
+
+    ★ The establish half has no token and is never released — on a long-lived thread (a
+    scheduler worker) the first caller pins that thread's trace id for every later unit of
+    work it runs, so unrelated runs share a `trace_id` (TEST-ORDER-CONTEXTVAR-1, where
+    `PersistentFlowRunner.start` did exactly that). Inside a request or a flow node the trace
+    is already set with a token, so this only reads. Kept because app flow nodes call it in
+    that read-only position; **for new code use :func:`trace_scope`**, which releases what it
+    establishes.
+    """
     current = get_trace_id()
     if current:
         return current
     generated = str(trace_id or uuid.uuid4())
     _trace_id_ctx.set(generated)
     return generated
+
+
+@contextmanager
+def trace_scope(trace_id: str | None = None) -> Iterator[str]:
+    """Yield the current trace id, establishing one for the block if none is current.
+
+    The token-holding form of :func:`ensure_trace_id`: an ambient trace is reused untouched;
+    an absent one is set for the duration of the block and reset on exit, whatever the block
+    did. Nothing outlives the caller's frame, so a scheduler thread that runs many units of
+    work never carries one unit's trace id into the next.
+    """
+    current = get_trace_id()
+    if current:
+        yield current
+        return
+    generated = str(trace_id or uuid.uuid4())
+    token = _trace_id_ctx.set(generated)
+    try:
+        yield generated
+    finally:
+        _trace_id_ctx.reset(token)
 
 
 def get_parent_event_id(default: str | None = None) -> str | None:
