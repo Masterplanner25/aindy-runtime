@@ -68,6 +68,15 @@ from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
+# The seam methods whose responses this meter reads — the RAW completion paths, plus `chat()`
+# which delegates to them. ★ The governor reserves against EXACTLY this set and nothing else:
+# an embedding call goes through the same `call_method` seam, carries no completion usage, is
+# never metered, and reserving for it (found live, 2026-09-13: two `reserved` per planner call)
+# holds ~2k tokens against the budget for a call that costs none of them. One constant, shared,
+# so the meter and the governor cannot disagree about what a "token-spending call" is; pinned
+# against a derived AST census of the provider clients in `test_llm_budget.py`.
+METERED_METHODS: frozenset[str] = frozenset({"chat", "messages_create", "chat_completion_response"})
+
 # (tenant_id, run_id) the current execution span attributes its LLM calls to. Both optional.
 _LLM_ATTRIBUTION: ContextVar[tuple[str | None, str | None]] = ContextVar(
     "aindy_llm_attribution", default=(None, None)
@@ -99,6 +108,26 @@ def llm_attribution_scope(
 def current_llm_attribution() -> tuple[str | None, str | None]:
     """``(tenant_id, run_id)`` the current span attributes LLM calls to."""
     return _LLM_ATTRIBUTION.get()
+
+
+def resolve_llm_subject() -> tuple[str | None, str | None, str]:
+    """``(tenant_id, unit_key, attributed)`` for the current span — ONE resolution shared by the
+    meter (which accrues onto it) and the governor (which reserves against it), so the two can
+    never disagree about whose budget a call is charged to.
+
+    ``unit_key`` is the attributed run, else the bound execution unit. ``tenant_id`` comes from
+    the attribution scope, else from the bound unit's snapshot (a pipeline-bound request unit
+    carries its tenant). ``attributed`` is the label value: ``run | unit | tenant | none``.
+    """
+    from AINDY.kernel.resource_manager import get_resource_manager
+    from AINDY.kernel.syscall_dispatcher import _EU_ID_CTX
+
+    tenant_id, run_id = _LLM_ATTRIBUTION.get()
+    unit_id = _EU_ID_CTX.get() or None
+    if not tenant_id and unit_id:
+        tenant_id = get_resource_manager().get_usage(unit_id).get("tenant_id") or None
+    attributed = "run" if run_id else "unit" if unit_id else "tenant" if tenant_id else "none"
+    return tenant_id, run_id or unit_id, attributed
 
 try:
     from AINDY.platform_layer.metrics import (
@@ -193,21 +222,13 @@ def _attribute_usage(*, provider: str, tokens: int) -> None:
     """
     try:
         from AINDY.kernel.resource_manager import get_resource_manager
-        from AINDY.kernel.syscall_dispatcher import _EU_ID_CTX
 
-        tenant_id, run_id = _LLM_ATTRIBUTION.get()
-        unit_id = _EU_ID_CTX.get() or None
+        tenant_id, key, attributed = resolve_llm_subject()
         rm = get_resource_manager()
-
-        key = run_id or unit_id
         if key:
             rm.record_tokens(key, tokens, tenant_id=tenant_id)
-        if not tenant_id and unit_id:
-            tenant_id = rm.get_usage(unit_id).get("tenant_id") or None
         if tenant_id:
             rm.record_tenant_tokens(tenant_id, tokens)
-
-        attributed = "run" if run_id else "unit" if unit_id else "tenant" if tenant_id else "none"
         llm_calls_total.labels(provider=provider, attributed=attributed).inc()
     except Exception as exc:  # noqa: BLE001 — accounting must not fail a completed call
         logger.debug("[token_meter] attribution not recorded for %s: %s", provider, exc)

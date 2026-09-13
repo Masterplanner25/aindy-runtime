@@ -13029,10 +13029,10 @@ reified. Same shape here. See `COMPARATIVE_RESEARCH_INDEX.md` §4b.
 
 ## COST-GOVERNOR-1 — every quota exists except the one that matters for an LLM runtime
 
-**Status: OPEN — P1. METER SHIPPED 2026-09-03 (#563, #564); ADOPTED 2026-09-08 (app #321);
-★ PHASE 3 (identity + accrual) SHIPPED 2026-09-13 (#635). ★★ PHASE 2 EVIDENCE OBTAINED
-2026-09-13 — the meter MOVES on a real deployment (below). THE GOVERNOR (phase 4) IS UNBLOCKED.**
-See `docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`. Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
+**Status: CLOSED (2026-09-13, #638) — THE GOVERNOR SHIPPED, OPT-IN, AND WAS VERIFIED LIVE.**
+Meter #563/#564 (2026-09-03) → adopted app #321 (09-08) → phase 3 identity + accrual #635 →
+phase 2 evidence #637 → phase 4 governor #638, all 2026-09-13. Residuals (not blockers) at the
+end of the phase 4 section. See `docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`. Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
 (`C:\codev\MetaGPT research\`, 2026-08-15, its **M2**), verified against source at `v2.4.0`.
 **The last verified-but-unfiled gap across ten comparative research folders.**
 
@@ -13059,6 +13059,84 @@ true and neither is adoption:
    calls need the `INITIATOR-IDENTITY-1` rule (*allow, and count separately*; an asserted
    identity may constrain, never widen), with the unattributed fraction visible before anyone
    relies on a cap.
+
+### ★★ Phase 4 — the governor: reserve → call → reconcile, refusing on breach (2026-09-13, #638)
+
+`platform_layer/llm_budget.py`, hooked at `CircuitBreakerLLMClient._call_with_breaker` — the
+one place every seam call (`chat()` and `call_method()`) passes exactly once — and hooked
+**outside the breaker**, so a refusal never counts toward opening the circuit.
+
+**Two ceilings, both OPT-IN (default 0 = unlimited):** `AINDY_QUOTA_MAX_TOKENS` per execution
+(the attributed run, else the bound unit) and `AINDY_QUOTA_MAX_TENANT_TOKENS` per tenant window
+(window = `TENANT_KEY_TTL_SECONDS`, 24 h, on both backends). Every other ceiling in
+`resource_manager` has a non-zero default because its dimension self-limits; spend does not,
+and a wrong default refuses real work — so the operator sets it against the measured baseline
+phase 2 produced. The four design questions, as settled:
+
+- **Q1 where checked** — at the seam, against `ResourceManager` (Redis-authoritative when
+  shared, in-memory otherwise), never the database. **Q2 whose budget** — run + tenant, both
+  binding. **Q3 estimated or actual** — BOTH: `reserve_tokens` / `reserve_tenant_tokens`
+  pre-fill the counter with an estimate (`max_tokens` the caller asked for, else
+  `AINDY_LLM_BUDGET_DEFAULT_RESERVE`=2048, plus a 4-chars-per-token prompt guess) and refuse if
+  that would exceed the cap; the meter records the ACTUAL inside the call; `release_*` takes
+  the estimate back out. Net = actual; a call that raises leaves nothing. **Q4 fail policy** —
+  the dispatcher's own `_quota_backend_failure_may_fail_open`: open in dev/test (counted
+  `degraded`), closed in prod. Not a fifth policy.
+- **Atomicity is the whole point.** A read-then-compare admits N concurrent callers who all read
+  the same number; the reservation pre-fills the counter it is checked against — INCRBY-then-
+  compare with a compensating DECRBY on Redis, one critical section in memory — so the (N+1)th
+  sees the N. Pinned by a 16-thread test (`test_concurrent_reservations_cannot_all_pass`).
+- **Refusal = `LLMBudgetExceededError(LLMCallError)`**, message prefixed `RESOURCE_LIMIT_EXCEEDED`
+  like every other quota; `aindy_llm_budget_outcomes_total{scope, outcome=reserved|refused|degraded}`.
+  Unattributed calls are admitted without reservation (`INITIATOR-IDENTITY-1`).
+
+**★★ Verified LIVE, and the live run found two things the unit suite could not — both fixed
+in the same PR and re-verified.** A sidecar from the monolith image with the branch wheel
+installed (`AINDY.__path__` printed) and `AINDY_QUOTA_MAX_TENANT_TOKENS=8000`, sharing the
+stack's Redis, three planner calls (`max_tokens=4096` → ~5.2k reserved each):
+
+```
+call 1 → 200   call 2 → 200   call 3 → 429 RESOURCE_LIMIT_EXCEEDED: tenant '8fde…' llm token
+                                          budget (4621 used + 5208 reserved > 8000 in window)
+tokens prompt 4044 + completion 577 = 4621 == the Redis window (the estimate never became the record)
+budget_outcomes{tenant,reserved}=2 {tenant,refused}=1; the refused call spent nothing
+```
+
+1. **Embeddings go through the same seam** (`call_method("create_embedding_response")` in
+   `_recall_planner_memory`) and were being reserved for — ~2k held during a call the meter
+   never meters, and `reserved` counting TWICE per planner call. Fix: the governor reserves
+   only for `token_meter.METERED_METHODS` (`chat`, `messages_create`,
+   `chat_completion_response`) — one constant shared with the meter, pinned against a
+   derived AST census of the provider clients (variant 12: the literal is compared against the
+   derivation, never used as it).
+2. **The first refusal reached the client as HTTP 500 `http_error`.** `generate_plan` swallowed
+   the exception into a string and `create_agent_run_runtime` mapped every plan failure to 500 —
+   and when that was fixed to read the exception, it STILL came back 500, because the app's
+   planner rewraps: `AnthropicPlannerError(detail) from LLMBudgetExceededError`. Fix:
+   `_plan_failure.error` carries the exception; `find_budget_refusal()` walks `__cause__`/
+   `__context__`; the route answers **429** with the reason (the status the pipeline already
+   gives a tenant at its concurrency limit). A route test calls the real route with a rewrapping
+   backend (ROUTE-GUARD-1).
+
+**Mutation-tested 5/5:** reserve-always-admits, no-release, reservation-inside-breaker,
+always-fail-open (the first draft of that test patched the policy function itself and the
+mutation SURVIVED — the test now drives the real `_quota_backend_failure_may_fail_open` via
+`Settings.is_testing`/`is_dev`), outermost-exception-only.
+
+**Residuals — recorded, none blocks closure:**
+- **The estimate is coarse by design.** A caller declaring `max_tokens=4096` reserves ~5k per
+  call, so a window smaller than one reservation admits nothing. Correct (the caller's own
+  ceiling is the honest worst case) but an operator setting a tight cap must size it against
+  `max_tokens`, not against typical actuals. `AINDY_LLM_BUDGET_DEFAULT_RESERVE` tunes the
+  no-`max_tokens` case only.
+- **The tenant window is the store's TTL (24 h, rolling from first accrual), not a calendar
+  budget.** A daily/monthly reset is a `BILLING-2`-adjacent decision; do not couple them.
+- **Ceilings are env vars, not `EXEC-ENV-BIND-1`'s resources descriptor.** That entry's phase 4
+  is where a per-unit declared budget would live; this shipped the enforcing mechanism it
+  needs. `SYSMAX-3/-4`'s "resources become enforcing" now has a worked example.
+- **A refused call inside the nodus worker subprocess** is attributed `none` (no ContextVar
+  crosses the boundary — `DUR-2b`) and therefore admitted. The tenant window still catches it
+  only if the tool's own process resolves a tenant; today it does not. Same boundary as phase 3.
 
 ### ★★ Phase 2 — the meter moves in a real deployment (2026-09-13)
 

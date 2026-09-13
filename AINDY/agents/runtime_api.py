@@ -148,6 +148,18 @@ def create_agent_run_runtime(*, goal: str, db, user_id):
     except AgentRuntimeGuardrailViolation as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     if not run:
+        # COST-GOVERNOR-1 phase 4 — a budget refusal is "rejected", not "broken": 429 with the
+        # RESOURCE_LIMIT_EXCEEDED reason, the same status the pipeline gives a tenant at its
+        # concurrency limit. Found live: the first refused planner call surfaced as a 500.
+        from AINDY.agents.agent_runtime.shared import get_runtime_compat_module
+        from AINDY.platform_layer.llm_client import find_budget_refusal
+
+        # The same compat module generate_plan wrote to, so the two cannot disagree; and the
+        # cause chain is walked because an app planner rewraps the seam's error before the
+        # runtime sees it (found live: `AnthropicPlannerError(...) from LLMBudgetExceededError`).
+        refusal = find_budget_refusal(getattr(get_runtime_compat_module()._plan_failure, "error", None))
+        if refusal is not None:
+            raise HTTPException(status_code=429, detail=str(refusal))
         raise HTTPException(status_code=500, detail="Failed to generate plan")
     if run["status"] == "approved":
         run = execute_run(run_id=run["run_id"], user_id=user_id, db=db) or run

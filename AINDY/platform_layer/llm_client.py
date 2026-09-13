@@ -14,6 +14,41 @@ class LLMCircuitOpenError(CircuitOpenError, LLMCallError):
     """Raised when the LLM circuit breaker rejects a call."""
 
 
+class LLMBudgetExceededError(LLMCallError):
+    """Raised BEFORE a provider call when the caller's token budget would be exceeded.
+
+    COST-GOVERNOR-1 phase 4. A subclass of ``LLMCallError`` so every existing consumer's error
+    handling sees one contract; the message starts with ``RESOURCE_LIMIT_EXCEEDED`` like every
+    other quota refusal in the runtime. ★ Not a provider failure: it is raised outside the
+    circuit breaker and never counts toward opening it.
+    """
+
+    def __init__(self, message: str, *, scope: str, subject: str, used: int, reserved: int, cap: int):
+        super().__init__(message)
+        self.scope = scope
+        self.subject = subject
+        self.used = used
+        self.reserved = reserved
+        self.cap = cap
+
+
+def find_budget_refusal(exc: BaseException | None, *, depth: int = 8) -> "LLMBudgetExceededError | None":
+    """The ``LLMBudgetExceededError`` behind ``exc``, walking ``__cause__``/``__context__``.
+
+    Consumers rewrap seam errors — the app's planner raises ``AnthropicPlannerError(detail)
+    from exc`` — so a typed refusal is usually one or two causes down by the time a route sees
+    it. Found live: the first refused planner call reached the client as a 500 because the
+    route checked only the outermost exception. Bounded walk; never raises.
+    """
+    seen = 0
+    while exc is not None and seen < depth:
+        if isinstance(exc, LLMBudgetExceededError):
+            return exc
+        exc = exc.__cause__ or exc.__context__
+        seen += 1
+    return None
+
+
 @runtime_checkable
 class LLMClient(Protocol):
     """Abstraction for all LLM provider calls."""
@@ -58,6 +93,20 @@ class CircuitBreakerLLMClient:
         return self._breaker
 
     def _call_with_breaker(self, func, *args, **kwargs):
+        # COST-GOVERNOR-1 phase 4 — reserve → call → reconcile. The reservation sits OUTSIDE
+        # the breaker on purpose: a budget refusal is not a provider failure and must never
+        # count toward opening the circuit. Imported lazily to keep this module free of the
+        # kernel at import time (llm_budget reads the resource manager).
+        from AINDY.platform_layer.llm_budget import llm_budget_reservation
+        from AINDY.platform_layer.token_meter import METERED_METHODS
+
+        if getattr(func, "__name__", "") not in METERED_METHODS:
+            # Not a token-spending call (an embedding, a listing): nothing to reserve against.
+            return self._guarded_call(func, *args, **kwargs)
+        with llm_budget_reservation(provider=self._provider, args=args, kwargs=kwargs):
+            return self._guarded_call(func, *args, **kwargs)
+
+    def _guarded_call(self, func, *args, **kwargs):
         try:
             return self._breaker.call(func, *args, **kwargs)
         except CircuitOpenError as exc:

@@ -206,6 +206,7 @@ def test_generate_plan_declares_the_tenant_around_the_backend(monkeypatch):
         _resolve_objective=lambda objective, values: objective,
         _get_planner_context=lambda run_type, user_id, db: {"system_prompt": "plan"},
         _get_tools_for_run=lambda run_type, user_id, db: [],
+        _plan_failure=SimpleNamespace(reason=None, error=None),
     )
     monkeypatch.setattr(planning, "get_runtime_compat_module", lambda: compat)
     monkeypatch.setattr(planning, "_resolve_planner_backend_name", lambda ctx: ("probe", "test"))
