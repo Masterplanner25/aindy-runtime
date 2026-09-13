@@ -1,4 +1,4 @@
-### Added — `docs/handoffs/`: outbound handoffs to sibling repos, with per-ask status (docs/handoffs-folder)
+### Added — `docs/handoffs/`: outbound handoffs to sibling repos, with per-ask status (#645)
 
 The three `NODUS_HANDOFF_*.md` files move out of `docs/runtime/` into their own folder with an
 index that records what each asks of Nodus and where it stands: the 5.0.1 blocking ask is
