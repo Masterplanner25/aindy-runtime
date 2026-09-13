@@ -1,7 +1,7 @@
 ---
 title: "CLI as an execution surface — scope (CLI-EXEC-SURFACE-1)"
 api_version: "1.0"
-last_verified: "2026-08-22"
+last_verified: "2026-09-12"
 status: current
 owner: "platform-team"
 ---
@@ -92,6 +92,20 @@ So the dispatcher creates usage and the pipeline destroys it. **Call the dispatc
 the pipeline and you get accrual that is never reaped.**
 
 ### What that does to an id-less caller, executed
+
+> **★★ CORRECTED 2026-09-12 — the run below asked the wrong component.** It called
+> `check_quota('')` on the resource manager directly and inferred what the dispatcher does.
+> Through the dispatcher — `dispatch_syscall(name, args, user_id=...)`, the MCP handler's exact
+> call — **there is no `""` key and no lockout**: `make_syscall_ctx_from_tool` mints a fresh
+> `uuid4()` per call when `run_id` is empty (one line above the code cited below), so an
+> id-less caller is always on call 1 of a new unit. The quota was **vacuous** for it, not
+> tripping — 120 calls, 120 successes, 120 distinct units — and every one of those units was
+> a `UsageSnapshot` nothing reaped: the leak was real, the lockout was not. The pipeline was
+> not exempt either; it never told the dispatcher which unit it had claimed, so routes minted
+> their own too. **Fixed and closed 2026-09-12 — `QUOTA-ACCRUAL-ORPHAN-1` in `TECH_DEBT.md`
+> carries the measured run and the fix.** The paragraphs below are kept as written because
+> the document's central question (§3) stands on the accrual/reap split, which was right.
+
 
 `mcp_server.py` has **zero** references to `ExecutionPipeline`, and its handler calls
 `dispatch_syscall(name, args, user_id=...)` with no `execution_unit_id` and no `trace_id`, so

@@ -113,6 +113,32 @@ syscall_outcome_refused_total = Counter(
     registry=REGISTRY,
 )
 
+# ── Execution-unit ownership (QUOTA-ACCRUAL-ORPHAN-1) ────────────────────────
+#
+# ★ The quota has a SUBJECT only when the caller names one. A root dispatch that arrives with
+# no execution unit gets one minted for it; that unit lives exactly as long as the dispatch,
+# so its budget is one call — vacuous by construction. This counter is how an operator finds
+# the callers that dispatch without owning a unit: the pipeline names its unit for every
+# route, so a non-zero count is a transport or a background path that has not.
+syscall_unowned_unit_total = Counter(
+    "aindy_syscall_unowned_unit_total",
+    "Root syscall dispatches that had to mint their own execution unit because the caller "
+    "supplied none — the unit is reaped when the dispatch returns, so nothing leaks, but "
+    "no per-execution budget can apply to that caller.",
+    ["syscall"],
+    registry=REGISTRY,
+)
+
+# ★ Evictions are the OTHER half: a snapshot that was never reaped and aged past the TTL the
+# Redis backend already applies. Counted rather than silently dropped, because a prune that
+# says nothing is indistinguishable from a reap — and the count is the leak, measured.
+resource_usage_evicted_total = Counter(
+    "aindy_resource_usage_evicted_total",
+    "In-memory usage snapshots evicted unreaped after EU_KEY_TTL_SECONDS — units accrued by "
+    "a dispatch whose owner never marked them completed.",
+    registry=REGISTRY,
+)
+
 run_cancel_observed_total = Counter(
     "aindy_run_cancel_observed_total",
     "Effects refused because their run was already cancelled",

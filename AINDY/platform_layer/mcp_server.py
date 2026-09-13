@@ -186,14 +186,39 @@ def _make_handler(syscall_name: str, configured_user_id: Optional[str]):
     """
 
     def _handler(args: dict) -> dict:
+        from AINDY.kernel.resource_manager import ResourceLimitError, get_resource_manager
         from AINDY.kernel.syscall_dispatcher import dispatch_syscall
 
         user_id = _SESSION_IDENTITY.get() or configured_user_id
         if not user_id:
             raise RuntimeError("no identity resolved for this MCP call")
-        # db=None → the syscall handler opens/closes its own session. Least-privilege
-        # capability is inferred from the syscall name inside dispatch_syscall.
-        return dispatch_syscall(syscall_name, args or {}, user_id=user_id)
+        # QUOTA-ACCRUAL-ORPHAN-1 — a transport that dispatches on its own has no pipeline
+        # to claim an execution unit for it, so it owns one per call: admitted against the
+        # identity's concurrency limit, started, and reaped when the call returns. Without
+        # this every call minted a unit nothing cleared — one snapshot per tool call, with
+        # no tenant, for the life of a stdio session. A refusal is returned in the same
+        # envelope shape the dispatcher uses, so the MCP client sees one error contract.
+        try:
+            with get_resource_manager().owned_execution(str(user_id)) as eu_id:
+                # db=None → the syscall handler opens/closes its own session. Least-privilege
+                # capability is inferred from the syscall name inside dispatch_syscall.
+                return dispatch_syscall(
+                    syscall_name, args or {}, user_id=user_id, execution_unit_id=eu_id
+                )
+        except ResourceLimitError as exc:
+            logger.warning("[mcp-server] %s refused: %s", syscall_name, exc)
+            return {
+                "status": "error",
+                "data": {},
+                "outcome": None,
+                "trace_id": "",
+                "execution_unit_id": "",
+                "syscall": syscall_name,
+                "version": (syscall_name.split(".") + ["unknown"])[1],
+                "duration_ms": 0,
+                "error": str(exc),
+                "warning": None,
+            }
 
     return _handler
 

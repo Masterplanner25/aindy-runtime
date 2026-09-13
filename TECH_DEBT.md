@@ -1724,10 +1724,123 @@ implementation.
 
 ## QUOTA-ACCRUAL-ORPHAN-1 — the dispatcher accrues resource usage that only the pipeline reaps
 
-**Status:** Open — P2, but a **live functional break**, not a latent risk. Found 2026-08-22
+**Status: CLOSED (2026-09-12).** Filed 2026-08-22 while scoping `CLI-EXEC-SURFACE-1`.
+**★★ The entry below the rule was WRONG about the mechanism, and the wrong version was labelled
+"executed, with a liveness control". Read §"What was actually measured" before the original —
+it is kept because the shape of the error is the lesson, again (catalogue variant 7, second time
+in this one entry).**
+
+### What was actually measured (2026-09-12) — through the real entry point this time
+
+The original reproduction called `check_quota('')` **directly** and reasoned from there. Run
+through `dispatch_syscall(name, args, user_id=...)` — the MCP server's exact call — with
+`is_testing` patched off:
+
+```
+120 id-less calls  → statuses {'success': 120}
+                     distinct execution_unit_ids returned: 120
+                     '' in returned eus: False        '' in rm._usage: False
+                     snapshots held in rm._usage: 120  pending purge: 0
+                     sample: {'eu_id': '7db5…', 'tenant_id': '', 'syscall_count': 1}
+control              check_quota('eu-control') after 105 → (False, "… exceeded syscall_count limit (105 > 100)")
+```
+
+So, against the three "stages" below: **there is no `""` bucket and there is no lockout.**
+`make_syscall_ctx_from_tool` (`run_id or uuid4()`) and `_resolve_trace_context` (root call,
+`execution_unit_id or uuid4()`) both mint a fresh unit per call, and both predate the filing.
+An id-less caller is *always* on call 1 of a new unit — **the quota is vacuous for it, which is
+exactly the claim the method note says was "the opposite of what happens".** What IS true is
+the half the entry got right for the wrong reason: every one of those units is created by
+step 4's `record_usage` and cleared by nothing, so the process singleton grows one
+`UsageSnapshot` — tenant `""` — per call, for its whole lifetime. Redis is not worse: its keys
+carry `EU_KEY_TTL_SECONDS` (1 h); the in-memory store had no bound at all.
+
+**★★ And "route handlers are fine: they run inside the pipeline" was false.** The pipeline
+claims an `ExecutionUnit`, admits it, `mark_started`s it and reaps it — and never told
+`SyscallDispatcher` which unit that was (the dispatcher's `_EU_ID_CTX`/`_TRACE_ID_CTX` were set
+only by `worker_loop` and by a root dispatch itself). So a route's dispatch minted its own
+unit too. Measured on the booted app: 5 × `POST /platform/syscall` → **5 orphan snapshots
+that survived the purge sweep**, tenant `""`, while the request's own unit read
+`syscall_count: 0`. Every route that dispatches — `/platform/syscall`, `memory_router`'s
+syscall path, `/observability/system` — had the same shape.
+
+**★ A third finding the fix would have made LIVE: `check_quota` re-ran `can_execute(tenant)`
+for a unit that was already admitted and therefore already in the tenant's active count.**
+At exactly `MAX_CONCURRENT_PER_TENANT` (default 5) that refused **every syscall of the last unit
+admitted** — `(5/5) >= 5`. Reproduced in four lines. It had never fired only because no
+dispatch snapshot carried a tenant; the moment the pipeline hands the dispatcher a unit with
+one, it would have. Fixed by removing the re-decision: admission is decided once, before
+`mark_started`; a mid-execution check is about *this unit's* budget, which is all the
+docstring ever claimed.
+
+### What shipped (one PR, `fix/quota-accrual-orphan-1`)
+
+**The rule the fix enforces: a unit is reaped by whoever established it.**
+
+1. **A ROOT dispatch that minted its unit reaps it on return** (`SyscallDispatcher.dispatch`,
+   `finally`, root only — `_tok_eu is not None`). "Minted" = the caller's context arrived with
+   `execution_unit_id=""`, OR `make_syscall_ctx_from_tool` filled it and says so via
+   `metadata["_eu_minted"]`. A NAMED unit is left to its owner (liveness control on the
+   purge); a NESTED dispatch inherited a unit it does not own and leaves it alone. **This is
+   not "a second reaper" (the objection below): minted here, reaped here, one frame.** It is
+   counted — `aindy_syscall_unowned_unit_total{syscall}` — because a minted unit's budget is
+   one call, so the counter IS the list of callers to which no per-execution quota applies.
+   Still on it after this PR: `nodus_worker`'s `sys()` seam, agent tools via
+   `make_syscall_ctx_from_tool`/`invoke_tool_syscall`, `extension_worker` with an empty
+   `run_id`. **Those are the next decision, not a leak: should a guest's `sys()` calls share
+   the run's budget?** That is `SYSMAX-3` / `EXEC-ENV-BIND-1`'s resources descriptor.
+2. **The pipeline binds its unit into the dispatcher's ContextVars** for the handler's
+   duration (`_safe_bind_syscall_unit`, same bridge `worker_loop` builds). Every dispatch
+   inside a route is now nested under the request's unit: usage accrues where `mark_completed`
+   reaps; the envelope's `trace_id` equals `X-Trace-ID` (FR-26 extended to the syscall
+   envelope); `memory.write`'s provenance `execution_unit_id` names a real `ExecutionUnit`
+   row; and a helper-minted context's idempotency scope becomes the request unit rather than
+   a phantom. **★ Only when BOTH ids exist** — binding a trace with no unit would make nested
+   dispatches inherit `""`, i.e. create the bucket this entry was filed about. **★ Gate
+   semantics deliberately unchanged:** the gate still keys on the id the CALLER's context
+   arrived with (`_orig_eu_id`), so an empty-context dispatch under a parent (memory_router)
+   stays ungated — widening that would dedup two identical `memory.write`s in one request,
+   which is a semantic change under cover of a mediation fix (`ROUTE-EFFECT-BYPASS-1`'s
+   warning). Left for `IDEM-13` if wanted.
+3. **The MCP server owns a unit per call** — `ResourceManager.owned_execution(tenant)`:
+   `can_execute` → `mark_started` → dispatch with `execution_unit_id` → `mark_completed`.
+   A refusal returns the dispatcher's envelope shape (`status: error`), so the client sees one
+   error contract. The identity's concurrency limit now applies to MCP calls the way it
+   applies to HTTP requests. **Not done, by decision: an `ExecutionUnit` DB row per MCP call**
+   — whether a transport is an execution surface is `CLI-EXEC-SURFACE-1`'s question.
+4. **The in-memory store evicts unreaped snapshots after `EU_KEY_TTL_SECONDS`** — parity with
+   the Redis backend, swept at most once a minute, **counted
+   (`aindy_resource_usage_evicted_total`) and logged at WARNING**, never silently. This is the
+   belt for the residual that is by design: an async job submitted from a request inherits the
+   request's ids for trace continuity (`execution_dispatcher.py` captures them on purpose),
+   so its dispatches re-open a unit whose owner already returned. **A unit's accounting can be
+   re-opened by work that inherited it; the reap is at the owner's return, not at the last
+   inheritor's.** A non-zero eviction count is that, measured.
+
+**Mutation-tested 8/8** (`tests/unit/test_quota_accrual_orphan.py`): no-reap, reap-all,
+no-bind, re-admit-in-check_quota, no-evict, MCP-unowned, helper-unmarked, no-count — each
+turned the suite red. **The route test drives `POST /platform/syscall` on the booted app**
+(ROUTE-GUARD-1), not the handler.
+
+### ★ Method note, second edition
+
+The first method note (kept below) says the entry was *initially* filed from source as "the
+quota is vacuous for an id-less caller", then "corrected" by running `check_quota('')`. **The
+first reading was right and the correction was wrong**, because the correction exercised the
+resource manager, not the dispatcher — it asked the right component the wrong question. The
+tell that was there to read: `make_syscall_ctx_from_tool`'s `run_id or str(_uuid.uuid4())` is
+one line above the code the entry cites. **A reproduction has to enter where the caller
+enters.** The 2026-09-12 run took the MCP handler's exact call and let the stack decide.
+
+---
+
+### Original entry (2026-08-22) — kept as filed; the mechanism section is WRONG, see above
+
+
+**Status (as filed):** Open — P2, but a **live functional break**, not a latent risk. Found 2026-08-22
 while scoping `CLI-EXEC-SURFACE-1`; split out because the mechanism is not CLI- or MCP-specific.
 
-### The mechanism
+#### The mechanism
 
 Resource accounting is split across two components that were never required to appear
 together:
@@ -1745,7 +1858,7 @@ together:
 that nothing ever clears.** Route handlers are fine: they run inside the pipeline. The gap is
 every other dispatch path.
 
-### The one caller that hits it today
+#### The one caller that hits it today
 
 `AINDY/platform_layer/mcp_server.py` has **zero** references to `ExecutionPipeline`, and its
 handler calls `dispatch_syscall(name, args, user_id=...)` with no `execution_unit_id` and no
@@ -1753,7 +1866,7 @@ handler calls `dispatch_syscall(name, args, user_id=...)` with no `execution_uni
 (`syscall_dispatcher.py:904-910`), so every call checks *and accrues* against the key `""`,
 in the process-level singleton (`get_resource_manager()`, `resource_manager.py:984`).
 
-### Executed, with a liveness control
+#### Executed, with a liveness control
 
 `is_testing` is a pydantic **property** — patch it on the class or `check_quota`
 short-circuits to `(True, None)` at `resource_manager.py:639` and proves nothing:
@@ -1782,7 +1895,7 @@ Three stages, in order:
    `MAX_WALL_TIME_MS` (300 000) accrues identically — a second, slower path to the same
    lockout.
 
-### Why it matters
+#### Why it matters
 
 `aindy-runtime mcp-server --transport stdio` is a **long-lived** process. A session exceeding
 100 tool calls hits a hard stop, and the message cites an execution unit that does not exist —
@@ -1799,7 +1912,7 @@ deployment-wide and outlives any single restart.
 `CLI-EXEC-SURFACE-1`); or the deployment runs Redis, which widens the blast radius from one
 process to all of them.
 
-### The fix, and the shape to avoid
+#### The fix, and the shape to avoid
 
 **The rule: a caller that uses `dispatch_syscall` must own an `ExecutionUnit` lifecycle —
 claim it and reap it.** Not for metrics; so the quota has a subject that is *its own* and that
@@ -1868,8 +1981,10 @@ thing to decide deliberately: **handing DLQ drain to an LLM client is a decision
    and because `tenant_id == user_id` a shared transport identity is a shared memory namespace —
    `INITIATOR-IDENTITY-1`.
 2. **Setting the call up correctly.** `mcp-server` dispatches with no `execution_unit_id`, so quota
-   accrues on the key `""` and nothing reaps it — `QUOTA-ACCRUAL-ORPHAN-1`. It never bypassed the
-   gate; it walked through it wrong, and a long-lived stdio session simply stops at 100 syscalls.
+   accrues on a unit nothing reaps — `QUOTA-ACCRUAL-ORPHAN-1`. *(Corrected 2026-09-12: it was
+   NOT the key `""` and it did NOT stop at 100 — each call minted its own unit, so the budget was
+   vacuous and the store leaked one snapshot per call. Closed; the MCP handler now owns a unit
+   per call.)* It never bypassed the gate; it walked through it wrong.
 
 **★ The name is kept deliberately.** `CLI-EXEC-SURFACE-1` is referenced from `CLAUDE.md`, the scope
 doc and three sibling entries; renaming a filed id in place is what `SCOPE-NAMING-1` records as the
@@ -1959,9 +2074,10 @@ strong inference from a proxy.)*
 
 **Read that entry, not this paragraph.** In one line: `SyscallDispatcher` **accrues** resource
 usage and only `ExecutionPipeline` **reaps** it, so any caller that dispatches outside the
-pipeline accrues forever. The one caller doing that today is `mcp-server`, which dispatches
-with no `execution_unit_id`; it gets one free call, then a single process-wide bucket keyed
-`""`, then a permanent `RESOURCE_LIMIT_EXCEEDED` past 100 syscalls.
+pipeline accrues forever. *(Corrected 2026-09-12, CLOSED: the "one free call, then a bucket
+keyed `""`, then a permanent lockout" story this paragraph used to tell was wrong — each
+id-less call minted its own unit, so the quota was vacuous and the store leaked one snapshot
+per call; and the pipeline was affected too, since it never told the dispatcher its unit.)*
 
 **Why it belongs in this entry's story at all:** it is the hole a CLI built the obvious way
 inherits on day one, and it is the reason the scope doc's answer to *"pipeline or beside it?"*

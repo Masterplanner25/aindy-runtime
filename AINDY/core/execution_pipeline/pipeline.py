@@ -12,12 +12,14 @@ from AINDY.core.execution_pipeline.runtime_state import (
     _inject_execution_envelope,
     _record_side_effect,
     _requires_route_side_effects,
+    _safe_bind_syscall_unit,
     _safe_reset_current_execution_context,
     _safe_reset_parent_event,
     _safe_reset_pipeline_active,
     _safe_set_current_execution_context,
     _safe_set_parent_event,
     _safe_set_pipeline_active,
+    _safe_unbind_syscall_unit,
     _set_event_refs,
 )
 from AINDY.core.execution_pipeline.shared import (
@@ -59,6 +61,8 @@ class ExecutionPipeline:
     _safe_reset_pipeline_active = _safe_reset_pipeline_active
     _safe_set_current_execution_context = _safe_set_current_execution_context
     _safe_reset_current_execution_context = _safe_reset_current_execution_context
+    _safe_bind_syscall_unit = _safe_bind_syscall_unit
+    _safe_unbind_syscall_unit = _safe_unbind_syscall_unit
     _inject_execution_envelope = _inject_execution_envelope
     _extract_memory_context_count = _extract_memory_context_count
     _apply_execution_hints = _apply_execution_hints
@@ -90,6 +94,7 @@ class ExecutionPipeline:
         parent_token: Any = None
         pipeline_token: Any = None
         execution_ctx_token: Any = None
+        syscall_unit_tokens: Any = None
         rm_started = False
 
         logger.info("execution.entry=PIPELINE", extra={"route": ctx.route_name, "trace_id": trace_id})
@@ -137,6 +142,7 @@ class ExecutionPipeline:
                 )
             self._safe_rm_mark_started(ctx)
             rm_started = True
+            syscall_unit_tokens = self._safe_bind_syscall_unit(ctx)
             handler_start = time.monotonic()
             result = handler(ctx)
             if inspect.isawaitable(result):
@@ -297,6 +303,7 @@ class ExecutionPipeline:
                     active_metric.dec()
                 except Exception:
                     pass
+            self._safe_unbind_syscall_unit(syscall_unit_tokens)
             if rm_started:
                 self._safe_rm_mark_completed(ctx)
             if ctx.metadata.get("eu_status") != "waiting":
