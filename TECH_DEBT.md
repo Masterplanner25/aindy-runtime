@@ -10406,7 +10406,32 @@ enforcement is a failure mode this repository already names — it is the whole 
 
 ## FLOW-PARALLEL-1 — the flow engine has no fan-out, join, or barrier
 
-**★★ PHASE 1 SHIPPED 2026-09-10 (#616) — declared fan-out, default-OFF. Open for 2–4.**
+**★★ PHASE 2 SHIPPED 2026-09-13 (#640) — join policies at the barrier; the FIRST `partial`
+EMITTER in the runtime. Open for 3–4 (named predicates / switch-case; the default flip).**
+
+### Phase 2 — the join is declared on the group and resolved at the barrier
+
+`FanOutEdgeGroup(targets, join="all"|"any"|"quorum", quorum=k)`. `all` is phase 1
+byte-for-byte — including its graph signature, pinned as a RECORDED digest (a comparison between
+two encodings that move together cannot pin that; mutation testing found the first draft's
+version survived). `any` and `quorum(k)` proceed once enough branches have succeeded; **when they
+proceed past a failed branch the superstep is a `partial` outcome** (`EFFECT-PARTIAL-1`'s
+vocabulary, finally with an emitter): the failed branches are named under `_superstep_partials`
+on the run's state (durable, survives a resume on a fresh runner), carried on the
+`execution.completed` event (`outcome`, `partial_units`), and lifted by `sys.v1.flow.run` onto
+its envelope — `status: "partial"`, `outcome.units` naming superstep, join, branch and error —
+at the dispatcher's single resolution point, so the ledger records it too. The merge is
+unchanged (only SUCCESS patches ever landed); **convergence is required of the branches that
+SUCCEEDED** — a failed branch produced no state to choose a successor against. History is written
+for every branch whatever the join decides. A non-default join is in the graph signature: it
+decides which successors are reachable, so a run planned under `all` does not resume under `any`.
+
+**★ `test_syscall_outcome.py`'s "nothing emits an outcome claim" guard fired, as its docstring
+said it would when this day came; it is now an EXACT census of the two emitting files, so an
+unlisted third one still fails.** Mutation-tested 5/5 (`test_flow_join_policies.py`); the
+end-to-end test drives the real runner and the real dispatcher.
+
+**★ Phase 1 — SHIPPED 2026-09-10 (#616) — declared fan-out, default-OFF.**
 `FanOutEdgeGroup` declares a node's successors; the group runs as one superstep with per-branch
 sessions, one contiguous ordinal block allocated at the barrier, and a central merge on the
 runner's session. **★★ Three decisions the design did not make, taken while building:**
@@ -10423,9 +10448,9 @@ UNCHANGED against the live `AGENT_FLOW`/`NODUS_SCRIPT_FLOW`/`NODUS_COMPILE_AND_R
 run on upgrade.** **★★ Mutation testing found the ONE untested thing that mattered: "branches
 share the runner's session" survived every other test — the §5 constraint the whole design is
 shaped around, whose failure mode is SILENT corruption.** Mutation-tested 12/12 after that fix.
-**★ STILL OPEN: fan-out without a join is half a primitive** — phase 2 replaces enforced
-convergence with declared policies (`all`/`any`/`quorum(k)`) and is where a partially-failed
-superstep starts reporting `partial` instead of failing whole.
+~~**★ STILL OPEN: fan-out without a join is half a primitive**~~ — phase 2 shipped it (above).
+**Still open:** phase 3 (named predicates, `SwitchCaseEdgeGroup`, closes `FLOW-GRAPH-SIGNATURE-1`'s
+blind spot) and phase 4 (flip `AINDY_FLOW_FAN_OUT` on the evidence of a real flow declaring a group).
 
 
 **Status: CONFLICT HALF SETTLED 2026-09-03 (#569); SCHEDULER PHASE 0 SHIPPED 2026-09-08 (#603)
@@ -12038,6 +12063,9 @@ absorbable thing is the scope vocabulary, not a resource-specific verb.
 ---
 
 ## EFFECT-PARTIAL-1 — the envelope has two states and a batched effect has three
+
+**★ 2026-09-13 — the first EMITTER: `FLOW-PARALLEL-1` phase 2 (#640).** A fan-out superstep that proceeds past a failed branch under a lenient join is `partial`; `sys.v1.flow.run` lifts it onto the envelope. The vocabulary is no longer latent — consumers branching `!= "success"` (as told in the 2.9.0 handoff) see it; one branching `== "error"` would misread it as success, which is why that shape was removed from four dispatch consumers when the vocabulary shipped.
+
 
 **Status: CLOSED 2026-09-03 (#569).** Filed 2026-08-17. Provenance:
 `AIDER-PORTABILITY-2026-08-17` (its B2). Vocabulary shipped #560; the envelope and ledger halves

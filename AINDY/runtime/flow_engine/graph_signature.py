@@ -75,7 +75,19 @@ def _canonical_edges(edges: Any) -> dict[str, list[Any]]:
                 # ★ Adding a group to a flow SHOULD change that flow's signature: it is a
                 #   topology change, and a run planned against the sequential shape must
                 #   quarantine. That is the mechanism working.
-                targets.append({"fan_out": [str(t) for t in edge.targets]})
+                encoded: dict[str, Any] = {"fan_out": [str(t) for t in edge.targets]}
+                # Phase 2 — the join decides which successors are reachable, so it is SHAPE.
+                # ★ Only a NON-DEFAULT join is encoded: every phase-1 group hashed as
+                #   {"fan_out": [...]} and `all` must keep that exact digest, or every run
+                #   suspended on a phase-1 group quarantines on upgrade (the absent ≠ mismatch
+                #   rule). `test_a_default_join_keeps_the_phase_1_signature` pins it.
+                join = str(getattr(edge, "join", "all") or "all")
+                if join != "all":
+                    encoded["join"] = join
+                    quorum = getattr(edge, "quorum", None)
+                    if quorum is not None:
+                        encoded["quorum"] = int(quorum)
+                targets.append(encoded)
             elif isinstance(edge, dict):
                 # A conditional edge. The target and the fact that it is gated are topology;
                 # the callable under "condition" is an implementation and is not read at all.

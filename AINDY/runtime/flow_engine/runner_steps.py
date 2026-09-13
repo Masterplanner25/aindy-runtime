@@ -425,16 +425,19 @@ def _execute_superstep(
     branches: list[str],
     node_started_event_id,
 ) -> str:
-    """FLOW-PARALLEL-1 phase 1 — run a declared fan-out group as ONE superstep.
+    """FLOW-PARALLEL-1 phases 1+2 — run a declared fan-out group as ONE superstep.
 
     Returns the node the flow continues from. Raises `FanOutWaitRefused` if a branch WAITs and
-    `ValueError` if the branches do not converge.
+    `ValueError` if the join is not satisfied or the surviving branches do not converge.
 
-    ★★ **Phase 1 requires all branches to converge on the SAME successor**, and enforces it
-    rather than picking one. This is the degenerate join — an implicit `all` — and it is the
-    narrowest thing that makes fan-out coherent without the join policies phase 2 owns. The
-    design says *"fan-out without a join is half a primitive"*; this is the half, made explicit
-    instead of left undefined. Declared join policies (`all`, `any`, `quorum(k)`) generalise it.
+    ★★ **The join is the group's declared policy, resolved at the barrier (phase 2).** `all`
+    (the default) is phase 1 exactly: every branch must succeed. `any` and `quorum(k)` proceed
+    once enough have — and when they proceed past a failed branch, the superstep is a
+    **`partial`** outcome (`EFFECT-PARTIAL-1`): the failed branches are named on the run's
+    state under `_superstep_partials`, on the completion event, and on the `flow.run`
+    envelope. Never silent. The merge takes only SUCCESS patches (unchanged since phase 0), and
+    **convergence is required of the branches that succeeded** — a failed branch's successor
+    is not consulted, because it produced no state to choose a successor against.
 
     ★ **The branches never become `run.current_node`.** The run stays parked on the node that
     declared the group until the whole superstep commits, so a crash mid-superstep resumes by
@@ -444,8 +447,16 @@ def _execute_superstep(
     ★ **The runner's session is the only `FlowHistory` writer** (design §3c). Branches ran on
     their own sessions and returned patches; everything below is on `self.db`, single-threaded.
     """
-    from AINDY.runtime.flow_engine.fan_out import FanOutWaitRefused, run_fan_out_branches
+    from AINDY.runtime.flow_engine.fan_out import (
+        FanOutEdgeGroup,
+        FanOutWaitRefused,
+        resolve_join,
+        run_fan_out_branches,
+    )
+    from AINDY.runtime.flow_engine.node_executor import fan_out_group_for
     from AINDY.db.models.flow_run import FlowHistory
+
+    group = fan_out_group_for(run.current_node, self.flow) or FanOutEdgeGroup(branches)
 
     def _execute(node, branch_state, branch_context):
         from AINDY.runtime import flow_engine as flow_engine_module
@@ -489,29 +500,50 @@ def _execute_superstep(
                 sequence_number=ordinal,
             )
         )
-        patches.append({"node": node, "patch": patch, "status": status})
+        patches.append({
+            "node": node, "patch": patch, "status": status,
+            "error": result.get("error") or entry["error"],
+        })
     self.db.commit()
 
     # The central merge, on the runner's session, in declaration order (§3c).
     self._merge_superstep(state, patches)
 
-    failed = [p["node"] for p in patches if p["status"] == "FAILURE"]
-    if failed:
+    # ★ The join, at the barrier (phase 2). History is already written for every branch —
+    #   the record must show what was attempted whatever the join decides.
+    outcome = resolve_join(group, {p["node"]: p["status"] for p in patches})
+    if not outcome.satisfied:
         raise ValueError(
-            f"branch(es) {failed} failed in the fan-out group from {run.current_node!r}. "
-            "Phase 1 has no join policy, so a failed branch fails the superstep; `any` and "
-            "`quorum(k)` are phase 2."
+            f"branch(es) {list(outcome.failed)} failed in the fan-out group from "
+            f"{run.current_node!r}; join={outcome.join} needs {outcome.required} of "
+            f"{len(group.targets)} to succeed and {len(outcome.succeeded)} did."
         )
+    if outcome.partial:
+        # Proceeding past a failure is a PARTIAL outcome, and it is recorded where it is
+        # durable (the run's state), not only where it is convenient (a log line).
+        logger.warning(
+            "[FlowFanOut] superstep from %r proceeds under join=%s with failed branch(es) %s",
+            run.current_node, outcome.join, list(outcome.failed),
+        )
+        partials = list(state.get("_superstep_partials") or [])
+        errors = {p["node"]: p.get("error") for p in patches}
+        partials.append({
+            "superstep": run.current_node,
+            "join": outcome.join,
+            "succeeded": list(outcome.succeeded),
+            "failed": [{"branch": b, "error": errors.get(b)} for b in outcome.failed],
+        })
+        state["_superstep_partials"] = partials
 
-    # ★ Convergence, enforced. Resolved AFTER the merge so each branch's successor is chosen
-    #   against the merged state, which is what a sequential run would have seen.
-    successors = {node: resolve_next_node(node, state, self.flow) for node in branches}
+    # ★ Convergence, enforced over the SUCCEEDED branches. Resolved AFTER the merge so each
+    #   branch's successor is chosen against the merged state, which is what a sequential run
+    #   would have seen.
+    successors = {node: resolve_next_node(node, state, self.flow) for node in outcome.succeeded}
     distinct = set(successors.values())
     if len(distinct) != 1 or None in distinct:
         raise ValueError(
             f"fan-out branches from {run.current_node!r} did not converge: {successors}. "
-            "Phase 1 requires every branch of a group to resolve to the same successor "
-            "(the degenerate `all` join). Declared join policies are phase 2."
+            "Every succeeding branch of a group must resolve to the same successor."
         )
     return distinct.pop()
 

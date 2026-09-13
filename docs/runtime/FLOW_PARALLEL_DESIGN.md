@@ -1,7 +1,7 @@
 ---
 title: "Flow Fan-Out and Supersteps — Design"
 api_version: "1.0"
-last_verified: "2026-09-10"
+last_verified: "2026-09-13"
 status: current
 owner: "platform-team"
 ---
@@ -195,7 +195,7 @@ cheapest guard, and it belongs in the same PR as the shape.
 |---|---|---|
 | ~~**0**~~ | ~~The superstep seam~~ | **DONE — #603**, with one deliberate narrowing: no `resolve_frontier()` was added. Nothing can produce a frontier of >1 until phase 1 declares fan-out edges, and shipping an unused resolver is exactly the `ROUTE-AST-UNWIRED-1` shape this phase is meant to avoid. What shipped is the part that IS on the live path today: barrier ordinal allocation (§4) and the central merge (§3c) |
 | ~~**1**~~ | ~~`FanOutEdgeGroup`, bounded width, per-branch sessions, `WAIT` refused~~ | **DONE.** Three things this row did not say, decided while building: **(a) the bound is PROCESS-WIDE, not per-run** — runners are created from request handlers, syscall dispatch, rehydration and scheduler recovery, so a per-run width of W allows *runs × W* sessions; one shared pool, sized like the scheduler's lanes. **(b) the flag gates CONCURRENCY, not SEMANTICS** — a group runs its branches in declaration order either way, so flipping it off changes timing and nothing else. **(c) phase 1 requires branches to CONVERGE on one successor, enforced** — the degenerate `all` join, because §8 is right that fan-out without a join is half a primitive and the half needs defined semantics rather than none |
-| **2** | `FanInEdgeGroup` / join policies (`all`, `any`, `quorum(k)`) resolved at the barrier, partial outcomes per `EFFECT-PARTIAL-1` | |
+| ~~**2**~~ | ~~join policies (`all`, `any`, `quorum(k)`) resolved at the barrier, partial outcomes per `EFFECT-PARTIAL-1`~~ | **DONE — #640, 2026-09-13.** Declared ON the group (`join=`, `quorum=`), not as a separate `FanInEdgeGroup` — the barrier already exists, the join is a property of it. `all` keeps phase 1's recorded signature digest; a non-default join is shape and changes it. A lenient join proceeding past a failure is the runtime's **first `partial` emitter**: on the run's state, the completion event, and the `flow.run` envelope. Convergence is required of the SUCCEEDED branches |
 | **3** | Named predicates, then `SwitchCaseEdgeGroup` as a constrained fan-out; closes `FLOW-GRAPH-SIGNATURE-1`'s blind spot | separable, see §6 |
 | **4** | Flip the default once a real flow declares a group and a superstep has been observed | evidence, not code |
 
@@ -261,6 +261,6 @@ frontier of one, which is today's path.
 #603 and **phase 1 on 2026-09-10**, approved under §2 (the concurrency model) with §10 above
 serving as the §8 impact analysis.
 
-**Still to be asked, when phase 2 is taken:** join policies (`all`, `any`, `quorum(k)`) replace
-the enforced convergence phase 1 ships with, and that is where a partially-failed superstep starts
-reporting `partial` rather than failing whole.
+~~**Still to be asked, when phase 2 is taken:**~~ Phase 2 shipped 2026-09-13 (#640) under the
+same §2 approval: the join is a declared property of the existing barrier (no new edge type), and a
+partially-failed superstep under `any`/`quorum(k)` reports `partial` rather than failing whole.

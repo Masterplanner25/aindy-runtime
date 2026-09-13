@@ -137,12 +137,26 @@ def test_the_marker_is_stripped_even_when_refused():
 # ── the two facts the safety argument rests on ───────────────────────────────
 
 
-def test_no_registered_handler_emits_an_outcome_claim():
-    """★★ FACT 1 — this is what makes widening the value set a no-op on upgrade.
+#: The runtime code that EMITS an outcome claim. Empty from #569 (the vocabulary shipped
+#: latent) until FLOW-PARALLEL-1 phase 2 (2026-09-13), when a fan-out superstep proceeding past
+#: failed branches under a lenient join became the first `partial` emitter: the runner writes
+#: the marker on the completed run's result and `sys.v1.flow.run` lifts it onto its envelope.
+#: ★ An exact set, not a floor: a new emitter is a consumer-visible change and must be added
+#: here deliberately, with a release note, not discovered.
+_KNOWN_OUTCOME_EMITTERS = {
+    "AINDY/kernel/syscall_registry.py",
+    "AINDY/runtime/flow_engine/runner_completion.py",
+}
+
+
+def test_only_the_known_handlers_emit_an_outcome_claim():
+    """★★ FACT 1, amended — the widening was a no-op on upgrade because nothing emitted it.
 
     Checked over the AST rather than by string match: a comment or docstring mentioning the key
-    must not satisfy it. If this ever fails, the widening is no longer latent and the release
-    notes have to say so before the handler ships.
+    must not satisfy it. From #569 this asserted ABSENCE; since FLOW-PARALLEL-1 phase 2 there is
+    a first emitter (recorded in `_KNOWN_OUTCOME_EMITTERS` and in that PR's release note), so
+    it now asserts the exact set. A file appearing here that is not listed is the signal the
+    original docstring described: "the release notes have to say so before the handler ships."
     """
     import ast
     from pathlib import Path
@@ -161,9 +175,12 @@ def test_no_registered_handler_emits_an_outcome_claim():
             elif isinstance(node, ast.Name) and node.id == "OUTCOME_KEY":
                 offenders.append(str(path))
 
-    assert not offenders, (
-        f"a handler emits an outcome claim: {sorted(set(offenders))}. The new envelope values "
-        f"are no longer latent — consumers must be told before this ships."
+    found = {Path(p).as_posix() for p in offenders}
+    assert found == _KNOWN_OUTCOME_EMITTERS, (
+        f"outcome emitters changed: unexpected {sorted(found - _KNOWN_OUTCOME_EMITTERS)}, "
+        f"missing {sorted(_KNOWN_OUTCOME_EMITTERS - found)}. A new emitter is consumer-visible "
+        "— add it here deliberately AND say so in the release notes; a vanished one means the "
+        "partial path was deleted."
     )
 
 
