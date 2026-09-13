@@ -16,6 +16,7 @@ from AINDY.agents.agent_runtime.shared import get_runtime_compat_module, logger
 from AINDY.config import settings
 from AINDY.platform_layer.external_call_service import perform_external_call
 from AINDY.platform_layer.openai_client import chat_completion, get_openai_client
+from AINDY.platform_layer.token_meter import llm_attribution_scope
 
 PLANNER_SYSTEM_PROMPT = """You are a generic agent planner.
 
@@ -330,16 +331,22 @@ def generate_plan(
             tools=tools,
             memory_block=memory_block,
         )
-        plan = _invoke_planner_backend(
-            backend_name=backend_name,
-            objective_text=objective_text,
-            run_type=run_type,
-            user_id=user_id,
-            db=db,
-            system_prompt=system_prompt,
-            tools=tools,
-            planner_context=planner_context,
-        )
+        # COST-GOVERNOR-1 phase 3 — planning is the expensive LLM call, and it runs BEFORE the
+        # AgentRun row exists, so the only identity it can carry is the tenant. Declared here,
+        # around whichever backend runs (the runtime's own or an app-registered one), so the
+        # meter can accrue the spend to the tenant's window; without this the planner's tokens
+        # are attributed to nothing a budget could ever read.
+        with llm_attribution_scope(tenant_id=str(user_id) if user_id else None):
+            plan = _invoke_planner_backend(
+                backend_name=backend_name,
+                objective_text=objective_text,
+                run_type=run_type,
+                user_id=user_id,
+                db=db,
+                system_prompt=system_prompt,
+                tools=tools,
+                planner_context=planner_context,
+            )
         if "steps" not in plan or "overall_risk" not in plan:
             logger.warning("[AgentRuntime] Plan missing required fields: %s", plan)
             return None

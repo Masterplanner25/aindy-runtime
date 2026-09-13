@@ -13029,8 +13029,9 @@ reified. Same shape here. See `COMPARATIVE_RESEARCH_INDEX.md` §4b.
 
 ## COST-GOVERNOR-1 — every quota exists except the one that matters for an LLM runtime
 
-**Status: OPEN — P1. METER SHIPPED 2026-09-03 (#563, #564); ADOPTED 2026-09-08 (app #321).
-The governor is blocked on EVIDENCE and IDENTITY, no longer on adoption — see
+**Status: OPEN — P1. METER SHIPPED 2026-09-03 (#563, #564); ADOPTED 2026-09-08 (app #321);
+★ PHASE 3 (identity + accrual) SHIPPED 2026-09-13 (#635). The governor is now blocked on
+EVIDENCE only (phase 2 — a read of a running deployment) — see
 `docs/runtime/LLM_SEAM_ADOPTION_SCOPE.md`.** Filed 2026-08-18. Provenance: `METAGPT_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md`
 (`C:\codev\MetaGPT research\`, 2026-08-15, its **M2**), verified against source at `v2.4.0`.
 **The last verified-but-unfiled gap across ten comparative research folders.**
@@ -13058,6 +13059,56 @@ true and neither is adoption:
    calls need the `INITIATOR-IDENTITY-1` rule (*allow, and count separately*; an asserted
    identity may constrain, never widen), with the unattributed fraction visible before anyone
    relies on a cap.
+
+### ★ Phase 3 — tokens are a resource dimension with a subject (2026-09-13, #635)
+
+**The counter the governor will check turned out to already exist.** The meter's own docstring
+said per-tenant accounting belongs in "a cache, keyed and expiring", not in a Prometheus label
+— and `kernel.resource_manager` is exactly that: per-unit snapshots and per-tenant counters,
+Redis-shared or in-memory, both TTL'd, and since `QUOTA-ACCRUAL-ORPHAN-1` (#632) its units are
+reaped and the pipeline binds one per request. So `observe_llm_usage` now also accrues:
+
+- **`UsageSnapshot.tokens`** on the attributed **run**, else the **bound execution unit**
+  (`_EU_ID_CTX` — a request, a bound worker job); Redis key `aindy:rm:eu:{id}:tokens`,
+  `EU_KEY_TTL_SECONDS`, deleted with the unit.
+- **A per-tenant rolling window** (`record_tenant_tokens` / `get_tenant_tokens`;
+  `aindy:rm:tenant:{id}:tokens`, `TENANT_KEY_TTL_SECONDS`, in-memory parity in `_sweep`). **The
+  budget WINDOW is phase 4's decision; this counter's expiry is not it.**
+- **`aindy_llm_calls_total{provider, attributed=run|unit|tenant|none}`** — the unattributed
+  fraction, visible before anyone relies on a cap (`INITIATOR-IDENTITY-1`: allow, count).
+
+**★★ Whose identity is available WHERE — the finding that shaped it.** Planning, the expensive
+call, runs in `create_run` **before the `AgentRun` row exists**, so at planning time the only
+identity is the tenant; the run id exists only for execution-time calls under `execute_run`.
+**A per-run budget therefore cannot cover planning; a per-tenant one can.** Both scopes the
+entry settled on (agent run + tenant, both binding) are still right — but phase 4 must not
+expect the run budget to catch a runaway planner.
+
+**How identity reaches the call site — `token_meter.llm_attribution_scope(tenant_id, run_id)`**,
+a token-holding ContextVar (`TEST-ORDER-CONTEXTVAR-1`): inner spans inherit outer fields.
+`generate_plan` declares the tenant around whichever backend runs (the runtime's own or the
+app's registered Claude planner — so **the app half of phase 3 is nothing**: #321's call sits
+inside that span). `execute_run` declares (tenant, run) around the execution span and lands the
+run's total on its `SCORE_COMPUTED` record as `dimensions.llm_tokens` — per-run spend, durable
+in the trace, with no schema change.
+
+**★ `ResourceManager.observed_unit(tenant, eu)` — observed, NOT admitted, and that is the
+design choice to keep.** `owned_execution` (the MCP server's scope) admits against
+`MAX_CONCURRENT_PER_TENANT` and starts the unit; wrapping an agent run in it would silently make
+the run ONE admitted unit — counted against tenant concurrency, capped at 100 syscalls across
+every step — which is `EXEC-ENV-BIND-1` phase 4's subject decision, not a side effect of
+metering. `observed_unit` gives the tokens a subject with the run's identity and purges on exit.
+A control test asserts the tenant's active count stays 0 inside it.
+
+**★ Two boundaries it does not cross, stated so nobody reads a zero as a bug:** an LLM call
+made *inside the nodus worker subprocess* (a tool the guest calls) has no attribution
+ContextVar — the same process boundary `DUR-2b` names — and lands as `none`; and a call made
+from a scheduler thread outside any span lands as `none`. Both are what `attributed="none"`
+exists to show.
+
+**Nothing is enforced.** No ceiling, no refusal. Phase 4 stays gated on phase 2 — a read of
+`aindy_llm_tokens_total` (and now `aindy_llm_calls_total`) on a running deployment — and the
+Docker stack was down on the host when this shipped, so that read has not been made.
 
 **★ Why the meter sits on the RAW path and not `chat()`, recorded here because it is a live trap
 rather than history.** `chat()` delegates to `messages_create` / `chat_completion_response`;

@@ -36,16 +36,76 @@ with the customer list and turns the metric into an operational problem of its o
 accounting belongs in the counter the governor will check — a cache, keyed and expiring — not in
 the observability surface. Recording that here so the next person does not read the omission as
 an oversight and "fix" it.
+
+★ PHASE 3 — THE COUNTER THE GOVERNOR WILL CHECK IS `ResourceManager` (2026-09-13)
+-----------------------------------------------------------------------------------
+That "cache, keyed and expiring" already existed: `kernel.resource_manager` holds per-unit
+snapshots and per-tenant counters, Redis-shared or in-memory, both TTL'd — and since
+`QUOTA-ACCRUAL-ORPHAN-1` (#632) its units are reaped and the pipeline binds one for every
+request. So `observe_llm_usage` now ALSO accrues the tokens as a resource dimension there:
+
+* on the **run** when an agent run's execution span declared itself (`llm_attribution_scope`,
+  set by `execute_run`), else on the **bound execution unit** (`_EU_ID_CTX` — a request, a
+  bound worker job), and
+* on the **tenant**'s rolling window whenever the tenant is known.
+
+Whose identity is available WHERE is the finding that shaped this: **planning — the expensive
+call — runs in `create_run` before the `AgentRun` row exists**, so at planning time only the
+tenant can be named; the run id exists only for execution-time calls under `execute_run`. A
+per-run budget therefore cannot cover planning; a per-tenant one can. Both accrue here; neither
+is enforced — the ceiling is phase 4, gated on evidence the meter moves in a real deployment.
+
+Unattributed calls are allowed and COUNTED (`aindy_llm_calls_total{attributed="none"}`): the
+`INITIATOR-IDENTITY-1` rule — an asserted identity may constrain, never widen — so the safe
+default is to let the call through and make the unattributed fraction visible.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
+# (tenant_id, run_id) the current execution span attributes its LLM calls to. Both optional.
+_LLM_ATTRIBUTION: ContextVar[tuple[str | None, str | None]] = ContextVar(
+    "aindy_llm_attribution", default=(None, None)
+)
+
+
+@contextmanager
+def llm_attribution_scope(
+    *, tenant_id: str | None = None, run_id: str | None = None
+) -> Iterator[tuple[str | None, str | None]]:
+    """Declare who the LLM calls made inside the block belong to.
+
+    A field left ``None`` inherits the enclosing scope's value, so an inner span may add a run
+    to an outer tenant without restating it. Token-holding: nothing outlives the block
+    (`TEST-ORDER-CONTEXTVAR-1`).
+    """
+    outer_tenant, outer_run = _LLM_ATTRIBUTION.get()
+    value = (
+        str(tenant_id) if tenant_id else outer_tenant,
+        str(run_id) if run_id else outer_run,
+    )
+    token = _LLM_ATTRIBUTION.set(value)
+    try:
+        yield value
+    finally:
+        _LLM_ATTRIBUTION.reset(token)
+
+
+def current_llm_attribution() -> tuple[str | None, str | None]:
+    """``(tenant_id, run_id)`` the current span attributes LLM calls to."""
+    return _LLM_ATTRIBUTION.get()
+
 try:
-    from AINDY.platform_layer.metrics import llm_tokens_total, llm_usage_unreadable_total
+    from AINDY.platform_layer.metrics import (
+        llm_calls_total,
+        llm_tokens_total,
+        llm_usage_unreadable_total,
+    )
 
     _METRICS_AVAILABLE = True
 except Exception:  # pragma: no cover - metrics are optional at import time
@@ -114,9 +174,40 @@ def observe_llm_usage(*, provider: str, model: str, response: Any) -> None:
         llm_tokens_total.labels(
             provider=provider, model=model_label, kind="completion"
         ).inc(completion)
+        _attribute_usage(provider=provider, tokens=prompt + completion)
     except Exception as exc:  # noqa: BLE001 — see the docstring: never fail a completed call
         logger.debug("[token_meter] usage not recorded for %s/%s: %s", provider, model_label, exc)
         try:
             llm_usage_unreadable_total.labels(provider=provider, model=model_label).inc()
         except Exception:
             pass
+
+
+def _attribute_usage(*, provider: str, tokens: int) -> None:
+    """Accrue one call's tokens onto the identity the span declared (phase 3). Never raises.
+
+    Precedence for the UNIT key: the attributed run, else the bound execution unit. The tenant
+    window is accrued whenever a tenant is known, from the attribution scope first and, failing
+    that, from the bound unit's snapshot (a pipeline-bound request unit carries its tenant).
+    Reads the dispatcher's ContextVar lazily so this module keeps no kernel import at load.
+    """
+    try:
+        from AINDY.kernel.resource_manager import get_resource_manager
+        from AINDY.kernel.syscall_dispatcher import _EU_ID_CTX
+
+        tenant_id, run_id = _LLM_ATTRIBUTION.get()
+        unit_id = _EU_ID_CTX.get() or None
+        rm = get_resource_manager()
+
+        key = run_id or unit_id
+        if key:
+            rm.record_tokens(key, tokens, tenant_id=tenant_id)
+        if not tenant_id and unit_id:
+            tenant_id = rm.get_usage(unit_id).get("tenant_id") or None
+        if tenant_id:
+            rm.record_tenant_tokens(tenant_id, tokens)
+
+        attributed = "run" if run_id else "unit" if unit_id else "tenant" if tenant_id else "none"
+        llm_calls_total.labels(provider=provider, attributed=attributed).inc()
+    except Exception as exc:  # noqa: BLE001 — accounting must not fail a completed call
+        logger.debug("[token_meter] attribution not recorded for %s: %s", provider, exc)

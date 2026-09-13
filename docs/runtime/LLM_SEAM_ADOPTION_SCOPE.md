@@ -1,7 +1,7 @@
 ---
 title: "Scope — Routing a Real Consumer Through the LLM Seam"
 api_version: "1.0"
-last_verified: "2026-09-08"
+last_verified: "2026-09-13"
 status: current
 owner: "platform-team"
 ---
@@ -183,8 +183,8 @@ things still have to be true at the call site:
 |---|---|---|
 | ~~**0**~~ | ~~Meter the raw response paths (`messages_create`, `chat_completion_response`)~~ | **DONE — #564 (3 clients) + #597 (deepseek, the one missed). In v2.9.0; deepseek lands next release.** |
 | ~~**1**~~ | ~~Route `planner_anthropic.py` through `get_llm_client("anthropic").call_method(...)`, reading `exc.__cause__` for detail~~ | **DONE — app #321, 2026-09-08.** Also picked up the circuit breaker, which this table did not anticipate |
-| **2** | Confirm `aindy_llm_tokens_total` moves in a real deployment | **NEXT** — evidence, not code. **★ The meter shipped in v2.9.0: an environment on anything older routes through the seam and records nothing, which reads as *"the adoption failed"*. Verify the INSTALLED version, not the declared range** — the app declares `>=2.9.0` and its dev venv was on 2.6.0 |
-| **3** | Thread run/tenant identity to the call site, and count unattributed calls | runtime + app |
+| **2** | Confirm `aindy_llm_tokens_total` moves in a real deployment | **STILL NEXT (phase 3 shipped ahead of it — plumbing, not the governor)** — evidence, not code. **★ The meter shipped in v2.9.0: an environment on anything older routes through the seam and records nothing, which reads as *"the adoption failed"*. Verify the INSTALLED version, not the declared range** — the app declares `>=2.9.0` and its dev venv was on 2.6.0 |
+| ~~**3**~~ | ~~Thread run/tenant identity to the call site, and count unattributed calls~~ | **DONE — #635, 2026-09-13.** `llm_attribution_scope` set by `generate_plan` (tenant — the run does not exist yet at planning time) and `execute_run` (tenant + run); tokens accrue in `ResourceManager` per unit and per tenant window; `aindy_llm_calls_total{attributed}` counts the unattributed fraction. **The app half was nothing** — #321's call already sits inside `generate_plan`'s span |
 | **4** | The governor: reserve → call → reconcile, against a cache, refusing on breach | runtime |
 
 ~~**Phase 0 is worth doing regardless of whether 1–4 happen**~~ — done; it closed a gap in
@@ -192,7 +192,7 @@ shipped code, and #597 closed the quarter of it that was missed. **Phase 1 is un
 prerequisite is in v2.9.0**, which is the current release, so no new runtime release is needed
 to start it.
 
-Phases 1 and 3 are app-repo changes and are not the runtime's to make unilaterally.
+Phase 1 was an app-repo change. Phase 3 turned out to be runtime-only: the app's planner call runs inside `generate_plan`, which now declares the tenant around it.
 
 **★ One thing phase 1 must check first, found 2026-09-08:** `aindy-apps-monolith` *declares*
 `aindy-runtime>=2.9.0,<3.0` but its `venv/` had **2.6.0** installed, which predates phase 0.

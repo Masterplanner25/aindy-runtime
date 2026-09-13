@@ -11,6 +11,8 @@ Quota defaults
   MAX_MEMORY_BYTES           268 435 456  (256 MiB)
   MAX_SYSCALLS_PER_EXECUTION 100
   MAX_CONCURRENT_PER_TENANT  5
+  (tokens: ACCRUED per unit and per tenant since COST-GOVERNOR-1 phase 3, NOT enforced —
+   the ceiling is phase 4, gated on evidence the meter moves in a real deployment)
 
 These can be overridden via environment variables:
   AINDY_QUOTA_CPU_MS         (sets MAX_WALL_TIME_MS; env var name kept for compatibility)
@@ -115,6 +117,10 @@ class UsageSnapshot:
     wall_time_ms: int = 0
     memory_bytes: int = 0
     syscall_count: int = 0
+    # COST-GOVERNOR-1 phase 3 — LLM tokens (prompt + completion) attributed to this unit by
+    # `token_meter.observe_llm_usage`. The dominant cost of an LLM execution unit, and until
+    # this field existed the one dimension the quota system did not carry.
+    tokens: int = 0
     # Monotonic creation time — the in-memory store's analogue of the Redis backend's
     # EU_KEY_TTL_SECONDS expiry (QUOTA-ACCRUAL-ORPHAN-1). Not part of to_dict().
     created_at: float = field(default_factory=time.monotonic, compare=False, repr=False)
@@ -126,6 +132,7 @@ class UsageSnapshot:
             "wall_time_ms": self.wall_time_ms,
             "memory_bytes": self.memory_bytes,
             "syscall_count": self.syscall_count,
+            "tokens": self.tokens,
         }
 
 
@@ -175,6 +182,12 @@ return 1
     def _memory_key(self, eu_id: str) -> str:
         return f"aindy:rm:eu:{eu_id}:memory_bytes"
 
+    def _tokens_key(self, eu_id: str) -> str:
+        return f"aindy:rm:eu:{eu_id}:tokens"
+
+    def _tenant_tokens_key(self, tenant_id: str) -> str:
+        return f"aindy:rm:tenant:{tenant_id}:tokens"
+
     def increment_tenant_active(self, tenant_id: str) -> int:
         key = self._tenant_key(tenant_id)
         value = int(self._redis.incr(key))
@@ -216,11 +229,32 @@ return 1
             args=[str(bytes_used), str(EU_KEY_TTL_SECONDS)],
         )
 
+    def add_tokens(self, eu_id: str, count: int) -> int:
+        key = self._tokens_key(eu_id)
+        value = int(self._redis.incrby(key, count))
+        self._redis.expire(key, EU_KEY_TTL_SECONDS)
+        return value
+
+    def get_tokens(self, eu_id: str) -> int:
+        value = self._redis.get(self._tokens_key(eu_id))
+        return int(value) if value is not None else 0
+
+    def add_tenant_tokens(self, tenant_id: str, count: int) -> int:
+        key = self._tenant_tokens_key(tenant_id)
+        value = int(self._redis.incrby(key, count))
+        self._redis.expire(key, TENANT_KEY_TTL_SECONDS)
+        return value
+
+    def get_tenant_tokens(self, tenant_id: str) -> int:
+        value = self._redis.get(self._tenant_tokens_key(tenant_id))
+        return int(value) if value is not None else 0
+
     def delete_eu(self, eu_id: str) -> None:
         self._redis.delete(
             self._cpu_key(eu_id),
             self._syscalls_key(eu_id),
             self._memory_key(eu_id),
+            self._tokens_key(eu_id),
         )
 
     def reset_all(self) -> None:
@@ -305,6 +339,9 @@ class ResourceManager:
         self._eu_tenant: dict[str, str] = {}
         self._pending_purge: set[str] = set()
         self._last_eviction_sweep: float = time.monotonic()
+        # COST-GOVERNOR-1 phase 3 — tenant → (tokens, window_started_at). The in-memory
+        # analogue of the Redis tenant tokens key, which carries TENANT_KEY_TTL_SECONDS.
+        self._tenant_tokens: dict[str, tuple[int, float]] = {}
         # AGENT-HARDEN-8 PR2 — per-capability fixed-window rate counters (in-memory
         # fallback when Redis is absent): key → (bucket, count).
         self._rate_windows: dict[str, tuple[int, int]] = {}
@@ -557,6 +594,58 @@ class ResourceManager:
                 return
             raise
 
+    def _backend_add_tokens(self, eu_id: str, count: int) -> int | None:
+        if self._backend is None:
+            return None
+        try:
+            return self._backend.add_tokens(eu_id, count)
+        except Exception as exc:
+            import redis  # type: ignore[import]
+            if isinstance(exc, redis.RedisError):
+                logger.warning("[ResourceManager] redis add_tokens failed eu=%s error=%s", eu_id, exc)
+                return None
+            raise
+
+    def _backend_get_tokens(self, eu_id: str) -> int | None:
+        if self._backend is None:
+            return None
+        try:
+            return self._backend.get_tokens(eu_id)
+        except Exception as exc:
+            import redis  # type: ignore[import]
+            if isinstance(exc, redis.RedisError):
+                logger.warning("[ResourceManager] redis get_tokens failed eu=%s error=%s", eu_id, exc)
+                return None
+            raise
+
+    def _backend_add_tenant_tokens(self, tenant_id: str, count: int) -> int | None:
+        if self._backend is None:
+            return None
+        try:
+            return self._backend.add_tenant_tokens(tenant_id, count)
+        except Exception as exc:
+            import redis  # type: ignore[import]
+            if isinstance(exc, redis.RedisError):
+                logger.warning(
+                    "[ResourceManager] redis add_tenant_tokens failed tenant=%s error=%s", tenant_id, exc
+                )
+                return None
+            raise
+
+    def _backend_get_tenant_tokens(self, tenant_id: str) -> int | None:
+        if self._backend is None:
+            return None
+        try:
+            return self._backend.get_tenant_tokens(tenant_id)
+        except Exception as exc:
+            import redis  # type: ignore[import]
+            if isinstance(exc, redis.RedisError):
+                logger.warning(
+                    "[ResourceManager] redis get_tenant_tokens failed tenant=%s error=%s", tenant_id, exc
+                )
+                return None
+            raise
+
     def _backend_delete_eu(self, eu_id: str) -> None:
         if self._backend is None:
             return
@@ -732,11 +821,16 @@ class ResourceManager:
             return
         self._last_eviction_sweep = now
         cutoff = now - EU_KEY_TTL_SECONDS
+        tenant_cutoff = now - TENANT_KEY_TTL_SECONDS
         with self._lock:
             expired = [eid for eid, snap in self._usage.items() if snap.created_at < cutoff]
             for eid in expired:
                 self._usage.pop(eid, None)
                 self._eu_tenant.pop(eid, None)
+            # Tenant token windows are NOT orphans — they expire by design, silently, exactly
+            # as the Redis key does. Phase 4 decides the budget window; this is parity.
+            for tid in [t for t, (_, started) in self._tenant_tokens.items() if started < tenant_cutoff]:
+                self._tenant_tokens.pop(tid, None)
         if expired:
             _count_evicted(len(expired))
             logger.warning(
@@ -769,6 +863,32 @@ class ResourceManager:
             yield eid
         finally:
             self.mark_completed(tenant_id, eid)
+
+    @contextmanager
+    def observed_unit(self, tenant_id: str, eu_id: str) -> Iterator[str]:
+        """Own a unit's usage snapshot WITHOUT admitting it (COST-GOVERNOR-1 phase 3).
+
+        `owned_execution` admits against the tenant's concurrency limit and starts the unit;
+        that changes admission semantics for whatever it wraps. This does not: it creates the
+        snapshot under `tenant_id` so usage attributed to `eu_id` has a subject, yields, and
+        purges on exit. Read `get_usage(eu_id)` INSIDE the block if you want the final numbers.
+
+        Built for the agent run: tokens spent under `execute_run` need somewhere to land that
+        carries the run's identity, but whether an agent run should ALSO be admitted and
+        syscall-capped as one unit is `EXEC-ENV-BIND-1` phase 4's subject decision, not this
+        helper's to make by side effect.
+        """
+        eid = str(eu_id)
+        tid = str(tenant_id or "")
+        with self._lock:
+            if eid not in self._usage:
+                self._usage[eid] = UsageSnapshot(eu_id=eid, tenant_id=tid)
+            elif tid and not self._usage[eid].tenant_id:
+                self._usage[eid].tenant_id = tid
+        try:
+            yield eid
+        finally:
+            self.purge_eu(eid)
 
     # ── Lifecycle hooks ───────────────────────────────────────────────────────
 
@@ -971,6 +1091,48 @@ class ResourceManager:
         for _ in range(steps):
             self._backend_increment_syscalls(eid)
 
+    def record_tokens(self, eu_id: str, count: int, *, tenant_id: str | None = None) -> None:
+        """Accrue LLM tokens onto a unit (COST-GOVERNOR-1 phase 3). Not enforced.
+
+        `tenant_id`, when given, stamps a snapshot this call has to create — the other
+        `record_*` methods create tenant-less snapshots because their callers are dispatches
+        that have not been through `mark_started`; a token accrual usually knows its tenant.
+        """
+        eid = str(eu_id)
+        delta = int(count)
+        if delta <= 0:
+            return
+        with self._lock:
+            if eid not in self._usage:
+                self._usage[eid] = UsageSnapshot(eu_id=eid, tenant_id=str(tenant_id or ""))
+            self._usage[eid].tokens += delta
+        self._backend_add_tokens(eid, delta)
+
+    def record_tenant_tokens(self, tenant_id: str, count: int) -> None:
+        """Accrue LLM tokens onto a tenant's rolling window (COST-GOVERNOR-1 phase 3).
+
+        The per-tenant counter the governor will read. Expires after
+        `TENANT_KEY_TTL_SECONDS` on both backends; what the budget WINDOW should be — daily,
+        monthly, per grant — is phase 4's decision, and this counter's expiry is not it.
+        """
+        tid = str(tenant_id)
+        delta = int(count)
+        if not tid or delta <= 0:
+            return
+        with self._lock:
+            current, started = self._tenant_tokens.get(tid, (0, time.monotonic()))
+            self._tenant_tokens[tid] = (current + delta, started)
+        self._backend_add_tenant_tokens(tid, delta)
+
+    def get_tenant_tokens(self, tenant_id: str) -> int:
+        """Tokens accrued to a tenant in the current window (Redis-authoritative when shared)."""
+        tid = str(tenant_id)
+        shared = self._backend_get_tenant_tokens(tid)
+        if shared is not None:
+            return shared
+        with self._lock:
+            return self._tenant_tokens.get(tid, (0, 0.0))[0]
+
     def record_usage(self, eu_id: str, usage: dict) -> None:
         """Accumulate resource usage for an ExecutionUnit.
 
@@ -980,11 +1142,12 @@ class ResourceManager:
         Args:
             eu_id:  ExecutionUnit ID.
             usage:  Dict with keys: wall_time_ms (int), memory_bytes (int),
-                    syscall_count (int).  Missing keys are treated as 0.
+                    syscall_count (int), tokens (int).  Missing keys are treated as 0.
         """
         self.record_cpu(eu_id, int(usage.get("wall_time_ms", 0)))
         self.record_memory(eu_id, int(usage.get("memory_bytes", 0)))
         self.record_syscall(eu_id, int(usage.get("syscall_count", 0)))
+        self.record_tokens(eu_id, int(usage.get("tokens", 0)))
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
@@ -996,7 +1159,9 @@ class ResourceManager:
         with self._lock:
             snap = self._usage.get(str(eu_id))
             if snap is None:
-                return {"eu_id": eu_id, "wall_time_ms": 0, "memory_bytes": 0, "syscall_count": 0}
+                return {
+                    "eu_id": eu_id, "wall_time_ms": 0, "memory_bytes": 0, "syscall_count": 0, "tokens": 0,
+                }
             return snap.to_dict()
 
     def get_tenant_active(self, tenant_id: str) -> int:
@@ -1031,6 +1196,10 @@ class ResourceManager:
                 "total_wall_time_ms": sum(s.wall_time_ms for s in snaps),
                 "peak_memory_bytes": max((s.memory_bytes for s in snaps), default=0),
                 "total_syscalls": sum(s.syscall_count for s in snaps),
+                # Live snapshots only; reaped units are gone. The rolling window below is the
+                # number a tenant budget would read.
+                "total_tokens": sum(s.tokens for s in snaps),
+                "window_tokens": self._tenant_tokens.get(tid, (0, 0.0))[0],
                 "quota_limits": {
                     "max_wall_time_ms": MAX_WALL_TIME_MS,
                     "max_memory_bytes": MAX_MEMORY_BYTES,
@@ -1060,6 +1229,7 @@ class ResourceManager:
             self._active_counts.clear()
             self._eu_tenant.clear()
             self._pending_purge.clear()
+            self._tenant_tokens.clear()
             self._last_eviction_sweep = time.monotonic()
 
 
