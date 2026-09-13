@@ -27,7 +27,7 @@ from AINDY.agents.stuck_run_service import recover_stuck_agent_run
 from AINDY.core.execution_dispatcher import async_heavy_execution_enabled
 from AINDY.db.models import AgentRun, AgentStep, AgentTrustSettings
 from AINDY.platform_layer.async_job_service import defer_async_job, submit_autonomous_async_job
-from AINDY.platform_layer.trace_context import ensure_trace_id
+from AINDY.platform_layer.trace_context import trace_scope
 from AINDY.utils.uuid_utils import normalize_uuid
 
 
@@ -57,46 +57,51 @@ def _decision_or_defer_response(
     task_name: str,
     payload: dict[str, Any],
 ):
-    trace_id = ensure_trace_id()
-    evaluation = evaluate_live_trigger(
-        db=db,
-        trigger=trigger,
-        user_id=user_id,
-        context=trigger_context,
-    )
-    record_decision(
-        db=db,
-        trigger=trigger,
-        evaluation=evaluation,
-        user_id=user_id,
-        trace_id=trace_id,
-        context=trigger_context,
-    )
-
-    if evaluation["decision"] == "ignore":
-        return {"_decision_response": build_decision_response(evaluation, trace_id=trace_id)}
-
-    if evaluation["decision"] == "defer":
-        log_id = defer_async_job(
-            task_name=task_name,
-            payload=payload,
+    # TEST-ORDER-CONTEXTVAR-1 — `trace_scope`, not `ensure_trace_id`: the only caller today is
+    # the agent route, where the middleware already owns the trace, so this reads; but if this
+    # is ever reached from a thread with no ambient trace, what it establishes must not
+    # outlive the call (the flow runner pinned a scheduler thread's trace id that way).
+    with trace_scope() as trace_id:
+        evaluation = evaluate_live_trigger(
+            db=db,
+            trigger=trigger,
             user_id=user_id,
-            source="agent_router",
-            decision=evaluation,
+            context=trigger_context,
         )
-        return {
-            "_http_status": 202,
-            "_http_response": build_decision_response(
-                evaluation,
-                trace_id=log_id,
-                result={
-                    "automation_log_id": log_id,
-                    "decision": "defer",
-                    "reason": evaluation["reason"],
-                },
-                next_action={"type": "poll_automation_log", "automation_log_id": log_id},
-            ),
-        }
+        record_decision(
+            db=db,
+            trigger=trigger,
+            evaluation=evaluation,
+            user_id=user_id,
+            trace_id=trace_id,
+            context=trigger_context,
+        )
+
+        if evaluation["decision"] == "ignore":
+            return {"_decision_response": build_decision_response(evaluation, trace_id=trace_id)}
+
+        if evaluation["decision"] == "defer":
+            log_id = defer_async_job(
+                task_name=task_name,
+                payload=payload,
+                user_id=user_id,
+                source="agent_router",
+                decision=evaluation,
+            )
+            return {
+                "_http_status": 202,
+                "_http_response": build_decision_response(
+                    evaluation,
+                    trace_id=log_id,
+                    result={
+                        "automation_log_id": log_id,
+                        "decision": "defer",
+                        "reason": evaluation["reason"],
+                    },
+                    next_action={"type": "poll_automation_log", "automation_log_id": log_id},
+                ),
+            }
+
 
     return None
 
@@ -104,20 +109,20 @@ def _decision_or_defer_response(
 def create_agent_run_runtime(*, goal: str, db, user_id):
     goal = goal.strip()
     if async_heavy_execution_enabled():
-        trace_id = ensure_trace_id()
-        trigger_context = {"goal": goal, "importance": 0.95, "trace_id": trace_id}
-        return {
-            "_http_status": 202,
-            "_http_response": submit_autonomous_async_job(
-                task_name="agent.create_run",
-                payload={"goal": goal, "user_id": str(user_id), "trace_id": trace_id},
-                user_id=user_id,
-                source="agent_router",
-                trigger_type="user",
-                trigger_context=trigger_context,
-                db=db,
-            ),
-        }
+        with trace_scope() as trace_id:
+            trigger_context = {"goal": goal, "importance": 0.95, "trace_id": trace_id}
+            return {
+                "_http_status": 202,
+                "_http_response": submit_autonomous_async_job(
+                    task_name="agent.create_run",
+                    payload={"goal": goal, "user_id": str(user_id), "trace_id": trace_id},
+                    user_id=user_id,
+                    source="agent_router",
+                    trigger_type="user",
+                    trigger_context=trigger_context,
+                    db=db,
+                ),
+            }
 
     decision = _decision_or_defer_response(
         db=db,

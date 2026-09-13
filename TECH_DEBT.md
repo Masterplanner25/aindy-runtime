@@ -10951,9 +10951,14 @@ True**, a stale trace id and a stale syscall unit id. What that made vacuous:
   had already set one, so nothing changed; **on a scheduler thread the first flow pinned that
   thread's trace id for every later flow it ran** — unrelated runs sharing a `trace_id`, which
   is a real (minor) trace-correlation defect, not test hygiene. Fixed: same value, with a
-  token, released in `start()`'s `finally`. `ensure_trace_id` itself is unchanged; its two remaining callers are
-  `agents/runtime_api.py:60` and `:107` (agent-run entry), which have the same thread-pinning
-  exposure when reached from a scheduler thread — **not fixed here**, audit them next.
+  token, released in `start()`'s `finally`. `ensure_trace_id` itself stays — app flow nodes call it in the read-only
+  position (`agent_flows`, `watcher_flows`, `tasks_flows`) — now with a docstring that says what
+  the establish half does. **Follow-up (#634): the runtime's own two callers in
+  `agents/runtime_api.py` moved to `trace_scope()`, the token-holding form.** Measured first:
+  their only caller is the agent route, under the middleware's trace, so they only ever READ —
+  the exposure this entry first claimed for them was latent, not live. Hardened anyway because
+  the shape is the one that bit `start()`, and pinned by `tests/unit/test_trace_scope.py`
+  (drives `create_agent_run_runtime` with no ambient trace; mutation-checked).
 
 ### What shipped (with `TEST-ORDER-REGISTRY-1`'s closure)
 
