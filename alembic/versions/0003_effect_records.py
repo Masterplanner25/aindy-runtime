@@ -4,7 +4,7 @@ Revision ID: 0003
 Revises: 0002
 Create Date: 2026-05-24
 
-Creates the effect_records table, closing NF-1 from IDEMPOTENCY_AUDIT.md
+Creates the effect_records table, closing NF-1 from docs/archive/IDEMPOTENCY_AUDIT.md
 §"Open Findings — Effect-Level Idempotency Layer".
 
 NF-1: The runtime previously had no persistent record keyed to a specific

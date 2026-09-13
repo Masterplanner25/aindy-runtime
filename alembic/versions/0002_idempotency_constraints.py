@@ -5,7 +5,7 @@ Revises: 0001
 Create Date: 2026-05-23
 
 Adds DB-level uniqueness constraints to close IDEM-2, IDEM-3, IDEM-4, and
-IDEM-5 from the idempotency audit (IDEMPOTENCY_AUDIT.md, 2026-05-23).
+IDEM-5 from the idempotency audit (docs/archive/IDEMPOTENCY_AUDIT.md, 2026-05-23).
 
 IDEM-2: webhook_subscriptions — partial UNIQUE on (event_type, callback_url)
         where is_active = true. Prevents duplicate active webhook registrations

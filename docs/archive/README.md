@@ -86,7 +86,8 @@ points at them:
 - `IDEMPOTENCY_AUDIT.md` and `ISOLATION_MODEL_PLAN.md` are cited from **source code** —
   `AINDY/db/models/effect_record.py`, `alembic/versions/0002_*` and `0003_*`, and
   `AINDY/platform_layer/sandbox_runner.py` all name them, by bare filename. Moving them
-  would break live code comments.
+  would break live code comments. *(Superseded for the audit on 2026-09-13 — see below:
+  those citations are provenance, not dependency, and provenance is what an archive holds.)*
 - `C2_SANDBOX_AUDIT.md` is cited from `TECH_DEBT.md` and `ISOLATION_MODEL_PLAN.md`.
 
 All three were **gitignored until 2026-08-05** — so those citations pointed at files no clone
@@ -140,3 +141,27 @@ the Alembic-head note in `CLAUDE.md` describes; the fix is one fewer copy, not a
 
 The `TECH_DEBT.md` mention of `RTR.md` (in the closed native-bridge doc-verification entry)
 is historical narrative and stays as written.
+
+## Repository root — archived 2026-09-13 (second)
+
+| Document | Written | What it was | Superseded by |
+|---|---|---|---|
+| [`IDEMPOTENCY_AUDIT.md`](IDEMPOTENCY_AUDIT.md) | 2026-05-23, last merged 2026-05-24 | The idempotency and invariants audit: 8 findings (`IDEM-1..8`) against the schema-bootstrap, syscall-registry, scheduler and DB-constraint surfaces, plus 5 "new findings" (`NF-1..5`) that proposed the effect-level layer — a persistent `EffectRecord`, a deterministic `action_id`, a declared execution guarantee, and a gate at the syscall boundary. | `docs/runtime/IDEMPOTENCY_CONTRACT.md` for what the runtime guarantees now; `TECH_DEBT.md` `IDEM-*` entries for the findings' lifecycle. Every `IDEM` and `NF` item is closed (Alembic `0002`/`0003`, the MEB program, `IDEM-11`'s default-on gate). |
+
+**Why it was kept on 2026-08-06 and archived now.** The earlier pass kept it because three
+source files cite it by bare filename — `effect_record.py`, `alembic/versions/0002_*` and
+`0003_*` — and reasoned that moving it *"would break live code comments"*. That conflated two
+things. Those citations say *"this migration closes IDEM-5 from the audit"* and *"this table
+closes NF-1"*: they record **where the code came from**, not something the code needs to be
+current. A migration frozen at 2026-05-23 citing an audit frozen at 2026-05-23 is provenance,
+and provenance is precisely what this directory holds. Source code citing a months-old audit
+is not a reason to keep the audit live; it is a reason to keep the audit *at all*.
+
+**What was updated, and what deliberately was not.** The two Alembic docstrings now cite
+`docs/archive/IDEMPOTENCY_AUDIT.md`. The `effect_record.py` docstring keeps the bare
+filename: that file is under `AINDY/db/models/`, whose raw bytes are content-hashed by the
+schema contract, so a one-word docstring edit would cost a `SCHEMA_CONTRACT_VERSION` bump,
+a baseline regen and two test-assertion edits for a change with no DDL — the trap
+`AGENT-EVENT-VOCAB-1` records. `git grep IDEMPOTENCY_AUDIT` still resolves the bare name to
+this directory. The `TECH_DEBT.md` mention (in the closed `IDEM-9` entry) is historical and
+stays as written.
