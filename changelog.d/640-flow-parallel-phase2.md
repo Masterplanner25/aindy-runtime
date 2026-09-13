@@ -1,7 +1,0 @@
-### Added — fan-out join policies; the runtime's first `partial` envelope (`FLOW-PARALLEL-1` phase 2, #640)
-
-- `FanOutEdgeGroup(targets, join="all" | "any" | "quorum", quorum=k)`. `all` (the default) is phase 1 exactly, including its graph-signature digest, so runs suspended on a phase-1 group are unaffected by this upgrade. `any` and `quorum(k)` proceed once enough branches have succeeded. A non-default join is part of the graph signature — a run planned under `all` will not resume under `any` (`FLOW-GRAPH-SIGNATURE-1` quarantine, as designed).
-- **★ Consumer-visible: `sys.v1.flow.run` can now return `status: "partial"`.** When a lenient join proceeds past a failed branch, the run completes but the envelope says `partial`, with `outcome.units` naming each failed branch (`superstep`, `join`, `branch`, `error`). The `EFFECT-PARTIAL-1` vocabulary shipped latent in 2.9.0 with the instruction to branch `!= "success"`, never `== "error"`; this is the first thing that emits it. A consumer still testing `== "error"` reads a partial run as a success.
-- Also on the run's state under `_superstep_partials` (durable across a resume) and on the `execution.completed` event payload (`outcome: "partial"`, `partial_units`).
-- Convergence is required of the branches that succeeded; a failed branch's patch does not land and its successor is not consulted. History is written for every branch whatever the join decides.
-- `tests/unit/test_syscall_outcome.py`'s "no handler emits an outcome claim" guard is now an exact census of the two emitting files.

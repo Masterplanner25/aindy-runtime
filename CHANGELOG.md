@@ -4,6 +4,168 @@
 
 _Nothing yet._
 
+## 2.13.0 — 2026-09-13
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No migration.** The Alembic head is unchanged at `0018` and
+  `SCHEMA_CONTRACT_VERSION` did not move — no `AINDY/db/models/` or `memory_persistence.py` change
+  this release. `bootstrap-schema --reconcile` is not needed.
+- **★ `sys.v1.flow.run` can now return `status: "partial"`** (#640) — the first emitter of the
+  `EFFECT-PARTIAL-1` vocabulary that shipped latent in 2.9.0. It happens only for a flow that
+  declares a fan-out group with `join="any"` or `join="quorum"` and has a branch fail; no
+  existing flow declares one. The 2.9.0 handoff told consumers to branch `!= "success"`, never
+  `== "error"` — a consumer still testing `== "error"` reads a partial run as a success. Check.
+- **Three new opt-in ceilings/flags, all default OFF — nothing changes until you set them.**
+  `AINDY_QUOTA_MAX_TOKENS` and `AINDY_QUOTA_MAX_TENANT_TOKENS` (#638, the LLM token governor:
+  a call over budget is refused with `RESOURCE_LIMIT_EXCEEDED` before the provider is called;
+  `POST /apps/agent/run` answers 429). Size a tenant window against the planner's `max_tokens`
+  (4096 in the app → ~5k reserved per call), not against typical actuals. And
+  `AINDY_RUN_SCOPED_QUOTA` (#639): on, the 100-syscall cap applies to a whole guest script and a
+  whole agent run for the first time; read `aindy_syscall_unowned_unit_total` before flipping it.
+- **New metrics** — `aindy_llm_calls_total{attributed}`, `aindy_llm_budget_outcomes_total`,
+  `aindy_syscall_unowned_unit_total`, `aindy_resource_usage_evicted_total`. Alarm on
+  `aindy_llm_budget_outcomes_total{outcome="refused"}` once a cap is set.
+- **Route envelopes changed subtly (#632):** a syscall dispatched inside a request now carries the
+  request's `trace_id` (equal to `X-Trace-ID`) and `execution_unit_id` rather than a per-call
+  UUID, and the request's per-execution syscall/wall-time budget now bounds all of its dispatches
+  as one unit. Memory-node provenance `execution_unit_id` names a real `ExecutionUnit`.
+- **Fixed in production code (#633, #634):** `PersistentFlowRunner.start()` pinned a scheduler
+  thread's `trace_id` for every later flow on that thread — unrelated runs shared a trace id;
+  `_execute_job_inline` leaked trace/parent-event ContextVars on its early-return paths.
+
+### Fixed — syscall usage accrued on units nothing reaped; the pipeline never named its unit to the dispatcher (`QUOTA-ACCRUAL-ORPHAN-1`, #632)
+
+- **Every syscall dispatched with no `execution_unit_id` minted a fresh unit and leaked its
+  `UsageSnapshot` for the life of the process.** `make_syscall_ctx_from_tool` and the
+  dispatcher's root-call fill both mint a `uuid4()`; the dispatcher's step-4 accrual created the
+  snapshot and nothing cleared it. Measured: 120 MCP-shaped calls → 120 snapshots retained,
+  tenant `""`. (The entry as filed said the calls shared a bucket keyed `""` and locked out
+  after 100 — neither happens; the quota was *vacuous* for such callers, not tripping.)
+  A root dispatch now reaps the unit it minted when it returns, and counts it:
+  **`aindy_syscall_unowned_unit_total{syscall}`** is the list of callers to which no
+  per-execution budget applies (today: the nodus worker's `sys()` seam, agent tools,
+  `extension_worker` with no run id).
+- **Routes were not exempt.** `ExecutionPipeline` claims, admits and reaps an `ExecutionUnit`
+  but never told `SyscallDispatcher` which — so a route's dispatches minted their own units
+  (5 × `POST /platform/syscall` → 5 orphan snapshots; the request's unit read
+  `syscall_count: 0`). The pipeline now binds its unit and trace into the dispatcher's
+  ContextVars for the handler's duration, the same bridge the distributed worker already
+  builds. **Observable consequences:** a syscall envelope returned from a route carries the
+  request's `trace_id` (equal to `X-Trace-ID`) and `execution_unit_id`; usage accrues on the
+  request unit, so `MAX_SYSCALLS_PER_EXECUTION` / `MAX_WALL_TIME_MS` now bound a request's
+  syscalls as one unit; `memory.write` provenance names the real unit. Idempotency-gate
+  engagement is unchanged (it still keys on the id the caller's context arrived with).
+- **`check_quota` no longer re-decides tenant admission for a unit already admitted.** It
+  called `can_execute(tenant)` with the running unit in the active count, refusing every
+  syscall of the last unit admitted at exactly `MAX_CONCURRENT_PER_TENANT` (5/5). Latent only
+  because no dispatch snapshot carried a tenant; the bridge above would have made it live.
+- **The MCP server owns an execution unit per tool call** (`ResourceManager.owned_execution`):
+  admitted against the identity's concurrency limit, started, reaped on return. A refusal is
+  returned in the dispatcher's envelope shape (`status: "error"`, `RESOURCE_LIMIT_EXCEEDED`).
+- **The in-memory usage store evicts unreaped snapshots after `EU_KEY_TTL_SECONDS` (1 h)** —
+  parity with the Redis backend, which always had that TTL. Swept at most once a minute,
+  **counted (`aindy_resource_usage_evicted_total`) and logged at WARNING**. A non-zero count is
+  work that re-opened a unit after its owner returned (an async job inheriting the submitting
+  request's ids, by design) or a caller that names a unit it never reaps.
+
+### Changed/Fixed — the unit sweep now fails a test that leaks a runtime ContextVar; two production leaks it found are fixed (`TEST-ORDER-CONTEXTVAR-1`, `TEST-ORDER-REGISTRY-1`, #633)
+
+Test/CI change that alters what a green `Runtime Contracts` means, plus two small runtime fixes the new check surfaced.
+
+- **What green used to hide:** pytest runs every test in one `contextvars` context, and
+  `tests/unit/test_contextvar_thread_propagation.py` set `pipeline_active=True`, a trace id and
+  the dispatcher's `_EU_ID_CTX` without resetting them. Everything alphabetically after it —
+  roughly 180 of 221 unit files — ran with the ExecutionContract gate vacuously satisfied and
+  stale trace/unit ids. A second leaker (`test_mcp_server.py`, effect attribution left at
+  `tenant-7`) surfaced the moment the guard existed.
+- **What green means now:** `tests/unit/conftest.py` snapshots every ContextVar the runtime has
+  imported (a derived census, asserted non-empty), and after each test restores what changed and
+  fails the test that changed it, naming the vars. Victims stay clean; the error lands on the
+  leaker. The guard's own liveness is proven by `tests/unit/test_contextvar_isolation_guard.py`
+  (a real pytest subprocess against a generated leaker + victim; mutation-tested 3/3).
+- **Two production leaks the guard found, fixed here (`Fixed`):** `_execute_job_inline` left
+  the trace and parent-event ContextVars set on its early-return paths (harmless in production —
+  each job runs in a `copy_context()`); `PersistentFlowRunner.start()` established a trace id via
+  `ensure_trace_id` and never released it, so on a scheduler thread with no ambient trace the
+  first flow pinned that thread's `trace_id` for every later flow — unrelated runs sharing a
+  trace id. `start()` now takes a token for the trace it establishes and releases it.
+- **`TEST-ORDER-REGISTRY-1` closed by measurement, not by a fix:** its reproduction passes 0/6
+  at the commit that filed it, 0/13 across four orderings on `main`, and the registry-isolation
+  fixture it prescribed has existed since the repo's first commit. Its symptom ("an EMPTY
+  capability set") is `FLAKY-1`'s subprocess-provider signature, read as ordering from one sample.
+- Not adopted, by decision: randomised test order. It detects without attributing, and would
+  convert every latent order-dependence into an unattributed CI flake on day one.
+
+### Changed — `trace_scope()`: establish a trace id for a block, never for the rest of the thread (#634)
+
+- `AINDY.platform_layer.trace_context.trace_scope(trace_id=None)` — the token-holding form of
+  `ensure_trace_id`: an ambient trace is reused untouched; an absent one is set for the block and
+  reset on exit. `ensure_trace_id` is unchanged (app flow nodes call it where a trace is always
+  already set) but now documents that its establish half is never released — on a scheduler
+  thread that pins the thread's `trace_id` for every later unit of work, which is what
+  `PersistentFlowRunner.start()` did until #633.
+- `agents/runtime_api.py`'s two `ensure_trace_id` sites now use `trace_scope`. No observable
+  change today — their only caller is the agent route, where the middleware already owns the
+  trace — so this closes the latent shape, not a live bug.
+
+### Added — LLM tokens become a resource dimension with a subject (`COST-GOVERNOR-1` phase 3, #635)
+
+- `token_meter.observe_llm_usage` now also accrues each call's tokens into `ResourceManager`:
+  onto the attributed **run**, else the **bound execution unit** (`UsageSnapshot.tokens`;
+  Redis `aindy:rm:eu:{id}:tokens`), and onto a **per-tenant rolling window**
+  (`record_tenant_tokens` / `get_tenant_tokens`; Redis `aindy:rm:tenant:{id}:tokens`,
+  `TENANT_KEY_TTL_SECONDS`). `get_usage()` and `get_tenant_summary()` report them
+  (`tokens`, `total_tokens`, `window_tokens`). **Nothing is enforced** — the ceiling is phase 4.
+- New metric **`aindy_llm_calls_total{provider, attributed}`**, `attributed ∈ run|unit|tenant|none`.
+  The `none` fraction is the set of call sites no budget could reach; unattributed calls are
+  allowed and counted, never refused (`INITIATOR-IDENTITY-1`).
+- `token_meter.llm_attribution_scope(tenant_id=, run_id=)` declares who a span's LLM calls
+  belong to. The runtime sets it in `generate_plan` (tenant — planning runs before the
+  `AgentRun` row exists, so a per-run budget cannot cover it) and in `execute_run` (tenant +
+  run). An app-registered planner backend runs inside that span, so no app change is needed.
+- An agent run's total tokens land on its `SCORE_COMPUTED` record as `dimensions.llm_tokens`.
+- `ResourceManager.observed_unit(tenant, eu)` — a snapshot with a subject, purged on exit,
+  **without** admission or `mark_started`: wrapping a run in the admitting scope would make it
+  one 100-syscall unit by side effect, which is a separate decision (`EXEC-ENV-BIND-1` ph4).
+- Known boundaries: a call made inside the nodus worker subprocess, or from a thread outside
+  any span, lands as `attributed="none"` — that is the metric doing its job, not a bug.
+
+### Added — the LLM token governor: reserve → call → reconcile, refusing on breach (`COST-GOVERNOR-1` phase 4, #638)
+
+**Opt-in.** Two new ceilings, both default `0` = unlimited, so nothing changes until an operator sets them:
+
+- `AINDY_QUOTA_MAX_TOKENS` — tokens per execution (the attributed agent run, else the bound execution unit).
+- `AINDY_QUOTA_MAX_TENANT_TOKENS` — tokens per tenant window (the window is `TENANT_KEY_TTL_SECONDS`, 24 h rolling).
+- `AINDY_LLM_BUDGET_DEFAULT_RESERVE` (2048) — completion tokens reserved when a call passes no `max_tokens`.
+
+How it works: at the LLM seam (`CircuitBreakerLLMClient`, every `chat()`/`call_method()`), **outside the circuit breaker**, an estimate (`max_tokens` + a 4-chars-per-token prompt guess) is reserved atomically against the caller's budgets — INCRBY-then-compare on Redis, one critical section in memory — so N concurrent callers cannot all pass. The meter records the actual inside the call; the estimate is released after. A refusal raises `LLMBudgetExceededError` (an `LLMCallError`, message prefixed `RESOURCE_LIMIT_EXCEEDED`) **before** the provider is called, and never counts toward opening the circuit. Store failures follow the runtime's existing policy: admit in dev/test (counted), refuse in prod.
+
+- New metric `aindy_llm_budget_outcomes_total{scope=execution|tenant, outcome=reserved|refused|degraded}`.
+- `POST /apps/agent/run` (and any consumer of `create_agent_run_runtime`) answers a budget refusal with **429** and the reason, not a generic 500 — including when an app planner rewraps the seam's error (`find_budget_refusal` walks `__cause__`).
+- Only token-spending calls are governed: `token_meter.METERED_METHODS` (`chat`, `messages_create`, `chat_completion_response`). Embeddings ride the same seam and are neither metered nor reserved.
+- `ResourceManager.reserve_tokens` / `release_tokens` / `reserve_tenant_tokens` / `release_tenant_tokens`; `get_tenant_summary()["quota_limits"]` reports both ceilings.
+
+Sizing note: the reservation is the caller's own `max_tokens`, so a window smaller than one reservation admits nothing. Set the tenant window against the planner's `max_tokens` (4096 in the app) times the calls you mean to allow, not against typical actuals.
+
+### Added — declared resource ceilings are enforced; `resources.tokens`; `AINDY_RUN_SCOPED_QUOTA` (`EXEC-ENV-BIND-1` phase 4, #639)
+
+- **`ExecutionEnvironmentSpec.resources.tokens`** — a per-execution LLM token ceiling on the descriptor, clamped narrow-only like the other three.
+- **Declared ceilings now bind.** `require_execution_unit` hands a unit's effective (floor-clamped) resources to `ResourceManager`; `check_quota` enforces `min(global, declared)` for `wall_time_ms` and `syscalls`, and the token governor uses the declared `tokens` ceiling as its execution cap. A declaration can only narrow a global ceiling. Memory stays declared-only (recorded, not enforced). `env_applied` gains `resources_enforced`, the list of declared ceilings that actually bind for that row.
+- Redis: `aindy:rm:eu:{id}:limits` (hash, EU TTL) so a worker in another process sees the same ceilings; `ResourceManager.declare_limits` / `declared_limits` / `effective_limit`; `get_usage()` reports `limits`.
+- **`AINDY_RUN_SCOPED_QUOTA`** (default off): the run becomes the quota subject for a guest's `sys()` calls and an agent run's execution span — they accrue on the run's unit and are checked against its ceilings. **Behaviour change when on:** `MAX_SYSCALLS_PER_EXECUTION` (100) applies to a whole guest script and a whole agent run for the first time; the 101st is refused. Raise `AINDY_QUOTA_MAX_SYSCALLS` for a legitimate workload; read `aindy_syscall_unowned_unit_total` first — it names the callers this moves. Accounting only; the idempotency gate is unchanged.
+- `syscall_dispatcher.bind_execution_unit(eu_id, trace_id)` — the per-request/per-job unit bridge as one reusable context manager.
+- An agent run's declared token ceiling binds its LLM spend regardless of the flag (`execute_run` copies the EU row's ceilings onto the run's accounting key).
+
+### Added — fan-out join policies; the runtime's first `partial` envelope (`FLOW-PARALLEL-1` phase 2, #640)
+
+- `FanOutEdgeGroup(targets, join="all" | "any" | "quorum", quorum=k)`. `all` (the default) is phase 1 exactly, including its graph-signature digest, so runs suspended on a phase-1 group are unaffected by this upgrade. `any` and `quorum(k)` proceed once enough branches have succeeded. A non-default join is part of the graph signature — a run planned under `all` will not resume under `any` (`FLOW-GRAPH-SIGNATURE-1` quarantine, as designed).
+- **★ Consumer-visible: `sys.v1.flow.run` can now return `status: "partial"`.** When a lenient join proceeds past a failed branch, the run completes but the envelope says `partial`, with `outcome.units` naming each failed branch (`superstep`, `join`, `branch`, `error`). The `EFFECT-PARTIAL-1` vocabulary shipped latent in 2.9.0 with the instruction to branch `!= "success"`, never `== "error"`; this is the first thing that emits it. A consumer still testing `== "error"` reads a partial run as a success.
+- Also on the run's state under `_superstep_partials` (durable across a resume) and on the `execution.completed` event payload (`outcome: "partial"`, `partial_units`).
+- Convergence is required of the branches that succeeded; a failed branch's patch does not land and its successor is not consulted. History is written for every branch whatever the join decides.
+- `tests/unit/test_syscall_outcome.py`'s "no handler emits an outcome claim" guard is now an exact census of the two emitting files.
+
+
 ## 2.12.0 — 2026-09-12
 
 **Operator notes — read before upgrading.**
