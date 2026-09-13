@@ -1,4 +1,4 @@
-### Changed — five completed audit/plan documents archived out of `docs/runtime/` (docs/archive-runtime-audits)
+### Changed — five completed audit/plan documents archived out of `docs/runtime/` (#646)
 
 `INFINITY_LOOP_AUDIT.md` (all five gaps closed 07-08), `MONETIZATION_AUDIT.md` (every finding a
 self-contained `TECH_DEBT.md` entry), `LOCAL_AND_CLOUD_AUDIT.md`, and the 05-31
