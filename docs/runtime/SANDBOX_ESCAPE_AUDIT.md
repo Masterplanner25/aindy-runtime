@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-12"
+last_verified: "2026-09-13"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1414,3 +1414,40 @@ deprecation, and four fixes, none of which touch the sandbox boundary:
 **No dependency pin moved this release** (`git diff v2.11.0..v2.12.0 -- pyproject.toml
 AINDY/requirements.txt` is empty), so unlike 2.10.0/2.11.0 there is no nodus bump to misread as a
 boundary change in either direction.
+
+## Entry 027 — 2026-09-13
+
+**Trigger:** `v2.13.0` release tag (`sandbox-escape-linux.yml`, run `34772346417`).
+**Commit:** `0dce67132f7e8b5baae0839b6231747c1092637b`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–026.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 5.97s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `34772346417`).
+
+**The certified boundary is untouched.** `git diff v2.12.0..v2.13.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**, and so is the
+diff over `pyproject.toml` / `AINDY/requirements.txt` — no dependency pin moved.
+
+**What this release changed, and why none of it is what this gate measures.** 2.13.0 is quota
+and accounting work on the HOST side of the boundary plus a flow-engine feature:
+
+- **`QUOTA-ACCRUAL-ORPHAN-1` (#632)** — the dispatcher reaps units it minted; the pipeline binds
+  its unit; the MCP server owns one per call. Resource accounting, all in-process on the host.
+- **`TEST-ORDER-CONTEXTVAR-1` / `trace_scope` (#633, #634)** — a test-isolation guard and two
+  trace-id ContextVar fixes. Nothing crosses the guest boundary.
+- **`COST-GOVERNOR-1` phases 3+4 (#635, #638)** — token attribution and the LLM token governor
+  at the provider-client seam, which runs on the host; a guest never reaches it directly.
+- **`EXEC-ENV-BIND-1` phase 4 (#639)** — declared resource ceilings become enforcing. This
+  touches the DESCRIPTOR that the guest path consumes (`resources.tokens` added), but not the
+  confinement kwargs the guest is spawned with: `nodus_runtime_kwargs` / `subprocess_confinement`
+  are unchanged, and `test_guest_environment_binding.py` (the real VM) stayed green. The new
+  `AINDY_RUN_SCOPED_QUOTA` flag, default off, binds the guest's `sys()` calls to the run's
+  accounting unit on the host side; it grants nothing and confines nothing.
+- **`FLOW-PARALLEL-1` phase 2 (#640)** — join policies on the host's flow runner.
+
+**★ Read `EXEC-ENV-BIND-1` phase 4 correctly: it is the resources axis, not the visibility or
+authority axes.** The certification ladder measures what a guest can SEE and DO; a token or
+syscall ceiling changes how much it may USE. A future entry that finds this gate red after a
+change to `resources` should look for a spawn-argument regression, not for a new escape.

@@ -2,7 +2,7 @@
 title: "App Handoff — Runtime v2.12.0"
 api_version: "1.0"
 last_verified: "2026-09-12"
-status: current
+status: superseded
 owner: "platform-team"
 ---
 
