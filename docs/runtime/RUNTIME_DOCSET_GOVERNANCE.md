@@ -99,7 +99,6 @@ The following documents are the governing layer for current runtime claims.
 ### Cross-Repo and Contract Discipline
 - `CROSS_REPO_COMPATIBILITY.md`
 - `DECISION_LOG.md`
-- `OPEN_QUESTIONS.md`
 
 These should be treated as the primary source for current runtime claim interpretation.
 
@@ -250,7 +249,6 @@ The goal is to stop documentation drift from turning into platform overclaim.
 This document should be read together with:
 
 - `DECISION_LOG.md`
-- `OPEN_QUESTIONS.md`
 
 These answer different questions:
 
@@ -259,4 +257,7 @@ These answer different questions:
   `docs/archive/`. For current alignment, `Runtime Docs Validation` and `docs/archive/README.md`'s
   archive passes are the record.)*
 - `DECISION_LOG.md`: which core runtime decisions are already accepted
-- `OPEN_QUESTIONS.md`: which important questions remain unresolved
+- *(`OPEN_QUESTIONS.md` — which important questions remain unresolved — is archived: all eleven
+  were resolved by 2026-06-06. An open question now lives with the contract it concerns — e.g.
+  `IDEMPOTENCY_CONTRACT.md` and `SANDBOX_CONTRACT.md` each end with *Open Operational Questions* —
+  or in the `TECH_DEBT.md` entry that owns it, never in a standalone tracker.)*

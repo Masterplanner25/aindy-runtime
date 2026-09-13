@@ -42,7 +42,6 @@ Start with:
 - `RELEASE_GATES.md`
 - `TEST_STRATEGY.md`
 - `DECISION_LOG.md`
-- `OPEN_QUESTIONS.md`
 
 ### Operators
 Start with:
@@ -88,7 +87,6 @@ These docs define the current governing posture for the runtime.
 - `RUNTIME_STABILITY_INDEX.md`
 - `PROFILE_SUPPORT_MATRIX.md`
 - `DECISION_LOG.md`
-- `OPEN_QUESTIONS.md`
 
 ---
 
@@ -191,7 +189,7 @@ These remain important, but should be read through the governing docs above.
 4. `RUNTIME_STABILITY_INDEX.md`
 5. `DEGRADED_MODE_MATRIX.md`
 6. `RELEASE_GATES.md`
-7. `OPEN_QUESTIONS.md`
+7. the *Open Operational Questions* section of the contract you are reviewing
 
 ### Fast Operator Truth Order
 1. `PROFILE_SUPPORT_MATRIX.md`

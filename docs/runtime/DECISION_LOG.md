@@ -1,6 +1,6 @@
 ---
 title: "Decision Log"
-last_verified: "2026-05-31"
+last_verified: "2026-09-13"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -239,13 +239,32 @@ These surfaces are the most important for operator truth and cross-repo coordina
 
 ## Future Decisions To Record
 
-The following decisions should be added here once resolved:
+*(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
+the log stopped being where decisions were recorded. They are listed with where each landed,
+rather than back-filled as `DEC-010..014`, because a second copy of a decision that already has
+a canonical home is the drift this docset keeps paying for.)*
 
-- final runtime ownership boundary after extraction/contraction review
-- exact distributed profile support definition
-- final stable surface list for downstream reliance
-- stronger or revised extension support posture if adopted
-- explicit readiness-blocker policy by profile
+- ~~final runtime ownership boundary after extraction/contraction review~~ — `RUNTIME_BOUNDARY.md`
+  and `README.md` §Ownership Boundary (resolved 2026-06-05; `ROUTE_OWNERSHIP_INVENTORY.md` for
+  the per-route answer)
+- ~~exact distributed profile support definition~~ — `DEPLOYMENT_PROFILES.md`,
+  `PROFILE_SUPPORT_MATRIX.md`, enforced by `deployment_contract.py`
+- ~~final stable surface list for downstream reliance~~ — `PUBLIC_RUNTIME_SURFACES.md`,
+  `SDK_CONTRACT.md`, `UI_CONTRACT.md`, pinned by `tests/unit/test_cross_repo_compatibility.py`
+- ~~stronger or revised extension support posture if adopted~~ — the two-tier isolation contract,
+  `EXTENSION_TRUST_MODEL.md` and `SANDBOX_CONTRACT.md` (2026-05-23 decision; design record in
+  `docs/archive/ISOLATION_MODEL_PLAN.md`)
+- ~~explicit readiness-blocker policy by profile~~ — `ReadinessBlockerCode` in
+  `AINDY/kernel/condition_codes.py`, documented in `CONDITION_CODES.md` and
+  `DEGRADED_MODE_MATRIX.md` (2026-06-06)
+
+**Where decisions are recorded now.** Since 2026-08-01, owner decisions are recorded in
+`TECH_DEBT.md` (`DECISIONS-2026-08-01`) and the *Recorded decisions — considered and declined,
+do not re-litigate* section of `CLAUDE.md`; design-level decisions live in the relevant
+`docs/design/` document's status header. `DEC-001..009` above remain accepted and are the
+principles those later decisions were made under. **There are therefore three places a decision
+can be recorded**; consolidating them is a docset decision not yet taken, and until it is, this
+log is the record of the *founding* decisions only.
 
 ---
 
@@ -290,7 +309,7 @@ The runtime should increasingly preserve reasoning, not just code.
 
 This document should align with:
 
-- `OPEN_QUESTIONS.md`
+- `../archive/OPEN_QUESTIONS.md` (all eleven resolved; archived 2026-09-13)
 - `RUNTIME_BOUNDARY.md`
 - `SECURITY_POSTURE.md`
 - `PROFILE_SUPPORT_MATRIX.md`
