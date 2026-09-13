@@ -4219,6 +4219,15 @@ for the OS integration described above.
 
 **Resolution direction:** Both caps are tunable via env vars (`AINDY_MAX_SYSCALLS_PER_EXECUTION`, `AINDY_MAX_WALL_TIME_MS`). Document the advisory in `NODUS_DEVELOPER_GUIDE.md` §3 ("Design complex flows as multi-node DAGs rather than single nodes with many syscalls"). Raise caps only when a real workload requires it — do not raise speculatively.
 
+**★ 2026-09-13 — the other direction is also true: for some callers the cap does not apply AT
+ALL.** `QUOTA-ACCRUAL-ORPHAN-1` (#632) measured that a dispatch arriving with no execution unit
+gets one minted per call, so a guest's `sys()` calls, agent tools built via
+`make_syscall_ctx_from_tool` and id-less `extension_worker` calls are each "call 1 of 100",
+forever. Those root dispatches are now reaped and counted (`aindy_syscall_unowned_unit_total`);
+whether they should share the run's budget is filed on `EXEC-ENV-BIND-1` phase 4. Until that is
+decided, a `RESOURCE_LIMIT_EXCEEDED` on this cap can only come from a caller that NAMED its unit
+— routes (via the pipeline bridge), MCP calls, and flow nodes under a named run.
+
 **Reopen trigger:** First production `RESOURCE_LIMIT_EXCEEDED` from a legitimate (non-runaway) flow.
 
 ---
@@ -9005,6 +9014,22 @@ itself gated on the LLM seam acquiring a consumer (`LLM_SEAM_ADOPTION_SCOPE.md`)
 first: an enforcing resources axis whose dominant dimension is unmeasured spend enforces the two
 dimensions that were never the problem.**
 
+**★ Input for phase 4, filed 2026-09-13 out of `QUOTA-ACCRUAL-ORPHAN-1` (#632): the per-execution
+syscall/wall-time budget has a KNOWN population it does not apply to, and the runtime now counts
+it.** `aindy_syscall_unowned_unit_total{syscall}` increments for every root dispatch that had to
+mint its own execution unit — a unit that lives one call, so its budget is vacuous by
+construction. Known members today: the nodus worker's `sys()` seam (`nodus_worker.py:242`
+dispatches with no unit even though the worker holds the run's `execution_unit_id`), agent
+tools via `make_syscall_ctx_from_tool` with no `run_id` (`runtime_agent_defaults.py`,
+`tool_syscalls.py`), and `extension_worker` when the context carries no `run_id`. **This is a
+DECISION, not a leak** (the units are reaped): should a guest's `sys()` calls share the run's
+budget — i.e. is the resources descriptor's subject the RUN or the CALL? Threading the run id
+through is one line per site; what it changes is that a guest script's 101st `sys()` is refused
+and, for EXACTLY_ONCE syscalls, that two identical calls in one run dedup (the gate keys on the
+caller-named id — `_orig_eu_id`). Decide the subject here before flipping any of the three; a
+counter read from a deployment says which of them anyone actually exercises. `SYSMAX-4` carries
+the same note from the cap's side.
+
 **Phase 2 = the guest path asks.** `nodus_worker` derives every confinement argument from an
 `ExecutionEnvironmentSpec` clamped to `GUEST_FLOOR` instead of three hardcoded `False` literals,
 and passes `allowed_paths` explicitly against a per-execution scratch root. This closes
@@ -10877,6 +10902,132 @@ someone builds on.
 **Method note for whoever repeats this:** verify the guarantees, not just the gaps. Both errors
 above were in "already covered" sections — the parts of an audit least likely to be re-checked,
 because a finding invites scrutiny and a reassurance does not.
+
+---
+
+## TEST-ORDER-CONTEXTVAR-1 — one test file set three ContextVars and reset none; ~80% of the sweep ran polluted
+
+**Status: CLOSED (2026-09-13).** Found while fixing `QUOTA-ACCRUAL-ORPHAN-1` (#632): a new test
+asserting the dispatcher's ContextVars were `""` passed alone and failed only in CI's full order.
+The victim was in `test_quota_accrual_orphan.py`; the leaker was 140 files earlier.
+
+### Measured
+
+pytest runs every test in ONE `contextvars` context, so a `.set()` with no `.reset()` is
+ambient for every test that runs after it. `tests/unit/test_contextvar_thread_propagation.py`
+did that three times — `set_trace_id(...)`, `_EU_ID_CTX.set(...)`, `set_pipeline_active(True)`
+— and no fixture anywhere reset them. A probe file run alone, then run after that file:
+
+```
+alone : {'pipeline_active': False, 'trace_id': None, 'syscall_eu': '', 'syscall_trace': ''}
+after : {'pipeline_active': True,  'trace_id': '9d7ea3fb-…', 'syscall_eu': '6eede31c-…', 'syscall_trace': ''}
+```
+
+`test_c…` sorts early, so **roughly 180 of 221 unit files ran with `is_pipeline_active()`
+True**, a stale trace id and a stale syscall unit id. What that made vacuous:
+
+- the ExecutionContract gate (`system_event_service` rejects `execution.*` events unless a
+  pipeline or async scope is active) — satisfied by the leak, so no test after "c" could observe
+  a rejection it did not itself arrange;
+- memory-capture guards keyed on `is_pipeline_active()` — which is why capture tests were
+  found to "need `allow_when_pipeline_active=True`" (RTR-3/4/6/7 notes, 2026-07-08): that
+  workaround was papering over this leak, not a property of the capture engine;
+- `entrypoints.run_flow` / `execute_intent` read `_EU_ID_CTX.get() or trace_id`, and
+  `execution_dispatcher` captures `_EU_ID_CTX` for the distributed payload — every such test
+  after "c" ran with a unit id from a test that had finished long before.
+
+**Three more leakers surfaced the moment the guard existed, and two are PRODUCTION code:**
+
+- `test_mcp_server.py`'s identity test reset `_SESSION_IDENTITY` but not the effect attribution
+  the auth hook also sets, so every later test ran attributed to `tenant-7` — variant 13's shape:
+  the fixture reset the thing it knew about and not the interaction.
+- **`async_job_service._execute_job_inline`** set the trace and parent-event tokens at the top and
+  reset the trace only in an inner `finally` that the early returns (no JobLog, no handler) never
+  reached; the parent-event token on those paths was never reset at all. Invisible in
+  production because each job runs in a `copy_context()`. Fixed: both resets in the outer
+  `finally`, LIFO with the inner ones.
+- **`PersistentFlowRunner.start`** called `ensure_trace_id`, which SETS the ambient trace id
+  with no token when none is current, and never released it. Inside a request the middleware
+  had already set one, so nothing changed; **on a scheduler thread the first flow pinned that
+  thread's trace id for every later flow it ran** — unrelated runs sharing a `trace_id`, which
+  is a real (minor) trace-correlation defect, not test hygiene. Fixed: same value, with a
+  token, released in `start()`'s `finally`. `ensure_trace_id` itself is unchanged; its two remaining callers are
+  `agents/runtime_api.py:60` and `:107` (agent-run entry), which have the same thread-pinning
+  exposure when reached from a scheduler thread — **not fixed here**, audit them next.
+
+### What shipped (with `TEST-ORDER-REGISTRY-1`'s closure)
+
+**`tests/unit/conftest.py::_contextvar_isolation`** — autouse. Snapshots every ContextVar the
+runtime has imported, and after each test **restores what changed and fails THAT test**, naming
+each var and its before/after. Two properties are load-bearing: the restore, so victims stay
+clean instead of merely having the blame moved; and the attribution, so the error lands on the
+leaker rather than on whichever test 100 files later noticed. **★ The census is DERIVED** — a
+scan of loaded `AINDY.*` modules for `ContextVar` instances, cached on the module count — and
+asserted non-empty (variant 12; a hand-typed list here would be the second list nobody re-reads).
+A var first imported *during* a test joins the census for the next test.
+
+**Liveness control: `tests/unit/test_contextvar_isolation_guard.py`** spawns a real pytest
+subprocess against a generated leaker + victim (same idiom as `CI-MARKER-1`'s guard). Mutation-
+tested 3/3: no-fail, no-restore, empty-census each turn it red. Both leakers fixed by keeping
+their tokens.
+
+**★ Not done, by decision: randomising test order (`pytest-randomly`).** It would have found
+this — and it would also turn every latent order-dependence into a CI flake on the day it is
+switched on, with no attribution. The guard attributes; a shuffle only detects. Revisit if a
+second class of ambient state (module globals, registries) leaks the same way.
+
+### Rule
+
+**A test that sets ambient state owns its reset, and a fixture that resets one var does not
+reset the interaction that set two.** `caplog` was already known not to cross threads (variant
+10); this is the same instrument problem on the ordering axis — a test can only observe the
+ambient state it did not itself arrange if nothing before it arranged it.
+
+---
+
+## TEST-ORDER-REGISTRY-1 — `test_platform_only_startup` "passes only by alphabetical order"
+
+**Status: CLOSED (2026-09-13) — the claim did not reproduce at its own filing commit, and the
+fix it prescribed had existed since the first commit of the repo.** Filed 2026-08-19 in
+`CLAUDE.md`'s registry (#507) with no entry here; this is the first record of it.
+
+### As filed
+
+> `test_platform_only_startup.py` asserts against the GLOBAL tool/capability registries and
+> passes only because it sorts alphabetically before every `test_tool_*` file. Run
+> `pytest tests/unit/test_tool_session_handle.py tests/unit/test_platform_only_startup.py` in
+> that order and two of its tests fail with an EMPTY capability set — verified on `main` with no
+> local changes. Fix is registry isolation in that suite's fixture.
+
+### Measured
+
+| Tree | Ordering | Runs | Failures |
+|---|---|---|---|
+| `bedc667` (the filing commit, in a worktree, its own `AINDY` first on `sys.path`) | as filed | 6 | 0 |
+| `main` @ `8875824` | as filed | 4 | 0 |
+| `main` @ `8875824` | every one of the 113 later files first, then the suite | 1 | 0 |
+| `main` @ `8875824` | each `test_tool_*` / `test_authority_negotiation_*` file first | 8 | 0 |
+
+And `platform_only_runtime` — the suite's fixture — has snapshotted, cleared and restored
+`TOOL_REGISTRY`, `_SUGGESTION_PROVIDERS` and the platform registry's state since `0d5d382`
+(2026-05-17). **The prescribed fix was already there when the entry was written.**
+
+### What it most likely was
+
+"Two tests fail with an EMPTY capability set" is `FLAKY-1`'s signature, not an ordering one: the
+capability definitions come from a provider that runs in a **subprocess**
+(`isolated-runtime-callback`), and a spawn failure or timeout yields `[]`. `FLAKY-1` was closed
+four days before this was filed, with a 30 s callback budget that a loaded machine can still
+exceed — and its own entry records, three times over, a small-sample failure being read as
+caused by whatever files happened to be nearby. This was a fourth. **The entry's general claim
+was right for a reason it did not name**: the sweep WAS order-dependent, through ContextVars, not
+registries — see `TEST-ORDER-CONTEXTVAR-1`, which this closure ships with.
+
+### Rule
+
+**Before filing an ordering defect, reproduce it more than once and at least once with the order
+reversed.** A single failing pair proves a failure happened, not that the order caused it. The
+2026-08-19 note said "verified"; what was verified was one run.
 
 ---
 
