@@ -2292,7 +2292,7 @@ two layers as a dedicated effort — this is the kernel's most correctness-sensi
 
 Status: CLOSED (2026-05-24)
 
-Source: `ISOLATION_MODEL_PLAN.md` Gap 4 / `C2_SANDBOX_AUDIT.md`.
+Source: `docs/archive/ISOLATION_MODEL_PLAN.md` Gap 4 / `docs/archive/C2_SANDBOX_AUDIT.md` (both archived 2026-09-13).
 
 Reopen condition was: a non-Linux host platform produces a sandbox runner type passing
 the shared worker policy certification suite with assurance class at or above
@@ -2340,7 +2340,7 @@ Closing C3 fully needs a platform-native strong-VM runner. **Preparation plan sc
 `docs/runtime/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`** (Windows-native + macOS tracks) so
 either track can start the day a trigger lands.
 
-Source: `C2_SANDBOX_AUDIT.md` "What This Audit Does NOT Cover" / `ISOLATION_MODEL_PLAN.md` Gap 4 (C3 remainder).
+Source: `docs/archive/C2_SANDBOX_AUDIT.md` "What This Audit Does NOT Cover" / `docs/archive/ISOLATION_MODEL_PLAN.md` Gap 4 (C3 remainder). Both archived 2026-09-13; the C3 remainder is unchanged.
 
 **Phase 0 (2026-06-04) — Adversarial escape test suite: COMPLETE**
 

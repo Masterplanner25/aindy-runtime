@@ -203,3 +203,36 @@ pointer is doing real work for an operator reading the posture output, so it was
 archive path rather than removed; no test pins the string. `C2_SANDBOX_AUDIT.md` (still at the
 root) cites this plan by bare name twice and is left as-is. `TECH_DEBT.md`, `CHANGELOG.md` and
 `AINDY_RUNTIME_REPLACEMENT_COST_AUDIT.md` mentions are historical.
+
+## Repository root — archived 2026-09-13 (fourth)
+
+| Document | Written | What it was | Superseded by |
+|---|---|---|---|
+| [`C2_SANDBOX_AUDIT.md`](C2_SANDBOX_AUDIT.md) | 2026-05-24 | The audit that closed `C2` — eight findings (`NF-1..8`) on why `container-sandbox-certified` was unreachable off Linux when the container backend delivered Linux semantics anyway, four open operational questions, and a verification strategy. Its "What This Audit Does NOT Cover" section is where `C3` was born. | `TECH_DEBT.md` `C2` (closed 2026-05-24, live-verified on Windows + Docker Desktop) and `C3` (the tracked remainder); `docs/runtime/EXTENSION_TRUST_MODEL.md` §Available Platform Sandbox Mechanism Matrix and §Container-Backed Third-Party Plugin Isolation Semantics; `docs/runtime/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`. |
+
+**Verified per item on 2026-09-13.** `NF-1..7` are in `sandbox_runner.py` —
+`_detect_linux_container_backend()` (`docker info` → `OSType`), the
+`linux_container_backend_available` parameter on `_platform_matrix_entry`, and a dynamic
+`production_safe_third_party_supported_host_platforms` key beside the static Linux-only
+constant, which was deliberately left narrow. `NF-5`'s non-Linux certification tests are in
+`test_sandbox_runner.py`. `NF-2` and `NF-8`'s doc sections exist under the names the
+2026-05-31 reconciliation gave them (*Container-Backed … Semantics*, *Available Platform
+Sandbox Mechanism Matrix*).
+
+**The four open questions were answered by the implementation rather than in writing:**
+Q1 — re-detect on every matrix call, no cache; Q2 — fail closed with an `operator_note`, and
+**no** `ASSUME_LINUX_BACKEND` escape hatch was added; Q3 — no `backend_host_platform` field
+by that name, but `detection_method`, `os_type` and `current_wsl2_detection` expose the same
+distinction; Q4 — `_detect_wsl2()` (C3 phase 1) separates *running inside WSL2* from
+*Windows talking to a WSL2 backend*, and `MACOS_CONTAINER_POLICY.md` covers the third case.
+
+**One recommendation was never actioned, and is recorded here rather than filed:** the
+audit's *After This Audit* section proposed `docs/runtime/SANDBOX_CONTRACT.md` — a peer to
+`EXECUTION_CONTRACT.md` and `IDEMPOTENCY_CONTRACT.md` with the sandbox guarantees as
+numbered invariants. It does not exist; those guarantees remain prose spread across
+`EXTENSION_TRUST_MODEL.md`, `SECURITY_MATRIX.md`, `OS_ISOLATION_LAYER.md` and the threat
+model in `SANDBOX_ESCAPE_AUDIT.md`. Whether that consolidation is wanted is a docset
+decision, not a defect.
+
+The two `Source:` pointer lines in `TECH_DEBT.md` (`C2`, `C3`) now cite the archive path;
+the narrative mention in `ISOLATION-DOC-STATUS-1` stays as written.
