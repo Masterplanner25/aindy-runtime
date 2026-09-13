@@ -13,8 +13,8 @@ This document records what is already in place that makes hosted deployment viab
 what the shortest path to a single-operator cloud deployment looks like, and what
 becomes load-bearing when the target shifts to true multi-tenant SaaS.
 
-Companion documents: `LOCAL_AND_CLOUD_AUDIT.md` (infrastructure gaps) and
-`MONETIZATION_AUDIT.md` (billing and commercial architecture).
+Companion documents: `../archive/LOCAL_AND_CLOUD_AUDIT.md` (infrastructure gaps, 2026-06-05 — archived; its open findings live in `TECH_DEBT.md` under `DEPLOY-TARGET-2`, `TENANT-2`, `DATA-1`) and
+`../archive/MONETIZATION_AUDIT.md` (billing and commercial architecture).
 
 ---
 
@@ -93,7 +93,7 @@ against a cloud Postgres, not code changes. Tracked as `DEPLOY-TARGET-1`.
 **Target:** Multiple paying operators each get an isolated runtime environment.
 Think "one deployment, many customers."
 
-This is when `LOCAL_AND_CLOUD_AUDIT.md` findings TENANT-1 through TENANT-4
+This is when the `LOCAL_AND_CLOUD_AUDIT` findings TENANT-1 through TENANT-4 (now enumerated under `DEPLOY-TARGET-2` in `TECH_DEBT.md`)
 become load-bearing:
 
 | Finding | What it blocks |
@@ -108,7 +108,7 @@ deliberate work that should begin only when the first multi-tenant customer
 is ready to onboard. Tracked as `DEPLOY-TARGET-2`.
 
 The commercial layer (billing identity, plan tiers, Stripe integration, usage
-reporting) is a separate concern documented in `MONETIZATION_AUDIT.md`.
+reporting) is a separate concern documented in `../archive/MONETIZATION_AUDIT.md`.
 
 ---
 

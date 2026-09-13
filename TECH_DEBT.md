@@ -281,7 +281,7 @@ opt-in flags after app soak (`AINDY_PLANNER_MEMORY_INJECTION`, `AINDY_ASYNC_JOB_
 (`aindy-apps-monolith/apps/analytics/services/{scoring,orchestration}/`). This repo owns
 the execution substrate and the loop-closure primitives the app-side "force execution
 through Infinity" phases depend on. The runtime-side audit is
-`docs/runtime/INFINITY_LOOP_AUDIT.md`; it now cross-links the app docset (was
+`docs/archive/INFINITY_LOOP_AUDIT.md`; it now cross-links the app docset (was
 one-directional — the app docs pointed here, this repo did not point back; fixed
 2026-07-05).
 
@@ -1001,7 +1001,7 @@ default off; chain-depth cap; approval gate + admission reuse; app-sourced
   baseline regenerated (`tests/baselines/system_event_contract.json`, `3389c3b6…`). No schema
   change (SystemEvent already carries `parent_event_id` + JSON `payload`). Tests:
   `tests/unit/test_next_action_acting.py` (+8 outcome cases). Contract doc:
-  `docs/runtime/INFINITY_LOOP_AUDIT.md` (Gap 4).
+  `docs/archive/INFINITY_LOOP_AUDIT.md` (Gap 4).
 - (c) Flip `AINDY_NEXT_ACTION_ACTING` after app soak (unchanged).
 
 ### FR-4 — Docs relocation: Bucket A + runtime half of `INVARIANTS.md`
@@ -2853,7 +2853,7 @@ deprecation philosophy, neither of which is settled.
 
 Status: Deferred — Low Priority
 
-Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area A, finding TENANT-2.
+Source: `docs/archive/LOCAL_AND_CLOUD_AUDIT.md` (archived 2026-09-13) Area A, finding TENANT-2.
 
 `MAX_CONCURRENT_PER_TENANT = 5` is a process-wide constant overridable only via
 `AINDY_QUOTA_MAX_CONCURRENT` env var, not per-billing-tenant. The `quota_group`
@@ -2887,7 +2887,7 @@ surface promotion to stable.
 
 Status: Deferred — Low Priority
 
-Source: `docs/runtime/LOCAL_AND_CLOUD_AUDIT.md` Area D, finding DATA-1.
+Source: `docs/archive/LOCAL_AND_CLOUD_AUDIT.md` (archived 2026-09-13) Area D, finding DATA-1.
 
 No `AINDY_DATA_REGION` env var or equivalent exists. Cloud operators in regulated
 industries (GDPR, HIPAA, SOC 2 Type II) need to declare which region data is stored
@@ -2957,7 +2957,33 @@ from `LOCAL_AND_CLOUD_AUDIT.md` become load-bearing and must be resolved in sequ
 None of these are blocked by architectural debt — the hooks are seeded. This is
 deliberate work that begins only when the first multi-tenant customer is ready.
 
-Source: `docs/runtime/DEPLOYMENT_TARGETS.md`. Related: `BILLING-1` (billing identity).
+**Also from the same audit, same trigger, severity low — folded in here 2026-09-13 when
+`LOCAL_AND_CLOUD_AUDIT.md` was archived, because the audit was their only record:**
+
+- **CLOUD-1** — no surface distinguishes a local install from a cloud-hosted runtime. Direction:
+  a `distribution_context` field (`local-install` | `cloud-hosted`) on the deployment contract
+  payload, injected by the control plane at registration; optionally on `/health`.
+- **CLOUD-2** — `hostile-third-party`'s role as *the* cloud-marketplace / untrusted-tenant-plugin
+  profile is implicit. Direction: one sentence in `DEPLOYMENT_PROFILES.md`.
+- **CLOUD-3** — no runtime node registration. The deployment contract payload is the right
+  content; the missing piece is a push (`POST /platform/control-plane/register` at startup) or a
+  control-plane pull.
+- **CLOUD-4** — `deployment_contract_summary()` is internal, not in `PUBLIC_RUNTIME_SURFACES.md`;
+  a control plane depending on it today consumes an undeclared surface. Promote with CLOUD-3.
+- **COMPAT-3** — the platform UI has no independent version surface. Direction: a `ui_version`
+  key on `/health` or `/api/version`, equal to the runtime version until it diverges.
+- **DATA-2** — no operator-accessible audit log of writes ("who wrote what, when, from which
+  tenant"). `EffectRecord` is durable for idempotency but not structured as an audit surface;
+  evaluate promoting it vs a separate `AuditRecord`. ★ Overlaps `SYSEVENT-RETENTION-1` (the
+  audit trail's retention) and `AUDIT-CORRELATION-1` (its joins) — read both before building.
+
+★ **TENANT-1 is the same defect `INITIATOR-IDENTITY-1` files from the OpenClaw side**
+(`tenant_context.py` — `tenant_id == user_id` holds only while work is *requested*); that entry
+is the live one. **LOCAL-2** (a way to print the version without starting uvicorn) is satisfied by
+`aindy-runtime --version`.
+
+Source: `docs/runtime/DEPLOYMENT_TARGETS.md`; findings from `docs/archive/LOCAL_AND_CLOUD_AUDIT.md`
+(archived 2026-09-13). Related: `BILLING-1` (billing identity).
 
 **Reopen trigger:** When first multi-tenant operator onboards.
 
@@ -2977,7 +3003,7 @@ Resolution direction: introduce a `billing_account_id` field on `User` (or a
 `tenant_id` onto this identifier. This unblocks BILLING-3 (plan enforcement) and
 DEPLOY-TARGET-2 (multi-tenant SaaS).
 
-Source: `docs/runtime/MONETIZATION_AUDIT.md` Area A, finding BILLING-1.
+Source: `docs/archive/MONETIZATION_AUDIT.md` (archived 2026-09-13) Area A, finding BILLING-1.
 
 **Reopen trigger:** When first multi-seat team plan or control-plane integration begins.
 
@@ -2993,7 +3019,7 @@ table is the clearest natural unit; the recommendation in the monetization audit
 is per-agent-run with a seat-based floor for team plans. This decision must be
 made before any billing backend is integrated.
 
-Source: `docs/runtime/MONETIZATION_AUDIT.md` Area B, finding BILLING-2.
+Source: `docs/archive/MONETIZATION_AUDIT.md` (archived 2026-09-13) Area B, finding BILLING-2.
 
 **Reopen trigger:** Before billing infrastructure or Stripe integration begins.
 
@@ -3015,7 +3041,7 @@ The `quota_group` field on `execution_units` is the right enforcement hook (seed
 but unread). `TENANT-2` in `TECH_DEBT.md` tracks the enforcement-path gap at the
 infrastructure level; BILLING-3 extends it into the commercial billing context.
 
-Source: `docs/runtime/MONETIZATION_AUDIT.md` Area C, finding BILLING-3.
+Source: `docs/archive/MONETIZATION_AUDIT.md` (archived 2026-09-13) Area C, finding BILLING-3.
 
 **Reopen trigger:** When the first paid plan tier is defined.
 
@@ -3036,7 +3062,7 @@ The runtime's side of this contract: a `set-plan-tier` internal admin endpoint
 key. The commercial logic (Stripe, webhooks, pricing pages) lives outside this repo
 to preserve self-hostability.
 
-Source: `docs/runtime/MONETIZATION_AUDIT.md` Area D, finding BILLING-4.
+Source: `docs/archive/MONETIZATION_AUDIT.md` (archived 2026-09-13) Area D, finding BILLING-4.
 
 **Reopen trigger:** Before first paid customer onboards.
 
@@ -3055,7 +3081,7 @@ Minimum viable: a read-only admin endpoint returning current-period agent run co
 compute wall time, and memory record count relative to plan limits. Requires a
 billing period start date on the billing account model (BILLING-1 dependency).
 
-Source: `docs/runtime/MONETIZATION_AUDIT.md` Area E, finding BILLING-5.
+Source: `docs/archive/MONETIZATION_AUDIT.md` (archived 2026-09-13) Area E, finding BILLING-5.
 
 **Reopen trigger:** When first metered plan with usage limits ships.
 

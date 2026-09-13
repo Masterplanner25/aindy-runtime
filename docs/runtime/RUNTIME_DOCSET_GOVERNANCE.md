@@ -249,12 +249,14 @@ The goal is to stop documentation drift from turning into platform overclaim.
 
 This document should be read together with:
 
-- `RUNTIME_DOC_ALIGNMENT_AUDIT.md`
 - `DECISION_LOG.md`
 - `OPEN_QUESTIONS.md`
 
 These answer different questions:
 
-- `RUNTIME_DOC_ALIGNMENT_AUDIT.md`: which older docs are aligned, partial, or conflicting
+- *(`RUNTIME_DOC_ALIGNMENT_AUDIT.md` — which older docs were aligned, partial, or conflicting —
+  was a 2026-05-31 snapshot whose reconciliation plan was executed the same day; both are in
+  `docs/archive/`. For current alignment, `Runtime Docs Validation` and `docs/archive/README.md`'s
+  archive passes are the record.)*
 - `DECISION_LOG.md`: which core runtime decisions are already accepted
 - `OPEN_QUESTIONS.md`: which important questions remain unresolved
