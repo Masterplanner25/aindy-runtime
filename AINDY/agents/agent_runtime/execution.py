@@ -10,6 +10,7 @@ from AINDY.agents.runtime_guardrails import AgentRuntimeGuardrailViolation
 from AINDY.core.execution_signal_helper import record_agent_event
 from AINDY.core.system_event_service import emit_error_event
 from AINDY.platform_layer.trace_context import get_parent_event_id, get_trace_id, reset_parent_event_id, set_parent_event_id
+from AINDY.platform_layer.token_meter import llm_attribution_scope
 
 from AINDY.agents.agent_runtime.shared import LOCAL_AGENT_ID, get_runtime_compat_module, logger
 from AINDY.memory.memory_persistence import (
@@ -213,22 +214,39 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
         owner_run_token = None
         if delegation_private_memory_enabled() and capability_token.get("parent_run_id"):
             owner_run_token = set_owner_run_id(str(run.id))
+        # COST-GOVERNOR-1 phase 3 — every LLM call made under this run's execution span is
+        # attributed to (tenant, run). The run's snapshot is OBSERVED, not admitted:
+        # `observed_unit` gives the tokens a subject with the run's identity and purges it
+        # on exit, without putting the run through tenant admission or the per-unit syscall
+        # cap — whether an agent run should be ONE admitted unit is EXEC-ENV-BIND-1 phase 4's
+        # subject decision, not a side effect of metering. Read before exit, recorded on the
+        # run's score event so per-run spend is durable in the trace.
+        llm_tokens = 0
         try:
-            execute_agent_run_via_nodus(
-                run_id=str(run.id),
-                plan=execution_plan,
-                user_id=user_id,
-                db=db,
-                correlation_id=getattr(run, "correlation_id", None),
-                execution_token=capability_token,
-            )
+            from AINDY.kernel.resource_manager import get_resource_manager
+
+            _rm = get_resource_manager()
+            with _rm.observed_unit(str(user_db_id or ""), str(run.id)), llm_attribution_scope(
+                tenant_id=str(user_db_id) if user_db_id else None, run_id=str(run.id)
+            ):
+                try:
+                    execute_agent_run_via_nodus(
+                        run_id=str(run.id),
+                        plan=execution_plan,
+                        user_id=user_id,
+                        db=db,
+                        correlation_id=getattr(run, "correlation_id", None),
+                        execution_token=capability_token,
+                    )
+                finally:
+                    llm_tokens = int(_rm.get_usage(str(run.id)).get("tokens") or 0)
         finally:
             reset_parent_event_id(parent_token)
             if owner_run_token is not None:
                 reset_owner_run_id(owner_run_token)
 
         db.refresh(run)
-        _emit_agent_run_score(run, db=db, user_id=user_db_id)
+        _emit_agent_run_score(run, db=db, user_id=user_db_id, llm_tokens=llm_tokens)
         hook_next_action = None
         if run.status == "completed":
             hook_results = compat._run_completion_hooks(
@@ -283,7 +301,7 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
         return None
 
 
-def _emit_agent_run_score(run, *, db: Session, user_id: str) -> None:
+def _emit_agent_run_score(run, *, db: Session, user_id: str, llm_tokens: int | None = None) -> None:
     """Emit a per-run SCORE_COMPUTED record for a finished agent run.
 
     Covers the terminal ``completed``/``failed`` states reached on the normal
@@ -313,6 +331,9 @@ def _emit_agent_run_score(run, *, db: Session, user_id: str) -> None:
             dimensions={
                 "steps_completed": getattr(run, "steps_completed", None),
                 "steps_total": getattr(run, "steps_total", None),
+                # COST-GOVERNOR-1 phase 3 — tokens the run's execution span spent, from the
+                # meter; None when the span was not observed (a caller other than execute_run).
+                "llm_tokens": llm_tokens,
             },
             source="agent",
         )

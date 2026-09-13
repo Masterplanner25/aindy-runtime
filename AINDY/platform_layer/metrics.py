@@ -199,6 +199,23 @@ llm_usage_unreadable_total = Counter(
     registry=REGISTRY,
 )
 
+# ── COST-GOVERNOR-1 phase 3 — who did the call belong to? ────────────────────
+#
+# ★ The governor's precondition, made visible before anyone relies on a cap. A budget can only
+# refuse what it can attribute; the `INITIATOR-IDENTITY-1` rule (allow, and count separately —
+# an asserted identity may constrain, never widen) means unattributed calls are let through,
+# so the unattributed FRACTION is the number that says whether a budget would mean anything.
+# Four values, bounded: `run` (an agent run's execution span), `unit` (an execution unit was
+# bound — a request, a bound worker job), `tenant` (only the tenant is known — planning, which
+# runs before the AgentRun row exists), `none`.
+llm_calls_total = Counter(
+    "aindy_llm_calls_total",
+    "LLM calls by the identity the meter could attribute them to: run | unit | tenant | none. "
+    "A non-zero `none` is the set of call sites no budget can reach.",
+    ["provider", "attributed"],
+    registry=REGISTRY,
+)
+
 # ── Nodus warm-worker pool (NODUS-WARMPOOL-1) ────────────────────────────────
 
 nodus_warm_pool_events_total = Counter(
