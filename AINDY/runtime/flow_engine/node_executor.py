@@ -61,6 +61,20 @@ def resolve_next_node(current_node: str, state: dict, flow: dict):
     return first
 
 
+def fan_out_group_for(current_node: str, flow: dict):
+    """The `FanOutEdgeGroup` declared on `current_node`, or None (phase 2 needs its join)."""
+    from AINDY.runtime.flow_engine.fan_out import FanOutEdgeGroup
+
+    edges = flow["edges"].get(current_node, [])
+    if isinstance(edges, FanOutEdgeGroup):
+        return edges
+    if isinstance(edges, (list, tuple)):
+        for edge in edges:
+            if isinstance(edge, FanOutEdgeGroup):
+                return edge
+    return None
+
+
 def resolve_frontier(current_node: str, state: dict, flow: dict) -> list[str]:
     """FLOW-PARALLEL-1 phase 1 — the successors that make up the next superstep.
 

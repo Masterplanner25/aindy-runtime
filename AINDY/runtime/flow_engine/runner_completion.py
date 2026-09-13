@@ -91,6 +91,18 @@ def maybe_finalize_completion(
             logger.warning("Execution completion hook skipped: %s", exc)
         from AINDY.runtime import flow_engine as flow_engine_module
 
+        # FLOW-PARALLEL-1 phase 2 — a run that proceeded past failed branches under a lenient
+        # join completed, but not wholly: it is a `partial` outcome (EFFECT-PARTIAL-1), named
+        # per unit, on the completion event AND lifted onto the flow.run envelope below.
+        partial_units = _superstep_partial_units(state)
+        completion_payload = {
+            "run_id": str(run.id),
+            "workflow_type": runner.workflow_type,
+            "result": execution_result,
+        }
+        if partial_units:
+            completion_payload["outcome"] = "partial"
+            completion_payload["partial_units"] = partial_units
         flow_engine_module.emit_system_event(
             db=runner.db,
             event_type=SystemEventTypes.EXECUTION_COMPLETED,
@@ -98,14 +110,10 @@ def maybe_finalize_completion(
             trace_id=run.trace_id or str(run.id),
             parent_event_id=root_event_id,
             source="flow",
-            payload={
-                "run_id": str(run.id),
-                "workflow_type": runner.workflow_type,
-                "result": execution_result,
-            },
+            payload=completion_payload,
             required=True,
         )
-        return _format_execution_response(
+        response = _format_execution_response(
             status="SUCCESS",
             trace_id=run.trace_id or str(run.id),
             result=execution_result,
@@ -114,12 +122,34 @@ def maybe_finalize_completion(
             run_id=run.id,
             state=state,
         )
+        if partial_units:
+            from AINDY.kernel.syscall_outcome import OUTCOME_KEY, partial
+
+            response[OUTCOME_KEY] = partial(
+                partial_units,
+                detail=f"{len(partial_units)} fan-out branch(es) failed under a lenient join",
+            )
+        return response
     except Exception as exc:
         return runner._fail_execution(
             f"Completion finalization failed: {exc}",
             failed_node=current_node,
             parent_event_id=str(node_started_event_id) if node_started_event_id else None,
         )
+
+
+def _superstep_partial_units(state: dict) -> list[dict]:
+    """Flatten `_superstep_partials` (written at the barrier) into per-branch units."""
+    units: list[dict] = []
+    for entry in (state.get("_superstep_partials") or []) if isinstance(state, dict) else []:
+        for failed in entry.get("failed") or []:
+            units.append({
+                "superstep": entry.get("superstep"),
+                "join": entry.get("join"),
+                "branch": failed.get("branch"),
+                "error": failed.get("error"),
+            })
+    return units
 
 
 def capture_flow_completion(runner, run, state: dict) -> None:

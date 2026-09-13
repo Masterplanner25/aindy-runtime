@@ -693,7 +693,15 @@ def _handle_flow_run(payload: dict, context: SyscallContext) -> dict:
             workflow_type=workflow_type,
         )
         result = runner.start(initial_state, flow_name=flow_name)
-        return {"flow_result": result}
+        from AINDY.kernel.syscall_outcome import OUTCOME_KEY
+
+        data = {"flow_result": result}
+        # FLOW-PARALLEL-1 phase 2 — a run that completed past failed fan-out branches carries
+        # EFFECT-PARTIAL-1's marker; lifting it makes the ENVELOPE say `partial` and the
+        # ledger record it, at the one resolution point the dispatcher already has.
+        if isinstance(result, dict) and OUTCOME_KEY in result:
+            data[OUTCOME_KEY] = result[OUTCOME_KEY]
+        return data
     finally:
         if owns_session:
             db.close()

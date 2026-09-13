@@ -1,4 +1,4 @@
-"""FLOW-PARALLEL-1 phase 1 — declared fan-out, bounded width, per-branch sessions.
+"""FLOW-PARALLEL-1 phases 1+2 — declared fan-out, bounded width, per-branch sessions, join policies.
 
 Design: `docs/runtime/FLOW_PARALLEL_DESIGN.md`. Read §3 before changing anything here; it is a
 hard constraint that narrows this more than the topology model does.
@@ -30,6 +30,15 @@ single-threaded and remains the only `FlowHistory` writer (§3c, §4).
 suspended branch would need a durable partial-superstep record that may never be wanted, and
 lifting the restriction is coupled to `RECOVERY-GRANULARITY-1` rather than to this. The
 limitation is *declared and loud* rather than discovered.
+
+★★ **Phase 2 — the join is DECLARED on the group, resolved at the barrier (2026-09-13).** Phase 1
+shipped the degenerate join — every branch must succeed and converge — as the narrowest thing
+that made fan-out coherent. `join="all"` (the default, byte-for-byte phase 1), `join="any"` and
+`join="quorum", quorum=k` generalise it. Under a lenient join a superstep in which SOME branches
+failed is not a failure and not a success: it is a **`partial`** outcome, `EFFECT-PARTIAL-1`'s
+vocabulary, naming the branches that did not land — recorded on the run's state, carried on the
+completion event, and lifted onto the `sys.v1.flow.run` envelope. The merge is unchanged: only
+SUCCESS branches ever contributed, and convergence is required of the branches that succeeded.
 """
 
 from __future__ import annotations
@@ -47,9 +56,15 @@ logger = logging.getLogger(__name__)
 # ── The declared shape ───────────────────────────────────────────────────────
 
 
+JOIN_ALL = "all"
+JOIN_ANY = "any"
+JOIN_QUORUM = "quorum"
+JOIN_POLICIES = (JOIN_ALL, JOIN_ANY, JOIN_QUORUM)
+
+
 @dataclass(frozen=True)
 class FanOutEdgeGroup:
-    """A declared set of successors that run as one superstep.
+    """A declared set of successors that run as one superstep, and how they JOIN.
 
     A distinct type rather than another dict shape: `flow["edges"]` already uses a dict to mean
     *conditional edge*, and overloading it would make the graph ambiguous to read and to
@@ -58,12 +73,23 @@ class FanOutEdgeGroup:
     ★ `targets` is a tuple because DECLARATION ORDER IS THE CONTRACT — it is the merge order
     (`state_merge` resolves `last_write_wins` in declaration order) and the ordinal order
     (§4). A mutable sequence would let a caller reorder it after the signature was taken.
+
+    ★ `join` (phase 2) says how many branches must SUCCEED for the superstep to proceed:
+    `all` (every one — the default, and phase 1's behaviour exactly), `any` (at least one), or
+    `quorum` with `quorum=k` (at least k). A lenient join that proceeds past a failed branch
+    reports a `partial` outcome naming it; it never hides it. The join is part of the graph's
+    SHAPE — it decides which successors are reachable — so a non-default join is in the graph
+    signature and a run planned under one join will not resume under another.
     """
 
     targets: tuple[str, ...]
+    join: str = JOIN_ALL
+    quorum: int | None = None
 
-    def __init__(self, targets):
+    def __init__(self, targets, join: str = JOIN_ALL, quorum: int | None = None):
         object.__setattr__(self, "targets", tuple(str(t) for t in targets))
+        object.__setattr__(self, "join", str(join or JOIN_ALL).strip().lower())
+        object.__setattr__(self, "quorum", int(quorum) if quorum is not None else None)
         if len(self.targets) < 2:
             raise ValueError(
                 f"FanOutEdgeGroup needs at least two targets, got {list(self.targets)}. "
@@ -76,6 +102,70 @@ class FanOutEdgeGroup:
                 "twice in one superstep would allocate two ordinals for one node and merge its "
                 "patch against itself."
             )
+        if self.join not in JOIN_POLICIES:
+            raise ValueError(
+                f"FanOutEdgeGroup join must be one of {list(JOIN_POLICIES)}, got {join!r}."
+            )
+        if self.join == JOIN_QUORUM:
+            if self.quorum is None or not (1 <= self.quorum <= len(self.targets)):
+                raise ValueError(
+                    f"FanOutEdgeGroup join='quorum' needs quorum=k with 1 <= k <= "
+                    f"{len(self.targets)} (the group's width), got {quorum!r}. k == width is "
+                    "`all` and k == 1 is `any`; both are allowed, spelled either way."
+                )
+        elif self.quorum is not None:
+            raise ValueError(
+                f"FanOutEdgeGroup quorum={quorum!r} is only meaningful with join='quorum' "
+                f"(got join={self.join!r}). A number that would be ignored is a declaration "
+                "that lies."
+            )
+
+    @property
+    def required_successes(self) -> int:
+        """How many branches must succeed for the superstep to proceed."""
+        if self.join == JOIN_ANY:
+            return 1
+        if self.join == JOIN_QUORUM:
+            return int(self.quorum or 0)
+        return len(self.targets)
+
+    @property
+    def join_label(self) -> str:
+        """`all` | `any` | `quorum:k` — what a record of the superstep says about its join."""
+        return f"{JOIN_QUORUM}:{self.quorum}" if self.join == JOIN_QUORUM else self.join
+
+
+@dataclass(frozen=True)
+class JoinOutcome:
+    """What the barrier decided for one superstep."""
+
+    join: str
+    required: int
+    succeeded: tuple[str, ...]
+    failed: tuple[str, ...]
+
+    @property
+    def satisfied(self) -> bool:
+        return len(self.succeeded) >= self.required
+
+    @property
+    def partial(self) -> bool:
+        """Proceeded past at least one failed branch — a `partial` outcome, never a silent one."""
+        return self.satisfied and bool(self.failed)
+
+
+def resolve_join(group: FanOutEdgeGroup, statuses: dict[str, str]) -> JoinOutcome:
+    """Apply the group's join policy to per-branch statuses (`SUCCESS` | `FAILURE` | ...).
+
+    Order is declaration order throughout, for the same reason the merge and the ordinals
+    are: a record that listed failed branches in completion order would read differently on
+    every run.
+    """
+    succeeded = tuple(t for t in group.targets if statuses.get(t) == "SUCCESS")
+    failed = tuple(t for t in group.targets if statuses.get(t) != "SUCCESS")
+    return JoinOutcome(
+        join=group.join_label, required=group.required_successes, succeeded=succeeded, failed=failed,
+    )
 
 
 class FanOutWaitRefused(RuntimeError):
