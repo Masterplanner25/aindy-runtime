@@ -171,7 +171,7 @@ Three things to know about the guest:
 ```python
 print("\nRunning analysis script...")
 with open("analyze.nd", encoding="utf-8") as f:
-    analysis = client.nodus.run_script(script=f.read(), input={"context": "sprint-12"})
+    analysis = client.nodus.run_script(script=f.read(), input={"context": "sprint-12"})["data"]
 
 print(f"  Status:       {analysis['status']}")          # flow status, e.g. SUCCESS
 print(f"  Nodus status: {analysis['nodus_status']}")
@@ -180,19 +180,21 @@ out = analysis["output_state"]
 print(f"  Output keys:  {sorted(out)}")
 ```
 
-**Expected output:**
+**Observed output:**
 
 ```
 Running analysis script...
   Status:       SUCCESS
-  Nodus status: SUCCESS
+  Nodus status: success
   Run id:       3c7e…
   Output keys:  ['completed_count', 'in_progress_count', 'summary']
 ```
 
-This is `POST /platform/nodus/run` (scope `flow.execute`). It is **not** a syscall envelope:
-the response is the Nodus execution record — `status`, `nodus_status`, `run_id`, `trace_id`,
-`output_state`, `events`, `memory_writes`, `error`. Every `sys()` call the script made went
+This is `POST /platform/nodus/run` (scope `flow.execute`). The route response is the pipeline
+envelope — `{"status": "success", "data": {...}}` — and `data` is the Nodus execution record:
+`status` (flow: `SUCCESS` / `WAITING` / `FAILED`), `nodus_status` (`success` / `WAIT` / …),
+`run_id`, `trace_id`, `output_state`, `events`, `memory_writes`, `events_emitted`,
+`memory_writes_count`, `error`, plus an `execution_record`. Every `sys()` call the script made went
 through the dispatcher under your identity.
 
 ---
@@ -255,10 +257,11 @@ flat list. The recursive read above is simpler when all you want is the nodes.
 
 ```python
 print("\nEmitting completion event...")
-ev = client.events.emit("sprint.analyzed", {
-    "sprint": "sprint-12",
-    "task_count": len(nodes),
-    "insight_id": node["id"],
+# NOT client.events.emit(): aindy-sdk 1.0.0 sends {"type": ...} and the syscall requires
+# "event_type", so that method 422s against every runtime release. The generic caller works.
+ev = client.syscalls.call("sys.v1.event.emit", {
+    "event_type": "sprint.analyzed",
+    "payload": {"sprint": "sprint-12", "task_count": len(nodes), "insight_id": node["id"]},
 })
 print(f"  ✓ {ev['status']} — trace {ev['trace_id']}")
 print("\nDone. The memory-driven loop is working.")
@@ -266,7 +269,8 @@ print("\nDone. The memory-driven loop is working.")
 
 `sys.v1.event.emit` writes a `SystemEvent` row, fans out to any matching webhook
 subscription, and publishes on the event bus. Its `data` is empty by contract — the event's
-identity is the envelope's `trace_id`.
+identity is the envelope's `trace_id`. (`client.events.emit` is the SDK method for this and is
+broken in 1.0.0 — `docs/handoffs/SDK_HANDOFF_memory_tree_flat.md` — hence the generic call.)
 
 ---
 
@@ -275,11 +279,16 @@ identity is the envelope's `trace_id`.
 ```python
 import os
 from aindy_sdk import AINDYClient
+import base64, json
+def tenant_from_jwt(token: str) -> str:            # memory paths are /memory/{tenant}/…; tenant = JWT sub
+    seg = token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))["sub"]
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
     api_key=os.environ.get("AINDY_API_KEY", "replace_me"),
 )
+TENANT = tenant_from_jwt(client.api_key)
 
 for content, tags in [
     ("Implement the syscall versioning layer",       ["engineering", "sprint-12", "completed"]),
@@ -291,11 +300,12 @@ for content, tags in [
 nodes = client.memory.read(f"/memory/{TENANT}/tasks/**", limit=20)["data"]["nodes"]
 
 with open("analyze.nd", encoding="utf-8") as f:
-    out = client.nodus.run_script(script=f.read())["output_state"]
+    out = client.nodus.run_script(script=f.read())["data"]["output_state"]
 
 client.memory.write(f"/memory/{TENANT}/insights/decision", out["summary"],
                     tags=["sprint-12", "auto-generated"], node_type="decision")
-client.events.emit("sprint.analyzed", {"sprint": "sprint-12", "task_count": len(nodes)})
+client.syscalls.call("sys.v1.event.emit", {"event_type": "sprint.analyzed",
+                     "payload": {"sprint": "sprint-12", "task_count": len(nodes)}})
 
 print(f"Loop complete: {len(nodes)} tasks → 1 insight → 1 event")
 ```
