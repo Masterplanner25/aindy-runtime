@@ -334,3 +334,21 @@ Three same-topic pairs (`DEGRADED_MODE_MATRIX` / `DEGRADED_RUNTIME_MODES`,
 `REPO_COMPATIBILITY_POLICY` / `CROSS_REPO_COMPATIBILITY`, `MEMORY_BRIDGE` / `MEMORY_BRIDGE_CONTRACT`)
 were checked and are **not** duplicates — different scopes — but a reader will keep asking, so
 each could use a one-line "see also, and how this differs" at the top.
+
+## `docs/runtime/ARCHITECTURE_RISK.md` — archived 2026-09-13
+
+| Document | Written | What it was | Why it can go |
+|---|---|---|---|
+| [`ARCHITECTURE_RISK.md`](ARCHITECTURE_RISK.md) | 2026-06-03 | A point-in-time risk map — top five modules by complexity × change velocity, top five by blast radius, five bootstrap/config coupling findings — with measured numbers: line counts, function counts, six-month commit frequency, static import fan-in. | **It is measurements, and measurements decay.** Re-measured 2026-09-13: `registry.py` 1875 → 2176 lines, `sandbox_runner.py` 2179 → 2437, `startup.py` 1541 → 1930 (+25%), `db/database.py` importers 88 → 105, `config.py` importers 40 → 55 (+37%). Only `health_service.py` and `deployment_contract.py` held. The rankings may or may not still hold — nobody knows, which is the problem with citing it as current from `CLAUDE.md`. Its own *Review Notes* say it was input for "Phase 2 hardening", i.e. the 90-day checklist archived above. |
+
+**What of it survives elsewhere.** The two coupling findings with consequences are tracked
+independently: Coupling-2 (`DATABASE_URL` consumed at import in `db/database.py`) is `CLI-1`
+and the `runtime_only.py` `__getattr__` hazard section in `CLAUDE.md`; Coupling-5
+(`health_service.py` imports `db.schema_contract` at module level) is named as *"Known unsafe"*
+in the same section. Coupling-1/3/4 (startup fan-out, config fan-in, registry mixing
+orchestration with dispatch) are the `LAYER-*` / `TIER3-10` class — filed, deferred, unchanged.
+
+**If a risk map is wanted again, generate it, don't write it.** Every number in this document
+is derivable by script (`wc -l`, `git log --since`, `git grep -l`), and a script re-run at each
+release cannot go stale the way a hand-written table did. That is the same conclusion the
+release-state paragraph in `CLAUDE.md` reached about version numbers.

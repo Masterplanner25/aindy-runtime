@@ -80,7 +80,6 @@ doc or the code, and either way it gets fixed rather than caveated.
 - [`SECURITY_POSTURE.md`](runtime/SECURITY_POSTURE.md) — the posture as it exists and the claim the team will defend
 - [`SECURITY_MATRIX.md`](runtime/SECURITY_MATRIX.md) — five security dimensions mapped to enforcement
 - [`SANDBOX_ESCAPE_AUDIT.md`](runtime/SANDBOX_ESCAPE_AUDIT.md) — **append-only** log of every release-gate escape run; the evidence behind the sandbox claim
-- [`ARCHITECTURE_RISK.md`](runtime/ARCHITECTURE_RISK.md) — complexity and blast-radius risk map *(point-in-time, 2026-06-03 — candidate for a refresh or the archive)*
 
 **Roadmap-shaped**
 - [`ECOSYSTEM_CAPABILITY_GAPS.md`](runtime/ECOSYSTEM_CAPABILITY_GAPS.md) — `ECOGAP-1..6`, corrected against source

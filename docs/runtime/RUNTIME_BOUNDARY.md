@@ -363,7 +363,7 @@ These documents answer adjacent but distinct questions. All four exist under
 | `RUNTIME_BOUNDARY.md` (this document) | What the runtime owns and does not own | Reviewed |
 | `RUNTIME_MODULE_MAP.md` | Every directory/module tagged as core runtime / platform support / legacy spillover / extraction candidate | Reviewed 2026-06-03 |
 | `EXECUTION_INVARIANTS.md` | What runtime behavior must not drift across releases | Reviewed 2026-06-03 |
-| `ARCHITECTURE_RISK.md` | Top modules by complexity/change risk and blast radius; coupling hotspots | Reviewed 2026-06-03 |
+| `../archive/ARCHITECTURE_RISK.md` | Top modules by complexity/change risk and blast radius; coupling hotspots — **a 2026-06-03 snapshot, archived 2026-09-13**; its numbers had drifted 12–37% | Archived, was reviewed 2026-06-03 |
 | `SECURITY_POSTURE.md` | What trust and isolation claims are actually true today | Exists — review status unknown |
 | `CROSS_REPO_COMPATIBILITY.md` | What SDK/UI/runtime consumers may rely on across versions | Exists — review status unknown |
 | `DEGRADED_MODE_MATRIX.md` | What remains safe under partial infrastructure failure | Exists — review status unknown |
