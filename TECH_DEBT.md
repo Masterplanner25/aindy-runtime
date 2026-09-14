@@ -12830,6 +12830,16 @@ speculative.
 `C:\codev\Claude Code research\docs\` (2026-08-15), the capstone of a nine-document port series.
 Re-verified against `C:\dev\claw` on 2026-08-17 — see the measurements below.
 
+**2026-09-13 — two facts from running the tutorials live, both on the witness question.**
+(1) `examples/openclaw/` — the in-repo imitation of Claw — was removed: it ran in-process
+with an unconfined `NodusRuntime`, i.e. it demonstrated the bypass rather than the substrate;
+`examples/README.md` now points at the tutorials and at infinityclaw with this entry's caveat.
+(2) Claw's three SDK touchpoints include `events.emit`, and **aindy-sdk 1.0.0's `events.emit`
+sends `type` where the syscall requires `event_type` — it has 422'd against every runtime
+release** (`docs/handoffs/SDK_HANDOFF_1_0_0_wire_mismatches.md`). So the one consumer has had a
+silently broken integration point for as long as it has existed, and nothing in it noticed —
+which is this entry's thesis, observed rather than argued. Claw HEAD is still 2026-07-03.
+
 **This is not a defect. It is a gap in the evidence, and it is the reason several other entries in
 this file cannot be closed with confidence.**
 

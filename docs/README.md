@@ -143,4 +143,6 @@ Version-to-version moves are [`upgrades/`](upgrades/README.md), not here.
 - **The changelog** is `CHANGELOG.md` at the repo root, assembled at release from `changelog.d/`. The pre-split monolith's changelog is in the archive.
 - **Open work** is `TECH_DEBT.md` at the root, indexed by the prefix registry in `CLAUDE.md`. Neither is a doc in this tree.
 - **Open questions** live with the contract they concern (the *Open Operational Questions* section at the end of a contract) or in the owning `TECH_DEBT.md` entry — there is no standalone tracker any more.
+- **Runnable examples** are `tutorials/` — verified live. `examples/` at the repo root is a pointer
+  to them and to the real consumer, with `SUBSTRATE-WITNESS-1`'s caveat.
 - **The apps, SDK and UI kit** have their own repositories and docsets; this tree describes the runtime's side of each boundary only.
