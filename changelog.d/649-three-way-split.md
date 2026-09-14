@@ -1,4 +1,4 @@
-### Changed — `docs/` is split by the question it answers; `docs/platform/governance/` is gone (docs/three-way-split)
+### Changed — `docs/` is split by the question it answers; `docs/platform/governance/` is gone (#649)
 
 `docs/runtime/` had been holding three kinds of document. It now holds only what the runtime
 guarantees (42 files); `docs/operations/` (12) is how to run it; `docs/governance/` (19) is how
