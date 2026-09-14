@@ -4,6 +4,341 @@
 
 _Nothing yet._
 
+## 2.14.0 — 2026-09-13
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No migration.** The Alembic head is unchanged at `0018` and
+  `SCHEMA_CONTRACT_VERSION` did not move (`2026-09-10`) — no `AINDY/db/models/` or
+  `memory_persistence.py` change this release. `bootstrap-schema --reconcile` is not needed.
+- **★ Four runtime defects found by running the tutorials live against 2.13.0 are fixed
+  (#654–#657).** All four are behaviour changes in the WAIT/resume and job-retry paths; none is
+  behind a flag. Each was verified by tests that drive the real runner (mutation-checked); none
+  has yet been re-run against a live server — the app team's upgrade step is that run.
+  - **A suspended Nodus script now receives the payload that resumed it** (#654). The flow
+    runner merges a node's WAIT output patch into the run's state (it merged SUCCESS patches
+    only, so `nodus_wait_event_type` never reached `flow_runs.state` and the bridge dropped the
+    injected payload — guest WAIT/RESUME with a payload had never worked). Visible changes: a
+    custom node's WAIT `output_patch` is now on the run's state; the execution record's
+    `nodus_status` is `"waiting"` on a WAIT rather than `None`; a payload-less wake (the event
+    bus) logs `Resumed WITHOUT a payload` at WARNING before the script re-parks. A second,
+    latent defect fixed in the same change: `resume()` aliased the ORM `run.state` dict, so with
+    `expire_on_commit=False` the snapshot never advanced.
+  - **`POST /platform/flows/runs/{id}/resume` resumes that run only** (#655). It injected the
+    payload into, and woke, every run parked on the event name, any tenant. **Wire change,
+    additive:** the event-bus Redis message gains a `run_id` key; an instance that predates it
+    ignores the key and fans out as before for the length of a rolling deploy.
+  - **A waiting flow run no longer holds a tenant concurrency slot** (#656). Four parked waits
+    used to 429 every route for the tenant. `get_tenant_active` / `aindy:quota:concurrent:*`
+    no longer count parked runs; admission is decided once per acquisition (start and resume),
+    no longer re-decided per node with the run's own slot in the count; the run's
+    `ExecutionUnit` goes `waiting` while parked. `AINDY_QUOTA_MAX_CONCURRENT` is unchanged —
+    this is not a cap raise.
+  - **An async job whose handler is not registered fails once, terminally** (#657). It was
+    re-dispatched in-process ~87×/s forever, uncounted. Rows still storming on a running 2.13.0
+    stop on their first attempt after upgrade (boot recovery re-dispatches `pending` rows once;
+    they now fail with `AsyncJobHandlerNotRegistered` in `error_message`). **Thread-mode retries
+    now back off:** `AINDY_RETRY_BACKOFF_BASE_MS` (1000) / `AINDY_RETRY_BACKOFF_MAX_MS` (30000)
+    apply to thread mode as they already did to the distributed queue; set the base to `0` for
+    the old immediacy.
+- **Packaging (#649):** the sdist now ships `docs/operations/` and `docs/governance/` beside
+  `docs/runtime/`, and the package's `Documentation` URL points at `docs/`. `docs/` is split
+  three ways (runtime contracts / operations / governance) with `docs/upgrades/` (per-release
+  app handoffs, with an index), `docs/handoffs/` (outbound asks of sibling repos) and
+  `docs/design/` (scope/design records with status) alongside. Bookmarks into the old
+  `docs/platform/` and `docs/architecture/` paths are dead.
+- **`examples/openclaw/` is removed (#653)** — it ran the guest VM in-process and unconfined,
+  the bypass `GUEST-CONFINE-1` closed. `examples/README.md` points at the tutorials.
+- **The tutorials work (#651, #652).** None of the three had ever run; all are rewritten
+  against source and run live. Tutorial 2 documents, by version, where 2.13.0 stops and what
+  this release changes.
+
+### Added — `docs/runtime/SANDBOX_CONTRACT.md` (#643)
+
+The sandbox contract the C2 audit recommended on 2026-05-24 and nobody wrote: sixteen numbered
+invariants across the three seams where the runtime runs code it did not author (plugin host,
+guest VM, tool worker), each naming its enforcement point and the test that pins it, a runner
+matrix of what each runner actually delivers, and a §7 stating what is *not* guaranteed so it
+cannot be inferred from silence. Two coverage gaps it surfaced are recorded in the document
+rather than hidden and filed as `SANDBOX-EVIDENCE-1` / `-2`: the `hostile-third-party`
+post-launch kill has no direct test, and the strong runner's launcher flags are verified only by
+the live `/proc` probe, never in CI.
+
+### Changed — `EXTENSION_TRUST_MODEL.md` regains its Assurance Reporting section
+
+The 2026-05-31 docset reconciliation deleted the only prose definitions of *assurance class /
+attestation / certification tier*; the terms stayed in the posture report and four live docs
+with no definition. Restored against the current constants — five vocabularies now, including
+the assurance ceiling and the `kernel-observable` verification method that post-date the
+deleted text.
+
+### Changed — five root documents archived, one deleted
+
+`RTR.md`, `IDEMPOTENCY_AUDIT.md`, `ISOLATION_MODEL_PLAN.md` and `C2_SANDBOX_AUDIT.md` moved to
+`docs/archive/`, each with a per-item verification in the archive README of why nothing
+forward-looking remains. `sandbox_runner.py`'s operator-facing `ceiling_note` and two Alembic
+docstrings now cite the archive paths; `effect_record.py`'s bare-name citation was left alone on
+purpose (a docstring edit under `db/models/` costs a schema-version bump). The gitignored
+`Idempotency convo.txt` transcript was deleted — it was the conversation that proposed
+`EffectRecord`, and everything in it has shipped, been filed, or been declined.
+
+### Added — `docs/upgrades/`: the per-release handoffs, and the index that did not exist (#644)
+
+Fifteen `APP_HANDOFF_v*.md` files (v1.11.0 → v2.13.0) move from `docs/runtime/` (and one from
+`docs/archive/`) into `docs/upgrades/`, with a `README.md` that indexes them: one row per release
+with its Alembic head, schema-contract value, whether `bootstrap-schema --reconcile` is owed, and
+the consumer-visible change. Until now an operator on 2.4.0 wanting 2.13.0 had nine files to
+open in an order nothing stated, and no way to see which carried a schema step without reading
+each. `Runtime Docs Validation` now checks the new folder with the same rules, so the move does
+not take fifteen documents out of CI. `RELEASE_CHECKLIST.md` gains the step that keeps the index
+maintained.
+
+### Added — `docs/handoffs/`: outbound handoffs to sibling repos, with per-ask status (#645)
+
+The three `NODUS_HANDOFF_*.md` files move out of `docs/runtime/` into their own folder with an
+index that records what each asks of Nodus and where it stands: the 5.0.1 blocking ask is
+resolved (`nodus-mcp 0.1.3`) but two of its §4 asks are verifiably still open; the `nodus-a2a`
+name collision is unresolved as far as PyPI shows; the `migrate-store` truncation is open. They
+are the opposite direction from `docs/upgrades/` and the index says so. `Runtime Docs Validation`
+checks the new folder.
+
+### Changed — five completed audit/plan documents archived out of `docs/runtime/` (#646)
+
+`INFINITY_LOOP_AUDIT.md` (all five gaps closed 07-08), `MONETIZATION_AUDIT.md` (every finding a
+self-contained `TECH_DEBT.md` entry), `LOCAL_AND_CLOUD_AUDIT.md`, and the 05-31
+`RUNTIME_DOC_ALIGNMENT_AUDIT.md` + `HIGH_CONFLICT_DOC_RECONCILIATION_PLAN.md` pair (executed the
+day they were written) move to `docs/archive/`. Six low-severity findings whose only record was
+the local/cloud audit (`CLOUD-1..4`, `COMPAT-3`, `DATA-2`) were folded into `DEPLOY-TARGET-2`
+first so nothing is lost. `RUNTIME_DOC_INDEX.md` loses a dangling entry for a file archived five
+weeks ago and a "read these before editing" instruction for a reconciliation that was done in
+May. `SANDBOX_ESCAPE_AUDIT.md` stays — it is a live log.
+
+### Changed — `docs/design/`: the thirteen scope/design/program/proposal docs get their own folder and a status index (#647)
+
+They were neither contracts (`docs/runtime/` says what the runtime guarantees now) nor dead
+(`docs/archive/`) — source cites most of them by path as the reasoning behind live code. Four
+had status headers wrong by one or more shipped phases (`EXECUTION_ENVIRONMENT_SPEC_DESIGN` said
+phases 3–4 unbuilt; `TOOL_SEAM_ISOLATION_SCOPE` said "no code"; `FLOW_PARALLEL_DESIGN` was a
+phase behind; `LLM_SEAM_ADOPTION_SCOPE` said the governor was not started), and three
+`CLAUDE.md` key-file rows still said "awaiting approval" / "design only, no code". All corrected.
+Path citations updated across `AINDY/`, `tests/`, `alembic/` and docs — except under
+`AINDY/db/models/`, where a docstring edit costs a schema-version bump; `Runtime Docs Validation`
+checks the new folder. `RUNTIME_DOC_INDEX.md` had never listed any of the thirteen.
+
+### Changed — three completed trackers archived; `DECISION_LOG.md` corrected in place (#648)
+
+`TEST_GAP_BACKLOG.md` / `TEST_GAP_WORK_ITEMS.md` (every one of ten gaps has a test today) and
+`OPEN_QUESTIONS.md` (all eleven resolved by 2026-06-06; two named residuals were closed before
+the review that listed them) move to `docs/archive/`. `DECISION_LOG.md` stays — its nine
+decisions are live — but its "future decisions to record" list, all five resolved in June and
+none added, now says where each landed and that decisions since August are recorded in
+`TECH_DEBT.md` and `CLAUDE.md`. The governance doc and index now say where an open question
+lives: with the contract it concerns, not in a standalone tracker.
+
+### Changed — `docs/` is split by the question it answers; `docs/platform/governance/` is gone (#649)
+
+`docs/runtime/` had been holding three kinds of document. It now holds only what the runtime
+guarantees (42 files); `docs/operations/` (12) is how to run it; `docs/governance/` (19) is how
+work is done on the repo — including the three governance docs that were buried at
+`docs/platform/governance/`, the monolith's path copied verbatim in June and never chosen.
+`docs/architecture/` and `docs/platform/` dissolve. `docs/README.md` is the new index and lists
+every live file (the old one listed 32 of 70). Every path citation was rewritten — 41 files
+across `AINDY/`, `tests/`, workflows, `CLAUDE.md`, `README.md`, `TECH_DEBT.md` and the docs
+themselves — and 215 live markdown links were checked to resolve. **Operator-visible:** the
+sdist now ships `docs/operations/` and `docs/governance/` beside `docs/runtime/`, and the
+package's `Documentation` URL points at `docs/` rather than `docs/runtime/`. Three files
+archived on the way: the pre-split monolith changelog (renamed so it no longer collides with
+the real one), the finished `RUNTIME_DOCSET_BOUNDARY` plan, and the old index.
+
+### Changed — `ARCHITECTURE_RISK.md` archived (#650)
+
+The 2026-06-03 complexity/blast-radius risk map was measurements, and measurements decay:
+re-measured today, `startup.py` had grown 25% and `config.py`'s importer count 37% since it was
+written, while `CLAUDE.md` still cited it as the current reference. The two coupling findings
+with consequences are tracked as `CLI-1` and the `runtime_only.py` import-hazard section; the
+rest are the deferred `LAYER-*` class. The archive entry says how to get a risk map that cannot
+go stale: generate it.
+
+### Fixed — the three tutorials did not work, and had not since they were written (#651)
+
+Every call in `docs/tutorials/` was checked against the SDK source, the syscall registry, the
+routes and the installed Nodus 5.13 interpreter. Findings, all corrected: every tutorial's first
+write used `/memory/demo/…`, which puts `demo` in the **tenant** slot of
+`/memory/{tenant}/{namespace}/{type}/{id}` and raises `TENANT_VIOLATION`; every Nodus script
+failed to parse (`if`/`while` need parentheses since nodus 5); `event.wait()`, `emit()` and
+`sys.v1.event.wait` do not exist; `memory.tree` has no `flat` key; `flow.run` returns
+`{"flow_result": …}` not the flow's keys; `POST /platform/flows` needs `platform.admin` and a
+node registry that is empty on a bare runtime; the schedule route's fields were all wrong.
+Tutorial 2's model was wrong at the root — a guest script re-runs from the top on resume, it
+does not continue — and its approval event could not have woken the run.
+
+### Fixed — `NODUS_DEVELOPER_GUIDE.md` examples and its WAIT section
+
+Seven examples had unparenthesised conditions that no longer parse; the pin section said
+4.2.0. §4 claimed the event bus delivers the payload into `nodus_received_events` — it does
+not; only the resume route does. Rewritten to describe both paths.
+
+### Added — `WAIT-PAYLOAD-PATH-1` filed; `docs/tutorials/` joins `Runtime Docs Validation`
+
+The bus-resume path carries no payload and usually does not even match the wait (it keys on
+the run's `trace_id`; the emit carries its own), and local vs cross-instance correlation rules
+disagree. Filed as a design question with the minimum fix stated. The tutorials folder now has
+frontmatter and is checked by CI; it was the one docs folder outside the check.
+
+### Fixed — the tutorials, corrected against a live 2.13.0 server; four runtime defects filed (#652)
+
+The three tutorials' complete scripts were run verbatim against a real server with the published
+`aindy-sdk 1.0.0`. Tutorials 1 and 3 now complete end to end. What the run corrected in the docs:
+the login and Nodus-run responses are pipeline envelopes (`data.access_token`,
+`data.output_state`); the flow-run GET is `data.flow_run_get_result`; the execution graph is
+`data.observability_rippletrace_result`; `nodus_status` is lowercase / `None` on a WAIT; webhook
+subscriptions need `owner_class: first-party-app`; the schedule routes answer unwrapped and
+`next_run_at` is `None` on the listing; the tenant helper must be inlined per script; the SDK's
+`events.emit` and `upload_script` send the wrong keys and are routed around.
+
+**Tutorial 2 cannot complete on 2.13.0 and now says so at the top.** Running it found that a
+Nodus script can suspend a run but can never receive what resumed it — the WAIT patch carrying
+`nodus_wait_event_type` is never merged into run state, so the resume bridge never fires
+(`NODUS-RESUME-BRIDGE-1`, subsuming `WAIT-PAYLOAD-PATH-1`). Three more, all observed live:
+`RESUME-FANOUT-UNSCOPED-1` (the resume route injects into every run waiting on that event, any
+tenant), `ACTIVE-COUNT-WAIT-LEAK-1` (a waiting run holds a concurrency slot until restart; four
+parked waits 429'd a GET), `ASYNC-JOB-UNREGISTERED-STORM-1` (an unregistered handler is
+re-dispatched ~87×/s forever with no backoff). `NODUS_DEVELOPER_GUIDE` §4 and the SDK handoff
+updated; the handoff is now the list of 1.0.0's four wire mismatches.
+
+### Removed — `examples/openclaw/`; `examples/README.md` is now a pointer (#653)
+
+The June 2026 OpenClaw spike ran in-process — a direct `dispatch_syscall` and a self-built
+`NodusRuntime(allowed_paths=None)` — bypassing the plugin host, guest floor, tool registry and
+`EffectRecord`: the boundary `GUEST-CONFINE-1` closed and `SANDBOX_CONTRACT.md` forbids. As an
+example it taught the one pattern the runtime prevents. It targeted nodus 4.0.3, had no inbound
+references, and its `schedule_reminder` left the job rows behind `ASYNC-JOB-UNREGISTERED-STORM-1`.
+`examples/README.md` points at `docs/tutorials/` (live-verified) and at infinityclaw, states
+`SUBSTRATE-WITNESS-1`'s caveat, and sets the bar an example here must meet. In git history if
+needed.
+
+### Fixed — a suspended Nodus script now receives the payload that resumed it (`NODUS-RESUME-BRIDGE-1`) (#654)
+
+A guest script could suspend a flow run (`set_state("nodus_wait_requested", true)`) but could
+never learn what resumed it — through any path, since the feature was written. The flow runner
+merged **SUCCESS** node patches only, so the WAIT patch carrying `nodus_wait_event_type` was
+recorded in `flow_history` and never reached `flow_runs.state`; on re-entry the `nodus.execute`
+bridge found no pending wait type, discarded the payload `POST /platform/flows/runs/{id}/resume`
+had injected, and the script re-parked. Observed live as `WAIT, WAIT, WAIT…` in a run's history.
+
+- **The runner now merges WAIT patches** (`runner_steps._MERGED_STATUSES = {SUCCESS, WAIT}`).
+  FAILURE and RETRY patches still do not land. The DUR-4 history fold applies the same rule and
+  a test pins the two sets equal. A WAIT is refused inside a fan-out group before anything is
+  written, so a WAIT patch never conflict-resolves against sibling branches.
+- **Behaviour change for any custom node that returns `WAIT` with an `output_patch`:** that patch
+  is now visible to the re-run and on the run's state. Census: `nodus.execute` is the only
+  WAIT-with-patch node in the runtime; the app's one WAIT node (`genesis_track_message`) sends
+  no patch. Nothing relied on the drop (the patch was recorded in history, never read back).
+- `nodus.execute`'s WAIT patch also carries `nodus_output_state`, so what the script set before
+  parking is readable on the waiting run (it is **not** seeded back into the re-run's
+  namespace — the re-run still starts from the top with only `nodus_received_events`). The
+  execution record's `nodus_status` is therefore `"waiting"` on a WAIT rather than `None`.
+- A wake **without** a payload (the event bus, `sys.v1.event.emit`) now logs
+  `[nodus.execute] Resumed WITHOUT a payload while waiting on '<type>'` at WARNING before the
+  script re-parks — previously indistinguishable from a first wait. A re-run that completes
+  clears the pending type so a later payload cannot bridge into a wait that no longer exists.
+- **Second defect, found by the test and latent in production:** `PersistentFlowRunner.resume()`
+  aliased the ORM `run.state` dict as its working state, so after in-place merges the later
+  `run.state = _json_safe(state)` assigned a value equal to what SQLAlchemy recorded as the
+  original and produced **no UPDATE**. Production sessions expire on commit, which broke the
+  alias before the first write; a session with `expire_on_commit=False` lost the snapshot
+  outright. The runner now works on a copy. Correctness no longer depends on session expiry.
+- `tests/unit/test_nodus_resume_bridge.py` drives start → WAIT → inject → resume with the real
+  guest interpreter and asserts the script's **second** run; mutation-checked 4/4.
+  `docs/tutorials/02-event-driven-automation.md` Step 6 now completes on a runtime carrying
+  this change (its "after the fix" output is from that test; 2.13.0 still stops where it says).
+
+### Fixed — `POST /platform/flows/runs/{id}/resume` resumes that run only (`RESUME-FANOUT-UNSCOPED-1`) (#655)
+
+The per-run resume route checked that the named run belonged to the caller and was waiting on
+the event, then injected the payload into — and woke — **every** run parked on that event name,
+any tenant (`route_event` peeked all waits by event type with no run or tenant filter). Observed
+live as `results: [{run_id: <B>…}, {run_id: <A>…}]`. Event names are conventional strings
+(`review.approved`), so collisions are the normal case. `platform.admin`-gated, so an isolation
+defect an operator could trigger by using the route as documented, not an exploit.
+
+- The wake is now scoped to the named run **end to end**: `route_event(run_id=)` injects into
+  that run only; `publish_event` / `notify_event` take `run_id`, filter the local scan, carry it
+  through the pre-rehydration buffer, put it on the Redis pub/sub message and pass it to the
+  cross-instance fallback. `results` has exactly one entry.
+- **Wire change, additive:** the event-bus message gains a `run_id` key. An instance that
+  predates it ignores the key and fans out as before, for the length of a rolling deploy. No
+  schema change.
+- Scoped by **run id, not correlation**: a flow WAIT's correlation is the run's `trace_id`, and
+  sibling runs started under one request share a trace, so correlation-only scoping would still
+  fan out to them. A test pins that.
+- Without `run_id`, `route_event` keeps its broadcast semantics. No runtime caller uses that
+  form; a broadcast resume, if ever wanted, is a separate verb with its own scope.
+- Internal: the scheduler's pre-rehydration buffer entries are now `(event_type,
+  correlation_id, run_id)`.
+
+### Fixed — a waiting flow run no longer holds a tenant concurrency slot (`ACTIVE-COUNT-WAIT-LEAK-1`) (#656)
+
+`PersistentFlowRunner` took a tenant slot (`ResourceManager.mark_started`) when a run started and
+returned it on success or failure — and **never on WAIT**. A run parked as a durable row kept one
+of the tenant's `MAX_CONCURRENT_PER_TENANT` (default 5) slots for as long as it waited. Observed
+live: after four parked waits, a read-only `GET /platform/flows/runs/{id}` returned 429. Under a
+`hostile-third-party` profile this was a five-request self-DoS available to any tenant that can
+start a flow.
+
+- **A run now holds a slot exactly while it is executing.** The slot is acquired at node entry —
+  `can_execute` then `mark_started`, once, for a fresh start and a resume alike — released by
+  every WAIT (new `ResourceManager.mark_waiting`: same as `mark_completed`, including the
+  `resource_available` capacity event, but the usage snapshot is kept because the run comes
+  back), and released by completion/failure.
+- **Admission is no longer re-decided per node with the run's own slot in the count.** At exactly
+  the cap, the last-admitted run used to park itself on `resource_available` while still holding
+  the slot it was being refused for. A refused run now parks holding nothing, and its node does
+  not execute.
+- The success-path release used to live inside the flow-completion memory-capture hook, which
+  returns early when `user_id` or `workflow_type` is unset — a run with no workflow type took a
+  slot and never returned it. The release is now unconditional on a terminal outcome.
+- On WAIT the run's own ExecutionUnit is moved to `waiting` with its wait condition (previously it
+  stayed `executing` while parked); a resumed runner recovers its EU and tenant from the run and
+  moves a `waiting` EU through `resume_execution_unit` if the scheduler callback has not.
+- **Behaviour change for operators reading `aindy:quota:concurrent:*` / `get_tenant_active`:** a
+  parked run no longer counts. `AINDY_QUOTA_MAX_CONCURRENT` is unchanged — this is not a cap
+  raise.
+- Unit tests drive the real runner against a fresh `ResourceManager` with `is_testing` patched off
+  (`can_execute` short-circuits under it); mutation-checked 4/4. Not yet re-run live.
+
+### Fixed — an async job whose handler is not registered fails once instead of re-dispatching forever (`ASYNC-JOB-UNREGISTERED-STORM-1`) (#657)
+
+A `JobLog` row naming a handler that no loaded process registered — a runtime booted without
+its app, a renamed handler, a rolled-back deploy — was re-dispatched in a tight in-process
+loop: **~87 attempts per second per job, uncounted, forever** (45,000 log lines in ten minutes
+from two rows, observed live). Three faults stacked: the "not registered" `raise` came before
+`attempt_count += 1`, so `max_attempts` (default 1) never bound it; the increment was only ever
+committed as a side effect of the started-event emit, and the except branch's `rollback()`
+discarded it otherwise; and the thread-mode retry was an immediate executor submit with no
+delay — only the distributed queue path honoured a backoff.
+
+- **An unregistered handler is terminal.** `_execute_job_inline` raises
+  `AsyncJobHandlerNotRegistered` (a `RuntimeError` subclass — existing catches still hold) and
+  the retry branch refuses it whatever `max_attempts` says. The row ends `failed` after exactly
+  one attempt with `attempt_count=1` and the message in `error_message`.
+- **Every attempt is counted.** The attempt is numbered before the handler lookup and restored
+  after the except branch's rollback, so a registered handler that fails without a started event
+  is no longer uncounted either.
+- **Thread-mode retries back off.** A retryable failure with budget left is re-dispatched after
+  the dispatcher's existing exponential delay (`AINDY_RETRY_BACKOFF_BASE_MS`, default 1000 ms,
+  doubling per attempt, capped by `AINDY_RETRY_BACKOFF_MAX_MS`, default 30000 ms) via a daemon
+  `Timer` — the same curve the distributed path already applied through `enqueue_delayed`.
+  `AINDY_RETRY_BACKOFF_BASE_MS=0` restores the old immediacy.
+- **Operator-visible:** a terminal failure logs one `failed TERMINALLY (not retried)` WARNING;
+  a retry logs `rescheduling with backoff` and the delay. Rows already storming on a running
+  2.13.0 stop on the first attempt after upgrade (boot recovery re-dispatches `pending` rows
+  once; they now fail). `docs/runtime/RETRY_POLICY.md`'s async-job section is corrected — it
+  described the pre-fix loop as if it already counted before the handler ran.
+- Unit tests drive `_execute_job_inline` against a real `JobLog` on a private SQLite engine;
+  mutation-checked 4/4. Not re-run live.
+
+
 ## 2.13.0 — 2026-09-13
 
 **Operator notes — read before upgrading.**
