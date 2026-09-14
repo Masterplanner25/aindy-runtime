@@ -12638,7 +12638,7 @@ is zero-arg).
 ---
 ## NODUS-RESUME-BRIDGE-1 — a Nodus script can suspend a run but can never receive what resumed it
 
-**Status: CLOSED (2026-09-13, PR #PRNUM).** Filed the same day by running Tutorial 2 against a
+**Status: CLOSED (2026-09-13, PR #654).** Filed the same day by running Tutorial 2 against a
 live 2.13.0 server after the source-level pass had already rewritten it to the "correct" shape.
 **Guest WAIT/RESUME with a payload had never worked, through any path.** Subsumes
 `WAIT-PAYLOAD-PATH-1`'s payload half; its correlation-rule half stays open there.
