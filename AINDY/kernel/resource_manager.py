@@ -1050,6 +1050,83 @@ class ResourceManager:
             logger.warning("[ResourceManager] reset_all_concurrency_counters failed: %s", exc)
         return deleted
 
+    def mark_waiting(self, tenant_id: str, eu_id: str | None = None) -> None:
+        """Release *tenant_id*'s concurrency slot for an execution that has PARKED, not ended.
+
+        ACTIVE-COUNT-WAIT-LEAK-1 — a flow WAIT used to call neither this nor
+        ``mark_completed``, so a parked run held one of the tenant's
+        ``MAX_CONCURRENT_PER_TENANT`` slots for as long as it waited (the counter
+        is in-process, or Redis; nothing else releases it before restart). Five
+        parked waits locked the tenant out of every route — observed live as a
+        429 on a read-only GET. "Parked as a row, costs nothing while waiting" was
+        the claim; one fifth of the admission budget was the cost.
+
+        Differs from ``mark_completed`` in exactly one way: the UsageSnapshot is
+        NOT queued for purge — the run will come back, and its wall-time /
+        syscall / token accrual continues where it left off. The capacity event
+        fires the same way, because a freed slot is a freed slot. The resumed
+        run re-acquires through ``mark_started`` after ``can_execute`` says it
+        may — admission is decided per ACQUISITION, and the parked run is not in
+        the count it is judged against.
+        """
+        tid = str(tenant_id)
+        effective_current, effective_new_active = self._release_slot(tid)
+        self._publish_capacity_freed(tid, effective_current, effective_new_active)
+
+    def _release_slot(self, tid: str) -> tuple[int, int]:
+        """Decrement the tenant counter once. Returns ``(before, after)`` as observed."""
+        effective_current = 0
+        effective_new_active = 0
+        redis_client = self._get_redis()
+        if redis_client is not None:
+            key = self._concurrency_key(tid)
+            try:
+                effective_current = int(redis_client.get(key) or 0)
+                effective_new_active = int(redis_client.decr(key))
+                if effective_new_active < 0:
+                    logger.warning(
+                        "[ResourceManager] tenant concurrency counter underflow tenant=%s value=%d",
+                        tid,
+                        effective_new_active,
+                    )
+                    self.reset_tenant_quota(tid)
+                    effective_new_active = 0
+                return effective_current, effective_new_active
+            except Exception as exc:
+                self._drop_redis_client(
+                    "[resource_manager] Redis decr failed, using local: %s",
+                    exc,
+                )
+        with self._lock:
+            count = self._active_counts.get(tid, 0)
+            effective_current = count
+            if count > 0:
+                self._active_counts[tid] = count - 1
+            effective_new_active = self._active_counts.get(tid, 0)
+        return effective_current, effective_new_active
+
+    def _publish_capacity_freed(self, tid: str, effective_current: int, effective_new_active: int) -> None:
+        """Fire ``resource_available`` on the full → available transition, outside ``_lock``."""
+        capacity_freed = (
+            effective_current >= self.MAX_CONCURRENT_PER_TENANT
+            and effective_new_active < self.MAX_CONCURRENT_PER_TENANT
+        )
+        if not capacity_freed:
+            return
+        try:
+            from AINDY.kernel.event_bus import publish_event
+            publish_event("resource_available")
+            logger.info(
+                "[ResourceManager] capacity freed tenant=%s active=%d→%d "
+                "— published resource_available to all instances",
+                tid, effective_current, effective_new_active,
+            )
+        except Exception as _exc:
+            logger.debug(
+                "[ResourceManager] publish_event resource_available failed "
+                "(non-fatal): %s", _exc
+            )
+
     def mark_completed(self, tenant_id: str, eu_id: str | None = None) -> None:
         """Decrement active execution counter for *tenant_id*.
 
@@ -1078,65 +1155,12 @@ class ResourceManager:
             eu_id:     Optional ExecutionUnit ID.
         """
         tid = str(tenant_id)
-        capacity_freed = False
-        effective_current = 0
-        effective_new_active = 0
-        redis_client = self._get_redis()
-        if redis_client is not None:
-            key = self._concurrency_key(tid)
-            try:
-                effective_current = int(redis_client.get(key) or 0)
-                effective_new_active = int(redis_client.decr(key))
-                if effective_new_active < 0:
-                    logger.warning(
-                        "[ResourceManager] tenant concurrency counter underflow tenant=%s value=%d",
-                        tid,
-                        effective_new_active,
-                    )
-                    self.reset_tenant_quota(tid)
-                    effective_new_active = 0
-            except Exception as exc:
-                self._drop_redis_client(
-                    "[resource_manager] Redis decr failed, using local: %s",
-                    exc,
-                )
-                with self._lock:
-                    count = self._active_counts.get(tid, 0)
-                    effective_current = count
-                    if count > 0:
-                        self._active_counts[tid] = count - 1
-                    effective_new_active = self._active_counts.get(tid, 0)
-        else:
-            with self._lock:
-                count = self._active_counts.get(tid, 0)
-                effective_current = count
-                if count > 0:
-                    self._active_counts[tid] = count - 1
-                effective_new_active = self._active_counts.get(tid, 0)
-
+        effective_current, effective_new_active = self._release_slot(tid)
         with self._lock:
             if eu_id:
                 self._pending_purge.add(str(eu_id))
-            capacity_freed = (
-                effective_current >= self.MAX_CONCURRENT_PER_TENANT
-                and effective_new_active < self.MAX_CONCURRENT_PER_TENANT
-            )
-
-        if capacity_freed:
-            # ── Outside _lock — no re-entrant deadlock risk ───────────────
-            try:
-                from AINDY.kernel.event_bus import publish_event
-                publish_event("resource_available")
-                logger.info(
-                    "[ResourceManager] capacity freed tenant=%s active=%d→%d "
-                    "— published resource_available to all instances",
-                    tid, effective_current, effective_new_active,
-                )
-            except Exception as _exc:
-                logger.debug(
-                    "[ResourceManager] publish_event resource_available failed "
-                    "(non-fatal): %s", _exc
-                )
+        # ── Outside _lock — no re-entrant deadlock risk ───────────────────
+        self._publish_capacity_freed(tid, effective_current, effective_new_active)
 
     # ── Usage recording ───────────────────────────────────────────────────────
 

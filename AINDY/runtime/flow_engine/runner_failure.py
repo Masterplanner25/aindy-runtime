@@ -33,20 +33,13 @@ def fail_execution(
             eu = eus.get_by_source("flow_run", run.id)
             if eu:
                 eus.update_status(eu.id, "failed")
-        try:
-            from AINDY.kernel.resource_manager import get_resource_manager as get_rm
-
-            get_rm().mark_completed(
-                getattr(runner, "_tenant_id", str(runner.user_id or "")),
-                str(eu_id) if eu_id else None,
-            )
-        except Exception as exc:
-            logger.debug(
-                "[EU] resource_manager.mark_completed(failed) skipped: %s",
-                exc,
-            )
     except Exception as exc:
         logger.warning("[EU] flow fail hook - non-fatal | error=%s", exc)
+    # ACTIVE-COUNT-WAIT-LEAK-1 — outside the EU hook's try, so a failed status update cannot
+    # skip the release; releases only a slot this runner holds.
+    from AINDY.runtime.flow_engine.runner_completion import release_slot_on_completion
+
+    release_slot_on_completion(runner, "failed")
     try:
         runner._emit_execution_failed(
             {
