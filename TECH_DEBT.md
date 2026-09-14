@@ -12583,6 +12583,59 @@ cheaper.
 
 ---
 
+## WAIT-PAYLOAD-PATH-1 — the event bus resumes a waiting run without its payload; only the resume route delivers one
+
+**Status: OPEN (P2).** Filed 2026-09-13 from the tutorials correctness pass; every claim below
+was read from source, and the tutorial that assumed otherwise was rewritten.
+
+**Two resume paths, one contract, different semantics.**
+
+| Path | Wakes the run? | Delivers the payload? | Correlation rule |
+|---|---|---|---|
+| `POST /platform/flows/runs/{run_id}/resume` → `flow_run_resume` → `route_event()` | yes | **yes** — `state["event"] = payload`, bridged to `nodus_received_events[event]` by `nodus.execute` (`nodus_adapter.py:672`) | sends none, so it matches any wait on that event |
+| `sys.v1.event.emit` → `emit_system_event` → `_notify_scheduler_of_event` → `publish_event` | yes | **no** — the resume callback is zero-argument (`build_flow_resume_callback`); `publish_event` has no payload parameter at all | forwards `payload.correlation_id` **or the emitter's `trace_id`** |
+
+A flow WAIT registers `correlation_id = run.trace_id` (`runner_steps.py:362-376`). An
+`event.emit` from a *different* request therefore carries a different id, and the local rule
+(`waits.py:111`: skip when both set and different) skips it. So from the SDK, `events.emit()`
+neither delivers a payload nor, in the common case, even wakes the run.
+
+**What a Nodus script sees on the bus path.** It re-runs from the top with
+`nodus_received_events` absent and `nodus_wait_event_type` still set, requests the wait again,
+and parks. Every further emit repeats that. Nothing errors, nothing logs at WARNING.
+
+**Three things this touches:**
+1. `NODUS_DEVELOPER_GUIDE.md` §4 said *"Something calls `EventBus.publish` … the next execution
+   receives the event in `state["nodus_received_events"]`"* — false on the bus path. Corrected
+   2026-09-13 to describe both paths.
+2. `docs/tutorials/02-event-driven-automation.md` was built on the false version (and on
+   `event.wait()` / `emit()` builtins that do not exist — `GUEST-BUILTINS-DEAD-1`). Rewritten to
+   the two-phase shape and the resume route.
+3. **Local vs cross-instance matching disagree.** `waits.py:111` skips only when *both* ids are
+   set and differ; `cross_instance.py:56` skips whenever the emit carries an id the wait's does
+   not equal — so a wait registered with `correlation_id=None` resumes locally on any emit and
+   **never** cross-instance, because `_notify_scheduler_of_event` always supplies one. Two
+   instances give two answers to the same emit. Not exercised by
+   `test_multi_instance_resume.py`, which registers `correlation_id=None` and publishes without
+   one.
+
+**Design question, not a bug to patch blind.** The bus being payload-free is defensible — a
+payload on a Redis fan-out is a durability and size question, and `WAIT-TYPED-CONTRACT-1`
+already says the resume payload is unvalidated. What is not defensible is that the guide
+claimed otherwise and that nothing distinguishes "resumed with payload" from "resumed and
+re-waited". Minimum fix: (a) the bus-resume path marks state (`nodus_resumed_without_payload`
+or an emitted `SystemEvent`) so a script or operator can tell; (b) unify the correlation rule
+across `waits.py` and `cross_instance.py`, with a test that publishes with a `correlation_id`
+against a `None` wait on both paths. Whether the route should stay the only payload path is
+the owner's call; if the bus is meant to carry payloads, `publish_event` grows a parameter and
+the callback stops being zero-arg — which `FR-15`'s "reconstructible from `run_id` alone"
+constraint argues against.
+
+**Related, distinct:** `WAIT-TYPED-CONTRACT-1` (payload unvalidated — this entry is about it
+not arriving), `GUEST-BUILTINS-DEAD-1` (the fake `event.wait()` API), `FR-15` (why the callback
+is zero-arg).
+
+---
 ## OTEL-GENAI-SEMCONV-1 — our traces are richer than the standard and illegible to standard tooling
 
 **Status: OPEN — P2.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`.

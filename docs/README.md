@@ -11,11 +11,11 @@ the question you are asking tells you the folder.
 | **Why something was built the way it was** — scopes, designs, program plans, proposals | [`design/`](design/README.md) | status per doc |
 | **What changes when I move between releases** — one handoff per release, indexed by schema step | [`upgrades/`](upgrades/README.md) | append per release |
 | **What this repo is asking of a sibling repo** — outbound handoffs to Nodus | [`handoffs/`](handoffs/README.md) | status per ask |
-| **Worked examples** for writing flows and scripts | [`tutorials/`](tutorials/index.md) | yes |
+| **Worked examples** for writing flows and scripts | [`tutorials/`](tutorials/index.md) | yes — every call checked against source 2026-09-13 |
 | **What was true once** — completed plans, point-in-time audits, superseded trackers | [`archive/`](archive/README.md) | **no** — audit trail only |
 
 `Runtime Docs Validation` in CI checks five-key frontmatter and a real `last_verified` date on
-every file in `runtime/`, `operations/`, `governance/`, `upgrades/`, `handoffs/` and `design/`.
+every file in `runtime/`, `operations/`, `governance/`, `upgrades/`, `handoffs/`, `design/` and `tutorials/`.
 The archive is deliberately outside it.
 
 **History.** Until 2026-09-13 almost everything lived in `docs/runtime/` (108 files), with three
