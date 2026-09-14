@@ -12727,9 +12727,33 @@ other cost), `GUEST-BUILTINS-DEAD-1`, `WAIT-TYPED-CONTRACT-1`.
 
 ## RESUME-FANOUT-UNSCOPED-1 — `POST /platform/flows/runs/{id}/resume` resumes every run waiting on that event, any tenant
 
-**Status: OPEN (P1; would be P0 without the `platform.admin` gate).** Filed 2026-09-13 from a
-live run: a resume of run A returned `results: [{run_id: <B>, payload_injected: true}, {run_id:
-<A>, …}]` — B was another waiting run on the same event type.
+**Status: CLOSED (2026-09-13, PR #655).** Filed the same day from a live run: a resume of run A
+returned `results: [{run_id: <B>, payload_injected: true}, {run_id: <A>, …}]` — B was another
+waiting run on the same event type. Was P1; would have been P0 without the `platform.admin` gate.
+
+**What was done — the run id, carried end to end, not the correlation.** `route_event(...,
+run_id=)` injects into the named run only and publishes `run_id` with the wake;
+`notify_event(run_id=)` filters the local scan, carries it through the pre-rehydration buffer
+(now a 3-tuple), puts it on the Redis message (additive key — an instance that predates it
+ignores it and fans out as before, for the length of a rolling deploy) and passes it to
+`_cross_instance_resume`, which filters the registry walk. `flow_run_resume_node` passes the run
+it just validated. Without `run_id`, `route_event` is still the broadcast form — no runtime
+caller uses it; it is kept for an explicit broadcast verb with its own scope.
+
+**★ Why not "pass the correlation" (the fix shape below):** a flow WAIT's correlation is the
+run's `trace_id`, and a trace is shared by every run started under one request or by a
+`flow.run` from inside a running flow — so two sibling runs waiting on one event have the same
+correlation and would both resume. `test_sibling_runs_in_one_trace_are_separated_by_run_id_not_correlation`
+fails under correlation-only scoping (mutation-checked, with a liveness assertion that the
+correlation-scoped peek sees both).
+
+**Tests:** `tests/unit/test_resume_fanout_scoped.py` (the real route node against a real
+`SchedulerEngine`: two tenants, siblings in one trace, liveness, ownership, buffer replay,
+`publish_event` threading); `test_event_bus.py` (wire carries `run_id`; subscriber forwards it);
+`tests/integration/test_multi_instance_resume.py::test_a_run_scoped_wake_resumes_only_that_run_cross_instance`.
+Mutation-checked 3/3 (local filter, targeted injection, route not passing the id).
+
+*The original entry follows unchanged.*
 
 **Where.** `flow_run_resume_node` checks the *named* run belongs to the caller and is waiting on
 `event_type`, then calls `route_event(event_type, payload)` (`event_router.py:5`) — which

@@ -278,11 +278,13 @@ The route checks the named run is yours and `waiting` on that `event_type` (404 
 otherwise), injects the payload into its state, and publishes the event so the scheduler
 re-enqueues it. The second execution is asynchronous.
 
-> **Two things to know about this route** (`RESUME-FANOUT-UNSCOPED-1`): `results` lists
-> *every* run waiting on `review.approved` — not only the one in the path — because the
-> fan-out is by event type with no run-id or tenant filter. On a shared server your approval
-> resumes other people's waits too. That is why it is `platform.admin`-gated, and why it is
-> filed.
+> **One thing to know about this route, by version** (`RESUME-FANOUT-UNSCOPED-1`): on
+> **2.13.0** `results` lists *every* run waiting on `review.approved` — not only the one in the
+> path — because the fan-out was by event type with no run-id or tenant filter, so on a shared
+> server your approval resumed other people's waits too. **Fixed on `main` 2026-09-13:** the
+> resume is scoped to the named run end to end (injection, local wake, Redis broadcast,
+> cross-instance fallback), and `results` has exactly one entry. The route stays
+> `platform.admin`-gated.
 
 ---
 
@@ -416,8 +418,8 @@ tutorial_02.py                          wait_resume.nd
       │ ───────────────────────────────►     │ set nodus_wait_* → exit           ✓
       │                                      ▼ FlowRun.status = waiting          ✓ (durable, rehydrated)
       │  POST …/runs/{id}/resume             ·
-      │ ───────────────────────────────►     ·  payload → state["event"]         ✓ (also into every other
-      │                                      ▼ re-enqueued, script re-runs       ✓  waiting run — filed)
+      │ ───────────────────────────────►     ·  payload → state["event"]         ✓ (2.13.0: also into every other
+      │                                      ▼ re-enqueued, script re-runs       ✓  waiting run — fixed 2026-09-13)
       │                                      │ nodus_received_events populated   ✓ since 2026-09-13 (✗ on 2.13.0 — NODUS-RESUME-BRIDGE-1)
       │                                      │ phase 2                           ✓ since 2026-09-13 (✗ on 2.13.0)
 ```

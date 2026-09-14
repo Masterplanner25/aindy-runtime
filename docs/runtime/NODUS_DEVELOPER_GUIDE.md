@@ -263,8 +263,10 @@ The WAIT/RESUME cycle:
    the event name **and the run's `trace_id` as `correlation_id`**.
 3. Something resumes it. Two paths exist and they are **not equivalent**:
    - **`POST /platform/flows/runs/{run_id}/resume`** with `{"event_type", "payload"}`
-     (`platform.admin`) — injects the payload into the run's state (`route_event`), then
-     publishes. **This is the only path that delivers a payload.**
+     (`platform.admin`) — injects the payload into **that run's** state (`route_event` with
+     `run_id`), then publishes a wake scoped to that run on every instance. **This is the only
+     path that delivers a payload.** (Until 2026-09-13 it injected into, and woke, every run
+     waiting on the event name, any tenant — `RESUME-FANOUT-UNSCOPED-1`.)
    - **`sys.v1.event.emit`** / anything that calls `EventBus.publish_event` — re-enqueues the run
      through a zero-argument callback. **No payload crosses the bus.** The re-run script finds
      `nodus_received_events` absent, re-requests the wait, and the run parks again. It also only
