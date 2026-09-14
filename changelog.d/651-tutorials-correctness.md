@@ -1,4 +1,4 @@
-### Fixed — the three tutorials did not work, and had not since they were written (docs/tutorials-correctness)
+### Fixed — the three tutorials did not work, and had not since they were written (#651)
 
 Every call in `docs/tutorials/` was checked against the SDK source, the syscall registry, the
 routes and the installed Nodus 5.13 interpreter. Findings, all corrected: every tutorial's first
