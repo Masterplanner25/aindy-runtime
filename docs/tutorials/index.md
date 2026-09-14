@@ -13,14 +13,14 @@ plugins, no custom nodes — and ends with something you can see in memory.
 | # | Tutorial | What you'll see |
 |---|---|---|
 | 1 | [Memory-Driven Task Analyzer](./01-memory-driven-workflow.md) | Write → read → analyze in a Nodus script → write back → emit |
-| 2 | [Event-Driven Automation](./02-event-driven-automation.md) | A script suspends the run; a resume re-runs it. **Payload delivery is blocked on `NODUS-RESUME-BRIDGE-1` today** — the tutorial shows exactly where. |
+| 2 | [Event-Driven Automation](./02-event-driven-automation.md) | A script suspends the run; a resume re-runs it with the approval payload. **On 2.13.0 the payload never arrives** (`NODUS-RESUME-BRIDGE-1`, fixed on `main` 2026-09-13) — the tutorial shows exactly where. |
 | 3 | [Scheduled Intelligence](./03-scheduled-execution.md) | The same kind of script on a cron, with a webhook on its event |
 
 > **Corrected 2026-09-13, then run live against 2.13.0 the same day.** Every call was checked
 > against the SDK source, the runtime's syscall registry and routes, and the installed Nodus
 > interpreter (5.13.0); then all three complete scripts were executed against a real server.
-> Tutorials 1 and 3 complete. Tutorial 2 reaches its resume and stops on a runtime defect it now
-> documents (`NODUS-RESUME-BRIDGE-1`). The
+> Tutorials 1 and 3 complete. Tutorial 2 reached its resume and stopped on a runtime defect it
+> documents (`NODUS-RESUME-BRIDGE-1` — fixed on `main` later the same day; 2.13.0 still has it). The
 > previous versions had been "re-validated on relocation" in June with inline *Runtime note*
 > callouts — but the callouts described things that do not exist (`event.wait()`, `emit()`,
 > `sys.v1.event.wait`, a `flat` key on `memory.tree`, an `analyze_tasks` flow), and every

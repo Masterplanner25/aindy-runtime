@@ -303,3 +303,27 @@ def test_a_payload_less_wake_re_waits_and_says_so(
         assert _history_statuses(db_session, run_id) == ["WAIT", "WAIT", "SUCCESS"]
     finally:
         reg.FLOW_REGISTRY.pop(flow_name, None)
+
+
+def test_a_run_that_completes_after_a_bare_wake_clears_the_pending_type(
+    db_session, in_process_worker
+):
+    """Narrow, at the node: a script woken without a payload that nevertheless finishes (it
+    could — from memory, a syscall, anything outside its namespace) must not leave
+    `nodus_wait_event_type` behind, or a later resume would bridge a payload into a wait that
+    no longer exists. The runner tests above cannot reach this: a namespace-only script has no
+    way to tell a bare wake from a first run, so it always re-parks."""
+    from AINDY.runtime.nodus_adapter import nodus_execute_node
+
+    state = {
+        "nodus_script": 'set_state("done", true)\n',
+        "nodus_wait_event_type": EVENT,
+        "trace_id": "t-bare-wake",
+    }
+    context = {"db": db_session, "user_id": str(uuid.uuid4()), "run_id": "r1", "trace_id": "t-bare-wake"}
+
+    result = nodus_execute_node(state, context)
+
+    assert result["status"] == "SUCCESS", result
+    assert result["output_patch"]["nodus_output_state"].get("done") is True
+    assert "nodus_wait_event_type" not in state
