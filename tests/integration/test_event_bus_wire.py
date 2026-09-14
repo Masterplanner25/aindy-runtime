@@ -72,6 +72,7 @@ class _RecordingEngine:
     def __init__(self, rehydrated: bool = True) -> None:
         self._rehydrated = rehydrated
         self.calls: list[tuple[str, str | None, bool]] = []
+        self.run_ids: list[str | None] = []
         self._lock = threading.Lock()
 
     def is_rehydrated(self) -> bool:
@@ -80,9 +81,14 @@ class _RecordingEngine:
     def mark_rehydrated(self) -> None:
         self._rehydrated = True
 
-    def notify_event(self, event_type, *, correlation_id=None, broadcast=True):
+    def notify_event(self, event_type, *, correlation_id=None, run_id=None, broadcast=True):
+        # ★ The signature must accept every kwarg the real subscriber forwards. When `run_id`
+        #   was added (RESUME-FANOUT-UNSCOPED-1) a recorder without it raised TypeError inside
+        #   the subscriber thread, the bus swallowed it as "local notify_event failed
+        #   (non-fatal)", and every wire test read as "nothing crossed the wire".
         with self._lock:
             self.calls.append((event_type, correlation_id, broadcast))
+            self.run_ids.append(run_id)
         return 1
 
     def received(self) -> list[tuple[str, str | None, bool]]:
@@ -136,6 +142,7 @@ def _publish_until_observed(
     predicate,
     *,
     correlation_id: str | None = None,
+    run_id: str | None = None,
     deadline_secs: float = _WIRE_DEADLINE_SECS,
 ) -> bool:
     """Publish repeatedly until *predicate* holds or the deadline expires.
@@ -148,7 +155,7 @@ def _publish_until_observed(
     """
     deadline = time.monotonic() + deadline_secs
     while time.monotonic() < deadline:
-        publisher.publish(event_type, correlation_id=correlation_id)
+        publisher.publish(event_type, correlation_id=correlation_id, run_id=run_id)
         if predicate():
             return True
         time.sleep(_POLL_INTERVAL_SECS)
@@ -183,6 +190,22 @@ class TestCrossInstancePropagation:
         )
 
         assert delivered, "correlation_id did not survive serialization across Redis"
+
+    def test_run_id_survives_the_wire(self, subscriber, engine):
+        """RESUME-FANOUT-UNSCOPED-1 — a per-run wake must arrive per-run on the other
+        instance, or the scope holds only where the resume originated."""
+        publisher = _make_bus("publisher-a")
+        run_id = f"run-{uuid.uuid4().hex[:8]}"
+
+        delivered = _publish_until_observed(
+            publisher,
+            "review.approved",
+            lambda: run_id in engine.run_ids,
+            correlation_id="trace-x",
+            run_id=run_id,
+        )
+
+        assert delivered, "run_id did not survive serialization across Redis"
 
     def test_dispatch_suppresses_rebroadcast(self, subscriber, engine):
         """`broadcast=False` on the receiving side is what stops an event
