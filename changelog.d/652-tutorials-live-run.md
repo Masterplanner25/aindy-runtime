@@ -1,4 +1,4 @@
-### Fixed — the tutorials, corrected against a live 2.13.0 server; four runtime defects filed (docs/tutorials-live-run)
+### Fixed — the tutorials, corrected against a live 2.13.0 server; four runtime defects filed (#652)
 
 The three tutorials' complete scripts were run verbatim against a real server with the published
 `aindy-sdk 1.0.0`. Tutorials 1 and 3 now complete end to end. What the run corrected in the docs:
