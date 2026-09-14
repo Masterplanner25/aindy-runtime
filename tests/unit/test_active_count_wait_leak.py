@@ -23,7 +23,7 @@ pydantic property), or it would be exercising a `return True, None`.
 
 Mutation-checked: drop `_release_slot_on_wait` from the WAIT branch → the parked-count tests
 fail; acquire unconditionally at start again → the at-cap test fails; drop the `_holds_slot`
-guard in completion → the never-acquired test fails.
+guard in completion → the direct guard test fails.
 """
 from __future__ import annotations
 
@@ -188,40 +188,56 @@ def test_a_tenant_at_the_cap_parks_on_resources_holding_nothing(
     assert rm.get_tenant_active(tenant) == rm.MAX_CONCURRENT_PER_TENANT - 1
 
 
-def test_a_runner_that_never_acquired_does_not_release_someone_elses_slot(
-    db_session, rm, enforcing, scheduler_spy
-):
-    """`mark_completed` on a runner that holds nothing would decrement a slot another run is
-    using — an under-count is over-admission. A node that FAILS still acquired (it ran), so the
-    case is a runner that fails BEFORE its first node: a run whose flow graph is incomplete."""
+def test_a_failing_run_releases_the_slot_it_acquired(db_session, rm, enforcing, scheduler_spy):
+    """Failure is a terminal outcome like success: the slot taken at node entry comes back."""
     from AINDY.runtime.flow_engine import registry as reg
     from AINDY.runtime.flow_engine.runner import PersistentFlowRunner
 
     user = uuid.uuid4()
     tenant = str(user)
     rm.mark_started(tenant, "other-0")  # someone else's live execution
-
-    node = f"orphan_{uuid.uuid4().hex[:6]}"
+    node = f"failing_{uuid.uuid4().hex[:6]}"
+    seen: list[int] = []
 
     @reg.register_node(node)
     def _n(state, context):  # noqa: ANN001
-        return {"status": "SUCCESS"}
+        seen.append(rm.get_tenant_active(tenant))
+        return {"status": "FAILURE", "error": "boom"}
 
-    # `start` names a node that is not registered → fails before any acquisition.
-    flow = {"start": "not_a_registered_node", "end": [node], "edges": {}}
-    name = f"orphan_flow_{uuid.uuid4().hex[:6]}"
+    flow = {"start": node, "end": [node], "edges": {}}
+    name = f"failing_flow_{uuid.uuid4().hex[:6]}"
     reg.register_flow(name, flow)
     try:
         response = PersistentFlowRunner(
             flow=flow, db=db_session, user_id=tenant, workflow_type=None
         ).start({}, flow_name=name)
         assert response["status"] == "FAILED", response
-        assert rm.get_tenant_active(tenant) == 1, (
-            "the failing runner released a slot it never held"
-        )
+        assert seen == [2], "the failing node ran holding its own slot beside the other run's"
+        assert rm.get_tenant_active(tenant) == 1, "failure did not return the slot"
     finally:
         reg.FLOW_REGISTRY.pop(name, None)
         reg.NODE_REGISTRY.pop(node, None)
+
+
+def test_release_is_guarded_by_what_the_runner_holds(rm):
+    """`release_slot_on_completion` on a runner that holds nothing must not decrement — an
+    under-count is over-admission. Today every terminal path runs after an acquisition, so the
+    guard is defensive; it is pinned directly because the day a terminal path precedes node
+    entry (a quarantine, a vanished run) is the day it stops being defensive."""
+    from types import SimpleNamespace
+
+    from AINDY.runtime.flow_engine.runner_completion import release_slot_on_completion
+
+    rm.mark_started("t", "other")
+    idle = SimpleNamespace(_holds_slot=False, _tenant_id="t", _eu_id="eu-idle", user_id="t")
+    release_slot_on_completion(idle, "failed")
+    assert rm.get_tenant_active("t") == 1, "a runner that never acquired released someone else's slot"
+
+    holder = SimpleNamespace(_holds_slot=True, _tenant_id="t", _eu_id="eu-h", user_id="t")
+    release_slot_on_completion(holder, "success")
+    assert rm.get_tenant_active("t") == 0 and holder._holds_slot is False
+    release_slot_on_completion(holder, "success")  # a second terminal call is a no-op
+    assert rm.get_tenant_active("t") == 0
 
 
 # ── the ResourceManager seam ─────────────────────────────────────────────────
