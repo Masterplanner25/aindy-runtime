@@ -1,4 +1,4 @@
-### Removed — `examples/openclaw/`; `examples/README.md` is now a pointer (docs/examples-pointer)
+### Removed — `examples/openclaw/`; `examples/README.md` is now a pointer (#653)
 
 The June 2026 OpenClaw spike ran in-process — a direct `dispatch_syscall` and a self-built
 `NodusRuntime(allowed_paths=None)` — bypassing the plugin host, guest floor, tool registry and
