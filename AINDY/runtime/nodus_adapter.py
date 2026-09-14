@@ -641,9 +641,14 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
     nodus_execute_result  dict — {status, output_state, events_emitted,
                                   memory_writes, error}
     nodus_error           str  — set only on failure
-    nodus_wait_event_type str  — set only on WAIT; cleared on resume
+    nodus_wait_event_type str  — set only on WAIT (and persisted on the run's
+                                 state — the runner merges WAIT patches);
+                                 cleared when a resume delivers a payload or
+                                 the script completes
     nodus_received_events dict — {event_type: payload} for events delivered
-                                 after an event.wait() (populated on resume)
+                                 by POST …/runs/{id}/resume after a wait
+                                 (populated on resume; the script reads it
+                                 via get_state("nodus_received_events"))
 
     Flow engine integration
     -----------------------
@@ -669,10 +674,30 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
     # ── Resume bridge ─────────────────────────────────────────────────────────
     # When route_event() resumes a waiting flow run it injects state["event"]
     # with the received event payload and clears waiting_for.  Bridge that
-    # into nodus_received_events so event.wait() returns the payload on the
-    # re-execution without raising NodusWaitSignal again.
+    # into nodus_received_events so the re-run script finds the payload under
+    # get_state("nodus_received_events")[<event_type>] instead of re-waiting.
+    #
+    # ★ `nodus_wait_event_type` is in `state` only because the flow runner merges the WAIT
+    #   patch (`runner_steps._MERGED_STATUSES`). Until 2026-09-13 it merged SUCCESS patches
+    #   only, so this key reached `flow_history` and never `flow_runs.state`, the condition
+    #   below was never true on a real resume, and the injected `event` was popped and lost —
+    #   `NODUS-RESUME-BRIDGE-1`, observed live as `WAIT, WAIT, WAIT…`. The pinning test drives
+    #   the runner through the SECOND run; a unit test of this function alone cannot see it.
     incoming_event = state.pop("event", None)
     pending_wait_type: Optional[str] = state.get("nodus_wait_event_type")
+    if incoming_event is None and pending_wait_type:
+        # WAIT-PAYLOAD-PATH-1 (a): a payload-less wake — `sys.v1.event.emit` / a bare
+        # `publish_event` — re-runs the script with nothing to hand it, and the script will
+        # re-park on the same type. Say so; before this, the re-wait was indistinguishable
+        # from a first wait. The key is left in place: the re-run's own WAIT patch re-sets it,
+        # and a run that completes instead clears it below.
+        logger.warning(
+            "[nodus.execute] Resumed WITHOUT a payload while waiting on '%s' eu=%s — the "
+            "event bus carries no payload; only POST …/runs/{id}/resume delivers one. "
+            "The script will re-wait.",
+            pending_wait_type,
+            run_id,
+        )
     if incoming_event is not None and pending_wait_type:
         received = dict(state.get("nodus_received_events") or {})
         received[pending_wait_type] = (
@@ -805,9 +830,16 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         return {
             "status": "WAIT",
             "wait_for": wait_for,
+            # ★ This patch is MERGED into the run's state by the flow runner (not only recorded
+            #   in flow_history) — `nodus_wait_event_type` is what the resume bridge above keys
+            #   on. `nodus_output_state` rides along so what the script set before it parked is
+            #   readable on the run while it waits; it is NOT seeded back into the re-run's
+            #   namespace (only `nodus_received_events` is) — whether a re-run starts fresh or
+            #   with its prior state is `WAIT-TYPED-CONTRACT-1`'s decision.
             "output_patch": {
                 "nodus_status": "waiting",
                 "nodus_wait_event_type": wait_for,
+                "nodus_output_state": nodus_result.output_state,
                 "nodus_events": nodus_result.emitted_events,
                 "nodus_memory_writes": nodus_result.memory_writes,
                 "nodus_received_events": state.get("nodus_received_events") or {},
@@ -856,6 +888,11 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         "nodus_memory_writes": nodus_result.memory_writes,
         "nodus_execute_result": execution_summary,
     }
+
+    # A run that finished (either way) is no longer waiting on anything. `state` is the
+    # runner's live dict, so the pop persists; without it a payload-less wake followed by a
+    # completing re-run would leave a stale pending type for a later nodus node to mis-bridge.
+    state.pop("nodus_wait_event_type", None)
 
     if success:
         logger.info(
