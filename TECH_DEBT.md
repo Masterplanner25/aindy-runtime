@@ -12842,9 +12842,36 @@ this is that rule unapplied to the wait), `SYSMAX-1`, `TENANT-2`.
 
 ## ASYNC-JOB-UNREGISTERED-STORM-1 — a job whose handler is not registered is re-dispatched in a tight in-memory loop, uncounted, forever
 
-**Status: OPEN (P1).** Filed 2026-09-13; measured at **~87 re-dispatches per second per job**,
-45,000 log lines in ten minutes from two rows, on a bare runtime booted against a database that
-held two `openclaw.reminder` jobs from a consumer not loaded in this process.
+**Status: CLOSED (2026-09-13, PR #657).** Filed the same day; measured at **~87 re-dispatches per
+second per job**, 45,000 log lines in ten minutes from two rows, on a bare runtime booted against
+a database that held two `openclaw.reminder` jobs from a consumer not loaded in this process.
+
+**What was done — all three faults, because the count fix alone only covers `max_attempts=1`.**
+(1) An unregistered handler raises `AsyncJobHandlerNotRegistered` (a `RuntimeError` subclass, so
+existing catches hold) and `_is_terminal_job_error` refuses to retry it whatever the budget — a
+retry cannot register a handler. (2) The attempt is numbered (`attempt_no`) BEFORE the handler
+lookup, and the except branch restores it after its `db.rollback()` — the increment used to be
+committed only as a side effect of the started-event emit, so any failure without one was
+uncounted, registered handler or not. (3) The thread-mode re-dispatch goes through
+`_schedule_job_retry`: `threading.Timer(_compute_retry_delay(log_id))` — the dispatcher's
+existing exponential curve (`AINDY_RETRY_BACKOFF_BASE_MS` 1000 / `_MAX_MS` 30000), which only the
+distributed path had honoured. `AINDY_RETRY_BACKOFF_BASE_MS=0` restores immediacy on purpose.
+
+**★ Mutation evidence says which fault mattered live:** with `_is_terminal_job_error` returning
+False, the `max_attempts=1` test STILL passes — the count fix stops the observed storm by itself;
+the terminal class is what protects budgets > 1. And removing the post-rollback restore fails
+the unregistered tests too: the raise precedes the assignment, so the restore is what carries
+the count there. Both are needed; neither is decorative.
+
+**Tests:** `tests/unit/test_async_job_unregistered_storm.py` — `_execute_job_inline` (the
+function boot recovery and the pool both run) against a real JobLog on a PRIVATE SQLite engine
+(the shared `db_session` fixture binds an outer transaction, so the code's `rollback()` erased
+the test's own row — `NoResultFound` read as "the row disappeared"). Dispatcher and `Timer`
+spied, with a liveness test that observes a real re-dispatch. Mutation-checked 4/4. **Not
+re-run live**; the two `openclaw.reminder` rows are still in the `aindy-runtime_postgres_data`
+volume if a live confirmation is wanted — boot against it and expect two `failed` rows.
+
+*The original entry follows unchanged.*
 
 **Where.** `_execute_job_inline` (`async_job_service.py:1151-1157`): the `handler is None` →
 `raise RuntimeError("… is not registered")` comes **before** `log.attempt_count += 1`. The
