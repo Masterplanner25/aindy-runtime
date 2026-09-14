@@ -1,6 +1,6 @@
 ---
 title: "Upgrading aindy-runtime"
-last_verified: "2026-09-13"
+last_verified: "2026-09-14"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -58,6 +58,7 @@ loop, not a warning (`FR-14`, 2.1.0). Read the exit code — `0` done, `3` re-ru
 | 2.11.0 | 2026-09-10 | [`APP_HANDOFF_v2.11.0.md`](./APP_HANDOFF_v2.11.0.md) | none *(routes you by origin version)* | `0018` | `2026-09-10` — **bumped with no DDL** (a vocabulary edit under `db/models/`, `AGENT-EVENT-VOCAB-1`); `bootstrap-schema` still exits `0` | app floor `>=2.9.0` | **Read §0 if you are below 2.9.0** — it routes you through the steps you skipped. Records the cwd version trap that bit both repos. |
 | 2.12.0 | 2026-09-12 | [`APP_HANDOFF_v2.12.0.md`](./APP_HANDOFF_v2.12.0.md) | none | `0018` | `2026-09-10` | app floor `>=2.11.0` | FR-23/25/26/27/28 intake; strict at-most-once opt-in (`AINDY_SYSCALL_IDEMPOTENCY_STRICT`). Pin bump + rebuild. |
 | 2.13.0 | 2026-09-13 | [`APP_HANDOFF_v2.13.0.md`](./APP_HANDOFF_v2.13.0.md) | none | `0018` | `2026-09-10` | app floor `>=2.12.0` | `sys.v1.flow.run` can return `partial` for lenient-join fan-out (opt-in, the app declares none). Token governor and run-scoped quota knobs, all default-off. |
+| 2.14.0 | 2026-09-14 | [`APP_HANDOFF_v2.14.0.md`](./APP_HANDOFF_v2.14.0.md) | none | `0018` | `2026-09-10` | app floor `>=2.13.0` | Four unflagged WAIT/resume + job-retry fixes from the live tutorial run (#654–#657): guest scripts receive resume payloads; per-run resume no longer fans out (event-bus message gains `run_id`); parked runs hold no concurrency slot; unregistered job handlers fail once. Pin bump + rebuild; run Tutorial 2 live as the verification. |
 
 Bold rows carry a schema step. **Between any two releases, count the bold rows you cross —
 that is how many times you owe `bootstrap-schema --reconcile`** (once is enough; it applies all

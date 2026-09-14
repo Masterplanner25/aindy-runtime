@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-13"
+last_verified: "2026-09-14"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1451,3 +1451,47 @@ and accounting work on the HOST side of the boundary plus a flow-engine feature:
 authority axes.** The certification ladder measures what a guest can SEE and DO; a token or
 syscall ceiling changes how much it may USE. A future entry that finds this gate red after a
 change to `resources` should look for a spawn-argument regression, not for a new escape.
+
+## Entry 028 — 2026-09-14
+
+**Trigger:** `v2.14.0` release tag (`sandbox-escape-linux.yml`, run `34809989433`).
+**Commit:** `9a7888df413cbf1002fa40c7ce209d5cfc526860`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–027.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.13s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `34809989433`).
+
+**The certified boundary is untouched.** `git diff v2.13.0..v2.14.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **two lines, neither
+executable**: a `ceiling_note` string in `sandbox_runner.py:111` now cites
+`docs/archive/ISOLATION_MODEL_PLAN.md` (#643, the doc moved), and `pyproject.toml`'s
+`Documentation` URL points at `docs/` (#649). No dependency pin moved.
+
+**What this release changed, and why none of it is what this gate measures.** 2.14.0 is four
+host-side runtime fixes found by running the tutorials live, plus a docs restructuring:
+
+- **`NODUS-RESUME-BRIDGE-1` (#654)** — the flow runner merges WAIT patches into run state, so a
+  guest script's second run receives the resume payload. The guest is spawned with the same
+  confinement kwargs; what changed is which keys of the HOST's flow state the adapter seeds into
+  the guest namespace (`nodus_received_events`, as it was always meant to). The re-run test
+  drives the real interpreter through `run_one` in-process — the process boundary is removed by
+  the test, not by the change.
+- **`RESUME-FANOUT-UNSCOPED-1` (#655)** — the per-run resume route scopes its wake by run id,
+  on the scheduler, the Redis message and the cross-instance fallback. Host-only.
+- **`ACTIVE-COUNT-WAIT-LEAK-1` (#656)** — tenant concurrency slots are held only while a run
+  executes. `ResourceManager` accounting, host-only.
+- **`ASYNC-JOB-UNREGISTERED-STORM-1` (#657)** — an unregistered job handler fails terminally;
+  thread-mode retries back off. Host-only.
+- **Docs (#643–#653)** — `docs/` split three ways; `examples/openclaw/` REMOVED because it ran
+  `NodusRuntime(allowed_paths=None)` in-process and unconfined — the bypass `GUEST-CONFINE-1`
+  closed. That removal is the one change in this release that is ABOUT the boundary, and it is
+  a deletion of an example that stepped around it, not a change to the boundary itself.
+
+**★ Read the guest-facing change correctly.** `nodus_adapter.py`'s WAIT patch now carries
+`nodus_output_state` and its bridge clears `nodus_wait_event_type` on completion; both are
+host-side flow-state bookkeeping. Nothing new is seeded into the guest namespace beyond
+`nodus_received_events`, which the pre-2.14.0 code already seeded whenever it had it (it never
+did — that was the defect). A future entry that finds this gate red after a change to the
+adapter's seeding should look at what reaches `nodus_initial_state`, not at the runner.
