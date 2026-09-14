@@ -205,7 +205,7 @@ the whole vocabulary — do not invent a fourth without adding it here:
 | Value | Meaning | Example |
 |---|---|---|
 | `current` | Live guidance. The default, and what a reader should assume. | most of `docs/runtime/` |
-| `outdated` | Retained as an audit trail; its claims describe a past state and must not be acted on. | `docs/platform/governance/CHANGELOG.md` (pre-split monolith) |
+| `outdated` | Retained as an audit trail; its claims describe a past state and must not be acted on. | `docs/archive/PRE_SPLIT_MONOLITH_CHANGELOG.md` (pre-split monolith) |
 | `complete` | A one-time **plan** whose work is finished. Any rules it states may still be in force; its task lists are history, not a queue. | `RUNTIME_DOCSET_BOUNDARY.md` |
 
 `complete` exists because neither of the other two fits a finished plan: the work is not

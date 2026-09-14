@@ -31,7 +31,7 @@ Important interpretation:
 - import allowlisting is not the same thing as broad downstream stability
 - a module promoted here still needs to be interpreted through
   [Runtime Stability Index](./RUNTIME_STABILITY_INDEX.md) and
-  [Cross-Repo Compatibility](./CROSS_REPO_COMPATIBILITY.md)
+  [Cross-Repo Compatibility](../governance/CROSS_REPO_COMPATIBILITY.md)
 
 ## SDK Bridge Role
 
@@ -43,7 +43,7 @@ in `PUBLIC_RUNTIME_SURFACES.md`. The import modules listed in
 **Public Runtime API Modules** below are the boundary that first-party apps use
 when running inside the runtime process — the SDK operates over HTTP and does not
 import from `AINDY.*` directly. Cross-version SDK/runtime interpretation should
-now be taken from [Cross-Repo Compatibility](./CROSS_REPO_COMPATIBILITY.md).
+now be taken from [Cross-Repo Compatibility](../governance/CROSS_REPO_COMPATIBILITY.md).
 
 ## Contract Rules
 

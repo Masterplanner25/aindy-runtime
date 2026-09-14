@@ -1,6 +1,8 @@
 recursive-include AINDY *.json
 recursive-include AINDY/platform/dist *
 recursive-include docs/runtime *.md
+recursive-include docs/operations *.md
+recursive-include docs/governance *.md
 
 # llms.txt / llms-full.txt live under AINDY/ so they reach the *installed* package.
 # They existed only at the repo root before, which served a reader who had already found

@@ -12,11 +12,11 @@ This document defines the runtime extension trust and ownership boundary as it
 exists today.
 
 The versioned extension ABI policy is documented separately in
-[EXTENSION_ABI.md](EXTENSION_ABI.md).
+[EXTENSION_ABI.md](./EXTENSION_ABI.md).
 The explicit capability model is documented separately in
-[EXTENSION_CAPABILITIES.md](EXTENSION_CAPABILITIES.md).
+[EXTENSION_CAPABILITIES.md](./EXTENSION_CAPABILITIES.md).
 The provenance and integrity contract is documented separately in
-[EXTENSION_PROVENANCE.md](EXTENSION_PROVENANCE.md).
+[EXTENSION_PROVENANCE.md](./EXTENSION_PROVENANCE.md).
 
 ## Important Limitation
 

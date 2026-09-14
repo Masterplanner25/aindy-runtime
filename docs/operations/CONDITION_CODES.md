@@ -213,7 +213,7 @@ if flow_run.status == FlowRunStatus.WAITING:
 ## Relationship to Other Docs
 
 - `docs/runtime/SDK_CONTRACT.md` — SDK stable surfaces; condition codes are an operator surface, not SDK surface
-- `docs/runtime/DEGRADED_RUNTIME_MODES.md` — what degrades when each condition fires
-- `docs/runtime/OPERATOR_RUNBOOK.md` — triage guidance keyed by condition code
+- `docs/operations/DEGRADED_RUNTIME_MODES.md` — what degrades when each condition fires
+- `docs/operations/OPERATOR_RUNBOOK.md` — triage guidance keyed by condition code
 - `AINDY/kernel/condition_codes.py` — authoritative source of truth
 - `tests/unit/test_cross_repo_compatibility.py` — machine-verified stability assertions

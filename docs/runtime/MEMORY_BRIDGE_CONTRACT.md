@@ -99,9 +99,9 @@ This document defines the Memory Bridge API contract and its security boundary b
 ### Policy Requirements
 - No mutation endpoints without JWT validation.
 - Any change to permission model requires:
-- Update to `docs/platform/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
+- Update to `docs/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
 - Human approval.
-- Errors must conform to `docs/platform/governance/ERROR_HANDLING_POLICY.md`.
+- Errors must conform to `docs/governance/ERROR_HANDLING_POLICY.md`.
 
 ## 4. Data Integrity Rules
 
@@ -121,14 +121,14 @@ This document defines the Memory Bridge API contract and its security boundary b
 - DB failure during node or link creation: `MemoryNodeDAO` rolls back and re-raises; route does not explicitly convert to HTTP error.
 
 ### Policy Requirements
-- All mutation failures must return JSON error responses per `docs/platform/governance/ERROR_HANDLING_POLICY.md`.
+- All mutation failures must return JSON error responses per `docs/governance/ERROR_HANDLING_POLICY.md`.
 
 ## 6. Policy Requirements
 - No mutation endpoints without JWT validation.
 - Any change to permission model requires:
-- Update to `docs/platform/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
+- Update to `docs/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
 - Human approval.
-- Response errors must follow `docs/platform/governance/ERROR_HANDLING_POLICY.md`.
+- Response errors must follow `docs/governance/ERROR_HANDLING_POLICY.md`.
 
 ## 7. Known Risks
 - Secret rotation is not documented in code.

@@ -370,4 +370,4 @@ Loop complete: 3 tasks → 1 insight → 1 event
 
 ## Next
 
-→ **[Tutorial 2: Event-Driven Automation](02-event-driven-automation.md)** — make that `sprint.analyzed` event trigger a follow-up workflow automatically.
+→ **[Tutorial 2: Event-Driven Automation](./02-event-driven-automation.md)** — make that `sprint.analyzed` event trigger a follow-up workflow automatically.

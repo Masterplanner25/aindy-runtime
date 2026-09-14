@@ -35,7 +35,7 @@ evaluators today — never by editing runtime code.
 
 The runtime is "kernel primitives + registration surfaces; apps extend without
 editing runtime" (`docs/runtime/DB_OWNERSHIP_CONTRACT.md`,
-`docs/architecture/MODEL_OWNERSHIP_POLICY.md`). The **runtime owns the mechanism
+`docs/governance/MODEL_OWNERSHIP_POLICY.md`). The **runtime owns the mechanism
 / primitive / registration surface**; the **app owns the workflow content**
 (`.nd` source, which workflow to select). This surface is therefore squarely
 runtime-owned, and it must mirror the existing canonical extension pattern rather

@@ -9,7 +9,7 @@ owner: "platform-team"
 
 This document defines enforceable collaboration boundaries for AI agents operating in this repository. It is directive and governance-focused.
 
-> **How this is reached.** [`CLAUDE.md`](../../../CLAUDE.md) is the authoritative
+> **How this is reached.** [`CLAUDE.md`](../../CLAUDE.md) is the authoritative
 > agent-instruction surface and links here from its header; `CODEX.md` is a pointer to
 > `CLAUDE.md`. That chain is load-bearing — until 2026-08-05 nothing referenced this file,
 > so a document calling itself directive was in practice read by no one. If you restructure
@@ -23,9 +23,9 @@ This document defines enforceable collaboration boundaries for AI agents operati
 > runtime/apps split: paths under `AINDY/...` are runtime-owned in this repo;
 > paths under `apps/...` and `client/...` are app-owned and now live in the
 > **aindy-apps-monolith** repo. `INVARIANTS.md` is now split — the runtime half
-> is [`docs/platform/governance/INVARIANTS.md`](./INVARIANTS.md) in this repo
+> is [`docs/governance/INVARIANTS.md`](./INVARIANTS.md) in this repo
 > and the app-domain half lives in aindy-apps-monolith. `DATA_MODEL_MAP.md` is
-> now relocated (runtime-scoped, Tier-2 surgery — `docs/architecture/DATA_MODEL_MAP.md`).
+> now relocated (runtime-scoped, Tier-2 surgery — `docs/runtime/DATA_MODEL_MAP.md`).
 > Two governance docs referenced below were not part of this migration pass.
 > Re-checked 2026-08-05: `SYSTEM_SPEC.md` exists in **neither** repo and its references
 > are historical only; `GOVERNANCE_INDEX.md` does **not** exist here but does exist in
@@ -58,7 +58,7 @@ This document defines enforceable collaboration boundaries for AI agents operati
 - A plan-first proposal has been approved for larger changes.
 
 ### Refactoring Must Preserve
-- All invariants in `docs/platform/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
+- All invariants in `docs/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
 - Public API contracts (FastAPI routes and request/response shapes).
 - Migration compatibility for existing database state.
 
@@ -85,7 +85,7 @@ The following are high-sensitivity areas and require explanation of impact and e
 - Schema changes must include:
 - ORM model update.
 - New Alembic revision.
-- Documentation update in `docs/architecture/DATA_MODEL_MAP.md` _(runtime-scoped; app-domain tables tracked in aindy-apps-monolith)_.
+- Documentation update in `docs/runtime/DATA_MODEL_MAP.md` _(runtime-scoped; app-domain tables tracked in aindy-apps-monolith)_.
 - Never remove constraints without explicit approval.
 
 ## 5. Concurrency and Session Rules
@@ -102,8 +102,8 @@ The following are high-sensitivity areas and require explanation of impact and e
 ## 7. Documentation Discipline
 - Any architectural change must update:
 - `docs/architecture/SYSTEM_SPEC.md` (if structural) _(pre-split governance doc; not migrated)_.
-- `docs/platform/governance/INVARIANTS.md` (if enforcement changes) _(runtime half; app-domain invariants in aindy-apps-monolith)_.
-- `docs/architecture/DATA_MODEL_MAP.md` (if schema changes) _(runtime-scoped; app-domain tables tracked in aindy-apps-monolith)_.
+- `docs/governance/INVARIANTS.md` (if enforcement changes) _(runtime half; app-domain invariants in aindy-apps-monolith)_.
+- `docs/runtime/DATA_MODEL_MAP.md` (if schema changes) _(runtime-scoped; app-domain tables tracked in aindy-apps-monolith)_.
 - Documentation must reflect actual implementation, not intended behavior.
 - Update the `Last updated` date in `docs/GOVERNANCE_INDEX.md` whenever any file under `docs/` changes _(pre-split governance doc; not migrated)_.
 
@@ -117,7 +117,7 @@ For any of the following, a proposal must be written and approved before impleme
 
 The proposal must include:
 - A structured change plan.
-- Impact analysis on invariants in `docs/platform/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
+- Impact analysis on invariants in `docs/governance/INVARIANTS.md` _(runtime half; app-domain invariants in aindy-apps-monolith)_.
 - Migration and API contract implications.
 
 ## 9. Non-Goals

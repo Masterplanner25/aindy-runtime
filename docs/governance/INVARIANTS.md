@@ -23,9 +23,9 @@ migration set.
 Genesis activation and locking, canonical-metrics uniqueness, RippleTrace
 DropPoint seeding, freelance/masterplan non-null columns, and the app route
 surfaces that *consume* the runtime auth/rate-limit mechanisms below. See
-`aindy-apps-monolith` → `docs/platform/governance/INVARIANTS.md` for that half.
+`aindy-apps-monolith` → `docs/governance/INVARIANTS.md` for that half.
 
-Related runtime docs: [`../../runtime/EXECUTION_INVARIANTS.md`](../../runtime/EXECUTION_INVARIANTS.md)
+Related runtime docs: [`../../runtime/EXECUTION_INVARIANTS.md`](../runtime/EXECUTION_INVARIANTS.md)
 covers execution/flow-engine invariants (WAIT/RESUME, idempotency, scheduler
 semantics); this document covers data, storage, auth, and startup invariants.
 

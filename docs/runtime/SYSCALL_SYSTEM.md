@@ -13,7 +13,7 @@ Repository ownership:
 - app docs may describe app-owned syscall handlers, but the syscall ABI and
   dispatcher contract remain runtime-owned
 - the broader documentation split map lives in
-  [Runtime Docset Boundary](./RUNTIME_DOCSET_BOUNDARY.md)
+  [Runtime Docset Boundary](../archive/RUNTIME_DOCSET_BOUNDARY.md)
 
 For repo-split purposes, `AINDY.kernel.syscall_dispatcher` and
 `AINDY.kernel.syscall_registry` are approved public runtime imports under the

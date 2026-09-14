@@ -339,7 +339,7 @@ Stored as VARCHAR in the database; stable surface.
 (execute/defer/ignore from trigger evaluator).
 
 Machine-verified in `tests/unit/test_cross_repo_compatibility.py` (6 new tests).
-Reference: `docs/runtime/CONDITION_CODES.md`.
+Reference: `docs/operations/CONDITION_CODES.md`.
 
 ---
 

@@ -179,6 +179,6 @@ pytest -c pytest.integration.ini -v
 | All registered syscalls | `docs/runtime/SYSCALL_REFERENCE.md` |
 | Writing Nodus scripts | `docs/runtime/NODUS_DEVELOPER_GUIDE.md` |
 | Execution invariants | `docs/runtime/EXECUTION_INVARIANTS.md` |
-| Production deployment | `docs/runtime/DEPLOYMENT_TARGETS.md` |
+| Production deployment | `docs/operations/DEPLOYMENT_TARGETS.md` |
 | Security model | `docs/runtime/SECURITY_MATRIX.md` |
-| Release checklist | `docs/runtime/RELEASE_CHECKLIST.md` |
+| Release checklist | `docs/governance/RELEASE_CHECKLIST.md` |

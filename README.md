@@ -78,7 +78,7 @@ the provenance that ties them together are substrate concerns.
 For the full statement of what the runtime is and what a consumer inherits — including where
 the claims stop — see [`docs/runtime/WHAT_THE_RUNTIME_IS.md`](docs/runtime/WHAT_THE_RUNTIME_IS.md).
 
-**Stability:** public surfaces declared under `docs/runtime/` are stable. Extension and
+**Stability:** public surfaces declared under `docs/runtime/` (`PUBLIC_RUNTIME_SURFACES.md`, `RUNTIME_STABILITY_INDEX.md`) are stable. Extension and
 orchestration surfaces marked experimental may change between minor versions. In-process
 extensions require trusted code — this is not a sandboxed third-party plugin host.
 
@@ -498,7 +498,7 @@ Runtime CI scope in `.github/workflows/runtime-ci.yml` now covers the
 runtime-owned push/PR baseline:
 
 - lint runtime-owned Python code with Ruff
-- validate runtime-doc frontmatter under `docs/runtime/`
+- validate doc frontmatter under `docs/{runtime,operations,governance,upgrades,handoffs,design}/`
 - install the runtime package and test extras in editable mode
 - assert runtime code does not import `apps.*`
 - verify the `aindy-runtime` console script
@@ -569,17 +569,19 @@ same head.
 
 ## Docs
 
-Runtime-owned documentation lives under `docs/runtime/`. Start with
-[`docs/runtime/QUICKSTART.md`](docs/runtime/QUICKSTART.md), then
-[`docs/runtime/RUNTIME_DOC_INDEX.md`](docs/runtime/RUNTIME_DOC_INDEX.md) to find the right
-document by reader type.
+Documentation is split by the question it answers — see [`docs/README.md`](docs/README.md)
+for the map. In short: [`docs/runtime/`](docs/runtime/) is what the runtime guarantees,
+[`docs/operations/`](docs/operations/) is how to run it (start with
+[`QUICKSTART.md`](docs/operations/QUICKSTART.md)), [`docs/governance/`](docs/governance/) is
+how work is done on this repo, and [`docs/upgrades/`](docs/upgrades/README.md) is what
+changes between releases.
 
-Release staging guidance lives in `docs/runtime/RELEASE_STAGING.md`.
+Release staging guidance lives in `docs/governance/RELEASE_STAGING.md`.
 
-CI ownership guidance lives in `docs/runtime/CI_OWNERSHIP.md`.
+CI ownership guidance lives in `docs/governance/CI_OWNERSHIP.md`.
 
-Deployment topology guidance lives in `docs/runtime/DEPLOYMENT_PROFILES.md`.
+Deployment topology guidance lives in `docs/operations/DEPLOYMENT_PROFILES.md`.
 
 Manual GitHub branch-protection and review settings guidance lives in
-`docs/runtime/GITHUB_SETTINGS_CHECKLIST.md`.
+`docs/governance/GITHUB_SETTINGS_CHECKLIST.md`.
 

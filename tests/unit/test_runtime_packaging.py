@@ -34,7 +34,7 @@ def test_runtime_package_metadata_declares_console_entrypoints():
     }
     assert pyproject["project"]["urls"] == {
         "Homepage": "https://github.com/Masterplanner25/aindy-runtime",
-        "Documentation": "https://github.com/Masterplanner25/aindy-runtime/tree/main/docs/runtime",
+        "Documentation": "https://github.com/Masterplanner25/aindy-runtime/tree/main/docs",
         "Source": "https://github.com/Masterplanner25/aindy-runtime",
         "Issues": "https://github.com/Masterplanner25/aindy-runtime/issues",
     }
@@ -119,13 +119,13 @@ def test_runtime_build_artifacts_include_runtime_owned_assets(tmp_path):
         "Home-page: https://github.com/Masterplanner25/aindy-runtime" in metadata
         or "Project-URL: Homepage, https://github.com/Masterplanner25/aindy-runtime" in metadata
     )
-    assert "Project-URL: Documentation, https://github.com/Masterplanner25/aindy-runtime/tree/main/docs/runtime" in metadata
+    assert "Project-URL: Documentation, https://github.com/Masterplanner25/aindy-runtime/tree/main/docs" in metadata
 
     with tarfile.open(sdist_path, "r:gz") as sdist:
         sdist_names = set(sdist.getnames())
 
     sdist_root = f"aindy_runtime-{runtime_package_version}"
-    assert f"{sdist_root}/docs/runtime/DEPLOYMENT_PROFILES.md" in sdist_names
+    assert f"{sdist_root}/docs/operations/DEPLOYMENT_PROFILES.md" in sdist_names
     assert f"{sdist_root}/AINDY/runtime_plugins.json" in sdist_names
     assert f"{sdist_root}/AINDY/nodus/stdlib/.nodus/deps.json" in sdist_names
 

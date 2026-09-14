@@ -139,7 +139,7 @@ touching guest execution is zero. A is a legitimate answer and nodus explicitly 
 
 ## 5. Impact on `INVARIANTS.md`
 
-**No invariant is engaged.** Reviewed against `docs/platform/governance/INVARIANTS.md`: the
+**No invariant is engaged.** Reviewed against `docs/governance/INVARIANTS.md`: the
 invariants cover DB configuration (1, 2, 2.1, 17), the durable ledger (2.2), the memory graph
 (4–14, 27, 28), auth and rate limiting (21–23), and the startup schema guard (29). **None
 references the guest workflow store, and none can — the store is outside Postgres and outside the

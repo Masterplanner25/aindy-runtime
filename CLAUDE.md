@@ -5,7 +5,7 @@ laude.ai/code) when working with code in this repository.
 
 **This file is the authoritative agent-instruction surface for this repo.** Two companions:
 
-- **[`docs/platform/governance/AGENT_WORKING_RULES.md`](docs/platform/governance/AGENT_WORKING_RULES.md)**
+- **[`docs/governance/AGENT_WORKING_RULES.md`](docs/governance/AGENT_WORKING_RULES.md)**
   — the *collaboration* boundaries: what an agent may change without approval, what requires
   sign-off, and how to behave at a boundary it cannot resolve. This file covers what is true
   about the codebase; that one covers what you are permitted to do to it. **Read it before
@@ -450,9 +450,9 @@ Add the same pattern for any future exception type that callers are expected to 
 
 ---
 
-## `docs/runtime/` — required YAML frontmatter
+## `docs/{runtime,operations,governance,upgrades,handoffs,design}/` — required YAML frontmatter
 
-Every `*.md` file under `docs/runtime/` must start with a YAML frontmatter block containing all five required keys or CI fails (`Runtime Docs Validation` job):
+Every `*.md` file under `docs/runtime/`, `docs/operations/`, `docs/governance/`, `docs/upgrades/`, `docs/handoffs/` or `docs/design/` must start with a YAML frontmatter block containing all five required keys or CI fails (`Runtime Docs Validation` job):
 
 ```markdown
 ---
@@ -464,7 +464,7 @@ owner: "platform-team"
 ---
 ```
 
-**Missing any key → `Runtime Docs Validation` exits 1 and blocks merge.** This bit us when `SANDBOX_ESCAPE_AUDIT.md` was created without `api_version`/`last_verified` and `MACOS_CONTAINER_POLICY.md` had no frontmatter at all. Always add all five keys when creating a new doc in this directory.
+**Missing any key → `Runtime Docs Validation` exits 1 and blocks merge.** The map of which folder holds what is `docs/README.md`; `docs/archive/` is deliberately outside the check. This bit us when `SANDBOX_ESCAPE_AUDIT.md` was created without `api_version`/`last_verified` and `MACOS_CONTAINER_POLICY.md` had no frontmatter at all. Always add all five keys when creating a new doc in this directory.
 
 ---
 
@@ -882,7 +882,7 @@ next one is cut — `2.4.0` shipped with the `nodus-lang` pin that `f7f3555` had
 only the first is cheap to verify.
 
 The release *protocol* — which does not go stale either — is in the `PYPI-PUBLISH-1` line of the
-prefix registry and in `docs/runtime/RELEASE_CHECKLIST.md`.
+prefix registry and in `docs/governance/RELEASE_CHECKLIST.md`.
 
 **Standing decisions** (full record: `TECH_DEBT.md` → `DECISIONS-2026-08-01`):
 
@@ -923,7 +923,7 @@ record in `TECH_DEBT.md`.** If trimming an entry would lose something, the loss 
 that the text was never indexed anywhere — move it down first, then trim. Ratchet the cap
 downward in a dedicated pass; never raise it to accommodate a new entry.
 
-**★ Provenance tags → `docs/runtime/COMPARATIVE_RESEARCH_INDEX.md`.** A line tagged
+**★ Provenance tags → `docs/governance/COMPARATIVE_RESEARCH_INDEX.md`.** A line tagged
 *(Aider research)*, *(MAF research)*, *(Codex research)*, *(Claude Code research)*,
 *(CrewAI/Nodus research)*, *(GPT Engineer research)* or *(ADK research)* came from a comparative
 analysis in `C:\codev\<name> research\`, not from an audit of this codebase — a different class of
@@ -1146,7 +1146,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Connector + outbound contract (FR-1) | `docs/runtime/CONNECTOR_CONTRACT.md` |
 | **What the runtime is (category + what a consumer inherits)** | `docs/runtime/WHAT_THE_RUNTIME_IS.md` |
 | Runtime module map (tagged inventory) | `docs/runtime/RUNTIME_MODULE_MAP.md` |
-| **Comparative research index (8 systems: what each produced, what is settled, recurring errors)** | `docs/runtime/COMPARATIVE_RESEARCH_INDEX.md` |
+| **Comparative research index (8 systems: what each produced, what is settled, recurring errors)** | `docs/governance/COMPARATIVE_RESEARCH_INDEX.md` |
 | Runtime execution invariants | `docs/runtime/EXECUTION_INVARIANTS.md` |
 | **`ExecutionEnvironmentSpec` design record (EXEC-ENV-BIND-1, CLOSED — all four phases shipped)** | `docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md` |
 | Architecture risk (complexity/blast-radius) | `docs/runtime/ARCHITECTURE_RISK.md` |
@@ -1169,7 +1169,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | **Witness + baseline scope (SUBSTRATE-WITNESS-1, PERF-BASELINE-1) — both are consumer-shaped, not code-shaped** | `docs/design/WITNESS_AND_BASELINE_SCOPE.md` |
 | **CLI as an execution surface — scope (CLI-EXEC-SURFACE-1)** | `docs/design/CLI_EXECUTION_SURFACE_SCOPE.md` |
 | **Outcome-ambiguity design + the runtime answer (EFFECT-OUTCOME-UNKNOWN-1) — read §5.3, §7, §14 before acting** | `C:\dev\Coding Language\docs\design\v5\03-outcome-ambiguity.md` |
-| Cross-repo compatibility policy | `docs/runtime/CROSS_REPO_COMPATIBILITY.md` |
+| Cross-repo compatibility policy | `docs/governance/CROSS_REPO_COMPATIBILITY.md` |
 | Runtime → SDK contract | `docs/runtime/SDK_CONTRACT.md` |
 | Runtime → UI contract | `docs/runtime/UI_CONTRACT.md` |
 | **Outbound handoffs index — what this repo is asking of Nodus, with per-ask status** | `docs/handoffs/README.md` |
@@ -1178,7 +1178,7 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | **Guest workflow store declaration proposal (`ORCHESTRATOR-SPLIT-1` store 4) — APPROVED + implemented #611; (a)/(b) of the entry untouched** | `docs/design/WORKFLOW_STORE_DECLARATION_PROPOSAL.md` |
 | **Upgrade index — start here for any version-to-version move; one row per release, schema steps in bold** | `docs/upgrades/README.md` |
 | Latest app-team handoff | `docs/upgrades/APP_HANDOFF_v2.13.0.md` — pin bump + rebuild, no schema step, no required code change. **★ The one consumer-visible change: `sys.v1.flow.run` can return `partial` — only for a flow declaring a lenient-join fan-out group, which the app does not (checked: 0 `FanOutEdgeGroup`); its two `== "error"` sites are not syscall envelopes.** Three opt-in knobs, sized against the planner's `max_tokens=4096` (~5.2k reserved per call). **★ Verify a version by PRINTING `AINDY.__path__` beside the number, IN THE CONTAINER** — the 2.11.0 handoff's correction records the cwd trap that bit both repos; the app's dev venv is now on real site-packages (2.12.0 on 2026-09-13) |
-| Release verification checklist | `docs/runtime/RELEASE_CHECKLIST.md` |
+| Release verification checklist | `docs/governance/RELEASE_CHECKLIST.md` |
 | Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
 | **Soak harness — concurrency + metric readback** | `tests/integration/soak_harness.py`; guarded by `tests/unit/test_soak_harness.py` |
 | Unit-marker auto-default + its guard (CI-MARKER-1) | `tests/unit/conftest.py`, `tests/unit/test_ci_marker_default.py` |
@@ -1215,9 +1215,9 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | Sandbox escape results artifact | `tests/sandbox/sandbox_escape_results.json` |
 | Sandbox escape audit log (append-only) | `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` |
 | Sandbox escape posture function | `AINDY/platform_layer/sandbox_runner.py` — `sandbox_escape_test_posture()` |
-| macOS container sandbox policy | `docs/runtime/MACOS_CONTAINER_POLICY.md` |
+| macOS container sandbox policy | `docs/operations/MACOS_CONTAINER_POLICY.md` |
 | WSL2 / macOS backend detection | `AINDY/platform_layer/sandbox_runner.py` — `_detect_wsl2()` |
-| Cloud deployment targets + readiness | `docs/runtime/DEPLOYMENT_TARGETS.md` |
+| Cloud deployment targets + readiness | `docs/operations/DEPLOYMENT_TARGETS.md` |
 | Route ownership inventory | `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md` |
 | nginx plain HTTP config | `nginx/nginx.conf` |
 | nginx TLS config (Let's Encrypt) | `nginx/nginx.tls.conf` |

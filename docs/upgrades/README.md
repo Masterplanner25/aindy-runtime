@@ -41,23 +41,23 @@ loop, not a warning (`FR-14`, 2.1.0). Read the exit code — `0` done, `3` re-ru
 
 | Release | Date | Handoff | Schema step | Alembic head | Schema contract | Consumer pin moves? | What an upgrader must know |
 |---|---|---|---|---|---|---|---|
-| **1.11.0** | 2026-08-01 | [`APP_HANDOFF_v1.11.0.md`](APP_HANDOFF_v1.11.0.md) | none | `0013` | — | — | Last 1.x. Adds `POST /auth/password/change`. |
-| **2.0.0** | 2026-08-02 | [`APP_HANDOFF_v2.0.0.md`](APP_HANDOFF_v2.0.0.md) | **yes** — `users.is_verified`, `users.verified_at` | `0014` | `2026-08-02` | **yes** — `>=2.0,<3.0`; a `<2.0` pin will not resolve | **Major.** Auth rework: 202-no-token on register, verification, recovery routes. **Read 2.0.1 too — the backfill this handoff promised did not run on wheel installs.** |
+| **1.11.0** | 2026-08-01 | [`APP_HANDOFF_v1.11.0.md`](./APP_HANDOFF_v1.11.0.md) | none | `0013` | — | — | Last 1.x. Adds `POST /auth/password/change`. |
+| **2.0.0** | 2026-08-02 | [`APP_HANDOFF_v2.0.0.md`](./APP_HANDOFF_v2.0.0.md) | **yes** — `users.is_verified`, `users.verified_at` | `0014` | `2026-08-02` | **yes** — `>=2.0,<3.0`; a `<2.0` pin will not resolve | **Major.** Auth rework: 202-no-token on register, verification, recovery routes. **Read 2.0.1 too — the backfill this handoff promised did not run on wheel installs.** |
 | **2.0.1** | 2026-08-05 | *(no handoff — see `CHANGELOG.md` §2.0.1)* | corrects 2.0.0's | `0014` | `2026-08-02` | no | Patch that fixes the 2.0.0 upgrade path itself: `--reconcile` now performs the verified-backfill on every install shape. If you are on 2.0.0 you are exposed. |
-| **2.1.0** | 2026-08-15 | [`APP_HANDOFF_v2.1.0.md`](APP_HANDOFF_v2.1.0.md) | **yes** — agents metadata + owner-scoped name | `0016` (`0015`, `0016`) | `2026-08-15.1` | no | **`bootstrap-schema --reconcile` required.** This is the release where a bare `bootstrap-schema` crash-looped a live stack (`FR-14`); the handoff was corrected after. |
-| 2.2.0 | 2026-08-16 | [`APP_HANDOFF_v2.2.0.md`](APP_HANDOFF_v2.2.0.md) | none | `0016` | `2026-08-15.1` | no | New `scheduler.queued` event. Scope enforcement explicitly **not** in this release (its closing section says so). |
-| 2.3.0 | 2026-08-16 | [`APP_HANDOFF_v2.3.0.md`](APP_HANDOFF_v2.3.0.md) | none | `0016` | `2026-08-15.1` | no | **`bootstrap-schema` gains branchable exit codes** (`0`/`3`/`4`); the `Upgrade Path Guard` ships. |
-| 2.4.0 | 2026-08-17 | [`APP_HANDOFF_v2.4.0.md`](APP_HANDOFF_v2.4.0.md) | none | `0016` | `2026-08-15.1` | no | Shipped with a `nodus-lang` pin already fixed on `main` — which is why 2.4.1 exists. |
-| 2.4.1 | 2026-08-19 | [`APP_HANDOFF_v2.4.1.md`](APP_HANDOFF_v2.4.1.md) | none | `0016` | `2026-08-15.1` | no | Dependency bumps incl. **`Mako` 1.4 (Python floor 3.10)**. Plain `pip install`. |
-| **2.5.0** | 2026-08-19 | [`APP_HANDOFF_v2.5.0.md`](APP_HANDOFF_v2.5.0.md) | **yes** — `execution_units` environment spec columns | `0017` | `2026-08-19` | no | **`bootstrap-schema --reconcile` required.** Three execution defaults flipped on (warm pool, idempotency gate, child-context clamp). |
-| 2.6.0 | 2026-08-22 | [`APP_HANDOFF_v2.6.0.md`](APP_HANDOFF_v2.6.0.md) | none | `0017` | `2026-08-19` | no | Plain `pip install`. |
-| 2.7.0 | 2026-09-02 | [`APP_HANDOFF_v2.7.0.md`](APP_HANDOFF_v2.7.0.md) | none | `0017` | `2026-08-19` | no | Async scheduler dispatch on by default (`AINDY_ASYNC_SCHEDULER_DISPATCH=0` to revert); three nodus-lang security fixes. |
-| **2.8.0** | 2026-09-02 | [`APP_HANDOFF_v2.8.0.md`](APP_HANDOFF_v2.8.0.md) | **yes** — `flow_runs.graph_signature` | `0018` | `2026-09-02.1` | no | **`bootstrap-schema --reconcile` required.** Suspended runs are quarantined on graph-shape mismatch (`FLOW-GRAPH-SIGNATURE-1`). |
-| 2.9.0 | 2026-09-03 | [`APP_HANDOFF_v2.9.0.md`](APP_HANDOFF_v2.9.0.md) | none *(but 2.8.0's if skipped)* | `0018` | `2026-09-02.1` | no | Syscall envelope gains `partial` / `unknown` outcomes (`EFFECT-PARTIAL-1`); a consumer branching on `== "error"` should read §2. |
+| **2.1.0** | 2026-08-15 | [`APP_HANDOFF_v2.1.0.md`](./APP_HANDOFF_v2.1.0.md) | **yes** — agents metadata + owner-scoped name | `0016` (`0015`, `0016`) | `2026-08-15.1` | no | **`bootstrap-schema --reconcile` required.** This is the release where a bare `bootstrap-schema` crash-looped a live stack (`FR-14`); the handoff was corrected after. |
+| 2.2.0 | 2026-08-16 | [`APP_HANDOFF_v2.2.0.md`](./APP_HANDOFF_v2.2.0.md) | none | `0016` | `2026-08-15.1` | no | New `scheduler.queued` event. Scope enforcement explicitly **not** in this release (its closing section says so). |
+| 2.3.0 | 2026-08-16 | [`APP_HANDOFF_v2.3.0.md`](./APP_HANDOFF_v2.3.0.md) | none | `0016` | `2026-08-15.1` | no | **`bootstrap-schema` gains branchable exit codes** (`0`/`3`/`4`); the `Upgrade Path Guard` ships. |
+| 2.4.0 | 2026-08-17 | [`APP_HANDOFF_v2.4.0.md`](./APP_HANDOFF_v2.4.0.md) | none | `0016` | `2026-08-15.1` | no | Shipped with a `nodus-lang` pin already fixed on `main` — which is why 2.4.1 exists. |
+| 2.4.1 | 2026-08-19 | [`APP_HANDOFF_v2.4.1.md`](./APP_HANDOFF_v2.4.1.md) | none | `0016` | `2026-08-15.1` | no | Dependency bumps incl. **`Mako` 1.4 (Python floor 3.10)**. Plain `pip install`. |
+| **2.5.0** | 2026-08-19 | [`APP_HANDOFF_v2.5.0.md`](./APP_HANDOFF_v2.5.0.md) | **yes** — `execution_units` environment spec columns | `0017` | `2026-08-19` | no | **`bootstrap-schema --reconcile` required.** Three execution defaults flipped on (warm pool, idempotency gate, child-context clamp). |
+| 2.6.0 | 2026-08-22 | [`APP_HANDOFF_v2.6.0.md`](./APP_HANDOFF_v2.6.0.md) | none | `0017` | `2026-08-19` | no | Plain `pip install`. |
+| 2.7.0 | 2026-09-02 | [`APP_HANDOFF_v2.7.0.md`](./APP_HANDOFF_v2.7.0.md) | none | `0017` | `2026-08-19` | no | Async scheduler dispatch on by default (`AINDY_ASYNC_SCHEDULER_DISPATCH=0` to revert); three nodus-lang security fixes. |
+| **2.8.0** | 2026-09-02 | [`APP_HANDOFF_v2.8.0.md`](./APP_HANDOFF_v2.8.0.md) | **yes** — `flow_runs.graph_signature` | `0018` | `2026-09-02.1` | no | **`bootstrap-schema --reconcile` required.** Suspended runs are quarantined on graph-shape mismatch (`FLOW-GRAPH-SIGNATURE-1`). |
+| 2.9.0 | 2026-09-03 | [`APP_HANDOFF_v2.9.0.md`](./APP_HANDOFF_v2.9.0.md) | none *(but 2.8.0's if skipped)* | `0018` | `2026-09-02.1` | no | Syscall envelope gains `partial` / `unknown` outcomes (`EFFECT-PARTIAL-1`); a consumer branching on `== "error"` should read §2. |
 | 2.10.0 | 2026-09-09 | *(no handoff — see `CHANGELOG.md` §2.10.0)* | none | `0018` | `2026-09-02.1` | no | `pydantic-core` no longer pinned by the package; DeepSeek client metered. Plain `pip install`. |
-| 2.11.0 | 2026-09-10 | [`APP_HANDOFF_v2.11.0.md`](APP_HANDOFF_v2.11.0.md) | none *(routes you by origin version)* | `0018` | `2026-09-10` — **bumped with no DDL** (a vocabulary edit under `db/models/`, `AGENT-EVENT-VOCAB-1`); `bootstrap-schema` still exits `0` | app floor `>=2.9.0` | **Read §0 if you are below 2.9.0** — it routes you through the steps you skipped. Records the cwd version trap that bit both repos. |
-| 2.12.0 | 2026-09-12 | [`APP_HANDOFF_v2.12.0.md`](APP_HANDOFF_v2.12.0.md) | none | `0018` | `2026-09-10` | app floor `>=2.11.0` | FR-23/25/26/27/28 intake; strict at-most-once opt-in (`AINDY_SYSCALL_IDEMPOTENCY_STRICT`). Pin bump + rebuild. |
-| 2.13.0 | 2026-09-13 | [`APP_HANDOFF_v2.13.0.md`](APP_HANDOFF_v2.13.0.md) | none | `0018` | `2026-09-10` | app floor `>=2.12.0` | `sys.v1.flow.run` can return `partial` for lenient-join fan-out (opt-in, the app declares none). Token governor and run-scoped quota knobs, all default-off. |
+| 2.11.0 | 2026-09-10 | [`APP_HANDOFF_v2.11.0.md`](./APP_HANDOFF_v2.11.0.md) | none *(routes you by origin version)* | `0018` | `2026-09-10` — **bumped with no DDL** (a vocabulary edit under `db/models/`, `AGENT-EVENT-VOCAB-1`); `bootstrap-schema` still exits `0` | app floor `>=2.9.0` | **Read §0 if you are below 2.9.0** — it routes you through the steps you skipped. Records the cwd version trap that bit both repos. |
+| 2.12.0 | 2026-09-12 | [`APP_HANDOFF_v2.12.0.md`](./APP_HANDOFF_v2.12.0.md) | none | `0018` | `2026-09-10` | app floor `>=2.11.0` | FR-23/25/26/27/28 intake; strict at-most-once opt-in (`AINDY_SYSCALL_IDEMPOTENCY_STRICT`). Pin bump + rebuild. |
+| 2.13.0 | 2026-09-13 | [`APP_HANDOFF_v2.13.0.md`](./APP_HANDOFF_v2.13.0.md) | none | `0018` | `2026-09-10` | app floor `>=2.12.0` | `sys.v1.flow.run` can return `partial` for lenient-join fan-out (opt-in, the app declares none). Token governor and run-scoped quota knobs, all default-off. |
 
 Bold rows carry a schema step. **Between any two releases, count the bold rows you cross —
 that is how many times you owe `bootstrap-schema --reconcile`** (once is enough; it applies all
@@ -90,7 +90,7 @@ docker exec <api> aindy-runtime bootstrap-schema; echo "exit $?"
 One file per release, `APP_HANDOFF_v<major>.<minor>.<patch>.md`, in this folder, with the
 five-key frontmatter (`Runtime Docs Validation` checks this folder too). Then **add the row
 above** — the index is hand-maintained, and a release without a row is the same failure as a
-release without a handoff. `docs/runtime/RELEASE_CHECKLIST.md` §Release Notes Verification
+release without a handoff. `docs/governance/RELEASE_CHECKLIST.md` §Release Notes Verification
 carries the checklist: if runtime-owned schema changed, the handoff *says so and names the
 step*; if a route started enforcing a scope, the handoff *names the scopes*; and say which
 `Upgrade Path Guard` case applied — on a release with no schema change it passes trivially, so
@@ -111,4 +111,4 @@ was believed at release time is part of what these files are for.
   app-side name for the same release.
 - **Schema mechanics** — what `bootstrap-schema` does, `--reconcile`, the runtime's own Alembic
   version table — are `docs/runtime/SCHEMA_LIFECYCLE.md`. Cross-repo version policy is
-  `docs/runtime/CROSS_REPO_COMPATIBILITY.md`.
+  `docs/governance/CROSS_REPO_COMPATIBILITY.md`.

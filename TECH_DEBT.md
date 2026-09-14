@@ -1018,7 +1018,7 @@ present and git-tracked with frontmatter:
   `docs/tutorials/{index,01-memory-driven-workflow,02-event-driven-automation,03-scheduled-execution}.md`
   (the "four tutorials" = 3 + index; the pre-split archive itself has no 4th/Nodus tutorial —
   WAIT/RESUME is covered as the Nodus `event.wait()` builtin in tutorial 2).
-- **Runtime half of `INVARIANTS.md`:** authored at `docs/platform/governance/INVARIANTS.md`
+- **Runtime half of `INVARIANTS.md`:** authored at `docs/governance/INVARIANTS.md`
   ("runtime-owned half" — PostgreSQL/UTC/session-isolation/memory-graph/embedding/schema-guard
   invariants, enforcement sites re-verified), cross-linked to the app-owned half in
   `aindy-apps-monolith` (DOCS-BUCKET-A-1 residual 4).
@@ -2390,7 +2390,7 @@ Updated static platform matrix entries for Windows and macOS: both now show
 `linux_container_backend_available=True` (Docker Desktop on both platforms supports Linux
 containers). Static matrix now correctly reports `no_new_privileges`, `drop_all_capabilities`,
 `pids_limit` as available hardening controls for both platforms.
-Policy document created: `docs/runtime/MACOS_CONTAINER_POLICY.md`. Records what IS and is
+Policy document created: `docs/operations/MACOS_CONTAINER_POLICY.md`. Records what IS and is
 NOT claimed (seccomp/AppArmor/SELinux not claimed — not tested), assurance tier
 (container-grade, not strong-sandbox-vm).
 2 new unit tests in `tests/unit/test_sandbox_runner.py` (64 total).
@@ -2411,7 +2411,7 @@ last_run, host_platform, coverage, gaps, operator_note). Returns `"not_run"` gra
 when artifact is absent (production install without tests/).
 
 **Phase 4 (2026-06-05) — Release gate: COMPLETE**
-Step 16 added to `docs/runtime/RELEASE_CHECKLIST.md`. Gate condition:
+Step 16 added to `docs/governance/RELEASE_CHECKLIST.md`. Gate condition:
 `sandbox_escape_test_posture()["posture"] == "all_pass"`. Skips acceptable; FAILs block.
 Audit trail instruction added: append to SANDBOX_ESCAPE_AUDIT.md after each pre-release run.
 
@@ -2649,7 +2649,7 @@ Implemented:
   with mandatory comment documentation.
 - `.github/dependabot.yml` — enabled for `pip` and `github-actions` ecosystems,
   weekly cadence. Secondary signal for transitive deps and stale SHA pins.
-- `docs/runtime/SECURITY_POLICY.md` — new file. Documents SLA (Critical: 7 days,
+- `docs/governance/SECURITY_POLICY.md` — new file. Documents SLA (Critical: 7 days,
   High: 14 days, Medium: next minor, Low: next major), exemption process, and
   accepted-findings register.
 
@@ -2735,7 +2735,7 @@ entry rather than re-disabling the gate.
 `prometheus-fastapi-instrumentator` 7.1.0 → 8.0.0 (7.x required `starlette<1.0.0`; 8.0.0
 requires `starlette>=1.0.0,<2.0.0`). Pins updated in both `AINDY/requirements.txt` and
 `pyproject.toml`. `--ignore-vuln PYSEC-2026-161` removed from `security-audit.yml`.
-PYSEC-2026-161 Accepted Findings entry removed from `docs/runtime/SECURITY_POLICY.md`.
+PYSEC-2026-161 Accepted Findings entry removed from `docs/governance/SECURITY_POLICY.md`.
 Unit tests pass; no API-level breakage detected (direct starlette usage in the codebase
 is limited to `starlette.exceptions.HTTPException` — a stable import).
 
@@ -2931,7 +2931,7 @@ Candidate platforms (in order of fit):
 Required env vars at deploy time: `DATABASE_URL`, `SECRET_KEY`, `OPENAI_API_KEY`,
 `AINDY_BOOTSTRAP_ADMIN_EMAIL`, optionally `AINDY_REDIS_URL`.
 
-Source: `docs/runtime/DEPLOYMENT_TARGETS.md`.
+Source: `docs/operations/DEPLOYMENT_TARGETS.md`.
 
 **Reopen trigger:** When first cloud deployment is planned.
 
@@ -2982,7 +2982,7 @@ deliberate work that begins only when the first multi-tenant customer is ready.
 is the live one. **LOCAL-2** (a way to print the version without starting uvicorn) is satisfied by
 `aindy-runtime --version`.
 
-Source: `docs/runtime/DEPLOYMENT_TARGETS.md`; findings from `docs/archive/LOCAL_AND_CLOUD_AUDIT.md`
+Source: `docs/operations/DEPLOYMENT_TARGETS.md`; findings from `docs/archive/LOCAL_AND_CLOUD_AUDIT.md`
 (archived 2026-09-13). Related: `BILLING-1` (billing identity).
 
 **Reopen trigger:** When first multi-tenant operator onboards.
@@ -6124,7 +6124,7 @@ The Bucket A migration relocated runtime-owned docs that were left behind in the
 pre-split monolith archive (`C:\dev\masterplan-infiniteweave-monday-node-2025-0411\docs`)
 into this repo, mirroring the archive's category dirs:
 
-- `docs/architecture/MODEL_OWNERSHIP_POLICY.md`
+- `docs/governance/MODEL_OWNERSHIP_POLICY.md`
 - `docs/platform/governance/{AGENT_WORKING_RULES,ERROR_HANDLING_POLICY,CHANGELOG}.md`
 - `docs/tutorials/{index,01-memory-driven-workflow,02-event-driven-automation,03-scheduled-execution}.md`
 
@@ -6136,7 +6136,7 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
 **Residuals / deferred work:**
 
 1. **`DATA_MODEL_MAP.md` Tier-2 surgery — DONE 2026-06-28.** Landed at
-   `docs/architecture/DATA_MODEL_MAP.md`, runtime-scoped ("surgery only,
+   `docs/runtime/DATA_MODEL_MAP.md`, runtime-scoped ("surgery only,
    faithful"). The archive's ~902-line **combined** pre-split schema was
    collapsed: app-domain tables (`freelance`, `masterplan`, `task`, `social`,
    `author`, `leadgen`, `research`, `arm`, `rippletrace`, analytics/`metrics_*`,
@@ -6192,7 +6192,7 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
    remaining unverified tokens in the migrated docs.
 
 4. **Pre-split governance docs.** `INVARIANTS.md` has been **split and authored**:
-   the runtime-owned half is now `docs/platform/governance/INVARIANTS.md` (this
+   the runtime-owned half is now `docs/governance/INVARIANTS.md` (this
    repo; PostgreSQL/UTC/memory-graph/auth/startup invariants, enforcement sites
    re-verified against the current tree), companion to the app-owned half in
    `aindy-apps-monolith`. References that previously annotated it as "not migrated"
@@ -6203,7 +6203,7 @@ within `AINDY/`; app-owned modules repointed to `aindy-apps-monolith` with notes
    audit trail; its hundreds of historical path references were intentionally
    **not** rewritten (rewriting would falsify the record). A scope banner marks it
    as pre-split history; current runtime history lives in
-   `docs/runtime/DOCSET_CHANGELOG.md`.
+   `docs/governance/DOCSET_CHANGELOG.md`.
 
 6. **Tutorial surface drift** (validated against the live runtime, annotated with
    **Runtime note** callouts, examples left intact so worked outputs stay

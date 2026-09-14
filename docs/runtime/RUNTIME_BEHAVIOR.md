@@ -83,8 +83,8 @@ This document describes the current runtime behavior of the FastAPI backend as i
   failure by itself, but it remains visible in `/ready` and `/api/version`.
 - In production, startup now fails closed if external Python override is enabled
   without `AINDY_ACK_UNSANDBOXED_EXTERNAL_PYTHON=true`.
-- See `docs/runtime/DEGRADED_RUNTIME_MODES.md` for the current degraded-mode contract.
-- See `docs/runtime/DEPLOYMENT_PROFILES.md` for the supported deployment topology contract.
+- See `docs/operations/DEGRADED_RUNTIME_MODES.md` for the current degraded-mode contract.
+- See `docs/operations/DEPLOYMENT_PROFILES.md` for the supported deployment topology contract.
 
 ## 3.1 Runtime-Owned Schema Contract
 - The extracted runtime no longer depends on repo-root `alembic.ini` or
@@ -180,7 +180,7 @@ This document describes the current runtime behavior of the FastAPI backend as i
   - `execution.completed` or `execution.failed` as the canonical execution ledger events
 - Async execution has two transport modes, selected by `EXECUTION_MODE`:
   - `thread` (default for dev) - `ExecutionDispatcher` submits to an in-process `ThreadPoolExecutor`; no external dependencies. Hard cap: 100 concurrent jobs. `docker-compose.prod.yml` overrides this to `distributed` — thread mode is dev-only.
-  - `distributed` - `ExecutionDispatcher` enqueues a `QueueJobPayload` to `core/distributed_queue.py`; one or more `worker/worker_loop.py` processes consume the queue. Trace context (`trace_id`, `eu_id`) is serialised into the payload and restored in the worker before execution, preserving the full syscall trace chain across the process boundary. Retry backoff, visibility timeout recovery, and a Dead Letter Queue are included; see [`DEPLOYMENT_PROFILES.md`](DEPLOYMENT_PROFILES.md).
+  - `distributed` - `ExecutionDispatcher` enqueues a `QueueJobPayload` to `core/distributed_queue.py`; one or more `worker/worker_loop.py` processes consume the queue. Trace context (`trace_id`, `eu_id`) is serialised into the payload and restored in the worker before execution, preserving the full syscall trace chain across the process boundary. Retry backoff, visibility timeout recovery, and a Dead Letter Queue are included; see [`DEPLOYMENT_PROFILES.md`](../operations/DEPLOYMENT_PROFILES.md).
 - When the thread-mode queue is full (`QueueSaturatedError`), the autonomous trigger path (`submit_autonomous_async_job`) converts the submission to a 60-second deferred job instead of returning HTTP 503. Demand peaks are absorbed without surfacing errors to callers.
 - High-impact execution outcomes can now auto-create Memory Bridge records with causal metadata (`source_event_id`, `root_event_id`, `causal_depth`, `impact_score`, `memory_type`).
 - Embedding generation for newly captured memory is now asynchronous. Request paths persist the memory first with `embedding_status=pending`, enqueue background embedding work, and retrieval can fall back to non-embedding search while vectors are unavailable.
