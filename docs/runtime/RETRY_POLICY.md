@@ -1,6 +1,6 @@
 ---
 title: "Retry Policy"
-last_verified: "2026-08-13"
+last_verified: "2026-09-13"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -150,22 +150,35 @@ classifier, resolved one layer earlier.
 
 ```text
 _execute_job_inline(log_id, task_name, payload)
-  log.attempt_count += 1          ← incremented BEFORE handler call
+  attempt_no = log.attempt_count + 1      ← numbered BEFORE anything can fail
+  handler = _JOB_REGISTRY.get(task_name)
+    None → raise AsyncJobHandlerNotRegistered   ← TERMINAL, never retried
+  log.attempt_count = attempt_no
   handler(payload, db)
     success → log.status = "success"
     exception →
-      if log.attempt_count < log.max_attempts:   ← retry check
-          log.status = "pending"
-          db.commit()
-          _get_executor().submit(_execute_job, log_id, ...)   ← reschedule
-          return
+      db.rollback(); log.attempt_count = max(log.attempt_count, attempt_no)  ← the attempt counts
+      if retryable and log.attempt_count < log.max_attempts:   ← retry check
+          log.status = "pending"; db.commit()
+          _schedule_job_retry(...)     ← thread mode: threading.Timer(_compute_retry_delay(log_id))
+          return                          distributed: enqueue_delayed via the dispatcher
       else:
           log.status = "failed"   ← terminal
 ```
 
 `log.max_attempts` is set at submission time (`submit_async_job(max_attempts=1)` default).
-With the current default of 1, `attempt_count >= max_attempts` after the first try — no
-behavior change. When a caller passes `max_attempts > 1`, retries fire automatically.
+When a caller passes `max_attempts > 1`, retries fire automatically — **after an exponential
+backoff** (`AINDY_RETRY_BACKOFF_BASE_MS`, default 1000, doubling per attempt, capped by
+`AINDY_RETRY_BACKOFF_MAX_MS`, default 30000; the same curve the distributed path always had).
+
+> **Corrected 2026-09-13 (`ASYNC-JOB-UNREGISTERED-STORM-1`).** The diagram above used to be
+> wrong in three ways that compounded into a live incident: the increment came AFTER the
+> handler lookup, so an unregistered handler raised at attempt 0 and `0 < 1` retried forever;
+> the increment was only committed as a side effect of the started-event emit and the except
+> branch's `rollback()` discarded it otherwise; and the thread-mode reschedule was an immediate
+> executor submit with no delay. Measured: ~87 re-dispatches per second per job. An
+> unregistered handler is now a distinct terminal class (`AsyncJobHandlerNotRegistered`,
+> a `RuntimeError` subclass); the attempt is restored after the rollback; the retry waits.
 
 ### Nodus scheduled jobs — full data flow
 
@@ -261,7 +274,7 @@ Every real retry loop is hand-rolled and reads exactly two fields, `max_attempts
 |---|---|---|
 | `flow_engine/runner_steps.py:266` | `max_attempts` | no |
 | `nodus_adapter.py:262` | `max_attempts`, `high_risk_immediate_fail` | no |
-| `async_job_service.py:1283` | `log.max_attempts` (from the DB row) | no — reschedules |
+| `async_job_service.py` `_execute_job_inline` | `log.max_attempts` (from the DB row) | **yes since 2026-09-13** — reschedules after `_compute_retry_delay` (a `Timer` in thread mode, `enqueue_delayed` distributed); an unregistered handler is terminal |
 | `agent_plan_compiler.py:111` | `max_attempts` baked into generated Nodus | no |
 
 **Consequence for anyone changing this.** The old instruction — *"when a caller wants backoff it
