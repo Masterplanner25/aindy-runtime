@@ -1121,6 +1121,65 @@ def _emit_async_job_score(
         logger.debug("[AsyncJob] score emit skipped for %s", log_id, exc_info=True)
 
 
+class AsyncJobHandlerNotRegistered(RuntimeError):
+    """The job names a handler no loaded process registered.
+
+    ASYNC-JOB-UNREGISTERED-STORM-1 — this is NOT retryable. Nothing about a retry changes which
+    handlers are registered in this process; the trigger is ordinary (a runtime booted without
+    its app, a renamed handler, a rolled-back deploy) and the row must fail on the spot so an
+    operator sees one `failed` row with this message, not a WARNING 87 times a second.
+    """
+
+
+def _is_terminal_job_error(exc: BaseException) -> bool:
+    """Errors a retry cannot fix. `RETRY-CLASSIFY-1` classifies by substring elsewhere; this
+    path never classified at all — an unregistered handler was re-dispatched forever."""
+    return isinstance(exc, AsyncJobHandlerNotRegistered)
+
+
+def _schedule_job_retry(log_id: str, task_name: str, payload: dict[str, Any], user_id) -> None:
+    """Re-dispatch a failed attempt AFTER the dispatcher's exponential backoff.
+
+    ASYNC-JOB-UNREGISTERED-STORM-1 — the thread-mode retry used to call `_dispatch` inline,
+    which submits to the executor immediately: no delay, no `scheduled_for`, so a failing job
+    with retries left re-ran as fast as the thread pool could turn it around (~87/s measured).
+    The distributed path already honoured `_compute_retry_delay` via `enqueue_delayed`; this
+    gives the thread path the same curve (`AINDY_RETRY_BACKOFF_BASE_MS`, default 1000, doubling
+    per attempt, capped by `AINDY_RETRY_BACKOFF_MAX_MS`). A daemon Timer, one per pending
+    retry, bounded by `max_attempts`.
+    """
+    from AINDY.core.execution_dispatcher import (
+        JOB_DISPATCH_STUB,
+        _compute_retry_delay,
+        dispatch as _dispatch,
+    )
+
+    def _fire() -> None:
+        _dispatch(
+            JOB_DISPATCH_STUB,
+            handler_fn=lambda: _execute_job(log_id, task_name, payload),
+            context={
+                "log_id": log_id,
+                "retry": True,
+                "user_id": str(user_id) if user_id is not None else None,
+            },
+        )
+
+    if _distributed_execution_enabled():
+        _fire()  # the distributed enqueue applies the backoff itself (is_retry → enqueue_delayed)
+        return
+    delay_s = _compute_retry_delay(str(log_id))
+    if delay_s <= 0:
+        _fire()
+        return
+    import threading
+
+    logger.info("[AsyncJob] %s retry of %s in %.1fs", task_name, log_id, delay_s)
+    timer = threading.Timer(delay_s, _fire)
+    timer.daemon = True
+    timer.start()
+
+
 def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]) -> None:
     JobLog = _job_log_model()
     trace_token = set_trace_id(str(log_id))
@@ -1141,6 +1200,7 @@ def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]
     except Exception:
         async_ctx_token = None
     parent_token = set_parent_event_id(_ensure_root_execution_event_id(db, str(log_id)))
+    attempt_no = 0
     try:
         log = db.query(JobLog).filter(JobLog.id == log_id).first()
         if not log:
@@ -1148,13 +1208,23 @@ def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]
         if not log:
             return
 
+        # ★ The attempt is numbered BEFORE anything can fail. `log.attempt_count += 1` used to
+        #   come after the handler lookup, so an unregistered handler raised at attempt 0 —
+        #   and the except branch below saw `0 < max_attempts`, set `pending`, and re-dispatched
+        #   immediately, forever. It was also only ever COMMITTED by a side effect (the
+        #   started-event emit), and the except branch's `db.rollback()` discarded it whenever
+        #   that emit did not run. `attempt_no` is what this attempt IS; the except branch
+        #   restores it after the rollback.
+        attempt_no = int(log.attempt_count or 0) + 1
         handler = _JOB_REGISTRY.get(task_name)
         if handler is None:
-            raise RuntimeError(f"Async job handler '{task_name}' is not registered")
+            raise AsyncJobHandlerNotRegistered(
+                f"Async job handler '{task_name}' is not registered in this process"
+            )
         queued_event_exists = _has_existing_execution_started(db, str(log_id))
         log.status = "running"
         log.started_at = datetime.now(timezone.utc)
-        log.attempt_count += 1
+        log.attempt_count = attempt_no
         try:
             from AINDY.core.execution_unit_service import ExecutionUnitService
             _eu = ExecutionUnitService(db).get_by_source("job_log", log_id)
@@ -1302,30 +1372,29 @@ def _execute_job_inline(db, log_id: str, task_name: str, payload: dict[str, Any]
         db.rollback()
         log = db.query(JobLog).filter(JobLog.id == log_id).first()
         if log:
-            # REPLACED: implicit always-fail Ã¢â€ ' consult retry policy via log.max_attempts
-            # log.max_attempts is set at submission time (default 1, matching ASYNC_JOB_DEFAULT).
-            # When a caller supplies max_attempts > 1 at submit, the retry infrastructure
-            # here will honour it without any further changes.
-            if log.attempt_count < log.max_attempts:
+            # The rollback above may have discarded this attempt's increment (it is only
+            # committed as a side effect of the started-event emit). This attempt happened;
+            # it counts — ASYNC-JOB-UNREGISTERED-STORM-1.
+            if int(log.attempt_count or 0) < attempt_no:
+                log.attempt_count = attempt_no
+            # log.max_attempts is set at submission time (default 1). A terminal error is
+            # never retried, whatever the budget: a retry cannot register a handler.
+            retryable = not _is_terminal_job_error(exc)
+            if retryable and log.attempt_count < log.max_attempts:
                 log.status = "pending"
                 log.error_message = str(exc)
                 db.commit()
                 logger.warning(
-                    "[AsyncJob] %s attempt %d/%d failed -- rescheduling: %s",
+                    "[AsyncJob] %s attempt %d/%d failed -- rescheduling with backoff: %s",
                     task_name, log.attempt_count, log.max_attempts, exc,
                 )
-                # Removed: direct _get_executor().submit() call.
-                from AINDY.core.execution_dispatcher import JOB_DISPATCH_STUB, dispatch as _dispatch
-                _dispatch(
-                    JOB_DISPATCH_STUB,
-                    handler_fn=lambda: _execute_job(log_id, task_name, payload),
-                    context={
-                        "log_id": log_id,
-                        "retry": True,
-                        "user_id": str(getattr(log, "user_id", None)) if getattr(log, "user_id", None) is not None else None,
-                    },
-                )
+                _schedule_job_retry(log_id, task_name, payload, getattr(log, "user_id", None))
                 return
+            if not retryable:
+                logger.warning(
+                    "[AsyncJob] %s attempt %d failed TERMINALLY (not retried): %s",
+                    task_name, log.attempt_count, exc,
+                )
 
             failure_response = execution_error(str(exc), [], str(log_id))
             log.status = "failed"
