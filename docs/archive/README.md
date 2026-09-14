@@ -296,3 +296,18 @@ those were written; replaced with what happened.
 
 **Not archived, and why:** `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (live log). The
 `*_SCOPE.md` / `*_DESIGN.md` / `*_PROPOSAL.md` cluster was not part of this pass.
+
+## `docs/runtime/` — the trackers, archived 2026-09-13
+
+| Document | Written | What it was | Why it can go |
+|---|---|---|---|
+| [`TEST_GAP_BACKLOG.md`](TEST_GAP_BACKLOG.md) | 2026-05-31 | Ten prioritised test gaps (`TG-001..010`) against the execution invariants: startup sequencing, the syscall not-ready window, orphaned-wait recovery, profile-aware readiness under dependency loss, correlation/duplicate wakeup, tenant isolation, health-vs-readiness, profile smokes, artifact smokes, security-posture regression. | **Every gap has a test file today**, checked by name and then by content: `test_startup_readiness.py`, `test_syscall_not_ready.py`, `test_rehydration_paths.py` / `test_agent_approve_watchdog.py`, `test_partial_infrastructure_readiness.py` / `test_runtime_degraded_modes.py`, `test_scheduler_wait_resume.py` (`…correlation_id_filter`), `test_cross_tenant_*` across six files, `test_health_liveness_signal.py`, `test_deployment_profiles.py`, `test_runtime_packaging.py`, `test_security_isolation.py` / `test_sandbox_verification_posture.py`. The 90-day checklist ticked the P0 four on 2026-06-04. **One sub-bullet not verifiable by a dedicated test:** TG-006's *resumed execution tenant continuity* — the resume tests set a `tenant_id` but none asserts it survives the resume. Not filed; noted here. |
+| [`TEST_GAP_WORK_ITEMS.md`](TEST_GAP_WORK_ITEMS.md) | 2026-05-31 | The same ten gaps as issue-shaped work items (`WG-001..010`). | Mirror of the backlog; nothing cited it but the backlog. |
+| [`OPEN_QUESTIONS.md`](OPEN_QUESTIONS.md) | 2026-05-31; last review 2026-06-06 | Eleven open questions about runtime scope, stable surfaces, extension posture, the supported distributed profile, security posture, readiness blockers, test assurance, cross-repo breakage, deployment split, route ownership, condition codes — each with a resolution criterion. | **All eleven resolved or substantially resolved by 2026-06-06, per the document's own status lines**, and the four residuals the "substantially" ones named are closed too: `AGENT-EVAL-001` / `AGENT-API-001` (closed 06-03 — *before* the 06-05 review that listed them as open), the cross-profile readiness-blocker table (`ReadinessBlockerCode`, `DEGRADED_MODE_MATRIX.md` §113), coverage floors (declined — see the 90-day checklist's row above), the undefined `ROUTES` groups (`API-MODULE-DRIFT-1`, closed 06-03). Nothing has been added since June; the practice became *an open question lives with the contract it concerns*. |
+
+**Not archived: `DECISION_LOG.md`.** Its nine founding decisions are still accepted and still
+cited. But its *Future Decisions To Record* list had five items, all resolved by 06-06, none
+added — decisions since August were recorded in `TECH_DEBT.md` and `CLAUDE.md` instead. Fixed in
+place: each item now says where it landed, and the log states plainly that there are three
+places a decision can be recorded and that it holds only the founding ones. Consolidating the
+three is a docset decision not taken here.

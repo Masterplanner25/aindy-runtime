@@ -12,7 +12,7 @@ operator, or app-layer extraction candidate. Its purpose is to make ownership
 intentional rather than accidental — route existence does not imply mature runtime
 ownership.
 
-This answers Open Question 10 from `OPEN_QUESTIONS.md`.
+This answers Open Question 10 from `../archive/OPEN_QUESTIONS.md` (resolved 2026-06-05; the tracker is archived).
 
 ---
 
