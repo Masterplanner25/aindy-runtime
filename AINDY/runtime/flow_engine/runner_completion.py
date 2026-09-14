@@ -68,6 +68,7 @@ def maybe_finalize_completion(
             )
 
         runner._capture_flow_completion(run, state)
+        release_slot_on_completion(runner, "success")
         run.status = "success"
         run.state = _json_safe(state)
         run.waiting_for = None
@@ -152,6 +153,30 @@ def _superstep_partial_units(state: dict) -> list[dict]:
     return units
 
 
+def release_slot_on_completion(runner, outcome: str) -> None:
+    """ACTIVE-COUNT-WAIT-LEAK-1 — give the tenant slot back, once, on a terminal outcome.
+
+    Releases only a slot THIS runner holds (`_holds_slot`, set by `_check_resources` when it
+    acquired). A runner that never acquired — refused admission, or failed before its first
+    node — must not decrement a slot another run is using: an under-count is over-admission.
+    Unconditional on `user_id` / `workflow_type`, unlike the memory-capture hook it used to
+    live inside; a run with no workflow type still took a slot and must still return it.
+    """
+    if not getattr(runner, "_holds_slot", False):
+        return
+    runner._holds_slot = False
+    try:
+        from AINDY.kernel.resource_manager import get_resource_manager as get_rm
+
+        eu_id = getattr(runner, "_eu_id", None)
+        get_rm().mark_completed(
+            getattr(runner, "_tenant_id", str(runner.user_id or "")),
+            str(eu_id) if eu_id else None,
+        )
+    except Exception as exc:
+        logger.debug("[EU] resource_manager.mark_completed(%s) skipped: %s", outcome, exc)
+
+
 def capture_flow_completion(runner, run, state: dict) -> None:
     if not runner.user_id or not runner.workflow_type:
         return
@@ -204,18 +229,10 @@ def capture_flow_completion(runner, run, state: dict) -> None:
                 eu = eus.get_by_source("flow_run", run.id)
                 if eu:
                     eus.update_status(eu.id, "completed")
-            try:
-                from AINDY.kernel.resource_manager import get_resource_manager as get_rm
-
-                get_rm().mark_completed(
-                    getattr(runner, "_tenant_id", str(runner.user_id or "")),
-                    str(eu_id) if eu_id else None,
-                )
-            except Exception as exc:
-                logger.debug(
-                    "[EU] resource_manager.mark_completed(success) skipped: %s",
-                    exc,
-                )
+            # ACTIVE-COUNT-WAIT-LEAK-1 — the slot release used to live HERE, inside a function
+            # that returns early when `user_id` or `workflow_type` is unset and is wrapped in a
+            # memory-capture try/except. It is now `release_slot_on_completion`, called
+            # unconditionally by `maybe_finalize_completion`.
         except Exception as exc:
             logger.warning("[EU] flow completion hook - non-fatal | error=%s", exc)
     except Exception as exc:

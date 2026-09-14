@@ -12781,9 +12781,37 @@ under `DEPLOY-TARGET-2` (shared event channel) — this is that finding, already
 
 ## ACTIVE-COUNT-WAIT-LEAK-1 — a waiting run holds a tenant concurrency slot forever; five parked waits lock the tenant out of every route
 
-**Status: OPEN (P1).** Filed 2026-09-13 from a live run: after four waiting runs accumulated, a
-read-only `GET /platform/flows/runs/{id}` returned **429 "Too many concurrent executions for this
-tenant"**.
+**Status: CLOSED (2026-09-13, PR #656).** Filed the same day from a live run: after four waiting
+runs accumulated, a read-only `GET /platform/flows/runs/{id}` returned **429 "Too many concurrent
+executions for this tenant"**.
+
+**What was done — a run holds a slot exactly while it is executing.** Acquisition moved from
+`_initialize_execution_unit` (unconditional, at start) to `_check_resources` at node entry:
+`can_execute` → `mark_started`, once, only while the runner holds nothing (`_holds_slot`), the
+same for a fresh start and a resume. The WAIT branch calls `_release_slot_on_wait` →
+`ResourceManager.mark_waiting` (new: releases the slot and fires the capacity event like
+`mark_completed`, but keeps the UsageSnapshot — the run comes back and keeps accruing) and parks
+the run's own EU `waiting` with its condition. Completion/failure release through
+`release_slot_on_completion`, guarded by `_holds_slot`.
+
+**★ Two more things the fix found, both latent:** (1) `can_execute` was re-asked at EVERY node
+with the run's own slot in the count — `QUOTA-ACCRUAL-ORPHAN-1`'s shape at the flow runner — so
+at exactly the cap the last-admitted run parked itself on `resource_available` while holding the
+slot it was refused for; a refusal now parks holding nothing. (2) The success-path
+`mark_completed` lived INSIDE `capture_flow_completion`, which returns early when `user_id` or
+`workflow_type` is unset and is wrapped in the memory-capture try/except — a run with no workflow
+type took a slot and never returned it. Now unconditional. **★ A resumed runner is a fresh
+object with no `_eu_id`/`_tenant_id`; it now recovers both from the run, and moves a `waiting`
+EU through `resume_execution_unit` if the scheduler callback did not (idempotent).**
+
+**Tests:** `tests/unit/test_active_count_wait_leak.py` — real runner on SQLite with a fresh
+`ResourceManager` (cap 2) and `is_testing` patched False on the settings class (`can_execute`
+short-circuits under it — a test that forgets this exercises `return True, None`): cap+2 parked
+runs → active 0, admission open, each node saw exactly 1 from inside; resume → 1 during, 0
+after; a tenant at the cap parks on `resource_available` holding nothing and its node does not
+run; failure releases; the guard; `mark_waiting` keeps the snapshot; the flow EU is `waiting`.
+Mutation-checked 4/4. **Not re-run live.** The 105 stuck `job|route` / `flow|route` EU rows are
+NOT this (routes, not flow runs) — still undiagnosed.
 
 **Where.** `PersistentFlowRunner` calls `resource_manager.mark_started(tenant, eu)` when the run
 starts (`runner.py:264`); `mark_completed` is called from `runner_completion.py:210` and

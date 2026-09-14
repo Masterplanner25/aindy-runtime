@@ -1,7 +1,7 @@
 ---
 title: "Foundational Pattern: The Infinity Algorithm"
 api_version: "1.0"
-last_verified: "2026-05-31"
+last_verified: "2026-09-13"
 status: current
 owner: "platform-team"
 ---
@@ -149,9 +149,12 @@ Everything that causes the cycle to run again:
 - `EventBus` subscriber loop receives Redis pub/sub messages from any instance
   and calls `SchedulerEngine.notify_event()`, which re-enqueues all waiting
   runs that match the event type and correlation_id.
-- `ResourceManager.mark_completed()` publishes `resource_available` when a
-  tenant's concurrency count drops from at-limit to below-limit, immediately
-  re-enqueuing any runs waiting on that event.
+- `ResourceManager.mark_completed()` — and, since 2026-09-13, `mark_waiting()`,
+  which a flow WAIT calls (`ACTIVE-COUNT-WAIT-LEAK-1`) — publishes
+  `resource_available` when a tenant's concurrency count drops from at-limit
+  to below-limit, immediately re-enqueuing any runs waiting on that event.
+  A parked run holds no slot; it re-acquires through `can_execute` +
+  `mark_started` at its first node after resume.
 - `SchedulerEngine.tick_time_waits()` fires time-based wait entries whose
   `trigger_at` has elapsed.
 

@@ -5,6 +5,8 @@ from AINDY.runtime.flow_engine.runner_failure import fail_execution
 from AINDY.runtime.flow_engine.runner_steps import (
     _advance_to_next_node,
     _check_resources,
+    _park_execution_unit,
+    _release_slot_on_wait,
     _claim_waiting_run,
     _execute_current_node,
     _handle_node_status,
@@ -61,6 +63,8 @@ class PersistentFlowRunner:
     _claim_waiting_run = _claim_waiting_run
     _execute_current_node = _execute_current_node
     _check_resources = _check_resources
+    _park_execution_unit = _park_execution_unit
+    _release_slot_on_wait = _release_slot_on_wait
     _queue_node_failure = _queue_node_failure
     _record_resource_usage = _record_resource_usage
     _handle_node_status = _handle_node_status
@@ -258,12 +262,12 @@ class PersistentFlowRunner:
                 )
             self._eu_id = eu.id
             self._tenant_id = tenant_id
-            try:
-                from AINDY.kernel.resource_manager import get_resource_manager
-
-                get_resource_manager().mark_started(tenant_id, str(self._eu_id))
-            except Exception as exc:
-                logger.debug("[EU] resource_manager.mark_started skipped: %s", exc)
+            # ACTIVE-COUNT-WAIT-LEAK-1 — the tenant slot is NOT taken here any more. It is
+            # acquired by `_check_resources` at node entry, once, after `can_execute` — the
+            # same place a RESUMED runner acquires. Taking it here unconditionally and then
+            # asking `can_execute` at the first node judged the run against a count that
+            # already included it (QUOTA-ACCRUAL-ORPHAN-1's shape), and left no single
+            # point that a WAIT could release and a resume could re-acquire.
         except RuntimeError:
             try:
                 run.status = "failed"
@@ -345,6 +349,27 @@ class PersistentFlowRunner:
                 return claim_response
             finally:
                 deactivate_async_execution_context(async_token)
+
+        # A resumed runner is a fresh object: it never ran `_initialize_execution_unit`, so it
+        # has no EU id and no tenant. Recover both from the run, or the slot it acquires at the
+        # first node is charged to tenant "" and the EU it parks is nobody's.
+        if getattr(self, "_eu_id", None) is None:
+            self._tenant_id = str(self.user_id) if self.user_id else ""
+            try:
+                from AINDY.core.execution_unit_service import ExecutionUnitService
+
+                eus = ExecutionUnitService(self.db)
+                eu = eus.get_by_source("flow_run", run.id)
+                self._eu_id = eu.id if eu is not None else None
+                # The WAIT parked the EU (`_park_execution_unit`). The scheduler callback
+                # already moves it waiting → resumed → executing before calling us; a resume
+                # that did not come through the callback must do the same, or completion's
+                # waiting → completed is an invalid transition. Idempotent either way.
+                if eu is not None and eu.status == "waiting":
+                    eus.resume_execution_unit(eu.id)
+            except Exception as exc:
+                logger.debug("[EU] resumed runner could not recover its EU: %s", exc)
+                self._eu_id = None
 
         def _reload_run() -> FlowRun | None:
             return self.db.query(FlowRun).filter(FlowRun.id == db_run_id).first()

@@ -148,13 +148,37 @@ def _execute_current_node(
 
 
 def _check_resources(self, run, state: dict, current_node: str, node_started_event_id):
+    """Admission + per-unit budget, at node entry.
+
+    ★ **The tenant slot is acquired HERE, once per acquisition, and only while the runner holds
+    none** (`ACTIVE-COUNT-WAIT-LEAK-1`). A run holds a slot exactly while it is executing:
+    acquired at its first node after a start OR a resume, released by every WAIT
+    (`_release_slot_on_wait`) and by completion/failure. Before this the slot was taken
+    unconditionally at start, never released on WAIT, and `can_execute` was re-asked at EVERY
+    node with the run's own slot in the count — so at exactly `MAX_CONCURRENT_PER_TENANT` the
+    last-admitted run parked itself on `resource_available` while still holding the slot it
+    was being refused for.
+
+    ★ Admission is judged against a count that does NOT include this run — it holds nothing
+    when it asks. A refusal parks the run on `resource_available` holding nothing, so a parked
+    run costs the tenant no admission budget, which is what "parked as a row" promised.
+
+    ★ `can_execute` short-circuits to True under `settings.is_testing`; a test of the refusal
+    path patches `is_testing` on the settings class (it is a pydantic property).
+    """
     try:
         from AINDY.kernel.resource_manager import get_resource_manager as get_rm
 
         rm = get_rm()
         tenant_id = getattr(self, "_tenant_id", str(self.user_id or ""))
         eu_id_str = str(getattr(self, "_eu_id", "") or "")
-        can_run, run_reason = rm.can_execute(tenant_id, eu_id_str)
+        if getattr(self, "_holds_slot", False):
+            can_run, run_reason = True, None
+        else:
+            can_run, run_reason = rm.can_execute(tenant_id, eu_id_str)
+            if can_run:
+                rm.mark_started(tenant_id, eu_id_str or None)
+                self._holds_slot = True
         if not can_run:
             run.status = "waiting"
             run.waiting_for = "resource_available"
@@ -163,6 +187,7 @@ def _check_resources(self, run, state: dict, current_node: str, node_started_eve
             run.current_node = current_node
             run.state = _json_safe(state)
             self.db.commit()
+            self._park_execution_unit(run, "resource_available")
             try:
                 from AINDY.core.flow_run_rehydration import build_flow_resume_callback
                 from AINDY.core.wait_condition import WaitCondition
@@ -215,6 +240,49 @@ def _check_resources(self, run, state: dict, current_node: str, node_started_eve
     except (ImportError, AttributeError) as exc:
         logger.debug("[Flow] resource check skipped: %s", exc)
     return None
+
+
+def _release_slot_on_wait(self, run, wait_for: str) -> None:
+    """ACTIVE-COUNT-WAIT-LEAK-1 — a parked run holds no tenant slot.
+
+    Releases through `mark_waiting` (slot back, usage snapshot kept — the run will resume and
+    keep accruing), flips `_holds_slot` so the next node entry re-acquires through admission,
+    and moves the run's own ExecutionUnit to `waiting` so the durable record agrees with the
+    row (`flow|flow_run` units were observed stuck `executing` for parked runs).
+    """
+    if not getattr(self, "_holds_slot", False):
+        return
+    self._holds_slot = False
+    try:
+        from AINDY.kernel.resource_manager import get_resource_manager as get_rm
+
+        eu_id = getattr(self, "_eu_id", None)
+        get_rm().mark_waiting(
+            getattr(self, "_tenant_id", str(self.user_id or "")),
+            str(eu_id) if eu_id else None,
+        )
+    except Exception as exc:
+        logger.debug("[EU] resource_manager.mark_waiting skipped: %s", exc)
+    self._park_execution_unit(run, wait_for)
+
+
+def _park_execution_unit(self, run, wait_for: str) -> None:
+    """Move the run's own EU to `waiting` with its condition; non-fatal like every EU hook."""
+    eu_id = getattr(self, "_eu_id", None)
+    if not eu_id:
+        return
+    try:
+        from AINDY.core.execution_unit_service import ExecutionUnitService
+        from AINDY.core.wait_condition import WaitCondition
+
+        eus = ExecutionUnitService(self.db)
+        eus.update_status(eu_id, "waiting")
+        eus.set_wait_condition(
+            eu_id,
+            WaitCondition.for_event(wait_for, correlation_id=str(run.trace_id or run.id)),
+        )
+    except Exception as exc:
+        logger.debug("[EU] park to waiting skipped for eu=%s: %s", eu_id, exc)
 
 
 def _queue_node_failure(self, run, current_node: str, node_started_event_id, error: str) -> None:
@@ -368,6 +436,9 @@ def _handle_node_status(
         run.state = _json_safe(state)
         run.current_node = current_node
         self.db.commit()
+        # ACTIVE-COUNT-WAIT-LEAK-1 — the slot goes back BEFORE the wait is registered, so a
+        # tenant at the cap regains a slot the moment its run parks, not when it resumes.
+        self._release_slot_on_wait(run, wait_for)
         try:
             from AINDY.core.flow_run_rehydration import build_flow_resume_callback
             from AINDY.core.wait_condition import WaitCondition
