@@ -1,4 +1,4 @@
-### Changed — `ARCHITECTURE_RISK.md` archived (docs/archive-architecture-risk)
+### Changed — `ARCHITECTURE_RISK.md` archived (#650)
 
 The 2026-06-03 complexity/blast-radius risk map was measurements, and measurements decay:
 re-measured today, `startup.py` had grown 25% and `config.py`'s importer count 37% since it was
