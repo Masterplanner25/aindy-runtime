@@ -187,7 +187,13 @@ class EventBus:
             )
         return self._pub_client
 
-    def publish(self, event_type: str, *, correlation_id: str | None = None) -> bool:
+    def publish(
+        self,
+        event_type: str,
+        *,
+        correlation_id: str | None = None,
+        run_id: str | None = None,
+    ) -> bool:
         """
         Publish *event_type* to all instances via Redis pub/sub.
 
@@ -198,6 +204,11 @@ class EventBus:
             event_type:     The event name (e.g. ``"operation.completed"``).
             correlation_id: Optional correlation chain ID forwarded to
                             remote ``notify_event()`` calls.
+            run_id:         Optional — scope the wake to ONE run
+                            (RESUME-FANOUT-UNSCOPED-1). Additive on the wire:
+                            an instance that predates the key ignores it and
+                            fans out as before, for the length of a rolling
+                            deploy.
 
         Returns:
             ``True`` if the message was delivered to Redis, ``False`` on any
@@ -209,6 +220,7 @@ class EventBus:
         payload = json.dumps({
             "event_type": event_type,
             "correlation_id": correlation_id,
+            "run_id": run_id,
             "source_instance_id": self._instance_id,
         })
 
@@ -458,10 +470,11 @@ class EventBus:
             return
 
         correlation_id: str | None = payload.get("correlation_id") or None
+        run_id: str | None = payload.get("run_id") or None
 
         logger.debug(
-            "[EventBus] received event=%r corr=%r from=%s",
-            event_type, correlation_id, source,
+            "[EventBus] received event=%r corr=%r run=%r from=%s",
+            event_type, correlation_id, run_id, source,
         )
 
         # ── Local notify (broadcast=False prevents re-publication) ─────────
@@ -472,7 +485,7 @@ class EventBus:
                 # Buffer event until _waiting dict is fully populated
                 with self._buffer_lock:
                     if len(self._pre_rehydration_buffer) < _MAX_BUFFER_SIZE:
-                        self._pre_rehydration_buffer.append((event_type, correlation_id))
+                        self._pre_rehydration_buffer.append((event_type, correlation_id, run_id))
                         logger.debug(
                             "[EventBus] buffered pre-rehydration event=%r (buffer=%d)",
                             event_type, len(self._pre_rehydration_buffer),
@@ -486,6 +499,7 @@ class EventBus:
             engine.notify_event(
                 event_type,
                 correlation_id=correlation_id,
+                run_id=run_id,
                 broadcast=False,  # already broadcasting — suppress re-publish
             )
         except Exception as exc:
@@ -516,11 +530,12 @@ class EventBus:
         from AINDY.kernel.scheduler_engine import get_scheduler_engine  # noqa: PLC0415
         engine = get_scheduler_engine()
         dispatched = 0
-        for event_type, correlation_id in pending:
+        for event_type, correlation_id, run_id in pending:
             try:
                 engine.notify_event(
                     event_type,
                     correlation_id=correlation_id,
+                    run_id=run_id,
                     broadcast=False,
                 )
                 dispatched += 1
@@ -583,6 +598,7 @@ def publish_event(
     event_type: str,
     *,
     correlation_id: str | None = None,
+    run_id: str | None = None,
 ) -> int:
     """Emit *event_type* through the full distributed path.
 
@@ -610,6 +626,9 @@ def publish_event(
         event_type:     The event name (e.g. ``"operation.completed"``).
         correlation_id: Optional correlation chain ID forwarded to all
                         remote ``notify_event()`` calls.
+        run_id:         Optional — wake ONE run only, on every instance
+                        (RESUME-FANOUT-UNSCOPED-1). The per-run resume route
+                        passes it; an emit does not.
 
     Returns:
         Number of flows re-enqueued **locally** on this instance.
@@ -619,5 +638,6 @@ def publish_event(
     return get_scheduler_engine().notify_event(
         event_type,
         correlation_id=correlation_id,
+        run_id=run_id,
         broadcast=True,
     )

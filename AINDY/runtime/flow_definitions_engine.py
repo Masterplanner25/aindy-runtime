@@ -131,7 +131,11 @@ def flow_run_resume_node(state, context):
             return {"status": "FAILURE", "error": f"HTTP_400:Flow run is '{run.status}', not 'waiting'. Cannot resume."}
         if run.waiting_for != event_type:
             return {"status": "FAILURE", "error": f"HTTP_400:Flow run waiting for '{run.waiting_for}', not '{event_type}'"}
-        results = route_event(event_type=event_type, payload=payload, db=db, user_id=user_id)
+        # RESUME-FANOUT-UNSCOPED-1 — the run we just checked ownership of is the ONLY run
+        # this resume may touch. Without `run_id`, route_event is a broadcast.
+        results = route_event(
+            event_type=event_type, payload=payload, db=db, user_id=user_id, run_id=str(run.id)
+        )
         return {"status": "SUCCESS", "output_patch": {"flow_run_resume_result": {"run_id": run_id, "resumed": True, "results": results}}}
     except Exception as e:
         return {"status": "FAILURE", "error": str(e)}

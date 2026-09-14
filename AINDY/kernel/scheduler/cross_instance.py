@@ -28,6 +28,7 @@ def _cross_instance_resume(
     event_type: str,
     correlation_id: str | None,
     skip_run_ids: set[str],
+    run_id: str | None = None,
 ) -> int:
     try:
         from AINDY.kernel.redis_wait_registry import RedisWaitRegistry
@@ -39,10 +40,14 @@ def _cross_instance_resume(
             return 0
 
         resumed = 0
+        target_run = str(run_id) if run_id is not None else None
         for run_id, spec in registry.get_all_specs().items():
             import AINDY.kernel.scheduler_engine as compat
 
             if run_id in skip_run_ids:
+                continue
+            # RESUME-FANOUT-UNSCOPED-1 — a per-run wake wakes that run and nothing else.
+            if target_run is not None and str(run_id) != target_run:
                 continue
             with engine._lock:
                 if run_id in engine._waiting:
