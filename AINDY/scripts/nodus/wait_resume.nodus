@@ -1,0 +1,50 @@
+// Tutorial 2 — two-phase: runs once, suspends, runs AGAIN from the top on resume
+let received = get_state("nodus_received_events")
+if (received == nil) {
+    // ── Phase 1: first run ────────────────────────────────────────────────
+    let result = sys("sys.v1.memory.read", {"path": "/memory/" + user_id + "/tasks/**", "limit": 20})
+    let task_count = 0i
+    if (result["status"] == "success") { task_count = len(result["data"]["nodes"]) }
+
+    sys("sys.v1.memory.write", {
+        "path": "/memory/" + user_id + "/pending/decision",
+        "content": "Pending review: " + str(task_count) + " tasks loaded for sprint-12",
+        "tags": ["pending", "awaiting-approval"],
+        "node_type": "decision"
+    })
+
+    set_state("task_count", task_count)
+    set_state("nodus_wait_requested", true)      // ← the suspend
+    set_state("nodus_wait_event_type", "review.approved")
+} else {
+    // ── Phase 2: resumed with the approval payload ────────────────────────
+    let approval = received["review.approved"]
+    let reviewer = approval["reviewer"]
+    let note = approval["note"]
+
+    if (approval["approved"] == true) {
+        sys("sys.v1.memory.write", {
+            "path": "/memory/" + user_id + "/insights/decision",
+            "content": "Sprint-12 tasks approved by " + reviewer + ". Note: " + note,
+            "tags": ["approved", "sprint-12", reviewer],
+            "node_type": "decision"
+        })
+        sys("sys.v1.event.emit", {
+            "event_type": "sprint.review.completed",
+            "payload": {"reviewer": reviewer, "approved": true}
+        })
+        set_state("outcome", "approved")
+    } else {
+        sys("sys.v1.memory.write", {
+            "path": "/memory/" + user_id + "/insights/decision",
+            "content": "Sprint-12 tasks rejected by " + reviewer + ". Reason: " + note,
+            "tags": ["rejected", "sprint-12"],
+            "node_type": "decision"
+        })
+        sys("sys.v1.event.emit", {
+            "event_type": "sprint.review.rejected",
+            "payload": {"reviewer": reviewer, "reason": note}
+        })
+        set_state("outcome", "rejected")
+    }
+}

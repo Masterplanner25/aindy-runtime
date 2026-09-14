@@ -232,9 +232,14 @@ set_state("nodus_wait_event_type", "user.response.received")
 // (or the next node) runs again with the event payload in state.
 ```
 
-On resume, the incoming event payload is available in state under `nodus_received_events`
-— **but only if the resume carried a payload, and only one path does** (corrected 2026-09-13,
-`WAIT-PAYLOAD-PATH-1`):
+On resume, the incoming event payload is *meant* to be available in state under
+`nodus_received_events`. **Run live on 2026-09-13, it is not — through any path**
+(`NODUS-RESUME-BRIDGE-1`): the WAIT step's output patch, which carries
+`nodus_wait_event_type`, is recorded in `flow_history` but never merged into the run's state, so
+the bridge that would populate `nodus_received_events` on re-entry finds no pending wait type
+and skips. The script re-runs, sees nil, and waits again. The shape below is the correct
+*target* shape and will start working when that entry closes; until then a guest script can
+suspend a run but cannot learn what resumed it.
 
 ```nd
 // On the second execution (after resume):

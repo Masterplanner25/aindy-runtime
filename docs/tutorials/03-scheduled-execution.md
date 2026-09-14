@@ -96,20 +96,23 @@ Never schedule a script you have not run. Create `tutorial_03.py`:
 ```python
 import os
 from aindy_sdk import AINDYClient
-from tutorial_01 import tenant_from_jwt
+import base64, json
+def tenant_from_jwt(token: str) -> str:            # memory paths are /memory/{tenant}/…; tenant = JWT sub
+    seg = token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))["sub"]
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
     api_key=os.environ.get("AINDY_API_KEY", "replace_me"),
 )
-TENANT = tenant_from_jwt(client.api_key)      # from Tutorial 1 — memory paths start /memory/{tenant}/
+TENANT = tenant_from_jwt(client.api_key)
 
 with open("daily_briefing.nd", encoding="utf-8") as f:
-    client.nodus.upload_script("daily_briefing", f.read(), overwrite=True)
+    client.post("/platform/nodus/upload", {"name": "daily_briefing", "content": f.read(), "overwrite": True})
 
 print("Manual run...")
-result = client.nodus.run_script(script_name="daily_briefing")
-print(f"  status:        {result['status']}")
+result = client.nodus.run_script(script_name="daily_briefing")["data"]
+print(f"  status:        {result['status']}   nodus: {result['nodus_status']}")
 print(f"  memory writes: {result['memory_writes_count']}")
 print(f"  events:        {result['events_emitted']}")
 out = result["output_state"]
@@ -121,7 +124,7 @@ print(f"  node_count:    {out['node_count']}")
 
 ```
 Manual run...
-  status:        SUCCESS
+  status:        SUCCESS   nodus: success
   memory writes: 1
   events:        1
   briefing:      Daily briefing: 5 node(s) - 2 decisions, 3 outcomes, 0 insights.
@@ -158,10 +161,13 @@ Scheduling (09:00 UTC daily)...
   ✓ job 6b1f…
     name:     daily_briefing
     cron:     0 9 * * *
-    next run: 2026-09-14T09:00:00+00:00
+    next run: None
 ```
 
-`POST /platform/nodus/schedule` (scope `flow.execute`). You can pass `script` (inline source)
+`POST /platform/nodus/schedule` (scope `flow.execute`). The response is the job record,
+**unwrapped** (unlike `nodus/run`). `next_run_at` reads `None` right after creation and — as
+observed live — stays `None` after a restart too; the row is `is_active: true` and the
+scheduler will fire it, but the field is not populated from the cron. Treat it as informational. You can pass `script` (inline source)
 instead of `script_name`. Optional fields: `error_policy` (`fail` default), `max_retries`
 (1–10, default 3). The cron is validated with `CronTrigger.from_crontab()` before the row is
 written, so a bad expression is a 422 now, not a silent no-op at 09:00.
@@ -187,11 +193,11 @@ for j in listing["jobs"]:
 Scheduled jobs:
   [✓ active] daily_briefing  (6b1f…)
              cron:     0 9 * * *
-             next run: 2026-09-14T09:00:00+00:00
+             next run: None
              last run: never
 ```
 
-The listing is `{"count": N, "jobs": [...]}`, scoped to your user.
+The listing is `{"count": N, "jobs": [...]}`, unwrapped, scoped to your user.
 
 ---
 
@@ -204,13 +210,14 @@ try:
         "event_type":   "daily.briefing.ready",
         "callback_url": "https://your-system.example/hooks/briefing",
         "secret":       "your-webhook-secret",
+        "owner_class":  "first-party-app",   # the default, external-third-party, requires a provenance declaration
     })
-    print(f"  ✓ subscription {sub.get('id', '?')}")
+    print(f"  ✓ subscription {sub['id']}")
 except Exception as e:
     print(f"  (skipped: {e})")
 ```
 
-Scope `webhook.manage`. Every delivery carries `X-AINDY-Signature: sha256=<hmac>` computed
+Scope `webhook.manage`. The response is the subscription record, unwrapped. Every delivery carries `X-AINDY-Signature: sha256=<hmac>` computed
 with the `secret`; a prefix wildcard (`daily.*`) subscribes to a family of events. A failing
 endpoint does not fail the script that emitted the event — delivery is fan-out, not part of
 the syscall.
@@ -223,7 +230,7 @@ You do not have to wait until 09:00 to see the whole chain fire:
 
 ```python
 print("\nForcing a run now...")
-now = client.nodus.run_script(script_name="daily_briefing")
+now = client.nodus.run_script(script_name="daily_briefing")["data"]
 print(f"  status: {now['status']}   events emitted: {now['events_emitted']}")
 ```
 
@@ -282,15 +289,18 @@ not unique.
 ```python
 import os
 from aindy_sdk import AINDYClient
-from tutorial_01 import tenant_from_jwt
+import base64, json
+def tenant_from_jwt(token: str) -> str:            # memory paths are /memory/{tenant}/…; tenant = JWT sub
+    seg = token.split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))["sub"]
 
 client = AINDYClient(base_url=os.environ["AINDY_BASE_URL"], api_key=os.environ["AINDY_API_KEY"])
 TENANT = tenant_from_jwt(client.api_key)
 
 with open("daily_briefing.nd", encoding="utf-8") as f:
-    client.nodus.upload_script("daily_briefing", f.read(), overwrite=True)
+    client.post("/platform/nodus/upload", {"name": "daily_briefing", "content": f.read(), "overwrite": True})
 
-test = client.nodus.run_script(script_name="daily_briefing")
+test = client.nodus.run_script(script_name="daily_briefing")["data"]
 print("manual run:", test["status"], "-", test["output_state"]["briefing"])
 
 job = client.post("/platform/nodus/schedule", {
@@ -302,6 +312,7 @@ client.post("/platform/webhooks", {
     "event_type": "daily.briefing.ready",
     "callback_url": "https://your-system.example/hooks/briefing",
     "secret": "your-webhook-secret",
+    "owner_class": "first-party-app",
 })
 print("webhook subscribed. Done — it runs without you now.")
 ```

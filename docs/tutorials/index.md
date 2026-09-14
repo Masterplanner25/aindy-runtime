@@ -13,11 +13,14 @@ plugins, no custom nodes — and ends with something you can see in memory.
 | # | Tutorial | What you'll see |
 |---|---|---|
 | 1 | [Memory-Driven Task Analyzer](./01-memory-driven-workflow.md) | Write → read → analyze in a Nodus script → write back → emit |
-| 2 | [Event-Driven Automation](./02-event-driven-automation.md) | A script suspends the run, an external signal resumes it with a payload |
+| 2 | [Event-Driven Automation](./02-event-driven-automation.md) | A script suspends the run; a resume re-runs it. **Payload delivery is blocked on `NODUS-RESUME-BRIDGE-1` today** — the tutorial shows exactly where. |
 | 3 | [Scheduled Intelligence](./03-scheduled-execution.md) | The same kind of script on a cron, with a webhook on its event |
 
-> **Corrected 2026-09-13.** Every call in these three was checked against the SDK source, the
-> runtime's syscall registry and routes, and the installed Nodus interpreter (5.13.0). The
+> **Corrected 2026-09-13, then run live against 2.13.0 the same day.** Every call was checked
+> against the SDK source, the runtime's syscall registry and routes, and the installed Nodus
+> interpreter (5.13.0); then all three complete scripts were executed against a real server.
+> Tutorials 1 and 3 complete. Tutorial 2 reaches its resume and stops on a runtime defect it now
+> documents (`NODUS-RESUME-BRIDGE-1`). The
 > previous versions had been "re-validated on relocation" in June with inline *Runtime note*
 > callouts — but the callouts described things that do not exist (`event.wait()`, `emit()`,
 > `sys.v1.event.wait`, a `flat` key on `memory.tree`, an `analyze_tasks` flow), and every
@@ -41,10 +44,11 @@ resume step needs:
 curl -s -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email": "admin@example.com", "password": "changeme"}'
-# {"access_token": "eyJ...", "token_type": "bearer"}
+# {"status": "success", "data": {"access_token": "eyJ...", "token_type": "bearer", ...}, ...}
+#   ^ the token is under data — every route answers in the pipeline envelope
 
 export AINDY_BASE_URL="http://localhost:8000"
-export AINDY_API_KEY="eyJ..."        # the access_token — the SDK's parameter is named api_key
+export AINDY_API_KEY="eyJ..."        # data.access_token — the SDK's parameter is named api_key
 ```
 
 If you would rather use a scoped key, mint one at `POST /platform/keys` as that admin with
@@ -63,6 +67,16 @@ line of real work (`/memory/demo/…` put `demo` in the tenant slot).
 ```bash
 pip install aindy-sdk          # imported as `aindy_sdk`
 ```
+
+**aindy-sdk 1.0.0 has three wire mismatches against this runtime**, found when these tutorials
+were run live (`docs/handoffs/SDK_HANDOFF_1_0_0_wire_mismatches.md`): `events.emit()` sends
+`type` (the syscall needs `event_type`), `nodus.upload_script()` sends `source` (the route needs
+`content`), and `memory.tree()`'s docstring promises a `flat` key that does not exist. The
+tutorials use `client.syscalls.call(...)` and `client.post(...)` where the typed method is
+broken, and say so inline.
+
+**5. On Windows,** `set PYTHONIOENCODING=utf-8` before running the scripts — the sample
+output uses `→` and `•`, which the default console code page cannot encode.
 
 ## What the tutorials deliberately do not use
 

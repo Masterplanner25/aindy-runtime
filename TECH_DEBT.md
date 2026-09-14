@@ -12585,7 +12585,7 @@ cheaper.
 
 ## WAIT-PAYLOAD-PATH-1 — the event bus resumes a waiting run without its payload; only the resume route delivers one
 
-**Status: OPEN (P2).** Filed 2026-09-13 from the tutorials correctness pass; every claim below
+**Status: SUBSUMED 2026-09-13 by `NODUS-RESUME-BRIDGE-1` — run live, the route path does not deliver either.** The bus-path and correlation findings below still hold and are carried there. Was: OPEN (P2). Filed 2026-09-13 from the tutorials correctness pass; every claim below
 was read from source, and the tutorial that assumed otherwise was rewritten.
 
 **Two resume paths, one contract, different semantics.**
@@ -12634,6 +12634,156 @@ constraint argues against.
 **Related, distinct:** `WAIT-TYPED-CONTRACT-1` (payload unvalidated — this entry is about it
 not arriving), `GUEST-BUILTINS-DEAD-1` (the fake `event.wait()` API), `FR-15` (why the callback
 is zero-arg).
+
+---
+## NODUS-RESUME-BRIDGE-1 — a Nodus script can suspend a run but can never receive what resumed it
+
+**Status: OPEN (P1).** Filed 2026-09-13 by running Tutorial 2 against a live 2.13.0 server after
+the source-level pass had already rewritten it to the "correct" shape. **Guest WAIT/RESUME with a
+payload has never worked, through any path.** Subsumes `WAIT-PAYLOAD-PATH-1`.
+
+**The mechanism, end to end, as observed.**
+1. Script sets `nodus_wait_requested` / `nodus_wait_event_type`; the `nodus.execute` node returns
+   `{"status": "WAIT", "wait_for": …, "output_patch": {"nodus_wait_event_type": …, …}}`
+   (`nodus_adapter.py:806`). ✓
+2. `_handle_node_status` WAIT branch (`runner_steps.py:348`) persists `run.state = _json_safe(state)`
+   and registers the wait. **But `state` does not contain the patch:** `_merge_superstep`
+   (`runner_steps.py:255`) merges SUCCESS branches only — its own docstring says *"a WAIT branch's
+   patch was never merged. Preserved exactly, because changing it here would be a behaviour change
+   smuggled inside a refactor."* The patch is written to `flow_history.output_patch` and nowhere
+   else. **Live: `flow_history` shows `nodus_wait_event_type` on every WAIT row; `flow_runs.state`
+   has only `trace_id, nodus_script, root_event_id, nodus_error_policy, nodus_input_payload`.**
+3. `POST /platform/flows/runs/{id}/resume` → `route_event` sets `state["event"] = payload` and
+   publishes; the run re-enqueues and the script re-runs. ✓ (`resumed: true, payload_injected: true`)
+4. `nodus.execute` re-entry (`nodus_adapter.py:672-681`): `incoming_event = state.pop("event")`;
+   `pending_wait_type = state.get("nodus_wait_event_type")` → **None, because of step 2** → the
+   bridge into `nodus_received_events` is skipped, and `event` has already been popped. The
+   script sees nil, requests the wait again. Every resume adds a `WAIT` row to history
+   (observed: 2, then 4). Nothing errors; `nodus.event.wait_resumed` is emitted regardless.
+
+**Also seen in passing, same family:** the script's own `set_state` values land under
+`nodus_output_state` (nested), never top-level, so a phase-1 value is unreadable in phase 2 even
+once the bridge works; the execution record's `nodus_status` is `None` on a WAIT (not `"WAIT"`);
+`next_run_at` on a scheduled Nodus job is `None` on the listing even after boot restores it.
+
+**Why it survived.** `GUEST-BUILTINS-DEAD-1` established the *suspend* is live and stopped there;
+`NODUS_DEVELOPER_GUIDE` §4 documented the resume half from the design, not from a run; the
+tutorial that would have exercised it failed on its first line (`TENANT_VIOLATION`) since it was
+written; and the unit tests drive the flow-level WAIT, where the next segment is a different node
+that needs no patch. The only consumer that needs the WAIT patch merged is the one that re-runs
+the same node — the guest — and nothing tested that.
+
+**Fix shape — a design decision, then a small change.** Either (a) merge WAIT patches in
+`_merge_superstep` (the docstring's "smuggled behaviour change" is exactly the change wanted,
+now made deliberately, with the fan-out policy question answered: a WAIT branch's patch is the
+*wait registration*, not a result, and must not conflict-resolve against SUCCESS patches), or
+(b) have the WAIT branch persist `wait_for` into state itself (`state["nodus_wait_event_type"] =
+wait_for` beside `run.waiting_for`) so the bridge has what it needs without touching the merge.
+(b) is one line and honest; (a) is the general fix. Either way: a test that suspends a script,
+resumes it with a payload through the route, and asserts the script's **second** run sees
+`nodus_received_events` — the assertion the guide has been making without one. Then decide
+whether `nodus_output_state` should surface top-level so phase-1 values survive.
+
+**Related:** `WAIT-PAYLOAD-PATH-1` (subsumed — bus path + correlation asymmetry),
+`RESUME-FANOUT-UNSCOPED-1` (found in the same run), `ACTIVE-COUNT-WAIT-LEAK-1` (the wait's
+other cost), `GUEST-BUILTINS-DEAD-1`, `WAIT-TYPED-CONTRACT-1`.
+
+---
+
+## RESUME-FANOUT-UNSCOPED-1 — `POST /platform/flows/runs/{id}/resume` resumes every run waiting on that event, any tenant
+
+**Status: OPEN (P1; would be P0 without the `platform.admin` gate).** Filed 2026-09-13 from a
+live run: a resume of run A returned `results: [{run_id: <B>, payload_injected: true}, {run_id:
+<A>, …}]` — B was another waiting run on the same event type.
+
+**Where.** `flow_run_resume_node` checks the *named* run belongs to the caller and is waiting on
+`event_type`, then calls `route_event(event_type, payload)` (`event_router.py:5`) — which
+`peek_matching_run_ids(event_type, correlation_id=None)` (`waits.py:209`, iterates all of
+`_waiting`, **no tenant**) and then `db.query(FlowRun).filter(FlowRun.id.in_(ids), status ==
+"waiting")` (**no user_id filter**), injects the payload into each, and publishes. The ownership
+check protects the path parameter; the effect ignores it.
+
+**What that means.** An admin approving one tenant's wait injects their payload into, and
+resumes, every other tenant's run parked on the same event name. Event names are conventional
+strings (`review.approved`), so collisions are the normal case, not an edge. Today
+`platform.admin` is required, which keeps this out of the exploit class — it is an isolation
+defect an operator can trigger by using the route as documented.
+
+**Fix shape.** `route_event` takes the `run_id` it was called for and injects into that run only
+(the wait's `correlation_id` is the run's `trace_id`; pass it). If a broadcast resume is wanted
+it should be a different verb with its own scope, not the default of the per-run one. Test:
+two tenants, two waits on one event name, resume one, assert the other is untouched — on both
+the local and cross-instance paths (`WAIT-PAYLOAD-PATH-1`'s asymmetry lives here too).
+
+**Related:** `INITIATOR-IDENTITY-1` (tenant == user_id), `WAIT-TYPED-CONTRACT-1`, `TENANT-3`
+under `DEPLOY-TARGET-2` (shared event channel) — this is that finding, already live.
+
+---
+
+## ACTIVE-COUNT-WAIT-LEAK-1 — a waiting run holds a tenant concurrency slot forever; five parked waits lock the tenant out of every route
+
+**Status: OPEN (P1).** Filed 2026-09-13 from a live run: after four waiting runs accumulated, a
+read-only `GET /platform/flows/runs/{id}` returned **429 "Too many concurrent executions for this
+tenant"**.
+
+**Where.** `PersistentFlowRunner` calls `resource_manager.mark_started(tenant, eu)` when the run
+starts (`runner.py:264`); `mark_completed` is called from `runner_completion.py:210` and
+`runner_failure.py:39`. **The WAIT branch (`runner_steps.py:348`) calls neither.** The counter is
+in-process (`_active_counts`; Redis when configured), so a parked run occupies a slot until the
+process restarts — and `MAX_CONCURRENT_PER_TENANT` is 5. The route pipeline's own `finally`
+does release its slot, which is why routes worked until the *flows* had eaten the budget.
+
+**Why it matters more than it reads.** The wait is the runtime's headline durability feature —
+"parked as a row, costs nothing while waiting" — and it costs one fifth of the tenant's
+admission budget. Combined with `NODUS-RESUME-BRIDGE-1` (every resume of a guest wait produces
+another wait) the tutorial locked its own tenant out in under a minute. In a
+`hostile-third-party` deployment this is a five-request self-DoS available to any tenant that
+can start a flow.
+
+**Fix shape.** `mark_completed` (or a `mark_waiting` that releases the slot) on the WAIT branch,
+and `mark_started` again on resume claim — the resume callback's atomic claim is the right
+place. A test: park N ≥ `MAX_CONCURRENT_PER_TENANT` runs, then make any request; today it
+429s. **Not** a cap raise. Also seen: **105 `execution_units` rows in `executing` for one user**
+after the tutorial runs (62 `job|route`, 34 `flow|route`, 6 `flow|flow_run`) with `[EU] invalid
+transition executing→executing` warnings — the DB-side EU status is not being finalised on some
+route path either; separate, not diagnosed here.
+
+**Related:** `QUOTA-ACCRUAL-ORPHAN-1` (closed — "a unit is reaped by whoever established it";
+this is that rule unapplied to the wait), `SYSMAX-1`, `TENANT-2`.
+
+---
+
+## ASYNC-JOB-UNREGISTERED-STORM-1 — a job whose handler is not registered is re-dispatched in a tight in-memory loop, uncounted, forever
+
+**Status: OPEN (P1).** Filed 2026-09-13; measured at **~87 re-dispatches per second per job**,
+45,000 log lines in ten minutes from two rows, on a bare runtime booted against a database that
+held two `openclaw.reminder` jobs from a consumer not loaded in this process.
+
+**Where.** `_execute_job_inline` (`async_job_service.py:1151-1157`): the `handler is None` →
+`raise RuntimeError("… is not registered")` comes **before** `log.attempt_count += 1`. The
+except branch (`:1309`) sees `attempt_count (0) < max_attempts (1)`, sets `status = "pending"`,
+commits, and re-dispatches **immediately and in-process** via `_dispatch(JOB_DISPATCH_STUB,
+handler_fn=lambda: _execute_job(…), context={"retry": True})`. No backoff, no `scheduled_for`,
+no increment — the loop never terminates and never counts.
+
+**Three properties that make it worse than a busy loop.**
+- It rewrites the row's status faster than an operator can: `UPDATE … SET status='failed'` was
+  overwritten to `pending` within the same second. The only way to stop it is to stop the
+  process, edit the rows, then start it — and `job_recovery.recover_orphaned_thread_jobs()` at
+  boot re-dispatches anything still `pending`, so the edit must land in the gap.
+- It is silent at INFO — the WARNING line is the only trace, and it is the same line 87 times a
+  second, which is the log-flood shape `SYSEVENT-RETENTION-1` warns about from the other side.
+- The trigger is ordinary: any consumer that ever submitted a job and is not loaded now — a
+  runtime booted without its app, a renamed handler, a rolled-back deploy.
+
+**Fix shape.** An unregistered handler is **not retryable**: fail the row on the spot with a
+distinct error class, or at minimum increment `attempt_count` before raising so `max_attempts`
+means something. And the generic re-dispatch should honour a backoff/`scheduled_for` rather
+than recurse in-process. Test: submit a job for a handler that does not exist, assert exactly
+one execution attempt and a terminal `failed` status.
+
+**Related:** `RETRY-CLASSIFY-1` (retryability by substring — this path never classifies at
+all), `SYSEVENT-RETENTION-1`.
 
 ---
 ## OTEL-GENAI-SEMCONV-1 — our traces are richer than the standard and illegible to standard tooling

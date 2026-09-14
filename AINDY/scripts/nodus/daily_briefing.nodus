@@ -1,0 +1,42 @@
+// Tutorial 3 — daily briefing over everything this user owns
+let recent = sys("sys.v1.memory.read", {"path": "/memory/" + user_id + "/**", "limit": 50})
+let nodes = []
+if (recent["status"] == "success") { nodes = recent["data"]["nodes"] }
+let node_count = len(nodes)
+
+// Count by type
+let decisions = 0i
+let outcomes = 0i
+let insights = 0i
+let i = 0i
+while (i < node_count) {
+    let t = nodes[i]["node_type"]
+    if (t == "decision") { decisions = decisions + 1i }
+    if (t == "outcome")  { outcomes = outcomes + 1i }
+    if (t == "insight")  { insights = insights + 1i }
+    i = i + 1i
+}
+
+let summary = "No new memory nodes since last briefing."
+if (node_count > 0i) {
+    summary = ("Daily briefing: " + str(node_count) + " node(s) - " + str(decisions)
+               + " decisions, " + str(outcomes) + " outcomes, " + str(insights) + " insights.")
+    // Same path every day, so downstream consumers always find the latest briefing here
+    sys("sys.v1.memory.write", {
+        "path": "/memory/" + user_id + "/briefings/decision",
+        "content": summary,
+        "tags": ["daily-briefing", "auto-generated"],
+        "node_type": "decision"
+    })
+}
+
+// Emit for webhooks and downstream automations — even on an empty day
+sys("sys.v1.event.emit", {
+    "event_type": "daily.briefing.ready",
+    "payload": {"node_count": node_count, "decisions": decisions,
+                "outcomes": outcomes, "insights": insights, "summary": summary}
+})
+
+set_state("briefing", summary)
+set_state("node_count", node_count)
+set_state("done", true)
