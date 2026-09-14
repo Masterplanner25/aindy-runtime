@@ -1,7 +1,7 @@
 ---
 title: "Nodus Developer Guide"
 api_version: "1.0"
-last_verified: "2026-08-16"
+last_verified: "2026-09-13"
 status: current
 owner: "platform-team"
 ---
@@ -145,7 +145,7 @@ not persist partial writes.
 
 ```nd
 let r = call_tool("send_email", { to: "x@example.com", subject: "hi" })
-if r["success"] {
+if (r["success"]) {
     print(r["result"])
 } else {
     print(r["error"])
@@ -192,7 +192,7 @@ envelope:
 ```nd
 let result = sys("sys.v1.memory.read", {"query": "authentication flow", "limit": 3})
 
-if result["status"] == "success" {
+if (result["status"] == "success") {
     let nodes = result["data"]["nodes"]
     print("Found: " + str(len(nodes)))
 } else {
@@ -232,21 +232,39 @@ set_state("nodus_wait_event_type", "user.response.received")
 // (or the next node) runs again with the event payload in state.
 ```
 
-On resume, the incoming event payload is available in state under `nodus_received_events`:
+On resume, the incoming event payload is available in state under `nodus_received_events`
+— **but only if the resume carried a payload, and only one path does** (corrected 2026-09-13,
+`WAIT-PAYLOAD-PATH-1`):
 
 ```nd
 // On the second execution (after resume):
 let received = get_state("nodus_received_events")
-let event_payload = received["user.response.received"]
-print("User said: " + event_payload["text"])
+if (received == nil) {
+    // first run — do the pre-wait work, then suspend
+} else {
+    let event_payload = received["user.response.received"]
+    print("User said: " + event_payload["text"])
+}
 ```
 
+**The script runs again from the top.** It does not continue from the wait; it must branch on
+whether `nodus_received_events` is present, as above.
+
 The WAIT/RESUME cycle:
-1. Script sets `nodus_wait_requested = true` and `nodus_wait_event_type = "event.name"`.
-2. Runtime suspends the `FlowRun` (`status → waiting`).
-3. Something calls `EventBus.publish("event.name")`.
-4. The scheduler re-enqueues the flow.
-5. The next execution receives the event in `state["nodus_received_events"]["event.name"]`.
+1. Script sets `nodus_wait_requested = true` and `nodus_wait_event_type = "event.name"` and exits.
+2. Runtime suspends the `FlowRun` (`status → waiting`) and registers a scheduler wait keyed on
+   the event name **and the run's `trace_id` as `correlation_id`**.
+3. Something resumes it. Two paths exist and they are **not equivalent**:
+   - **`POST /platform/flows/runs/{run_id}/resume`** with `{"event_type", "payload"}`
+     (`platform.admin`) — injects the payload into the run's state (`route_event`), then
+     publishes. **This is the only path that delivers a payload.**
+   - **`sys.v1.event.emit`** / anything that calls `EventBus.publish_event` — re-enqueues the run
+     through a zero-argument callback. **No payload crosses the bus.** The re-run script finds
+     `nodus_received_events` absent, re-requests the wait, and the run parks again. It also only
+     matches if the emit carries no `correlation_id` or the same one the wait registered — an
+     emit from an unrelated request carries its own `trace_id` and is skipped.
+4. The scheduler re-enqueues the flow; the `nodus.execute` node runs the script again.
+5. On the route path, the payload is in `state["nodus_received_events"]["event.name"]`.
 
 ---
 
@@ -259,7 +277,7 @@ Stdlib functions that can fail return **err records** rather than throwing:
 ```nd
 import "std:fs" as fs
 let result = fs.read("data.json")
-if type(result) == "error" {
+if (type(result) == "error") {
     print("Failed: " + result["message"])
     // result["kind"] is "io_error", "parse_error", etc.
 } else {
@@ -273,7 +291,7 @@ if type(result) == "error" {
 
 ```nd
 let r = sys("sys.v1.memory.write", {"content": ""})
-if r["status"] != "success" {
+if (r["status"] != "success") {
     print("Syscall failed: " + r["error"])
 }
 ```
@@ -306,7 +324,7 @@ normally.
 
 ---
 
-## 6. Type quick-reference (nodus-lang 4.1.0)
+## 6. Type quick-reference (nodus-lang 5.13.0)
 
 | Value | `type()` result |
 |-------|----------------|
@@ -334,7 +352,7 @@ let nodes = recall("project status", ["project"], 5)
 
 let summary = ""
 let i = 0
-while i < len(nodes) {
+while (i < len(nodes)) {
     summary = summary + nodes[i]["content"] + "\n"
     i = i + 1i
 }
@@ -355,7 +373,7 @@ let write_result = sys("sys.v1.memory.write", {
     "significance": 0.7
 })
 
-if write_result["status"] == "success" {
+if (write_result["status"] == "success") {
     let path = write_result["data"]["path"]
     set_state("last_memory_path", path)
 }
@@ -370,7 +388,7 @@ let r = sys("sys.v1.job.submit", {
     "source":    "nodus_script"
 })
 
-if r["status"] == "success" {
+if (r["status"] == "success") {
     set_state("report_job_id", r["data"]["log_id"])
 }
 ```
@@ -400,8 +418,12 @@ set_state("approved_by", approval["approver_id"])
 
 ## 8. Nodus version and upgrade notes
 
-A.I.N.D.Y. pins **nodus-lang == 4.2.0** (NODUS-UPGRADE-1). History: 4.0.3 (2026-06-11)
-→ 4.0.5 (2026-06-19) → 4.1.0 (2026-07-17) → 4.2.0 (2026-08-16), each a no-code-change bump.
+A.I.N.D.Y. pins **nodus-lang == 5.13.0** (`pyproject.toml`; `NODUS-UPGRADE-1` records the three
+sites a bump must touch). History: 4.0.3 (2026-06-11) → 4.0.5 (2026-06-19) → 4.1.0 (2026-07-17)
+→ 4.2.0 (2026-08-16) → 5.0.4 (2026-08-19, a security fix — `NODUS-UPGRADE-2`) → 5.13.0
+(2026-09-09). **Syntax change at 5.0: `if` and `while` conditions must be parenthesised** —
+`if (x == 1i) { … }`, `while (i < n) { … }`. Every example in this guide was corrected
+2026-09-13; the previous forms failed to parse on the current interpreter.
 
 **4.1.0 → 4.2.0 (FR-16)** was risk-probed the same way, and one check is new since 4.1.0:
 `GUEST-CONFINE-1`'s confinement now depends on the VM constructor accepting

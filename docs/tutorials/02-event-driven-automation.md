@@ -1,347 +1,314 @@
+---
+title: "Tutorial 2 — Event-Driven Automation"
+last_verified: "2026-09-13"
+api_version: "1.0"
+status: current
+owner: "platform-team"
+---
 # Tutorial 2 — Event-Driven Automation
 
-**Time:** ~8 minutes  
-**Difficulty:** Intermediate  
-**What you'll build:** A Nodus script that pauses mid-execution waiting for an external signal, then automatically resumes and processes the data when the signal arrives.
+**Time:** ~8 minutes
+**Difficulty:** Intermediate
+**What you'll build:** A Nodus script that suspends its run until a human approves, then
+finishes the work with the approval payload — no polling, no thread, no process held open.
 
 ---
 
 ## Goal
 
-You'll see A.I.N.D.Y.'s WAIT/RESUME pattern — the execution unit suspends itself, and a second process wakes it up with new data. No polling. No threads. The script just stops and picks up exactly where it left off.
+```
+Script runs → loads tasks → writes "pending" → SUSPENDS the run
+      (you approve)
+Script runs AGAIN from the top → sees the approval → writes the insight → emits
+```
 
-```
-Script starts → reads tasks → WAITS for "review.approved" →
-  (you emit the event) →
-Script resumes → writes approved insight → emits confirmation
-```
+Read that second line carefully. This is the thing the previous version of this tutorial got
+wrong, and it is the whole model: **a guest script does not pause mid-line and continue. It
+sets two state keys, exits, and when the event arrives the runtime runs the same script
+again with the payload in state.** Your script has to be written in two phases that branch
+on whether the payload is there. Nothing is held open in between — the run is a row in
+`flow_runs` with `status = 'waiting'`.
 
 ---
 
-## How WAIT/RESUME works
+## How WAIT / RESUME actually works
 
 ```
-Nodus script                    External system (you)
-      │
-      │  sys("sys.v1.event.wait",
-      │      {event_type: "review.approved"})
-      │
-      ▼ ← execution unit status: WAITING
-      ·
-      ·  (suspended — no threads blocked)
-      ·
-      ▼ ← you emit "review.approved"
-      │
-      │  resumes with event payload injected
-      │  into script state as "event_payload"
-      ▼
-   continues...
+   first run                                         second run
+   ─────────                                         ──────────
+   script: get_state("nodus_received_events") → nil  script: get_state(...) → {"review.approved": {...}}
+   script: set_state("nodus_wait_requested", true)   script: does the approved work
+   script: set_state("nodus_wait_event_type",
+                     "review.approved")
+   script exits
+   runtime: FlowRun.status → waiting
+   runtime: SchedulerEngine.register_wait(
+              event="review.approved",
+              correlation_id=<run.trace_id>)
+                    ·
+                    ·   POST /platform/flows/runs/{run_id}/resume
+                    ·   {"event_type": "review.approved", "payload": {...}}
+                    ·
+   runtime: payload → state["event"] → state["nodus_received_events"]["review.approved"]
+   runtime: re-enqueues the run; the nodus.execute node runs the script again
 ```
+
+Two facts decide how you resume it, and both were checked against source for this version:
+
+- **The event bus carries no payload.** `sys.v1.event.emit` (what `client.events.emit`
+  sends) can *wake* a waiting run, but the resume callback is zero-argument
+  (`build_flow_resume_callback`) — the re-run script would find nothing in
+  `nodus_received_events`, re-request the wait, and sit there. Payload injection happens only
+  in `route_event`, which only `POST /platform/flows/runs/{run_id}/resume` calls.
+- **The wait is correlation-keyed to the run's own `trace_id`.** An emit from a separate
+  request carries *its* trace id, and a wait whose id is set and differs is skipped. The
+  resume route sidesteps this by not sending one.
+
+So the tutorial resumes through the route. It needs `platform.admin` — the admin JWT from the
+prerequisites has it.
 
 ---
 
-> **Runtime note (validated 2026-06-27):** In the current runtime, WAIT/RESUME
-> is exposed as the Nodus **builtin** `event.wait("<event_type>")`, not as a
-> `sys.v1.event.wait` syscall — no such syscall is registered (see
-> `AINDY/runtime/nodus_builtins.py` and `docs/runtime/NODUS_DEVELOPER_GUIDE.md`).
-> The `sys("sys.v1.event.wait", {...})` form below is retained as authored for
-> narrative continuity; to run this today, replace it with
-> `let approval = event.wait("review.approved")`. The builtin suspends the
-> execution unit (status → `waiting`) and returns the event payload on resume.
-> `emit(...)` and `set_state(...)` shown below are likewise Nodus builtins.
+## Step 1 — Write the two-phase script
 
-## Step 1 — Write the Nodus script
-
-Create `wait_resume.nodus`:
+Create `wait_resume.nd`:
 
 ```js
-// Phase 1 — runs immediately on start
-let tasks = sys("sys.v1.memory.read", {
-    path: "/memory/demo/tasks/*",
-    limit: 20
-})
+// Tutorial 2 — two-phase: runs once, suspends, runs AGAIN from the top on resume
+let received = get_state("nodus_received_events")
+if (received == nil) {
+    // ── Phase 1: first run ────────────────────────────────────────────────
+    let result = sys("sys.v1.memory.read", {"path": "/memory/" + user_id + "/tasks/**", "limit": 20})
+    let task_count = 0i
+    if (result["status"] == "success") { task_count = len(result["data"]["nodes"]) }
 
-let task_count = tasks.data.nodes.length
-
-// Persist what we found so Phase 2 can use it
-sys("sys.v1.memory.write", {
-    path:      "/memory/demo/pending/decision",
-    content:   "Pending review: " + task_count + " tasks loaded for sprint-12",
-    tags:      ["pending", "awaiting-approval"],
-    node_type: "decision",
-    extra:     {task_count: task_count}
-})
-
-// ── PAUSE HERE ────────────────────────────────────────────────────────────
-// Execution unit suspends. Status → WAITING.
-// Script resumes when "review.approved" is emitted.
-// The emitted event's payload is injected as `event_payload`.
-let approval = sys("sys.v1.event.wait", {
-    event_type: "review.approved",
-    timeout_seconds: 300
-})
-// ── RESUMED ───────────────────────────────────────────────────────────────
-
-// Phase 2 — runs only after approval arrives
-let reviewer  = approval.data.payload.reviewer
-let approved  = approval.data.payload.approved
-let note      = approval.data.payload.note
-
-if approved {
-    // Write the approved insight
     sys("sys.v1.memory.write", {
-        path:      "/memory/demo/insights/decision",
-        content:   "Sprint-12 tasks approved by " + reviewer + ". Note: " + note,
-        tags:      ["approved", "sprint-12", reviewer],
-        node_type: "decision",
-        extra:     {reviewer: reviewer, task_count: task_count}
+        "path": "/memory/" + user_id + "/pending/decision",
+        "content": "Pending review: " + str(task_count) + " tasks loaded for sprint-12",
+        "tags": ["pending", "awaiting-approval"],
+        "node_type": "decision"
     })
 
-    // Confirm via event
-    emit("sprint.review.completed", {
-        reviewer:    reviewer,
-        task_count:  task_count,
-        approved:    true
-    })
-
-    set_state("outcome", "approved")
-    set_state("reviewer", reviewer)
+    set_state("task_count", task_count)          // survives into phase 2
+    set_state("nodus_wait_requested", true)      // ← the suspend
+    set_state("nodus_wait_event_type", "review.approved")
 } else {
-    // Write a rejection note
-    sys("sys.v1.memory.write", {
-        path:      "/memory/demo/insights/decision",
-        content:   "Sprint-12 tasks rejected by " + reviewer + ". Reason: " + note,
-        tags:      ["rejected", "sprint-12"],
-        node_type: "decision"
-    })
+    // ── Phase 2: resumed with the approval payload ────────────────────────
+    let approval = received["review.approved"]
+    let reviewer = approval["reviewer"]
+    let note = approval["note"]
+    let task_count = get_state("task_count")
 
-    emit("sprint.review.rejected", {reviewer: reviewer, reason: note})
-    set_state("outcome", "rejected")
+    if (approval["approved"] == true) {
+        sys("sys.v1.memory.write", {
+            "path": "/memory/" + user_id + "/insights/decision",
+            "content": "Sprint-12 tasks approved by " + reviewer + ". Note: " + note,
+            "tags": ["approved", "sprint-12", reviewer],
+            "node_type": "decision"
+        })
+        sys("sys.v1.event.emit", {
+            "event_type": "sprint.review.completed",
+            "payload": {"reviewer": reviewer, "task_count": task_count, "approved": true}
+        })
+        set_state("outcome", "approved")
+    } else {
+        sys("sys.v1.memory.write", {
+            "path": "/memory/" + user_id + "/insights/decision",
+            "content": "Sprint-12 tasks rejected by " + reviewer + ". Reason: " + note,
+            "tags": ["rejected", "sprint-12"],
+            "node_type": "decision"
+        })
+        sys("sys.v1.event.emit", {
+            "event_type": "sprint.review.rejected",
+            "payload": {"reviewer": reviewer, "reason": note}
+        })
+        set_state("outcome", "rejected")
+    }
 }
 ```
 
+State set in phase 1 (`task_count`) is still there in phase 2 — flow state persists across
+the wait. `emit(...)` and `event.wait(...)` do not exist in the guest; the only exits are
+`sys()` and `set_state()`.
+
 ---
 
-## Step 2 — Upload and start the script
+## Step 2 — Upload and start it
 
 Create `tutorial_02.py`:
 
 ```python
-import os
-import time
+import os, time
 from aindy_sdk import AINDYClient
+from tutorial_01 import tenant_from_jwt
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
-    api_key=os.environ.get("AINDY_API_KEY", "aindy_replace_me"),
+    api_key=os.environ.get("AINDY_API_KEY", "replace_me"),   # admin JWT — Step 5 needs platform.admin
 )
+TENANT = tenant_from_jwt(client.api_key)      # from Tutorial 1 — memory paths start /memory/{tenant}/
 
-# Make sure there are tasks to find (from Tutorial 1, or seed them now)
-print("Seeding tasks...")
+# Seed tasks (Tutorial 1 wrote these; harmless to repeat)
 for content, tags in [
-    ("Implement syscall versioning",             ["engineering", "sprint-12"]),
-    ("Write SDK unit tests",                     ["engineering", "sprint-12"]),
-    ("Publish documentation site",               ["docs",        "sprint-12"]),
+    ("Implement syscall versioning", ["engineering", "sprint-12"]),
+    ("Write SDK unit tests",         ["engineering", "sprint-12"]),
+    ("Publish documentation site",   ["docs", "sprint-12"]),
 ]:
-    client.memory.write("/memory/demo/tasks/outcome", content,
-                        tags=tags, node_type="outcome")
+    client.memory.write(f"/memory/{TENANT}/tasks/outcome", content, tags=tags, node_type="outcome")
 
-# Upload the script
 print("Uploading script...")
-with open("wait_resume.nodus") as f:
-    source = f.read()
+with open("wait_resume.nd", encoding="utf-8") as f:
+    client.nodus.upload_script("wait_resume", f.read(), overwrite=True)
 
-client.nodus.upload_script("wait_resume", source, overwrite=True)
-print("  ✓ Script uploaded.")
-
-# Start it — it will immediately WAIT for "review.approved"
-print("\nStarting script (will pause at event.wait)...")
-result = client.nodus.run_script(
-    script_name="wait_resume",
-    input={"sprint": "sprint-12"},
-)
-
-run_id = result.get("run_id") or result.get("trace_id")
-print(f"  Run ID:     {run_id}")
-print(f"  Status:     {result.get('nodus_status', result.get('status'))}")
+print("Starting script (phase 1 — will suspend)...")
+result = client.nodus.run_script(script_name="wait_resume", input={"sprint": "sprint-12"})
+run_id = result["run_id"]
+print(f"  Run id:       {run_id}")
+print(f"  Flow status:  {result['status']}")          # WAITING
+print(f"  Nodus status: {result['nodus_status']}")    # WAIT
 ```
 
 **Expected output:**
 
 ```
-Seeding tasks...
 Uploading script...
-  ✓ Script uploaded.
-
-Starting script (will pause at event.wait)...
-  Run ID:     run-9f3c...
-  Status:     waiting
+Starting script (phase 1 — will suspend)...
+  Run id:       9f3c…
+  Flow status:  WAITING
+  Nodus status: WAIT
 ```
 
-The script is suspended. It has written the pending node to memory but is not yet processing anything. Nothing is blocked on the server — the execution unit is simply parked.
+`upload_script` is `POST /platform/nodus/upload`; `run_script` is `POST /platform/nodus/run`
+(both `flow.execute`). The run is now a `flow_runs` row with `status = 'waiting'` and
+`waiting_for = 'review.approved'`, and the scheduler holds a wait entry for it. If the server
+restarts, `flow_run_rehydration` re-registers it — nothing is lost.
 
 ---
 
-## Step 3 — Verify the script is waiting
+## Step 3 — Verify it is waiting
 
 ```python
-# Confirm the WAITING state
-print("\nChecking execution state...")
-info = client.execution.get(run_id)
-print(f"  Execution status: {info['data']['status']}")   # "waiting"
-print(f"  Syscalls so far:  {info['data']['syscall_count']}")
+print("\nFlow run:")
+run = client.get(f"/platform/flows/runs/{run_id}")["flow_run_get_result"]   # platform.admin
+print(f"  status:      {run['status']}")          # waiting
+print(f"  waiting_for: {run['waiting_for']}")     # review.approved
 
-# Verify the pending node was written
-print("\nPending memory nodes:")
-pending = client.memory.read("/memory/demo/pending/*")
-for node in pending["data"]["nodes"]:
-    print(f"  • {node['content']}")
-    print(f"    tags: {', '.join(node.get('tags', []))}")
+print("\nPending node written in phase 1:")
+for node in client.memory.read(f"/memory/{TENANT}/pending/**")["data"]["nodes"]:
+    print(f"  • {node['content']}   tags: {', '.join(node['tags'])}")
 ```
 
 **Expected output:**
 
 ```
-Checking execution state...
-  Execution status: waiting
-  Syscalls so far:  2
+Flow run:
+  status:      waiting
+  waiting_for: review.approved
 
-Pending memory nodes:
-  • Pending review: 3 tasks loaded for sprint-12
-    tags: pending, awaiting-approval
+Pending node written in phase 1:
+  • Pending review: 3 tasks loaded for sprint-12   tags: pending, awaiting-approval
 ```
+
+`GET /platform/flows/runs/{run_id}` returns the run row — `status`, `waiting_for`,
+`current_node`, `state`, `trace_id` — under `flow_run_get_result`. (`client.execution.get`
+also exists and accepts a flow run id, but it reads the *execution unit*, whose status follows
+the request pipeline rather than the flow; the run row is the authoritative view of a wait.)
 
 ---
 
-## Step 4 — Subscribe to the completion event (optional but satisfying)
+## Step 4 — Subscribe a webhook (optional)
 
-Before sending the approval signal, set up a webhook to watch for the result:
+If you have something listening, subscribe it to the events phase 2 will emit. Prefix
+wildcards (`sprint.review.*`) are supported. Needs `webhook.manage`.
 
 ```python
-print("\nSubscribing to completion events...")
-
-# This posts to a local endpoint you control.
-# For the tutorial, we just print the payload we'd receive.
 try:
     sub = client.post("/platform/webhooks", {
-        "event_type":   "sprint.review.*",     # prefix wildcard
+        "event_type":   "sprint.review.*",
         "callback_url": "http://localhost:9999/hook",
         "secret":       "tutorial-secret",
     })
-    sub_id = sub.get("id", "sub-created")
-    print(f"  ✓ Webhook subscribed — id: {sub_id}")
-    print("  Listening for: sprint.review.completed, sprint.review.rejected")
+    print(f"\n  ✓ Webhook subscribed — id {sub.get('id', '?')}")
 except Exception as e:
-    print(f"  (Webhook skipped: {e})")
-    sub_id = None
+    print(f"\n  (webhook skipped: {e})")
 ```
 
 ---
 
-## Step 5 — Send the approval signal
+## Step 5 — Approve it
 
-This is the moment. Emit the `review.approved` event and watch the script wake up.
+This is the moment. Resume the run *with a payload* through the flows route:
 
 ```python
-print("\nSending approval signal...")
-time.sleep(1)  # tiny pause so the WAIT state is fully committed
-
-approval_event = client.events.emit("review.approved", {
-    "reviewer": "shawn",
-    "approved": True,
-    "note":     "All tasks meet the sprint exit criteria. Ship it.",
+print("\nApproving...")
+resumed = client.post(f"/platform/flows/runs/{run_id}/resume", {
+    "event_type": "review.approved",
+    "payload": {
+        "reviewer": "shawn",
+        "approved": True,
+        "note":     "All tasks meet the sprint exit criteria. Ship it.",
+    },
 })
-
-print(f"  ✓ Event emitted — id: {approval_event['data'].get('event_id', 'ok')}")
-print("  Script should now resume...")
-time.sleep(2)  # give the server a moment to process the resume
+print(f"  resume accepted: {resumed.get('status', resumed)}")
 ```
 
-**Expected output:**
-
-```
-Sending approval signal...
-  ✓ Event emitted — id: ev-8b2d...
-  Script should now resume...
-```
+The route checks the run is `waiting` and that `waiting_for` matches `event_type` (400
+otherwise, 404 if the run is not yours), injects the payload into the run's state, and
+publishes the event so the scheduler re-enqueues the run. The second execution happens
+asynchronously — so wait for it.
 
 ---
 
-## Step 6 — Check the outcome
+## Step 6 — Watch phase 2 complete
 
 ```python
-print("\nChecking final state...")
+print("\nWaiting for phase 2...")
+for _ in range(20):
+    run = client.get(f"/platform/flows/runs/{run_id}")["flow_run_get_result"]
+    if run["status"] in ("completed", "failed"):
+        break
+    time.sleep(0.5)
+print(f"  status:  {run['status']}")
+print(f"  outcome: {run['state'].get('outcome')}")   # set_state("outcome", ...) in phase 2
 
-# The execution unit should now be complete
-info = client.execution.get(run_id)
-print(f"  Execution status: {info['data']['status']}")  # "success"
-print(f"  Total syscalls:   {info['data']['syscall_count']}")
-
-# The approved insight should be in memory
-print("\nApproved insights:")
-insights = client.memory.read("/memory/demo/insights/*")
-for node in insights["data"]["nodes"]:
+print("\nInsights:")
+for node in client.memory.read(f"/memory/{TENANT}/insights/**")["data"]["nodes"]:
     print(f"  • {node['content']}")
-    print(f"    tags: {', '.join(node.get('tags', []))}")
+    print(f"    tags: {', '.join(node['tags'])}")
 ```
 
 **Expected output:**
 
 ```
-Checking final state...
-  Execution status: success
-  Total syscalls:   4
+Waiting for phase 2...
+  status:  completed
+  outcome: approved
 
-Approved insights:
+Insights:
   • Sprint-12 tasks approved by shawn. Note: All tasks meet the sprint exit criteria. Ship it.
     tags: approved, sprint-12, shawn
 ```
 
+(If you ran Tutorial 1, its insight is listed too.)
+
 ---
 
-## Step 7 — Read the execution trace
+## Step 7 — Read the causal trace
 
-Every syscall during the run emitted a `SystemEvent` (`source="nodus"`) onto the
-canonical event bus, linked into the causal `EventEdge` graph. Read the run's
-execution-causality graph:
-
-> **Runtime note (validated 2026-07-07):** the per-function `NodusTraceEvent`
-> table and its `GET /platform/nodus/trace/{trace_id}` reader were **removed**
-> (RTR-1 close) — they duplicated, at finer grain, what `SystemEvent` +
-> `EventEdge` already record. Use the causal execution graph instead:
-> `GET /platform/observability/execution_graph/{trace_id}
-
-> **Path note (corrected 2026-08-05).** This is mounted under `/platform`. The bare
-> `/observability/...` form these tutorials previously used returns 404 on a default
-> deployment — the root-level mount only exists when `AINDY_ENABLE_LEGACY_SURFACE=true`
-> (see `AINDY/routes/__init__.py`), which is off by default.` (handler
-> `AINDY/routes/observability_router.py`). The path segment is the run's
-> `trace_id`; `run_id` is used here only because the SDK surfaces the same
-> identifier under both keys.
+Every syscall the script made, the wait, and the resume are `SystemEvent` rows linked by
+`EventEdge`. The run's `trace_id` came back in Step 2:
 
 ```python
-print("\nExecution graph:")
-graph = client.get(f"/platform/observability/execution_graph/{run_id}")
-for event in graph.get("events", []):
-    etype  = event.get("event_type", "?")
-    source = event.get("source", "?")
-    depth  = event.get("causal_depth", 0)
-    print(f"  depth={depth:<2} {source:10s} {etype}")
+graph = client.get(f"/platform/observability/execution_graph/{result['trace_id']}")
+for ev in graph.get("nodes", []):
+    print(f"  {ev.get('timestamp', '?')[:19]}  {ev.get('source', '?'):12s} {ev.get('type', '?')}")
+print(f"  ({len(graph.get('edges', []))} causal edges)")
 ```
 
-**Expected output:**
-
-```
-Execution trace:
-  memory.read               sys.v1.memory.read             4ms
-  memory.write              sys.v1.memory.write            3ms
-  event.wait                sys.v1.event.wait              0ms   ← suspended here
-  event.wait (resumed)      sys.v1.event.wait (resume)     0ms   ← woke up here
-  memory.write              sys.v1.memory.write            2ms
-  event.emit                sys.v1.event.emit              1ms
-```
-
-The trace shows exactly where the script paused and when it resumed — with the approval payload injected as if it was a normal return value.
+The graph is `{"nodes": [...], "edges": [...]}` — each node a `SystemEvent` with `id`, `type`,
+`source`, `timestamp`, `payload`. You will see the memory read and write from phase 1,
+`flow.waiting`, a `nodus.event.wait_resumed` marker, and phase 2's write and emit — with the
+gap between them being however long you took to approve.
 
 ---
 
@@ -350,47 +317,32 @@ The trace shows exactly where the script paused and when it resumed — with the
 ```python
 import os, time
 from aindy_sdk import AINDYClient
+from tutorial_01 import tenant_from_jwt
 
-client = AINDYClient(
-    base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
-    api_key=os.environ.get("AINDY_API_KEY", "aindy_replace_me"),
-)
+client = AINDYClient(base_url=os.environ["AINDY_BASE_URL"], api_key=os.environ["AINDY_API_KEY"])
+TENANT = tenant_from_jwt(client.api_key)
 
-# Seed tasks
 for content in ["Syscall versioning", "SDK tests", "Docs site"]:
-    client.memory.write("/memory/demo/tasks/outcome", content,
-                        tags=["sprint-12"], node_type="outcome")
+    client.memory.write(f"/memory/{TENANT}/tasks/outcome", content, tags=["sprint-12"], node_type="outcome")
 
-# Upload and start (will WAIT)
-with open("wait_resume.nodus") as f:
+with open("wait_resume.nd", encoding="utf-8") as f:
     client.nodus.upload_script("wait_resume", f.read(), overwrite=True)
 
-result = client.nodus.run_script(script_name="wait_resume", input={})
-run_id = result.get("run_id") or result.get("trace_id")
-print(f"Script waiting — run_id: {run_id}")
+run_id = client.nodus.run_script(script_name="wait_resume")["run_id"]
+print(f"Suspended — run {run_id}")
 
-# Let it settle, then send the approval
-time.sleep(1)
-client.events.emit("review.approved", {
-    "reviewer": "shawn",
-    "approved": True,
-    "note":     "Ship it.",
+client.post(f"/platform/flows/runs/{run_id}/resume", {
+    "event_type": "review.approved",
+    "payload": {"reviewer": "shawn", "approved": True, "note": "Ship it."},
 })
-print("Approval sent — script resuming...")
 
-# Check the result
-time.sleep(2)
-insights = client.memory.read("/memory/demo/insights/*")
-for node in insights["data"]["nodes"]:
+for _ in range(20):
+    if client.get(f"/platform/flows/runs/{run_id}")["flow_run_get_result"]["status"] in ("completed", "failed"):
+        break
+    time.sleep(0.5)
+
+for node in client.memory.read(f"/memory/{TENANT}/insights/**")["data"]["nodes"]:
     print(f"Insight: {node['content']}")
-```
-
-**Final output:**
-
-```
-Script waiting — run_id: run-9f3c...
-Approval sent — script resuming...
-Insight: Sprint-12 tasks approved by shawn. Note: Ship it.
 ```
 
 ---
@@ -398,31 +350,32 @@ Insight: Sprint-12 tasks approved by shawn. Note: Ship it.
 ## What you just built
 
 ```
-tutorial_02.py                  Nodus script (wait_resume.nodus)
-      │                                    │
-      │  run_script()                      │  reads memory
-      │ ──────────────────────────────►    │  writes pending node
-      │                                    │
-      │                                    ▼ WAIT ("review.approved")
-      │  events.emit("review.approved")    ·
-      │ ──────────────────────────────►    · suspended
-      │                                    ·
-      │                                    ▼ RESUMED
-      │                                    │  writes approved insight
-      │  memory.read → sees result         │  emits "sprint.review.completed"
-      │ ◄──────────────────────────────    │
+tutorial_02.py                          wait_resume.nd
+      │  run_script()                        │ phase 1: read, write pending
+      │ ───────────────────────────────►     │ set nodus_wait_* → exit
+      │                                      ▼ FlowRun.status = waiting
+      │  POST …/runs/{id}/resume             ·   (a row; nothing running)
+      │ ───────────────────────────────►     ·
+      │                                      ▼ re-enqueued
+      │                                      │ phase 2: sees payload,
+      │  memory.read → sees insight          │ writes insight, emits
+      │ ◄───────────────────────────────     │
 ```
 
-Key insight: **the script has no polling loop, no callback, no thread**. It pauses as a database row and resumes as a scheduler event. This pattern scales to hundreds of concurrent waiting executions with zero resource cost while waiting.
+The waiting run costs nothing while it waits — it is a database row and a scheduler entry,
+and it survives a restart. That is the property this pattern buys you.
 
 ---
 
-## What happens if the event never arrives?
+## What if the approval never comes?
 
-The `timeout_seconds: 300` parameter in the script means the execution fails with a timeout error after 5 minutes. Without a timeout it waits indefinitely. Both are valid depending on your use case.
+The run stays `waiting`. There is no per-wait timeout on this path today; an operator cancels
+it or resumes it with a rejection. `GET /platform/flows/runs?status=waiting` lists them
+(`platform.admin`).
 
 ---
 
 ## Next
 
-→ **[Tutorial 3: Scheduled Intelligence](./03-scheduled-execution.md)** — make this analysis run automatically every morning without you touching a keyboard.
+→ **[Tutorial 3: Scheduled Intelligence](./03-scheduled-execution.md)** — run a script on a
+schedule instead of on demand.

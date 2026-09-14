@@ -1,356 +1,279 @@
+---
+title: "Tutorial 3 — Scheduled Intelligence"
+last_verified: "2026-09-13"
+api_version: "1.0"
+status: current
+owner: "platform-team"
+---
 # Tutorial 3 — Scheduled Intelligence
 
-**Time:** ~7 minutes  
-**Difficulty:** Intermediate  
-**What you'll build:** A Nodus script that runs on a cron schedule, analyzes memory, writes a daily briefing, and emails (emits) the summary — without you doing anything after setup.
+**Time:** ~7 minutes
+**Difficulty:** Intermediate
+**What you'll build:** A Nodus script that runs on a cron schedule, summarises what is in
+memory, writes a daily briefing node, and emits an event a webhook can pick up — with nobody
+at a keyboard.
 
 ---
 
 ## Goal
 
-You'll see A.I.N.D.Y. running autonomously. You set it up once, and every morning it:
-
-1. Reads everything written to memory in the last 24 hours
-2. Analyzes it with a flow
-3. Writes a daily briefing node
-4. Emits a `daily.briefing.ready` event
-
 ```
-09:00 every day
+09:00 UTC every day
       │
       ▼
-  Nodus script fires (no human involved)
+  scheduler fires the stored script
       │
-      ├─ reads recent memory nodes
-      ├─ runs analysis flow
-      ├─ writes briefing to memory
-      └─ emits event → triggers webhooks
+      ├─ sys.v1.memory.read   /memory/<tenant>/**
+      ├─ sys.v1.memory.write  /memory/<tenant>/briefings/decision
+      └─ sys.v1.event.emit    daily.briefing.ready  → webhook fan-out
 ```
+
+The scheduled job is a `nodus_scheduled_jobs` row; the runtime's APScheduler lane picks it up
+on the cron tick, runs it as a normal Nodus execution under your identity, and records the
+outcome on the row (`last_run_at`, `last_run_status`). Missed ticks — the server was down at
+09:00 — follow the job's `misfire_policy` (`skip` by default).
 
 ---
 
 ## Step 1 — Write the briefing script
 
-Create `daily_briefing.nodus`:
+Create `daily_briefing.nd`:
 
 ```js
-// Read everything written since yesterday
-let recent = sys("sys.v1.memory.read", {
-    path:  "/memory/demo/**",
-    query: "sprint insight decision outcome",
-    limit: 50
-})
-
-let nodes     = recent.data.nodes
-let node_count = nodes.length
-
-// Nothing to brief today? Exit cleanly.
-if node_count == 0 {
-    set_state("briefing", "No new memory nodes since last briefing.")
-    set_state("node_count", 0)
-    emit("daily.briefing.ready", {node_count: 0, summary: "Nothing new."})
-    set_state("done", true)
-}
+// Tutorial 3 — daily briefing over everything this user owns
+let recent = sys("sys.v1.memory.read", {"path": "/memory/" + user_id + "/**", "limit": 50})
+let nodes = []
+if (recent["status"] == "success") { nodes = recent["data"]["nodes"] }
+let node_count = len(nodes)
 
 // Count by type
-let decisions = 0
-let outcomes  = 0
-let insights  = 0
-let i = 0
-
-while i < node_count {
-    let t = nodes[i].node_type
-    if t == "decision" { decisions = decisions + 1 }
-    if t == "outcome"  { outcomes  = outcomes  + 1 }
-    if t == "insight"  { insights  = insights  + 1 }
-    i = i + 1
+let decisions = 0i
+let outcomes = 0i
+let insights = 0i
+let i = 0i
+while (i < node_count) {
+    let t = nodes[i]["node_type"]
+    if (t == "decision") { decisions = decisions + 1i }
+    if (t == "outcome")  { outcomes = outcomes + 1i }
+    if (t == "insight")  { insights = insights + 1i }
+    i = i + 1i
 }
 
-// Build a summary line
-let summary = "Daily briefing: " + node_count + " node(s) — "
-            + decisions + " decisions, "
-            + outcomes  + " outcomes, "
-            + insights  + " insights."
-
-// Run a deeper analysis if we have enough signal
-let analysis_summary = summary
-if node_count >= 3 {
-    // Runtime note (validated 2026-06-27): the sys.v1.flow.run schema field is
-    // `initial_state` (not `input`). See AINDY/kernel/syscall_registry.py.
-    let analysis = sys("sys.v1.flow.run", {
-        flow_name: "analyze_tasks",
-        initial_state: {
-            nodes:   nodes,
-            context: "daily briefing"
-        }
+let summary = "No new memory nodes since last briefing."
+if (node_count > 0i) {
+    summary = ("Daily briefing: " + str(node_count) + " node(s) - " + str(decisions)
+               + " decisions, " + str(outcomes) + " outcomes, " + str(insights) + " insights.")
+    // Same path every day, so downstream consumers always find the latest briefing here
+    sys("sys.v1.memory.write", {
+        "path": "/memory/" + user_id + "/briefings/decision",
+        "content": summary,
+        "tags": ["daily-briefing", "auto-generated"],
+        "node_type": "decision"
     })
-    if analysis.status == "success" {
-        analysis_summary = analysis.data.summary
-    }
 }
 
-// Write the briefing to a well-known path so downstream
-// consumers can always find today's briefing at the same address.
-sys("sys.v1.memory.write", {
-    path:      "/memory/demo/briefings/decision",
-    content:   analysis_summary,
-    tags:      ["daily-briefing", "auto-generated"],
-    node_type: "decision",
-    extra: {
-        node_count: node_count,
-        decisions:  decisions,
-        outcomes:   outcomes,
-        insights:   insights
-    }
+// Emit for webhooks and downstream automations — even on an empty day
+sys("sys.v1.event.emit", {
+    "event_type": "daily.briefing.ready",
+    "payload": {"node_count": node_count, "decisions": decisions,
+                "outcomes": outcomes, "insights": insights, "summary": summary}
 })
 
-// Emit for webhooks / downstream automations
-emit("daily.briefing.ready", {
-    node_count:       node_count,
-    decisions:        decisions,
-    outcomes:         outcomes,
-    insights:         insights,
-    summary:          analysis_summary
-})
-
-// Surface for callers who inspect output_state directly
-set_state("briefing",    analysis_summary)
-set_state("node_count",  node_count)
-set_state("done",        true)
+set_state("briefing", summary)
+set_state("node_count", node_count)
+set_state("done", true)
 ```
+
+If you did Tutorials 1 and 2, `/memory/<tenant>/**` — everything you own — already holds tasks, insights and a pending
+node, so the first run has something to say.
 
 ---
 
 ## Step 2 — Test it manually first
 
-Always verify the script runs correctly before scheduling it. Create `tutorial_03.py`:
+Never schedule a script you have not run. Create `tutorial_03.py`:
 
 ```python
-import os, json
+import os
 from aindy_sdk import AINDYClient
+from tutorial_01 import tenant_from_jwt
 
 client = AINDYClient(
     base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
-    api_key=os.environ.get("AINDY_API_KEY", "aindy_replace_me"),
+    api_key=os.environ.get("AINDY_API_KEY", "replace_me"),
 )
+TENANT = tenant_from_jwt(client.api_key)      # from Tutorial 1 — memory paths start /memory/{tenant}/
 
-# Upload the script
-print("Uploading daily_briefing script...")
-with open("daily_briefing.nodus") as f:
-    source = f.read()
+with open("daily_briefing.nd", encoding="utf-8") as f:
+    client.nodus.upload_script("daily_briefing", f.read(), overwrite=True)
 
-client.nodus.upload_script("daily_briefing", source, overwrite=True)
-print("  ✓ Uploaded.")
-
-# Run it once manually to verify
-print("\nRunning manually...")
-result = client.nodus.run_script(
-    script_name="daily_briefing",
-    input={},
-)
-
-print(f"  Status:        {result['nodus_status']}")
-print(f"  Events emitted: {result['events_emitted']}")
-print(f"  Memory writes:  {result['memory_writes_count']}")
-print()
-print("  Output state:")
-for key, val in result.get("output_state", {}).items():
-    print(f"    {key}: {val}")
+print("Manual run...")
+result = client.nodus.run_script(script_name="daily_briefing")
+print(f"  status:        {result['status']}")
+print(f"  memory writes: {result['memory_writes_count']}")
+print(f"  events:        {result['events_emitted']}")
+out = result["output_state"]
+print(f"  briefing:      {out['briefing']}")
+print(f"  node_count:    {out['node_count']}")
 ```
 
 **Expected output:**
 
 ```
-Uploading daily_briefing script...
-  ✓ Uploaded.
-
-Running manually...
-  Status:         success
-  Events emitted: 1
-  Memory writes:  1
-
-  Output state:
-    briefing:   Daily briefing: 3 node(s) — 1 decisions, 2 outcomes, 0 insights.
-    node_count: 3
-    done:       True
+Manual run...
+  status:        SUCCESS
+  memory writes: 1
+  events:        1
+  briefing:      Daily briefing: 5 node(s) - 2 decisions, 3 outcomes, 0 insights.
+  node_count:    5
 ```
 
-The script works. Now schedule it.
+Your counts will differ with what the earlier tutorials left in memory. `memory_writes_count`
+and `events_emitted` come from the execution record and are the cheap way to confirm the
+script did what you think.
 
 ---
 
 ## Step 3 — Schedule it
 
 ```python
-print("\nScheduling daily briefing (09:00 every day)...")
-
-schedule = client.post("/platform/nodus/schedule", {
-    "name":      "daily_briefing",
-    "flow_name": "daily_briefing",
-    "cron_expr": "0 9 * * *",       # 09:00 every day
-    "state":     {}
+print("\nScheduling (09:00 UTC daily)...")
+job = client.post("/platform/nodus/schedule", {
+    "script_name": "daily_briefing",   # the stored script from Step 2
+    "cron":        "0 9 * * *",        # 5-field cron, UTC
+    "job_name":    "daily_briefing",   # human label; the id is what you delete by
+    "input":       {},
 })
-
-print(f"  ✓ Job created")
-print(f"    name:      {schedule.get('name')}")
-print(f"    cron:      {schedule.get('cron_expr')}")
-print(f"    next run:  {schedule.get('next_run_at', 'calculated at next tick')}")
+job_id = job["id"]
+print(f"  ✓ job {job_id}")
+print(f"    name:     {job['job_name']}")
+print(f"    cron:     {job['cron_expression']}")
+print(f"    next run: {job['next_run_at']}")
 ```
 
 **Expected output:**
 
 ```
-Scheduling daily briefing (09:00 every day)...
-  ✓ Job created
-    name:      daily_briefing
-    cron:      0 9 * * *
-    next run:  2026-04-02T09:00:00+00:00
+Scheduling (09:00 UTC daily)...
+  ✓ job 6b1f…
+    name:     daily_briefing
+    cron:     0 9 * * *
+    next run: 2026-09-14T09:00:00+00:00
 ```
+
+`POST /platform/nodus/schedule` (scope `flow.execute`). You can pass `script` (inline source)
+instead of `script_name`. Optional fields: `error_policy` (`fail` default), `max_retries`
+(1–10, default 3). The cron is validated with `CronTrigger.from_crontab()` before the row is
+written, so a bad expression is a 422 now, not a silent no-op at 09:00.
 
 ---
 
 ## Step 4 — Verify the schedule
 
 ```python
-print("\nActive scheduled jobs:")
-jobs = client.get("/platform/nodus/schedule")
-for job in jobs.get("jobs", []):
-    status = "✓ active" if job.get("is_active") else "✗ inactive"
-    print(f"  [{status}] {job['name']}")
-    print(f"             cron:     {job['cron_expr']}")
-    print(f"             next run: {job.get('next_run_at', '—')}")
-    print(f"             last run: {job.get('last_run_at', 'never')}")
+print("\nScheduled jobs:")
+listing = client.get("/platform/nodus/schedule")
+for j in listing["jobs"]:
+    flag = "✓ active" if j["is_active"] else "✗ inactive"
+    print(f"  [{flag}] {j['job_name']}  ({j['id'][:8]}…)")
+    print(f"             cron:     {j['cron_expression']}")
+    print(f"             next run: {j['next_run_at']}")
+    print(f"             last run: {j['last_run_at'] or 'never'}  {j['last_run_status'] or ''}")
 ```
 
 **Expected output:**
 
 ```
-Active scheduled jobs:
-  [✓ active] daily_briefing
+Scheduled jobs:
+  [✓ active] daily_briefing  (6b1f…)
              cron:     0 9 * * *
-             next run: 2026-04-02T09:00:00+00:00
+             next run: 2026-09-14T09:00:00+00:00
              last run: never
 ```
+
+The listing is `{"count": N, "jobs": [...]}`, scoped to your user.
 
 ---
 
 ## Step 5 — Subscribe a webhook to the briefing event
 
-When the briefing runs, fire a webhook to your downstream system:
-
 ```python
-print("\nSubscribing to briefing events...")
+print("\nSubscribing webhook to daily.briefing.ready...")
 try:
     sub = client.post("/platform/webhooks", {
         "event_type":   "daily.briefing.ready",
-        "callback_url": "https://your-system.com/hooks/aindy-briefing",
+        "callback_url": "https://your-system.example/hooks/briefing",
         "secret":       "your-webhook-secret",
     })
-    print(f"  ✓ Webhook registered — id: {sub.get('id')}")
-    print("  Payload you'll receive each morning:")
-    print("""  {
-    "event_type": "daily.briefing.ready",
-    "payload": {
-        "node_count": 12,
-        "decisions": 3,
-        "outcomes": 7,
-        "insights": 2,
-        "summary": "Daily briefing: 12 node(s)..."
-    },
-    "trace_id": "run-...",
-    "timestamp": "2026-04-02T09:00:04Z"
-  }""")
+    print(f"  ✓ subscription {sub.get('id', '?')}")
 except Exception as e:
-    print(f"  (Skipped: {e})")
+    print(f"  (skipped: {e})")
 ```
+
+Scope `webhook.manage`. Every delivery carries `X-AINDY-Signature: sha256=<hmac>` computed
+with the `secret`; a prefix wildcard (`daily.*`) subscribes to a family of events. A failing
+endpoint does not fail the script that emitted the event — delivery is fan-out, not part of
+the syscall.
 
 ---
 
-## Step 6 — Force a test run right now
+## Step 6 — Force a run now
 
-Don't want to wait until 09:00? Trigger it immediately:
+You do not have to wait until 09:00 to see the whole chain fire:
 
 ```python
-print("\nForcing a run now (manual trigger)...")
+print("\nForcing a run now...")
+now = client.nodus.run_script(script_name="daily_briefing")
+print(f"  status: {now['status']}   events emitted: {now['events_emitted']}")
+```
 
-immediate = client.nodus.run_script(
-    script_name="daily_briefing",
-    input={"triggered_by": "manual"},
-)
+This is the same execution the scheduler will perform — same script, same identity, same
+syscalls — just triggered by you. If the webhook endpoint is real, it received a
+`daily.briefing.ready` delivery just now.
 
-print(f"  Status:    {immediate['nodus_status']}")
-print(f"  Briefing:  {immediate['output_state'].get('briefing', '—')}")
-print(f"  Nodes:     {immediate['output_state'].get('node_count', 0)}")
+---
+
+## Step 7 — Read the briefing back
+
+```python
+print("\nBriefings in memory:")
+for node in client.memory.read(f"/memory/{TENANT}/briefings/**", limit=5)["data"]["nodes"]:
+    print(f"  • {node['content']}")
 ```
 
 **Expected output:**
 
 ```
-Forcing a run now (manual trigger)...
-  Status:    success
-  Briefing:  Daily briefing: 3 node(s) — 1 decisions, 2 outcomes, 0 insights.
-  Nodes:     3
+Briefings in memory:
+  • Daily briefing: 5 node(s) - 2 decisions, 3 outcomes, 0 insights.
+  • Daily briefing: 5 node(s) - 2 decisions, 3 outcomes, 0 insights.
 ```
+
+Two entries — the manual run and the forced run. Each scheduled tick adds one. (The briefing
+counts *itself* from the second run on, since `/memory/<tenant>/**` is everything you own. Read
+`/memory/<tenant>/tasks/**` instead if that bothers you.)
 
 ---
 
-## Step 7 — Read the briefing from memory
+## Step 8 — Change or cancel
 
-The briefing is always at the same well-known path. Any script, flow, or external system can read today's briefing without knowing the run ID:
-
-```python
-print("\nReading today's briefing from memory...")
-
-briefings = client.memory.read("/memory/demo/briefings/*", limit=5)
-for node in briefings["data"]["nodes"]:
-    print(f"  Content: {node['content']}")
-    print(f"  Written: {node.get('created_at', '—')}")
-    print(f"  Tags:    {', '.join(node.get('tags', []))}")
-    if node.get("extra"):
-        extra = node["extra"]
-        print(f"  Stats:   {extra.get('node_count', 0)} nodes, "
-              f"{extra.get('decisions', 0)} decisions, "
-              f"{extra.get('outcomes', 0)} outcomes")
-```
-
-**Expected output:**
-
-```
-Reading today's briefing from memory...
-  Content: Daily briefing: 3 node(s) — 1 decisions, 2 outcomes, 0 insights.
-  Written: 2026-04-01T10:32:14Z
-  Tags:    daily-briefing, auto-generated
-  Stats:   3 nodes, 1 decisions, 2 outcomes
-```
-
----
-
-## Step 8 — Update and cancel
-
-Change the schedule:
-
-> **Runtime note (validated 2026-06-27):** the delete route is
-> `DELETE /platform/nodus/schedule/{job_id}` (handler
-> `AINDY/routes/platform/nodus_schedule_router.py`). The path segment is the
-> job's `job_id`; deleting by the human `name` shown here works only if your
-> SDK resolves name → `job_id` for you, otherwise pass the id returned at
-> creation.
+Schedules are replaced, not edited: delete by **id** and create again.
 
 ```python
-# Update to run twice a day (09:00 and 18:00)
-client.delete("/platform/nodus/schedule/daily_briefing")
-client.post("/platform/nodus/schedule", {
-    "name":      "daily_briefing",
-    "flow_name": "daily_briefing",
-    "cron_expr": "0 9,18 * * *",
-    "state":     {}
+client.delete(f"/platform/nodus/schedule/{job_id}")            # 204
+job = client.post("/platform/nodus/schedule", {
+    "script_name": "daily_briefing",
+    "cron":        "0 9,18 * * *",                             # 09:00 and 18:00 UTC
+    "job_name":    "daily_briefing",
 })
-print("Updated: now runs at 09:00 and 18:00.")
+print(f"Rescheduled as {job['id']} — {job['cron_expression']}")
 
-# Cancel entirely
-# client.delete("/platform/nodus/schedule/daily_briefing")
-# print("Cancelled.")
+# To stop it for good:
+# client.delete(f"/platform/nodus/schedule/{job['id']}")
 ```
+
+`DELETE /platform/nodus/schedule/{job_id}` takes the row id, never the `job_name` — names are
+not unique.
 
 ---
 
@@ -359,101 +282,60 @@ print("Updated: now runs at 09:00 and 18:00.")
 ```python
 import os
 from aindy_sdk import AINDYClient
+from tutorial_01 import tenant_from_jwt
 
-client = AINDYClient(
-    base_url=os.environ.get("AINDY_BASE_URL", "http://localhost:8000"),
-    api_key=os.environ.get("AINDY_API_KEY", "aindy_replace_me"),
-)
+client = AINDYClient(base_url=os.environ["AINDY_BASE_URL"], api_key=os.environ["AINDY_API_KEY"])
+TENANT = tenant_from_jwt(client.api_key)
 
-# Upload
-with open("daily_briefing.nodus") as f:
+with open("daily_briefing.nd", encoding="utf-8") as f:
     client.nodus.upload_script("daily_briefing", f.read(), overwrite=True)
 
-# Test once manually
-result = client.nodus.run_script(script_name="daily_briefing", input={})
-print(f"Manual run: {result['output_state'].get('briefing')}")
+test = client.nodus.run_script(script_name="daily_briefing")
+print("manual run:", test["status"], "-", test["output_state"]["briefing"])
 
-# Schedule for every morning
-client.post("/platform/nodus/schedule", {
-    "name":      "daily_briefing",
-    "flow_name": "daily_briefing",
-    "cron_expr": "0 9 * * *",
-    "state":     {},
+job = client.post("/platform/nodus/schedule", {
+    "script_name": "daily_briefing", "cron": "0 9 * * *", "job_name": "daily_briefing",
 })
+print("scheduled:", job["id"], job["cron_expression"], "next", job["next_run_at"])
 
-# Subscribe for delivery
 client.post("/platform/webhooks", {
-    "event_type":   "daily.briefing.ready",
-    "callback_url": "https://your-system.com/hooks/aindy",
+    "event_type": "daily.briefing.ready",
+    "callback_url": "https://your-system.example/hooks/briefing",
+    "secret": "your-webhook-secret",
 })
-
-# Confirm
-jobs = client.get("/platform/nodus/schedule")
-print(f"Active jobs: {len(jobs.get('jobs', []))}")
-print("Done — briefing will run every morning at 09:00.")
+print("webhook subscribed. Done — it runs without you now.")
 ```
-
-**Final output:**
-
-```
-Manual run: Daily briefing: 3 node(s) — 1 decisions, 2 outcomes, 0 insights.
-Active jobs: 1
-Done — briefing will run every morning at 09:00.
-```
-
----
-
-## What you just built
-
-```
-Cron: "0 9 * * *"
-      │
-      ▼  09:00 every day (server-side, no client needed)
-  daily_briefing.nodus
-      │
-      ├─ sys.v1.memory.read  ← scans /memory/demo/**
-      │
-      ├─ sys.v1.flow.run     ← analyze_tasks (if enough signal)
-      │
-      ├─ sys.v1.memory.write ← /memory/demo/briefings/decision
-      │
-      └─ sys.v1.event.emit   ─────────────────────────────────►  Webhook
-                                                                  POST /hooks/aindy
-                                                                  {node_count, summary, ...}
-```
-
-The server handles the schedule. You handle nothing — it runs while you sleep.
 
 ---
 
 ## Cron reference
 
-| Expression | Meaning |
-|------------|---------|
+Five fields, **UTC**: `minute hour day-of-month month day-of-week`.
+
+| Expression | Fires |
+|---|---|
 | `0 9 * * *` | 09:00 every day |
-| `0 9,18 * * *` | 09:00 and 18:00 every day |
-| `0 9 * * MON` | 09:00 every Monday |
-| `*/30 * * * *` | Every 30 minutes |
-| `0 0 1 * *` | Midnight on the 1st of each month |
-
-Leader-election ensures only one server instance runs each job even in a multi-process deployment.
+| `0 9 * * 1-5` | 09:00 Monday–Friday |
+| `0 */6 * * *` | every six hours |
+| `30 8 1 * *` | 08:30 on the 1st of each month |
+| `0 9,18 * * *` | 09:00 and 18:00 |
 
 ---
 
-## All three tutorials — what you now have
+## What you now have, across all three
 
-| Tutorial | Pattern | What it gives you |
-|----------|---------|-------------------|
-| 1 — Memory-Driven Workflow | Read → Process → Write | Persistent, queryable intelligence |
-| 2 — Event-Driven Automation | Emit → Wait → Resume | Reactive, pauseable workflows |
-| 3 — Scheduled Intelligence | Cron → Script → Event | Autonomous, hands-off execution |
+```
+Tutorial 1   write → read → analyze (script) → write insight → emit
+Tutorial 2   script suspends the run → human approves through the resume route → script finishes
+Tutorial 3   the same kind of script on a cron, with a webhook on its event
+```
 
-Combine them: write your tasks (T1), have a flow wait for approval before acting on them (T2), and run the whole loop on a schedule automatically (T3). That's the full A.I.N.D.Y. execution model.
-
----
+Every one of those arrows went through `SyscallDispatcher`, under your identity, with a
+capability check and a `SystemEvent` — the scheduled run included. Nothing in these three
+needed an app plugin, a custom node, or anything the runtime does not ship.
 
 ## Next steps
 
-- [Syscall Reference](../runtime/SYSCALL_REFERENCE.md) — all registered syscalls with payloads and return shapes
-- [Nodus Language Guide](../runtime/NODUS_DEVELOPER_GUIDE.md) — injected globals, built-ins, WAIT/RESUME, error semantics
-- SDK Reference — all client methods _(ships in the separately published **aindy-sdk** package; the `docs/sdk/` docset was not migrated into this runtime repo)_
+- `docs/runtime/NODUS_DEVELOPER_GUIDE.md` — everything a guest script can and cannot do
+- `docs/runtime/SYSCALL_REFERENCE.md` — every `sys.v1.*` call and the scope each needs
+- `docs/runtime/SANDBOX_CONTRACT.md` — what the guest boundary guarantees, and what it does not

@@ -55,7 +55,8 @@ jobs:
           # docs/handoffs/ holds outbound handoffs to sibling repos (same date).
           # docs/design/ holds design records with a status (2026-09-13).
           docs_roots = [Path("docs/runtime"), Path("docs/operations"), Path("docs/governance"),
-                        Path("docs/upgrades"), Path("docs/handoffs"), Path("docs/design")]
+                        Path("docs/upgrades"), Path("docs/handoffs"), Path("docs/design"),
+                        Path("docs/tutorials")]
           missing = []
 
           # DOCS-STALE-1 (closed 2026-08-13). Seven docs declared a last_verified EARLIER
@@ -111,7 +112,7 @@ jobs:
               print("\n".join(missing))
               sys.exit(1)
 
-          print(f"validated {sum(len(list(r.glob('*.md'))) for r in docs_roots)} docs (runtime, operations, governance, upgrades, handoffs, design) "
+          print(f"validated {sum(len(list(r.glob('*.md'))) for r in docs_roots)} docs (runtime, operations, governance, upgrades, handoffs, design, tutorials) "
                 f"(frontmatter keys + last_verified >= {REPO_EPOCH})")
           PY
 
