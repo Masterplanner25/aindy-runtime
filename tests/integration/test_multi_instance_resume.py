@@ -132,6 +132,63 @@ class TestMultiInstanceResume:
         # test faithful to the "origin instance died" scenario.
         assert instance_a.waiting_for(run_id) is None
 
+    def test_a_run_scoped_wake_resumes_only_that_run_cross_instance(
+        self,
+        shared_redis,
+        db_session,
+        db_session_factory,
+    ):
+        """RESUME-FANOUT-UNSCOPED-1 on the CROSS-INSTANCE path.
+
+        Two runs parked on instance A, same event, no correlation (the widest match). Instance B
+        receives a wake scoped to run-A. Only run-A may be claimed; run-B's spec must survive in
+        the shared registry. Without the `run_id` filter in `_cross_instance_resume` this is the
+        live fan-out, one process boundary over.
+        """
+        from AINDY.db.models.flow_run import FlowRun
+        from AINDY.db.models.waiting_flow_run import WaitingFlowRun
+        from AINDY.kernel.redis_wait_registry import RedisWaitRegistry
+        from AINDY.kernel.resume_spec import RESUME_HANDLER_EU, ResumeSpec
+
+        registry = RedisWaitRegistry(shared_redis)
+        for run_id, eu_id in (("run-scoped-A", "eu-sA"), ("run-scoped-B", "eu-sB")):
+            registry.register(
+                run_id,
+                ResumeSpec(
+                    handler=RESUME_HANDLER_EU, eu_id=eu_id, tenant_id="tenant-scoped",
+                    run_id=run_id, eu_type="flow",
+                ),
+            )
+            db_session.add(
+                FlowRun(
+                    id=run_id, flow_name="test.flow", workflow_type="test_flow", state={},
+                    current_node="wait_node", status="waiting",
+                    waiting_for="review.approved", trace_id=None,
+                )
+            )
+            db_session.add(
+                WaitingFlowRun(
+                    run_id=run_id, event_type="review.approved", correlation_id=None,
+                    eu_id=eu_id, priority="normal", instance_id="instance-a",
+                )
+            )
+        db_session.commit()
+
+        instance_b = _make_engine()
+        with patch("AINDY.kernel.event_bus.get_redis_client", return_value=shared_redis), patch(
+            "AINDY.db.SessionLocal", db_session_factory
+        ):
+            count = instance_b.notify_event(
+                "review.approved", run_id="run-scoped-A", broadcast=False
+            )
+
+        assert count == 1
+        item = instance_b.dequeue_next()
+        assert item is not None and item.run_id == "run-scoped-A"
+        assert instance_b.dequeue_next() is None, "run-B was woken by run-A's resume"
+        assert registry.get_spec("run-scoped-A") is None
+        assert registry.get_spec("run-scoped-B") is not None, "run-B's wait was claimed"
+
     def test_only_one_instance_claims_concurrent_resume(
         self,
         shared_redis,

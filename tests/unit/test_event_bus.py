@@ -116,8 +116,15 @@ class TestPublish:
         assert json.loads(raw) == {
             "event_type": "operation.completed",
             "correlation_id": "chain-abc",
+            "run_id": None,
             "source_instance_id": bus._instance_id,
         }
+
+    def test_payload_carries_the_run_scope(self, bus, fake_redis):
+        """RESUME-FANOUT-UNSCOPED-1 — a per-run wake must say so ON THE WIRE, or every other
+        instance fans out exactly as before."""
+        bus.publish("review.approved", correlation_id="trace-1", run_id="run-A")
+        assert json.loads(fake_redis.publish.call_args[0][1])["run_id"] == "run-A"
 
     def test_correlation_id_is_optional(self, bus, fake_redis):
         bus.publish("evt")
@@ -339,8 +346,20 @@ class TestHandleMessage:
         with _patch_engine(engine):
             bus._handle_message(payload)
         engine.notify_event.assert_called_once_with(
-            "operation.completed", correlation_id="chain-1", broadcast=False
+            "operation.completed", correlation_id="chain-1", run_id=None, broadcast=False
         )
+
+    def test_remote_run_scope_is_forwarded(self, bus):
+        """RESUME-FANOUT-UNSCOPED-1 — a per-run wake that arrives over the wire must stay
+        per-run on this instance, or a scoped resume fans out everywhere but its origin."""
+        engine = _engine()
+        payload = json.dumps(
+            {"event_type": "review.approved", "correlation_id": "trace-1",
+             "run_id": "run-A", "source_instance_id": "some-other-instance"}
+        )
+        with _patch_engine(engine):
+            bus._handle_message(payload)
+        assert engine.notify_event.call_args.kwargs["run_id"] == "run-A"
 
     def test_dispatch_always_suppresses_rebroadcast(self, bus):
         """`broadcast=False` is what stops an event ping-ponging between instances."""
@@ -399,21 +418,21 @@ class TestPreRehydrationBuffer:
         with _patch_engine(engine):
             bus._handle_message(self._remote("evt-1"))
         engine.notify_event.assert_not_called()
-        assert bus._pre_rehydration_buffer == [("evt-1", None)]
+        assert bus._pre_rehydration_buffer == [("evt-1", None, None)]
 
     def test_buffering_preserves_the_correlation_id(self, bus):
         engine = _engine(rehydrated=False)
         with _patch_engine(engine):
             bus._handle_message(self._remote("evt-1", "chain-9"))
-        assert bus._pre_rehydration_buffer == [("evt-1", "chain-9")]
+        assert bus._pre_rehydration_buffer == [("evt-1", "chain-9", None)]
 
     def test_buffer_is_capped_and_drops_the_overflow(self, bus):
         engine = _engine(rehydrated=False)
-        bus._pre_rehydration_buffer = [("old", None)] * _MAX_BUFFER_SIZE
+        bus._pre_rehydration_buffer = [("old", None, None)] * _MAX_BUFFER_SIZE
         with _patch_engine(engine):
             bus._handle_message(self._remote("overflow"))
         assert len(bus._pre_rehydration_buffer) == _MAX_BUFFER_SIZE
-        assert ("overflow", None) not in bus._pre_rehydration_buffer
+        assert not any(e[0] == "overflow" for e in bus._pre_rehydration_buffer)
 
     def test_own_instance_messages_are_never_buffered(self, bus):
         engine = _engine(rehydrated=False)
@@ -428,7 +447,7 @@ class TestDrainBufferedEvents:
         assert bus.drain_buffered_events() == 0
 
     def test_buffered_events_are_dispatched_in_order(self, bus):
-        bus._pre_rehydration_buffer = [("evt-1", "c1"), ("evt-2", None)]
+        bus._pre_rehydration_buffer = [("evt-1", "c1", None), ("evt-2", None, None)]
         engine = _engine()
         with _patch_engine(engine):
             assert bus.drain_buffered_events() == 2
@@ -437,26 +456,26 @@ class TestDrainBufferedEvents:
         ]
 
     def test_drained_events_suppress_rebroadcast(self, bus):
-        bus._pre_rehydration_buffer = [("evt-1", None)]
+        bus._pre_rehydration_buffer = [("evt-1", None, None)]
         engine = _engine()
         with _patch_engine(engine):
             bus.drain_buffered_events()
         assert engine.notify_event.call_args.kwargs["broadcast"] is False
 
     def test_draining_empties_the_buffer(self, bus):
-        bus._pre_rehydration_buffer = [("evt-1", None)]
+        bus._pre_rehydration_buffer = [("evt-1", None, None)]
         with _patch_engine(_engine()):
             bus.drain_buffered_events()
         assert bus._pre_rehydration_buffer == []
 
     def test_second_drain_is_a_no_op(self, bus):
-        bus._pre_rehydration_buffer = [("evt-1", None)]
+        bus._pre_rehydration_buffer = [("evt-1", None, None)]
         with _patch_engine(_engine()):
             assert bus.drain_buffered_events() == 1
             assert bus.drain_buffered_events() == 0
 
     def test_one_failing_event_does_not_abort_the_drain(self, bus):
-        bus._pre_rehydration_buffer = [("bad", None), ("good", None)]
+        bus._pre_rehydration_buffer = [("bad", None, None), ("good", None, None)]
         engine = _engine()
         engine.notify_event.side_effect = [RuntimeError("boom"), None]
         with _patch_engine(engine):

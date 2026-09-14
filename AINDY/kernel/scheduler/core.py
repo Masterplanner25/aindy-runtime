@@ -39,10 +39,12 @@ class SchedulerCoreMixin:
             buffered = list(self._pre_rehydration_buffer)
             self._pre_rehydration_buffer.clear()
 
-        for event_type, correlation_id in buffered:
+        for event_type, correlation_id, run_id in buffered:
             logger.info("[Scheduler] replaying buffered event post-rehydration: %s", event_type)
             try:
-                self.notify_event(event_type, correlation_id=correlation_id, broadcast=False)
+                self.notify_event(
+                    event_type, correlation_id=correlation_id, run_id=run_id, broadcast=False
+                )
             except Exception:
                 logger.warning(
                     "[Scheduler] buffered event replay failed event=%s corr=%s",

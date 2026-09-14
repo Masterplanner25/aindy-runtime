@@ -215,13 +215,13 @@ def test_notify_before_rehydration_returns_zero(pre_engine: SchedulerEngine) -> 
 def test_notify_before_rehydration_buffers_event(pre_engine: SchedulerEngine) -> None:
     pre_engine.notify_event("buffered.event", correlation_id="c1")
     with pre_engine._lock:
-        assert pre_engine._pre_rehydration_buffer == [("buffered.event", "c1")]
+        assert pre_engine._pre_rehydration_buffer == [("buffered.event", "c1", None)]
 
 
 def test_pre_rehydration_buffer_overflow_drops_excess(pre_engine: SchedulerEngine) -> None:
     with pre_engine._lock:
         for i in range(_MAX_PRE_REHYDRATION_BUFFER):
-            pre_engine._pre_rehydration_buffer.append((f"ev.{i}", None))
+            pre_engine._pre_rehydration_buffer.append((f"ev.{i}", None, None))
     count = pre_engine.notify_event("overflow.event")
     assert count == 0
     with pre_engine._lock:
@@ -240,7 +240,7 @@ def test_mark_rehydration_complete_replays_buffered_events(pre_engine: Scheduler
     pre_engine.notify_event("flow.complete")
     assert not pre_engine.is_rehydrated()
     with pre_engine._lock:
-        assert any(ev == "flow.complete" for ev, _ in pre_engine._pre_rehydration_buffer)
+        assert any(ev == "flow.complete" for ev, _, _ in pre_engine._pre_rehydration_buffer)
 
     pre_engine.mark_rehydration_complete()
 

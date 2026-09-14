@@ -76,8 +76,17 @@ class SchedulerWaitMixin:
         event_type: str,
         *,
         correlation_id: str | None = None,
+        run_id: str | None = None,
         broadcast: bool = True,
     ) -> int:
+        """Wake every local wait matching *event_type* (and *correlation_id*, when both sides
+        carry one), then broadcast.
+
+        ★ ``run_id`` narrows the wake to ONE run — `RESUME-FANOUT-UNSCOPED-1`. It is carried
+        through the pre-rehydration buffer, the Redis message and the cross-instance fallback,
+        because a scope that held on one of those paths and not the others would be exactly
+        the shape the entry was filed for.
+        """
         import AINDY.kernel.scheduler_engine as compat
 
         if not self._rehydration_complete.is_set():
@@ -89,13 +98,19 @@ class SchedulerWaitMixin:
                         event_type,
                     )
                     return 0
-                self._pre_rehydration_buffer.append((event_type, correlation_id))
-            logger.debug("[Scheduler] buffered event pre-rehydration: %s corr=%s", event_type, correlation_id)
+                self._pre_rehydration_buffer.append((event_type, correlation_id, run_id))
+            logger.debug(
+                "[Scheduler] buffered event pre-rehydration: %s corr=%s run=%s",
+                event_type, correlation_id, run_id,
+            )
             return 0
 
         to_resume: list[tuple[str, dict]] = []
+        target_run = str(run_id) if run_id is not None else None
         with self._lock:
             for run_id, entry in list(self._waiting.items()):
+                if target_run is not None and str(run_id) != target_run:
+                    continue
                 wc = entry.get("wait_condition") or {}
                 wc_type = wc.get("type")
                 wc_event = wc.get("event_name")
@@ -132,12 +147,15 @@ class SchedulerWaitMixin:
             event_type,
             correlation_id,
             {run_id for run_id, _ in to_resume},
+            run_id=target_run,
         )
         if broadcast:
             try:
                 from AINDY.kernel.event_bus import get_event_bus
 
-                get_event_bus().publish(event_type, correlation_id=correlation_id)
+                get_event_bus().publish(
+                    event_type, correlation_id=correlation_id, run_id=target_run
+                )
             except Exception as exc:
                 logger.debug("[Scheduler] event bus publish failed (non-fatal): %s", exc)
         return len(to_resume) + cross_resumed
