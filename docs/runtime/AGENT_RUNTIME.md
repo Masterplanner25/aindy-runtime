@@ -19,7 +19,7 @@ Repository ownership:
 - this document belongs to `aindy-runtime`
 - app-enrichment planning belongs in `docs/apps/AGENTICS.md`
 - the broader documentation split map lives in
-  [Runtime Docset Boundary](./RUNTIME_DOCSET_BOUNDARY.md)
+  [Runtime Docset Boundary](../archive/RUNTIME_DOCSET_BOUNDARY.md)
 
 The authoritative repo-split import boundary for app code lives in
 [Runtime Public API Contract](./PUBLIC_API_CONTRACT.md). Treat that document as
@@ -65,7 +65,7 @@ Baseline runtime behavior is intentionally generic:
 - empty suggestion output unless a plugin registers a suggestion provider
 
 The supported runtime-only deployment surface for that baseline is defined in
-[Runtime-Only Deployment](./RUNTIME_ONLY_DEPLOYMENT.md).
+[Runtime-Only Deployment](../operations/RUNTIME_ONLY_DEPLOYMENT.md).
 
 Claim note:
 
@@ -230,7 +230,7 @@ after approval. Modifying the token post-approval is not permitted.
 
 ## 5. Per-Step Retry Policy
 
-The runtime uses [`RETRY_POLICY.md`](RETRY_POLICY.md) for all retry decisions.
+The runtime uses [`RETRY_POLICY.md`](./RETRY_POLICY.md) for all retry decisions.
 The agent-specific rules are:
 
 - **Transient failures** (network timeout, downstream 5xx): retry up to 3 times

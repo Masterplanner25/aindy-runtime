@@ -225,7 +225,7 @@ before there was a second writer.
 
 ## 10. Impact analysis (`AGENT_WORKING_RULES.md` §8)
 
-**Invariants touched** (`docs/platform/governance/INVARIANTS.md`):
+**Invariants touched** (`docs/governance/INVARIANTS.md`):
 
 - **(17) per-request DB session isolation** — not violated, and §3 is written to keep it that
   way: branches get their own sessions, the runner's session stays single-threaded. A design

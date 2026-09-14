@@ -14,7 +14,7 @@ owner: "platform-team"
 > research, ARM, rippletrace, analytics/metrics, network-bridge) were collapsed
 > to a single pointer at the end of §1 — they are **app-owned** and now live in
 > the **aindy-apps-monolith** repo. The runtime-vs-app ownership boundary is
-> normative in [`../runtime/DB_OWNERSHIP_CONTRACT.md`](../runtime/DB_OWNERSHIP_CONTRACT.md);
+> normative in [`../runtime/DB_OWNERSHIP_CONTRACT.md`](./DB_OWNERSHIP_CONTRACT.md);
 > the runtime-owned model set is the source of truth in `AINDY/db/models/`
 > (plus the Memory Bridge models in `AINDY/memory/memory_persistence.py`).
 
@@ -228,7 +228,7 @@ here.
 The runtime owns additional ORM models under `AINDY/db/models/` that predate or
 postdate the original combined map and are **not** expanded above. They are
 canonical in source and cataloged by category in
-[`../runtime/DB_OWNERSHIP_CONTRACT.md`](../runtime/DB_OWNERSHIP_CONTRACT.md)
+[`../runtime/DB_OWNERSHIP_CONTRACT.md`](./DB_OWNERSHIP_CONTRACT.md)
 (§"Runtime-Owned Models"):
 
 - **Platform access:** `api_key` (`platform_api_keys`).
@@ -258,7 +258,7 @@ The pre-split combined map interleaved app-domain tables with runtime tables.
 Those tables are **app-owned** and now live in the **aindy-apps-monolith** repo
 under the owning app packages. They are intentionally **not** documented here.
 Summary of the collapsed domains (canonical list:
-[`../runtime/DB_OWNERSHIP_CONTRACT.md`](../runtime/DB_OWNERSHIP_CONTRACT.md)
+[`../runtime/DB_OWNERSHIP_CONTRACT.md`](./DB_OWNERSHIP_CONTRACT.md)
 §"App-Owned Models"):
 
 | Domain (app package) | Representative tables (pre-split names) |

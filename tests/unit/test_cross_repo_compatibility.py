@@ -15,7 +15,7 @@ Run only condition code assertions:
 
     pytest tests/unit/test_cross_repo_compatibility.py -v -k condition
 
-See docs/runtime/CROSS_REPO_COMPATIBILITY.md for the policy.
+See docs/governance/CROSS_REPO_COMPATIBILITY.md for the policy.
 See docs/runtime/SDK_CONTRACT.md, UI_CONTRACT.md, and CONDITION_CODES.md for surface definitions.
 """
 from __future__ import annotations
@@ -93,7 +93,7 @@ def test_stable_syscall_names_present_sdk():
     assert missing == [], (
         f"Stable syscall(s) missing from registry: {missing}. "
         "Removing or renaming a stable syscall requires a MAJOR version bump. "
-        "See docs/runtime/CROSS_REPO_COMPATIBILITY.md §2."
+        "See docs/governance/CROSS_REPO_COMPATIBILITY.md §2."
     )
 
 
@@ -528,7 +528,7 @@ def test_runtime_condition_codes_stable_operator():
 
     Operators, automation tooling, and incident systems key on these string values
     from /ready and /health responses. Removing or renaming requires a MAJOR bump.
-    See docs/runtime/CONDITION_CODES.md.
+    See docs/operations/CONDITION_CODES.md.
     """
     from AINDY.kernel.condition_codes import RuntimeConditionCode
 
@@ -538,7 +538,7 @@ def test_runtime_condition_codes_stable_operator():
         f"Stable RuntimeConditionCode value(s) removed: {missing}. "
         "These codes appear in /ready and /health responses. "
         "Removing them breaks operator automation. "
-        "See docs/runtime/CONDITION_CODES.md and CROSS_REPO_COMPATIBILITY.md."
+        "See docs/operations/CONDITION_CODES.md and CROSS_REPO_COMPATIBILITY.md."
     )
 
 
@@ -547,7 +547,7 @@ def test_readiness_blocker_codes_stable_operator():
 
     These codes appear in the required_failures list of /ready (HTTP 503) responses.
     Operators and monitoring dashboards key on them for alerting.
-    See docs/runtime/CONDITION_CODES.md.
+    See docs/operations/CONDITION_CODES.md.
     """
     from AINDY.kernel.condition_codes import ReadinessBlockerCode
 
@@ -556,7 +556,7 @@ def test_readiness_blocker_codes_stable_operator():
     assert missing == [], (
         f"Stable ReadinessBlockerCode value(s) removed: {missing}. "
         "These codes appear in /ready required_failures. "
-        "See docs/runtime/CONDITION_CODES.md."
+        "See docs/operations/CONDITION_CODES.md."
     )
 
 
@@ -569,7 +569,7 @@ def test_condition_classifications_stable_operator():
     assert missing == [], (
         f"Stable ConditionClassification value(s) removed: {missing}. "
         "These classifications gate /ready readiness. "
-        "See docs/runtime/CONDITION_CODES.md."
+        "See docs/operations/CONDITION_CODES.md."
     )
 
 
@@ -582,7 +582,7 @@ def test_flow_run_statuses_stable_operator():
     assert missing == [], (
         f"Stable FlowRunStatus value(s) removed: {missing}. "
         "Flow status strings are stored in the database and returned in API responses. "
-        "See docs/runtime/CONDITION_CODES.md."
+        "See docs/operations/CONDITION_CODES.md."
     )
 
 
@@ -595,7 +595,7 @@ def test_agent_run_statuses_stable_operator():
     assert missing == [], (
         f"Stable AgentRunStatus value(s) removed: {missing}. "
         "Agent run status strings are stored in the database and returned in API responses. "
-        "See docs/runtime/CONDITION_CODES.md."
+        "See docs/operations/CONDITION_CODES.md."
     )
 
 

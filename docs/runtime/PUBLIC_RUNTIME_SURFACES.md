@@ -264,6 +264,6 @@ Important scope limit:
 - it does not promote experimental extension surfaces into a hardened external
   platform contract
 
-Use [RUNTIME_ONLY_DEPLOYMENT.md](./RUNTIME_ONLY_DEPLOYMENT.md) for the full
+Use [RUNTIME_ONLY_DEPLOYMENT.md](../operations/RUNTIME_ONLY_DEPLOYMENT.md) for the full
 bootstrap contract and [PUBLIC_API_CONTRACT.md](./PUBLIC_API_CONTRACT.md) for
 the import boundary.

@@ -4,7 +4,7 @@
 repository, and everything that used to live here was a copy of part of it.
 
 Also read
-[`docs/platform/governance/AGENT_WORKING_RULES.md`](docs/platform/governance/AGENT_WORKING_RULES.md)
+[`docs/governance/AGENT_WORKING_RULES.md`](docs/governance/AGENT_WORKING_RULES.md)
 for the collaboration boundaries — what may change without approval, what needs sign-off, and
 how to behave at a boundary you cannot resolve.
 

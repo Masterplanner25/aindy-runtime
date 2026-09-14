@@ -24,7 +24,7 @@ Ownership note:
 Reading rule:
 
 - this doc is about ownership, not about broad downstream stability guarantees
-- use [Cross-Repo Compatibility](./CROSS_REPO_COMPATIBILITY.md) and
+- use [Cross-Repo Compatibility](../governance/CROSS_REPO_COMPATIBILITY.md) and
   [Runtime Boundary](./RUNTIME_BOUNDARY.md) when interpreting what downstream
   repos may rely on operationally
 

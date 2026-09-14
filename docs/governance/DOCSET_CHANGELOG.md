@@ -70,7 +70,7 @@ audit went after claims that resolve to something checkable.
   citation. This resolves residual 7 of the closed `DOCS-BUCKET-A-1`, which had recorded them as
   "unresolved by design".
 - **`AGENT_RUNTIME.md`** pointed at `AINDY/runtime/RETRY_POLICY.md`; **`EXECUTION_INVARIANTS.md`**
-  at `AINDY/docs/runtime/DEPLOYMENT_PROFILES.md`. `docs/` is not inside the package.
+  at `AINDY/docs/operations/DEPLOYMENT_PROFILES.md`. `docs/` is not inside the package.
 - **`RUNTIME_BEHAVIOR.md`** pointed at `docs/deployment/DEPLOYMENT_MODEL.md` — absent from both
   repos. Repointed to `DEPLOYMENT_PROFILES.md`.
 

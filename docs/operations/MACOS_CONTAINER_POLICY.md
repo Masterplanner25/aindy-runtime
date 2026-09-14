@@ -118,4 +118,4 @@ existing Entry 001 format. Record:
 | Phase 0 results artifact | `tests/sandbox/sandbox_escape_results.json` |
 | Audit log (Entry 001) | `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` |
 | macOS detection in code | `sandbox_runner.py` — `_detect_wsl2()`, `docker_macos_backend` field |
-| Release gate (Step 16) | `docs/runtime/RELEASE_CHECKLIST.md` |
+| Release gate (Step 16) | `docs/governance/RELEASE_CHECKLIST.md` |

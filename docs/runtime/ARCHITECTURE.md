@@ -136,13 +136,13 @@ Stability is governed by `PUBLIC_RUNTIME_SURFACES.md` and
 |---|---|
 | Foundational execution pattern | [FOUNDATIONAL_PATTERN.md](./FOUNDATIONAL_PATTERN.md) |
 | Runtime support posture | [SECURITY_POSTURE.md](./SECURITY_POSTURE.md) |
-| Supported deployment profiles | [PROFILE_SUPPORT_MATRIX.md](./PROFILE_SUPPORT_MATRIX.md) |
-| Deployment profile enforcement | [DEPLOYMENT_PROFILES.md](./DEPLOYMENT_PROFILES.md) |
+| Supported deployment profiles | [PROFILE_SUPPORT_MATRIX.md](../operations/PROFILE_SUPPORT_MATRIX.md) |
+| Deployment profile enforcement | [DEPLOYMENT_PROFILES.md](../operations/DEPLOYMENT_PROFILES.md) |
 | Extension trust and ownership | [EXTENSION_TRUST_MODEL.md](./EXTENSION_TRUST_MODEL.md) |
 | Extension ABI versioning | [EXTENSION_ABI.md](./EXTENSION_ABI.md) |
 | Public runtime surfaces | [PUBLIC_RUNTIME_SURFACES.md](./PUBLIC_RUNTIME_SURFACES.md) |
 | Runtime stability interpretation | [RUNTIME_STABILITY_INDEX.md](./RUNTIME_STABILITY_INDEX.md) |
-| Cross-repo compatibility | [CROSS_REPO_COMPATIBILITY.md](./CROSS_REPO_COMPATIBILITY.md) |
-| Boot and startup contract | [RUNTIME_ONLY_DEPLOYMENT.md](./RUNTIME_ONLY_DEPLOYMENT.md) |
+| Cross-repo compatibility | [CROSS_REPO_COMPATIBILITY.md](../governance/CROSS_REPO_COMPATIBILITY.md) |
+| Boot and startup contract | [RUNTIME_ONLY_DEPLOYMENT.md](../operations/RUNTIME_ONLY_DEPLOYMENT.md) |
 | Idempotency and effect records | [IDEMPOTENCY_CONTRACT.md](./IDEMPOTENCY_CONTRACT.md) |
 | Sandbox boundaries, admission and evidence | [SANDBOX_CONTRACT.md](./SANDBOX_CONTRACT.md) |

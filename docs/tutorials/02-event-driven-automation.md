@@ -425,4 +425,4 @@ The `timeout_seconds: 300` parameter in the script means the execution fails wit
 
 ## Next
 
-→ **[Tutorial 3: Scheduled Intelligence](03-scheduled-execution.md)** — make this analysis run automatically every morning without you touching a keyboard.
+→ **[Tutorial 3: Scheduled Intelligence](./03-scheduled-execution.md)** — make this analysis run automatically every morning without you touching a keyboard.

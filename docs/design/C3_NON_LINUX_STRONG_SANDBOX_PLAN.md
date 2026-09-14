@@ -183,7 +183,7 @@ the launcher and its certification, not the AINDY code.
   `tests/sandbox/sandbox_escape_results.json`.
 - Posture function: `sandbox_escape_test_posture()` in `sandbox_runner.py`.
 - Audit log: `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` (append-only).
-- macOS policy + CI cert: `docs/runtime/MACOS_CONTAINER_POLICY.md`,
+- macOS policy + CI cert: `docs/operations/MACOS_CONTAINER_POLICY.md`,
   `.github/workflows/macos-sandbox.yml`.
 - WSL2/macOS backend detection: `sandbox_runner.py` `_detect_wsl2()`.
 - Tracking: `TECH_DEBT.md` §C3.

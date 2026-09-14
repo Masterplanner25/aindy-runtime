@@ -207,7 +207,7 @@ gave up", which an operator could do nothing with.
 
 ## 8. Impact analysis (`AGENT_WORKING_RULES.md` §8)
 
-**Invariants touched** (`docs/platform/governance/INVARIANTS.md`):
+**Invariants touched** (`docs/governance/INVARIANTS.md`):
 - **(17) per-request DB session isolation** — not violated. The lock lives on a *dedicated*
   connection, never the request's and never the handler's `_gate_db`; `#157`'s separation is
   preserved and extended.

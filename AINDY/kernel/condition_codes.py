@@ -20,7 +20,7 @@ class RuntimeConditionCode(str, Enum):
     blocks readiness.
 
     Stable surface — removing or renaming a value requires a MAJOR version bump.
-    See docs/runtime/CONDITION_CODES.md for descriptions and classification.
+    See docs/operations/CONDITION_CODES.md for descriptions and classification.
     """
 
     # Extension override
@@ -53,7 +53,7 @@ class ReadinessBlockerCode(str, Enum):
     A non-empty required_failures list means status="not_ready" (HTTP 503).
     The codes are additive — multiple can be present simultaneously.
 
-    Stable surface — see docs/runtime/CONDITION_CODES.md.
+    Stable surface — see docs/operations/CONDITION_CODES.md.
     """
 
     STARTUP_INCOMPLETE = "startup_incomplete"

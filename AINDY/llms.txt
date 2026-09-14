@@ -30,7 +30,7 @@ Deploy in minutes via Docker Compose. Extend via a Python plugin registry.
 - [docs/runtime/MEMORY_ADDRESS_SPACE.md](docs/runtime/MEMORY_ADDRESS_SPACE.md): MemoryNode storage, MAS path structure, hybrid retrieval, embedding pipeline
 - [docs/runtime/SCHEMA_LIFECYCLE.md](docs/runtime/SCHEMA_LIFECYCLE.md): Schema contract versioning, blank-bootstrap, reconcile, enforce-schema flow
 - [docs/runtime/RETRY_POLICY.md](docs/runtime/RETRY_POLICY.md): RetryPolicy model, backoff strategies, syscall-level retry contract
-- [docs/runtime/DEGRADED_RUNTIME_MODES.md](docs/runtime/DEGRADED_RUNTIME_MODES.md): What degrades when Redis, Mongo, or the scheduler is unavailable
+- [docs/operations/DEGRADED_RUNTIME_MODES.md](docs/operations/DEGRADED_RUNTIME_MODES.md): What degrades when Redis, Mongo, or the scheduler is unavailable
 
 ## Extension and Plugin System
 
@@ -43,15 +43,15 @@ Deploy in minutes via Docker Compose. Extend via a Python plugin registry.
 
 - [docs/runtime/SDK_CONTRACT.md](docs/runtime/SDK_CONTRACT.md): Stable surfaces the aindy-sdk depends on — auth, version, memory, platform keys
 - [docs/runtime/UI_CONTRACT.md](docs/runtime/UI_CONTRACT.md): Platform SPA contracts — auth flow, boot identity, route gating, API base URL
-- [docs/runtime/CONDITION_CODES.md](docs/runtime/CONDITION_CODES.md): Stable operator-facing condition codes — RuntimeConditionCode, ReadinessBlockerCode, FlowRunStatus, AgentRunStatus, and all status enums
+- [docs/operations/CONDITION_CODES.md](docs/operations/CONDITION_CODES.md): Stable operator-facing condition codes — RuntimeConditionCode, ReadinessBlockerCode, FlowRunStatus, AgentRunStatus, and all status enums
 
 ## Deployment and Operations
 
-- [docs/runtime/DEPLOYMENT_PROFILES.md](docs/runtime/DEPLOYMENT_PROFILES.md): All deployment profiles — single-instance, distributed-api, distributed-worker, hostile-third-party
-- [docs/runtime/RUNTIME_ONLY_DEPLOYMENT.md](docs/runtime/RUNTIME_ONLY_DEPLOYMENT.md): Runtime-only (no app plugins) deployment guide
-- [docs/runtime/OPERATOR_RUNBOOK.md](docs/runtime/OPERATOR_RUNBOOK.md): Production runbook — health checks, schema reconcile, Redis failover, stuck-run recovery
-- [docs/runtime/PROFILE_SUPPORT_MATRIX.md](docs/runtime/PROFILE_SUPPORT_MATRIX.md): Feature support matrix across all deployment profiles
-- [docs/runtime/DEGRADED_MODE_MATRIX.md](docs/runtime/DEGRADED_MODE_MATRIX.md): Service degradation matrix — which features fail, which degrade, which are unaffected
+- [docs/operations/DEPLOYMENT_PROFILES.md](docs/operations/DEPLOYMENT_PROFILES.md): All deployment profiles — single-instance, distributed-api, distributed-worker, hostile-third-party
+- [docs/operations/RUNTIME_ONLY_DEPLOYMENT.md](docs/operations/RUNTIME_ONLY_DEPLOYMENT.md): Runtime-only (no app plugins) deployment guide
+- [docs/operations/OPERATOR_RUNBOOK.md](docs/operations/OPERATOR_RUNBOOK.md): Production runbook — health checks, schema reconcile, Redis failover, stuck-run recovery
+- [docs/operations/PROFILE_SUPPORT_MATRIX.md](docs/operations/PROFILE_SUPPORT_MATRIX.md): Feature support matrix across all deployment profiles
+- [docs/operations/DEGRADED_MODE_MATRIX.md](docs/operations/DEGRADED_MODE_MATRIX.md): Service degradation matrix — which features fail, which degrade, which are unaffected
 
 ## Security
 
@@ -62,9 +62,9 @@ Deploy in minutes via Docker Compose. Extend via a Python plugin registry.
 
 ## Governance and Release
 
-- [docs/runtime/RELEASE_CHECKLIST.md](docs/runtime/RELEASE_CHECKLIST.md): Full release verification checklist — 16 gates including sandbox certification
-- [docs/runtime/RELEASE_GATES.md](docs/runtime/RELEASE_GATES.md): Release gate definitions and pass/fail criteria
-- [docs/runtime/CROSS_REPO_COMPATIBILITY.md](docs/runtime/CROSS_REPO_COMPATIBILITY.md): Compatibility policy between aindy-runtime, aindy-sdk, and aindy-apps-monolith
+- [docs/governance/RELEASE_CHECKLIST.md](docs/governance/RELEASE_CHECKLIST.md): Full release verification checklist — 16 gates including sandbox certification
+- [docs/governance/RELEASE_GATES.md](docs/governance/RELEASE_GATES.md): Release gate definitions and pass/fail criteria
+- [docs/governance/CROSS_REPO_COMPATIBILITY.md](docs/governance/CROSS_REPO_COMPATIBILITY.md): Compatibility policy between aindy-runtime, aindy-sdk, and aindy-apps-monolith
 - [TECH_DEBT.md](TECH_DEBT.md): Open known issues with status and fix directions
 
 ## Wiki

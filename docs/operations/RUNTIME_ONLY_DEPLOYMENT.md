@@ -25,13 +25,13 @@ Scope limit:
 This document defines the runtime-only HTTP and extension surface. Deployment
 topology is a separate contract; see [Deployment Profiles](./DEPLOYMENT_PROFILES.md).
 The runtime invariants that must hold across refactors and releases are catalogued
-in [Execution Invariants](./EXECUTION_INVARIANTS.md).
+in [Execution Invariants](../runtime/EXECUTION_INVARIANTS.md).
 
 Repository ownership:
 
 - this document belongs to `aindy-runtime`
 - the broader documentation split map lives in
-  [Runtime Docset Boundary](./RUNTIME_DOCSET_BOUNDARY.md)
+  [Runtime Docset Boundary](../archive/RUNTIME_DOCSET_BOUNDARY.md)
 
 Use this mode through one of the supported first-class activation paths:
 

@@ -105,7 +105,7 @@ jobs:
                   if v.get("fix_versions"):
                       print(f"    Fix: upgrade to {', '.join(v['fix_versions'])}")
           print()
-          print("Response SLA (see docs/runtime/SECURITY_POLICY.md):")
+          print("Response SLA (see docs/governance/SECURITY_POLICY.md):")
           print("  Critical: patch within 7 days | High: 14 days | Medium: next minor | Low: next major")
           print()
           print("To exempt a known-acceptable finding: add --ignore-vuln <ID> to the pip-audit call.")

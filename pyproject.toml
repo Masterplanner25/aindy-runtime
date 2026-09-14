@@ -98,7 +98,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/Masterplanner25/aindy-runtime"
-Documentation = "https://github.com/Masterplanner25/aindy-runtime/tree/main/docs/runtime"
+Documentation = "https://github.com/Masterplanner25/aindy-runtime/tree/main/docs"
 Source = "https://github.com/Masterplanner25/aindy-runtime"
 Issues = "https://github.com/Masterplanner25/aindy-runtime/issues"
 
