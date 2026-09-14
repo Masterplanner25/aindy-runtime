@@ -3,8 +3,10 @@
 `FlowHistory` is a per-node append-only log where each row carries a full pre-node checkpoint
 (`input_state`) and the delta the node produced (`output_patch`). So the state *after* the
 last recorded node is that row's `input_state` shallow-merged with its `output_patch` — but
-only when the node SUCCEEDED, matching the live engine (`runner_steps.py` does
-`state.update(patch)` only on SUCCESS; WAIT/FAILURE/RETRY don't apply their patch).
+only when the node SUCCEEDED or WAITED, matching the live engine (`runner_steps.py`
+`_MERGED_STATUSES`: a SUCCESS patch is the node's result, a WAIT patch is its durable request
+for its own re-run — `NODUS-RESUME-BRIDGE-1`; FAILURE/RETRY don't apply their patch).
+`test_dur4_flow_history_fold.py` pins this module's set equal to the engine's.
 
 This is a **recovery/audit** primitive, not the live source of truth: normal resume rehydrates
 from the durable `FlowRun.state` snapshot. The fold is the canonical backup when that snapshot
@@ -15,19 +17,25 @@ from __future__ import annotations
 
 from typing import Any
 
+# Mirrors `runner_steps._MERGED_STATUSES`. Not imported from there on purpose: this module is a
+# recovery primitive and must not pull the flow engine (and its registry side effects) in to
+# fold a log. The parity test is what keeps the two equal.
+FOLDED_STATUSES = frozenset({"SUCCESS", "WAIT"})
+
 
 def fold_flow_history_state(rows: list) -> dict[str, Any]:
     """Reconstruct the post-last-node ``FlowRun.state`` from FlowHistory rows in order.
 
     ``rows`` must be ordered oldest→newest. Returns ``{}`` for an empty log. Uses the last
     row's full ``input_state`` checkpoint (so it is robust to any missing intermediate rows),
-    applying its ``output_patch`` only on SUCCESS (shallow merge, parity with the engine).
+    applying its ``output_patch`` only on SUCCESS or WAIT (shallow merge, parity with the
+    engine's ``_MERGED_STATUSES``).
     """
     if not rows:
         return {}
     last = rows[-1]
     base = dict(getattr(last, "input_state", None) or {})
-    if str(getattr(last, "status", "") or "").upper() == "SUCCESS":
+    if str(getattr(last, "status", "") or "").upper() in FOLDED_STATUSES:
         base.update(dict(getattr(last, "output_patch", None) or {}))
     return base
 

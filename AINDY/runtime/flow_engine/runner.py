@@ -349,7 +349,15 @@ class PersistentFlowRunner:
         def _reload_run() -> FlowRun | None:
             return self.db.query(FlowRun).filter(FlowRun.id == db_run_id).first()
 
-        state = run.state or {}
+        # ★ A COPY, never the ORM attribute itself. `run.state` is a plain JSON column: the
+        #   working dict is mutated in place by every merge, and if it IS the loaded value then
+        #   `run.state = _json_safe(state)` later assigns something equal to what SQLAlchemy
+        #   recorded as the original — no history, no UPDATE, and the snapshot silently never
+        #   advances. Production sessions expire on commit, which happened to break the alias
+        #   before the first write; a session with `expire_on_commit=False` (every test fixture)
+        #   does not, and the WAIT snapshot was lost that way while writing
+        #   `NODUS-RESUME-BRIDGE-1`'s second-run test. Correctness must not depend on expiry.
+        state = _json_safe(run.state or {})
         if isinstance(state, dict) and not state.get("trace_id"):
             state["trace_id"] = run.trace_id or get_trace_id() or str(run.id)
             run.state = _json_safe(state)

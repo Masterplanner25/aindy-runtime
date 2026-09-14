@@ -251,6 +251,12 @@ def _record_resource_usage(self, exec_ms: int) -> None:
 
 from AINDY.runtime.flow_engine.state_merge import declared_policies, merge_state
 
+# The node statuses whose output patch lands on the run's state. FAILURE and RETRY produce no
+# state; SUCCESS always did; WAIT joined 2026-09-13 (`NODUS-RESUME-BRIDGE-1`) — see
+# `_merge_superstep`. `AINDY/core/flow_history_fold.py` mirrors this set and a test pins the two
+# equal, because a fold that disagrees with the engine reconstructs a state the engine never had.
+_MERGED_STATUSES = frozenset({"SUCCESS", "WAIT"})
+
 
 def _merge_superstep(self, state: dict, outcomes: list[dict]) -> dict:
     """FLOW-PARALLEL-1 phase 0 — merge a superstep's successful branches into ``state``.
@@ -263,10 +269,20 @@ def _merge_superstep(self, state: dict, outcomes: list[dict]) -> dict:
     fan-out has to be written against the seam the engine actually uses; a merge helper that
     exists beside the real path is `ROUTE-AST-UNWIRED-1`, which this repository has catalogued.
 
-    ★ **Only SUCCESS branches contribute.** That is not a new rule — it is what the engine did
-    when the merge lived in `_handle_node_status`'s SUCCESS branch, and a WAIT branch's patch was
-    never merged. Preserved exactly, because changing it here would be a behaviour change
-    smuggled inside a refactor.
+    ★ **SUCCESS and WAIT branches contribute; FAILURE and RETRY never do.** Until 2026-09-13
+    only SUCCESS did — the rule the engine had when the merge lived in `_handle_node_status`,
+    preserved through the phase-0 refactor because changing it there would have been a
+    behaviour change smuggled inside a refactor. It was then changed HERE, deliberately, as
+    `NODUS-RESUME-BRIDGE-1`: a WAIT patch is the node's durable request for its own re-run
+    (`nodus_wait_event_type` is how `nodus.execute` knows, on re-entry, which wait the injected
+    `event` answers), and a patch that reaches `flow_history.output_patch` but never
+    `flow_runs.state` is a patch the re-run cannot see. Observed live: `WAIT, WAIT, WAIT…` —
+    every resume re-parked the script because the bridge found no pending type.
+    `flow_history_fold.py` applies the same rule so the DUR-4 reconstruction stays in parity.
+
+    ★ A WAIT patch can only ever be the single node of a one-node superstep: `_execute_superstep`
+    refuses a WAIT inside a fan-out group before anything is written, so a group's merge still
+    sees SUCCESS patches only.
 
     ★ **One `merge_state` call for the whole superstep, never one per branch.** Per-branch calls
     would apply patches in completion order regardless of the declared policy, which is the
@@ -276,16 +292,16 @@ def _merge_superstep(self, state: dict, outcomes: list[dict]) -> dict:
     their own sessions (`AGENT_WORKING_RULES` section 5 forbids sharing one), so shared state
     must be written by exactly one writer.
     """
-    successful = [
+    landed = [
         (outcome["node"], outcome.get("patch") or {})
         for outcome in outcomes
-        if outcome.get("status") == "SUCCESS"
+        if outcome.get("status") in _MERGED_STATUSES
     ]
-    if not successful:
+    if not landed:
         return state
     return merge_state(
         state,
-        successful,
+        landed,
         policies=declared_policies(getattr(self, "flow", {}) or {}),
     )
 
@@ -435,7 +451,8 @@ def _execute_superstep(
     once enough have — and when they proceed past a failed branch, the superstep is a
     **`partial`** outcome (`EFFECT-PARTIAL-1`): the failed branches are named on the run's
     state under `_superstep_partials`, on the completion event, and on the `flow.run`
-    envelope. Never silent. The merge takes only SUCCESS patches (unchanged since phase 0), and
+    envelope. Never silent. The merge takes only SUCCESS patches here — a WAIT is refused before
+    the merge, and no other status carries state — and
     **convergence is required of the branches that succeeded** — a failed branch's successor
     is not consulted, because it produced no state to choose a successor against.
 

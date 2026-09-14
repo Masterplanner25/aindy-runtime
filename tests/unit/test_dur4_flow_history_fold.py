@@ -2,7 +2,8 @@
 
 Each row carries a full pre-node ``input_state`` checkpoint + the node's ``output_patch``, so
 the post-last-node state is the last row's input_state with its patch applied ONLY on SUCCESS
-(parity with the live engine's per-status apply). Recovery/audit primitive; normal resume
+or WAIT (parity with the live engine's per-status apply — ``runner_steps._MERGED_STATUSES``;
+WAIT joined 2026-09-13, ``NODUS-RESUME-BRIDGE-1``). Recovery/audit primitive; normal resume
 still trusts the durable snapshot.
 """
 from __future__ import annotations
@@ -28,13 +29,26 @@ def test_fold_success_applies_patch():
     assert fold_flow_history_state([_row("SUCCESS", {"a": 1}, {"b": 2})]) == {"a": 1, "b": 2}
 
 
-def test_fold_wait_does_not_apply_patch():
-    # WAIT/FAILURE/RETRY don't apply their patch — parity with the engine (update on SUCCESS only).
-    assert fold_flow_history_state([_row("WAIT", {"a": 1}, {"b": 2})]) == {"a": 1}
+def test_fold_wait_applies_patch():
+    # A WAIT patch is the node's durable request for its own re-run (`nodus_wait_event_type`
+    # lives in it) and the engine merges it — NODUS-RESUME-BRIDGE-1. Before 2026-09-13 this
+    # test asserted the opposite, in parity with an engine that dropped it.
+    assert fold_flow_history_state([_row("WAIT", {"a": 1}, {"b": 2})]) == {"a": 1, "b": 2}
 
 
-def test_fold_failure_does_not_apply_patch():
+def test_fold_failure_and_retry_do_not_apply_patch():
     assert fold_flow_history_state([_row("FAILURE", {"a": 1}, {"b": 2})]) == {"a": 1}
+    assert fold_flow_history_state([_row("RETRY", {"a": 1}, {"b": 2})]) == {"a": 1}
+
+
+def test_fold_status_set_matches_the_engine():
+    """★ The fold reconstructs what the engine persisted. Two hand-written sets drift; this
+    pins them equal so a status added to one side without the other is a CI failure."""
+    from AINDY.core.flow_history_fold import FOLDED_STATUSES
+    from AINDY.runtime.flow_engine.runner_steps import _MERGED_STATUSES
+
+    assert FOLDED_STATUSES == _MERGED_STATUSES
+    assert FOLDED_STATUSES, "an empty census satisfies every guard built on it"
 
 
 def test_fold_uses_last_rows_checkpoint():

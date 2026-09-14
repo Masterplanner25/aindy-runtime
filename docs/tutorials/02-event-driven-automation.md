@@ -12,16 +12,17 @@ owner: "platform-team"
 **What you'll build:** A Nodus script that suspends its run until a human approves, then
 finishes the work with the approval payload — no polling, no thread, no process held open.
 
-> **★ Read this first — run live against 2.13.0 on 2026-09-13.** Steps 1–5 work exactly as
-> shown: the script suspends the run, the run is a durable `waiting` row, and the resume route
-> accepts the approval and re-runs the script. **Step 6 does not complete today:** the re-run
-> script never sees the approval, so it suspends again. The cause is a runtime defect, not a
-> tutorial error — `NODUS-RESUME-BRIDGE-1` in `TECH_DEBT.md`: the node's WAIT output patch is
-> never merged into the run's state, so the bridge that would hand the payload to the script
-> can never fire. Guest WAIT/RESUME with a payload has never worked, through any path. The
-> tutorial is kept in its correct target shape, marks the point where today's runtime stops,
-> and shows you how to observe it. When that entry closes, Step 6 will start completing
-> without a change to this page.
+> **★ Read this first — version matters for Step 6.** Run live against **2.13.0** on
+> 2026-09-13, Steps 1–5 worked exactly as shown and **Step 6 did not complete**: the re-run
+> script never saw the approval and suspended again. That was a runtime defect, not a tutorial
+> error — `NODUS-RESUME-BRIDGE-1`: the node's WAIT output patch was recorded in `flow_history`
+> but never merged into the run's state, so the bridge that hands the payload to the script
+> could never fire. Guest WAIT/RESUME with a payload had never worked, through any path.
+> **Fixed on `main` 2026-09-13; the first release after 2.13.0 carries it** (check
+> `CHANGELOG.md`). On 2.13.0 this page still stops where it says it stops, and shows you how to
+> observe that. Step 6's "after the fix" output below comes from the runtime's own
+> second-run test (`tests/unit/test_nodus_resume_bridge.py`), which drives this exact script
+> shape through start → wait → resume — not yet from a second live run of this page.
 
 ---
 
@@ -59,7 +60,7 @@ the payload is there. Nothing is held open in between — the run is a row in `f
                     ·   POST /platform/flows/runs/{run_id}/resume
                     ·   {"event_type": "review.approved", "payload": {...}}
                     ·
-   runtime: payload → state["event"] → state["nodus_received_events"]["review.approved"]  ← broken today
+   runtime: payload → state["event"] → state["nodus_received_events"]["review.approved"]  ← fixed 2026-09-13; broken on 2.13.0
    runtime: re-enqueues the run; the nodus.execute node runs the script again
 ```
 
@@ -70,12 +71,13 @@ Three facts decide how you resume it, all checked against source and then agains
   only in `route_event`, which only `POST /platform/flows/runs/{run_id}/resume` calls.
 - **The wait is correlation-keyed to the run's own `trace_id`**, so an emit from a separate
   request (which carries *its* trace id) is skipped. The resume route sends none and matches.
-- **The injected payload is dropped before the script runs** (`NODUS-RESUME-BRIDGE-1`). The
-  route writes `state["event"]`; the `nodus.execute` node bridges that into
-  `nodus_received_events` only if `state["nodus_wait_event_type"]` is set — and the WAIT
-  branch of the flow runner persists state *without* the node's output patch, which is where
-  that key lives. `flow_history` records the patch on every WAIT step; `flow_runs.state` never
-  receives it.
+- **The injected payload reaches the script only if the runner kept the node's WAIT patch.**
+  The route writes `state["event"]`; the `nodus.execute` node bridges that into
+  `nodus_received_events` only if `state["nodus_wait_event_type"]` is set, and that key lives
+  in the node's WAIT output patch. **On 2.13.0 the runner merged SUCCESS patches only**, so the
+  patch reached `flow_history` and never `flow_runs.state`, and the payload was dropped before
+  the script ran (`NODUS-RESUME-BRIDGE-1`). Since 2026-09-13 the runner merges WAIT patches
+  too, and a payload-less wake (the event bus) logs a WARNING instead of re-waiting silently.
 
 The route needs `platform.admin` — the admin JWT from the prerequisites has it.
 
@@ -180,7 +182,7 @@ result = client.nodus.run_script(script_name="wait_resume", input={"sprint": "sp
 run_id = result["run_id"]
 print(f"  Run id:       {run_id}")
 print(f"  Flow status:  {result['status']}")          # WAITING
-print(f"  Nodus status: {result['nodus_status']}")    # None — the record's nodus_status is unset on a WAIT
+print(f"  Nodus status: {result['nodus_status']}")    # None on 2.13.0; "waiting" after NODUS-RESUME-BRIDGE-1
 ```
 
 **Observed output:**
@@ -190,7 +192,7 @@ Uploading script...
 Starting script (phase 1 — will suspend)...
   Run id:       173c40f1…
   Flow status:  WAITING
-  Nodus status: None
+  Nodus status: None            ← "waiting" on a runtime carrying NODUS-RESUME-BRIDGE-1's fix
 ```
 
 The upload is `POST /platform/nodus/upload` (posted directly — `client.nodus.upload_script`
@@ -293,7 +295,7 @@ for _ in range(10):
     run = client.get(f"/platform/flows/runs/{run_id}")["data"]["flow_run_get_result"]
     print(f"  status={run['status']:9s} waiting_for={run['waiting_for']}  "
           f"received={run['state'].get('nodus_received_events')}")
-    if run["status"] in ("completed", "failed"):
+    if run["status"] in ("success", "failed"):   # a finished FlowRun is "success", not "completed"
         break
 
 hist = client.get(f"/platform/flows/runs/{run_id}/history")["data"]
@@ -311,18 +313,25 @@ Watching the run after resume...
   history: ['WAIT', 'WAIT']
 ```
 
-That is the defect, visible: the run went `executing` (the resume fired, the script ran again),
-`nodus_received_events` never appeared, and the script — seeing nil — requested the wait again.
-Every further resume adds another `WAIT` row to the history. Nothing errors and nothing warns.
+That is the 2.13.0 defect, visible: the run went `executing` (the resume fired, the script ran
+again), `nodus_received_events` never appeared, and the script — seeing nil — requested the wait
+again. Every further resume added another `WAIT` row to the history. Nothing errored and nothing
+warned.
 
-What *should* appear here, and will when `NODUS-RESUME-BRIDGE-1` closes:
+**On a runtime carrying the fix** (`main` from 2026-09-13; the first release after 2.13.0) the
+same loop ends with:
 
 ```
-  status=completed waiting_for=None  received={'review.approved': {'reviewer': 'shawn', ...}}
+  status=success   waiting_for=None  received={'review.approved': {'reviewer': 'shawn', 'approved': True, 'note': 'Ship it.'}}
   history: ['WAIT', 'SUCCESS']
 ```
 
-followed by the approved insight under `/memory/{TENANT}/insights/**`.
+followed by the approved insight under `/memory/{TENANT}/insights/**`. Two details worth
+knowing, both read from the runtime's second-run test rather than guessed: the finished run's
+status is **`success`** (the FlowRun vocabulary, not `completed`), and while the run is
+waiting, `state["nodus_output_state"]` now carries what phase 1 set (`task_count`) — readable
+on the run, though **not** handed back into phase 2's namespace; the re-run still starts from
+the top with only `nodus_received_events` seeded.
 
 ---
 
@@ -390,9 +399,9 @@ print("Approval sent — script re-running...")
 for _ in range(10):
     time.sleep(1)
     run = client.get(f"/platform/flows/runs/{run_id}")["data"]["flow_run_get_result"]
-    if run["status"] in ("completed", "failed"):
+    if run["status"] in ("success", "failed"):
         break
-print(f"Final status: {run['status']}  (2.13.0: 'waiting' again — NODUS-RESUME-BRIDGE-1)")
+print(f"Final status: {run['status']}  (2.13.0: 'waiting' again — NODUS-RESUME-BRIDGE-1; fixed after)")
 for node in client.memory.read(f"/memory/{TENANT}/insights/**")["data"]["nodes"]:
     print(f"Insight: {node['content']}")
 ```
@@ -409,13 +418,13 @@ tutorial_02.py                          wait_resume.nd
       │  POST …/runs/{id}/resume             ·
       │ ───────────────────────────────►     ·  payload → state["event"]         ✓ (also into every other
       │                                      ▼ re-enqueued, script re-runs       ✓  waiting run — filed)
-      │                                      │ nodus_received_events populated   ✗ NODUS-RESUME-BRIDGE-1
-      │                                      │ phase 2                           ✗ never reached
+      │                                      │ nodus_received_events populated   ✓ since 2026-09-13 (✗ on 2.13.0 — NODUS-RESUME-BRIDGE-1)
+      │                                      │ phase 2                           ✓ since 2026-09-13 (✗ on 2.13.0)
 ```
 
 The waiting run costs nothing while it waits — a database row and a scheduler entry — and it
-survives a restart. That property is real. Delivering the answer *into* the script is the part
-that is not, yet.
+survives a restart. That property is real. Delivering the answer *into* the script is real from
+the first release after 2.13.0; on 2.13.0 it is the step that does not happen.
 
 ---
 

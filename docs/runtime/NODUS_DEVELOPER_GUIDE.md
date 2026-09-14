@@ -232,14 +232,16 @@ set_state("nodus_wait_event_type", "user.response.received")
 // (or the next node) runs again with the event payload in state.
 ```
 
-On resume, the incoming event payload is *meant* to be available in state under
-`nodus_received_events`. **Run live on 2026-09-13, it is not — through any path**
-(`NODUS-RESUME-BRIDGE-1`): the WAIT step's output patch, which carries
-`nodus_wait_event_type`, is recorded in `flow_history` but never merged into the run's state, so
-the bridge that would populate `nodus_received_events` on re-entry finds no pending wait type
-and skips. The script re-runs, sees nil, and waits again. The shape below is the correct
-*target* shape and will start working when that entry closes; until then a guest script can
-suspend a run but cannot learn what resumed it.
+On resume via `POST /platform/flows/runs/{run_id}/resume`, the payload is available in state
+under `nodus_received_events`. **On 2.13.0 and earlier it was not — through any path**
+(`NODUS-RESUME-BRIDGE-1`, fixed 2026-09-13): the WAIT step's output patch, which carries
+`nodus_wait_event_type`, was recorded in `flow_history` but never merged into the run's state,
+so the bridge that populates `nodus_received_events` on re-entry found no pending wait type and
+skipped. The script re-ran, saw nil, and waited again. The runner now merges WAIT patches
+(`runner_steps._MERGED_STATUSES`), and the shape below is what runs. A wake **without** a
+payload — the event bus, `sys.v1.event.emit` — still re-runs the script with nothing to hand
+it; since the fix that case logs a WARNING (`Resumed WITHOUT a payload`) instead of re-waiting
+silently.
 
 ```nd
 // On the second execution (after resume):

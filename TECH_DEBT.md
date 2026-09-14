@@ -12585,7 +12585,7 @@ cheaper.
 
 ## WAIT-PAYLOAD-PATH-1 — the event bus resumes a waiting run without its payload; only the resume route delivers one
 
-**Status: SUBSUMED 2026-09-13 by `NODUS-RESUME-BRIDGE-1` — run live, the route path does not deliver either.** The bus-path and correlation findings below still hold and are carried there. Was: OPEN (P2). Filed 2026-09-13 from the tutorials correctness pass; every claim below
+**Status: SUBSUMED 2026-09-13 by `NODUS-RESUME-BRIDGE-1` — run live, the route path did not deliver either.** That entry CLOSED the same day: the route path now delivers, and minimum fix (a) below is done in its cheap form — a payload-less wake logs `[nodus.execute] Resumed WITHOUT a payload` at WARNING (no state marker, no `SystemEvent`). **Still open here: (b), the local-vs-cross-instance correlation disagreement, and whether the bus should ever carry a payload.** Was: OPEN (P2). Filed 2026-09-13 from the tutorials correctness pass; every claim below
 was read from source, and the tutorial that assumed otherwise was rewritten.
 
 **Two resume paths, one contract, different semantics.**
@@ -12638,9 +12638,44 @@ is zero-arg).
 ---
 ## NODUS-RESUME-BRIDGE-1 — a Nodus script can suspend a run but can never receive what resumed it
 
-**Status: OPEN (P1).** Filed 2026-09-13 by running Tutorial 2 against a live 2.13.0 server after
-the source-level pass had already rewritten it to the "correct" shape. **Guest WAIT/RESUME with a
-payload has never worked, through any path.** Subsumes `WAIT-PAYLOAD-PATH-1`.
+**Status: CLOSED (2026-09-13, PR #654).** Filed the same day by running Tutorial 2 against a
+live 2.13.0 server after the source-level pass had already rewritten it to the "correct" shape.
+**Guest WAIT/RESUME with a payload had never worked, through any path.** Subsumes
+`WAIT-PAYLOAD-PATH-1`'s payload half; its correlation-rule half stays open there.
+
+**What was done — option (a), deliberately.** `runner_steps._MERGED_STATUSES = {SUCCESS, WAIT}`:
+a WAIT patch is the node's durable request for its own re-run and now lands on
+`flow_runs.state`; FAILURE/RETRY still do not. `flow_history_fold.FOLDED_STATUSES` mirrors it
+and `test_fold_status_set_matches_the_engine` pins the two equal (DUR-4 must reconstruct what
+the engine persisted). The fan-out question answers itself: `_execute_superstep` refuses a WAIT
+inside a group before anything is written, so a WAIT patch is only ever the single node of a
+one-node superstep and never conflict-resolves against anything. `nodus.execute`'s WAIT patch
+also carries `nodus_output_state` now (what the script set before it parked is readable on the
+waiting run — NOT seeded back into the re-run; that is `WAIT-TYPED-CONTRACT-1`'s call), a
+payload-less wake logs `Resumed WITHOUT a payload` at WARNING (`WAIT-PAYLOAD-PATH-1` (a)), and a
+completing re-run clears `nodus_wait_event_type` so a stale pending type cannot mis-bridge a
+later payload. Side effect: the execution record's `nodus_status` is `"waiting"` on a WAIT, not
+`None`.
+
+**★ Found writing the second-run test — a second defect, latent in production:** `resume()`
+took `state = run.state or {}`, ALIASING the ORM attribute. Every merge mutates that dict in
+place, so `run.state = _json_safe(state)` later assigns something equal to what SQLAlchemy
+recorded as the original → no history → no UPDATE → the snapshot never advances. Production
+sessions `expire_on_commit`, and the `FlowHistory` commit before each write happened to break
+the alias; every test fixture is `expire_on_commit=False` and the WAIT snapshot was lost outright
+(`flow_runs.state` still the initial three keys after a `WAIT` row). Now `_json_safe(run.state)`
+— a copy. **Correctness must not depend on session expiry; grep for other `x = row.json_col`
+aliases before mutating one.**
+
+**Test:** `tests/unit/test_nodus_resume_bridge.py` — drives `PersistentFlowRunner` start → WAIT →
+inject → resume on a real SQLite `FlowRun`, with the REAL guest interpreter and worker entry
+(`run_one` in-process; only the process boundary removed), and asserts the script's SECOND run
+reached phase 2, history `['WAIT', 'SUCCESS']`. Scheduler is a spy (`register_wait` asserted),
+not a no-op. Mutation-checked 4/4: SUCCESS-only merge, alias restored, warning removed,
+completion-clear removed — each bites. **Not yet re-run live**; Tutorial 2's "after the fix"
+output is stated from this test and says so.
+
+*The original entry follows unchanged.*
 
 **The mechanism, end to end, as observed.**
 1. Script sets `nodus_wait_requested` / `nodus_wait_event_type`; the `nodus.execute` node returns

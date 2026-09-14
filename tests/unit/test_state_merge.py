@@ -291,12 +291,16 @@ def test_the_seam_passes_every_successful_branch_together_in_declaration_order()
     assert calls[0] == [("a", {"c": 1}), ("b", {"c": 2})], "declaration order was not preserved"
 
 
-def test_only_successful_branches_contribute_a_patch():
-    """★ Preserved behaviour, pinned because a refactor is exactly where it could be lost.
+def test_only_success_and_wait_branches_contribute_a_patch():
+    """★ Pinned because a refactor is exactly where this could move by accident.
 
-    When the merge lived in the SUCCESS branch, a WAIT or FAILED node's patch was never merged.
-    That is unchanged — and it had to be checked rather than assumed, because widening a merge is
-    a natural place to accidentally start including patches that were previously dropped.
+    When the merge lived in the SUCCESS branch, a WAIT or FAILED node's patch was never merged,
+    and this test preserved that through the phase-0 move. On 2026-09-13 it was changed ON
+    PURPOSE (`NODUS-RESUME-BRIDGE-1`): a WAIT patch is the node's durable request for its own
+    re-run, and dropping it was the whole defect. The test did its job — the change had to come
+    through here, deliberately, rather than slip in. FAILURE (and RETRY) patches still never
+    reach the merge; `_MERGED_STATUSES` is the census, and `test_dur4_flow_history_fold.py`
+    pins the fold to the same set.
     """
     from unittest.mock import patch
 
@@ -316,10 +320,12 @@ def test_only_successful_branches_contribute_a_patch():
             ],
         )
 
-    assert calls[0] == [("ok", {"a": 1})], (
-        "a non-SUCCESS branch's patch reached the merge; that is a behaviour change smuggled "
-        "inside a refactor"
+    assert calls[0] == [("ok", {"a": 1}), ("waiting", {"b": 2})], (
+        "the merge must take exactly the SUCCESS and WAIT patches, in declaration order: a "
+        "FAILURE patch reaching it, or a WAIT patch dropped, is a behaviour change — make it "
+        "deliberately, here, or not at all"
     )
+    assert rs._MERGED_STATUSES == frozenset({"SUCCESS", "WAIT"})
 
 
 def test_a_superstep_with_no_successful_branch_does_not_merge_at_all():
