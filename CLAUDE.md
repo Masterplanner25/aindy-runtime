@@ -1149,7 +1149,6 @@ Do not write `with pytest.raises(...)` around `call_tool()` — it will never fi
 | **Comparative research index (8 systems: what each produced, what is settled, recurring errors)** | `docs/governance/COMPARATIVE_RESEARCH_INDEX.md` |
 | Runtime execution invariants | `docs/runtime/EXECUTION_INVARIANTS.md` |
 | **`ExecutionEnvironmentSpec` design record (EXEC-ENV-BIND-1, CLOSED — all four phases shipped)** | `docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md` |
-| Architecture risk (complexity/blast-radius) | `docs/runtime/ARCHITECTURE_RISK.md` |
 | Runtime security matrix | `docs/runtime/SECURITY_MATRIX.md` |
 | Revocable tool DB handle (TOOL-SEAM-ISOLATION-1 step A) | `AINDY/agents/tool_session.py` |
 | **Execution environment vocabulary (EXEC-ENV-BIND-1)** | `AINDY/core/execution_environment.py` — `ExecutionEnvironmentSpec`, `assurance_rank()`, `clamp_to_floor()`, `GUEST_FLOOR` |
