@@ -35,13 +35,31 @@ def _build_eu_resume_callback(eu_id: str):
 
 
 def _detect_wait(self, result: Any) -> tuple[str, dict, Any] | None:
+    """Only an explicit `ExecutionWaitSignal` parks the REQUEST's execution unit.
+
+    ★ FR-29 / `WAIT-DETECT-SHAPE-1` (2026-09-14): this used to also treat any handler result
+    dict whose ``status`` upper-cased to ``WAITING`` as the request itself waiting. Two things
+    return such a dict, and neither is the request waiting:
+
+    - a READ of a waiting run — `GET /platform/flows/runs/{id}` on an app-profile server, where
+      a registered result key makes the handler's return the bare row and the row says
+      ``status: "waiting"``. Eight reads parked eight readers' units, forever, each with a
+      `waiting_flow_runs` FK violation because the scheduler was handed a unit id as a run id.
+    - a START of something that suspends — `POST /platform/nodus/run`, whose execution record
+      carries ``status: "WAITING"`` with ``waiting_for`` NESTED under ``data``. The old branch
+      read neither key and parked the request's unit on the literal event ``"unknown"``, which
+      nothing emits. The dict path parked units; it never once resumed one.
+
+    A request's unit describes the request. When the handler returns, the request is done; what
+    is waiting is the run it read or started, whose own `flow_runs` row and execution unit carry
+    the wait (ACTIVE-COUNT-WAIT-LEAK-1). The handler's result is returned untouched — a caller
+    still sees ``data.status == "WAITING"`` — it just no longer changes what the pipeline
+    records about the request.
+    """
     from AINDY.core.execution_gate import ExecutionWaitSignal
 
     if isinstance(result, ExecutionWaitSignal):
         return result.wait_for, result.payload, result.wait_condition
-    if isinstance(result, dict) and str(result.get("status") or "").upper() == "WAITING":
-        wait_for = str(result.get("wait_for") or result.get("waiting_for") or "unknown")
-        return wait_for, {}, None
     return None
 
 

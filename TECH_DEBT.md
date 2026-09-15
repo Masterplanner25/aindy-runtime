@@ -407,7 +407,7 @@ A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — ver
 item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
 blocked on a token-delivery channel (FR-1). **FR-7** (memory recall defects) shipped in
 v2.0.0. **FR-8, FR-9 and FR-10 arrived 2026-08-03 and shipped 2026-08-05 — see below; all
-three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate, #518) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database, #517) arrived 2026-08-22 and were fixed the same day; both have their own sections. **FR-19/20/21/22 arrived 2026-08-22** and were fixed the same day — 19's runtime half (#521), 20 (#520), 21 (#522), 22 (route inventory); each has its own section. **FR-24** (`nltk` CVE) shipped in 2.7.0 unfiled. **FR-23/25/26/27 filed 2026-09-11** — 23 had sat a month in their document while this line said "next available: FR-23"; 25 (a)+(c) shipped the same day (#620); 23, 25 (b), 26, 27 open, each with its own section below. Next available: **FR-28**.
+three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate, #518) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database, #517) arrived 2026-08-22 and were fixed the same day; both have their own sections. **FR-19/20/21/22 arrived 2026-08-22** and were fixed the same day — 19's runtime half (#521), 20 (#520), 21 (#522), 22 (route inventory); each has its own section. **FR-24** (`nltk` CVE) shipped in 2.7.0 unfiled. **FR-23/25/26/27 filed 2026-09-11** — 23 had sat a month in their document while this line said "next available: FR-23"; 25 (a)+(c) shipped the same day (#620); 23, 25 (b), 26, 27 open, each with its own section below. **FR-28** (#628) and **FR-29** (#670, filed by the app team from their live 2.14.0 run — `WAIT-DETECT-SHAPE-1`) shipped 2026-09-12/14. Next available: **FR-30**.
 
 ### FR-8/9/10 — the 2.0.0 upgrade trio (SHIPPED 2026-08-05)
 
@@ -8757,6 +8757,88 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ---
 
+## FR-29 / WAIT-DETECT-SHAPE-1 — reading a waiting run parked the READER's execution unit, forever 🔴 defect
+
+**Status: CLOSED (2026-09-14, PR #670).** Filed by the app team the same day from their live
+2.14.0 run of Tutorial 2 (`aindy-apps-monolith` `RUNTIME_FEATURE_REQUESTS.md` FR-29, app #359);
+reproduced here at the route, both server profiles, before the detector was touched.
+**Pre-existing, not a 2.14.0 regression** — none of the three files involved had changed since
+2.13.0. This is almost certainly the **105 `execution_units` rows stuck under `job|route` /
+`flow|route`** that the 2026-09-13 tutorial run left "undiagnosed": every read of a parked run
+and every start of a suspending script left one behind.
+
+### What the app team hit
+
+Eight `GET /platform/flows/runs/{id}` of a parked run → eight `[Scheduler] waiting backup
+write failed … ForeignKeyViolation … waiting_flow_runs_run_id_fkey` WARNINGs, and afterwards
+ten `execution_units` rows in `waiting` — eight `flow|route` on `review.approved` (one per
+GET) and two `job|route` on the event **`"unknown"`** (the two `POST /platform/nodus/run`
+whose script suspended) — still `waiting` after both runs finished. The "run id" in each
+warning was the **reader's execution-unit id**. Their diagnosis of the mechanism was correct
+to the line and is not repeated; two things it could not see from their side are below.
+
+### The mechanism, and the two halves
+
+`core/execution_pipeline/waits.py::_detect_wait` classified ANY handler result dict whose
+`status` upper-cased to `WAITING` as *the request itself* waiting: park the request's EU,
+register a scheduler wait under the EU's id, emit `execution.waiting`. Two producers, neither
+the request waiting:
+
+1. **A read** — `get_flow_run` returns `run_flow("flow_run_get")["data"]`. On a platform-only
+   server that is the flow state `{"run_id", "flow_run_get_result": {row}}`: no top-level
+   `status`, detector inert — which is why the runtime's own live run never saw it. The app
+   registers `register_flow_result("flow_run_get", result_key="flow_run_get_result")`, which
+   makes `data` the **bare row**, whose own `status: "waiting"` lands where the detector
+   reads. **★ A result key — a registration the ABI invites — was enough to turn a read into
+   a parked execution.** The scheduler then tried to persist `waiting_flow_runs(run_id=<eu
+   id>)` (`eu_type` derives from the route prefix: `flow` → backed up) and hit the FK.
+2. **A start** — `POST /platform/nodus/run` on a suspending script returns the execution
+   record, top-level `status: "WAITING"`, on ANY server. **★ This was the half the old branch
+   was WRITTEN for, and it never worked either:** `_format_execution_response` nests
+   `waiting_for` under `data`/`result`, so the detector read neither `wait_for` nor
+   `waiting_for` and parked the request on the literal event `"unknown"`. Nothing emits that.
+   And even a correctly named wait would only have moved the EU `waiting → resumed →
+   executing` via `resume_execution_unit` — no path re-executes a returned request, so no
+   request EU parked by this branch was ever completed. **The dict path parked units; it
+   never once resumed one.** Its `execution.waiting` line in Tutorial 2's causal graph was
+   this.
+
+### What was done
+
+- **`_detect_wait` honours `ExecutionWaitSignal` only** — raised (caught by the pipeline's own
+  `except`) or returned. The dict branch is gone. A request's EU describes the request: when the
+  handler returns, the EU completes; what is waiting is the run it read or started, whose own
+  `flow_runs` row and EU (`ACTIVE-COUNT-WAIT-LEAK-1`) carry the wait. The handler's result is
+  untouched — `data.status == "WAITING"` still reaches the caller.
+- **`_persist_wait_backup` checks the id names a `flow_runs` row before merging** (ask 3) —
+  a non-run id is a DEBUG skip, not a WARNING that reads like data loss. Still reachable: an
+  `ExecutionWaitSignal` raised from a `flow.*` route parks a request EU under `eu_type="flow"`.
+- **Ask 2 (a path out for a legitimately parked request EU) is answered by construction, not
+  built:** no request EU parks unless its handler raises the signal, and a handler that does so
+  is claiming its own resumption. That contract's resume side (`resumed → executing`, then
+  what?) is unchanged and untested — no in-tree handler raises it; noted, not filed.
+
+**Consumer-visible:** the pipeline envelope of `POST /platform/nodus/run` (and any route that
+returns a WAITING record) now says `status: "success"` with `data.status: "WAITING"`, where
+it said `status: "waiting"` + `metadata.eu_wait_for: "unknown"`; its trace carries
+`execution.completed`, not `execution.waiting`. The app's own routers read `data.status` and are
+unaffected; their `flow_run_get` result key can stay.
+
+**Tests:** `tests/unit/test_wait_detect_reader_park_fr29.py` — every route case CALLS the
+route through the booted app with the response's own `eu_id` read back: platform-only read
+(control), app-profile read (the defect), four reads leave nothing behind, a real suspending
+script through `POST /platform/nodus/run` with the scheduler spied (exactly one `register_wait`,
+the run's), the detector directly on the three shapes, the backup write with a positive
+control. **Mutation-tested 3/3** — and the third mutation SURVIVED the first draft: the
+explicit-signal control only *raised* the signal, which never reaches `_detect_wait`, so
+deleting the detector's last branch went green. Now parametrised over raised/returned. **Not
+re-run live.**
+
+**Related:** `ACTIVE-COUNT-WAIT-LEAK-1` (the run's own EU going `waiting` — correct and
+separate), `QUOTA-ACCRUAL-ORPHAN-1` ("a unit is reaped by whoever established it" — this was
+the rule unapplied to a request that returned), `WAIT-TYPED-CONTRACT-1`.
+
+---
 ## FR-28 — `acknowledge_message` acknowledges a message that does not exist 🔴 correctness
 
 **Status: SHIPPED 2026-09-12 (#628).** Found by the FR-25 (b) probe, verified against source; a correctness defect in the coordination path, not a status-code one.

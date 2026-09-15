@@ -1,6 +1,6 @@
 ---
 title: "Tutorial 2 — Event-Driven Automation"
-last_verified: "2026-09-13"
+last_verified: "2026-09-14"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -363,7 +363,7 @@ print(f"  ({len(graph['edges'])} causal edges)")
 ```
   platform.nodus.run     execution.started
   syscall_dispatcher     syscall.executed
-  platform.nodus.run     execution.waiting
+  platform.nodus.run     execution.waiting    ← execution.completed on a runtime past 2.14.0 (FR-29)
   flow                   flow.node.started
   nodus                  nodus.execute.started
   flow                   flow.node.completed
@@ -372,7 +372,15 @@ print(f"  ({len(graph['edges'])} causal edges)")
 ```
 
 The graph is `data.observability_rippletrace_result` — `nodes`, `edges`, `root_event`,
-`terminal_events`, `ripple_span`, `insights`. This is phase 1 only: the resume's own events
+`terminal_events`, `ripple_span`, `insights`. **The third line changed after 2.14.0
+(`WAIT-DETECT-SHAPE-1`, the app team's FR-29):** the *request's* execution unit used to be
+parked alongside the run — on the event `"unknown"`, which nothing emits — because the pipeline
+read the execution record's `status: "WAITING"` as the request itself waiting. Now the request
+completes (`execution.completed`; the envelope's top-level `status` is `success`, and
+`data.status` is still `WAITING`) and only the run is parked: the `flow.waiting` line below is
+the wait, and `flow_runs` / the run's own execution unit are where it lives. The same defect
+parked the unit of every `GET …/runs/{id}` of a waiting run on an app-profile server, one row
+per read, which is how it was found. This is phase 1 only: the resume's own events
 (`nodus.event.wait_resumed`, the second `flow.waiting`) carry the *resume request's* trace id,
 not the run's, so they are on a different graph. Two traces for one run is itself a thing to
 know.

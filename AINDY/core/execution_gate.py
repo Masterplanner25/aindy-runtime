@@ -85,11 +85,18 @@ class ExecutionWaitSignal(Exception):
     Raise from any handler to request an EU-level WAIT transition without
     going through the flow engine.
 
-    The existing flow-engine WAIT mechanism (a flow node returns
-    ``{"status": "WAIT", "wait_for": "event_type"}``) is preserved and
-    continues to trigger the EU transition via dict-based detection in the
-    pipeline.  This signal provides the same capability to agents, jobs,
-    and bare operation handlers that do not run inside a ``FlowRun``.
+    The flow-engine WAIT mechanism (a flow node returns
+    ``{"status": "WAIT", "wait_for": "event_type"}``) parks the FLOW RUN —
+    its ``flow_runs`` row and its own execution unit — and is unchanged.
+    ★ It no longer parks the REQUEST that started or read the run: the
+    pipeline's dict-based detection (any handler result with
+    ``status: "WAITING"``) was removed under FR-29 / `WAIT-DETECT-SHAPE-1`,
+    because it parked the unit of every request that merely *returned* a
+    waiting run's row, and parked a starting request on the event
+    ``"unknown"``.  This signal is now the ONLY way a request-level
+    execution unit enters ``"waiting"``; raise it when the handler itself
+    — an agent, job or bare operation not inside a ``FlowRun`` — is the
+    thing that must be resumed.
 
     The pipeline catches this *before* ``HTTPException`` and ``Exception``
     so it is never misclassified as a failure.  The EU is transitioned to
