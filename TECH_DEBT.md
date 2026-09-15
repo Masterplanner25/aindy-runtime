@@ -3314,6 +3314,21 @@ the TTFA artifact. The editable-install step was replaced when the workflow was 
 
 **Status:** CLOSED (2026-06-14)
 
+**★ Third instance, 2026-09-15 (v2.15.0, fixed #672).** The wired-in Boot Smoke (the 09-10 fix)
+FAILED on its first run for the tag — `No matching distribution found for
+aindy-runtime==2.15.0` — and `Create GitHub Release` was skipped, while PyPI's JSON API had
+already answered 200 for the version and `pip download` from a laptop said the same thing
+several minutes later. **Two caches, two answers:** the smoke's `pypi_check` step probes
+`https://pypi.org/pypi/<pkg>/<ver>/json` at the origin, which is 200 the moment the upload
+lands; `pip install` resolves through `/simple/<pkg>/` behind PyPI's CDN, which lagged by
+minutes (an uncached fetch of the simple page listed 2.15.0 while pip still could not see it).
+So the gate said "published, run the smoke" and the smoke could not install. `gh run rerun
+--failed` passed and created the release. The install step now retries up to 10× at 30 s with
+`--no-cache-dir` and fails LOUDLY at the end — the version is published, so a skip there would
+be the 09-10 shape again. The sandbox gate was unaffected (it runs from source on the tag).
+Rule that survives: **a check that gates on one cache and acts through another is not one
+check.**
+
 `aindy-runtime` published to PyPI at v1.3.1. Dockerfile updated: the
 ui-builder (SPA compile) and local `python -m build` stages removed;
 Stage 1 now runs `pip install --prefix=/install "aindy-runtime==1.3.1"`.

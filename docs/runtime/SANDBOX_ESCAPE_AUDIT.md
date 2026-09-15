@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-14"
+last_verified: "2026-09-15"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1495,3 +1495,37 @@ host-side flow-state bookkeeping. Nothing new is seeded into the guest namespace
 `nodus_received_events`, which the pre-2.14.0 code already seeded whenever it had it (it never
 did — that was the defect). A future entry that finds this gate red after a change to the
 adapter's seeding should look at what reaches `nodus_initial_state`, not at the runner.
+
+---
+
+## Entry 029 — 2026-09-15
+
+**Trigger:** `v2.15.0` release tag (`sandbox-escape-linux.yml`, run `34930370105`).
+**Commit:** `946aa4e702f6f08ef7ce364c0d634dcfc82a83de`
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–028.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.75s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `34930370105`).
+
+**The certified boundary is untouched.** `git diff v2.14.0..v2.15.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**. No dependency
+pin that reaches the sandbox path moved (#669 bumps `click`, `jiter`, `psycopg2`, `tqdm`,
+`ruff`, the Rust `uuid` crate, and the SPA's `react`/`vite` — none is imported by the runner or
+the host).
+
+**What this release changed, and why it is not what this gate measures.** 2.15.0 is one
+host-side pipeline fix — `WAIT-DETECT-SHAPE-1` (#670, the app team's FR-29): the execution
+pipeline no longer parks a *request's* execution unit on a `WAITING`-shaped handler result, and
+the scheduler's `waiting_flow_runs` backup write refuses an id that is not a flow run. Neither
+touches how a guest is spawned or what reaches its namespace; the change is in what the HOST
+records about a request after the handler has already returned.
+
+**★ Release-process note, recorded here because the gate is where it would have been
+missed.** `publish.yml`'s Boot Smoke on the published wheel FAILED on its first run for this
+tag — `No matching distribution found for aindy-runtime==2.15.0` — while PyPI's JSON API had
+already answered 200 for the version. The check that gates Boot Smoke asks the JSON API at the
+origin; `pip install` resolves through the simple index behind Fastly, which lagged by minutes.
+A `--failed` rerun passed and created the release. The sandbox gate was unaffected (it runs on
+the tag, from source), and this entry is written from its first and only run.
