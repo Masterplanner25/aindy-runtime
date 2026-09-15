@@ -135,3 +135,73 @@ Bump `constraints.txt` `aindy-runtime==2.13.0` → `==2.14.0`. The `pyproject.to
 `>=2.13.0,<3.0` can stay — nothing in this release adds a symbol you import — or move to
 `>=2.14.0` if you want the four fixes guaranteed present wherever the app is installed.
 `pip install -c constraints.txt` keeps your dev venv on what your container runs.
+
+---
+
+## 6. Verified by the app team — 2026-09-14, same day (written from `aindy-apps-monolith`)
+
+Adopted as `aindy-apps-monolith` #358 (pin + floor `2.14.0`, `docs/runtime/RUNTIME_2_14_0_UPGRADE.md`
+there is the full record). Image `41642f6427f3` rebuilt on the pin, stack up on a 430 MB host.
+Every §4 check, each read rather than assumed:
+
+| §4 check | Result |
+|---|---|
+| 1. version + path, in the container | `2.14.0 ['/usr/local/lib/python3.11/site-packages/AINDY']` |
+| 2. `bootstrap-schema` | exit 0; heads runtime `0018`, app `ga1shadow0001` unchanged |
+| 3. job storm | `failed TERMINALLY` 0, `is not registered` 0 — at boot and after 12 h up. `[job_recovery] re-dispatched 3 orphaned thread-mode job(s)`, all three handlers registered |
+| 4. ★ **Tutorial 2, Steps 1–6, live** | **passes** — the first live run of that page anywhere. Output below |
+| 5. parked runs cost nothing | with a run `waiting`, four `GET /platform/flows/runs/{id}` → `[200, 200, 200, 200]` |
+
+**Step 4, observed** (test account, promoted to `is_admin` for the run and reverted; the
+tutorial's `.nd` verbatim; the harness accepts both the documented envelope and the bare shapes
+an app-profile server returns — see the note after):
+
+```
+Starting script (phase 1 - will suspend)...
+  Flow status:  WAITING      Nodus status: waiting        ← was None on 2.13.0 (§2 row 2)
+Flow run: status=waiting waiting_for=review.approved
+Approving...
+  {'run_id': 'f40116a3-…', 'resumed': True, 'results': [{'run_id': 'f40116a3-…', 'payload_injected': True}], …}
+  results entries: 1                                     ← #655
+Watching the run after resume...
+  status=success   waiting_for=None  received={'review.approved': {'reviewer': 'shawn', 'approved': True, 'note': 'Ship it.'}}
+  history: ['WAIT', 'SUCCESS', 'SUCCESS']
+  nodus_output_state: {'nodus_received_events': {…}, 'outcome': 'approved'}
+Insights:  • Sprint-12 tasks approved by shawn. Note: Ship it.
+```
+
+So #654, #655 and #656 hold on a live server. Three things the one-line expectation in §4 does
+not say, for the next reader:
+
+- **`history` has three rows, not `['WAIT', 'SUCCESS']`, and that is correct.** The
+  `nodus.execute` node's rows are exactly `WAIT, SUCCESS`; the third `SUCCESS` is
+  `nodus_record_outcome`, the runtime's own follow-on node (`runtime/nodus_adapter.py`). Read
+  node names before filing the three-row history as a defect. Suggest §4 say so.
+- **#655 was checked the direct way.** A second run was already parked on `review.approved`
+  from a first attempt; resuming `f40116a3…` left it `waiting`. It was then resumed with
+  `approved: false` → `success`, `outcome: rejected` — the rejection branch works too.
+- **On an app-profile server the flow routes answer the bare result, not the envelope.** The
+  app registers `register_flow_result("flow_run_get", result_key="flow_run_get_result")` and a
+  `raw_json_adapter` for the `flow` prefix, so `GET …/runs/{id}` is the row itself, `…/history`
+  is `{"run_id", "history"}`, `…/resume` is `{"run_id", "resumed", "results",
+  "execution_envelope"}`. Tutorial 2's `["data"]["flow_run_get_result"]` is right for a
+  platform-only server and a `KeyError` on this one. Not a runtime defect — recorded so the next
+  person running the tutorial against an app image knows which shape they are looking at.
+
+**Found while looking — filed as the app's `RUNTIME_FEATURE_REQUESTS.md` FR-29, for your
+intake.** Eight reads of the parked run produced eight
+`[Scheduler] waiting backup write failed … ForeignKeyViolation … waiting_flow_runs_run_id_fkey`
+WARNINGs, and afterwards ten `execution_units` rows sat `waiting` — eight `flow|route` (one per
+GET of the parked run, on `review.approved`) and two `job|route` (the two `POST
+/platform/nodus/run` requests, on `"unknown"`) — still `waiting` after both runs finished. The
+"run id" in each warning is the **reader's execution-unit id**: `execution_pipeline/waits.py::
+_detect_wait` treats any handler result dict with `status == "WAITING"` as the request itself
+waiting, parks the request's EU, and the wait registration's backup write then tries to insert
+`waiting_flow_runs(run_id=<eu id>)`. Nothing completes those units. **The trigger for the GET
+half is the app's result-key registration above** — the bare row's own `status: waiting` lands
+where the detector reads; on your platform-only server the row is nested under
+`flow_run_get_result` and the branch never fires, which is why your live run did not see it.
+The `nodus.run` half needs nothing of the app's. None of the three files involved changed
+between v2.13.0 and v2.14.0 — pre-existing, not a regression. The ask is in FR-29; the
+one-line app-side sidestep (drop that result key) is recorded there as the owner's call. Do
+not count `waiting` EUs as parked runs until one side moves.
