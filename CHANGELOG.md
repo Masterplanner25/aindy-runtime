@@ -4,6 +4,97 @@
 
 _Nothing yet._
 
+## 2.15.0 — 2026-09-14
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No migration.** The Alembic head is unchanged at `0018` and
+  `SCHEMA_CONTRACT_VERSION` did not move (`2026-09-10`) — no `AINDY/db/models/` or
+  `memory_persistence.py` change this release. `bootstrap-schema --reconcile` is not needed.
+- **★ One unflagged behaviour change (#670, the app team's FR-29):** a request that *reads* a
+  waiting run, or *starts* a script that suspends, no longer has its own execution unit parked.
+  Visible: the pipeline envelope of `POST /platform/nodus/run` (and any route returning a
+  `WAITING` record) says `status: "success"` with `data.status: "WAITING"` where it said
+  `status: "waiting"` + `metadata.eu_wait_for: "unknown"`; its trace carries
+  `execution.completed`, not `execution.waiting`. Consumers reading `data.status` are unaffected.
+  A consumer's `register_flow_result("flow_run_get", result_key=…)` can stay — it no longer
+  arms anything.
+- **One-off cleanup, optional:** every `GET …/runs/{id}` of a parked run on an app-profile
+  server, and every `POST /platform/nodus/run` whose script suspended, left one
+  `execution_units` row in `waiting` under `source_type='route'` on every release before this
+  one. Nothing wakes them and nothing in this release touches them. If your dashboards count
+  units by status: `UPDATE execution_units SET status='failed' WHERE status='waiting' AND
+  source_type='route';` — the run-level rows (`source_type` ≠ `route`) are real waits, leave
+  them.
+- **Dependencies (#669):** `click` 8.5.0, `jiter` 0.16.0, `psycopg2` 2.9.13, `tqdm` 4.70.1;
+  platform SPA `react` 19.3.0 / `vite` 8.3.0. No consumer-visible change expected.
+
+### Fixed — reading a waiting run no longer parks the reader's execution unit (`WAIT-DETECT-SHAPE-1`, app FR-29) (#670)
+
+Filed by the app team from their live 2.14.0 run of Tutorial 2. The execution pipeline treated
+**any** handler result dict whose `status` upper-cased to `WAITING` as *the request itself*
+waiting: it parked the request's `execution_units` row, registered a scheduler wait under that
+row's id, and emitted `execution.waiting`. Two things return such a dict, and neither is the
+request waiting:
+
+- **A read.** `GET /platform/flows/runs/{id}` of a parked run, on a server where a consumer has
+  registered a result key for `flow_run_get` (the app does), returns the bare run row — whose
+  own `status: "waiting"` parked the *reader*. Eight reads, eight units in `waiting` forever,
+  each with a `[Scheduler] waiting backup write failed … ForeignKeyViolation` WARNING because
+  the scheduler was handed a unit id as a `waiting_flow_runs.run_id`. The platform-only server
+  nests the row under `flow_run_get_result`, which is why the runtime's own live run never
+  saw it.
+- **A start.** `POST /platform/nodus/run` on a script that suspends returns an execution record
+  with top-level `status: "WAITING"` and `waiting_for` nested under `data` — so the detector
+  parked the request's unit on the literal event `"unknown"`, which nothing emits. This was
+  the case the branch was written for, and it never resumed a unit: nothing re-executes a
+  returned request. Pre-existing on every release; not a 2.14.0 regression. Almost certainly
+  the 105 `job|route` / `flow|route` units left stuck by the 2026-09-13 tutorial run.
+
+- **Only an explicit `ExecutionWaitSignal` (raised or returned) parks a request's unit now.**
+  A request's unit describes the request: when the handler returns, it completes. The run it
+  read or started carries its own wait on `flow_runs` and its own unit (#656). The handler's
+  result is untouched — `data.status == "WAITING"` still reaches the caller.
+- **The scheduler's `waiting_flow_runs` backup write skips an id that is not a flow run** (a
+  DEBUG line, not a WARNING that reads like data loss). Still reachable by an
+  `ExecutionWaitSignal` raised from a `flow.*` route.
+- **Consumer-visible:** the pipeline envelope of `POST /platform/nodus/run` (and any route
+  returning a WAITING record) now says `status: "success"` with `data.status: "WAITING"`,
+  where it said `status: "waiting"` and `metadata.eu_wait_for: "unknown"`; its trace carries
+  `execution.completed`, not `execution.waiting`. Tutorial 2's causal-graph listing and
+  `EXECUTION_CONTRACT.md` are updated. Consumers that read `data.status` (the app's routers
+  do) are unaffected. Dashboards counting `execution_units` by `status` stop inflating
+  `waiting` by one row per such request.
+- Unit tests call the routes through the booted app on both server shapes and read back the
+  unit the envelope names; the suspending-script case drives a real Nodus script with the
+  scheduler spied (exactly one `register_wait`, the run's). Mutation-checked 3/3 — the third
+  survived a first draft whose signal control only *raised* the signal, which never reaches the
+  detector. Not yet re-run against a live server; the app team's upgrade step is that run.
+
+### Changed — dependency bumps, grouped (#669)
+
+Eight dependabot PRs (#660–#667) taken as one, for the reason #485 recorded: `strict: true`
+branch protection means each individual merge forces a rebase of the other seven, and
+dependabot resolves each package independently, so the set was merged together and verified to
+resolve together (`pip install --dry-run --no-cache-dir -r AINDY/requirements.txt`).
+
+| Package | From | To |
+|---|---|---|
+| `click` | 8.4.2 | 8.5.0 |
+| `jiter` | 0.11.1 | 0.16.0 |
+| `psycopg2` | 2.9.12 | 2.9.13 |
+| `tqdm` | 4.70.0 | 4.70.1 |
+| `ruff` (dev) | 0.16.6 | 0.16.7 |
+| `uuid` (Rust) | 1.26.0 | 1.26.1 |
+| `react` / `react-dom` / `@types/react` / `@types/react-dom` (platform SPA) | 19.x | 19.3.0 |
+| `vite` (platform SPA, dev) | 8.2.2 | 8.3.0 |
+
+Every Python pin moved in **both** `pyproject.toml` and `AINDY/requirements.txt` (`ruff` lives
+only in the latter). No consumer-visible behaviour change is expected from any of these; `jiter`
+is the widest jump (five minors) and is a transitive of the LLM client SDKs, exercised by the
+metered-seam and cassette tests. **Gotcha recorded:** a stale local pip HTTP cache reported
+`click==8.5.0` as non-existent — `--no-cache-dir` before concluding a pin is wrong.
+
 ## 2.14.0 — 2026-09-13
 
 **Operator notes — read before upgrading.**
