@@ -407,7 +407,7 @@ A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — ver
 item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
 blocked on a token-delivery channel (FR-1). **FR-7** (memory recall defects) shipped in
 v2.0.0. **FR-8, FR-9 and FR-10 arrived 2026-08-03 and shipped 2026-08-05 — see below; all
-three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate, #518) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database, #517) arrived 2026-08-22 and were fixed the same day; both have their own sections. **FR-19/20/21/22 arrived 2026-08-22** and were fixed the same day — 19's runtime half (#521), 20 (#520), 21 (#522), 22 (route inventory); each has its own section. **FR-24** (`nltk` CVE) shipped in 2.7.0 unfiled. **FR-23/25/26/27 filed 2026-09-11** — 23 had sat a month in their document while this line said "next available: FR-23"; 25 (a)+(c) shipped the same day (#620); 23, 25 (b), 26, 27 open, each with its own section below. **FR-28** (#628) and **FR-29** (#670, filed by the app team from their live 2.14.0 run — `WAIT-DETECT-SHAPE-1`) shipped 2026-09-12/14. Next available: **FR-30**.
+three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate, #518) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database, #517) arrived 2026-08-22 and were fixed the same day; both have their own sections. **FR-19/20/21/22 arrived 2026-08-22** and were fixed the same day — 19's runtime half (#521), 20 (#520), 21 (#522), 22 (route inventory); each has its own section. **FR-24** (`nltk` CVE) shipped in 2.7.0 unfiled. **FR-23/25/26/27 filed 2026-09-11** — 23 had sat a month in their document while this line said "next available: FR-23"; 25 (a)+(c) shipped the same day (#620); 23, 25 (b), 26, 27 open, each with its own section below. **FR-28** (#628), **FR-29** (#670, `WAIT-DETECT-SHAPE-1`) and **FR-30** (#673, `EU-FINALIZE-UNCOMMITTED-1` — filed from their 2.15.0 verification) shipped 2026-09-12/14/15. Next available: **FR-31**.
 
 ### FR-8/9/10 — the 2.0.0 upgrade trio (SHIPPED 2026-08-05)
 
@@ -8772,15 +8772,86 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ---
 
+## FR-30 / EU-FINALIZE-UNCOMMITTED-1 — a request's execution unit never reached `completed`: the finalize was flushed after the last commit 🔴 defect
+
+**Status: CLOSED (2026-09-15, PR #673).** Filed by the app team the same day
+(`RUNTIME_FEATURE_REQUESTS.md` FR-30) while checking the 2.15.0 handoff's sentence *"a request's
+execution unit describes the request: when the handler returns, it completes."* Their table said
+it never had: **every route-sourced `execution_units` row on their stack was `executing`** —
+196 agent / 255 default / 373 flow / 39 job / 52 task since 2026-07-23, 19 more per Tutorial 2
+pass — with `execution.completed` on every trace and nothing in the log. **Pre-existing since the
+table's first row.** The 105 `executing` units our own 2026-09-13 run left "undiagnosed" were
+this, not FR-29 (corrected there).
+
+### The mechanism, verified from source
+
+`_safe_finalize_eu` (`execution_pipeline/resources.py:139`) → `ExecutionUnitService.update_status`
+→ **`self.db.flush()`** (`execution_unit_service.py:134`), no commit. It is the LAST write on the
+request session: the `execution.completed` / `execution.failed` emit before it commits
+(`system_event_service.py:125`), and `db/database.py::get_db` tears down with `close()` and no
+commit — the flushed UPDATE is rolled back. The finalize returned True, the pipeline recorded
+`execution_unit.finalize.completed: ok` in the envelope, and the row stayed `executing`. **Nothing
+failed, so nothing logged; it was undone.** The 13 `default|completed` rows on their stack are the
+exception that shows the shape — a handler that commits AFTER the pipeline's finalize carries it
+through by accident. `waiting` (FR-29) was committed because the `execution.waiting` emit comes
+after the status write; `completed`/`failed` were not because the emit comes before.
+
+### What was done
+
+`_safe_finalize_eu` commits after a successful `update_status`. One line; it is the write's own
+site, inside the existing try/except, so a commit failure records the side effect as `failed`
+exactly as a flush failure did. Not `get_db` (a route session that never commits on its own is the
+right default — their ask said so too), not `update_status` (other callers manage their own
+transactions).
+
+### ★★ Why no test in this repo could see it — catalogue variant 15
+
+`tests/unit/test_wait_detect_reader_park_fr29.py` asserted `reader.status == "completed"` the
+day before this was filed, and PASSED on the pre-fix code — re-confirmed by running it against
+the reverted fix. The shared `db_session` / `runtime_only_app` fixtures bind the app's request
+session and the test's reading session to ONE connection holding ONE outer transaction (SQLite
+`StaticPool` + `db_connection`'s `connection.begin()`). Inside that transaction a flushed UPDATE
+reads exactly like a committed one. **A fixture that shares the connection makes flush and commit
+indistinguishable.** `tests/unit/test_request_eu_finalize_commits_fr30.py` builds its own
+instrument — file-backed SQLite, `NullPool`, one connection per session, no outer transaction, the
+request session torn down as `get_db` tears it down — and runs a liveness control FIRST (a
+flush-then-close must read as rolled back, a commit must not). Mutation: with the commit removed,
+3/3 route tests fail and the control passes. **Rule: an assertion about durability must read
+through a connection that did not share the writer's transaction.** The 2026-09-13 storm test's
+note ("the shared fixture's outer transaction erases the code's rollback") is the same fixture
+seen from the other side.
+
+**Consumer-visible:** `execution_units.status` for route units now reaches `completed` / `failed`;
+`ExecutionConsole`'s `executing` filter means *in flight*. The ~900 rows already `executing` on
+a live stack stay until retired (`UPDATE execution_units SET status='failed' WHERE status='executing'
+AND source_type='route' AND created_at < <upgrade time>` — the operator's call).
+
+**Related:** `FR-29` / `WAIT-DETECT-SHAPE-1` (the other half of the same lifecycle),
+`ACTIVE-COUNT-WAIT-LEAK-1`, `RT-MEMTXN-LEAK-1` (its rules on the request-shared session hold: this
+adds a commit where the last write is, not a rollback).
+
+---
 ## FR-29 / WAIT-DETECT-SHAPE-1 — reading a waiting run parked the READER's execution unit, forever 🔴 defect
 
 **Status: CLOSED (2026-09-14, PR #670).** Filed by the app team the same day from their live
 2.14.0 run of Tutorial 2 (`aindy-apps-monolith` `RUNTIME_FEATURE_REQUESTS.md` FR-29, app #359);
 reproduced here at the route, both server profiles, before the detector was touched.
 **Pre-existing, not a 2.14.0 regression** — none of the three files involved had changed since
-2.13.0. This is almost certainly the **105 `execution_units` rows stuck under `job|route` /
-`flow|route`** that the 2026-09-13 tutorial run left "undiagnosed": every read of a parked run
-and every start of a suspending script left one behind.
+2.13.0. ~~This is almost certainly the **105 `execution_units` rows stuck under `job|route` /
+`flow|route`** that the 2026-09-13 tutorial run left "undiagnosed".~~ **★ CORRECTED 2026-09-15:
+WRONG. Those 105 were `executing`, not `waiting` — FR-30's shape, not this one's.** This entry
+leaks `waiting` rows (ten on the app's stack, exactly); the `executing` pile is the finalize
+that never committed (`FR-30`). Two defects, two statuses; I conflated them from the count.
+
+**★ VERIFIED LIVE by the app team 2026-09-15 on their rebuilt 2.15.0 container:** Tutorial 2
+with the parked run read EIGHT times — no new `route` row, 0 `waiting backup write failed`, 0
+FK errors; the run's own unit went `waiting → completed`. **Addendum they found, fixed #673:**
+the ten leaked rows re-fired the FK violation on EVERY boot through `wait_rehydration.
+ensure_waiting_flow_run_row` — `rehydrate_waiting_eus` seeds `waiting_flow_runs` with
+`run_id=eu_id` for every waiting unit, and a unit id is never a flow-run id, so on Postgres that
+seed had failed for EVERY waiting unit on EVERY boot since it was written, "non-fatal". The
+`flow_runs`-exists guard now lives in the shared seed (both callers). SQLite does not enforce
+the FK, which is why no test saw either instance.
 
 ### What the app team hit
 

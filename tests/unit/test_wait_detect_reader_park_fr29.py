@@ -28,6 +28,12 @@ refuses to persist a wait for an id that is not a flow run.
 
 Every route test here CALLS the route (`ROUTE-GUARD-1`); the unit it inspects is the one the
 response envelope names.
+
+★ 2026-09-15: the `reader.status == "completed"` assertions below PASSED on code that only
+FLUSHED that status and rolled it back on session close (FR-30). They still hold — they are
+about the pipeline's decision — but they cannot see durability: the shared fixture puts this
+test and the app on one connection inside one transaction. Durability is
+`test_request_eu_finalize_commits_fr30.py`'s, through a separate connection.
 """
 from __future__ import annotations
 
@@ -372,3 +378,44 @@ def test_backup_write_is_skipped_for_an_id_that_is_not_a_flow_run(db_session, te
         assert not [r for r in caplog.records if "backup write failed" in r.getMessage()], (
             "an id that is not a flow run is a skip, not a failure that reads like data loss"
         )
+
+
+def test_rehydration_seed_is_skipped_for_an_id_that_is_not_a_flow_run(db_session, caplog):
+    """FR-29 addendum (app team, 2026-09-15): the leaked route units re-fired the FK violation on
+    EVERY boot — `[rehydrate] waiting_flow_runs seed failed … ForeignKeyViolation` × 10 — because
+    `rehydrate_waiting_eus` seeds `waiting_flow_runs` with `run_id=eu_id` for every waiting unit,
+    and an execution-unit id is never a flow-run id. On Postgres that seed had failed for every
+    waiting unit on every boot since it was written; SQLite does not enforce the FK, so the row
+    simply lands here — which is what discriminates. Positive control first."""
+    import logging
+
+    from AINDY.core.wait_rehydration import ensure_waiting_flow_run_row
+    from AINDY.db.models.flow_run import FlowRun
+    from AINDY.db.models.waiting_flow_run import WaitingFlowRun
+
+    real = FlowRun(
+        id=str(uuid.uuid4()), flow_name="f", user_id=uuid.uuid4(), status="waiting",
+        waiting_for=EVENT, trace_id="t",
+    )
+    db_session.add(real)
+    db_session.commit()
+
+    ensure_waiting_flow_run_row(
+        db_session, run_id=real.id, event_type=EVENT, correlation_id="c",
+        timeout_at=None, eu_id=str(uuid.uuid4()), priority="normal",
+    )
+    assert db_session.query(WaitingFlowRun).filter(WaitingFlowRun.run_id == real.id).count() == 1, (
+        "liveness: a real flow run must still be seeded, or the skip below proves nothing"
+    )
+
+    eu_id = str(uuid.uuid4())  # a request's execution-unit id, as rehydrate_waiting_eus passes it
+    with caplog.at_level(logging.WARNING, logger="AINDY.core.wait_rehydration"):
+        ensure_waiting_flow_run_row(
+            db_session, run_id=eu_id, event_type=EVENT, correlation_id="c",
+            timeout_at=None, eu_id=eu_id, priority="normal",
+        )
+    assert db_session.query(WaitingFlowRun).filter(WaitingFlowRun.run_id == eu_id).count() == 0, (
+        "a waiting_flow_runs row was seeded for an id that is not a flow run — the FK violation "
+        "that fired ten times per boot on the app's stack"
+    )
+    assert not [r for r in caplog.records if "seed failed" in r.getMessage()]

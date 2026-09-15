@@ -77,7 +77,23 @@ def ensure_waiting_flow_run_row(
     try:
         import os
 
+        from AINDY.db.models.flow_run import FlowRun
         from AINDY.db.models.waiting_flow_run import WaitingFlowRun
+
+        # ★ FR-29 addendum (2026-09-15): `waiting_flow_runs.run_id` FKs to `flow_runs`. The
+        # EU-side caller (`rehydrate_waiting_eus`) passes `run_id=eu_id`, and an execution-unit
+        # id is never a flow-run id — so on Postgres that seed raised ForeignKeyViolation for
+        # EVERY waiting unit on EVERY boot, logged "non-fatal", since it was written (ten per
+        # boot on the app's stack from the units FR-29 leaked). SQLite does not enforce the FK,
+        # which is why no test saw it. A non-flow wait lives in memory + Redis, the same rule
+        # `_persist_wait_backup` applies; say so at DEBUG and do nothing.
+        if db.query(FlowRun.id).filter(FlowRun.id == str(run_id)).first() is None:
+            logger.debug(
+                "[rehydrate] waiting_flow_runs seed skipped for run=%s: not a flow run "
+                "(eu_id=%s) — wait held in memory/Redis only",
+                run_id, eu_id,
+            )
+            return
 
         existing = (
             db.query(WaitingFlowRun)
