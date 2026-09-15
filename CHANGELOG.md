@@ -4,6 +4,72 @@
 
 _Nothing yet._
 
+## 2.16.0 — 2026-09-15
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No migration.** The Alembic head is unchanged at `0018` and
+  `SCHEMA_CONTRACT_VERSION` did not move (`2026-09-10`) — no `AINDY/db/models/` or
+  `memory_persistence.py` change this release. `bootstrap-schema --reconcile` is not needed.
+- **★ One unflagged behaviour change (#673, the app team's FR-30): a request's `execution_units`
+  row now actually reaches `completed` / `failed`.** It never had — on every release since the
+  table's first row the terminal status was flushed and rolled back on session close, so every
+  route-sourced unit sat `executing` forever (900+ on the app's stack). Anything counting units
+  by status will see `executing` drop to *in flight* from the first request after upgrade.
+- **One-off cleanup, optional:** the rows already `executing` stay. To retire them:
+  `UPDATE execution_units SET status='failed' WHERE status='executing' AND source_type='route'
+  AND created_at < '<upgrade time>';` — leave non-`route` rows alone. (2.15.0's `waiting` cleanup
+  still applies if not yet run.)
+- **The `[rehydrate] waiting_flow_runs seed failed … ForeignKeyViolation` lines at boot stop.**
+  They fired once per waiting execution unit on every boot, on every release — the seed used a
+  unit id as a run id. Log noise only; nothing was lost.
+- **Boot Smoke on the published wheel retries the PyPI install** (#672) — a CI-meaning change,
+  no runtime change.
+
+### Fixed — a request's execution unit now actually reaches `completed` / `failed` (`EU-FINALIZE-UNCOMMITTED-1`, app FR-30) (#673)
+
+Filed by the app team on 2026-09-15 while verifying 2.15.0. **Every route-sourced
+`execution_units` row on a live stack has sat `executing` forever, since the table's first row**
+(900+ on theirs, 19 more per Tutorial 2 pass), with `execution.completed` on every trace and
+nothing logged. `_safe_finalize_eu` wrote the terminal status through
+`ExecutionUnitService.update_status`, which only **flushes**; it was the last write on the request
+session, the `execution.completed` emit before it had already committed, and `get_db` closes
+without committing — so the status was rolled back on every request. The finalize returned True
+and the envelope recorded `execution_unit.finalize.completed: ok`; the row disagreed.
+
+- **`_safe_finalize_eu` commits after a successful `update_status`.** Terminal route units now
+  read `completed` or `failed`; an operator console's `executing` count means *in flight*.
+- **Rows already `executing` are not touched.** Retire them by hand if you count by status:
+  `UPDATE execution_units SET status='failed' WHERE status='executing' AND source_type='route'
+  AND created_at < '<upgrade time>';`
+- **★ The `waiting_flow_runs` rehydration seed skips an id that is not a flow run** (FR-29's
+  addendum). `rehydrate_waiting_eus` seeds with `run_id=eu_id` for every waiting unit, and a
+  unit id is never a flow-run id — on Postgres that seed raised `ForeignKeyViolation` for every
+  waiting unit on every boot since it was written, logged `[rehydrate] … seed failed (non-fatal)`.
+  The `flow_runs`-exists guard now lives in the shared seed (both callers). Ten such lines per
+  boot on the app's stack, from the units FR-29 leaked; zero now.
+- **Correction to the 2.15.0 entry above:** it said FR-29 was "almost certainly the 105
+  `job|route` / `flow|route` units left stuck" by the 2026-09-13 tutorial run. Wrong — those
+  were `executing`, which is this defect; FR-29 leaks `waiting` rows. Two defects, two statuses.
+- **Why no existing test could see it:** the shared test fixtures put the app's request session
+  and the test's reading session on one connection inside one outer transaction, where a flushed
+  UPDATE reads exactly like a committed one — the FR-29 route tests asserted `completed` and
+  passed on the broken code. The new suite reads through a separate connection with no shared
+  transaction and runs a liveness control first (a flush-then-close must read as rolled back).
+  Mutation-checked: commit removed → 3/3 route tests fail; seed guard removed → its test fails.
+  **Not re-run live.**
+
+### Changed — Boot Smoke retries the PyPI install instead of failing on index lag (#672)
+
+On the `v2.15.0` tag, `publish.yml`'s Boot Smoke on the published wheel failed with
+`No matching distribution found for aindy-runtime==2.15.0` seconds after the upload, and the
+GitHub release was skipped; a `--failed` rerun passed. The smoke's gate probes PyPI's JSON API
+at the origin (200 the moment the upload lands) while `pip install` resolves through the simple
+index behind PyPI's CDN, which lagged by minutes — two caches, two answers. The install step in
+`smoke-postgres.yml` now retries up to 10× at 30 s with `--no-cache-dir` and fails loudly if the
+version never becomes resolvable. **What a green means is unchanged; what a red means is
+narrower:** it is no longer "the CDN was slow". Nothing in the package changed.
+
 ## 2.15.0 — 2026-09-14
 
 **Operator notes — read before upgrading.**
