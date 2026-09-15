@@ -23,6 +23,15 @@ finishes the work with the approval payload — no polling, no thread, no proces
 > observe that. Step 6's "after the fix" output below comes from the runtime's own
 > second-run test (`tests/unit/test_nodus_resume_bridge.py`), which drives this exact script
 > shape through start → wait → resume — not yet from a second live run of this page.
+>
+> **Run live on 2.14.0 by the app team, 2026-09-14, against their rebuilt container: Steps 1–6
+> complete as documented** — `status=success`, `received={'review.approved': {…}}`, one
+> `results` entry, insight written (`docs/upgrades/APP_HANDOFF_v2.14.0.md` §6). Two things that
+> run adds to Step 6: `history` is `['WAIT', 'SUCCESS', 'SUCCESS']` — the third row is
+> `nodus_record_outcome`, the runtime's follow-on node, not a re-execution — and on an
+> **app-profile** server the flow routes answer the bare result (the run row itself, not
+> `data.flow_run_get_result`) because the app registers a result key and a raw adapter for
+> them; the `["data"][…]` reads on this page are for a platform-only server.
 
 ---
 
