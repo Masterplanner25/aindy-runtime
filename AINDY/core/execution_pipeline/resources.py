@@ -145,6 +145,14 @@ def _safe_finalize_eu(self, ctx, status: str) -> None:
                 error=f"failed to persist status {status!r}",
             )
             return
+        # ★ FR-30 (2026-09-15): `update_status` only FLUSHES, and this is the LAST write on the
+        # request session — the `execution.completed` / `execution.failed` emit before it
+        # committed, and `get_db` tears down with `close()`, no commit. So the terminal status
+        # was rolled back on every request since the table existed: every route unit on a live
+        # stack sat `executing` forever (196 agent / 255 default / 373 flow / 39 job / 52 task
+        # rows on the app's stack, none since 2026-07-23 ever `completed`). Nothing logged it,
+        # because nothing failed — it was undone. Commit here, where the status is written.
+        db.commit()
         self._record_side_effect(
             ctx,
             f"execution_unit.finalize.{status}",

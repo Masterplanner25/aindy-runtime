@@ -1,7 +1,7 @@
 ---
 title: "App Handoff — Runtime v2.15.0"
 api_version: "1.0"
-last_verified: "2026-09-14"
+last_verified: "2026-09-15"
 status: current
 owner: "platform-team"
 ---
@@ -59,8 +59,9 @@ the booted app and reads back the unit the envelope names).
   And even a correctly named wait had nowhere to go — `resume_execution_unit` moves a unit
   `waiting → resumed → executing`, and nothing re-executes a returned request. **The dict path
   parked units; it never once resumed one**, on any release. That is your two `job|route` rows
-  on `"unknown"`, and it is almost certainly the 105 `job|route` / `flow|route` units our own
-  2026-09-13 tutorial run left "undiagnosed".
+  on `"unknown"`. ~~and it is almost certainly the 105 `job|route` / `flow|route` units our own
+  2026-09-13 tutorial run left "undiagnosed"~~ — **corrected 2026-09-15: those 105 were
+  `executing`, which is your FR-30 (the finalize never committed; fixed #673), not this.**
 - **Your `flow_run_get` result key can stay.** It no longer arms anything. Do not drop it on
   our account — it is a response-shape decision that is yours.
 - One precision on your census: `getFlowRun` *is* exported (`client/src/api/operator.js:12`,

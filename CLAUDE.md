@@ -503,10 +503,10 @@ normal move, not an optimization.
 
 ## ★ Trusting a green check — read this before citing CI as evidence
 
-**Fourteen separate times** this repo has shipped something that *looked* covered and was not.
-*(The fourteenth arrived 2026-09-10, predicted by this very sentence — which is the point.)*
-Assume there will be a fifteenth — the catalogue exists so you can recognise the shape, and the
-rules below are what it cost to learn:
+**Fifteen separate times** this repo has shipped something that *looked* covered and was not.
+*(The fourteenth arrived 2026-09-10 and the fifteenth 2026-09-15, each predicted by this very
+sentence — which is the point.)* Assume there will be a sixteenth — the catalogue exists so you
+can recognise the shape, and the rules below are what it cost to learn:
 
 | # | Variant | How it looked green | Entry |
 |---|---|---|---|
@@ -524,6 +524,7 @@ rules below are what it cost to learn:
 | 12 | **The check is right; its CENSUS is hand-written** | `test_every_provider_client_meters_its_response` walked the AST — correctly, per rule 7 — over three file paths typed out by hand, and a fourth client shipped unmetered | `COST-GOVERNOR-1` ph.0 |
 | 13 | **The FIXTURE blinds the test** | the suite patched `_ensure_tools_loaded` to a no-op to isolate the registry, so no test in it could observe that the code under test *called* it — and the call was the bug | `AUTHORITY-NEGOTIATION-1` ph.0 |
 | 14 | **The check is fine; its SUBJECT is dead** | a test read `inspect.signature` on a builtins class **nothing instantiates** — green, gating, over real source that no execution path can reach; the fix it guards was applied to unreachable code | `GUEST-BUILTINS-DEAD-1` |
+| 15 | **The FIXTURE shares the writer's transaction, so flush reads as commit** | a route test asserted an EU was `completed` and passed for a day on code that only FLUSHED the status and rolled it back on close — the test session and the app's session sat on ONE connection inside ONE outer transaction, where an uncommitted write is fully readable; the live table said `executing`, 900 rows deep | `EU-FINALIZE-UNCOMMITTED-1` |
 
 **Variant 9 is the one to design against, not just record:** it cannot be fixed by making the
 check better, because the check is fine — the *release* lacks the condition. The only answer
@@ -599,6 +600,17 @@ trusted bootstrap registration and so was not inert at all — but every test in
 patched that function to a no-op *in order to isolate the registry*, which is a correct thing to
 isolate. **The isolation and the blindness were the same line.** CI caught it through an
 unrelated audit-surface assertion (`bootstrap_registration_count: 0` became `1`).
+
+**★ Variant 15 is variant 13 with a transaction instead of a patch.** The shared `db_session` /
+`runtime_only_app` fixtures bind the app's request session and the test's reader to one
+connection holding one outer transaction — correct for isolating tests from each other, and
+exactly what makes a `flush()` indistinguishable from a `commit()` to every assertion inside it.
+The FR-29 route tests read `completed` on code whose finalize was rolled back on every request.
+**The rule: an assertion about DURABILITY must read through a connection that did not share the
+writer's transaction, and the file must carry a liveness control proving a flush-then-close reads
+as rolled back** (`test_request_eu_finalize_commits_fr30.py`). The storm test's note from 09-13
+— "the shared fixture's outer transaction erases the code's `rollback()`" — was the same fixture
+seen from the other side; a fixture that hides a rollback also hides a missing commit.
 
 **The rule: a fixture that neutralises a dependency also neutralises any test of HOW that
 dependency is used.** Stubbing something out is a claim that the interaction does not matter —
@@ -1015,7 +1027,7 @@ file — because findings were written where they were discovered instead of whe
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests from `aindy-apps-monolith`. **Next available: FR-30.** FR-1..13, 16..18, 20..22, 24, FR-19's runtime half, **FR-23 (#622+#626), FR-25 (a/b/c), FR-26, FR-27 (strict idempotency, #627), FR-28 (acknowledge authz, #628), FR-29 (reader parked by a wait-shaped result, #670 — `WAIT-DETECT-SHAPE-1`)** shipped. **★ FR-22: `/apps/*` is NOT an ownership boundary — 35 such routes are RUNTIME-served; inventory `AINDY/route_inventory.json`.** Open: **FR-14** (only exit-**3** additive-reconcile is safe to automate; the recurrence half — upgrade path never run against an EXISTING db — still open), **FR-6 items 2+3** (no `email` connector). FR-18's retention half is `SYSEVENT-RETENTION-1`.
+- **APP-FR-\*** — app-side feature requests from `aindy-apps-monolith`. **Next available: FR-31.** FR-1..13, 16..18, 20..22, 24, FR-19's runtime half, **FR-23 (#622+#626), FR-25 (a/b/c), FR-26, FR-27 (strict idempotency, #627), FR-28 (acknowledge authz, #628), FR-29 (reader parked by a wait-shaped result, #670 — `WAIT-DETECT-SHAPE-1`), FR-30 (request EU finalize never committed, #673 — `EU-FINALIZE-UNCOMMITTED-1`)** shipped. **★ FR-22: `/apps/*` is NOT an ownership boundary — 35 such routes are RUNTIME-served; inventory `AINDY/route_inventory.json`.** Open: **FR-14** (only exit-**3** additive-reconcile is safe to automate; the recurrence half — upgrade path never run against an EXISTING db — still open), **FR-6 items 2+3** (no `email` connector). FR-18's retention half is `SYSEVENT-RETENTION-1`.
 - **ECOGAP-\*** — ecosystem capability gaps (`ECOGAP-1..6`), roadmap gaps rather than classic debt. ECOGAP-2 is owned by C2/C3, ECOGAP-3 extends MEMORY-EMBEDDING-PROVIDER-1 — **don't double-track**. ECOGAP-1 Phases 1+2+2a and ECOGAP-4 G4b (MCP client + stdio server) shipped opt-in. **G4a remains built-but-INERT** — every guard vacuous until a policy is registered.
 - **RTR-\*** — runtime roadmap (`RTR-1..8`). RTR-1/5/6 closed; RTR-2/3/4/7 harden-halves done, BUILD halves deferred (RTR-3 full AgentRun↔FlowRun unification; RTR-4 remaining = soak+flip `AINDY_DELEGATION_PRIVATE_MEMORY`). RTR-8 stale/closed. **RTR-4 gotcha: delegate writes take the deferred capture path, so `MemoryNodeDAO.save` is the write chokepoint, not the syscall.**
 - **DOCS-\*** — docset findings. DOCS-BUCKET-A-1 and DOCS-STALE-1 closed; **`Runtime Docs Validation` now asserts `last_verified` is real and `>= 2026-05-17`** (it only checked key presence before). **DOCS-COVERAGE-CLAIM-1 half closed:** 6 docs cited 8 test files that never existed; all four areas now have suites (249 tests) *and* are made to actually run. **★ The pattern worth keeping: four separate docs mis-stated plugin-layer routes as runtime-owned. Check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence.** **★ Gotcha: `ResourceManager.can_execute` returns `(True, None)` unconditionally under `settings.is_testing`, so quota enforcement is vacuous in tests** — and `is_testing` is a pydantic *property*, so patch it on the class.
@@ -1063,7 +1075,8 @@ file — because findings were written where they were discovered instead of whe
 
 ### Closed — kept as one line because the rule still bites
 
-- **WAIT-DETECT-SHAPE-1 / FR-29** — **CLOSED 2026-09-14 (#670).** The pipeline parked the REQUEST's execution unit on ANY handler result dict with `status: WAITING` — so a GET of a waiting run parked the READER (armed by the app's `flow_run_get` result key; the platform-only nesting hid it), and `POST /platform/nodus/run` parked the request on the event `"unknown"` (`waiting_for` is NESTED). **★ The dict path parked units and never once resumed one — nothing re-executes a returned request.** Now only `ExecutionWaitSignal` parks a request EU; the scheduler's DB backup skips a non-`FlowRun` id. **★ Mutation 3 SURVIVED the first draft: a RAISED signal never reaches `_detect_wait` — test the RETURNED form.** Likely the 105 stuck `*|route` EUs from the tutorial run.
+- **EU-FINALIZE-UNCOMMITTED-1 / FR-30** — **CLOSED 2026-09-15 (#673).** A request's execution unit NEVER reached `completed`/`failed`: `_safe_finalize_eu` → `update_status` only FLUSHES, it is the last write, the emit before it committed, `get_db` closes without commit — rolled back on every request since the table existed (900+ `executing` route rows on the app's stack). **★★ Catalogue variant 15: the FR-29 tests asserted `completed` and PASSED on the broken code — the shared fixture puts app and test on ONE connection/transaction, so flush reads as commit.** `test_request_eu_finalize_commits_fr30.py` reads through a SEPARATE connection, liveness control first.
+- **WAIT-DETECT-SHAPE-1 / FR-29** — **CLOSED 2026-09-14 (#670), live-verified 09-15.** The pipeline parked the REQUEST's EU on ANY handler result with `status: WAITING` — a GET of a waiting run parked the READER (armed by the app's `flow_run_get` result key), `nodus/run` parked the request on `"unknown"` (`waiting_for` is NESTED). **★ The dict path parked units and never resumed one.** Now only `ExecutionWaitSignal` parks a request EU; DB backup + rehydration seed skip a non-`FlowRun` id (#673 — the seed FK'd EVERY boot). **★ Mutation 3 SURVIVED the first draft: a RAISED signal never reaches `_detect_wait` — test the RETURNED form.** **★ The 105 stuck EUs were `executing` — FR-30, not this.**
 - **ASYNC-JOB-UNREGISTERED-STORM-1** — **CLOSED 2026-09-13.** An unregistered job handler was re-dispatched in-process ~87×/s forever: the `raise` preceded `attempt_count += 1`, the increment was committed only as a side effect of the started-event emit (the except branch's `rollback()` erased it), and the thread-mode retry was an immediate executor submit. Now: `AsyncJobHandlerNotRegistered` is TERMINAL; the attempt is numbered before the lookup and restored after the rollback; thread-mode retries wait `_compute_retry_delay` via a `Timer`. **★ The count fix alone stops the live case (`max_attempts=1`); the terminal class protects budgets > 1 — mutation-tested apart.** **★ Test the except branch on a PRIVATE engine: the shared fixture's outer transaction makes the code's `rollback()` erase the test's row.**
 - **ACTIVE-COUNT-WAIT-LEAK-1** — **CLOSED 2026-09-13.** A waiting run held a tenant concurrency slot until restart (`mark_started` at start, nothing on WAIT; cap 5; four parked waits 429'd a GET). Now a run holds a slot exactly while executing: acquired at node entry after `can_execute` (start and resume alike, `_holds_slot`), released by every WAIT via `mark_waiting` (keeps the usage snapshot) and by completion/failure. **★ Two latent defects beside it: `can_execute` was re-asked per node with the run's OWN slot in the count (the last-admitted run parked itself holding it), and the success release lived inside a hook that returns early without `workflow_type`.** **★ `can_execute` is `True` under `is_testing` — patch the class property or the test is vacuous.**
 - **RESUME-FANOUT-UNSCOPED-1** — **CLOSED 2026-09-13.** `POST …/runs/{A}/resume` injected the payload into, and woke, EVERY run waiting on that event name, any tenant — the ownership check covered the path parameter, the effect ignored it. Now the run id rides the wake end to end: `route_event(run_id=)` → `notify_event(run_id=)` → buffer → Redis message (additive key) → `_cross_instance_resume`. **★ NOT the correlation: a flow WAIT's correlation is its `trace_id`, which sibling runs under one request SHARE — a test pins that correlation-only scoping still fans out.** Without `run_id`, `route_event` is the broadcast form; nothing calls it.
