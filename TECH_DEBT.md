@@ -11797,6 +11797,76 @@ ambient state it did not itself arrange if nothing before it arranged it.
 
 ---
 
+## TEST-ORDER-RUNTIME-STATE-1 — the published deployment profile shadows the env var in every unit test, and one test passes only while shadowed
+
+**Status: OPEN (P3 — test fidelity; no production defect).** Filed 2026-09-16 from the
+`SANDBOX-EVIDENCE-1` PR (#694), whose local subset run turned
+`test_sandbox_runner.py::test_container_runner_unavailable_fails_closed_without_fallback` red
+after `test_deployment_profiles.py`. **★ #694's description got the direction WRONG** — it said
+the profile file "leaves `distributed-api` published". It does the opposite, and that is the
+finding.
+
+**The mechanism, measured.** `deployment_contract._api_runtime_state` is a process-global dict;
+`publish_api_runtime_state` is an `update()` with no reset. Three runtime readers consult it
+BEFORE the env var — `validate_external_third_party_plugin_runtime_policy` (`:763`),
+`plugin_host._launch_and_admit` (`:883`), `health_service` (`:94`) — falling through to
+`resolve_api_deployment_profile()` (which honours `AINDY_DEPLOYMENT_PROFILE`) only when the
+published value is empty or `"unknown"`. In production the two agree: boot publishes what the
+env said. In the unit suite they do not:
+
+- **Baseline:** `tests/conftest.py`'s autouse `clear_global_app_dependency_overrides` imports
+  `AINDY.main`, which runs `_initialize_runtime_bootstrap()` → `_publish_boot_runtime_state()`
+  → **`deployment_profile: single-instance`** is published before the first test runs. A probe
+  test alone reads `single-instance`, never `unknown`.
+- **Consequence:** a unit test that sets `AINDY_DEPLOYMENT_PROFILE=distributed-api` by env and
+  nothing else is testing `single-instance` semantics. The env var is shadowed.
+- **`test_deployment_profiles.py`** has an autouse `_reset_runtime` that calls
+  `reset_runtime_state()` before AND after each test — so it leaves the state at the pristine
+  `"unknown"`, which UN-shadows the env var for every test that runs after it in the same
+  process. Bisected per test: all 21 leave `unknown`.
+
+**The test that passes for the wrong reason.** `test_container_runner_unavailable_fails_closed_
+without_fallback` configures `AINDY_DEPLOYMENT_PROFILE=distributed-api` + `AINDY_PLUGIN_SANDBOX_
+RUNNER=auto` + no container image, and expects the *"requires AINDY_PLUGIN_CONTAINER_IMAGE"*
+refusal. Under its OWN declared profile the policy's first check fires instead — *"not allowed
+under deployment profile 'distributed-api' while AINDY_PLUGIN_SANDBOX_RUNNER=auto"* — because a
+production-safe profile refuses `auto` before it looks at the image. The test gets the image
+error only because `single-instance` is published and shadows its env var. Alone: green. After
+`test_deployment_profiles.py`: red, with the correct message. **The test's expectation
+contradicts its setup; it was green because its setup never took effect.** CI's full order has
+enough files between the two for another `AINDY.main`-importing fixture to re-publish
+`single-instance`, which is why CI never saw it.
+
+**Census of exposure** (`setenv("AINDY_DEPLOYMENT_PROFILE"` across `tests/unit/`): four files.
+`test_deployment_profiles.py` resets; `test_plugin_host.py` and
+`test_plugin_host_attestation_kill.py` publish explicitly and restore in `finally` (the right
+shape); `test_sandbox_runner.py` sets the env twice with no publish/reset — one of those reads
+the env directly (`resolve_sandbox_runner_type` does, `:816`), the other is this test.
+
+**★ Two readers, two answers.** `resolve_sandbox_runner_type` reads `os.getenv` directly;
+`validate_external_third_party_plugin_runtime_policy` reads the published state first. In one
+process those can disagree about the deployment profile. Not a production bug (boot publishes
+from the env), but it is why a test can configure the runner correctly and the policy
+incorrectly with one `setenv`.
+
+**Fix (two parts, small; not done here — filed as asked):**
+
+1. **Guard the class:** an autouse fixture in `tests/unit/conftest.py` that snapshots
+   `_api_runtime_state` before each test and restores it after — the `TEST-ORDER-CONTEXTVAR-1`
+   shape. Decide whether it FAILS the leaker (the ContextVar guard does) or restores silently;
+   failing is stricter and will name `test_readiness_reports_active_deployment_profile`, which
+   publishes without restoring. Prefer failing.
+2. **Fix the test's premise:** set `AINDY_PLUGIN_SANDBOX_RUNNER=containerized_oci` explicitly
+   (the branch it means to test is "container runner, no image → refuse without fallback"), and
+   publish the profile it declares, so the assertion holds under the profile the test names.
+   Then mutation-test: publish `single-instance` instead and confirm it still passes for the
+   right reason, or make the test assert the profile it ran under.
+
+**Rule it adds to the catalogue:** a test that configures behaviour through an env var the code
+reads SECOND is not configuring anything while the first-read state is populated. Grep for the
+reader's order before trusting a `setenv`.
+
+---
 ## TEST-ORDER-REGISTRY-1 — `test_platform_only_startup` "passes only by alphabetical order"
 
 **Status: CLOSED (2026-09-13) — the claim did not reproduce at its own filing commit, and the
