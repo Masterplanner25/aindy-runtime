@@ -116,7 +116,9 @@ def test_registry_floor_was_raised():
     )
 
     assert len(SYSCALL_REGISTRY) >= SYSCALL_REGISTRY_MIN_COUNT
-    assert SYSCALL_REGISTRY_MIN_COUNT >= 24, "the floor must account for the new syscall"
+    # Raised to 24 when `memory.link` was added; DEC-022 removed `agent.list_recent_durations`
+    # (24 → 23), the one legitimate way the floor moves down. `link` itself is pinned above.
+    assert SYSCALL_REGISTRY_MIN_COUNT >= 23, "the floor must account for the new syscall"
 
 
 def test_link_is_not_in_the_sdk_rename_guard():

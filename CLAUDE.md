@@ -1058,6 +1058,8 @@ decisions landed in three places with no rule (#648); the two that lived only he
 - **DEC-018** — `HOOK-PRECEDENCE-1` first-non-`None`-wins hooks — *declined*; keyed or run-all-and-collect only.
 - **DEC-019** — kernel deterministic replay — *declined*; `ECOGAP-1` carries the three-way "replay" taxonomy.
 - **DEC-020** — `agent_execution` resolves for RESUME ONLY (`resolve_resumable_flow`), never into the public `FLOW_REGISTRY` — a public registration would run tools with no `execution_token` via `flow.run`.
+- **DEC-021** — no `waiting → completed` edge on an execution unit — *declined*; `waiting` is an obligation (resume or fail), the app's paused-task mapping is the mismatch.
+- **DEC-022** — `sys.v1.agent.list_recent_durations` REMOVED (floor 24 → 23); its only caller was #692's refused dispatch.
 
 ### Standing rule — not an item
 

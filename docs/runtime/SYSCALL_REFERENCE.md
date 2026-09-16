@@ -1,7 +1,7 @@
 ---
 title: "Syscall Reference"
 api_version: "1.0"
-last_verified: "2026-09-03"
+last_verified: "2026-09-16"
 status: current
 owner: "platform-team"
 ---
@@ -493,24 +493,6 @@ Count `AgentRun` rows for a user.
 | `status` | string or list[string] | no | Filter by status value(s). |
 
 **Returns:** `{count: N}`
-
----
-
-### `sys.v1.agent.list_recent_durations`
-
-List recent `AgentRun` timing fields for duration calculations.
-
-**Capability:** `agent.read`
-
-**Stability:** experimental
-
-**Payload:**
-
-| Key | Type | Required | Description |
-|-----|------|----------|-------------|
-| `window_hours` | int | no | Lookback window in hours. Default: 1. |
-
-**Returns:** `{durations: [{started_at, completed_at}, ...], count: N}`
 
 ---
 

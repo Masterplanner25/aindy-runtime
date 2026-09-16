@@ -483,6 +483,70 @@ resolution gives rehydration the dict without giving `flow.run` the name.
 - `AINDY/runtime/nodus_execution_service.py` (`ensure_runtime_flows_registered`, `resolve_resumable_flow`)
 - `TECH_DEBT.md` `FR-31 / RESUME-FLOW-UNREGISTERED-1`
 
+### DEC-021
+**Status:** `declined` (2026-09-16 — from the app's `TASK-EU-NOT-PERSISTED-1`, #363)
+
+**Decision**
+`_STATUS_TRANSITIONS` gains no `waiting → completed` edge. An execution unit completes only
+from `executing`; a `waiting` unit reaches a terminal state either by resuming
+(`resume_execution_unit()` → `resumed → executing`) and then completing, or by `failed`.
+
+**Why**
+`waiting` is a runtime OBLIGATION, not a display state: it means the unit is parked on an event
+the scheduler will deliver and its work is unfinished. `waiting → failed` exists because
+abandoning a parked unit is a truthful terminal exit; "completed while parked" would not be,
+and no runtime path needs it. Adding the edge would let a parked flow or agent unit be finalised
+without ever resuming, and would erase the `waiting`/`resumed` distinction the audit trail is
+documented to preserve (`WHAT_THE_RUNTIME_IS.md` §"a real status machine").
+
+The app hit this because it maps a paused human task onto `waiting` (`task_service.pause_task`)
+and then steps `waiting → executing → completed` on complete, through the edge kept for
+backward compatibility — the one path that skips `resumed`. The mismatch is the mapping: a
+paused task is not parked on a runtime event (no `wait_condition`, nothing will wake it). The
+consumer-side shapes that are truthful: leave the unit `executing` across a pause, or call
+`resume_execution_unit()` before completing.
+
+**Implications**
+- `tests/unit/test_eu_transitions_dec021.py` pins the absent edge and the two truthful exits
+- the compat edge `waiting → executing` stays: the runtime's own gate re-entry uses it
+  (`execution_gate.py::require_execution_unit` on an existing unit)
+- app handoff (next release) carries the two consumer-side shapes
+
+**Related Docs**
+- `AINDY/core/execution_unit_service.py` (`_STATUS_TRANSITIONS`, `resume_execution_unit`)
+- `docs/runtime/WHAT_THE_RUNTIME_IS.md`
+
+---
+### DEC-022
+**Status:** `accepted` (2026-09-16 — follows `SYSTEM-STATE-TENANT-1`, #692)
+
+**Decision**
+`sys.v1.agent.list_recent_durations` is REMOVED from `SYSCALL_REGISTRY`;
+`SYSCALL_REGISTRY_MIN_COUNT` 24 → 23. `sys.v1.agent.count_runs` stays (the app's
+`identity_boot_service` dispatches it).
+
+**Why**
+Its only consumer was the runtime's own `compute_current_state`, which dispatched it with no
+tenant and therefore never received an answer; #692 moved that read to a direct query. After
+that: `stable=False`, absent from `_STABLE_SYSCALLS`, the SDK, Claw, the app, and the MCP
+allowlist. It remained reachable through `POST /platform/syscall` by any holder of
+`agent.read` — a per-tenant read of raw timestamps that nothing calls. `SYSCALL_SYSTEM.md` §9
+justified it as kernel-owned "because runtime/platform code depends on it", which was false
+once #692 merged. A surface that exists only because a caller was deleted is a surface, not a
+capability; keeping it would mean documenting and guarding something with no user.
+
+**Implications**
+- consumer-visible removal — `changelog.d` entry under Removed; no major bump (experimental,
+  uncalled, and the cross-repo guard does not list it)
+- the floor constant's comment now states the one legitimate reason to lower it: a deliberate
+  removal citing its DEC-NNN, in the same PR
+- `tests/unit/test_syscall_removed_dec022.py` pins the absence so a re-registration is a decision
+
+**Related Docs**
+- `AINDY/kernel/syscall_registry.py`
+- `docs/runtime/SYSCALL_REFERENCE.md`, `docs/runtime/SYSCALL_SYSTEM.md`
+- `TECH_DEBT.md` `SYSTEM-STATE-TENANT-1`
+
 ---
 ## Future Decisions To Record
 

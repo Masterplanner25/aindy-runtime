@@ -1,6 +1,6 @@
 ---
 title: "Syscall System"
-last_verified: "2026-09-03"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -325,7 +325,6 @@ Core syscalls registered in `kernel/syscall_registry.py`; domain handlers regist
 | `sys.v1.job.submit` | `job.submit` | Submit an async job via `AsyncJobService` (wraps `submit_async_job()`) |
 | `sys.v1.agent.execute` | `agent.execute` | Execute an agent run via `execute_run()` (external agent wrapper) |
 | `sys.v1.agent.count_runs` | `agent.read` | Count AgentRun rows for a user, optionally filtered by status |
-| `sys.v1.agent.list_recent_durations` | `agent.read` | Recent AgentRun timing fields for runtime/system metrics |
 | `sys.v1.agent.list_recent_runs` | `agent.read` | Recent AgentRun rows as serialized dicts |
 | `sys.v1.agent.ensure_initial_run` | `agent.write` | Find or create the signup sentinel AgentRun |
 | `sys.v1.event.emit` | `event.emit` | Emit a system event |
@@ -333,7 +332,7 @@ Core syscalls registered in `kernel/syscall_registry.py`; domain handlers regist
 
 Domain handlers registered at startup via `register_all_domain_handlers()` in `kernel/syscall_handlers.py`. Execution entry-point handlers (`flow.execute_intent`, `nodus.execute`, `job.submit`, `agent.execute`) and runtime-owned helper syscalls are registered directly in `kernel/syscall_registry.py` alongside `flow.run`.
 
-The runtime/helper agent syscalls (`agent.count_runs`, `agent.list_recent_durations`, `agent.list_recent_runs`, `agent.ensure_initial_run`) are kernel-owned because runtime/platform code and identity boot paths depend on them as part of core execution and persistence behavior. Agent tools no longer route through a generic `sys.v1.agent.dispatch_tool` proxy; each tool dispatches directly to its owner syscall with an explicit capability context.
+The runtime/helper agent syscalls (`agent.count_runs`, `agent.list_recent_runs`, `agent.ensure_initial_run`) are kernel-owned because identity boot paths and app-side code depend on them as part of core execution and persistence behavior. `agent.list_recent_durations` was REMOVED 2026-09-16 (DEC-022): its only consumer was the runtime's own system-state snapshot, which dispatched it with no tenant and so never received an answer (`SYSTEM-STATE-TENANT-1`); once that read moved to a direct query the syscall had no caller in any repo, and a tenant-scoped read that nothing calls is a surface, not a capability. Agent tools no longer route through a generic `sys.v1.agent.dispatch_tool` proxy; each tool dispatches directly to its owner syscall with an explicit capability context.
 
 ---
 
