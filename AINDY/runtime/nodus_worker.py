@@ -454,6 +454,32 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     # the guest's only writable path: dropping the reference removes the directory mid-run and
     # the guest loses the one location it is permitted to touch. It is released explicitly at
     # the end of run_one, and a test asserts the directory exists while the VM does.
+    if "max_memory_mb" in env_kwargs:
+        # SYSMAX-3 (guest half) — a declared memory ceiling this host cannot meter is REFUSED,
+        # not dropped. nodus itself raises at construction for the same reason ("a limit that
+        # would not fire is worse than none"); checking first turns that into a clean failure
+        # payload naming the cause instead of a worker crash the pool would retry.
+        from nodus.runtime.memory import memory_metering_available
+
+        if not memory_metering_available():
+            try:
+                scratch_dir.cleanup()
+            except Exception:  # pragma: no cover - best-effort
+                pass
+            return {
+                "status": "failure",
+                "output_state": _json_safe(state),
+                "emitted_events": [],
+                "memory_writes": [],
+                "simulated_effects": [],
+                "error": (
+                    "declared memory ceiling cannot be enforced on this host: the guest VM "
+                    "could not read the worker's resident memory. Remove the ceiling "
+                    "(AINDY_NODUS_MAX_MEMORY_MB / resources.memory_bytes) or run under an "
+                    "OS-level limit."
+                ),
+                "stdout_log": "",
+            }
     runtime = NodusRuntime(
         project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None,
         **env_kwargs,

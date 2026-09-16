@@ -321,9 +321,38 @@ GUEST_FLOOR = ExecutionEnvironmentSpec(
 )
 
 
+#: Operator-declared memory ceiling for EVERY guest execution, in megabytes. ``0`` / unset
+#: means no ceiling — the default, so nothing changes until an operator sets it. Read at call
+#: time, never at import (a module-level read is invisible to behavioural tests).
+GUEST_MAX_MEMORY_MB_ENV = "AINDY_NODUS_MAX_MEMORY_MB"
+
+
+def _guest_memory_floor_bytes() -> Optional[int]:
+    raw = os.getenv(GUEST_MAX_MEMORY_MB_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        mb = float(raw)
+    except ValueError:
+        logger.warning("[ExecEnv] invalid %s=%r; ignoring (no guest memory ceiling)", GUEST_MAX_MEMORY_MB_ENV, raw)
+        return None
+    if mb <= 0:
+        return None
+    return int(mb * 1048576)
+
+
 def guest_floor() -> ExecutionEnvironmentSpec:
-    """Floor for the Nodus guest VM. See :data:`GUEST_FLOOR`."""
-    return GUEST_FLOOR
+    """Floor for the Nodus guest VM. See :data:`GUEST_FLOOR`.
+
+    SYSMAX-3 (guest half): when ``AINDY_NODUS_MAX_MEMORY_MB`` is set, the floor carries a
+    ``resources.memory_bytes`` ceiling that every guest execution inherits and a declared spec
+    may only narrow. It is ENFORCED — by nodus's ``max_memory_mb``, an RSS-growth bound polled
+    by the VM — on this path alone; see :data:`GUEST_RESOURCES_ENFORCED`.
+    """
+    memory = _guest_memory_floor_bytes()
+    if memory is None:
+        return GUEST_FLOOR
+    return replace(GUEST_FLOOR, resources=replace(GUEST_FLOOR.resources, memory_bytes=memory))
 
 
 #: ★ The tool floor — what an ISOLATED TOOL's worker subprocess may never exceed.
@@ -432,12 +461,22 @@ def nodus_runtime_kwargs(spec: ExecutionEnvironmentSpec, *, scratch_root: str) -
         declared_roots = [r for r in spec.visibility.filesystem_roots if r]
         allowed_paths = declared_roots or [scratch_root]
 
-    return {
+    kwargs: dict[str, Any] = {
         "allowed_paths": allowed_paths,
         "allow_subprocess": spec.authority.subprocess,
         "allow_network": spec.authority.network != NET_NONE,
         "allow_env": spec.visibility.env != ENV_NONE,
     }
+    # SYSMAX-3 (guest half) — a declared memory ceiling becomes nodus's `max_memory_mb`: the
+    # VM reads the worker's RSS at run start and kills the script once the process has grown
+    # by more than this. It bounds GROWTH over the run (polled), not a single allocation — an
+    # OS-level cap is the only thing that does that — and nodus REFUSES the kwarg at
+    # construction on a host whose RSS it cannot read, which the worker turns into a refused
+    # execution rather than a silently unbounded one.
+    memory_bytes = spec.resources.memory_bytes
+    if memory_bytes is not None and memory_bytes > 0:
+        kwargs["max_memory_mb"] = memory_bytes / 1048576.0
+    return kwargs
 
 
 # ── Clamp ─────────────────────────────────────────────────────────────────────
@@ -555,16 +594,25 @@ def _host_assurance() -> tuple[str, str]:
 
 #: The resources dimensions the runtime ENFORCES from a declared spec (phase 4). Memory is
 #: deliberately absent: it is declared and recorded, and `SYSMAX-3` says why it is not enforced
-#: (no OS integration; the value the runtime tracks is an estimate, not RSS). A row's
-#: `env_applied.resources_enforced` lists exactly these, filtered to what was declared, so
+#: on this path (no OS integration; the value the runtime tracks is an estimate, not RSS). A
+#: row's `env_applied.resources_enforced` lists exactly these, filtered to what was declared, so
 #: "was this ceiling enforced?" is answerable per dimension from the row.
 RESOURCES_ENFORCED: tuple[str, ...] = ("wall_time_ms", "syscalls", "tokens")
 
+#: The GUEST path enforces one more: `memory_bytes`, via nodus's `max_memory_mb` (2026-09-16,
+#: `SYSMAX-3` guest half). Only there — the VM meters its own worker's RSS; an agent run or a
+#: flow node in the API process is still unbounded, which is why `SYSMAX-3` stays open.
+GUEST_RESOURCES_ENFORCED: tuple[str, ...] = RESOURCES_ENFORCED + ("memory_bytes",)
 
-def enforced_resources(spec: ExecutionEnvironmentSpec) -> list[str]:
-    """The declared resource ceilings on `spec` that the runtime will actually enforce."""
+
+def enforced_resources(spec: ExecutionEnvironmentSpec, *, guest: bool = False) -> list[str]:
+    """The declared resource ceilings on `spec` that the runtime will actually enforce.
+
+    ``guest=True`` answers for the Nodus guest path, where a memory ceiling is real.
+    """
+    dimensions = GUEST_RESOURCES_ENFORCED if guest else RESOURCES_ENFORCED
     return [
-        name for name in RESOURCES_ENFORCED
+        name for name in dimensions
         if getattr(spec.resources, name, None) is not None
     ]
 
