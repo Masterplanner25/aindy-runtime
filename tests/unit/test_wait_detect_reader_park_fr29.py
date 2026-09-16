@@ -6,7 +6,8 @@ Found by the app team running Tutorial 2 against their 2.14.0 container (app FR-
 ForeignKeyViolation … waiting_flow_runs_run_id_fkey` WARNING, because the id the scheduler tried
 to persist as a `waiting_flow_runs.run_id` was the request's execution-unit id, not a flow run.
 
-The mechanism (`core/execution_pipeline/waits.py::_detect_wait`): the pipeline classified ANY
+The mechanism (`_detect_wait`, since deleted with the rest of the request-level wait under
+`EU-WAIT-SIGNAL-DEAD-1`, 2026-09-15): the pipeline classified ANY
 handler result dict whose ``status`` upper-cases to ``WAITING`` as *the request itself* waiting.
 A read of a waiting run returns the run's row; the row says ``status: "waiting"``; the reader is
 parked. It is armed by the app's ``register_flow_result("flow_run_get", result_key=…)`` — on a
@@ -23,8 +24,10 @@ nothing ever emits. The dict path parked units; it never once resumed one.
 The contract these tests pin: **a request's execution unit describes the request.** When the
 request returns, its unit completes — the thing that is waiting is the run it read or started,
 whose own `flow_runs` row and execution unit (ACTIVE-COUNT-WAIT-LEAK-1) already carry the wait.
-Only an explicit `ExecutionWaitSignal` parks a request unit, and the scheduler's DB backup
-refuses to persist a wait for an id that is not a flow run.
+★ Since 2026-09-15 NOTHING parks a request unit (`EU-WAIT-SIGNAL-DEAD-1`): the explicit
+`ExecutionWaitSignal` that FR-29 left as the one remaining way was removed — a route has no
+continuation to resume, and its resume callback rolled back on close. The scheduler's DB backup
+still refuses to persist a wait for an id that is not a flow run.
 
 Every route test here CALLS the route (`ROUTE-GUARD-1`); the unit it inspects is the one the
 response envelope names.
@@ -260,47 +263,13 @@ def test_starting_a_script_that_suspends_completes_the_request_unit(
 # ── the explicit signal still parks — the path that is MEANT to ───────────────
 
 
-@pytest.mark.parametrize("form", ["raised", "returned"])
-def test_an_explicit_wait_signal_still_parks_the_request_unit(db_session, scheduler_spy, form):
-    """Liveness control for the detector: the typed signal is the only thing that parks a
-    request unit, and it must keep doing so — a change that made every request complete
-    would pass the tests above and break the extension contract `ExecutionWaitSignal` states.
-
-    ★ Both forms, because they take DIFFERENT paths: a RAISED signal is caught by the
-    pipeline's `except ExecutionWaitSignal` and never reaches `_detect_wait`; a RETURNED
-    instance is what `_detect_wait`'s surviving branch exists for. A first draft covered only
-    the raise, and a mutation that deleted the detector's branch outright went green."""
-    import asyncio
-
-    from AINDY.core.execution_gate import ExecutionWaitSignal
-    from AINDY.core.execution_pipeline import ExecutionContext, ExecutionPipeline
-
-    uid = str(uuid.uuid4())
-    ctx = ExecutionContext(
-        request_id=str(uuid.uuid4()),
-        route_name="platform.custom",
-        user_id=uid,
-        metadata={"db": db_session},
-    )
-    signal = ExecutionWaitSignal("payment.confirmed", resume_key="inv_1", payload={"invoice": "inv_1"})
-
-    def handler(_ctx):
-        if form == "raised":
-            raise signal
-        return signal
-
-    result = asyncio.run(ExecutionPipeline().run(ctx, handler))
-    assert result.eu_status == "waiting"
-    assert result.metadata["eu_wait_for"] == "payment.confirmed"
-    unit = _eu(db_session, result.metadata["eu_id"])
-    assert unit.status == "waiting"
-    scheduler_spy.register_wait.assert_called_once()
-    assert scheduler_spy.register_wait.call_args.kwargs["wait_for_event"] == "payment.confirmed"
-
-
-def test_a_wait_shaped_dict_alone_is_not_a_wait(db_session, scheduler_spy):
-    """The detector, directly: the exact shape that parked the readers and the nodus request
-    — a top-level ``status: WAITING`` with or without a wait name — is a RESULT, not a signal."""
+def test_no_result_shape_parks_the_request_unit(db_session, scheduler_spy):
+    """★ EU-WAIT-SIGNAL-DEAD-1 — the invariant FR-29 was reaching for, stated fully: a request's
+    execution unit describes the request, and a request cannot wait. Every wait-shaped thing a
+    handler can return — the bare row, the execution record, the shape the old detector wanted,
+    and the flow-node WAIT dict itself — leaves the unit ``completed`` and registers nothing.
+    (The typed `ExecutionWaitSignal` that used to be the one exception is gone; the test that
+    pinned it as a liveness control pinned a surface nothing could ever resume.)"""
     import asyncio
 
     from AINDY.core.execution_pipeline import ExecutionContext, ExecutionPipeline
@@ -309,6 +278,7 @@ def test_a_wait_shaped_dict_alone_is_not_a_wait(db_session, scheduler_spy):
         {"status": "waiting", "waiting_for": EVENT, "id": "some-run"},  # the bare row
         {"status": "WAITING", "data": {"waiting_for": EVENT}},  # _format_execution_response
         {"status": "WAITING", "wait_for": EVENT},  # the shape the old detector wanted
+        {"status": "WAIT", "wait_for": EVENT, "output_patch": {}},  # a flow node's own WAIT dict
     ):
         ctx = ExecutionContext(
             request_id=str(uuid.uuid4()),
@@ -319,8 +289,35 @@ def test_a_wait_shaped_dict_alone_is_not_a_wait(db_session, scheduler_spy):
         result = asyncio.run(ExecutionPipeline().run(ctx, lambda _c, p=payload: p))
         assert result.success and result.eu_status is None, (payload, result.eu_status)
         assert result.data == payload, "the result itself is untouched"
+        assert "eu_wait_for" not in result.metadata
         assert _eu(db_session, result.metadata["eu_id"]).status == "completed", payload
     scheduler_spy.register_wait.assert_not_called()
+
+
+def test_the_pipeline_has_no_path_that_parks_a_unit():
+    """Source-derived supplement (never the coverage — the test above is): nothing under
+    `core/execution_pipeline/` transitions a unit to ``waiting`` or registers a scheduler
+    wait. A behavioural test can only try the shapes it knows; this catches a re-added branch
+    whatever shape it keys on."""
+    import ast
+    from pathlib import Path
+
+    import AINDY.core.execution_pipeline as pkg
+
+    offenders = []
+    for path in Path(pkg.__path__[0]).glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+            if name == "register_wait" or name == "set_wait_condition":
+                offenders.append(f"{path.name}:{node.lineno} {name}")
+            if name == "update_status" and any(
+                isinstance(a, ast.Constant) and a.value == "waiting" for a in node.args
+            ):
+                offenders.append(f"{path.name}:{node.lineno} update_status(waiting)")
+    assert offenders == [], offenders
 
 
 # ── the scheduler's DB backup refuses an id that is not a flow run ────────────

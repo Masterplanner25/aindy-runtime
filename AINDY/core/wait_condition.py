@@ -4,7 +4,6 @@ WaitCondition — structured descriptor for why an ExecutionUnit is suspended.
 Used by:
 - ExecutionUnit.wait_condition  (JSONB column — persisted state)
 - SchedulerEngine._waiting      (in-memory scheduling entry)
-- ExecutionWaitSignal           (raise-based WAIT request from handlers)
 - register_wait()               (canonical WAIT registration API)
 
 Types

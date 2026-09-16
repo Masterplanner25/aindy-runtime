@@ -1,6 +1,6 @@
 ---
 title: "Execution Contract"
-last_verified: "2026-09-14"
+last_verified: "2026-09-15"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -320,13 +320,15 @@ in lockstep — not a free edit.
 
 Note also `execution.waiting`, absent from both sequences below despite Invariant 5 listing
 `waiting` as a terminal state. WAIT/RESUME is a first-class runtime path, not an omission in the
-implementation. **★ Since 2026-09-14 (`WAIT-DETECT-SHAPE-1` / FR-29) a REQUEST's execution unit
-emits it only when the handler raises or returns `ExecutionWaitSignal`.** Until then the pipeline
-also parked the request on any handler result dict carrying `status: "WAITING"` — which parked
-the unit of every request that merely *read* a waiting run (one per `GET …/runs/{id}` on an
-app-profile server) and parked a request that *started* a suspending script on the event
-`"unknown"`. Neither was ever resumed; nothing re-executes a returned request. A run's own
-wait is on its `flow_runs` row and its own execution unit, and its event is `flow.waiting`.
+implementation — for RUNS. **★ A REQUEST's execution unit never emits it and never enters
+`waiting` (since 2026-09-15, `EU-WAIT-SIGNAL-DEAD-1`).** Two steps got here: 2026-09-14
+(`WAIT-DETECT-SHAPE-1` / FR-29) removed the dict-based park — the pipeline had parked the unit
+of every request that merely *read* a waiting run and a request that *started* a suspending
+script on the event `"unknown"`, none ever resumed — leaving `ExecutionWaitSignal` as the one
+typed way; 2026-09-15 removed that too, because a route has no continuation to resume (the
+request has already answered its client) and its resume callback rolled back on close. A run's
+own wait is on its `flow_runs` row and its own execution unit, and its event is `flow.waiting`.
+`execution.waiting` stays in the enum (frozen-hash baseline) with no in-tree emitter.
 
 Failure sequence:
 

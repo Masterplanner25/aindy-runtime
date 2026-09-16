@@ -77,92 +77,16 @@ def compute_action_id(action_type: str, input_payload: dict, scope: str) -> str:
     return _hashlib.sha256(canonical.encode()).hexdigest()
 
 
-# ── Cross-type WAIT signal ────────────────────────────────────────────────────
-
-
-class ExecutionWaitSignal(Exception):
-    """
-    Raise from any handler to request an EU-level WAIT transition without
-    going through the flow engine.
-
-    The flow-engine WAIT mechanism (a flow node returns
-    ``{"status": "WAIT", "wait_for": "event_type"}``) parks the FLOW RUN —
-    its ``flow_runs`` row and its own execution unit — and is unchanged.
-    ★ It no longer parks the REQUEST that started or read the run: the
-    pipeline's dict-based detection (any handler result with
-    ``status: "WAITING"``) was removed under FR-29 / `WAIT-DETECT-SHAPE-1`,
-    because it parked the unit of every request that merely *returned* a
-    waiting run's row, and parked a starting request on the event
-    ``"unknown"``.  This signal is now the ONLY way a request-level
-    execution unit enters ``"waiting"``; raise it when the handler itself
-    — an agent, job or bare operation not inside a ``FlowRun`` — is the
-    thing that must be resumed.
-
-    The pipeline catches this *before* ``HTTPException`` and ``Exception``
-    so it is never misclassified as a failure.  The EU is transitioned to
-    ``"waiting"`` and an ``execution.waiting`` SystemEvent is emitted.
-
-    Usage
-    -----
-        from AINDY.core.execution_gate import ExecutionWaitSignal
-        from AINDY.core.wait_condition import WaitCondition
-
-        # Event-based (default):
-        raise ExecutionWaitSignal(
-            "payment.confirmed",
-            resume_key="invoice_123",
-            payload={"invoice_id": "inv_123"},
-        )
-
-        # Time-based (explicit WaitCondition):
-        from datetime import datetime, timezone, timedelta
-        raise ExecutionWaitSignal(
-            "timer.expired",
-            wait_condition=WaitCondition.for_time(
-                datetime.now(timezone.utc) + timedelta(hours=1)
-            ),
-        )
-
-        # External trigger:
-        raise ExecutionWaitSignal(
-            "webhook.received",
-            wait_condition=WaitCondition.for_external("webhook.received"),
-        )
-
-    Parameters
-    ----------
-    wait_for:
-        The event type that will resume this EU.  Also used as the default
-        ``event_name`` when no explicit ``wait_condition`` is supplied.
-    resume_key:
-        Optional idempotency / targeting key so resume endpoints can locate
-        this EU by key rather than by id.
-    payload:
-        Arbitrary extra context stored alongside the wait event.
-    wait_condition:
-        Structured ``WaitCondition`` instance.  When provided, takes
-        precedence over deriving a condition from ``wait_for`` alone.
-        Defaults to ``WaitCondition.for_event(wait_for)`` when absent.
-
-    Note
-    ----
-    Do NOT use this to signal errors — raise ``HTTPException`` or a plain
-    ``Exception`` instead.  WAIT is a non-terminal, resumable execution state.
-    """
-
-    def __init__(
-        self,
-        wait_for: str,
-        *,
-        resume_key: str | None = None,
-        payload: dict[str, Any] | None = None,
-        wait_condition: Optional[Any] = None,  # WaitCondition | None
-    ) -> None:
-        self.wait_for = wait_for        # event type the EU is waiting for
-        self.resume_key = resume_key    # optional resume targeting / idempotency key
-        self.payload = dict(payload or {})
-        self.wait_condition = wait_condition  # WaitCondition | None
-        super().__init__(f"execution.wait:{wait_for}")
+# ── There is no cross-type WAIT signal ───────────────────────────────────────
+#
+# `ExecutionWaitSignal` lived here until 2026-09-15 (`EU-WAIT-SIGNAL-DEAD-1`): "raise from any
+# handler to request an EU-level WAIT". Removed rather than repaired, because the promise was
+# unfulfillable by construction — the pipeline wraps ROUTE handlers, a route has already
+# answered its client by the time it could raise, and nothing exists to run it again — and
+# because the resume side it did have rolled back on close (FR-30's shape). Nothing raised it in
+# any repo. The WAIT that exists is the flow node's ``{"status": "WAIT", "wait_for": …}``,
+# which parks the FLOW RUN on its own row with its own resume path (`runner_steps.py`), and the
+# agent run's, which has its own. A request's execution unit completes when its handler returns.
 
 
 # ── Retry-policy resolution ───────────────────────────────────────────────────

@@ -46,9 +46,9 @@ class SchedulerPersistenceMixin:
             # ★ FR-29 / WAIT-DETECT-SHAPE-1: `run_id` must name a flow_runs row, or the merge
             # below raises ForeignKeyViolation on Postgres — logged as a "backup write failed"
             # WARNING that reads like data loss. The one caller that handed us a non-run id
-            # (the pipeline parking a REQUEST's execution unit under `eu_type="flow"`) is
-            # fixed, but `ExecutionWaitSignal` from a `flow.*` route still can; that wait lives
-            # in memory + Redis like every other non-flow wait, and this says so at DEBUG.
+            # (the pipeline parking a REQUEST's execution unit under `eu_type="flow"`) is gone
+            # (`EU-WAIT-SIGNAL-DEAD-1`); a non-flow wait (agent) lives in memory + Redis, and
+            # this says so at DEBUG.
             flow_run = db.query(FlowRun).filter(FlowRun.id == str(run_id)).first()
             if flow_run is None:
                 logger.debug(
