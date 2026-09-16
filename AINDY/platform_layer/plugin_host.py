@@ -811,7 +811,29 @@ def _inventory_sandbox_attestation(hosts: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
+class _PostLaunchRejection(RuntimeError):
+    """A launched worker failed a post-launch check. Carries the failure kind the record
+    should be marked with, so ``_start_record``'s single failure path can record the CAUSE
+    rather than reclassifying the message."""
+
+    def __init__(self, message: str, *, failure_kind: str) -> None:
+        super().__init__(message)
+        self.failure_kind = failure_kind
+
+
 def _start_record(record: PluginHostRecord, *, runtime_context: dict[str, Any] | None) -> dict[str, Any]:
+    """Launch the record's worker and admit it — or leave it DEAD and the record marked.
+
+    SANDBOX-EVIDENCE-1: every failure after the runner exists takes ONE path — mark the
+    record with the failure's kind, force-kill the process, re-raise. The two post-launch
+    checks (strong-sandbox live verification; hostile-third-party attestation) used to
+    diverge: the attestation branch marked and killed inline, the verification branch only
+    raised — so through ``restart_plugin_host`` and ``execute_plugin_host``'s restart sites,
+    which do not wrap this call, an UNVERIFIED worker was left running with the record
+    saying ``running``. Only ``start_plugin_host`` caught it, and that catch then marked the
+    same failure a SECOND time as ``runtime_failure`` (double-counted, wrong cause). The
+    guarantee now lives here, once, for every caller.
+    """
     _assert_host_not_quarantined(record)
     record.runner = create_sandbox_runner(record.runner_type)
     record.sandbox_instance_id = secrets.token_hex(12)
@@ -821,6 +843,16 @@ def _start_record(record: PluginHostRecord, *, runtime_context: dict[str, Any] |
     record.last_stop_at = None
     record.last_error = None
     record.last_exit_code = None
+    try:
+        return _launch_and_admit(record, runtime_context=runtime_context)
+    except Exception as exc:
+        failure_kind = getattr(exc, "failure_kind", None) or _classify_failure(error=str(exc), crashed=False)
+        _mark_failure(record, state="failed", error=str(exc), kind=failure_kind)
+        _terminate_record_process(record, force_kill=True)
+        raise
+
+
+def _launch_and_admit(record: PluginHostRecord, *, runtime_context: dict[str, Any] | None) -> dict[str, Any]:
     response = record.runner.start(
         handler=record.handler,
         plugin_root=record.plugin_root,
@@ -863,19 +895,10 @@ def _start_record(record: PluginHostRecord, *, runtime_context: dict[str, Any] |
             dict(snapshot.get("sandbox_attestation") or {})
         )
         if violations:
-            _mark_failure(
-                record,
-                state="failed",
-                error=(
-                    "plugin host launch did not satisfy hostile-third-party sandbox "
-                    f"attestation requirements: {', '.join(violations)}"
-                ),
-                kind="contract_violation",
-            )
-            _terminate_record_process(record, force_kill=True)
-            raise RuntimeError(
+            raise _PostLaunchRejection(
                 "hostile-third-party sandbox admission failed because live sandbox "
-                f"attestation requirements were not verified: {', '.join(violations)}"
+                f"attestation requirements were not verified: {', '.join(violations)}",
+                failure_kind="contract_violation",
             )
         snapshot = record.snapshot()
     return snapshot
@@ -964,12 +987,9 @@ def start_plugin_host(
                     exit_code=record.runner.returncode(),
                 )
                 record.restart_count += 1
-            try:
-                return _start_record(record, runtime_context=runtime_context)
-            except Exception as exc:
-                _mark_failure(record, state="failed", error=str(exc))
-                _terminate_record_process(record, force_kill=True)
-                raise
+            # _start_record owns its failure path (mark + force-kill); a second mark here
+            # counted one launch failure twice and relabelled its cause (SANDBOX-EVIDENCE-1).
+            return _start_record(record, runtime_context=runtime_context)
         return record.snapshot()
 
 
