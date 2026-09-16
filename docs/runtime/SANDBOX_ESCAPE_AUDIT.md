@@ -1532,6 +1532,39 @@ the tag, from source), and this entry is written from its first and only run.
 
 ---
 
+## Entry 031 — 2026-09-16
+
+**Trigger:** `v2.17.0` release tag (`sandbox-escape-linux.yml`, run `35062082818`).
+**Commit:** `c9b6103c9a54` (release PR #683's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–030.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.96s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `35062082818`).
+
+**The certified boundary is untouched.** `git diff v2.16.0..v2.17.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**. No dependency pin
+moved.
+
+**What this release changed, and why it is not what this gate measures.** Six host-side items
+(#677–#682): typed resume payloads, one correlation rule for waking a wait, the removal of
+`ExecutionWaitSignal`, named flow predicates in the graph signature, the authority WAIT gate, and
+`CANCEL-REACH-1`'s two residuals. **One of those touches process isolation and is worth naming
+here: #682 changed how the isolated TOOL worker is driven** — `Popen` + a polling `communicate`
+that terminates → kills the child when its run is cancelled, replacing `subprocess.run(timeout=)`.
+That is the *tool* seam (`TOOL-SEAM-ISOLATION-1`'s one-shot worker, `AINDY/agents/tool_worker.py`),
+not the guest sandbox this gate certifies: the escape suite targets `containerized_oci` via
+`sandbox_runner.py`, which did not change. The worker's spawn kwargs (`_worker_confinement`) are
+passed through unchanged; only the wait loop around the child differs. `SANDBOX_CONTRACT.md` §7.1
+was corrected in the same PR — it had claimed the worker was "hard-killable by its isolation
+class" when nothing but the timeout killed it.
+
+**★ Release-process note — the CDN lag is now the norm, three tags running.** Boot Smoke on the
+published wheel installed `aindy-runtime==2.17.0` **on attempt 2** (`is on PyPI (JSON API 200)
+but pip cannot resolve it yet (attempt 1/10)`), exactly as on `v2.16.0`. The #672 retry absorbed
+it again. Written from this entry's first and only run.
+
 ## Entry 030 — 2026-09-16
 
 **Trigger:** `v2.16.0` release tag (`sandbox-escape-linux.yml`, run `34977777990`).
