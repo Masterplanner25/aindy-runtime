@@ -57,8 +57,6 @@ class _PipelineSpy(ExecutionPipeline):
     def _safe_rm_record_and_complete(self, ctx, duration_ms): pass
     def _safe_rm_mark_completed(self, ctx): pass
     def _set_event_refs(self, ctx, started_id, terminal_event_id=None, completed=False): pass
-    def _detect_wait(self, result): return None
-    def _safe_transition_eu_waiting(self, ctx, wait_for=None, wait_condition=None): pass
     def _inject_execution_envelope(self, ctx, result, duration_ms): return result
     def _extract_execution_result_and_signals(self, result): return result, {}
     def _merge_queued_signals(self, ctx, signals): return signals
@@ -169,30 +167,21 @@ async def test_pipeline_finalizes_eu_on_unexpected_exception():
 
 
 # ---------------------------------------------------------------------------
-# 3. Waiting path: finally block must NOT call finalize
+# 3. There is no waiting path: a wait-shaped result finalizes like any other
+#    (EU-WAIT-SIGNAL-DEAD-1, 2026-09-15 — this used to pin the opposite, on a
+#    spy whose `_detect_wait` returned a signal; the pipeline no longer has one).
 # ---------------------------------------------------------------------------
 
-class _WaitingPipelineSpy(_PipelineSpy):
-    """Simulates the EU entering the waiting state — _detect_wait returns a signal."""
-
-    def _detect_wait(self, result):
-        return ("some.event", {}, None)
-
-    def _safe_transition_eu_waiting(self, ctx, wait_for=None, wait_condition=None):
-        ctx.metadata["eu_status"] = "waiting"
-
-
 @pytest.mark.asyncio
-async def test_pipeline_skips_finalize_on_waiting_path():
-    pipe = _WaitingPipelineSpy()
+async def test_pipeline_finalizes_on_a_wait_shaped_result():
+    pipe = _PipelineSpy()
     ctx = _ctx()
 
     await pipe.run(ctx, lambda c: {"status": "WAITING"})
 
-    assert ctx.metadata.get("eu_status") == "waiting"
-    # finalize must not have been called — EU stays open for resume
-    assert not ctx.metadata.get("eu_finalized")
-    assert pipe.finalize_calls == []
+    assert ctx.metadata.get("eu_status") is None
+    assert ctx.metadata.get("eu_finalized")
+    assert pipe.finalize_calls[0] == "completed"
 
 
 # ---------------------------------------------------------------------------

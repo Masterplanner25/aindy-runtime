@@ -8836,6 +8836,86 @@ AND source_type='route' AND created_at < <upgrade time>` — the operator's call
 adds a commit where the last write is, not a rollback).
 
 ---
+## EU-WAIT-SIGNAL-DEAD-1 — a request's execution unit could "wait", and nothing could ever resume it
+
+**Status: CLOSED 2026-09-15 on filing — the surface was REMOVED, not repaired.** Decided by
+Shawn (dead surface vs contract), on the evidence below. Filed from the FR-29 entry's "noted,
+not filed" line and the 09-16 handoff's open question: *"`ExecutionWaitSignal`'s resume side
+`resumed → executing → ?` has no in-tree raiser and no test — decide whether it is a contract or
+dead surface."*
+
+**What it was.** `AINDY/core/execution_gate.py::ExecutionWaitSignal` — *"raise from any handler
+to request an EU-level WAIT without going through the flow engine … when the handler itself — an
+agent, job or bare operation not inside a FlowRun — is the thing that must be resumed."* The
+pipeline caught it (raised) or detected it (returned), moved the REQUEST's execution unit to
+`waiting`, registered a scheduler wait keyed on the unit id, and answered the client with
+`{"status": "WAITING", …}`. After FR-29 (#670) it was the one remaining way a request unit could
+park. Present since the initial extraction (`0d5d382`).
+
+**Three findings, each verified, in order of weight:**
+
+1. **No raiser exists — runtime, `aindy-apps-monolith`, `aindy-sdk`, Claw.** The only thing
+   that raised it was FR-29's own liveness-control test. (Census by grep across the four
+   trees; the Claw hits are its installed wheel, not its source.)
+2. **No legitimate raiser CAN exist.** The pipeline wraps ROUTE handlers. A route handler that
+   raises the signal has already produced the response its client will receive; nothing in the
+   runtime re-executes a request. Agents are resumed by `_build_agent_resume_callback`, flows
+   by `build_flow_resume_callback` — the docstring's three cases were two mechanisms that exist
+   elsewhere and one that cannot. *"resumed → executing → ?"* has no answer because there is
+   nothing to execute: the unit would sit `executing` forever, FR-30's stuck-row symptom by a
+   second path.
+3. **The resume side that did exist ROLLED BACK.** Both request-EU resume callbacks —
+   `execution_pipeline/waits.py::_build_eu_resume_callback` and
+   `wait_rehydration.py::_make_resume_callback` — opened `SessionLocal`, flushed `waiting →
+   resumed → executing`, and `close()`d without commit. **Probed through a separate connection
+   (`NullPool`, the FR-30 pattern), liveness control first:**
+   ```
+   control (same transitions + commit):  executing
+   pipeline resume callback, fresh conn: waiting      ← rolled back
+   ```
+   So even with a raiser: the scheduler consumed the wait, the row stayed `waiting`, boot
+   re-registered it, and every later event rolled back again. A zombie. **Third instance of
+   `EU-FINALIZE-UNCOMMITTED-1`'s shape in one week** — a callback that owns its session and
+   never commits it.
+
+**What was removed:** the class; the pipeline's `except ExecutionWaitSignal` branch and the
+returned-signal detection (`_detect_wait`, `_safe_transition_eu_waiting`,
+`_build_eu_resume_callback` — `execution_pipeline/waits.py` is gone); the `finally` block's
+"skip finalize when waiting" guard (finalize is idempotent, so it now runs unconditionally). The
+pipeline has **no** path that transitions a unit to `waiting` or registers a scheduler wait.
+
+**What was NOT removed, and why:**
+- `WaitCondition`, `ExecutionUnitService.resume_execution_unit`, `_STATUS_TRANSITIONS`'
+  `waiting` edges — the FLOW path uses all three (`_park_execution_unit`, the flow callback's
+  step 2), with commits downstream.
+- `wait_rehydration.rehydrate_waiting_eus` — still registers a rollback-only callback for
+  every `waiting` unit at boot. For flow units it is REDUNDANT with the flow callback's
+  committed step 2 (and harmless because it rolls back); for the pre-existing request units on
+  older deployments it is a no-op forever. Left as is: startup-phase code, and its removal is
+  a separate decision — filed below as the follow-up. **Operators: the ~10 `waiting` route
+  units the app kept as FR-29 evidence are now unreachable by any path; the retire `UPDATE`
+  the 2.16.0 handoff offered applies.**
+- `ExecutionResult.eu_status` / `to_canonical`'s `waiting` branch — generic field, inert.
+- `db/models/execution_unit.py:34` docstring still names the signal — a docstring edit under
+  `db/models/` costs a schema-version bump for zero DDL (#643's rule); corrected at the next
+  real schema change.
+- `execution.waiting` in `SystemEventTypes` — frozen-hash baseline; stays with no emitter.
+
+**Tests:** `test_wait_detect_reader_park_fr29.py` — the two tests whose subject was the signal
+are replaced by `test_no_result_shape_parks_the_request_unit` (every wait-shaped result a
+handler can return, including a flow node's own WAIT dict, leaves the unit `completed` and
+registers nothing) and a source-derived supplement (`test_the_pipeline_has_no_path_that_parks_a_unit`:
+nothing under `core/execution_pipeline/` calls `register_wait`, `set_wait_condition` or
+`update_status(…, "waiting")`). `test_eu_lifecycle_invariants.py` test 3 inverted (a
+wait-shaped result finalizes). **Mutation: re-adding a dict-based park → 6 fail, both new tests
+among them.** **Not re-run live.**
+
+**Follow-up (not filed as its own entry):** `rehydrate_waiting_eus` is now redundant with
+`flow_run_rehydration` for the only units that can be `waiting`; remove it, or commit its
+callback, in a startup-phase pass. Do not "fix" it by adding the commit alone — that would make
+a redundant callback race the flow callback for the same transition.
+
+---
 ## FR-29 / WAIT-DETECT-SHAPE-1 — reading a waiting run parked the READER's execution unit, forever 🔴 defect
 
 **Status: CLOSED (2026-09-14, PR #670).** Filed by the app team the same day from their live
@@ -8908,6 +8988,8 @@ the request waiting:
   built:** no request EU parks unless its handler raises the signal, and a handler that does so
   is claiming its own resumption. That contract's resume side (`resumed → executing`, then
   what?) is unchanged and untested — no in-tree handler raises it; noted, not filed.
+  **→ Filed and CLOSED 2026-09-15 as `EU-WAIT-SIGNAL-DEAD-1`: the signal was removed. No request
+  EU can enter `waiting` by any path now.**
 
 **Consumer-visible:** the pipeline envelope of `POST /platform/nodus/run` (and any route that
 returns a WAITING record) now says `status: "success"` with `data.status: "WAITING"`, where
@@ -12824,7 +12906,8 @@ check (7 fail), never record (4), drop the SUCCESS clear (2), worker stops forwa
 malformed → silently untyped (1), drop the 422 mapping (1), rejection falls through to inject (6).
 **Not re-run live.**
 
-**Still open here:** (a) the request-EU path (`ExecutionWaitSignal`) once it has a raiser;
+**Still open here:** ~~(a) the request-EU path (`ExecutionWaitSignal`) once it has a raiser~~
+— **resolved by removal the same day (`EU-WAIT-SIGNAL-DEAD-1`): there is no request-EU path**;
 (b) the `GUEST-BUILTINS-DEAD-1` step-2 product decision — a guest wait API vs the documented
 magic keys — which this entry owns and which phase 1 did not decide (it added a third key to
 the existing shape, it did not choose the shape); (c) the promotion to P1 if a webhook, MCP

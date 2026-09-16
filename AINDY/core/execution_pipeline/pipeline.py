@@ -47,7 +47,6 @@ from AINDY.core.execution_pipeline.signals import (
     _safe_capture_memory_hint,
     _safe_recall_memory_count,
 )
-from AINDY.core.execution_pipeline.waits import _detect_wait, _safe_transition_eu_waiting
 
 
 class ExecutionPipeline:
@@ -74,8 +73,6 @@ class ExecutionPipeline:
     _apply_log_signal = _apply_log_signal
     _safe_capture_memory_hint = _safe_capture_memory_hint
     _safe_recall_memory_count = _safe_recall_memory_count
-    _detect_wait = _detect_wait
-    _safe_transition_eu_waiting = _safe_transition_eu_waiting
     _safe_require_eu = _safe_require_eu
     _safe_check_quota = _safe_check_quota
     _safe_rm_mark_started = _safe_rm_mark_started
@@ -84,7 +81,6 @@ class ExecutionPipeline:
     _safe_finalize_eu = _safe_finalize_eu
 
     async def run(self, ctx, handler: Callable[[Any], Any]) -> ExecutionResult:
-        from AINDY.core.execution_gate import ExecutionWaitSignal
         from AINDY.core import execution_pipeline as execution_pipeline_module
 
         trace_id = str(ctx.request_id)
@@ -152,28 +148,12 @@ class ExecutionPipeline:
             result, signals = self._extract_execution_result_and_signals(result)
             signals = self._merge_queued_signals(ctx, signals)
 
-            wait_signal = self._detect_wait(result)
-            if wait_signal is not None:
-                wait_for, wait_payload, wait_condition = wait_signal
-                self._safe_transition_eu_waiting(ctx, wait_for=wait_for, wait_condition=wait_condition)
-                wait_event_id = self._safe_emit_event(
-                    ctx,
-                    event_type="execution.waiting",
-                    parent_event_id=started_event_id,
-                    required=required_side_effects,
-                    payload={"route_name": ctx.route_name, "wait_for": wait_for, **wait_payload},
-                )
-                self._set_event_refs(ctx, started_event_id, terminal_event_id=wait_event_id, completed=False)
-                ctx.metadata["eu_status"] = "waiting"
-                ctx.metadata["eu_wait_for"] = wait_for
-                logger.info("execution.waiting", extra={"route": ctx.route_name, "wait_for": wait_for})
-                if metrics_available:
-                    try:
-                        total_metric.labels(route=ctx.route_name, status="waiting").inc()
-                    except Exception:
-                        pass
-                return ExecutionResult(success=True, eu_status="waiting", data=result, metadata=ctx.metadata)
-
+            # EU-WAIT-SIGNAL-DEAD-1 (2026-09-15) — there is no request-level WAIT. A request's
+            # execution unit describes the request; when the handler returns, the request is done
+            # and the unit completes. What waits is the FlowRun (or AgentRun) the handler started,
+            # on its own row with its own resume path. The `ExecutionWaitSignal` branch that used
+            # to sit here parked a unit nothing could ever resume — a route has no continuation —
+            # and its resume callback rolled back on close anyway.
             injected_count = self._apply_execution_signals(ctx, signals)
             memory_context_count = max(
                 self._extract_memory_context_count(result),
@@ -205,54 +185,6 @@ class ExecutionPipeline:
                 success=True,
                 data=result,
                 memory_context_count=memory_context_count,
-                metadata=ctx.metadata,
-            )
-        except ExecutionWaitSignal as exc:
-            try:
-                self._safe_transition_eu_waiting(ctx, wait_for=exc.wait_for, wait_condition=exc.wait_condition)
-            except Exception as wait_guard_exc:
-                logger.critical(
-                    "execution.wait_untrackable eu=%s route=%s wait_for=%s: %s",
-                    ctx.metadata.get("eu_id"),
-                    ctx.route_name,
-                    exc.wait_for,
-                    wait_guard_exc,
-                )
-                guard_fail_event_id = self._safe_emit_event(
-                    ctx,
-                    event_type="execution.failed",
-                    parent_event_id=started_event_id,
-                    required=required_side_effects,
-                    payload={"route_name": ctx.route_name, "detail": str(wait_guard_exc)},
-                )
-                self._set_event_refs(ctx, started_event_id, terminal_event_id=guard_fail_event_id, completed=False)
-                self._safe_finalize_eu(ctx, "failed")
-                return ExecutionResult(
-                    success=False,
-                    error=str(wait_guard_exc),
-                    metadata={**ctx.metadata, "status_code": 500, "detail": str(wait_guard_exc)},
-                )
-
-            wait_event_id = self._safe_emit_event(
-                ctx,
-                event_type="execution.waiting",
-                parent_event_id=started_event_id,
-                required=required_side_effects,
-                payload={"route_name": ctx.route_name, "wait_for": exc.wait_for, "resume_key": exc.resume_key, **exc.payload},
-            )
-            self._set_event_refs(ctx, started_event_id, terminal_event_id=wait_event_id, completed=False)
-            ctx.metadata["eu_status"] = "waiting"
-            ctx.metadata["eu_wait_for"] = exc.wait_for
-            logger.info("execution.waiting (raised)", extra={"route": ctx.route_name, "wait_for": exc.wait_for})
-            if metrics_available:
-                try:
-                    total_metric.labels(route=ctx.route_name, status="waiting").inc()
-                except Exception:
-                    pass
-            return ExecutionResult(
-                success=True,
-                eu_status="waiting",
-                data={"status": "WAITING", "wait_for": exc.wait_for, "resume_key": exc.resume_key, **exc.payload},
                 metadata=ctx.metadata,
             )
         except HTTPException as exc:
@@ -306,8 +238,7 @@ class ExecutionPipeline:
             self._safe_unbind_syscall_unit(syscall_unit_tokens)
             if rm_started:
                 self._safe_rm_mark_completed(ctx)
-            if ctx.metadata.get("eu_status") != "waiting":
-                self._safe_finalize_eu(ctx, "failed")
+            self._safe_finalize_eu(ctx, "failed")
             self._safe_reset_current_execution_context(execution_ctx_token)
             self._safe_reset_pipeline_active(pipeline_token)
             self._safe_reset_parent_event(parent_token)

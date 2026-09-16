@@ -26,9 +26,9 @@ recovered from a torn snapshot resumes UNTYPED. Absent is never mismatch, the sa
 `FLOW-GRAPH-SIGNATURE-1` applies to its signature; the degradation is to the pre-feature
 behaviour, never to a wrong rejection.
 
-Phase 1 covers the `FlowRun` path only. `ExecutionWaitSignal` (a request-level unit parking
-itself) is not given a schema here: its resume side has no in-tree raiser and no test, and
-building on a surface nothing reaches is catalogue variant 14.
+Phase 1 covers the `FlowRun` path. The request-level wait (`ExecutionWaitSignal`) it deliberately
+left out was removed the same day (`EU-WAIT-SIGNAL-DEAD-1`) — a request has no continuation to
+resume, so there was never a second path to type.
 """
 from __future__ import annotations
 

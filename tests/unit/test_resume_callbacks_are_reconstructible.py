@@ -10,7 +10,8 @@ Two sites did not satisfy that:
   therefore `self.db`.
 - `execution_pipeline/waits.py` registered
   `lambda: ExecutionUnitService(db).resume_execution_unit(eu_id)`, capturing the
-  **request-scoped** session directly.
+  **request-scoped** session directly. (That whole path — the request-level wait — was removed
+  2026-09-15, `EU-WAIT-SIGNAL-DEAD-1`; its replacement closure rolled back on close anyway.)
 
 Both are `AGENT_WORKING_RULES` §5 — never share a SQLAlchemy session across threads or requests
 — and both survived because a closed SQLAlchemy session is not a dead one: it transparently
@@ -92,28 +93,6 @@ def test_no_resume_callback_is_a_capturing_lambda():
         "runner, a request — and the callback fires later on a scheduler thread, possibly in "
         "another process. Build it from identifiers instead (see "
         "AINDY/core/resume_reconstruction.py)."
-    )
-
-
-def test_the_execution_unit_resume_captures_only_an_identifier():
-    """The replacement for the worst of the two, checked on the closure it actually produces.
-
-    `lambda: ExecutionUnitService(db).resume_execution_unit(eu_id)` captured the request's own
-    session. This one captures a string and opens its own.
-    """
-    from AINDY.core.execution_pipeline.waits import _build_eu_resume_callback
-
-    callback = _build_eu_resume_callback("eu-123")
-    captured = dict(
-        zip(
-            callback.__code__.co_freevars,
-            (cell.cell_contents for cell in (callback.__closure__ or ())),
-        )
-    )
-
-    assert captured == {"eu_id": "eu-123"}, (
-        f"the EU resume closure captured {captured!r}. Only plain identifiers may be carried — "
-        f"anything else ties the callback to the request or process that registered it."
     )
 
 
