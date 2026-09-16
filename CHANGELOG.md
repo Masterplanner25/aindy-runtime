@@ -4,6 +4,171 @@
 
 _Nothing yet._
 
+## 2.19.0 — 2026-09-16
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No migration.** The Alembic head is unchanged at `0018` and
+  `SCHEMA_CONTRACT_VERSION` did not move (`2026-09-10`) — no `AINDY/db/models/` or
+  `memory_persistence.py` change this release. `bootstrap-schema --reconcile` is not needed.
+- **★ One syscall removed: `sys.v1.agent.list_recent_durations`** (#693, DEC-022). It was
+  experimental, unlisted in the SDK and the cross-repo rename guard, and its only caller in any
+  repo was the runtime's own snapshot, which never received an answer from it. A dispatch now
+  returns the standard `Unknown syscall` error envelope. `sys.v1.agent.count_runs` is unchanged.
+  `SYSCALL_REGISTRY_MIN_COUNT` is 23; `/health` readiness compares against it and moved with it.
+- **★ The system-state snapshot now counts agent runs** (#692). `compute_current_state` — the
+  reading behind `active_runs`, `avg_execution_time`, `system_load` and `health_status` — had
+  excluded every agent run since 2.0.0 (its two agent inputs were refused by the dispatcher
+  and read as zero). Expect `active_runs` to rise and `health_status` to read less calm on a
+  deployment with agent traffic; that is the true reading, not a regression. Found by the app
+  team's `SYSCALL-SILENT-ERRORS-1`.
+- **New setting, unset by default: `AINDY_NODUS_MAX_MEMORY_MB`** (#697, `SYSMAX-3` guest
+  half). A per-execution memory ceiling for the Nodus guest VM, enforced by nodus-lang 5.13's
+  `max_memory_mb`. Nothing changes until it is set. When set: the VM kills a script whose
+  process has **grown** past the budget (a `sandbox` error, run fails); it bounds growth over
+  the run, polled — not a single large allocation, which only an OS-level cap prevents; it
+  applies to the guest path only; and on a host where the VM cannot read RSS a declared
+  ceiling **refuses** the run rather than running it unbounded.
+- **Plugin hosts (`hostile-third-party` / strong sandbox): a failed post-launch check now kills
+  the worker on every path** (#694). Before, a failed strong-sandbox live verification through
+  `restart_plugin_host` or an `execute_plugin_host` restart left the unverified worker running
+  with the host reporting `running`. After any failed post-launch check the snapshot reads
+  `lifecycle_state: backoff`, `pid: null`, and the real failure kind — one attestation violation
+  now counts as one failure with `last_failure_kind: contract_violation` (it used to count as
+  two, relabelled `runtime_failure`, with a doubled backoff).
+- **`sys.v1.agent.undo` is re-entrant** (#696, `IDEM-12`): a second undo on the same run never
+  re-invokes a compensator; the response gains `already_reversed: [action_type…]` (additive).
+  Latent until now — no compensator is registered at HEAD.
+- **Docs and guards, no behaviour change:** the route execution contract is enforced at
+  request time only and the unwired boot-time AST validator is deleted (#698, DEC-023); no
+  `waiting → completed` edge on an execution unit, by decision (#693, DEC-021 — a consumer
+  mapping a paused task onto `waiting` should leave the unit `executing` or call
+  `resume_execution_unit()` before completing); the two tenant-path guards and the two admin
+  guards each share one rule (#699).
+
+### Fixed — the system-wide state snapshot never counted agent runs (`SYSTEM-STATE-TENANT-1`, #692)
+
+- `compute_current_state` (`AINDY/platform_layer/system_state_service.py`) reported
+  `active_runs` and `avg_execution_time` without any agent run, on every call since 2.0.0.
+  Its two agent inputs were fetched through `sys.v1.agent.count_runs` /
+  `sys.v1.agent.list_recent_durations` with `user_id=None`; the dispatcher refuses an empty
+  tenant before the handler runs, and the service read the error envelope as `0` / `[]`.
+  Both numbers feed `system_load` and `health_status`, so a deployment's health could read
+  calmer than it was.
+- Why the obvious fix was wrong: a supplied tenant would not have helped — both syscalls
+  scope to ONE user by construction, and this snapshot is not per-user. `AgentRun` is now
+  read directly across every tenant, the way `FlowRun` always was in the same function.
+- Consumer-visible: the next snapshot after upgrade includes agent runs. Nothing else in the
+  response shape changes. Both syscalls stay registered (`count_runs` has an app consumer;
+  `list_recent_durations` now has none — kept, removal is a separate decision).
+- Found by the app team's `SYSCALL-SILENT-ERRORS-1` (their #365) from
+  `aindy_syscall_outcome_total`; not filed as an FR. Test drives the real function on a seeded
+  session and pins that the snapshot dispatches no syscall at all.
+
+### Removed — `sys.v1.agent.list_recent_durations` (DEC-022, #693)
+
+- The syscall is gone from `SYSCALL_REGISTRY`; `SYSCALL_REGISTRY_MIN_COUNT` 24 → 23. Its only
+  caller in any repo was the runtime's own system-state snapshot, which dispatched it with no
+  tenant and never received an answer (#692 moved that read to a direct query). It was
+  `stable=False`, absent from the SDK, the app, Claw, the MCP allowlist and the cross-repo
+  rename guard — but reachable through `POST /platform/syscall` by any holder of `agent.read`,
+  so this is a consumer-visible removal. A dispatch now returns the standard
+  `Unknown syscall` error envelope. `sys.v1.agent.count_runs` is unchanged.
+- Operator note: `GET /health`-style readiness reads `len(SYSCALL_REGISTRY) >= floor`; both
+  moved together, nothing to reconcile.
+
+### Changed — execution-unit transition table: `waiting → completed` declined (DEC-021)
+
+- No code change; the decision is recorded and pinned by
+  `tests/unit/test_eu_transitions_dec021.py`. A unit completes only from `executing`; a
+  `waiting` unit exits by resuming (`resume_execution_unit()`) and then completing, or by
+  `failed`. Consumers mapping a paused human task onto `waiting` (the app's
+  `TASK-EU-NOT-PERSISTED-1`) should either leave the unit `executing` across the pause or
+  call `resume_execution_unit()` before completing — stepping `waiting → executing` by hand
+  works but skips the `resumed` audit state.
+
+### Fixed — an unverified strong-sandbox worker could be left running after a restart (`SANDBOX-EVIDENCE-1`, #694)
+
+- `_start_record` (`AINDY/platform_layer/plugin_host.py`) now has one failure path for every
+  post-launch check: mark the host with the failure's kind, force-kill the worker, re-raise —
+  for every caller. Before, a failed strong-sandbox live verification
+  (`_verify_post_launch_state` ≠ passed) only raised; `start_plugin_host` caught and killed
+  it, but `restart_plugin_host` and `execute_plugin_host`'s restart sites do not wrap the
+  call, so through them the unverified worker stayed alive with the host reporting `running`.
+- `start_plugin_host` no longer marks a launch failure a second time. One hostile-third-party
+  attestation violation used to be recorded as two failures with `last_failure_kind`
+  relabelled `runtime_failure`; it now reads `contract_violation` once, and the restart
+  backoff is computed from one failure, not two.
+- Behaviour visible to an operator: after a failed post-launch check on any path, the host
+  snapshot reports `lifecycle_state: backoff`, `pid: null`, and the real failure kind. A
+  quarantined host asked to start again is no longer counted as a fresh failure.
+- Test: `tests/unit/test_plugin_host_attestation_kill.py` — the real strong runner over a
+  fake process, one attestation field broken, the process asserted dead through both entry
+  points; mutation-tested 5/5. Closes the contract's invariant-11 coverage gap.
+
+### Fixed — a second `sys.v1.agent.undo` re-invoked every compensator (`IDEM-12`, #696)
+
+- `undo_run_effects` (`AINDY/core/effect_compensation.py`) is now re-entrant: an effect that
+  already carries a `reversed` row in `effect_reversals` is skipped and listed under a new
+  `already_reversed` key in the summary, so a deliberate second undo — or a retry with the
+  idempotency gate off — never runs a compensator twice and never writes a duplicate
+  `reversed` audit row. Only `reversed` suppresses; `irreversible` and `failed` rows leave the
+  effect eligible, so a transient compensator failure stays retryable.
+- Latent until now: zero compensators are registered at HEAD, so no deployment has double-
+  compensated, and with none registered the only visible change today is the new key. An
+  effect with no compensator is still re-surfaced (and re-logged) as `irreversible` on every
+  undo, by design — surfaced, not hidden.
+- Consumer-visible: `sys.v1.agent.undo`'s response gains `already_reversed: [action_type…]`
+  (additive; the required keys are unchanged). No schema change.
+
+### Added — `AINDY_NODUS_MAX_MEMORY_MB`: a per-execution memory ceiling for the Nodus guest VM (`SYSMAX-3` guest half, #697)
+
+- New operator setting, unset by default (no ceiling — nothing changes until it is set). When
+  set, every guest execution inherits `resources.memory_bytes` on the guest floor, translated
+  to nodus-lang 5.13's `max_memory_mb`: the VM reads the worker's RSS when the script starts
+  and fails the run with a `sandbox` error (`Memory limit exceeded: …`) once the process has
+  grown past the budget. A per-execution `env_spec` may narrow the ceiling, never widen it.
+- What it is and is not: it bounds memory **growth over the run**, polled by the VM — not a
+  single large allocation, which only an OS-level limit (ulimit / cgroup / container cap)
+  prevents. It applies to the guest path only; agent runs and flow nodes in the API process
+  remain unbounded, so `SYSMAX-3` stays open.
+- Fails closed: on a host where the VM cannot read RSS, a declared ceiling makes the run
+  fail with `declared memory ceiling cannot be enforced on this host …` rather than run
+  unbounded. With nothing declared, such a host is unaffected.
+- `enforced_resources(spec, guest=True)` now lists `memory_bytes`; the default path's list is
+  unchanged (`GUEST_RESOURCES_ENFORCED` vs `RESOURCES_ENFORCED`).
+
+### Changed — route execution contract: the claim is corrected, the unwired boot-time validator is deleted (`ROUTE-AST-UNWIRED-1`, DEC-023, #698)
+
+- `AINDY/core/route_execution_guard.py::validate_registered_route_execution` — an AST walk that
+  was documented as a "boot-time refusal" of routes bypassing the execution pipeline — is
+  removed, with its call-graph machinery. It was never called by the application and, by its
+  own test, rejected a working route (a module-level alias of `execute_with_pipeline`). No
+  behaviour changes: the request-time wrapper installed by `enforce_registered_route_execution`
+  was always the only enforcement, and still is.
+- What is enforced, stated precisely for the first time in the module docstring and
+  `EXECUTION_CONTRACT.md`: on each request, a router that declared `require_execution_context`
+  and returned without entering the pipeline fails with `RouteExecutionViolation`; routers
+  registered without the dependency (admin, user-owned agents, automation logs) are wrapped
+  but not required.
+- What CI now proves: every non-exempt route `register_routes` installs on the real app is
+  wrapped — a derived census replacing a one-route check.
+
+### Changed — the two tenant-path guards and the two admin guards each share one rule (#699)
+
+- `TenantContext.validate_memory_path` and `memory_address_space.validate_tenant_path` now
+  both call `kernel.tenant_context.tenant_owns_memory_path`. Visible differences: the exact
+  tenant root `/memory/{tenant}` is inside the namespace for both (the kernel guard used to
+  refuse it); paths are slash-normalised before comparison for both; an empty tenant owns no
+  path for both (the kernel guard used to accept `/memory//…` on a raw prefix match). The
+  kernel guard had no production caller, so no served behaviour changes; MAS's answers are
+  unchanged for every well-formed path.
+- `require_admin_principal` and `require_platform_admin_access` share `is_operator_principal`
+  (a session is an operator iff `is_admin`; an API key iff it carries `platform.admin`).
+  Behaviour unchanged. The tree gate's docstring now states, for the first time, that it
+  admits any API key by design because every `/platform` route enforces its own scope —
+  use `require_admin_principal` for an operator check. Closes `KEY-SCOPE-ESCALATION-1`.
+
 ## 2.18.0 — 2026-09-16
 
 **Operator notes — read before upgrading.**
