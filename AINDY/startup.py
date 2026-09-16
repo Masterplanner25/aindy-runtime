@@ -1621,36 +1621,17 @@ def _start_event_bus() -> None:
 
 
 def _rehydrate_waiting_state(db_factory, is_testing: bool) -> None:
-    # WAIT rehydration: re-register all waiting EUs with the SchedulerEngine.
-    # Must run after SchedulerEngine is initialised (above) and after the
-    # stuck-run scan (which may transition some EUs out of waiting status).
-    if not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
-        from AINDY.core.wait_rehydration import rehydrate_waiting_eus
-        _rehydrate_db = db_factory()
-        try:
-            _n_rehydrated = rehydrate_waiting_eus(_rehydrate_db)
-            if _n_rehydrated:
-                logger.info("[startup] WAIT rehydration registered %d EU(s)", _n_rehydrated)
-            clear_api_runtime_condition(RuntimeConditionCode.WAIT_EUS_REHYDRATION_FAILED)
-        except Exception as _rehydrate_exc:
-            _handle_runtime_degradation(
-                code=RuntimeConditionCode.WAIT_EUS_REHYDRATION_FAILED,
-                component="rehydration",
-                classification=_UNSAFE_DEGRADED,
-                detail=str(_rehydrate_exc),
-                production_message=(
-                    "WAIT execution-unit rehydration failed. Pending waits may be stranded."
-                ),
-            )
-            emit_recovery_failure("wait_eus", _rehydrate_exc, _rehydrate_db, logger=logger)
-        finally:
-            _rehydrate_db.close()
+    # ★ EU-level WAIT rehydration (`rehydrate_waiting_eus`) used to run first here. Removed
+    # 2026-09-16: its callback rolled back on every fire, and the only units that can be
+    # `waiting` belong to flow runs, whose rehydration below resumes the unit itself, with a
+    # commit. `RuntimeConditionCode.WAIT_EUS_REHYDRATION_FAILED` stays in the vocabulary
+    # (published condition code, pinned by the cross-repo contract) and is never emitted.
 
     # FlowRun WAIT rehydration: reconstruct PersistentFlowRunner callbacks for
     # all FlowRuns with status="waiting" so they can be resumed when their
     # event fires.  Must run after register_all_flows() so FLOW_REGISTRY is
-    # populated, and after EU rehydration so the scheduler entry for the same
-    # run_id already has the EU-level callback when we add the flow callback.
+    # populated. The callback claims the run, resumes the run's execution unit
+    # (waiting → resumed → executing) and drives the flow — one writer per unit.
     if not settings.is_testing and not os.getenv("PYTEST_CURRENT_TEST"):
         from AINDY.core.flow_run_rehydration import rehydrate_waiting_flow_runs
         _flow_rehydrate_db = db_factory()

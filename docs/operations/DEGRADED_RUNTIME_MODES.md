@@ -1,6 +1,6 @@
 ---
 title: "Degraded Runtime Modes"
-last_verified: "2026-05-18"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -43,7 +43,7 @@ Reading rule:
 | Mongo required paths | `mongo_required_unavailable` | `startup_fatal` | N/A | Startup fails |
 | Dynamic registry restore | `dynamic_registry_restore_failed` | `unsafe_degraded` | Start, but `/ready` fails and operators see the missing restore state | Startup fails |
 | Dynamic registry verification | `dynamic_registry_restore_incomplete` | `unsafe_degraded` | Start, but `/ready` fails and operators see incomplete restore counts | Startup fails |
-| WAIT EU rehydration | `wait_eus_rehydration_failed` | `unsafe_degraded` | Start, but `/ready` fails and operators see stranded-wait risk | Startup fails |
+| WAIT EU rehydration | `wait_eus_rehydration_failed` | *retired* | *Never emitted since 2026-09-16 — the step was removed; see `flow_run_rehydration_failed`* | — |
 | FlowRun rehydration | `flow_run_rehydration_failed` | `unsafe_degraded` | Start, but `/ready` fails and operators see stranded-wait risk | Startup fails |
 | Event drain after rehydration | `event_bus_rehydration_drain_failed` | `unsafe_degraded` | Start, but `/ready` fails and operators see lost-resume risk | Startup fails |
 

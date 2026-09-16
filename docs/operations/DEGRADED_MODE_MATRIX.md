@@ -1,6 +1,6 @@
 ---
 title: "Degraded Mode Matrix"
-last_verified: "2026-08-06"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -126,7 +126,7 @@ All three live in `AINDY/kernel/condition_codes.py`.
 | `distributed_worker_unavailable` | Worker heartbeat absent in distributed profile |
 | `mongo_optional_unavailable` | Mongo unavailable when optional |
 | `mongo_required_unavailable` | Mongo unavailable when required |
-| `wait_eus_rehydration_failed` | WAIT rehydration failure |
+| `wait_eus_rehydration_failed` | *Retired 2026-09-16 — never emitted (the EU-level rehydration step was removed)* |
 | `flow_run_rehydration_failed` | Flow-run rehydration failure |
 | `external_python_override_enabled` | Sandbox/trust posture weaker than claimed |
 | **`agent_run_rehydration_failed`** | **no row — see below** |

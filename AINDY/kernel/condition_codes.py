@@ -41,6 +41,9 @@ class RuntimeConditionCode(str, Enum):
     # Registry / rehydration
     DYNAMIC_REGISTRY_RESTORE_INCOMPLETE = "dynamic_registry_restore_incomplete"
     DYNAMIC_REGISTRY_RESTORE_FAILED = "dynamic_registry_restore_failed"
+    # RETIRED 2026-09-16 — never emitted since `rehydrate_waiting_eus` was removed
+    # (EU-WAIT-SIGNAL-DEAD-1 follow-up). Kept in the vocabulary: it is a published condition
+    # code pinned by the cross-repo contract, and a dashboard filtering on it must keep parsing.
     WAIT_EUS_REHYDRATION_FAILED = "wait_eus_rehydration_failed"
     FLOW_RUN_REHYDRATION_FAILED = "flow_run_rehydration_failed"
     AGENT_RUN_REHYDRATION_FAILED = "agent_run_rehydration_failed"

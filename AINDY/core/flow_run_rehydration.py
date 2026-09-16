@@ -10,42 +10,27 @@ This module reconstructs PersistentFlowRunner callbacks for every waiting
 FlowRun and re-registers them with SchedulerEngine on startup, so the
 resume path is intact when the event arrives.
 
-Relationship to EU rehydration
--------------------------------
-``core.wait_rehydration.rehydrate_waiting_eus`` handles ExecutionUnit-level
-callbacks (EU status transitions: waiting → resumed → executing).  This
-module handles FlowRun-level callbacks (flow runner resume: call
-``PersistentFlowRunner.resume(run_id)``).  The two work in parallel: both
-are called during the same startup phase, and each registers a distinct
-callback type in the SchedulerEngine entry for the same run_id.
+One callback per run, and it owns the run's execution unit
+-----------------------------------------------------------
+The callback built here (`build_flow_resume_callback`) does three things in order: an atomic
+claim of the FlowRun (``waiting → executing``, exactly one instance wins), the run's
+execution-unit transition (``waiting → resumed → executing``), then ``PersistentFlowRunner
+.resume()`` — all on one session the runner commits. It is the ONLY writer of that unit's
+status on resume.
+
+★ Until 2026-09-16 a second module, `wait_rehydration.rehydrate_waiting_eus`, registered a
+SECOND scheduler entry per parked run, keyed by the unit id, with a callback that moved the
+unit's status on a session it closed without committing — a rollback on every fire. This
+docstring called the pair "complementary … removing either would leave the execution in a
+broken half-state". That was false: the unit-keyed entry never wrote anything durable, and the
+flow callback's step 2 already did the work. Removed (`EU-WAIT-SIGNAL-DEAD-1`'s follow-up);
+`test_flow_rehydration_owns_the_unit.py` pins that a restart registers exactly ONE entry per
+parked run and that the unit's transition survives the callback's session.
 
 Idempotency
 -----------
-``scheduler.waiting_for(run_id)`` is checked before each registration.
-Runs already in the registry (e.g. from EU rehydration, or from a second
-call to this function) are skipped.  Safe to call multiple times.
-
-Dual-callback coexistence
--------------------------
-Each waiting flow run may have TWO scheduler entries after rehydration:
-
-``_waiting[eu.id]``        — registered by ``rehydrate_waiting_eus`` with a
-                             callback that transitions the EU through
-                             ``waiting → resumed → executing`` (status
-                             bookkeeping only).
-
-``_waiting[flow_run.id]``  — registered here with a callback that creates a
-                             fresh ``PersistentFlowRunner`` and calls
-                             ``runner.resume(run_id)`` (actual flow execution).
-
-Both entries wait on the same event name.  When the event fires,
-``notify_event()`` delivers BOTH callbacks.  They act on different objects
-(ExecutionUnit row vs FlowRun state machine) and are complementary — removing
-either would leave the execution in a broken half-state.
-``ExecutionUnitService.resume_execution_unit`` carries its own DB-level
-idempotency guard (skips if EU is already ``resumed/executing/completed``),
-so even if the FlowRun callback drives the EU to completion before the EU
-callback fires, the EU callback becomes a safe no-op.
+``scheduler.waiting_for(run_id)`` is checked before each registration, so a second call to this
+function skips runs already registered. Safe to call multiple times.
 
 Scope
 -----
@@ -314,26 +299,6 @@ def rehydrate_waiting_flow_runs(
             skipped += 1
             continue
 
-        # ── Guard 2: EU-level callback already registered — PROCEED, log only ─
-        # rehydrate_waiting_eus() registers _waiting[eu.id] with an EU status
-        # callback.  This function registers _waiting[flow_run.id] with a
-        # PersistentFlowRunner resume callback.  Both entries fire when the
-        # event arrives; they are complementary, not conflicting:
-        #   • EU callback  → waiting → resumed → executing  (bookkeeping)
-        #   • FlowRun cb   → PersistentFlowRunner.resume()  (flow execution)
-        # ExecutionUnitService.resume_execution_unit() carries its own
-        # idempotency guard so a race where the FlowRun callback completes
-        # the EU before the EU callback fires is safe.
-        # We do NOT skip here — omitting the FlowRun callback would leave the
-        # flow permanently stuck after restart.
-        if eu_id and scheduler.waiting_for(eu_id) is not None:
-            logger.debug(
-                "[flow_rehydrate] run=%s eu=%s: EU-level callback already "
-                "registered — adding FlowRun-level callback alongside it "
-                "(dual-callback coexistence, both required)",
-                run_id,
-                eu_id,
-            )
 
         # ── Derive wait condition (event or time-based) ───────────────────────
         wait_condition = derive_wait_condition_from_flow(run)

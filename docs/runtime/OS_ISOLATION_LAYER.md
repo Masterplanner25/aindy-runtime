@@ -1,6 +1,6 @@
 ---
 title: "OS Isolation Layer"
-last_verified: "2026-08-13"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -377,7 +377,7 @@ Callback ordering within the winning instance:
 2. **EU status transition** — `waiting → resumed → executing` (only if claim won)
 3. **Flow execution** — `PersistentFlowRunner.resume()` (only if claim won)
 
-The EU callback registered by `rehydrate_waiting_eus()` includes an ownership guard: if the FlowRun is no longer `"waiting"` when it fires, the EU callback skips — avoiding bookkeeping side effects on the losing instance.
+There is no separate EU-level callback. `rehydrate_waiting_eus()` used to register one per waiting unit (keyed by the unit id) whose callback moved the unit's status on a session it closed without committing — a rollback on every fire. Removed 2026-09-16: step 2 above is the unit's only writer on resume, and it rides the runner's commit.
 
 ## 11. Key Files
 
@@ -390,6 +390,6 @@ The EU callback registered by `rehydrate_waiting_eus()` includes an ownership gu
 | `kernel/event_bus.py` | Redis pub/sub distributed event bus; `publish_event()` public API |
 | `kernel/syscall_dispatcher.py` | OS layer integration points (Steps 5, 6, 11) |
 | `core/flow_run_rehydration.py` | Startup rehydration of FlowRun WAIT callbacks |
-| `core/wait_rehydration.py` | Startup rehydration of EU WAIT callbacks |
+| `core/wait_rehydration.py` | The `waiting_flow_runs` durability seed only (`ensure_waiting_flow_run_row`). *Corrected 2026-09-16: this row said "startup rehydration of EU WAIT callbacks"; that function was removed — see `flow_run_rehydration.py`'s docstring.* |
 | `AINDY/routes/platform/platform_ops_router.py` | `GET /platform/tenants/{id}/usage` (`:99`). *Corrected 2026-08-13: this row said `routes/platform_router.py`.* |
 | *(none)* | *Corrected 2026-08-13:* this table claimed `tests/unit/test_os_layer.py` and `tests/unit/test_event_bus.py` (26 tests). Neither has ever existed. The only event-bus unit test is `tests/unit/test_event_bus_redis_url.py`, which covers URL parsing alone. |
