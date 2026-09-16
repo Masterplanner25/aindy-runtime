@@ -8774,8 +8774,13 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ## FR-30 / EU-FINALIZE-UNCOMMITTED-1 — a request's execution unit never reached `completed`: the finalize was flushed after the last commit 🔴 defect
 
-**Status: CLOSED (2026-09-15, PR #673).** Filed by the app team the same day
-(`RUNTIME_FEATURE_REQUESTS.md` FR-30) while checking the 2.15.0 handoff's sentence *"a request's
+**Status: CLOSED (2026-09-15, PR #673); VERIFIED LIVE by the app team 2026-09-16 on 2.16.0** — 18
+route requests after upgrade → 12 `flow|completed`, 6 `job|completed`, zero `executing` (the same
+pass left 19 on 2.15.0); boot `seed failed` lines 10 → 0. **★ The 2.16.0 handoff's §2 over-claimed
+that their `task_service.py:582` pause write "is followed by your own commit path" — it is not;
+corrected in place. Their live check then found the task unit is never persisted at all (their
+create hook flushes, nothing commits) — theirs, `TASK-EU-NOT-PERSISTED-1`.** Filed by the app
+team the same day (`RUNTIME_FEATURE_REQUESTS.md` FR-30) while checking the 2.15.0 handoff's sentence *"a request's
 execution unit describes the request: when the handler returns, it completes."* Their table said
 it never had: **every route-sourced `execution_units` row on their stack was `executing`** —
 196 agent / 255 default / 373 flow / 39 job / 52 task since 2026-07-23, 19 more per Tutorial 2

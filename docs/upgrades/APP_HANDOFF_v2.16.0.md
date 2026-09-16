@@ -1,7 +1,7 @@
 ---
 title: "App Handoff — Runtime v2.16.0"
 api_version: "1.0"
-last_verified: "2026-09-15"
+last_verified: "2026-09-16"
 status: current
 owner: "platform-team"
 ---
@@ -78,10 +78,15 @@ step 3); they no longer make noise.
 | The `[rehydrate] waiting_flow_runs seed failed … ForeignKeyViolation` lines at boot stop | log noise only | your ten from 2026-09-14 produced ten per boot; zero now |
 | Boot Smoke on the published wheel retries the PyPI install (#672) | nothing at runtime | — |
 
-**Not touched, correctly:** `task_service.py:582`'s own `update_status(_eu.id, "waiting")` on
-pause is followed by your own commit path; `require_execution_unit` and `to_envelope` are
-untouched (the diff under `AINDY/` is `resources.py`, `wait_rehydration.py`, `_version.py`,
-and the smoke workflow).
+**Not touched:** `require_execution_unit` and `to_envelope` are untouched (the diff under
+`AINDY/` is `resources.py`, `wait_rehydration.py`, `_version.py`, and the smoke workflow).
+~~`task_service.py:582`'s own `update_status(_eu.id, "waiting")` on pause is followed by your
+own commit path~~ — **corrected 2026-09-16 by the app team's verification: it is not.**
+`pause_task` commits at `:570`, *then* flushes the unit to `waiting` at `:582`, and nothing
+commits after — so on ≤2.15.0 that write was rolled back on every pause by the same mechanism
+as FR-30, and on 2.16.0 the pipeline's finalize commit is what carries it. Checking that live
+found the task unit does not exist at all (their create hook flushes and nothing commits) —
+theirs, `TASK-EU-NOT-PERSISTED-1` in their `TECH_DEBT.md`. The claim was ours to get wrong.
 
 ---
 
@@ -126,3 +131,24 @@ docker logs <api> 2>&1 | grep -c "seed failed"
 
 Bump `constraints.txt` `aindy-runtime==2.15.0` → `==2.16.0`; your contract test moves the floor
 to `>=2.16.0,<3.0` with it. Nothing in this release adds a symbol you import.
+
+---
+
+## 6. Verified by the app team — 2026-09-16 (written from `aindy-apps-monolith`)
+
+Adopted as their `chore(runtime): adopt aindy-runtime 2.16.0` (pin + floor `2.16.0`,
+`docs/runtime/RUNTIME_2_16_0_UPGRADE.md` there is the full record). Image `f6d22e2ba5e1`, stack
+up on a 255 MB host, timed away from the 06:00 UTC cron burst. Every §4 check read rather than
+assumed:
+
+| §4 check | Result |
+|---|---|
+| 1. version + path, in the container | `2.16.0 ['/usr/local/lib/python3.11/site-packages/AINDY']` |
+| 2. `bootstrap-schema` | exit 0; heads runtime `0018`, app `ga1shadow0001` unchanged |
+| 3. baseline SELECT | the table exactly as FR-30 / FR-29 recorded it (196/255/373/39/52 `executing`, 8+2 `waiting`). **Neither retire `UPDATE` was run — owner's decision: the rows stay as evidence** |
+| 4. ★ **FR-30 live** — a Tutorial 2 pass (18 route requests) | **passes.** Post-upgrade route units: `flow\|completed` 12, `job\|completed` 6, **zero `executing`** — the same pass left 19 `executing` on 2.15.0. Three task-route requests → `default\|completed` 3, a third route type. Tutorial output unchanged |
+| 5. `[rehydrate] … seed failed` at boot | **0** (was 10 on 2.15.0; the ten rows are still there — the guard is what changed) |
+
+So #673 holds on a live server, for both halves. The one thing the run found is on their side
+(§2's correction above): their task unit is never persisted, so the pause-hook row cannot be
+re-verified until it is. No FR came out of this release.
