@@ -25,10 +25,23 @@ if ROOT_DIR not in sys.path:
 _STDLIB_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "nodus", "stdlib"))
 
 
-class WorkerWaitSignal(Exception):
+class _AwaitHalt(Exception):
+    """Raised INSIDE the guest by `await_event()` to stop the script at the call.
+
+    ★ It never reaches the worker: nodus 5.13 converts a host-function exception into an
+    ``{"ok": False, "errors": [...]}`` result (measured 2026-09-16 — DEC-017). That is fine, and
+    it is the whole design: `await_event` sets the three wait keys BEFORE raising, and `run_one`
+    checks ``nodus_wait_requested`` before it looks at ``ok``, so the run is reported ``waiting``
+    with the script halted exactly where it asked. The raise is a halt, not a signal.
+
+    This replaces ``WorkerWaitSignal``, which was the vestigial half of a design that assumed a
+    host exception would propagate out of the guest — it cannot, on any nodus version, and its
+    ``except`` branch was dead by construction (`GUEST-BUILTINS-DEAD-1`).
+    """
+
     def __init__(self, event_type: str) -> None:
         self.event_type = event_type
-        super().__init__(f"nodus.wait:{event_type}")
+        super().__init__(f"nodus.await_event:{event_type}")
 
 
 def _json_safe(value: Any) -> Any:
@@ -481,8 +494,46 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             return True
 
+    def _await_event(event_type: Any, schema: Any) -> Any:
+        """The guest wait — DEC-017 (`WAIT-TYPED-CONTRACT-1` / `GUEST-BUILTINS-DEAD-1` step 2).
+
+        ``await_event("review.approved", nil)`` on the FIRST run sets the three wait keys the
+        runner and adapter already key on (`nodus_wait_requested`, `nodus_wait_event_type`,
+        and `nodus_wait_resume_schema` when ``schema`` is not nil) and HALTS the script at the
+        call. On the RESUMED run — the script runs again from the top — the payload
+        `route_event` delivered is under `nodus_received_events[event_type]`, and the same call
+        RETURNS it instead of halting, so a linear script reads as it means:
+
+            let approval = await_event("review.approved", {"required": ["reviewer"]})
+            set_state("reviewer", approval["reviewer"])
+
+        ★ Everything BEFORE the call runs twice — once on each run. That is the documented
+        run-from-the-top contract (DEC-012), not a property of this function; guard phase-1
+        effects with `if (get_state("nodus_received_events") == nil)` unless they are mediated.
+
+        ★ Named `await_event`, not `wait`: `wait` is a reserved nodus built-in (coroutines) and
+        cannot be registered over — the `NODUS-SYS-SURFACE-1` trap under another name. The
+        arity is fixed at 2 by nodus; pass ``nil`` for an untyped wait.
+
+        The keys remain the wire contract underneath — a script may still set them directly —
+        so nothing about the runner, the adapter or the resume route changes.
+        """
+        name = str(event_type or "").strip()
+        if not name:
+            raise ValueError("await_event() needs a non-empty event type")
+        received = state.get("nodus_received_events") or {}
+        if isinstance(received, dict) and name in received:
+            payload = received[name]
+            return dict(payload) if isinstance(payload, dict) else {"payload": payload}
+        state["nodus_wait_requested"] = True
+        state["nodus_wait_event_type"] = name
+        if schema is not None:
+            state["nodus_wait_resume_schema"] = _json_safe(schema)
+        raise _AwaitHalt(name)
+
     runtime.register_function("set_state", _set_state, arity=2)
     runtime.register_function("get_state", _get_state, arity=1)
+    runtime.register_function("await_event", _await_event, arity=2)
     runtime.register_function("sys", _sys_dispatch, arity=2)
     runtime.register_function("call_tool", _call_tool, arity=2)
     runtime.register_function("is_retryable_error", _is_retryable_error, arity=1)
@@ -573,6 +624,9 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
             ok = bool((raw_result or {}).get("ok", False))
             error = None if ok else str((raw_result or {}).get("error") or "Nodus execution failed")
 
+            # ★ Checked BEFORE `ok`: `await_event()` halts the guest by raising, which nodus
+            # reports as `ok=False` — the flag it set first is what says "this is a wait, not a
+            # failure". Reordering these two branches would turn every await into a failure.
             if state.get("nodus_wait_requested"):
                 wait_for = str(state.get("nodus_wait_event_type") or "unknown")
                 state.pop("nodus_wait_requested", None)
@@ -601,18 +655,6 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                     "error": error,
                     "stdout_log": stdout_buffer.getvalue(),
                 }
-        except WorkerWaitSignal as exc:
-            state.pop("nodus_wait_requested", None)
-            result_payload = {
-                "status": "waiting",
-                "output_state": _json_safe(state),
-                "emitted_events": _json_safe(_runtime_emitted_events()),
-                "memory_writes": _json_safe(memory_deferral._writes),
-                "simulated_effects": simulated_effects,
-                "error": None,
-                "stdout_log": stdout_buffer.getvalue(),
-                "wait_for": exc.event_type,
-            }
         except Exception as exc:
             result_payload = {
                 "status": "failure",

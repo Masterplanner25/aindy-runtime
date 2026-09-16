@@ -8,7 +8,7 @@ raised ``ValueError`` at persist time, blocking the execute half of the planner 
 
 The two offending sites:
   - AINDY/kernel/syscall_registry.py  — sys.v1.memory.write handler
-  - AINDY/runtime/nodus_builtins.py    — Nodus script `memory.write` builtin
+  - AINDY/nodus/runtime/memory_bridge.py — the guest's live `remember` (nodus_builtins.py removed 2026-09-16)
 
 Both now default to "insight" (a member of VALID_NODE_TYPES, and the same value the
 scorer falls back to when type is unspecified — so a defaulted write ranks identically
@@ -44,15 +44,34 @@ def test_execution_is_rejected_and_insight_is_accepted_by_validator():
 
 
 def test_nodus_builtin_write_default_is_valid():
-    """The Nodus `memory.write` builtin default must be a valid node_type."""
-    from AINDY.memory.memory_persistence import VALID_NODE_TYPES
-    from AINDY.runtime.nodus_builtins import NodusMemoryBuiltins
+    """The Nodus guest `memory.write` builtin default must be a valid node_type.
 
-    default = inspect.signature(NodusMemoryBuiltins.write).parameters["node_type"].default
-    assert default in VALID_NODE_TYPES, (
-        f"NodusMemoryBuiltins.write defaults node_type={default!r}, "
-        f"which the persistence validator rejects."
-    )
+    ★ Re-pointed 2026-09-16 (`GUEST-BUILTINS-DEAD-1` step 3, DEC-017). This used to read
+    `inspect.signature` on `nodus_builtins.NodusMemoryBuiltins.write` — a class nothing
+    instantiated (catalogue variant 14), so the fix it guarded lived in unreachable code. The
+    guest's live memory write is the worker's `remember` host function → `nodus_worker`'s
+    memory bridge; its default is what a script actually gets."""
+    import ast
+    import inspect
+
+    from AINDY.memory.memory_persistence import VALID_NODE_TYPES
+    from AINDY.nodus.runtime import memory_bridge  # the worker's `bridge`
+    from AINDY.runtime import nodus_worker
+
+    assert "nodus_builtins" not in inspect.getsource(nodus_worker), "the dead module is back"
+    # `remember(node_type=None)` falls back inside the body (`node_type or "<default>"`), so the
+    # default is not in the signature; read the fallback literal from the source (AST, not text).
+    tree = ast.parse(inspect.getsource(memory_bridge))
+    fallbacks = {
+        node.values[1].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or)
+        and isinstance(node.values[0], ast.Name) and node.values[0].id == "node_type"
+        and isinstance(node.values[1], ast.Constant)
+    }
+    assert fallbacks, "no `node_type or <literal>` fallback found in the live bridge — re-derive this test"
+    bad = {f for f in fallbacks if f not in VALID_NODE_TYPES}
+    assert not bad, f"the guest's live memory write falls back to node_type {bad!r}, which the validator rejects"
 
 
 def test_syscall_memory_write_default_is_valid():

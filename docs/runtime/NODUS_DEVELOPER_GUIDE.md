@@ -1,7 +1,7 @@
 ---
 title: "Nodus Developer Guide"
 api_version: "1.0"
-last_verified: "2026-09-15"
+last_verified: "2026-09-16"
 status: current
 owner: "platform-team"
 ---
@@ -220,16 +220,35 @@ their payloads, and their return shapes.
 ## 4. Suspending a flow (WAIT / RESUME)
 
 A script can suspend the enclosing flow and wait for an external event before continuing.
-The suspension is signalled by setting two state keys before the script returns:
+**The guest wait is `await_event(event_type, schema)`** (DEC-017, 2026-09-16):
 
 ```nd
-// Signal the runtime to suspend this flow
+// Halts the script HERE on the first run; the flow enters "waiting".
+// On the resumed run the same call RETURNS the delivered payload.
+let approval = await_event("user.response.received", {
+    "required": ["text"], "properties": {"text": {"type": "string"}}
+})
+print("User said: " + approval["text"])
+```
+
+Pass `nil` as the second argument for an untyped wait (`await_event("x", nil)` — the arity is
+fixed by nodus). With a schema, a resume whose payload does not satisfy it is refused with 422 and
+the run stays waiting (§4's typed waits, `WAIT-TYPED-CONTRACT-1`).
+
+**Why `await_event` and not `wait`:** `wait` is a reserved nodus built-in (coroutines) and cannot
+be registered over — the same trap `NODUS-SYS-SURFACE-1` records for `sys`. **How it halts:** the
+function sets the wait keys and raises; nodus reports a host-function exception as a script
+error, but the worker checks the wait flag before it looks at `ok`, so the run is reported
+`waiting` with the script stopped exactly at the call.
+
+**The wire contract underneath is three state keys**, which a script may still set directly
+(this is what `await_event` does for you):
+
+```nd
 set_state("nodus_wait_requested", true)
 set_state("nodus_wait_event_type", "user.response.received")
-
-// Execution stops here — the flow enters "waiting" status.
-// When the event fires, the flow is re-enqueued and this script
-// (or the next node) runs again with the event payload in state.
+set_state("nodus_wait_resume_schema", {"required": ["text"]})   // optional
+// …the script keeps running after these; make them the last thing it does.
 ```
 
 On resume via `POST /platform/flows/runs/{run_id}/resume`, the payload is available in state
@@ -254,12 +273,14 @@ if (received == nil) {
 }
 ```
 
-**The script runs again from the top.** It does not continue from the wait; it must branch on
-whether `nodus_received_events` is present, as above. It does **not** get its prior
-`set_state` values back — a re-run starts with an empty namespace plus `nodus_received_events`.
-(Decided 2026-09-15 under `WAIT-TYPED-CONTRACT-1`: seeding the prior state back would re-apply
-phase 1's effects on every re-run. What the script set before it parked is readable on the
-waiting run's `nodus_output_state`; it is not handed back to the script.)
+**The script runs again from the top.** It does not continue from the wait: on the resumed run
+everything BEFORE `await_event()` runs again, then the call returns. It does **not** get its
+prior `set_state` values back — a re-run starts with an empty namespace plus
+`nodus_received_events` (DEC-012: seeding the prior state back would re-apply phase 1's effects
+on every re-run; what the script set before it parked is readable on the waiting run's
+`nodus_output_state`, not handed back). **So guard phase-1 effects** with the branch above
+(`if (get_state("nodus_received_events") == nil)`) unless they are mediated and deduplicated
+(DUR-1/2) — `await_event` makes the wait linear, not the effects idempotent.
 
 ### Declaring what may resume you (`nodus_wait_resume_schema`)
 
@@ -288,7 +309,7 @@ run one step later. A declaration moves that refusal to the door. Adoption is vi
 `aindy_flow_resume_payload_total{outcome="accepted|rejected|untyped"}`.
 
 The WAIT/RESUME cycle:
-1. Script sets `nodus_wait_requested = true` and `nodus_wait_event_type = "event.name"` and exits.
+1. Script calls `await_event("event.name", schema)` — or sets `nodus_wait_requested = true` and `nodus_wait_event_type = "event.name"` directly and exits.
 2. Runtime suspends the `FlowRun` (`status → waiting`) and registers a scheduler wait keyed on
    the event name **and the run's `trace_id` as `correlation_id`**.
 3. Something resumes it. Two paths exist and they are **not equivalent**:

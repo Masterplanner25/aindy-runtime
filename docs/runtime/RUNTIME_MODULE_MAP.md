@@ -1,6 +1,6 @@
 ---
 title: "Runtime Module Map"
-last_verified: "2026-08-18"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -112,9 +112,8 @@ The flow engine and Nodus execution layer. This is what runs work.
 |---|---|
 | `flow_engine/` | DAG executor; node scheduling, step sequencing, flow state machine |
 | `memory/` | Memory loop wiring for flows; deferred-write coordination |
-| `nodus_worker.py` | Compiles and runs `.nodus` scripts; injects memory builtins; propagates WAIT semantics |
+| `nodus_worker.py` | Compiles and runs `.nodus` scripts; registers the host functions (`sys`, `set_state`/`get_state`, `await_event`, the memory bridge); reports a WAIT via the three wait keys |
 | `nodus_runtime_adapter.py` | Bridges Nodus execution context to the flow engine |
-| `nodus_builtins.py` | `DeferredMemoryBuiltins` — `recall`, `search`, `write` backed by memory_context |
 | `nodus_compiler.py` | Nodus script compilation step |
 | `flow_schedule_service.py` | Flow scheduling entry points |
 | `security.py` | Execution-path security checks |
