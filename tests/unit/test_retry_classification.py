@@ -229,11 +229,16 @@ def _failure_dict_literals(path: pathlib.Path) -> list[tuple[int, set[str]]]:
     return found
 
 
-def test_every_execute_tool_refusal_declares_a_failure_class():
-    literals = _failure_dict_literals(_TOOL_REGISTRY_PATH)
-    assert len(literals) >= 10, "census is empty or implausibly small — the derivation broke"
+_GUEST_SEAM_PATH = pathlib.Path(retry_policy.__file__).resolve().parents[1] / "runtime" / "nodus_worker.py"
+
+
+@pytest.mark.parametrize("path, floor", [(_TOOL_REGISTRY_PATH, 10), (_GUEST_SEAM_PATH, 2)])
+def test_every_tool_refusal_declares_a_failure_class(path, floor):
+    """`execute_tool` and the guest's `run_agent_tool` seam — every `success: False` literal."""
+    literals = _failure_dict_literals(path)
+    assert len(literals) >= floor, f"{path.name}: census is empty or implausibly small — the derivation broke"
     missing = [line for line, keys in literals if "failure_class" not in keys]
-    assert not missing, f"`success: False` returns in tool_registry.py without `failure_class` at lines {missing}"
+    assert not missing, f"`success: False` returns in {path.name} without `failure_class` at lines {missing}"
 
 
 def test_every_declared_failure_class_in_tool_registry_is_a_known_class():

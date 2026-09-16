@@ -144,6 +144,8 @@ def run_agent_tool(
             "success": False,
             "result": None,
             "error": "tool execution requires a capability token",
+            # RETRY-CLASSIFY-1 — structural; the guest loop must not re-attempt it
+            "failure_class": "permission",
         }
     tool_args = dict(args) if isinstance(args, dict) else {}
 
@@ -163,7 +165,8 @@ def run_agent_tool(
             execution_token=execution_token,
         )
     except Exception as exc:
-        return {"success": False, "result": None, "error": str(exc)}
+        # RETRY-CLASSIFY-1 — the seam's own exception is un-classed; the fallback table decides
+        return {"success": False, "result": None, "error": str(exc), "failure_class": None}
     finally:
         with contextlib.suppress(Exception):
             db.close()

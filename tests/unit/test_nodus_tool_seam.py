@@ -39,6 +39,7 @@ def test_fail_closed_without_token(monkeypatch):
         "success": False,
         "result": None,
         "error": "tool execution requires a capability token",
+        "failure_class": "permission",  # RETRY-CLASSIFY-1 — never re-attempted by the guest loop
     }
     assert called["n"] == 0  # execute_tool never invoked
 
