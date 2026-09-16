@@ -4,6 +4,124 @@
 
 _Nothing yet._
 
+## 2.18.0 — 2026-09-16
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No migration.** The Alembic head is unchanged at `0018` and
+  `SCHEMA_CONTRACT_VERSION` did not move (`2026-09-10`) — no `AINDY/db/models/` or
+  `memory_persistence.py` change this release. `bootstrap-schema --reconcile` is not needed.
+- **★ Two restart / multi-instance correctness fixes, both pre-existing on every release:**
+  - **A run parked before a restart now resumes on the first wake of the new process** (#689,
+    the app team's FR-31). Before, a resume answered `resumed: true` and the run stayed `waiting`
+    forever until some script had run in the process. The "run any script first" workaround is
+    retired. This also makes an agent run parked by the 2.17.0 authority WAIT gate survive a
+    restart — its flow name had never been registered anywhere.
+  - **On a multi-instance deployment in thread mode (the default), a flow wait claimed from an
+    instance that died is now actually resumed** (#686). Before, the claim moved only the
+    execution unit — on a session that then rolled back — and logged `Cross-instance resume
+    claimed run_id=…`; the run stayed `waiting`. Runs already stuck this way resume on the next
+    boot's rehydration.
+- **★ One consumer-visible change on `POST /platform/flows/runs/{id}/resume`:** each result now
+  carries `woken: bool`, and **`resumed` means *woken*, not "payload stored"**. A resume with
+  nothing registered to wake answers `200` with `payload_injected: true, woken: false,
+  resumed: false` and a WARNING; the payload stays on the row and is delivered on the next wake
+  after rehydration. A client that keyed on `resumed: true` to mean "stored" should read
+  `payload_injected`. (The app's routers do not call this route — checked in their 2.17.0
+  adoption.)
+- **One removal (#688): `AINDY.runtime.nodus_builtins` and `nodus_worker.WorkerWaitSignal` are
+  gone.** Nothing imported either (the app grepped: 0 hits). The guest wait they documented could
+  never have worked — a host-function exception does not propagate out of the nodus guest on any
+  version. The guest wait is now **`await_event(event_type, schema)`** (DEC-017): halts the
+  script at the call on the first run, returns the payload on the resumed run; the three state
+  keys remain the wire contract and still work if set directly.
+- **Boot log changes (#685):** the `[rehydrate] Found N waiting EU(s)` / `WAIT rehydration
+  registered N EU(s)` lines are gone with the step that emitted them (its callback never
+  committed; the flow path already resumes the unit). The condition code
+  `wait_eus_rehydration_failed` is retired — still listed, never emitted.
+- **Fixed, latent:** a flow run that completed with no `user_id` or `workflow_type` on its row
+  left its execution unit `executing` forever; the unit's `completed` transition is now
+  unconditional (#685). Route-started flows always carried both, so live tables should not change.
+- **CI now guards a defect class** (#686): a function that opens its own session and writes
+  through it without committing fails the unit job (`test_own_session_commits.py`). Four such
+  callbacks were found and fixed across #673, #679, #685 and #686.
+- **Decisions have a register again** (#687, DEC-010): every decision made in conversation is
+  recorded as `DEC-NNN` in `docs/governance/DECISION_LOG.md` in the PR that acts on it;
+  `DEC-011..020` back-fill this week's. Docs-only; no runtime change.
+
+### Removed — the boot-time EU-level WAIT rehydration; a flow's unit is finalised unconditionally (`EU-WAIT-SIGNAL-DEAD-1` follow-up, #685)
+
+- `AINDY.core.wait_rehydration.rehydrate_waiting_eus` is gone, with its startup step. It
+  re-registered every `execution_units` row in `waiting` with a scheduler callback that never
+  committed, and every such unit belongs to a flow run whose own rehydration already resumes it
+  (with a commit). Boot logs lose the `[rehydrate] Found N waiting EU(s)` / `WAIT rehydration
+  registered N EU(s)` lines. Nothing an operator did depends on them.
+- The condition code `wait_eus_rehydration_failed` is **retired**: still listed, never emitted.
+  Dashboards filtering on it keep parsing; `flow_run_rehydration_failed` is the live one.
+- **Fixed, latent:** a flow run that completed with no `user_id` or `workflow_type` on its row
+  (a scheduler-resumed run can have neither) left its execution unit `executing` forever — the
+  unit's `completed` transition lived inside a memory-capture hook that returned early. It is
+  now unconditional. Route-started flows always carried both, so the app's live tables should
+  show no change.
+
+### Fixed — a flow wait claimed by another instance is now actually resumed (`SESSION-COMMIT-1`, #686)
+
+- **Multi-instance deployments in thread mode (the default):** when the instance holding a
+  parked flow run died and another instance claimed its wait from the Redis registry, the
+  claim moved only the run's execution unit — on a session that then rolled it back — and never
+  resumed the run. The run stayed `waiting` forever while the log said
+  `Cross-instance resume claimed run_id=…`. The claimed callback now rebuilds the real resume
+  (claim → unit → flow) from the registry entry and commits; when the run cannot be rebuilt on
+  the claiming instance (its flow is not registered there, or the entry predates FR-15 and
+  carries no run id) the unit is moved and committed and a WARNING names the run that was not
+  resumed. Single-instance deployments and distributed mode are unaffected.
+- **Runs already stuck by this** (`flow_runs.status='waiting'` with no scheduler entry on any
+  live instance) resume on the next boot's rehydration, which re-registers every waiting run.
+- **CI now guards the class** (`tests/unit/test_own_session_commits.py`): any function that opens
+  its own session and writes through it without committing fails the unit job. Four such
+  callbacks were found and fixed across #673, #679, #685 and this PR; this is what a green check
+  means for that shape from now on.
+
+### Added — `await_event(event_type, schema)` is the Nodus guest wait; `nodus_builtins.py` removed (DEC-017, #688)
+
+- A guest script suspends its flow with **`let payload = await_event("event.name", <schema or nil>)`**:
+  on the first run the call sets the wait and halts the script exactly there; on the resumed run
+  the same call returns the payload delivered by `POST /platform/flows/runs/{id}/resume`. Pass a
+  schema (syscall dialect) to make the wait typed — a non-matching resume is refused with 422 —
+  or `nil` for untyped. The three state keys (`nodus_wait_requested`, `nodus_wait_event_type`,
+  `nodus_wait_resume_schema`) remain the wire contract and still work if set directly.
+- **Why not `wait`:** it is a reserved nodus built-in and cannot be registered over.
+- **Removed:** `AINDY.runtime.nodus_builtins` (the documented-but-never-wired `event.wait()` /
+  `memory.*` namespaces) and `nodus_worker.WorkerWaitSignal`. Nothing imported either; the
+  design they implemented — a host exception propagating out of the guest — is impossible on
+  every nodus version (host exceptions are swallowed into the script result).
+- Everything before `await_event()` runs again on resume; the script starts with an empty
+  namespace plus `nodus_received_events` (DEC-012). Guard phase-1 effects with the
+  `if (get_state("nodus_received_events") == nil)` branch unless they are mediated.
+
+### Fixed — a run parked across a restart resumes on the first wake of a fresh process (app FR-31, `RESUME-FLOW-UNREGISTERED-1`, #689)
+
+- **A Nodus run parked before a restart could not be resumed until some script had run in the new
+  process**, and the first attempt silently orphaned it (`resumed: true` on the wire, run `waiting`
+  forever, one `not in FLOW_REGISTRY` WARNING). `nodus_execute` is now registered at boot — in the
+  API and in the worker, which never registered the runtime-owned flows at all — and the resume
+  path resolves it on a miss as well. Pre-existing on every release; found by the app team on the
+  2.17.0 upgrade's own verification step. The "run any script first" workaround is no longer needed.
+- **An agent run parked by the authority WAIT gate (2.17.0) now survives a restart.** Its flow
+  name, `agent_execution`, was never registered anywhere. It is resolvable for **resume only** —
+  deliberately not registered publicly, since a `FLOW_REGISTRY` entry is startable through
+  `sys.v1.flow.run` and the agent flow checks tool capability only when an `execution_token` is
+  present (DEC-020).
+- **A wake whose flow this process genuinely does not hold re-arms the wait** instead of consuming
+  it; the run is not claimed and the next wake (after the plugin loads, or on another instance)
+  resumes it.
+- **`POST /platform/flows/runs/{id}/resume` now reports `woken`** on each result and `resumed`
+  means *woken*, not "payload stored". A resume with nothing registered to wake answers
+  `payload_injected: true, woken: false, resumed: false` (200) and warns; the payload stays on the
+  row and is delivered on the next wake after rehydration. Clients that keyed on `resumed: true`
+  to mean "stored" should read `payload_injected`.
+
+
 ## 2.17.0 — 2026-09-15
 
 **Operator notes — read before upgrading.**
