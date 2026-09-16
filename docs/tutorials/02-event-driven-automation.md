@@ -1,6 +1,6 @@
 ---
 title: "Tutorial 2 — Event-Driven Automation"
-last_verified: "2026-09-15"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -154,6 +154,12 @@ if (received == nil) {
 being readable in phase 2 — the script's `output_state` is stored under `nodus_output_state`,
 not merged top-level (same defect family).
 
+> **Since 2026-09-16 there is a one-call form (DEC-017):** `let approval = await_event("review.approved", <schema or nil>)`
+> halts the script at the call on the first run and returns the payload on the resumed run, so the
+> two phases can be written linearly. The script below keeps the explicit two-phase shape because
+> it was run live in this form and because the guard around phase 1 is still the right pattern
+> when phase 1 has effects (everything before `await_event` runs again on resume).
+>
 > **Optional, and worth doing: declare what may resume you.** Phase 2 reads
 > `approval["reviewer"]`, `approval["note"]` and `approval["approved"]`. As written, a resume
 > with `"payload": {}` is *accepted*, the wait is consumed, and the script fails on its second

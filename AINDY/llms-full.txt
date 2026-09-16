@@ -392,7 +392,7 @@ executes `.nodus` / `.nd` scripts via the `nodus-lang` Python package.
 
 `nodus_worker.py` (`AINDY/runtime/`) compiles and runs Nodus scripts with:
 - `DeferredMemoryBuiltins` (recall/search/write backed by the flow's `memory_context`)
-- `WorkerWaitSignal` — propagates WAIT semantics back to the flow engine
+- `await_event(event_type, schema)` — the guest wait: sets the wait keys and halts the script; returns the payload on the resumed run (DEC-017)
 - Deferred memory writes — collected during script execution, committed after completion
 
 Nodus and aindy-runtime together implement the full Infinity Algorithm execution loop.

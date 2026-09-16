@@ -10076,6 +10076,17 @@ whether (a) is worth doing. This is also the natural home for `QUEUE-DURABILITY-
 
 ## GUEST-BUILTINS-DEAD-1 — the documented guest `event`/`memory` API is unreachable, and a green test guards it
 
+**Status: CLOSED 2026-09-16 (DEC-017).** Step 2 decided (the guest gets `await_event(event_type,
+schema)`, a host function over the three state keys, which remain the wire contract) and step 3
+done (`nodus_builtins.py` and `WorkerWaitSignal` deleted; `test_mem_nodetype_default.py`'s second
+assertion re-pointed at the LIVE guest write, the worker's memory bridge). **★ Two facts measured
+before deciding, both fatal to the raise-based design as written:** nodus 5.13 SWALLOWS a
+host-function exception into an `{"ok": False}` result, so `NodusWaitSignal`/`WorkerWaitSignal`
+could never have crossed the guest boundary on any version; and `wait` is a RESERVED nodus
+built-in that cannot be registered over. The halt still works because the worker checks
+`nodus_wait_requested` before `ok`. `tests/unit/test_guest_await_event.py` — real worker, real
+interpreter, both runs, end to end through the runner and the typed resume; mutation 4/4.
+*(Original status line follows for the record.)*
 **Status: OPEN — P2.** Filed 2026-09-10, measured at HEAD. Nothing is broken at runtime; what is
 wrong is that the runtime *documents and tests* a guest-facing API no execution path can reach.
 
@@ -13004,6 +13015,11 @@ nowhere; recovered and re-homed under Closed with the phase-3a PR.**
 
 ## WAIT-TYPED-CONTRACT-1 — a resume payload is trusted, not checked
 
+**Status: CLOSED 2026-09-16.** Phase 1 shipped 2026-09-15 (#677); the guest-wait product
+decision — the last open half — is DEC-017 (`await_event()` over the three keys), shipped with
+`GUEST-BUILTINS-DEAD-1`'s close. The request-EU path was removed (#679). Remaining P1 promotion
+trigger (a webhook/MCP/connector becoming a payload path) is a condition to watch, not work.
+*(Original status line follows for the record.)*
 **Status: PHASE 1 SHIPPED 2026-09-15 — OPEN (P2) for the request-EU path and the guest-wait
 product decision.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`. **The phase-1
 record is at the end of this entry; the text between is the filing, kept as written.**

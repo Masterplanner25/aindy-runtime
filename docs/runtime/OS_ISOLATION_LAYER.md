@@ -209,13 +209,15 @@ publish_event("task.completed", correlation_id="chain-abc")
 
 Nodus flows can pause execution and wait for an external signal:
 
-1. Flow node calls the Nodus **builtin** `event.wait("approval.granted")`.
+1. The guest script calls `await_event("approval.granted", schema)` — a host function the
+   worker registers (`nodus_worker.py`), which sets the three wait keys and halts the script;
+   the `nodus.execute` node returns `WAIT` and the flow engine suspends the run.
 
-   > **Corrected 2026-08-13: `sys.v1.event.wait` is not a registered syscall.** Only
-   > `sys.v1.event.emit` exists in `SYSCALL_REGISTRY`. WAIT is a Nodus builtin
-   > (`AINDY/runtime/nodus_builtins.py`) that raises `WorkerWaitSignal` out of the worker; the
-   > flow engine catches it and suspends. This is the same error already corrected in
-   > `docs/tutorials/02-event-driven-automation.md` under DOCS-BUCKET-A-1 — it survived here.
+   > **Corrected 2026-08-13 and again 2026-09-16.** `sys.v1.event.wait` is not a syscall (only
+   > `sys.v1.event.emit` exists). The 08-13 correction then said WAIT was a builtin in
+   > `nodus_builtins.py` that "raises `WorkerWaitSignal` out of the worker" — that module had no
+   > importer and a host exception cannot propagate out of the nodus guest on any version, so it
+   > never worked (`GUEST-BUILTINS-DEAD-1`; both deleted under DEC-017).
 2. `SchedulerEngine.register_wait(run_id, ...)` stores the callback in `_waiting`.
 3. When the event fires, `publish_event(event_type)` is called.
 4. `notify_event()` matches `_waiting` entries, deletes them under lock, and re-enqueues callbacks.
