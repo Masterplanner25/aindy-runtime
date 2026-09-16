@@ -11656,6 +11656,27 @@ constraint is unchanged and still gates the Rust work; nothing in A–D depends 
 
 ## ROUTE-AST-UNWIRED-1 — the boot-time route proof exists and is never run against the application
 
+**Status: CLOSED 2026-09-16 (#698) — option 2 taken as DELETE (DEC-023), option 1 done.**
+`validate_registered_route_execution` and its AST machinery (`_ModuleAnalysis`, `_analyse_module`,
+`_function_uses_pipeline`, `_route_uses_execution_pipeline`) are removed; the request-time
+wrapper is the sole mechanism and the module docstring now says exactly what it guarantees —
+including the half the old docstring did not: enforcement is REQUIRED only where the router
+declared `require_execution_context`; admin, user-owned-agent and automation-log routers are
+wrapped but not required (`routing.py` says why). The claim is corrected where it lived:
+`EXECUTION_CONTRACT.md`'s status note had over-corrected in the other direction ("nothing in
+this repo checks that routes enter through `execute_with_pipeline`") — the wrapper does, per
+request. **The boot-time property that IS true is now pinned over the real app:** a derived
+census of every non-exempt route `register_routes` installs (>50, asserted non-empty) carries
+the wrapper; unwiring `enforce_registered_route_execution` in `routing.py` turns it red
+(mutation 1/1). The one test that referenced the validator kept its useful half (the alias
+route works under the wrapper) and lost the `pytest.raises` that documented the false
+positive. **Why delete rather than teach:** cross-module, alias-aware call resolution is a
+static analyser, and its only gain over the request-time refusal is catching a bypass before
+the first request — on a surface FR-25b's per-route probe already drives. Catalogue variant 8
+stays listed; it is history.
+
+### Original entry (2026-08-15) — retained
+
 **Status: OPEN — P2 (documentation/assurance, not a live hole).** Found 2026-08-15 while
 verifying the *invariants* the three audits credit the runtime with, rather than their gaps.
 

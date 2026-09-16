@@ -1,13 +1,29 @@
-"""Strong runtime enforcement for managed route execution."""
+"""Request-time enforcement of the route execution contract.
+
+`enforce_registered_route_execution(app)` runs once at boot (`routing.py`) and WRAPS every
+registered, non-exempt `APIRoute`. The wrapper is the guarantee, and it is request-time: on
+each call it marks the endpoint entered and, after the handler returns, raises
+`RouteExecutionViolation` if the router declared the contract (`require_execution_context`)
+and the handler never entered the pipeline — so a bypass fails the request rather than
+serving it. Routers registered WITHOUT the dependency (admin, user-owned agents, automation
+logs: plain DB-query handlers) are wrapped but not required.
+
+★ There is no boot-time static proof, and there deliberately is not one (DEC-023,
+`ROUTE-AST-UNWIRED-1`). This module used to carry `validate_registered_route_execution`, an
+AST walk over each endpoint's module that raised at "boot" if the endpoint could not reach
+`execute_with_pipeline` by name — never called by the application, and by its own test it
+rejected a route that works (a module-level alias of the pipeline helper). An unrunnable
+stricter twin next to the real guard is what let the boot-time refusal be CLAIMED; it was
+deleted rather than wired. The boot-time property that IS true — every non-exempt route on
+the registered app is wrapped — is pinned by a derived census in
+`tests/unit/test_route_execution_guard.py`.
+"""
 
 from __future__ import annotations
 
-import ast
 import inspect
 import logging
-from dataclasses import dataclass
-from functools import lru_cache, wraps
-from pathlib import Path
+from functools import wraps
 from typing import Any, Generator, Iterable
 
 from fastapi import Request
@@ -22,99 +38,12 @@ from AINDY.core.execution_guard import (
 
 logger = logging.getLogger(__name__)
 
-_PIPELINE_CALLS = {"execute_with_pipeline", "execute_with_pipeline_sync"}
 _ROUTE_WRAPPED_ATTR = "_aindy_execution_wrapped"
 _ROUTE_ENDPOINT_ATTR = "_aindy_original_endpoint"
 
 
 class RouteExecutionViolation(RuntimeError):
     """Raised when a registered route bypasses the execution pipeline."""
-
-
-@dataclass(frozen=True)
-class _ModuleAnalysis:
-    direct_pipeline_functions: frozenset[str]
-    call_graph: dict[str, frozenset[str]]
-
-    def function_uses_pipeline(self, function_name: str) -> bool:
-        return _function_uses_pipeline(
-            function_name,
-            self.direct_pipeline_functions,
-            self.call_graph,
-            seen=frozenset(),
-        )
-
-
-def _called_function_name(node: ast.Call) -> str | None:
-    func = node.func
-    if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    return None
-
-
-def _function_uses_pipeline(
-    function_name: str,
-    direct_pipeline_functions: frozenset[str],
-    call_graph: dict[str, frozenset[str]],
-    *,
-    seen: frozenset[str],
-) -> bool:
-    if function_name in direct_pipeline_functions:
-        return True
-    if function_name in seen:
-        return False
-    for callee in call_graph.get(function_name, frozenset()):
-        if _function_uses_pipeline(
-            callee,
-            direct_pipeline_functions,
-            call_graph,
-            seen=seen | {function_name},
-        ):
-            return True
-    return False
-
-
-@lru_cache(maxsize=None)
-def _analyse_module(module_path: str) -> _ModuleAnalysis:
-    path = Path(module_path)
-    source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=module_path)
-
-    direct_pipeline_functions: set[str] = set()
-    call_graph: dict[str, set[str]] = {}
-
-    for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        function_name = node.name
-        calls: set[str] = set()
-        for child in ast.walk(node):
-            if not isinstance(child, ast.Call):
-                continue
-            called_name = _called_function_name(child)
-            if called_name is None:
-                continue
-            calls.add(called_name)
-            if called_name in _PIPELINE_CALLS:
-                direct_pipeline_functions.add(function_name)
-        call_graph[function_name] = calls
-
-    return _ModuleAnalysis(
-        direct_pipeline_functions=frozenset(direct_pipeline_functions),
-        call_graph={name: frozenset(calls) for name, calls in call_graph.items()},
-    )
-
-
-def _route_uses_execution_pipeline(route: APIRoute) -> bool:
-    endpoint = inspect.unwrap(getattr(route, _ROUTE_ENDPOINT_ATTR, route.endpoint))
-    module = inspect.getmodule(endpoint)
-    source_file = inspect.getsourcefile(endpoint)
-    if module is None or source_file is None or not source_file.endswith(".py"):
-        return False
-    analysis = _analyse_module(source_file)
-    return analysis.function_uses_pipeline(endpoint.__name__)
 
 
 def _route_request_parameter_name(route: APIRoute) -> str | None:
@@ -327,25 +256,3 @@ def enforce_registered_route_execution(app) -> None:
     for ir in included_routers_to_invalidate.values():
         ir._effective_candidates = []
         ir._effective_candidates_version = None
-
-
-def validate_registered_route_execution(app) -> None:
-    violations: list[str] = []
-
-    for route, _ in _iter_api_routes(app.routes):
-        if is_execution_exempt_path(route.path):
-            continue
-        if _route_uses_execution_pipeline(route):
-            continue
-        endpoint = inspect.unwrap(getattr(route, _ROUTE_ENDPOINT_ATTR, route.endpoint))
-        methods = ",".join(sorted(route.methods or []))
-        violations.append(
-            f"{methods} {route.path} -> {endpoint.__module__}.{endpoint.__name__}"
-        )
-
-    if not violations:
-        return
-
-    message = ["RouteExecutionViolation: registered routes bypass execution pipeline heuristics:"]
-    message.extend(f"  {line}" for line in violations)
-    raise RouteExecutionViolation("\n".join(message))

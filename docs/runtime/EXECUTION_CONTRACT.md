@@ -1,6 +1,6 @@
 ---
 title: "Execution Contract"
-last_verified: "2026-09-15"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -633,8 +633,16 @@ Status note:
 > (ruff) in `runtime-ci.yml`, which enforces style, not this contract.
 >
 > So the sentence *"Compile-time enforcement now exists"* is false for `aindy-runtime`. If the
-> linter exists at all it is app-side; nothing in this repo checks that routes enter through
-> `execute_with_pipeline`. The four bullets below describe the monolith at the time of writing.
+> linter exists at all it is app-side. **What this repo DOES have is request-time enforcement**
+> (corrected 2026-09-16, DEC-023): `enforce_registered_route_execution` wraps every registered,
+> non-exempt route at boot, and on each request the wrapper raises `RouteExecutionViolation`
+> if a router that declared `require_execution_context` returned without entering the
+> pipeline — a bypass fails the request. There is no compile-time or boot-time static proof,
+> and deliberately none: the AST validator that used to sit beside the wrapper was never
+> called and rejected working routes (`ROUTE-AST-UNWIRED-1`); it was deleted. The boot-time
+> fact that holds — every non-exempt route is wrapped — is pinned by a derived census in
+> `tests/unit/test_route_execution_guard.py`. The four bullets below describe the monolith at
+> the time of writing.
 
 - Route-level normalization improved materially after introduction of `core/execution_pipeline/` and `core/execution_helper.py` (`execute_with_pipeline` — real, still the entry helper).
 - That change unifies request-scoped trace creation, best-effort lifecycle event emission, and response passthrough on several legacy route groups without yet introducing a single persisted `ExecutionRecord` model.
