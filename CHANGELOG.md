@@ -4,6 +4,155 @@
 
 _Nothing yet._
 
+## 2.17.0 — 2026-09-15
+
+**Operator notes — read before upgrading.**
+
+- **This is a plain `pip install`. No migration.** The Alembic head is unchanged at `0018` and
+  `SCHEMA_CONTRACT_VERSION` did not move (`2026-09-10`) — no `AINDY/db/models/` or
+  `memory_persistence.py` change this release. `bootstrap-schema --reconcile` is not needed.
+- **★ One removal (#679): `AINDY.core.execution_gate.ExecutionWaitSignal` is gone.** Nothing in
+  any repo raised it; importing the name now fails. A request's `execution_units` row can no
+  longer enter `waiting` by any path — it completes when its handler returns. Rows of a route
+  type still `waiting` predate this and are unreachable: retire them with
+  `UPDATE execution_units SET status='failed' WHERE status='waiting' AND source_type='route';`
+  (the ~10 kept as FR-29 evidence included).
+- **★ Three unflagged behaviour changes on paths you may already use:**
+  - **`POST /platform/flows/runs/{id}/resume` no longer silently fails to wake the run when the
+    payload carries a `correlation_id` key of your own** (#678). Before, the payload was injected
+    and the wake vetoed — `resumed: true` on the wire, run parked forever. Runs stuck `waiting`
+    with `state.event` already set are this; resume them again.
+  - **The same route can now answer `422`** — only for a run whose waiting node declared a
+    `resume_schema` (#677). No in-tree node declares one yet; a client that never sees 422 today
+    will not start seeing it until a flow opts in.
+  - **A cancelled agent run stops sooner** (#682): a syscall dispatched inside its execution
+    span is refused before the handler runs, and an isolated tool's worker is terminated and
+    killed instead of running to its 120 s budget. Cancelled runs may report more refused
+    effects and fewer completed ones than before; that is the mechanism, measurable on
+    `aindy_run_cancel_observed_total{surface}` (`syscall`, `tool_worker` are new labels).
+- **New, opt-in, all default-off / declaration-gated:** named flow predicates
+  (`{"target", "when": "<name>"}` + `@register_predicate`, #680); typed wait payloads
+  (`resume_schema` on a WAIT / `nodus_wait_resume_schema` in a guest, #677); the authority WAIT
+  gate (`register_tool(on_denial="wait")`, behind the existing `AINDY_AUTHORITY_NEGOTIATION`,
+  #681). **Migration note for #680:** converting an existing edge from `condition` to `when`
+  changes that flow's graph signature once, so runs suspended on it at upgrade time are
+  quarantined — migrate flows with parked runs behind a drain. Every existing flow's digest is
+  unchanged by this release.
+- **New counters:** `aindy_flow_resume_payload_total{outcome}`,
+  `aindy_authority_negotiation_total` gains `waiting | gate_skip | gate_abort`,
+  `aindy_run_cancel_observed_total` gains `syscall | tool_worker`.
+
+### Added — a resume payload is checked against what the waiting node declared (`WAIT-TYPED-CONTRACT-1` phase 1, #677)
+
+- A flow node returning `WAIT` may declare **`resume_schema`** — in the syscall registry's own
+  schema dialect (`required` + `properties[<name>].type`), validated by the same function
+  `SyscallDispatcher.dispatch()` applies to syscall inputs. The runtime records it on the run
+  (`state["__pending_request"] = {node, event, schema}`, only when declared) and
+  **`POST /platform/flows/runs/{id}/resume` now answers `422`** — with the validator's errors
+  under `detail.errors` — for a payload that does not satisfy it. Nothing is injected, nothing
+  is woken; the run stays `waiting` and the caller may correct and retry.
+- Nodus scripts declare it with a third state key beside the two wait keys:
+  `set_state("nodus_wait_resume_schema", {...})`.
+- New counter `aindy_flow_resume_payload_total{outcome="accepted|rejected|untyped"}`.
+- **No behaviour change for any existing flow**: a wait that declares nothing is `untyped` and
+  accepts any payload, exactly as before. Why it was worth adding: an untyped resume with an
+  empty payload was *accepted*, the wait consumed, and Tutorial 2's script failed on its re-run
+  — the malformed resume was not refused at the door, it destroyed the run one step later.
+- Deliberately a state key, not a column — no schema step, no `bootstrap-schema --reconcile`
+  owed. Consequence: the DUR-4 history fold does not reconstruct the record, so a run recovered
+  from a torn snapshot resumes untyped (absent is never a mismatch).
+- Recorded decision: a resumed Nodus script does **not** get its prior `nodus_output_state`
+  seeded back — the two-phase run-from-the-top shape stays the contract.
+
+### Fixed — one correlation rule for waking a wait, on every instance; a run-scoped wake is decisive (`WAIT-PAYLOAD-PATH-1`, #678)
+
+- **`POST /platform/flows/runs/{id}/resume` no longer fails silently when the payload carries a
+  `correlation_id` key.** The route read that key as the wake's correlation; if it differed from
+  the run's trace (a client's own reference always does), the payload was injected and the wake
+  was vetoed — `resumed: true` on the wire, run parked forever. A wake that names a run is now
+  never vetoed by correlation. If you have runs stuck `waiting` with `state.event` already set,
+  this is why; resume them again.
+- The local scan and the cross-instance fallback applied different correlation rules — a wait
+  registered without one resumed locally on any emit and never on another instance (it waited
+  for the resume watchdog). One predicate now (`scheduler/common.py::correlation_admits`): veto
+  only when both the wait and the emit carry a correlation and they differ.
+- Decided and documented: the event bus never carries a payload. The payload's home is the run's
+  row, committed before the wake — which is what makes a resume reconstructible from `run_id`
+  alone. Any future payload path writes the row, then wakes by `run_id`.
+
+### Removed — `ExecutionWaitSignal`; a request's execution unit can never enter `waiting` (`EU-WAIT-SIGNAL-DEAD-1`, #679)
+
+- `AINDY.core.execution_gate.ExecutionWaitSignal` is gone, with the pipeline branches that
+  honoured it. It promised that a route handler could park the *request's* execution unit to
+  be resumed later — unfulfillable by construction (a route has already answered its client;
+  nothing re-executes a request), raised by nothing in any repo, and its resume callback
+  rolled back on session close, so a parked unit stayed `waiting` forever. Importing the name
+  now fails; no consumer did.
+- Behaviour: a request's `execution_units` row always reaches `completed`/`failed` when its
+  handler returns, whatever shape the handler returned. The pipeline no longer emits
+  `execution.waiting` or sets `metadata.eu_wait_for` (both were reachable only via the signal).
+- **Operators:** any `execution_units` row of a route type still in `waiting` predates this
+  and is unreachable by any path — including the ~10 the app kept as FR-29 evidence. The
+  retire `UPDATE` offered in the 2.16.0 handoff applies to them.
+
+### Added — named flow predicates; a named decision is part of the graph signature (`FLOW-PARALLEL-1` phase 3a, #680)
+
+- A conditional edge may declare `{"target": …, "when": "<name>"}` naming a predicate registered
+  with `@register_predicate("<name>")` (a pure function of state), beside the existing
+  `{"target": …, "condition": <callable>}` form. `"default"` is built in and always matches — the
+  named form of `lambda s: True`. An ordered list of `when` edges ending in `default` is a
+  switch-case: first match wins, explicit default, and a non-terminal node with no match fails
+  the run (as before).
+- **A `when` naming an unregistered predicate fails the run** with the name in the reason — it
+  never silently falls through. Rebinding a registered name to a different callable is refused.
+- **The graph signature now includes the NAME of a named predicate.** Rename or reroute the
+  decision gating a named edge and a run suspended under the old decision is quarantined on
+  resume (`FLOW-GRAPH-SIGNATURE-1`'s documented blind spot, closed for named edges; callable
+  predicates are still not hashed).
+- **Migration note:** converting an existing edge from `condition` to `when` changes that flow's
+  signature once, so runs suspended on it at upgrade time are quarantined. Migrate flows with
+  parked runs behind a drain. The runtime's own flows (`AGENT_FLOW`, `NODUS_SCRIPT_FLOW`) are
+  unchanged for exactly this reason; every existing flow's digest is byte-for-byte what it was.
+- Recorded decision: `SwitchCaseEdgeGroup` (design §8 phase 3b) is not being added — the `when`
+  list already has its semantics.
+
+### Added — a refused agent step can park the run for an operator's decision (`AUTHORITY-NEGOTIATION-1` phase 2, #681)
+
+- `register_tool(..., on_denial="wait")` (default `"fail"`, today's behaviour). When a tool is
+  refused for lack of authority and no declared `degraded_variant` recovers it, the agent run
+  now **parks** instead of failing: the `FlowRun` waits on `agent.authority.decision`, the
+  `AgentRun` is `waiting` with a durable `wait_state`, and the accumulated steps survive.
+- Resume with `POST /platform/flows/runs/{flow_run_id}/resume`,
+  `{"event_type": "agent.authority.decision", "payload": {"decision": "skip"|"abort", "note": "…"}}`.
+  `skip` records the step as `skipped` and continues; `abort` fails the run with your reason.
+  There is no `grant` — the gate cannot widen authority; an unknown decision re-parks the run
+  (recorded as `last_refused_decision`); a payload without `decision` is refused with `422`.
+- Behind the existing `AINDY_AUTHORITY_NEGOTIATION` flag (default off). Counter labels added:
+  `waiting`, `gate_skip`, `gate_abort` on `aindy_authority_negotiation_total`.
+- **Fixed on the way, on the default `agent_flow` backend:** a failure that happened *after* a
+  resume never reached the `AgentRun` (it stayed `waiting`/`executing`); the run is now marked
+  `failed` and its execution unit synced, whichever thread finishes it.
+
+### Fixed — a cancelled agent run is refused at the syscall dispatcher, and its isolated tool worker is killed (`CANCEL-REACH-1`, #682)
+
+- **Second chokepoint:** a syscall dispatched inside a cancelled run's execution span is now
+  refused before its handler runs (`aindy_run_cancel_observed_total{surface="syscall"}`). The
+  run identity is read from the execution span (`llm_attribution_scope`), so nothing changes
+  for routes that are not agent runs. If the syscall had reserved an `EXACTLY_ONCE` effect
+  record, the refusal completes it `failed` rather than leaving it `pending`.
+- **Isolated tools (`register_tool(isolation=…)`):** a cancelled run's isolated tool is no longer
+  spawned at all — the isolated branch used to return before the cancel check — and one that
+  is already running is **terminated and killed** when the run is cancelled (polled every 0.5 s;
+  the predicate's 2 s TTL bounds database reads), reported as
+  `{surface="tool_worker"}`. Before this the worker died only to its 120 s budget; the claim
+  that the path was "hard-killable by its isolation class" described a mechanism nothing
+  invoked.
+- The cancel check on the in-process tool path now also finalizes a reserved idempotent effect
+  record `failed` on refusal (it returned without doing so).
+- Unchanged: cancellation is still cooperative for an in-process tool already executing, still
+  fails open on an unreadable status, and still never queries per effect.
+
+
 ## 2.16.0 — 2026-09-15
 
 **Operator notes — read before upgrading.**
