@@ -1,6 +1,6 @@
 ---
 title: "Design Records"
-last_verified: "2026-09-13"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -26,7 +26,7 @@ its reasoning has been carried into a contract, which so far has never happened.
 
 ## Index
 
-| Document | Owner | Status (2026-09-13) | What it decides |
+| Document | Owner | Status (2026-09-16) | What it decides |
 |---|---|---|---|
 | [`AUTHORITY_NEGOTIATION_DESIGN.md`](./AUTHORITY_NEGOTIATION_DESIGN.md) | `AUTHORITY-NEGOTIATION-1` | **In flight** — phases 0+1 shipped (#600, 09-10); 2–3 design only | A denied capability gets one bounded, downgrade-only retry that cannot grant authority. **§2 overturns the entry's own proposed primitive.** |
 | [`C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`](./C3_NON_LINUX_STRONG_SANDBOX_PLAN.md) | `C3` | **Preparation, unscheduled** — phases 0–5 done; the native non-Linux strong-VM runner waits on a trigger | Windows-native and macOS tracks for `strong-sandbox-certified` off Linux, so either can start on day 1. |
@@ -35,12 +35,20 @@ its reasoning has been carried into a contract, which so far has never happened.
 | [`EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`](./EXECUTION_ENVIRONMENT_SPEC_DESIGN.md) | `EXEC-ENV-BIND-1` | **Complete 2026-09-13** — all four phases (#567, #639) | The `ExecutionEnvironmentSpec` vocabulary: what a unit *requires* (visibility, authority, resources, `min_assurance`), clamped to a seam's floor. Header corrected 09-13 — it said phases 3–4 were still design. |
 | [`FLOW_PARALLEL_DESIGN.md`](./FLOW_PARALLEL_DESIGN.md) | `FLOW-PARALLEL-1` | **In flight** — phases 0–2 shipped (#603, 09-10, #640); 3–4 design only | Fan-out as one superstep with a barrier; join policies `all` / `any` / `quorum`; the runtime's first `partial` emitter. |
 | [`FR27_ADVISORY_LOCK_DESIGN.md`](./FR27_ADVISORY_LOCK_DESIGN.md) | `FR-27` | **Approved + shipped 2026-09-12** (#627), opt-in `AINDY_SYSCALL_IDEMPOTENCY_STRICT` | Strict at-most-once under contention via a session-level advisory lock with explicit unlock; the measured prototype (N−1 of N) is in the doc. |
+| [`LEASE_FENCE_DESIGN.md`](./LEASE_FENCE_DESIGN.md) | `LEASE-FENCE-1` | **Design only (2026-09-16)** — proposal under §3/§8 (one column, Alembic `0019`) | One `fence` integer, incremented on takeover; checked `FOR SHARE` inside a leader-only job's transaction. **§2 finds the least-idempotent job is the one `CLAUDE.md` says not to guard twice.** |
 | [`LLM_SEAM_ADOPTION_SCOPE.md`](./LLM_SEAM_ADOPTION_SCOPE.md) | `COST-GOVERNOR-1` | **Superseded by events** — governor shipped 2026-09-13 (#638) | Why the governor waited on a real consumer being routed through the seam first. The ordering, not the design. |
 | [`MEDIATED_EFFECT_BOUNDARY_PROGRAM.md`](./MEDIATED_EFFECT_BOUNDARY_PROGRAM.md) | `IDEM-10`, `ECOGAP-4` G4a | **Complete 2026-07-11** — MEB-0..3b shipped; the gate defaulted on in 2.5.0 | One primitive (`EffectRecord`) at two chokepoints (`execute_tool`, the dispatcher). Live contract: `docs/runtime/IDEMPOTENCY_CONTRACT.md`. |
+| [`OTEL_GENAI_SEMCONV_DESIGN.md`](./OTEL_GENAI_SEMCONV_DESIGN.md) | `OTEL-GENAI-SEMCONV-1` | **Design only (2026-09-16)** | **§1: HEAD emits two span kinds and no LLM/tool/agent span — there is nothing GenAI-shaped to rename.** Three additive span kinds at three existing seams; the meter folds into the span helper; content capture stays out. |
 | [`PROVIDER_BREADTH_PROGRAM.md`](./PROVIDER_BREADTH_PROGRAM.md) | `ECOGAP-3` | **Complete 2026-07-12** (#241); more providers on demand | Embedding-provider abstraction with a configurable dimension and `memory reembed`; §3.2's dimension-migration constraint is cited from `embedding_providers.py`. |
+| [`RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md`](./RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md) | `RETRY-CLASSIFY-1`, `RETRY-CONTEXT-1` | **Design only (2026-09-16)** — proposal under §8 | One `FailureRecord` for both entries: a class set at the raising site, the substring table as a recorded fallback; the carried failure rides a **scope, never an argument** (the `EffectRecord` key). **§2: `execute_with_retry` has zero callers; §3: the classifier is wrong on the runtime's own refusals.** |
+| [`SYSEVENT_RETENTION_DESIGN.md`](./SYSEVENT_RETENTION_DESIGN.md) | `SYSEVENT-RETENTION-1` | **Design only (2026-09-16)** — proposal under §8 | Prune **leaves only** — four `NO ACTION` FKs make a referenced row undeletable and the one `CASCADE` is on the causal graph; a class per type, unclassified = keep, `report` before `prune`. |
 | [`TOOL_SEAM_ISOLATION_SCOPE.md`](./TOOL_SEAM_ISOLATION_SCOPE.md) | `TOOL-SEAM-ISOLATION-1` | **Closed 2026-08-19** — A, B, C1, C2 all shipped | How the tool seam was measured against source before anything was built; the status table inside tracks each step. Header corrected 09-13 — it said "no code". |
 | [`WITNESS_AND_BASELINE_SCOPE.md`](./WITNESS_AND_BASELINE_SCOPE.md) | `SUBSTRATE-WITNESS-1`, `PERF-BASELINE-1` | **Open (P1)** — both are consumer-shaped, not code-shaped | Why neither closes with a synthetic fixture: what is missing is a consumer that would *notice* if the guarantee broke. |
 | [`WORKFLOW_STORE_DECLARATION_PROPOSAL.md`](./WORKFLOW_STORE_DECLARATION_PROPOSAL.md) | `ORCHESTRATOR-SPLIT-1` store 4 | **Approved + implemented 2026-09-09** (#611); the entry's (a) and (b) untouched | The worker *declares* its guest workflow store (`sqlite`, autosweep off) rather than migrating it; §8 is the decision. |
+
+**Not in this folder but of this kind:** `ORCHESTRATOR-SPLIT-1` (b) — *publish the ownership contract* — is a
+contract, so it lives with the others in [`docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md`](../runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md).
+Its §7 carries the design decision the entry still owes (decline option (a) until the runtime reads guest state).
 
 ## Conventions
 

@@ -9478,6 +9478,26 @@ Batch-delete like `cascade_cleanup.prune_cascade_debris`, and log what was dropp
 **Do not close this by documenting a `DELETE` for an operator to run.** That is the FR-18
 mitigation, and it is what every deployment is doing by hand right now.
 
+### ★ DESIGN FILED 2026-09-16 — `docs/design/SYSEVENT_RETENTION_DESIGN.md`
+
+**The foreign keys decide more than this entry assumed, and they fail closed.** Five columns
+reference `system_events.id`: `system_events.parent_event_id` (self), `agent_events.system_event_id`,
+`memory_nodes.source_event_id` and `.root_event_id` — all `NO ACTION`, so **a referenced event
+cannot be deleted at all**; and `event_edges.source_event_id` / `.target_event_id` — **`CASCADE`**,
+so deleting an edge's endpoint silently removes the edge that `build_trace_graph` and
+`get_downstream_effects` read. Two consequences: a naïve batch `DELETE` on a real deployment
+*aborts* on the first parent row (a job that aborts hourly is `SYSMAX-5`'s brownout with a new
+cause), and the one place the database would *let* a delete through is the causal graph — the
+exact "missing row reads as never happened" failure `EVENT-OUTBOX-1` describes. **Rule: prune
+leaves only** — no inbound reference from any of the five columns — then class by type.
+**The census "per type" needs does not exist as an enum:** `SystemEventTypes` declares 46 names and
+the runtime emits **22 more as literals** (`watchdog.scan.completed`, `capability.*`, `auth.*`,
+`dlq.drained`…), and the app registers its own via `register_event_type` — so the class table is a
+registry seeded by the runtime and extended by the app, unclassified = keep, with a gauge of rows
+in unclassified types as the pressure to classify. Seed classes, `autonomy.decision` as the one
+decision to make explicitly, `report` mode before `prune`, committed batches, per-type counter —
+all in the design; no schema. Awaiting approval under §8.
+
 ## IDEM-12 — `agent.undo` re-invokes every compensator when called twice
 
 **Status: CLOSED 2026-09-16 (#696).** Reproduced first — two reversible effects, two undos,
@@ -10277,6 +10297,27 @@ proposal under `AGENT_WORKING_RULES` §8 — it is not an agent's call to make.
 domains is a defensible design — but it is currently *undocumented*, which means it cannot be
 relied on or reviewed. Writing the contract is cheap, and it is the prerequisite for deciding
 whether (a) is worth doing. This is also the natural home for `QUEUE-DURABILITY-CLASS-1`.
+
+### ★★ (b) PUBLISHED 2026-09-16 — `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md`
+
+**The premise holds and the conclusion drawn from it does not.** There is no shared transaction;
+there is a **single authority per unit of work** — `flow_runs` for flow work, `agent_runs` for
+agent work, `job_logs` for async jobs — and every other store is *derived* (the scheduler's
+`_waiting` and the event-bus buffer, rebuilt at boot), a *transport* (the queue; a message is
+never the authority for the work it names), a *ledger* (`effect_records`, the one cross-store
+guarantee), or **write-only** (stores 3 and 4). **The concrete failure mode above — host re-runs a
+segment while the guest rehydrates its own claim/wait state — requires an actor that does not
+exist at HEAD:** the runtime never reads store 4 (zero references under `AINDY/`), nodus's sweep
+can only dead-letter (`#733`: *"has no way to resume anything"*) and is declared off since #611,
+and a resumed node runs a fresh VM that creates a *new* record (DEC-012). Two records of one run,
+not two executions; the disagreement is confined to a store nothing reads. The contract makes that
+a rule (INV-OWN-003: no guest-side resumer without first choosing which store is authoritative for
+the same run) and pins it by a derived census. **§7 recommends DECLINING (a) — `WorkflowStore` over
+Postgres — at HEAD:** it would give the authority table a second copy of runs it already tracks,
+written by the guest and read by nobody; the trigger that reopens it is the first time the runtime
+wants to *read* guest run state. `QUEUE-DURABILITY-CLASS-1` folds into the contract's §6 Redis row
+as suggested above. **Entry closes on the contract plus that recorded decision (`DEC-NNN` on
+approval); until then it stays open for the decision only.**
 
 ---
 
@@ -13847,6 +13888,27 @@ either request alone**, and it is the same convergence pattern recorded on `EMBE
 gated on release discipline, not engineering — but it does mean the interop value is not
 speculative.
 
+### ★ DESIGN FILED 2026-09-16 — `docs/design/OTEL_GENAI_SEMCONV_DESIGN.md` — and the premise was off
+
+**Measured at HEAD: the runtime emits exactly two OTel span kinds — `syscall.{name}`
+(`syscall_dispatcher.py:824`, five attributes) and `async_job.{task}` (`async_job_service.py:1281`)
+— and `set_attribute` has zero call sites. There is no span around an LLM call, a tool execution
+or an agent run.** The richness this entry credits us with is real and lives in Prometheus
+(`aindy_llm_*`, 52 families) and the `SystemEvent` graph, not in OTel. So "adopt the conventions"
+is not a rename of a public surface gated on release discipline — there is nothing GenAI-shaped to
+rename. It is an **additive emit** of three span kinds at three chokepoints that already exist:
+the LLM seam (the four provider clients, each already bracketed by `llm_budget` before and
+`observe_llm_usage` after — the meter folds *inside* the new span helper so a client cannot do one
+without the other, and the derived census guard from `COST-GOVERNOR-1` gains one `With` node to
+find), `execute_tool`, and `execute_run` (where `llm_attribution_scope` already marks the same
+lifetime). `extract_token_usage` already returns the `gen_ai.usage.input_tokens`/`output_tokens`
+pair. The **only genuine rename** is `user.id` → `enduser.id` on the two existing span kinds — one
+release both, then drop. Prometheus names untouched; `gen_ai.client.*` metrics emitted beside them
+via a `MeterProvider` `otel.py` does not yet initialise. Content capture explicitly out. **Gotcha
+for the implementer: the conventions are still *Development*-stability upstream and
+`gen_ai.system` has already been renamed to `gen_ai.provider.name` — pin the semconv package and
+read keys from it.** Decisions in the design §8.
+
 ---
 
 ## SUBSTRATE-WITNESS-1 — the substrate claim has no first-party consumer that exercises it
@@ -14297,6 +14359,25 @@ needs both *what failed* and *what class of failure it was*.
 **Related:** `EFFECT-PARTIAL-1` (the result shape this would carry), `AUTHORITY-NEGOTIATION-1`
 (the other bounded-retry entry — note it is about retrying at *lower authority*, a different axis
 that composes with this one), `PROGRESS-CHANNEL-1` (same no-authority/no-effect discipline).
+
+### ★ DESIGN FILED 2026-09-16 — `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §6–§7
+
+**The constraint this entry did not state, and it is the whole design: the carried failure must
+ride a SCOPE, never an argument.** `EffectRecord` keys on `sha256({action_type, input, scope})`,
+so a prior failure folded into a tool's `args`, a node's `state` or a plan's `input_payload` makes
+every retry a *different effect* and the `EXACTLY_ONCE` gate stops deduplicating exactly the calls
+it exists to protect. Guard rail 2 above ("not part of an idempotency key") is not a preference —
+it falls out of where the key is computed. The channel is therefore a ContextVar scope in the
+shape of `token_meter.llm_attribution_scope`, plus `context["last_failure"]` beside
+`context["attempts"]` for flow nodes (`context`, not `state`, so it enters no `FlowHistory` patch
+and no graph signature), and a `prior_failures()` host function for the guest. Bound decided up
+front: K = 1 default, max 3, 2 KiB per record. **Also corrected: "the runtime owns the loop" is
+true, but the loop this entry names (`execute_with_retry(fn)`) has zero callers — see
+`RETRY-CLASSIFY-1`'s note; the channel threads into the three real loops.** The design is honest
+that nothing consumes the carried failure yet (a compiled plan's args are fixed at plan time; a
+repair stage is app content), so phase 2 ships default-off with a spy test whose second half —
+two attempts, ONE `EffectRecord` key — is the constraint, and this entry stays open until a
+first-party consumer reads it.
 
 ---
 
@@ -14978,6 +15059,28 @@ recorded a capability as *Covered* on the strength of a sentence about where it 
 than replaces), `RETRY-CLASSIFY-1` (note that Temporal's fence failure is a **named error type**,
 `ShardOwnershipLostError` — a class, not a matched substring).
 
+### ★ DESIGN FILED 2026-09-16 — `docs/design/LEASE_FENCE_DESIGN.md`
+
+**The entry's question — which leader-only job is least idempotent — is answered from source, and
+the answer is the job whose single-leader safety argument is written in `CLAUDE.md`.** Of the
+thirteen runtime scheduler jobs, ten re-run harmlessly (CAS-guarded, status-filtered, atomic queue
+ops, or process-local). `deferred_async_job_retry` double-dispatches a handler. And
+**`_recover_orphaned_approved_runs` spawns a thread calling `execute_run` per orphan, whose entry
+guard (`execution.py:35`) is a read-then-set — not a CAS — that `CLAUDE.md` says not to guard twice
+because *"the 10-minute threshold ensures the original thread is dead"*. That holds for ONE leader.**
+Two leaders' jobs firing close together both select the orphan; if the second entry read lands
+before the first `executing` commit (a window of seconds — a memory recall runs between `:35` and
+`:178`), the run executes twice with two fresh effect scopes, and nothing records that it did.
+The fence: one `BigInteger fence` column (contract bump, Alembic `0019`), incremented **only on
+takeover**; `assert_lease_fence(db, held)` does a `FOR SHARE` read of the row **inside the job's
+transaction** — a takeover's `FOR UPDATE` blocks until the job commits, and a takeover that already
+committed leaves a higher fence, so the stale leader is *refused*. §4 of the design explains why
+"check `is_leader` before each job" is not a cheaper equivalent: it reads the same local boolean
+the stale leader already believes. First consumers: the two non-idempotent jobs; `execute_run`
+untouched; the ten idempotent jobs deliberately unfenced (a row lock per job delays takeover).
+Counter `aindy_lease_fence_refusals_total{job}`; a negative control that takes over mid-job is the
+first test. Schema — awaiting approval under §3/§8.
+
 ---
 
 ## AUTHORITY-LIFETIME-1 — the capability token is bound to the clock, not to the execution it authorises
@@ -15114,6 +15217,25 @@ like on first reading.
 **Related:** `RETRY-CONTEXT-1` (the other half), `EFFECT-PARTIAL-1` (a partial result is a third
 outcome this binary classifier cannot express), `AUTHORITY-NEGOTIATION-1` (a `CAPABILITY_DENIED`
 is exactly the kind of error that should carry a class rather than a matched substring).
+
+### ★ DESIGN FILED 2026-09-16 — `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` (with `RETRY-CONTEXT-1`)
+
+Two corrections to this entry, both measured at HEAD. **(1) The census above says five sites;
+there are four.** `execute_with_retry` / `_execute_with_retry` (`retry_policy.py:224`/`:246`)
+have **zero callers** — the only other `execute_with_retry` in the tree is an unrelated local
+closure in `scheduler_service.py:827`. The runtime's three retry loops (flow node, tool step,
+compiled plan) are all inline; none goes through the helper the module presents as the primitive.
+The design deletes it rather than teaching it (the DEC-023 shape). **(2) The classifier is wrong
+on `execute_tool`'s OWN strings, not just on contrived ones** — run over the fourteen
+`"success": False` returns in `tool_registry.py`: *cancelled* (`:575`/`:1033`), *capability
+token is required* (`:790`) and *capability enforcement failed* (`:914`) are all classified
+**RETRY**, so a cancelled run's tool is re-attempted up to 3× (each refused pre-spawn). Direction:
+false *negatives* — wasted attempts, no duplicated effect; P2 stands, now on evidence. Note `:575`
+already returns `"cancelled": True` beside the string — the one typed flag outside the message,
+which the design generalises into `failure_class` set at the raising site, with the substring
+table as a *recorded* fallback (`classified_by="substring"`) and a counter
+`aindy_retry_classifications_total{site, failure_class, classified_by, decision}` as the operator
+signal. No schema. Decisions and phasing in the design §9–§10; awaiting approval under §8.
 
 ---
 

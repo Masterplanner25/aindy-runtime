@@ -612,6 +612,13 @@ and cite the id; `CLAUDE.md` §Recorded decisions indexes the ids. `TECH_DEBT.md
 log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` pins that every
 `DEC-NNN` cited anywhere in the repo exists here, once.
 
+**Pending — designs filed 2026-09-16, each listing the decisions it asks for; recorded here as
+`DEC-NNN` by the PR that implements (or declines) them, per DEC-010:**
+`docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §9 (five), `SYSEVENT_RETENTION_DESIGN.md`
+§8 (four), `LEASE_FENCE_DESIGN.md` §7 (four), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (five), and
+`docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (one — decline `ORCHESTRATOR-SPLIT-1` (a)
+until the runtime reads guest state). None is recorded yet because none has been approved.
+
 ---
 
 ## When To Add Or Update An Entry
