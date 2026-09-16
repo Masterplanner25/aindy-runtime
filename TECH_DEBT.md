@@ -2,6 +2,8 @@
 
 ## DECISIONS-2026-08-01 — open questions answered by the owner
 
+*Legacy batch. Since 2026-09-16 decisions are recorded as `DEC-NNN` in `docs/governance/DECISION_LOG.md` (DEC-010); this entry stays as the record of these seven.*
+
 Seven questions had accumulated across the FR-6 build, the v1.11.0 release, and the dependabot
 triage. All answered 2026-08-01. Recorded here because they were made in conversation and would
 otherwise be lost; each links to the entry that owns the work.
@@ -8948,7 +8950,7 @@ event on a single-instance deployment and a routine one on any multi-instance de
 ---
 ## EU-WAIT-SIGNAL-DEAD-1 — a request's execution unit could "wait", and nothing could ever resume it
 
-**Status: CLOSED 2026-09-15 on filing — the surface was REMOVED, not repaired.** Decided by
+**Status: CLOSED 2026-09-15 on filing — the surface was REMOVED, not repaired (DEC-014).** Decided by
 Shawn (dead surface vs contract), on the evidence below. Filed from the FR-29 entry's "noted,
 not filed" line and the 09-16 handoff's open question: *"`ExecutionWaitSignal`'s resume side
 `resumed → executing → ?` has no in-tree raiser and no test — decide whether it is a contract or
@@ -10911,7 +10913,7 @@ on it quarantines on that upgrade. `AGENT_FLOW` and `NODUS_SCRIPT_FLOW` stay on 
 migrating them would quarantine every in-flight agent plan and parked Nodus wait on a deployment.
 The app's seven lambdas are its call, paired with a drain (handoff item).
 
-**★ 3b declined:** an ordered `when` list ending in `default` already IS a switch-case here
+**★ 3b declined (DEC-015):** an ordered `when` list ending in `default` already IS a switch-case here
 (first match, explicit default, loud no-match — all pre-existing engine behaviour), so a
 `SwitchCaseEdgeGroup` would be a second spelling of one semantics. Registration-time sugar if
 ever wanted; no engine change.
@@ -11205,7 +11207,7 @@ failure branches now mark the run `failed` themselves and both terminal paths sy
 execution unit (`_sync_agent_eu_terminal`), which `execute_run`'s tail does only on the original
 path. The design row's "no new machinery" was half right.
 
-**Decisions recorded:** provide-a-result (human-as-the-tool) DEFERRED, not declined — a third
+**Decisions recorded (DEC-016):** provide-a-result (human-as-the-tool) DEFERRED, not declined — a third
 decision on this gate if ever built, never a new gate; the agent's own EU stays `executing`
 while parked (nothing resumes an agent EU). Completion hooks and `SCORE_COMPUTED` do not run for
 a run that completes via a gate resume — the same gap the nodus_vm resumed path has (RTR-3).
@@ -13080,7 +13082,7 @@ control: the same payload against a declared schema is refused and the run keeps
   `nodus_worker` forwards it, `nodus.execute` returns it as the node's `resume_schema`.
 
 **Three decisions, recorded so they are not re-derived:**
-1. **State key, not a column.** `waiting_for`/`wait_deadline`/`graph_signature` are columns, and a
+1. **State key, not a column (DEC-011).** `waiting_for`/`wait_deadline`/`graph_signature` are columns, and a
    column was the "honest" home — but an additive column makes every existing deployment owe
    `bootstrap-schema --reconcile` (0018's operator note) for a defence-in-depth check. Consequence
    stated rather than hidden: the record is a runner-level write (like `route_event`'s
@@ -13089,7 +13091,7 @@ control: the same payload against a declared schema is refused and the run keeps
    UNTYPED. Absent ≠ mismatch (`FLOW-GRAPH-SIGNATURE-1`'s rule); the degradation is to the
    pre-feature behaviour, never to a wrong rejection. Pinned by
    `test_a_state_reconstructed_by_the_fold_resumes_untyped` so changing either side is a decision.
-2. **`nodus_output_state` is NOT seeded back into a re-run — DECLINED 2026-09-15** (the question
+2. **`nodus_output_state` is NOT seeded back into a re-run — DECLINED 2026-09-15 (DEC-012)** (the question
    `NODUS-RESUME-BRIDGE-1` handed here). The two-phase run-from-the-top shape is the documented
    contract; seeding prior state would re-apply phase 1's effects on every re-run. What the script
    set before it parked stays readable on the waiting run; it is not handed back.
@@ -13194,7 +13196,7 @@ naming the run (`RESUME-FANOUT-UNSCOPED-1`: "the run id is the only thing unique
 a secondary key cannot be allowed to veto — that is rule 1, and it is why the predicate takes
 `run_scoped` rather than being the local rule copied twice.
 
-**The bus-payload question — DECIDED: the bus stays payload-free, and the reason is a design
+**The bus-payload question — DECIDED (DEC-013): the bus stays payload-free, and the reason is a design
 statement rather than a limitation.** A payload's home is the durable row: `route_event` writes
 `state["event"]` and COMMITS, then publishes a wake that carries only `event_type`,
 `correlation_id`, `run_id`. That is exactly what makes a resume reconstructible from `run_id`
