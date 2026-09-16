@@ -46,8 +46,39 @@ def execute_node(node_name: str, state: dict, context: dict) -> dict:
     return result
 
 
+def edge_predicate(edge: dict, *, node: str):
+    """The callable that gates a conditional edge — its `condition`, or its named `when`.
+
+    FLOW-PARALLEL-1 phase 3a. Exactly one of the two: both is a declaration that contradicts
+    itself and is refused; neither is not a conditional edge. A `when` naming an unregistered
+    predicate raises `UnknownPredicate` — never "does not match".
+    """
+    from AINDY.runtime.flow_engine.registry import resolve_predicate
+
+    has_condition = "condition" in edge
+    has_when = "when" in edge
+    if has_condition and has_when:
+        raise ValueError(
+            f"edge from node {node!r} to {edge.get('target')!r} declares both 'condition' "
+            f"and 'when'; a conditional edge has exactly one gate."
+        )
+    if has_when:
+        return resolve_predicate(edge["when"], node=node)
+    if has_condition:
+        return edge["condition"]
+    raise ValueError(
+        f"edge from node {node!r} to {edge.get('target')!r} is a dict with neither "
+        "'condition' nor 'when'; a conditional edge needs a gate."
+    )
+
+
 def resolve_next_node(current_node: str, state: dict, flow: dict):
-    """The single successor, or None. Unchanged; `resolve_frontier` is the plural form."""
+    """The single successor, or None. `resolve_frontier` is the plural form.
+
+    First matching edge wins, in declaration order — which is why the order is in the graph
+    signature, and why an ordered list of named `when` edges ending in `when: "default"` is a
+    switch-case without needing a second edge kind (phase 3b, declined as redundant).
+    """
     edges = flow["edges"].get(current_node, [])
     if not edges:
         return None
@@ -55,7 +86,7 @@ def resolve_next_node(current_node: str, state: dict, flow: dict):
     first = edges[0]
     if isinstance(first, dict):
         for edge in edges:
-            if edge["condition"](state):
+            if edge_predicate(edge, node=current_node)(state):
                 return edge["target"]
         return None
     return first

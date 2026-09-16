@@ -682,7 +682,18 @@ def _advance_to_next_node(
     #   `resolve_next_node` for both existing edge shapes, so every flow that declares no group
     #   takes exactly the code it took before. That is what makes this a small diff against a
     #   reviewed seam rather than a rewrite of the loop.
-    frontier = resolve_frontier(current_node, state, self.flow)
+    try:
+        frontier = resolve_frontier(current_node, state, self.flow)
+    except (KeyError, ValueError) as exc:
+        # FLOW-PARALLEL-1 phase 3a — an edge that cannot be resolved (a `when` naming an
+        # unregistered predicate, a dict edge with both or neither gate, a group beside sibling
+        # edges) FAILS THE RUN with the reason, never ends it quietly or escapes as a 500 that
+        # leaves the row `executing`. MAF's `_missing_callable`: fail loudly on restore.
+        return self._fail_execution(
+            f"cannot resolve the edge out of {current_node!r}: {exc}",
+            failed_node=current_node,
+            parent_event_id=str(node_started_event_id) if node_started_event_id else None,
+        )
 
     if len(frontier) > 1:
         try:

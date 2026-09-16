@@ -26,15 +26,21 @@ because `resolve_next_node` takes the first matching edge and order is therefore
   run's shape, and hashing bodies would trip on every refactor.
 - **`node_configs`.** Configuration, not topology. A retry count or a timeout changing must not
   strand in-flight runs.
-- **Predicate implementations *and their names*.** A conditional edge contributes "this edge is
-  gated" and its target — not which callable gates it. Including the name would trip when a
-  lambda becomes a named function, which is a refactor and not a reroute. This is the line MAF
-  draws too: the shape is data, the predicate is not.
+- **Predicate implementations.** A callable-gated edge (`"condition": <callable>`) contributes
+  "this edge is gated" and its target — not which callable gates it. Including anything about
+  the callable would trip when a lambda becomes a named function, which is a refactor and not
+  a reroute. This is the line MAF draws too: the shape is data, the predicate is not.
 
-The cost of that choice, stated plainly rather than discovered later: **a changed predicate that
-reroutes control flow will NOT be caught.** The guard detects a moved *graph*, not a changed
-*decision*. Catching the latter needs the predicate to be data — which is `FLOW-PARALLEL-1`'s
-topology-as-data question, deliberately not bundled here.
+**In, since 2026-09-15 (`FLOW-PARALLEL-1` phase 3a): the NAME of a named predicate.** An edge
+declared `{"target": …, "when": "<name>"}` contributes its target and that name. A name is a
+decision the author chose to make data, so renaming or rerouting it IS a topology change and
+moves the signature — the blind spot below is closed for named edges.
+
+The cost of the callable choice, stated plainly rather than discovered later: **a changed
+callable predicate that reroutes control flow will NOT be caught.** The guard detects a moved
+*graph*, not a changed *decision*. Naming the predicate is how an author opts a decision into
+the guard; the runtime does not do it for them, because the first migration of an edge to a
+name moves the flow's digest once and quarantines whatever is suspended on it.
 """
 from __future__ import annotations
 
@@ -88,9 +94,24 @@ def _canonical_edges(edges: Any) -> dict[str, list[Any]]:
                     if quorum is not None:
                         encoded["quorum"] = int(quorum)
                 targets.append(encoded)
+            elif isinstance(edge, dict) and "when" in edge:
+                # FLOW-PARALLEL-1 phase 3a — a NAMED predicate is data, and the name is shape.
+                # This is the blind spot closing: rename or reroute the decision gating a named
+                # edge and the signature moves, so a run suspended under the old decision
+                # quarantines instead of resuming into the new one.
+                #
+                # ★ A NEW key, not a re-encoding of the gated shape below: every callable-gated
+                #   flow in flight keeps its digest (the recorded `AGENT_FLOW` /
+                #   `NODUS_SCRIPT_FLOW` pins). The cost, stated: migrating an edge from
+                #   `condition` to `when` moves that flow's digest ONCE, and runs suspended on it
+                #   quarantine on that upgrade — the mechanism working, but a migration to plan
+                #   around a drain, which is why the runtime's own flows have not migrated.
+                targets.append({"target": str(edge.get("target") or ""), "when": str(edge["when"])})
             elif isinstance(edge, dict):
-                # A conditional edge. The target and the fact that it is gated are topology;
-                # the callable under "condition" is an implementation and is not read at all.
+                # A conditional edge gated by a CALLABLE. The target and the fact that it is
+                # gated are topology; the callable under "condition" is an implementation and is
+                # not read at all — so a changed callable is NOT caught (the blind spot that
+                # stays open for this form; name the predicate to close it).
                 targets.append({"target": str(edge.get("target") or ""), "gated": True})
             else:
                 targets.append(str(edge))

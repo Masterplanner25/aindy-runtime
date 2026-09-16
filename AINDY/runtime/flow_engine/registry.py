@@ -46,6 +46,92 @@ def register_node(name: str):
     return wrapper
 
 
+# ── Named predicates (FLOW-PARALLEL-1 phase 3a) ──────────────────────────────
+#
+# A conditional edge used to be `{"target": …, "condition": <callable>}` — a Python closure over
+# in-process state, which the graph signature could only record as "this edge is gated". It could
+# not say WHICH decision gated it, so a predicate rerouted between suspend and resume was not
+# caught (`FLOW-GRAPH-SIGNATURE-1`'s deliberate blind spot; MAF hit the same wall and answered:
+# serialize the shape, NAME the predicate, fail loudly if it is missing on restore).
+#
+# A predicate is now data: `{"target": …, "when": "<name>"}` names a pure function of `state`
+# registered here. The name is the identity — it goes into the signature — so registering a
+# name twice with a DIFFERENT callable is refused: a silent overwrite would make the signature
+# say one thing and the decision do another. Re-registering the same function (a module
+# re-imported) is a no-op.
+
+PREDICATE_REGISTRY: dict[str, Callable[[dict], bool]] = {}
+
+#: The named form of `lambda s: True` — the fall-through edge an ordered list of `when` edges
+#: ends with. With it, an ordered `when` list IS a switch-case: first match wins, `default`
+#: last, and a non-terminal node with no match already fails the run loudly.
+DEFAULT_PREDICATE = "default"
+
+
+class PredicateRegistrationError(ValueError):
+    """A predicate name is already bound to a different callable."""
+
+
+class UnknownPredicate(KeyError):
+    """A `when` edge names a predicate that is not registered — raised at RESOLUTION, loudly.
+
+    Never treated as "does not match": a missing decision that silently falls through would
+    reroute the flow, which is the exact thing naming predicates exists to make detectable.
+    """
+
+    def __init__(self, name: str, node: str) -> None:
+        self.name = name
+        self.node = node
+        super().__init__(
+            f"edge from node {node!r} names predicate {name!r}, which is not registered "
+            f"(registered: {sorted(PREDICATE_REGISTRY)}). Register it with "
+            f"@register_predicate({name!r}) before the flow runs."
+        )
+
+    def __str__(self) -> str:  # KeyError would repr() the message
+        return self.args[0]
+
+
+def _same_predicate(a: Callable, b: Callable) -> bool:
+    """The same function, or the same qualified name — a module re-imported (reloaded, or
+    imported twice under two names) produces a new function object for the same predicate."""
+    if a is b:
+        return True
+    return (getattr(a, "__module__", None), getattr(a, "__qualname__", None)) == (
+        getattr(b, "__module__", None), getattr(b, "__qualname__", None)
+    ) and getattr(a, "__qualname__", "<lambda>") != "<lambda>"
+
+
+def register_predicate(name: str):
+    """Decorator: bind ``name`` to a pure ``fn(state) -> bool``."""
+    key = str(name)
+
+    def wrapper(fn: Callable[[dict], bool]):
+        existing = PREDICATE_REGISTRY.get(key)
+        if existing is not None and not _same_predicate(existing, fn):
+            raise PredicateRegistrationError(
+                f"predicate {key!r} is already registered to "
+                f"{getattr(existing, '__qualname__', existing)!r}; a name is the predicate's "
+                "identity in the graph signature and cannot be silently rebound."
+            )
+        PREDICATE_REGISTRY[key] = fn
+        return fn
+
+    return wrapper
+
+
+@register_predicate(DEFAULT_PREDICATE)
+def _default_predicate(state: dict) -> bool:  # noqa: ARG001 — the fall-through matches anything
+    return True
+
+
+def resolve_predicate(name: str, *, node: str) -> Callable[[dict], bool]:
+    try:
+        return PREDICATE_REGISTRY[str(name)]
+    except KeyError:
+        raise UnknownPredicate(str(name), node) from None
+
+
 def register_flow(name: str, flow: dict) -> None:
     FLOW_REGISTRY[name] = flow
     logger.debug("Flow registered: %s", name)

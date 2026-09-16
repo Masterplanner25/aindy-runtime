@@ -19,8 +19,12 @@ from AINDY.runtime.flow_engine.node_executor import (
 from AINDY.runtime.flow_engine.registry import (
     CONTINUATION_SAFE_FLOWS,
     CONTINUATION_UNSAFE_FLOWS,
+    DEFAULT_PREDICATE,
     FLOW_REGISTRY,
     NODE_REGISTRY,
+    PREDICATE_REGISTRY,
+    PredicateRegistrationError,
+    UnknownPredicate,
     _registry_flow_plan,
     is_flow_continuation_safe,
     is_flow_continuation_unsafe,
@@ -28,6 +32,7 @@ from AINDY.runtime.flow_engine.registry import (
     mark_flow_continuation_unsafe,
     register_flow,
     register_node,
+    register_predicate,
     select_strategy,
 )
 from AINDY.runtime.flow_engine.runner import PersistentFlowRunner
