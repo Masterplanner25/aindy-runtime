@@ -1,14 +1,14 @@
 ---
 title: "Flow Fan-Out and Supersteps — Design"
 api_version: "1.0"
-last_verified: "2026-09-13"
+last_verified: "2026-09-15"
 status: current
 owner: "platform-team"
 ---
 
 # Flow fan-out and supersteps — design
 
-**`FLOW-PARALLEL-1`, the scheduling half. PHASES 0, 1 AND 2 SHIPPED (0: 2026-09-08 #603; 1: 2026-09-10; 2: 2026-09-13 #640 — the join policies, the runtime's first `partial` emitter); phases 3–4 are design only.**
+**`FLOW-PARALLEL-1`, the scheduling half. PHASES 0, 1, 2 AND 3a SHIPPED (0: 2026-09-08 #603; 1: 2026-09-10; 2: 2026-09-13 #640 — the join policies, the runtime's first `partial` emitter; 3a: 2026-09-15 — named predicates, §6a); 3b DECLINED (§6a); phase 4 is evidence, not code.**
 
 Written because `AGENT_WORKING_RULES.md` **§8 Proposal-First Rule** requires an approved
 proposal before implementing a large refactor, a runtime behaviour change, or a cross-layer
@@ -167,6 +167,41 @@ needs no predicate; only `SwitchCaseEdgeGroup` does — and in MAF's model a swi
 fan-out, so the ordering is: build fan-out, then express switch as a constrained fan-out once
 predicates are named. Bundling them makes one reviewable change into two unreviewable ones.
 
+### 6a. Phase 3 as built (2026-09-15) — names shipped; the switch type declined
+
+**3a — named predicates.** `@register_predicate("name")` binds a pure `fn(state) -> bool` in
+`PREDICATE_REGISTRY` (beside `NODE_REGISTRY`); an edge declares `{"target": …, "when": "name"}`
+beside today's `{"target": …, "condition": <callable>}`. Rules, each pinned by a test:
+
+- **The name is the identity.** Rebinding a registered name to a different callable is refused
+  (`PredicateRegistrationError`); a re-imported module re-registering the same function is not.
+  A silent overwrite would make the signature say one thing and the decision do another.
+- **A missing name is loud.** A `when` naming an unregistered predicate raises
+  `UnknownPredicate` at resolution, and `_advance_to_next_node` fails the RUN with the name in
+  the reason — never "does not match" (which would reroute silently), never an escaping
+  exception (which would leave the row `executing`). MAF's `_missing_callable`, applied.
+- **The signature encodes the name** as a NEW key (`{"target", "when"}`), so every callable-gated
+  flow keeps its digest byte-for-byte (a RECORDED digest pins it — §7's first requirement).
+  Renaming or rerouting a named decision moves the digest: **`FLOW-GRAPH-SIGNATURE-1`'s blind
+  spot is closed for named edges** and stays open for callables, by construction.
+- **The cost, stated:** migrating an edge from `condition` to `when` moves that flow's digest
+  once, so runs suspended on it quarantine on that upgrade. That is the mechanism working, but
+  it is a migration to plan around a drain — **the runtime's own `AGENT_FLOW` and
+  `NODUS_SCRIPT_FLOW` stay on callables**, because migrating them would quarantine every
+  in-flight agent plan and every parked Nodus wait on a deployment. The app's seven lambdas are
+  its call, on the same terms (handoff item).
+- `"default"` is a built-in predicate (always true): the named form of `lambda s: True`.
+
+**3b — `SwitchCaseEdgeGroup`: DECLINED as redundant.** The row in §8 came from MAF, where a
+switch *subclasses* fan-out because their edges have no first-match semantics. Ours already do:
+`resolve_next_node` takes the first matching edge in declaration order, a non-terminal node with
+no match already fails the run loudly, and the order is already in the signature. With named
+predicates, **an ordered list of `when` edges ending in `when: "default"` IS a switch-case** —
+same exclusivity, same explicit default, same loud no-match, cases-as-data in the digest. A
+distinct type would be a second spelling of one semantics (§9's "one mechanism, two policies"
+argues against it). If ever wanted for readability it is registration-time sugar that expands to
+the `when` list — no engine change.
+
 ---
 
 ## 7. Graph-signature compatibility
@@ -196,7 +231,7 @@ cheapest guard, and it belongs in the same PR as the shape.
 | ~~**0**~~ | ~~The superstep seam~~ | **DONE — #603**, with one deliberate narrowing: no `resolve_frontier()` was added. Nothing can produce a frontier of >1 until phase 1 declares fan-out edges, and shipping an unused resolver is exactly the `ROUTE-AST-UNWIRED-1` shape this phase is meant to avoid. What shipped is the part that IS on the live path today: barrier ordinal allocation (§4) and the central merge (§3c) |
 | ~~**1**~~ | ~~`FanOutEdgeGroup`, bounded width, per-branch sessions, `WAIT` refused~~ | **DONE.** Three things this row did not say, decided while building: **(a) the bound is PROCESS-WIDE, not per-run** — runners are created from request handlers, syscall dispatch, rehydration and scheduler recovery, so a per-run width of W allows *runs × W* sessions; one shared pool, sized like the scheduler's lanes. **(b) the flag gates CONCURRENCY, not SEMANTICS** — a group runs its branches in declaration order either way, so flipping it off changes timing and nothing else. **(c) phase 1 requires branches to CONVERGE on one successor, enforced** — the degenerate `all` join, because §8 is right that fan-out without a join is half a primitive and the half needs defined semantics rather than none |
 | ~~**2**~~ | ~~join policies (`all`, `any`, `quorum(k)`) resolved at the barrier, partial outcomes per `EFFECT-PARTIAL-1`~~ | **DONE — #640, 2026-09-13.** Declared ON the group (`join=`, `quorum=`), not as a separate `FanInEdgeGroup` — the barrier already exists, the join is a property of it. `all` keeps phase 1's recorded signature digest; a non-default join is shape and changes it. A lenient join proceeding past a failure is the runtime's **first `partial` emitter**: on the run's state, the completion event, and the `flow.run` envelope. Convergence is required of the SUCCEEDED branches |
-| **3** | Named predicates, then `SwitchCaseEdgeGroup` as a constrained fan-out; closes `FLOW-GRAPH-SIGNATURE-1`'s blind spot | separable, see §6 |
+| ~~**3**~~ | ~~Named predicates, then `SwitchCaseEdgeGroup` as a constrained fan-out; closes `FLOW-GRAPH-SIGNATURE-1`'s blind spot~~ | **3a DONE — 2026-09-15**; **3b DECLINED** — see §6a. The blind spot is closed for named edges; the runtime's own flows stay on callables (a migration moves the digest once) |
 | **4** | Flip the default once a real flow declares a group and a superstep has been observed | evidence, not code |
 
 **Phase 0 is worth landing alone** and is the honest first step: it puts the widened transaction

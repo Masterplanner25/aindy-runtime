@@ -10766,8 +10766,41 @@ enforcement is a failure mode this repository already names — it is the whole 
 
 ## FLOW-PARALLEL-1 — the flow engine has no fan-out, join, or barrier
 
-**★★ PHASE 2 SHIPPED 2026-09-13 (#640) — join policies at the barrier; the FIRST `partial`
-EMITTER in the runtime. Open for 3–4 (named predicates / switch-case; the default flip).**
+**★★ PHASE 3a SHIPPED 2026-09-15 — named predicates; 3b (`SwitchCaseEdgeGroup`) DECLINED as
+redundant. Open for phase 4 only (the default flip, on evidence).** Phase 2 shipped 2026-09-13
+(#640) — join policies at the barrier; the FIRST `partial` EMITTER in the runtime.
+
+### Phase 3a — a predicate is data, and the name is shape
+
+`@register_predicate("name")` + `{"target": …, "when": "name"}` beside the callable form
+(`AINDY/runtime/flow_engine/registry.py`, `node_executor.edge_predicate`). The name goes into
+the graph signature as a NEW key — every callable-gated flow keeps its digest (recorded pin) —
+so renaming or rerouting a named decision quarantines a run suspended under the old one:
+**`FLOW-GRAPH-SIGNATURE-1`'s blind spot, closed for named edges; still open for callables, by
+construction.** A missing name FAILS the run with the name in the reason (never falls through,
+never escapes as an exception that leaves the row `executing`); rebinding a name to a different
+callable is refused; `"default"` is built in as the named `lambda s: True`.
+
+**★ The cost, stated in the design (§6a) and the reason the runtime's own flows did NOT migrate:**
+moving an edge from `condition` to `when` changes that flow's digest once, so every run suspended
+on it quarantines on that upgrade. `AGENT_FLOW` and `NODUS_SCRIPT_FLOW` stay on callables —
+migrating them would quarantine every in-flight agent plan and parked Nodus wait on a deployment.
+The app's seven lambdas are its call, paired with a drain (handoff item).
+
+**★ 3b declined:** an ordered `when` list ending in `default` already IS a switch-case here
+(first match, explicit default, loud no-match — all pre-existing engine behaviour), so a
+`SwitchCaseEdgeGroup` would be a second spelling of one semantics. Registration-time sugar if
+ever wanted; no engine change.
+
+**Tests:** `tests/unit/test_flow_named_predicates.py` — registry identity rules, resolution
+(first match, default, loud unknown, one-gate-per-edge), the signature's two halves (a RECORDED
+pre-change digest for a callable-gated flow; the callable behind a name does not move it;
+naming / renaming / rerouting / reordering do), a real run branching by name, a missing name
+failing the run, and the blind spot closed end to end (a run suspended under `when: "before"`
+quarantines when resumed under `when: "after"`). **Mutation-tested 4/4** (encode named as
+gated → 4 fail; unknown resolves to default → 2; rebind allowed → 1; no try/except around
+`resolve_frontier` → 1). `FLOW-GRAPH-SIGNATURE-1`'s registry line, spliced into CLAUDE.md's
+opening sentence since #565, was recovered and re-homed under Closed in the same PR.
 
 ### Phase 2 — the join is declared on the group and resolved at the barrier
 
@@ -10809,8 +10842,8 @@ run on upgrade.** **★★ Mutation testing found the ONE untested thing that ma
 share the runner's session" survived every other test — the §5 constraint the whole design is
 shaped around, whose failure mode is SILENT corruption.** Mutation-tested 12/12 after that fix.
 ~~**★ STILL OPEN: fan-out without a join is half a primitive**~~ — phase 2 shipped it (above).
-**Still open:** phase 3 (named predicates, `SwitchCaseEdgeGroup`, closes `FLOW-GRAPH-SIGNATURE-1`'s
-blind spot) and phase 4 (flip `AINDY_FLOW_FAN_OUT` on the evidence of a real flow declaring a group).
+**Still open:** ~~phase 3~~ (3a shipped, 3b declined — above) and phase 4 (flip `AINDY_FLOW_FAN_OUT`
+on the evidence of a real flow declaring a group).
 
 
 **Status: CONFLICT HALF SETTLED 2026-09-03 (#569); SCHEDULER PHASE 0 SHIPPED 2026-09-08 (#603)
@@ -12796,6 +12829,16 @@ that needs soak — the mismatch branch is either taken or it is not.
 
 **Related, not the same:** `ORCHESTRATOR-SPLIT-1` (three durable stores, no shared recovery
 contract) and `FLOW-PARALLEL-1` (topology model). This entry needs neither to land.
+
+**Addendum 2026-09-15 — the blind spot, half closed.** `FLOW-PARALLEL-1` phase 3a made a
+predicate nameable (`{"target", "when": "name"}`), and a NAME is in the hash: rename or reroute
+the decision gating a named edge and a run suspended under the old one quarantines. A callable
+predicate (`"condition": <callable>`) is still not in the hash, by construction — the runtime
+cannot name it for the author, because migrating an edge to a name moves that flow's digest once
+and quarantines whatever is suspended on it. So the runtime's own flows stay callable-gated; the
+blind spot is closed exactly for the edges an author opts in. **★ This entry's CLAUDE.md line
+had been spliced into the file's opening sentence since #565 (2026-09-03) and was in the registry
+nowhere; recovered and re-homed under Closed with the phase-3a PR.**
 
 ---
 
