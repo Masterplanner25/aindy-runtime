@@ -8881,6 +8881,71 @@ AND source_type='route' AND created_at < <upgrade time>` — the operator's call
 adds a commit where the last write is, not a rollback).
 
 ---
+## SESSION-COMMIT-1 — a callback that owns its session must commit it; four instances in one week
+
+**Status: CLOSED 2026-09-16 on filing — the fourth instance FIXED, the class GUARDED.** Filed
+from the fifth session's handoff ("three in one week; worth a source-derived guard the next time
+it bites") after the survey that wrote the guard found the fourth.
+
+**The shape.** ``db = SessionLocal()`` (or ``with SessionLocal() as db``) … a write through it …
+``close()`` / the ``with`` exiting — and no ``commit()``. SQLAlchemy rolls back on close. Every
+instance passed its tests, for one reason: the shared `db_session` fixture puts the code and the
+assertion on ONE connection inside ONE outer transaction, where a flush reads exactly like a
+commit (catalogue variant 15). The row disagreed with the test every time.
+
+| # | Where | Found | Cost |
+|---|---|---|---|
+| 1 | `execution_pipeline/resources.py::_safe_finalize_eu` | FR-30, #673 | every route unit `executing` forever, since the table existed |
+| 2 | `execution_pipeline/waits.py::_build_eu_resume_callback` | #679 | the request-EU resume (surface removed) |
+| 3 | `wait_rehydration.py::_make_resume_callback` | #679 → #685 | the boot-time EU resume (step removed) |
+| 4 | **`kernel/resume_spec.py::_build_execution_unit_resume_callback`** | **this entry** | **the CROSS-INSTANCE resume — see below** |
+
+**★★ Instance 4 was two defects in one line, and the second is the one that matters.**
+`_cross_instance_resume` — the fallback for a wait whose registering instance died — pulls a
+`ResumeSpec` from the Redis wait registry and runs `build_callback_from_spec(spec)`. Every spec
+`register_wait` writes has handler `RESUME_HANDLER_EU`, whose callback was
+``with SessionLocal() as db: resume_execution_unit(spec.eu_id)``. (a) Rolled back on exit.
+(b) **Even committed, it moved only the UNIT — the run it belongs to was never resumed.** In
+thread mode (the default since FR-15 (a), 2026-09-01) the scheduler runs THIS closure, so a flow
+parked on an instance that died was claimed cross-instance, logged `Cross-instance resume
+claimed run_id=…`, and stayed `waiting` forever. Only distributed mode — which discards the
+closure and rebuilds from `run_id`+`eu_type` on the worker — ever resumed such a run.
+`tests/integration/test_multi_instance_resume.py` could see neither: it patched
+`resume_execution_unit` to a spy and asserted the spy was called (variant 13).
+
+**Fix:** the closure now rebuilds the REAL resume from the spec at fire time via
+`resume_reconstruction.build_resume_callback` (flow → claim + unit + `runner.resume()`; agent →
+the segment chain; each commits), and falls back to the unit-only transition — COMMITTED, and
+logged at WARNING naming the run it did NOT resume — only when the run cannot be rebuilt in this
+process (unknown type, unregistered flow, missing row, a pre-FR-15 spec with no `run_id`).
+
+**The guard — `tests/unit/test_own_session_commits.py`, a source-derived census (variant 12):**
+for every function under `AINDY/` (closures scanned as their own scope) that binds a session from
+`SessionLocal()`, if its body writes through that session (`add/add_all/merge/delete/flush/
+bulk_save_objects`, `query(...).update/delete`, or an `ExecutionUnitService` status method on a
+service over that session) it must also `commit` it. Reads owe nothing. `ALLOWLIST` is empty and
+must stay so without a one-line reason. **Liveness:** a synthetic module with the exact shapes of
+instances 1 and 4 must be reported. **Stated limits:** function-level, not path-level (a
+function with one committing path and one non-committing write path passes — M1 below survived
+the guard and was caught by the behavioural test, which is why both exist); a write delegated
+to a callee that receives the session is invisible (listed by `test_delegators_are_listed_not_
+judged`, never judged). The survey it ran over 43 files / 64 own-session functions flagged
+exactly one true positive (instance 4) and three false ones the receiver-resolution then
+excluded (`_active_sessions.add`, `engine.begin()` autocommit, `execute("SELECT 1")`).
+
+**Behavioural half:** `tests/unit/test_cross_instance_resume_commits.py` (FR-30 pattern,
+separate connection): a flow wait claimed cross-instance is ACTUALLY resumed — run `success`,
+unit `completed`; an unrebuildable run gets a committed unit transition and a WARNING; a spec
+with no run does too. **Mutation 3/3** (old one-liner → 3 fail; fallback never commits → 2 + the
+guard; never rebuild → 1). The integration test's spy is replaced by an observation of the real
+path.
+
+**★ The reason instance 4 stayed hidden for so long:** thread mode is where the runtime runs,
+and the cross-instance path fires only when an instance DIES holding a wait. That is a rare
+event on a single-instance deployment and a routine one on any multi-instance deployment —
+`FR-15`'s distributed evidence, still unobtained, is the scenario that would have surfaced it.
+
+---
 ## EU-WAIT-SIGNAL-DEAD-1 — a request's execution unit could "wait", and nothing could ever resume it
 
 **Status: CLOSED 2026-09-15 on filing — the surface was REMOVED, not repaired.** Decided by

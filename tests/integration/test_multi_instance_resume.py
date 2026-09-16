@@ -52,6 +52,7 @@ class TestMultiInstanceResume:
         shared_redis,
         db_session,
         db_session_factory,
+        caplog,
     ):
         """
         Scenario:
@@ -59,8 +60,14 @@ class TestMultiInstanceResume:
         2. Instance A dies (simulated by not using it further)
         3. Instance B receives notify_event("order.completed")
         4. Assert: Instance B enqueues resume for run-123
-        5. Assert: resume callback calls ExecutionUnitService.resume_execution_unit("eu-abc")
+        5. Assert: the claimed callback RUNS its real code path. (Until 2026-09-16 this step
+           patched `resume_execution_unit` to a spy and asserted the spy was called — which
+           could not see that the real callback rolled back on close, nor that it moved only
+           the unit and never the run. The spec here is `eu_type="task"`, which has no rebuild,
+           so the real path is the unit-only fallback; it must say so at WARNING.)
         """
+        import logging
+
         from AINDY.db.models.waiting_flow_run import WaitingFlowRun
         from AINDY.db.models.flow_run import FlowRun
         from AINDY.kernel.redis_wait_registry import RedisWaitRegistry
@@ -106,15 +113,11 @@ class TestMultiInstanceResume:
         db_session.commit()
 
         instance_b = _make_engine()
-        resume_called: list[str] = []
 
         with patch("AINDY.kernel.event_bus.get_redis_client", return_value=shared_redis), patch(
             "AINDY.db.SessionLocal",
             db_session_factory,
-        ), patch(
-            "AINDY.core.execution_unit_service.ExecutionUnitService.resume_execution_unit",
-            side_effect=lambda eu_id_arg: resume_called.append(eu_id_arg),
-        ):
+        ), patch("AINDY.db.database.SessionLocal", db_session_factory):
             count = instance_b.notify_event("order.completed", broadcast=False)
 
             assert count == 1
@@ -123,9 +126,13 @@ class TestMultiInstanceResume:
             assert item.execution_unit_id == eu_id
             assert item.run_id == run_id
 
-            item.run_callback()
+            with caplog.at_level(logging.WARNING, logger="AINDY.kernel.resume_spec"):
+                item.run_callback()
 
-        assert resume_called == [eu_id]
+        assert any("cannot be rebuilt" in r.getMessage() for r in caplog.records), (
+            "the claimed callback did not run its real path (a `task` spec has no rebuild, so "
+            "the unit-only fallback must run and warn)"
+        )
         assert registry.get_spec(run_id) is None
 
         # Instance A is intentionally unused after registration; this keeps the
