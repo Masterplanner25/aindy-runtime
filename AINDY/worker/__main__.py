@@ -39,6 +39,12 @@ def main() -> None:
     # that it also rebuilds flow resumes (FR-15). Without this a resumed flow is unrunnable
     # here, and `resume_reconstruction` dead-letters it rather than acknowledging it.
     registry.register_flows()
+    # FR-31 — and the RUNTIME-owned flows, which `register_flows()` (plugins only) never
+    # registers: a worker rebuilding a `nodus_execute` / `agent_execution` resume must find
+    # them by name. `register_all_flows()` is what the API's `_register_flow_engine` runs.
+    from AINDY.runtime.flow_definitions import register_all_flows
+
+    register_all_flows()
     deployment_profile = validate_worker_deployment_profile()
     publish_worker_runtime_state(
         process_role=PROCESS_ROLE_WORKER,

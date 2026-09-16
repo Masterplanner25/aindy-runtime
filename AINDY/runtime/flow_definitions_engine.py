@@ -154,7 +154,9 @@ def flow_run_resume_node(state, context):
                     }
                 },
             }
-        return {"status": "SUCCESS", "output_patch": {"flow_run_resume_result": {"run_id": run_id, "resumed": True, "results": results}}}
+        # FR-31 ask 3 — `resumed` means WOKEN, not merely "payload stored".
+        woken = bool(results) and all(r.get("woken", True) for r in results)
+        return {"status": "SUCCESS", "output_patch": {"flow_run_resume_result": {"run_id": run_id, "resumed": woken, "results": results}}}
     except Exception as e:
         return {"status": "FAILURE", "error": str(e)}
 

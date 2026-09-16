@@ -458,7 +458,32 @@ single re-run node's un-mediated side effects.
 - `TECH_DEBT.md` `ECOGAP-1`; `docs/design/DURABLE_EXECUTION_PROGRAM.md`
 
 ---
+### DEC-020
+**Status:** `accepted` (2026-09-16 — FR-31 / `RESUME-FLOW-UNREGISTERED-1`)
 
+**Decision**
+`agent_execution` — the AGENT_FLOW backend's `flow_name` — is resolvable for **resume only**
+(`resolve_resumable_flow()`) and is never registered into the public `FLOW_REGISTRY`.
+`nodus_execute` is registered at boot.
+
+**Why**
+A rehydrated resume must find the flow by the row's name, and `agent_execution` had never been
+registered anywhere — so a gate-parked agent run could not survive a restart. The obvious fix,
+registering it beside `nodus_execute`, would have made it startable through `sys.v1.flow.run` by
+any holder of `flow.run`; `agent_execute_step` checks tool capability only when the state carries
+an `execution_token`, so that path runs tools with no token — approval bypassed. Resume-only
+resolution gives rehydration the dict without giving `flow.run` the name.
+
+**Implications**
+- `test_agent_execution_is_resolvable_for_resume_but_never_publicly_registered` pins both halves
+- any future runtime-owned flow that is started with a direct `flow=` and labelled by name must go
+  through `resolve_resumable_flow`, not `register_flow`, unless it is meant to be publicly startable
+
+**Related Docs**
+- `AINDY/runtime/nodus_execution_service.py` (`ensure_runtime_flows_registered`, `resolve_resumable_flow`)
+- `TECH_DEBT.md` `FR-31 / RESUME-FLOW-UNREGISTERED-1`
+
+---
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —

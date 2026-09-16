@@ -126,19 +126,35 @@ def route_event(
     except Exception as exc:
         logger.warning("[route_event] state commit failed event=%s: %s", event_type, exc)
 
+    woken: int | None = None
     try:
         from AINDY.kernel.event_bus import publish_event
 
-        resumed = publish_event(event_type, correlation_id=corr, run_id=run_id)
+        woken = publish_event(event_type, correlation_id=corr, run_id=run_id)
         logger.info(
             "[route_event] publish_event resumed=%d event=%s corr=%s run=%s",
-            resumed,
+            woken,
             event_type,
             corr,
             run_id,
         )
     except Exception as exc:
         logger.warning("[route_event] publish_event failed event=%s: %s", event_type, exc)
+    # FR-31 ask 3 — say whether anything was WOKEN, not only whether the payload was stored.
+    # `payload_injected: true` with nothing registered to wake is exactly how a resume that would
+    # never happen read as `resumed: true` on the wire. The payload is on the row regardless: the
+    # next boot's rehydration re-registers the run and the next wake delivers it.
+    if run_id is not None and results:
+        for entry in results:
+            entry["woken"] = bool(woken)
+        if not woken:
+            logger.warning(
+                "[route_event] payload injected for run=%s but NO wait was registered to wake — "
+                "the run is not being resumed by this call; it will be on the next wake after "
+                "rehydration (event=%s)",
+                run_id,
+                event_type,
+            )
     return results
 
 

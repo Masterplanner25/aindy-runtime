@@ -131,7 +131,22 @@ def _build_flow(run_id: str, db: "Session") -> Optional[Callable[[], None]]:
     # so the message is dead-lettered and visible rather than acknowledged and gone.
     from AINDY.runtime.flow_engine import FLOW_REGISTRY
 
-    if run.flow_name not in FLOW_REGISTRY:
+    resolvable = run.flow_name in FLOW_REGISTRY
+    if not resolvable:
+        # FR-31 — `nodus_execute` is registered at boot now (this is the belt for a process that
+        # skipped boot); `agent_execution` is resolvable for RESUME ONLY and never enters
+        # FLOW_REGISTRY. See `ensure_runtime_flows_registered`.
+        try:
+            from AINDY.runtime.nodus_execution_service import (
+                ensure_runtime_flows_registered,
+                resolve_resumable_flow,
+            )
+
+            ensure_runtime_flows_registered()
+            resolvable = resolve_resumable_flow(run.flow_name) is not None
+        except Exception:  # pragma: no cover
+            resolvable = False
+    if not resolvable:
         logger.warning(
             "[resume_rebuild] flow %r is not registered in this process; run %s cannot be "
             "resumed here (registered: %s)",

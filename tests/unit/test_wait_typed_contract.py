@@ -314,7 +314,7 @@ def test_a_valid_payload_is_injected_and_counted_accepted(db_session, engine):
 
     results = route_event(EVENT, GOOD, db_session, run_id=str(run.id))
 
-    assert results == [{"run_id": str(run.id), "payload_injected": True}]
+    assert results == [{"run_id": str(run.id), "payload_injected": True, "woken": True}]
     db_session.expire_all()
     assert db_session.query(FlowRun).filter(FlowRun.id == run.id).one().state["event"] == GOOD
     assert _woken(engine) == {str(run.id)}
@@ -333,7 +333,7 @@ def test_an_untyped_run_accepts_anything_and_is_counted_untyped(db_session, engi
 
     results = route_event(EVENT, MISSING, db_session, run_id=str(run.id))
 
-    assert results == [{"run_id": str(run.id), "payload_injected": True}]
+    assert results == [{"run_id": str(run.id), "payload_injected": True, "woken": True}]
     db_session.expire_all()
     assert db_session.query(FlowRun).filter(FlowRun.id == run.id).one().state["event"] == MISSING
     assert _count("untyped") == before + 1
@@ -352,6 +352,7 @@ def test_broadcast_skips_a_rejecting_run_and_injects_the_rest(db_session, engine
 
     results = route_event(EVENT, MISSING, db_session)
 
+    # Broadcast form: `woken` is a per-RUN answer and the broadcast has none, so the key is absent.
     assert results == [{"run_id": str(untyped.id), "payload_injected": True}]
     db_session.expire_all()
     assert "event" not in db_session.query(FlowRun).filter(FlowRun.id == typed.id).one().state
@@ -422,7 +423,7 @@ def test_the_route_answers_200_for_a_payload_that_satisfies_the_schema(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["data"]["flow_run_resume_result"]["results"] == [
-        {"run_id": str(run.id), "payload_injected": True}
+        {"run_id": str(run.id), "payload_injected": True, "woken": True}
     ]
     db_session.expire_all()
     assert db_session.query(FlowRun).filter(FlowRun.id == run.id).one().state["event"] == GOOD
@@ -548,7 +549,7 @@ def test_without_a_declaration_a_malformed_resume_consumes_the_wait(
         run = _start_guest(db_session, flow, flow_name, UNTYPED_SCRIPT, user_id)
 
         results = route_event(EVENT, {}, db_session, run_id=str(run.id))
-        assert results == [{"run_id": str(run.id), "payload_injected": True}]
+        assert results == [{"run_id": str(run.id), "payload_injected": True, "woken": True}]
         assert engine.waiting_for(str(run.id)) is None, "the wait was consumed"
 
         PersistentFlowRunner(flow=flow, db=db_session, user_id=user_id, workflow_type=None).resume(

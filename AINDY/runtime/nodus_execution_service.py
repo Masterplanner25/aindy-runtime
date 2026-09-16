@@ -104,6 +104,57 @@ def ensure_nodus_script_flow_registered() -> None:
         register_flow("nodus_execute", NODUS_SCRIPT_FLOW)
 
 
+#: The two flows the runtime itself runs under a `flow_name` a `FlowRun` row records — and
+#: therefore the two a rehydrated or rebuilt resume looks up by that name.
+RUNTIME_OWNED_DYNAMIC_FLOWS: tuple[str, ...] = ("nodus_execute", "agent_execution")
+
+
+def ensure_runtime_flows_registered() -> None:
+    """Make the runtime's own dynamic flows resolvable by name before a resume needs them (FR-31).
+
+    ★ Until 2026-09-16 `nodus_execute` was registered LAZILY — on the first script run of a
+    process — and `agent_execution` was never in FLOW_REGISTRY at all:
+    `execute_agent_flow_orchestration` hands `AGENT_FLOW` to the runner directly and only labels
+    the row. Both work while the process that parked the run is the one that resumes it. Neither
+    survives a RESTART: `flow_run_rehydration`'s callback and `resume_reconstruction._build_flow`
+    look the row's `flow_name` up at wake time, find nothing, warn and return — after the wake has
+    consumed the run's registration. The app team hit it on the 2.17.0 upgrade's own verification
+    step (`resumed: true` on the wire, run `waiting` forever, one WARNING). An agent run parked by
+    the authority WAIT gate (#681) would have been unresumable after any restart, the same way.
+
+    **What this registers, and what it deliberately does NOT.** `nodus_execute` goes into
+    FLOW_REGISTRY (it was always reachable there after the first script; the platform routes gate
+    who may run a script). `agent_execution` does **not**: a flow in FLOW_REGISTRY is startable
+    through `sys.v1.flow.run` by anyone holding `flow.run`, and `agent_execute_step` only checks
+    tool capability when the state carries an `execution_token` — so a public registration would
+    let a caller run tools with no token, bypassing approval. It is resolvable for RESUME only,
+    through `resolve_resumable_flow()`, which the two resume builders use.
+
+    Idempotent; called at boot by `register_all_flows()` (API) and the worker's `__main__`, and
+    on a lookup miss by the resume builders as belt and braces for a process that skipped boot.
+    """
+    ensure_nodus_script_flow_registered()
+
+
+def resolve_resumable_flow(flow_name: str) -> dict | None:
+    """The flow definition a resume should run for a `FlowRun.flow_name`, or ``None``.
+
+    FLOW_REGISTRY first (plugins' flows, the platform flows, `nodus_execute`); then the
+    runtime-owned flows that are NOT publicly registered (`agent_execution` → `AGENT_FLOW`, see
+    `ensure_runtime_flows_registered` for why). Resume-only: nothing here makes a flow startable.
+    """
+    from AINDY.runtime.flow_engine import FLOW_REGISTRY
+
+    flow = FLOW_REGISTRY.get(flow_name)
+    if flow is not None:
+        return flow
+    if flow_name == "agent_execution":
+        from AINDY.runtime.nodus_adapter import AGENT_FLOW
+
+        return AGENT_FLOW
+    return None
+
+
 def _run_nodus_via_flow_direct(
     *,
     script: str,
