@@ -463,7 +463,101 @@ Recovery logic must surface orphaned or unrecoverable waiting work rather than l
 
 ---
 
-## 7. Readiness And Degraded-Mode Invariants
+## 7. Durable State Ownership Invariants
+
+Adopted 2026-09-16 from `DURABLE_STATE_OWNERSHIP_CONTRACT.md` §8 (`ORCHESTRATOR-SPLIT-1` (b)).
+The contract is the narrative; these are the enforceable statements.
+
+### INV-OWN-001
+**Status:** `internal-stable`
+
+**Invariant**
+A unit of work has exactly one authoritative status row — `flow_runs` for flow work,
+`agent_runs` for agent work, `job_logs` for async jobs — and every recovery path reads it
+before acting. No recovery path reconciles two stores.
+
+**Scope**
+- boot rehydration and crash continuation
+- periodic watchdogs and retry jobs
+- cross-instance resume
+
+**Must Hold**
+- [x] Every `rehydrate_*` / `recover_*` / `continue_*` entry point selects from one of the three authority tables.
+- [x] A status transition out of `waiting` goes through the authority's CAS (`_claim_waiting_run`, `approve_run`).
+
+**Known Exceptions**
+- `execution_units` is finalised by whoever established it and is never a recovery source (`rehydrate_waiting_eus` removed 2026-09-16).
+
+**Enforcement Path**
+- `AINDY/core/flow_run_rehydration.py`, `AINDY/core/agent_run_rehydration.py`, `AINDY/core/agent_continuation.py`
+- `AINDY/runtime/flow_engine/runner_steps.py::_claim_waiting_run`
+- `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §3
+
+**Tests**
+- [x] `tests/unit/test_rehydration_paths.py`
+- [x] `tests/unit/test_resume_callbacks_are_reconstructible.py`
+
+### INV-OWN-002
+**Status:** `internal-stable`
+
+**Invariant**
+A transport message or a live callback is never the authority for the work it names. Losing
+one loses at most latency: the scheduler's `_waiting` map and the event-bus buffer are rebuilt
+from the authority rows at boot; a queue message is a claim to run a `job_logs` row; a
+scheduler resume crosses the queue as `run_id` + `eu_type` and is rebuilt from the row.
+
+**Scope**
+- the distributed queue (Redis or in-memory)
+- the scheduler's in-memory wait registry
+- the event bus (never carries a payload — DEC-013)
+
+**Must Hold**
+- [x] Only unit types with an authority row are reconstructible across a transport (`flow`, `agent`).
+- [x] An unresolvable queue message is never ACKed as success.
+
+**Known Exceptions**
+- Thread-mode async jobs hold their execution in a process-local future; recovery is boot-only (`recover_orphaned_thread_jobs`).
+
+**Enforcement Path**
+- `AINDY/core/resume_reconstruction.py::RECONSTRUCTIBLE_EU_TYPES`
+- `AINDY/core/distributed_queue.py` (visibility timeout; DB-side atomic claim is primary)
+- `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §2, §5
+
+**Tests**
+- [x] `tests/unit/test_durable_state_ownership.py::test_only_flow_and_agent_units_are_reconstructible`
+- [x] `tests/unit/test_resume_callbacks_are_reconstructible.py`
+
+### INV-OWN-003
+**Status:** `internal-stable`
+
+**Invariant**
+The host never resumes a guest workflow from the guest's own store (`nodus_lang_workflow`,
+`.nodus/graphs/`), and no guest-side resumer exists. Those stores are write-only from the
+runtime and advisory; authority for a guest workflow's progress is the `flow_runs` row of the
+node that ran it.
+
+**Scope**
+- the Nodus worker's declared guest-state environment
+- every import under `AINDY/`
+
+**Must Hold**
+- [x] The worker declares `NODUS_WORKFLOW_AUTOSWEEP=0` (the only guest-side actor, which could only dead-letter, is off).
+- [x] Nothing under `AINDY/` imports `nodus_lang_workflow`.
+
+**Known Exceptions**
+- None. Adding a guest-side resumer or a host read of guest state requires first deciding which store is authoritative for the same run (contract §4, §7; DEC-039).
+
+**Enforcement Path**
+- `AINDY/runtime/nodus_worker.py::declare_guest_state_environment`
+- `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §4
+
+**Tests**
+- [x] `tests/unit/test_durable_state_ownership.py::test_the_host_imports_nothing_from_the_guest_workflow_store`
+- [x] `tests/unit/test_guest_state_declaration.py`
+
+---
+
+## 8. Readiness And Degraded-Mode Invariants
 
 ### INV-READY-001
 **Status:** `stable`
@@ -561,6 +655,9 @@ Populate this section as invariants are adopted.
 | INV-EVENT-002 | tests/unit/test_rehydration_paths.py | recovery/watchdog | covered |
 | INV-READY-001 | tests/unit/test_partial_infrastructure_readiness.py, tests/unit/test_startup_readiness.py, tests/unit/test_runtime_degraded_modes.py, tests/unit/test_operability_contracts.py | readiness/integration | covered |
 | INV-READY-002 | tests/unit/test_runtime_degraded_modes.py | degraded-mode/integration | partial |
+| INV-OWN-001 | tests/unit/test_rehydration_paths.py, tests/unit/test_resume_callbacks_are_reconstructible.py | recovery/authority | covered |
+| INV-OWN-002 | tests/unit/test_durable_state_ownership.py, tests/unit/test_resume_callbacks_are_reconstructible.py | transport/reconstruction | covered |
+| INV-OWN-003 | tests/unit/test_durable_state_ownership.py, tests/unit/test_guest_state_declaration.py | guest-store/census | covered |
 
 ---
 
