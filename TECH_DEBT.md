@@ -12719,7 +12719,9 @@ contract) and `FLOW-PARALLEL-1` (topology model). This entry needs neither to la
 
 ## WAIT-TYPED-CONTRACT-1 — a resume payload is trusted, not checked
 
-**Status: OPEN — P2.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`.
+**Status: PHASE 1 SHIPPED 2026-09-15 — OPEN (P2) for the request-EU path and the guest-wait
+product decision.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`. **The phase-1
+record is at the end of this entry; the text between is the filing, kept as written.**
 
 **The gap, stated as an asymmetry rather than a deficiency.** `register_wait`
 (`kernel/scheduler/waits.py:8-30`) keys on `wait_for_event` plus an optional `correlation_id`,
@@ -12753,6 +12755,81 @@ webhook, an MCP client, a third-party connector.
 **Interaction to watch.** A typed pending-request record is also the natural place to hang
 `FLOW-GRAPH-SIGNATURE-1`'s originating-topology reference. Build that one first and this one gets
 cheaper.
+
+### Phase 1 — shipped 2026-09-15 (`FlowRun` path)
+
+**Re-audit of the filing before building (the rule: verify the guarantees, not just the gaps).**
+Claim 1 (no schema) held. **Claim 2 ("nothing ties a response back to the node that asked") was
+mostly false by the time it was acted on:** `FlowRun.current_node` records the waiting node,
+`resume()` re-runs exactly that node, the route checks `run.waiting_for == event_type`, and since
+`RESUME-FANOUT-UNSCOPED-1` (#655) the wake is `run_id`-scoped end to end. The node binding
+existed; only the schema did not. The promotion trigger has not fired: the only payload path is
+still `POST …/runs/{id}/resume` (`platform.admin`); `sys.v1.event.emit` wakes without a payload.
+
+**What an unchecked resume cost, made concrete (was not in the filing):** Tutorial 2's phase 2
+reads `approval["reviewer"]`. A resume with `{}` was ACCEPTED, the wait CONSUMED (scheduler entry
+deleted), and the script failed on its re-run — the run ended `failed`, not `waiting`. A
+malformed resume was not refused at the door; it destroyed the run one step later.
+`test_without_a_declaration_a_malformed_resume_consumes_the_wait` keeps that as the liveness
+control: the same payload against a declared schema is refused and the run keeps waiting.
+
+**What was built — a typed pending request layered ON the durable wait, as the filing asked.**
+- **Vocabulary:** a WAIT result may carry `resume_schema` in the **dispatcher's own dialect**
+  (`syscall_versioning.validate_payload`: `required` + `properties[<name>].type`). The asymmetry
+  was the finding, so the wait path uses the syscall path's validator — one vocabulary, one
+  implementation, and no new schema library. `AINDY/core/pending_request.py`.
+- **Record:** the runner's WAIT branch writes `state["__pending_request"] = {node, event,
+  schema}` on the run — **only when a schema is declared**, so every existing flow sees no
+  change; a WAIT that declares nothing clears any earlier record; SUCCESS of the resumed node
+  clears it. A malformed declaration (non-dict) **fails the node loudly** — silently degrading to
+  untyped would make a typo indistinguishable from no guard (variant 6).
+- **Check:** `route_event` validates BEFORE injecting or waking. Per-run form (the route): a
+  rejection raises `ResumePayloadRejected`, nothing is written, the run stays `waiting`, the
+  scheduler entry survives, the route answers **422** with the validator's errors (checked by
+  prefix and FIRST — the two existing substring checks would mis-map a validator message that
+  quotes a field name containing "404"). Broadcast form (nothing calls it): a rejecting run is
+  skipped from injection; the wake still goes out by event name, which that run sees as a
+  payload-less wake — the semantics a bus emit already has.
+- **Signal:** `aindy_flow_resume_payload_total{outcome=accepted|rejected|untyped}`. `untyped` is
+  the label that matters while adoption is zero — it separates "no wait declares a schema yet"
+  from "the check is not wired".
+- **Guest:** `set_state("nodus_wait_resume_schema", {...})` beside the two existing wait keys;
+  `nodus_worker` forwards it, `nodus.execute` returns it as the node's `resume_schema`.
+
+**Three decisions, recorded so they are not re-derived:**
+1. **State key, not a column.** `waiting_for`/`wait_deadline`/`graph_signature` are columns, and a
+   column was the "honest" home — but an additive column makes every existing deployment owe
+   `bootstrap-schema --reconcile` (0018's operator note) for a defence-in-depth check. Consequence
+   stated rather than hidden: the record is a runner-level write (like `route_event`'s
+   `state["event"]`), NOT in the node's `output_patch` (which stays what the node returned), so
+   **the DUR-4 fold does not reconstruct it** — a run recovered from a torn snapshot resumes
+   UNTYPED. Absent ≠ mismatch (`FLOW-GRAPH-SIGNATURE-1`'s rule); the degradation is to the
+   pre-feature behaviour, never to a wrong rejection. Pinned by
+   `test_a_state_reconstructed_by_the_fold_resumes_untyped` so changing either side is a decision.
+2. **`nodus_output_state` is NOT seeded back into a re-run — DECLINED 2026-09-15** (the question
+   `NODUS-RESUME-BRIDGE-1` handed here). The two-phase run-from-the-top shape is the documented
+   contract; seeding prior state would re-apply phase 1's effects on every re-run. What the script
+   set before it parked stays readable on the waiting run; it is not handed back.
+3. **`ExecutionWaitSignal` gets no schema in this phase.** Its resume side (`resumed → executing`)
+   has no in-tree raiser and no test (noted in FR-29's entry, unfiled); building a check on a
+   surface nothing reaches is variant 14. Give it one when something raises it.
+
+**Tests:** `tests/unit/test_wait_typed_contract.py` — runner (records / no record / malformed
+fails loudly / earlier record does not type a later wait / SUCCESS clears), `route_event` on a
+REAL `SchedulerEngine` (rejected writes nothing + wakes nothing + entry survives; accepted;
+untyped passes; broadcast skips), **the route CALLED on the booted app** (422 + run still
+waiting; 200 control), the REAL guest interpreter + worker entry (declares, refuses, admits,
+reaches phase 2), the liveness control, the fold degradation. **Mutation-tested 7/7:** drop the
+check (7 fail), never record (4), drop the SUCCESS clear (2), worker stops forwarding (1),
+malformed → silently untyped (1), drop the 422 mapping (1), rejection falls through to inject (6).
+**Not re-run live.**
+
+**Still open here:** (a) the request-EU path (`ExecutionWaitSignal`) once it has a raiser;
+(b) the `GUEST-BUILTINS-DEAD-1` step-2 product decision — a guest wait API vs the documented
+magic keys — which this entry owns and which phase 1 did not decide (it added a third key to
+the existing shape, it did not choose the shape); (c) the promotion to P1 if a webhook, MCP
+client or connector ever becomes a payload path — at which point the check already exists and
+the question becomes whether an untyped wait may still be resumed by such a caller.
 
 ---
 

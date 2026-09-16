@@ -398,7 +398,13 @@ def _handle_node_status(
         #
         # ★ It also has to run on the RUNNER's session, single-threaded (design section 3c):
         # branches get their own sessions and must not write shared state.
-        pass
+        #
+        # WAIT-TYPED-CONTRACT-1 — a node that succeeded is no longer asking for anything: the
+        # pending request its WAIT recorded is consumed. Left in place it would type the NEXT
+        # wait on this run with a schema nobody declared for it.
+        from AINDY.core.pending_request import PENDING_REQUEST_KEY
+
+        state.pop(PENDING_REQUEST_KEY, None)
     elif node_status == "RETRY":
         attempts = context["attempts"].get(current_node, 0)
         node_cfg = self.flow.get("node_configs", {}).get(current_node, {})
@@ -429,6 +435,33 @@ def _handle_node_status(
                 failed_node=current_node,
                 parent_event_id=str(node_started_event_id) if node_started_event_id else None,
             )
+        # WAIT-TYPED-CONTRACT-1 — the node may declare what is allowed to resume it. Recorded on
+        # the run beside the wait (a runner-level write, like `route_event`'s `state["event"]`;
+        # NOT the node's patch, so `flow_history.output_patch` stays what the node returned), and
+        # checked by `route_event` before a payload is injected. No declaration → no record →
+        # the wait is untyped, exactly as before. A malformed declaration fails the node LOUDLY:
+        # silently degrading to untyped would make a typo indistinguishable from no guard.
+        try:
+            from AINDY.core.pending_request import (
+                PENDING_REQUEST_KEY,
+                RESUME_SCHEMA_KEY,
+                build_pending_request,
+            )
+
+            pending = build_pending_request(
+                node=current_node, event=wait_for, schema=result.get(RESUME_SCHEMA_KEY)
+            )
+        except ValueError as exc:  # InvalidResumeSchema
+            return self._fail_execution(
+                str(exc),
+                failed_node=current_node,
+                parent_event_id=str(node_started_event_id) if node_started_event_id else None,
+            )
+        if pending is not None:
+            state[PENDING_REQUEST_KEY] = pending
+        else:
+            # This wait declared nothing; a record from an earlier wait must not type it.
+            state.pop(PENDING_REQUEST_KEY, None)
         run.status = "waiting"
         run.waiting_for = wait_for
         _timeout = _get_flow_wait_timeout(run.flow_name)

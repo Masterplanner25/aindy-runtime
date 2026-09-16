@@ -146,6 +146,20 @@ run_cancel_observed_total = Counter(
     registry=REGISTRY,
 )
 
+# ── Typed resume (WAIT-TYPED-CONTRACT-1 phase 1) ─────────────────────────────
+#
+# ★ `untyped` is the label that matters while adoption is zero: it is what separates "no wait
+# has declared a schema yet" from "the check is not wired". Read it before deciding whether
+# a typed wait should ever become the default; a rejected count is the defence working.
+flow_resume_payload_total = Counter(
+    "aindy_flow_resume_payload_total",
+    "Resume payloads checked against the waiting node's declared schema: accepted (declared, "
+    "valid), rejected (declared, refused before injection), untyped (no schema declared — "
+    "the pre-feature behaviour).",
+    ["outcome"],
+    registry=REGISTRY,
+)
+
 # ── Authority negotiation (AUTHORITY-NEGOTIATION-1 phase 1) ──────────────────
 #
 # ★ Not optional decoration. Without this counter, "negotiation never fires because denials
