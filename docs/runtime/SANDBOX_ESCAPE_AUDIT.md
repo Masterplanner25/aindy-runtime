@@ -1532,6 +1532,39 @@ the tag, from source), and this entry is written from its first and only run.
 
 ---
 
+## Entry 032 — 2026-09-16
+
+**Trigger:** `v2.18.0` release tag (`sandbox-escape-linux.yml`, run `35111941901`).
+**Commit:** `482c3da9aee3` (release PR #690's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–031.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 9.61s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `35111941901`).
+
+**The certified boundary is untouched.** `git diff v2.17.0..v2.18.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**. No dependency pin
+moved.
+
+**What this release changed, and why it is not what this gate measures.** Four runtime items
+(#685, #686, #688, #689) plus the docs-only decisions register (#687). **One touches the guest
+worker and is worth naming here: #688 replaced the guest wait.** `nodus_worker.py` registers a
+new host function, `await_event`, which sets the three wait state keys and raises inside the
+guest to halt the script; `nodus_builtins.py` (the never-wired `event.wait()` design) and
+`WorkerWaitSignal` were deleted. That is the HOST-FUNCTION surface inside the guest VM — what a
+script may call — not the confinement around the VM (`allowed_paths`, the deny flags, the scratch
+root, the subprocess boundary), which `GUEST-CONFINE-1` pinned and which did not change. The
+escape suite targets `containerized_oci` via `sandbox_runner.py`; `nodus_worker.py` is not on its
+path. The other three are host-side: boot registration of the runtime's flows, the cross-instance
+resume callback, the EU-level rehydration step.
+
+**★ Release-process note — the CDN lag is getting longer, not shorter.** Boot Smoke on the
+published wheel installed `aindy-runtime==2.18.0` **on attempt 3** (`v2.16.0`: attempt 2;
+`v2.17.0`: attempt 2; `v2.15.0`: failed outright, pre-#672). The #672 retry (10 × 30 s) absorbed
+it with headroom; if a tag ever needs more than ~5 attempts the retry budget, not the release, is
+the thing to revisit. Written from this entry's first and only run.
+
 ## Entry 031 — 2026-09-16
 
 **Trigger:** `v2.17.0` release tag (`sandbox-escape-linux.yml`, run `35062082818`).
