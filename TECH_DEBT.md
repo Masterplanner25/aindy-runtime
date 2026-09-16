@@ -8955,10 +8955,24 @@ nothing under `core/execution_pipeline/` calls `register_wait`, `set_wait_condit
 wait-shaped result finalizes). **Mutation: re-adding a dict-based park → 6 fail, both new tests
 among them.** **Not re-run live.**
 
-**Follow-up (not filed as its own entry):** `rehydrate_waiting_eus` is now redundant with
-`flow_run_rehydration` for the only units that can be `waiting`; remove it, or commit its
-callback, in a startup-phase pass. Do not "fix" it by adding the commit alone — that would make
-a redundant callback race the flow callback for the same transition.
+**Follow-up — DONE 2026-09-16: `rehydrate_waiting_eus` REMOVED.** Every unit that can be
+`waiting` belongs to a flow run, and `flow_run_rehydration`'s callback (claim → resume the unit →
+drive the flow, one committed session) was already its only durable writer; the EU-level step
+registered a SECOND scheduler entry per parked run (keyed by unit id) whose callback rolled back
+on every fire. `flow_run_rehydration`'s docstring had called the pair "complementary … removing
+either would leave a broken half-state" — false in exactly the direction that hid the rollback.
+`wait_rehydration.py` keeps only the `waiting_flow_runs` seed; `WAIT_EUS_REHYDRATION_FAILED`
+stays in the condition-code vocabulary (published, pinned by the cross-repo contract), retired
+and never emitted. **★ The durability test written to prove the removal safe found a SECOND
+latent gap of `ACTIVE-COUNT-WAIT-LEAK-1`'s shape:** the flow's unit `completed` transition
+lived INSIDE `capture_flow_completion`, which returns early without `user_id`/`workflow_type`
+and is wrapped in the memory-capture try — so a run with no user id completed with its unit
+left `executing`, durably. Extracted to `finalize_flow_unit`, unconditional, before the commit
+(routes always pass both, so this was latent in production). `tests/unit/
+test_flow_rehydration_owns_the_unit.py`: exactly ONE scheduler entry per parked run, keyed by
+the run; the unit's transition read through a separate connection. **Mutation 2/3 + one
+survivor explained:** dropping the callback's step 2 changes nothing because `resume()` recovers
+the unit itself on the same session — two writers, one commit, not a race.
 
 ---
 ## FR-29 / WAIT-DETECT-SHAPE-1 — reading a waiting run parked the READER's execution unit, forever 🔴 defect

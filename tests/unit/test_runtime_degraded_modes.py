@@ -208,16 +208,21 @@ def test_dynamic_registry_restore_is_startup_fatal_in_production(monkeypatch):
 
 
 def test_rehydration_failure_is_startup_fatal_in_production(monkeypatch):
+    """The flow-run rehydration is the one that exists (the EU-level one was removed 2026-09-16
+    — its callback rolled back on every fire; `EU-WAIT-SIGNAL-DEAD-1`'s follow-up)."""
     import AINDY.startup as startup
-    import AINDY.core.wait_rehydration as wait_rehydration
+    import AINDY.core.flow_run_rehydration as flow_run_rehydration
 
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setattr(startup.settings, "ENV", "production")
     monkeypatch.setattr(startup.settings, "TESTING", False)
     monkeypatch.setattr(startup.settings, "TEST_MODE", False)
-    monkeypatch.setattr(wait_rehydration, "rehydrate_waiting_eus", lambda db: (_ for _ in ()).throw(RuntimeError("rehydrate exploded")))
+    monkeypatch.setattr(
+        flow_run_rehydration, "rehydrate_waiting_flow_runs",
+        lambda db: (_ for _ in ()).throw(RuntimeError("rehydrate exploded")),
+    )
 
-    with pytest.raises(RuntimeError, match="WAIT execution-unit rehydration failed"):
+    with pytest.raises(RuntimeError, match="FlowRun rehydration failed"):
         startup._rehydrate_waiting_state(_DummyDb, False)
 
 

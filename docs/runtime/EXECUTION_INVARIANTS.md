@@ -1,6 +1,6 @@
 ---
 title: "Execution Invariants"
-last_verified: "2026-08-06"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -151,8 +151,7 @@ The scheduler lifecycle must not allow a run or execution unit to appear activel
 - `AINDY/kernel/scheduler/waits.py::register_wait()`
 - `AINDY/kernel/scheduler/core.py::mark_rehydration_complete()`
 - `AINDY/startup.py::_rehydrate_waiting_state()`
-- `AINDY/core/wait_rehydration.py::rehydrate_waiting_eus()`
-- `AINDY/core/flow_run_rehydration.py::rehydrate_waiting_flow_runs()`
+- `AINDY/core/flow_run_rehydration.py::rehydrate_waiting_flow_runs()` — the one rehydration step; its callback claims the run, resumes the run's execution unit and drives the flow, on one committed session. (`wait_rehydration.rehydrate_waiting_eus()` was removed 2026-09-16 — its callback never committed; `test_flow_rehydration_owns_the_unit.py`.)
 
 **Tests**
 - [x] `tests/unit/test_scheduler_wait_resume.py::test_register_wait_stores_entry`

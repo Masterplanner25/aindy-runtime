@@ -68,6 +68,7 @@ def maybe_finalize_completion(
             )
 
         runner._capture_flow_completion(run, state)
+        finalize_flow_unit(runner, run, "completed")
         release_slot_on_completion(runner, "success")
         run.status = "success"
         run.state = _json_safe(state)
@@ -177,6 +178,29 @@ def release_slot_on_completion(runner, outcome: str) -> None:
         logger.debug("[EU] resource_manager.mark_completed(%s) skipped: %s", outcome, exc)
 
 
+def finalize_flow_unit(runner, run, status: str) -> None:
+    """Move the flow's execution unit to a terminal ``status``, unconditionally.
+
+    Called by `maybe_finalize_completion` BEFORE its commit, so the flush rides that commit.
+    Unconditional on `user_id` / `workflow_type` and outside the memory-capture try, for the
+    same reason `release_slot_on_completion` is: a guard inside a hook that can early-return
+    is not a guard. Non-fatal — a unit that cannot be finalised must not fail a run that did.
+    """
+    try:
+        from AINDY.core.execution_unit_service import ExecutionUnitService
+
+        eus = ExecutionUnitService(runner.db)
+        eu_id = getattr(runner, "_eu_id", None)
+        if eu_id:
+            eus.update_status(eu_id, status)
+        else:
+            eu = eus.get_by_source("flow_run", run.id)
+            if eu:
+                eus.update_status(eu.id, status)
+    except Exception as exc:
+        logger.warning("[EU] flow %s hook - non-fatal | error=%s", status, exc)
+
+
 def capture_flow_completion(runner, run, state: dict) -> None:
     if not runner.user_id or not runner.workflow_type:
         return
@@ -218,23 +242,12 @@ def capture_flow_completion(runner, run, state: dict) -> None:
             tags=["flow_history", "execution_pattern", runner.workflow_type],
             context={"run_id": run.id, "total_ms": total_ms},
         )
-        try:
-            from AINDY.core.execution_unit_service import ExecutionUnitService
-
-            eus = ExecutionUnitService(runner.db)
-            eu_id = getattr(runner, "_eu_id", None)
-            if eu_id:
-                eus.update_status(eu_id, "completed")
-            else:
-                eu = eus.get_by_source("flow_run", run.id)
-                if eu:
-                    eus.update_status(eu.id, "completed")
-            # ACTIVE-COUNT-WAIT-LEAK-1 — the slot release used to live HERE, inside a function
-            # that returns early when `user_id` or `workflow_type` is unset and is wrapped in a
-            # memory-capture try/except. It is now `release_slot_on_completion`, called
-            # unconditionally by `maybe_finalize_completion`.
-        except Exception as exc:
-            logger.warning("[EU] flow completion hook - non-fatal | error=%s", exc)
+        # ACTIVE-COUNT-WAIT-LEAK-1 — the slot release used to live HERE, inside a function that
+        # returns early when `user_id` or `workflow_type` is unset and is wrapped in a
+        # memory-capture try/except. It is now `release_slot_on_completion`. The unit's
+        # `completed` transition lived here too, with the same two ways of being skipped — it
+        # is now `finalize_flow_unit` (2026-09-16, found by the rehydration durability test:
+        # a run with no user_id completed with its unit left `executing`, durably).
     except Exception as exc:
         logger.warning("FlowHistory -> Memory Bridge capture failed: %s", exc)
         from AINDY.runtime import flow_engine as flow_engine_module

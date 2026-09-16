@@ -1,7 +1,7 @@
 ---
 title: "Operator-Facing Condition Codes"
 api_version: "1.0"
-last_verified: "2026-06-06"
+last_verified: "2026-09-16"
 status: current
 owner: "platform-team"
 ---
@@ -50,7 +50,7 @@ Each condition carries a `classification` from `ConditionClassification`:
 | `mongo_required_unavailable` | `startup_fatal` | mongo | Required MongoDB (`MONGO_REQUIRED=true`) unavailable; startup blocked |
 | `distributed_worker_unavailable` | `unsafe_degraded` | worker | Distributed profile requires a worker heartbeat; none detected at startup |
 | `event_bus_rehydration_drain_failed` | `unsafe_degraded` | rehydration | Buffered event drain after rehydration failed; resume events may be lost |
-| `wait_eus_rehydration_failed` | `unsafe_degraded` | rehydration | WAIT execution-unit rehydration failed; pending waits may be stranded |
+| `wait_eus_rehydration_failed` | `unsafe_degraded` | rehydration | **RETIRED 2026-09-16 — never emitted.** The step that raised it (`rehydrate_waiting_eus`) was removed; the code stays in the vocabulary so a dashboard filtering on it keeps parsing. Flow-run rehydration (`flow_run_rehydration_failed`, below) is the one that exists |
 | `flow_run_rehydration_failed` | `unsafe_degraded` | rehydration | FlowRun rehydration failed; waiting flows may not resume correctly |
 | `dynamic_registry_restore_failed` | `unsafe_degraded` | plugin_restore | Dynamic registry restore failed; runtime extensions were not restored from DB |
 | `dynamic_registry_restore_incomplete` | `unsafe_degraded` | plugin_restore | Registry restore incomplete; some flows, nodes, or webhooks missing |
