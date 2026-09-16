@@ -9012,6 +9012,59 @@ event on a single-instance deployment and a routine one on any multi-instance de
 `FR-15`'s distributed evidence, still unobtained, is the scenario that would have surfaced it.
 
 ---
+## SYSTEM-STATE-TENANT-1 — the system-wide state snapshot counted zero agent runs, always
+
+**Status: CLOSED 2026-09-16 on filing — FIXED.** Found by the app (its `SYSCALL-SILENT-ERRORS-1`,
+2026-09-16, from `aindy_syscall_outcome_total`) and recorded in its commit body as *"the runtime's
+`system_state_service` passes `None` for the two agent syscalls"* — not filed as an FR. Read
+from the sixth session's handoff check of the app repo; verified in-process before the fix.
+
+**The defect.** `platform_layer/system_state_service.py::compute_current_state` is a SYSTEM-wide
+reading: `FlowRun`, `SystemEvent`, `RequestMetric` and `SystemHealthLog` are queried across every
+tenant directly on the caller's session. Its two agent inputs went through
+`sys.v1.agent.count_runs` and `sys.v1.agent.list_recent_durations` via `dispatch_syscall(...,
+user_id=None, capability="agent.read")`. `make_syscall_ctx_from_tool` turns `None` into `""`,
+and the dispatcher's step 2b refuses an empty tenant — `TENANT_VIOLATION: syscall requires
+authenticated tenant context` — before any handler runs. The service tested `status == "success"`
+and otherwise read `0` / `[]`. So `active_runs` counted flow runs only and `avg_execution_time`
+averaged flow + request durations only, on every call since the extraction (`0d5d382`,
+2026-05-17). Both feed `system_load` and therefore `health_status`.
+
+**★ Two inferences in the app's record were wrong, and both would have led to the wrong fix:**
+
+- *"Inside a request the pipeline's tenant context covers an empty ctx"* — nothing does. No
+  ContextVar fills `SyscallContext.user_id`; the refusal fires on every call, request or job.
+  Their route probes "succeeded" because NO runtime route calls `compute_current_state` (zero
+  in-tree callers; the app's three are the only ones: `triggers.py`, `dependency_adapter.py`,
+  `ranking.py`, all job-shaped).
+- *Passing a tenant is the fix* — it is not. `_resolve_tenant_user_id` scopes both handlers to
+  ONE user by construction (`AgentRun.user_id == tenant`). A snapshot of the whole system asked
+  through a per-tenant syscall gets one tenant's answer. The syscalls are the wrong SHAPE for
+  this reading, not merely mis-called.
+
+**Fix (#692):** `AgentRun` is read directly on `db`, the way `FlowRun` always was in the same
+function and the way `support_metrics_service._agent_runs` already does one file over — the
+active-status set (`approved | executing | pending_approval`) and the one-hour duration window
+are unchanged. The two dispatches are gone from the service. Both syscalls STAY registered:
+`count_runs` has a consumer (the app's `identity_boot_service`), `list_recent_durations` now has
+none in either repo — removing a registered syscall is a separate decision, not a side effect.
+
+**Test — `tests/unit/test_system_state_agent_half.py`**, driving the real function on a seeded
+session: three active rows across two tenants must read 3 (a per-tenant count reads 2 or 1, the
+refused path read 0); two agent durations must move the average; a 3-hour-old row must not; and
+a spy on `dispatch_syscall` pins that the snapshot dispatches NOTHING — the liveness half, so a
+rewire back to a tenant-scoped syscall is caught on an EMPTY table, not only when rows exist.
+Red on the unfixed code 3/4 (the window test passes vacuously there — it is a supplement).
+**Mutation 3/3:** per-tenant filter → the count test; drop `agent_durations` from the average
+→ the duration test; drop the window → the window test.
+
+**The shape, for the catalogue:** a refusal read as an empty result. The dispatcher said no,
+the caller heard "nothing there", and the number it published was plausible — 0 active agent
+runs is a normal reading. `FR-25`'s WARNING on the refused path is what made it visible at all,
+and only because the app ran the service from a job and read the outcome metric. Same family as
+`EVENT-OUTBOX-1`'s *"a missing row reads as the work never happened"*.
+
+---
 ## EU-WAIT-SIGNAL-DEAD-1 — a request's execution unit could "wait", and nothing could ever resume it
 
 **Status: CLOSED 2026-09-15 on filing — the surface was REMOVED, not repaired (DEC-014).** Decided by
