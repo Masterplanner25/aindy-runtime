@@ -9452,6 +9452,22 @@ mitigation, and it is what every deployment is doing by hand right now.
 
 ## IDEM-12 — `agent.undo` re-invokes every compensator when called twice
 
+**Status: CLOSED 2026-09-16 (#696).** Reproduced first — two reversible effects, two undos,
+**four** compensator invocations — then fixed at reversal's own layer, exactly as the entry
+proposed: `undo_run_effects` now asks `effect_reversals` which of the run's effects already
+carry a `reversed` row (`_already_reversed_effect_ids`, keyed on `effect_record_id`, one query
+for the whole set) and skips them, reporting each under a new `already_reversed` summary key.
+**Only `reversed` suppresses** — an `irreversible` or `failed` row leaves the effect eligible,
+so a transient compensator failure stays retryable, and an effect with no compensator is
+re-surfaced as `irreversible` on every undo rather than hidden. No schema change; nothing
+depends on the `IDEM-11` gate or its flag. `sys.v1.agent.undo`'s output schema gains
+`already_reversed` (additive; `required` unchanged). Compensator count at HEAD: still zero — the
+fix lands before the first one does. **Mutation 3/3** (`tests/unit/test_effect_compensation_reentrant.py`):
+never skip → the double-undo test; suppress on ANY reversal status → the retry test AND the
+irreversible test; key on `action_type` instead of the effect → the cross-run test.
+
+### Original entry (2026-08-15) — retained
+
 **Status: OPEN — P2 (latent).** Filed 2026-08-15, found while doing the `IDEM-11` per-syscall
 audit rather than reported by any audit.
 

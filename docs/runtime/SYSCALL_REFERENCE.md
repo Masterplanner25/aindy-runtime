@@ -448,7 +448,9 @@ append-only `effect_reversals` audit log. Undo ≠ replay: `replay` re-does a ru
 |-----|------|----------|-------------|
 | `run_id` | string | yes | `AgentRun` id whose effects to reverse. |
 
-**Returns:** `{run_id, reversed: [action_type…], irreversible: [action_type…], failed: [{action_type, error}…]}`
+**Returns:** `{run_id, reversed: [action_type…], already_reversed: [action_type…], irreversible: [action_type…], failed: [{action_type, error}…]}`
+
+Re-entrant (IDEM-12, 2026-09-16): an effect that already carries a `reversed` audit row is skipped and listed under `already_reversed` — a second undo never re-invokes a compensator, gate on or off. `irreversible` and `failed` rows do not suppress a retry.
 
 ---
 

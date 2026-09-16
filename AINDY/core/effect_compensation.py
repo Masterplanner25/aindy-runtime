@@ -10,6 +10,13 @@ the append-only ``effect_reversals`` audit log:
   - irreversible — no compensator declared for the syscall; surfaced, not skipped.
   - failed       — a compensator was invoked but raised.
 
+IDEM-12: reversal is re-entrant at its own layer. An effect that already has a
+``reversed`` audit row is skipped and reported ``already_reversed`` — a second undo
+never re-invokes a compensator. Only ``reversed`` suppresses; ``irreversible`` and
+``failed`` rows do not, so a transient compensator failure stays retryable. This does
+not depend on the EXACTLY_ONCE idempotency gate (which keys on the request, not the
+effect, and is a flag).
+
 This is the rollback mechanism AGENT-HARDEN-6 (the Verifier) invokes when a run's
 post-conditions fail. Replay (``agent_runtime/replay.py``) *re-does*; this *undoes*.
 """
@@ -61,6 +68,29 @@ def _record_reversal(
     )
 
 
+def _already_reversed_effect_ids(db: Session, records) -> set:
+    """Ids of the given EffectRecords that already carry a ``reversed`` audit row.
+
+    Keyed on the effect record, not the action type — one run's reversal says nothing
+    about another run's effect of the same syscall. Only ``reversed`` counts: an
+    ``irreversible`` or ``failed`` row must leave the effect eligible for a retry.
+    """
+    from AINDY.db.models import EffectReversal
+
+    ids = [rec.id for rec in records if getattr(rec, "id", None) is not None]
+    if not ids:
+        return set()
+    rows = (
+        db.query(EffectReversal.effect_record_id)
+        .filter(
+            EffectReversal.effect_record_id.in_(ids),
+            EffectReversal.status == "reversed",
+        )
+        .all()
+    )
+    return {row[0] for row in rows}
+
+
 def undo_run_effects(
     run_id: str,
     *,
@@ -87,6 +117,7 @@ def undo_run_effects(
     summary: dict[str, Any] = {
         "run_id": str(run_id),
         "reversed": [],
+        "already_reversed": [],
         "irreversible": [],
         "failed": [],
     }
@@ -106,7 +137,15 @@ def undo_run_effects(
         .all()
     )
 
+    already_reversed = _already_reversed_effect_ids(db, records)
+
     for rec in records:
+        if rec.id in already_reversed:
+            # IDEM-12 — a compensator already ran for THIS effect; do not run it again and
+            # do not write a second `reversed` row. Reported so the caller can tell a
+            # no-op undo from one with nothing to undo.
+            summary["already_reversed"].append(rec.action_type)
+            continue
         compensator, _entry = _lookup_compensator(rec.action_type)
         effect = {
             "effect_record_id": str(rec.id),
