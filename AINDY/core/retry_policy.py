@@ -17,11 +17,11 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Optional, TypeVar
+from typing import Any, Optional
 
 
-_T = TypeVar("_T")
 _MAX_BACKOFF_SECONDS = 10.0
 _MAX_JITTER_MS = 50
 
@@ -90,19 +90,8 @@ _RISK_TO_AGENT_POLICY: dict[str, RetryPolicy] = {
     "high": AGENT_HIGH_RISK,
 }
 
-# Error strings that indicate a non-retryable failure regardless of policy.
-# Callers may check is_retryable_error() before honouring max_attempts.
-_NON_RETRYABLE_SUBSTRINGS: tuple[str, ...] = (
-    "permission",
-    "unauthorized",
-    "forbidden",
-    "not found",
-    "404",
-    "401",
-    "403",
-    "invalid",
-    "blocked by policy",
-)
+# The non-retryable substring table now lives beside `classify_failure` below as
+# `_SUBSTRING_CLASSES` — the same nine needles, each mapped to a failure class.
 
 
 def resolve_retry_policy(
@@ -204,62 +193,162 @@ async def _sleep_before_retry_async(policy: RetryPolicy, attempt_number: int) ->
 
 
 # ---------------------------------------------------------------------------
-# Error classification helper
+# Failure classification (RETRY-CLASSIFY-1)
 # ---------------------------------------------------------------------------
+#
+# Whether a failed attempt is retried used to be decided by `is_retryable_error(str)`: lowercase
+# the message, match nine substrings. Run over `execute_tool`'s OWN refusal strings that read
+# RETRY for a cancelled run, a missing capability token and a crashed enforcement check — three
+# conditions that cannot change between attempts (design §3). The class is therefore set at the
+# RAISING SITE (`failure_class` on the result dict, beside `error`), and the substring table
+# survives only as a fallback for un-classed strings — one that says so when it fires.
+#
+# ★ The class is a STRING on the result dict, not an exception type, because the three loops
+# that consume it (flow node, tool step, compiled plan in the guest) all consume DICTS, and the
+# guest boundary swallows host exceptions into `ok: False` — a type cannot cross it, a string can.
+# Design: docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md.
 
-def is_retryable_error(error: Optional[str]) -> bool:
-    """
-    Return False when an error string signals a non-retryable failure.
+FAILURE_CLASSES: frozenset[str] = frozenset({
+    "transient",     # retry may succeed: timeout, worker crash, 5xx, connection reset
+    "cancelled",     # the run was cancelled — never retry, never re-plan
+    "permission",    # capability / scope / policy refusal
+    "not_found",     # tool, syscall, route, resource absent
+    "invalid",       # caller-side: bad args, schema violation
+    "fatal",         # the raising site knows it is terminal
+})
 
-    Callers can use this to short-circuit retry loops even when the policy
-    allows more attempts. Current system does not use this - it is here as
-    the central place to add the check when callers adopt it.
-    """
-    if not error:
-        return True
-    lower = error.lower()
-    return not any(substr in lower for substr in _NON_RETRYABLE_SUBSTRINGS)
+#: The one class a retry may follow. Everything else stops the loop.
+RETRYABLE_CLASSES: frozenset[str] = frozenset({"transient"})
+
+FAILURE_CLASS_KEY = "failure_class"
+
+# The fallback table, kept verbatim from the string-only classifier so the default flip changes
+# nothing for a string the table already stopped. Order matters only for the class it maps to.
+_SUBSTRING_CLASSES: tuple[tuple[str, str], ...] = (
+    ("permission", "permission"),
+    ("unauthorized", "permission"),
+    ("forbidden", "permission"),
+    ("blocked by policy", "permission"),
+    ("not found", "not_found"),
+    ("404", "not_found"),
+    ("401", "permission"),
+    ("403", "permission"),
+    ("invalid", "invalid"),
+)
 
 
-def execute_with_retry(
-    operation: Callable[[], _T],
+@dataclass(frozen=True)
+class FailureRecord:
+    """One failed attempt, classified. The payload both retry entries share (design §4)."""
+
+    error: str
+    """The message, unchanged — what callers read today."""
+
+    failure_class: str
+    """One of ``FAILURE_CLASSES``."""
+
+    classified_by: str
+    """``"site"`` (the raising site declared it), ``"substring"`` (the fallback table fired),
+    or ``"default"`` (neither decided; treated as transient — the pre-existing behaviour)."""
+
+    attempt: int = 1
+    """1-based attempt that produced it."""
+
+    site: str = "unknown"
+    """``"flow_node"`` | ``"tool_step"`` | ``"compiled_plan"`` | ``"syscall"``."""
+
+    @property
+    def retryable(self) -> bool:
+        return self.failure_class in RETRYABLE_CLASSES
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "failure_class": self.failure_class,
+            "classified_by": self.classified_by,
+            "attempt": self.attempt,
+            "site": self.site,
+        }
+
+
+def _substring_class(message: str) -> Optional[str]:
+    lower = message.lower()
+    for needle, klass in _SUBSTRING_CLASSES:
+        if needle in lower:
+            return klass
+    return None
+
+
+def classify_failure(
+    result_or_error: Any,
     *,
-    policy: RetryPolicy,
-    retryable_error_checker: Callable[[Optional[str]], bool] = is_retryable_error,
-) -> _T:
-    """Run a synchronous operation under the supplied retry policy."""
-    for attempt_index in range(policy.max_attempts):
-        try:
-            return operation()
-        except Exception as exc:
-            if policy.high_risk_immediate_fail or attempt_index + 1 >= policy.max_attempts:
-                raise
+    site: str = "unknown",
+    attempt: int = 1,
+) -> FailureRecord:
+    """Classify one failed attempt.
 
-            if not retryable_error_checker(str(exc)):
-                raise
+    Accepts the result dict a loop already holds (``{"success": False, "error": ..,
+    "failure_class": ..}``), a bare error string, or ``None``. A class the site declared wins;
+    otherwise the substring table; otherwise ``transient`` — and the record says which.
+    """
+    declared: Any = None
+    message: Any = result_or_error
+    if isinstance(result_or_error, Mapping):
+        declared = result_or_error.get(FAILURE_CLASS_KEY)
+        message = result_or_error.get("error")
+    text = "" if message is None else str(message)
 
-            _sleep_before_retry(policy, attempt_index + 1)
+    if isinstance(declared, str) and declared in FAILURE_CLASSES:
+        return FailureRecord(text, declared, "site", attempt, site)
+    matched = _substring_class(text) if text else None
+    if matched is not None:
+        return FailureRecord(text, matched, "substring", attempt, site)
+    return FailureRecord(text, "transient", "default", attempt, site)
 
-    raise RuntimeError("retry loop exhausted unexpectedly")
+
+def is_retryable_error(error: Any) -> bool:
+    """Return False when a failure must not be retried, whatever the policy allows.
+
+    Takes the result DICT where the caller has one (so a site-declared ``failure_class`` is
+    honoured) or the bare error string (the legacy form, decided by the fallback table). Wired
+    at the flow-node retry gate, the agent tool-step loop, the Nodus host function of the same
+    name, and into every compiled agent plan.
+    """
+    return classify_failure(error).retryable
 
 
-async def _execute_with_retry(
-    operation: Callable[[], Awaitable[_T]],
+def record_retry_classification(record: FailureRecord, *, decision: str) -> None:
+    """Count one classification where a loop decided (``decision``: ``"retry"`` | ``"stop"``).
+
+    The operator signal for this class of failure: a mis-classification used to be
+    indistinguishable from a hard failure. ``classified_by="substring"`` is the residue the
+    table still owns. Never raises — a metrics failure must not change a retry decision.
+    """
+    try:
+        from AINDY.platform_layer.metrics import retry_classifications_total
+
+        retry_classifications_total.labels(
+            site=record.site,
+            failure_class=record.failure_class,
+            classified_by=record.classified_by,
+            decision=decision,
+        ).inc()
+    except Exception:  # noqa: BLE001 — observability never decides
+        pass
+
+
+def decide_retry(
+    result_or_error: Any,
     *,
-    policy: RetryPolicy,
-    retryable_error_checker: Callable[[Optional[str]], bool] = is_retryable_error,
-) -> _T:
-    """Run an async operation under the supplied retry policy."""
-    for attempt_index in range(policy.max_attempts):
-        try:
-            return await operation()
-        except Exception as exc:
-            if policy.high_risk_immediate_fail or attempt_index + 1 >= policy.max_attempts:
-                raise
+    site: str,
+    attempt: int,
+    attempts_allowed: bool,
+) -> tuple[bool, FailureRecord]:
+    """Classify, decide, and COUNT in one step — the shape every loop should call.
 
-            if not retryable_error_checker(str(exc)):
-                raise
-
-            await _sleep_before_retry_async(policy, attempt_index + 1)
-
-    raise RuntimeError("retry loop exhausted unexpectedly")
+    ``attempts_allowed`` is the policy's answer (attempts remain); the class can only veto it.
+    Returns ``(retry, record)``.
+    """
+    record = classify_failure(result_or_error, site=site, attempt=attempt)
+    retry = bool(attempts_allowed and record.retryable)
+    record_retry_classification(record, decision="retry" if retry else "stop")
+    return retry, record

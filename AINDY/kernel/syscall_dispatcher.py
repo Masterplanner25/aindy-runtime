@@ -80,7 +80,7 @@ from AINDY.kernel.effect_ledger import (
     durable_effects_active as _durable_effects_active,
     resolve_effect_record as _resolve_effect_record,
 )
-from typing import Any
+from typing import Any, Optional
 
 from AINDY.config import settings
 from AINDY.kernel.circuit_breaker import CircuitOpenError
@@ -392,6 +392,16 @@ class SyscallContractViolation(Exception):
 # docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
 
 
+def _classified_failure_class(name: str, message: str, declared: Optional[str]) -> str:
+    """Resolve a refusal's failure class and count the classification (RETRY-CLASSIFY-1)."""
+    from AINDY.core.retry_policy import FAILURE_CLASS_KEY, classify_failure, record_retry_classification
+
+    source: Any = {"error": message, FAILURE_CLASS_KEY: declared} if declared else message
+    record = classify_failure(source, site="syscall")
+    record_retry_classification(record, decision="stop")
+    return record.failure_class
+
+
 class SyscallDispatcher:
     """Routes sys.v1.* calls to registered handlers with capability enforcement.
 
@@ -559,6 +569,7 @@ class SyscallDispatcher:
                     f"available versions: {sorted(available)}",
                     t_start,
                     version=parsed_version,
+                    failure_class="not_found",
                 )
             # If fallback resolved to a different version, rewrite the lookup key
             if resolved and resolved != parsed_version:
@@ -578,6 +589,7 @@ class SyscallDispatcher:
                 f"Unknown syscall: {name!r}",
                 t_start,
                 version=parsed_version,
+                failure_class="not_found",
             )
 
         # Step 2 â€" enforce capability
@@ -588,6 +600,7 @@ class SyscallDispatcher:
                 f"'{entry.capability}'; caller has {context.capabilities}",
                 t_start,
                 version=parsed_version,
+                failure_class="permission",
             )
 
         # Step 2b â€" tenant isolation: validate context has a user_id
@@ -597,6 +610,7 @@ class SyscallDispatcher:
                 "TENANT_VIOLATION: syscall requires authenticated tenant context",
                 t_start,
                 version=parsed_version,
+                failure_class="permission",
             )
         metadata_error = _validate_runtime_owned_call_metadata(context)
         if metadata_error:
@@ -606,6 +620,7 @@ class SyscallDispatcher:
                 metadata_error,
                 t_start,
                 version=parsed_version,
+                failure_class="invalid",
             )
 
         # Step 2c â€" resource quota check (syscall budget)
@@ -627,11 +642,12 @@ class SyscallDispatcher:
                     t_start,
                     version=parsed_version,
                     already_logged=True,
+                    failure_class="transient",
                 )
         else:
             if not quota_ok:
                 return self._error_envelope(name, context, quota_reason, t_start,
-                                            version=parsed_version)
+                                            version=parsed_version, failure_class="transient")
 
         # Step 2d â€" input validation against ABI schema
         if entry.input_schema:
@@ -642,6 +658,7 @@ class SyscallDispatcher:
                     f"Input validation failed for {name!r}: " + "; ".join(errors),
                     t_start,
                     version=parsed_version,
+                    failure_class="invalid",
                 )
 
         # Step 2e â€" deprecation check (warn but still execute)
@@ -791,6 +808,7 @@ class SyscallDispatcher:
                 t_start,
                 version=parsed_version,
                 already_logged=True,
+                failure_class="cancelled",
             )
 
         # Step 3 â€" execute handler
@@ -854,8 +872,12 @@ class SyscallDispatcher:
             message = str(exc)
             if isinstance(exc, CircuitOpenError):
                 message = f"HTTP_503:{message}"
-            return self._error_envelope(name, context, message, t_start,
-                                        version=parsed_version, already_logged=True)
+            return self._error_envelope(
+                name, context, message, t_start, version=parsed_version, already_logged=True,
+                # a tripped breaker is the one handler failure the dispatcher KNOWS is transient;
+                # any other handler exception is left to the fallback table (declared=None)
+                failure_class="transient" if isinstance(exc, CircuitOpenError) else None,
+            )
 
         # Step 3b — output type check.
         # EXACTLY_ONCE: non-dict is a hard contract violation → raise SyscallContractViolation.
@@ -887,6 +909,7 @@ class SyscallDispatcher:
                 t_start,
                 version=parsed_version,
                 already_logged=True,
+                failure_class="fatal",
             )
         # ── EFFECT-PARTIAL-1 — resolve any outcome claim BEFORE schema validation ──
         # The reserved key is stripped here so a strict `additionalProperties: false` output
@@ -914,6 +937,7 @@ class SyscallDispatcher:
                 f"Syscall handler outcome contract violation: {_outcome.refusal}",
                 t_start, version=parsed_version,
                 already_logged=True,
+                failure_class="fatal",
             )
 
         if entry.output_schema:
@@ -941,6 +965,7 @@ class SyscallDispatcher:
                         t_start,
                         version=parsed_version,
                         already_logged=True,
+                        failure_class="fatal",
                     )
                 logger.warning(
                     "[SyscallDispatcher] output schema mismatch for experimental '%s': %s",
@@ -1035,6 +1060,7 @@ class SyscallDispatcher:
         version: str = "unknown",
         *,
         already_logged: bool = False,
+        failure_class: Optional[str] = None,
     ) -> dict[str, Any]:
         # ★ THE ONLY place an `error` outcome is counted. Every error path in the dispatcher
         # funnels through here, so counting at the call sites as well would double-count —
@@ -1065,6 +1091,11 @@ class SyscallDispatcher:
             "duration_ms": int((time.monotonic() - t_start) * 1000),
             "error": message,
             "warning": None,
+            # RETRY-CLASSIFY-1 — the class of this refusal, declared by the path that refused
+            # (`failure_class=`) or, for a handler's own exception, decided by the fallback
+            # table. Error envelopes only; a success carries no failure to classify. Same
+            # single-funnel property as the counter and the log line above.
+            "failure_class": _classified_failure_class(name, message, failure_class),
         }
 
     def _emit_syscall_event(

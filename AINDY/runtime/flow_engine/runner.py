@@ -1,3 +1,4 @@
+from AINDY.core.retry_policy import classify_failure as _classify_failure
 from AINDY.runtime.flow_engine.runner_completion import (
     capture_flow_completion,
 )
@@ -503,6 +504,13 @@ class PersistentFlowRunner:
                         "node": current_node,
                         "status": node_status,
                         "execution_time_ms": exec_ms,
+                        # RETRY-CLASSIFY-1 — the failure's class on a failed attempt, so the
+                        # event says WHY the retry gate decided what it did (None otherwise)
+                        "retry": (
+                            _classify_failure(result, site="flow_node").as_dict()
+                            if node_status not in {"SUCCESS", "WAIT"} and isinstance(result, dict)
+                            else None
+                        ),
                         "error": result.get("error"),
                     },
                     required=True,

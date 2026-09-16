@@ -584,6 +584,71 @@ wrapper: it judges what HAPPENED on the request, not what the source looks like.
 - `TECH_DEBT.md` `ROUTE-AST-UNWIRED-1`
 
 ---
+### DEC-024
+**Status:** `accepted` (2026-09-16 — `RETRY-CLASSIFY-1`, #703)
+
+**Decision**
+`execute_with_retry` and `_execute_with_retry` in `AINDY/core/retry_policy.py` are DELETED, not
+taught the new failure payload. The runtime's three retry loops — flow node
+(`runner_steps.py`), tool step (`nodus_adapter.py`) and the compiled plan's guest `while` —
+are inline and are the only loops; the module's retry primitive is `decide_retry()` (classify +
+decide + count), which each of them calls.
+
+**Why**
+Both helpers had zero callers (the only other `execute_with_retry` in the tree is an unrelated
+local closure in `scheduler_service.py`). `RETRY-CONTEXT-1`'s argument that "the runtime owns
+the loop" named this helper as the loop; a channel threaded only through it would have been
+covered, correct and unreachable — `ROUTE-AST-UNWIRED-1`'s shape (catalogue variant 8), and
+the reason DEC-023 deleted rather than wired. `RETRY_POLICY.md` had already recorded the zero
+callers; the entry's "five sites" count was the copy that was wrong.
+
+**Implications**
+- `backoff_ms` / `exponential_backoff` remain declared-and-unapplied (`RETRY_POLICY.md`
+  §Backoff); introducing real backoff now means calling `_sleep_before_retry` from a loop
+- phase 2 (`RETRY-CONTEXT-1`) threads its scope into the three real loops, not a helper
+
+**Related Docs**
+- `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §2
+- `docs/runtime/RETRY_POLICY.md`
+
+---
+
+### DEC-025
+**Status:** `accepted` (2026-09-16 — `RETRY-CLASSIFY-1`, #703)
+
+**Decision**
+A failure's class is a STRING on the result dict — `failure_class`, one of
+`transient | cancelled | permission | not_found | invalid | fatal` — set by the RAISING SITE
+(`execute_tool`'s refusals, the dispatcher's error envelope). The substring table survives only
+as the fallback for an un-classed string, and when it fires the record says so
+(`classified_by="substring"`); an unmatched string stays `transient` (`"default"`), so the
+flip changed nothing for any string the table did not already stop. Only `transient` is
+retryable.
+
+**Why**
+Not an exception hierarchy: the three loops consume result DICTS, and the guest boundary swallows
+host exceptions into `ok: False` — a type cannot cross it, a string can (the same reason
+`syscall_outcome.py`'s vocabulary is strings). Not a per-tool `retryable_errors=[...]`
+declaration on `register_tool`: that is the substring table moved into the manifest. Measured
+before the change: `execute_tool`'s own *cancelled*, *missing token* and *enforcement crashed*
+refusals matched no needle and read RETRY. `execute_tool` already returned `"cancelled": True`
+beside the string on one refusal — this generalises that precedent.
+
+**Implications**
+- every `"success": False` return in `tool_registry.py` must carry `failure_class` (AST census,
+  non-empty asserted; `None` allowed only where a tool's/worker's own failure is relayed)
+- the dispatcher error envelope gains `failure_class` (additive; error envelopes only)
+- `aindy_retry_classifications_total` is the operator signal; `classified_by="substring"` is the
+  residue to drive to zero
+- no schema: the record rides the `flow.node.*` / `agent.step.*` event payloads
+
+**Related Docs**
+- `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §3–§5
+- `docs/runtime/RETRY_POLICY.md` §Error classification
+- `docs/runtime/SYSCALL_SYSTEM.md` (envelope)
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
@@ -614,7 +679,7 @@ log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` 
 
 **Pending — designs filed 2026-09-16, each listing the decisions it asks for; recorded here as
 `DEC-NNN` by the PR that implements (or declines) them, per DEC-010:**
-`docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §9 (five), `SYSEVENT_RETENTION_DESIGN.md`
+`docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §9 (three left — 1 and 2 are DEC-024/025), `SYSEVENT_RETENTION_DESIGN.md`
 §8 (four), `LEASE_FENCE_DESIGN.md` §7 (four), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (five), and
 `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (one — decline `ORCHESTRATOR-SPLIT-1` (a)
 until the runtime reads guest state). None is recorded yet because none has been approved.

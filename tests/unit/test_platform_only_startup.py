@@ -319,6 +319,9 @@ def test_platform_only_app_owned_capabilities_fail_predictably(platform_only_run
         "success": False,
         "result": None,
         "error": "Tool 'task.create' not found in registry",
+        # RETRY-CLASSIFY-1 — every refusal declares its class; an absent tool is `not_found`,
+        # which is what makes "fail predictably" hold in a retry loop too (never re-attempted).
+        "failure_class": "not_found",
     }
 
 

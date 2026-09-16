@@ -1,4 +1,4 @@
-from AINDY.core.retry_policy import is_retryable_error
+from AINDY.core.retry_policy import decide_retry
 from AINDY.runtime.flow_engine.node_executor import resolve_frontier, resolve_next_node
 from AINDY.runtime.flow_engine.registry import FLOW_REGISTRY
 from AINDY.runtime.flow_engine.runner_completion import maybe_finalize_completion
@@ -412,8 +412,13 @@ def _handle_node_status(
             execution_type="flow",
             node_max_retries=node_cfg.get("max_retries"),
         )
-        node_error = result.get("error") if isinstance(result, dict) else None
-        if attempts < run_policy.max_attempts and is_retryable_error(node_error):
+        # RETRY-CLASSIFY-1 — classify the node's whole result (a `failure_class` the node
+        # declared wins; the substring table is the fallback), decide, and count the decision.
+        _should_retry, _failure = decide_retry(
+            result if isinstance(result, dict) else None,
+            site="flow_node", attempt=attempts, attempts_allowed=attempts < run_policy.max_attempts,
+        )
+        if _should_retry:
             logger.warning("Node %s retrying (attempt %d)", current_node, attempts)
             return "retry"
         return self._fail_execution(
