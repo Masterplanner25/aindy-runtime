@@ -1795,21 +1795,17 @@ SYSCALL_REGISTRY["sys.v1.agent.undo"] = SyscallEntry(
         "required": ["reversed", "irreversible", "failed"],
         "properties": {
             "reversed": {"type": "list"},
+            "already_reversed": {"type": "list"},
             "irreversible": {"type": "list"},
             "failed": {"type": "list"},
             "run_id": {"type": "string"},
         },
     },
-    # IDEM-11 — non-idempotent, and the sharpest of the six. undo_run_effects() selects
-    # EffectRecords by status == "success" and NEVER marks them reversed, nor consults
-    # effect_reversals. A second call therefore re-invokes every compensator — a double
-    # refund, a second reversing transfer — and writes duplicate audit rows.
-    #
-    # LATENT, not live: zero compensators are registered today (verified 2026-08-15), so
-    # every effect currently reports "irreversible" and the only present-day harm is
-    # duplicate audit rows. It becomes live the moment anyone registers a compensator.
-    # Declaring EXACTLY_ONCE is defense-in-depth, not the fix — the durable fix is for
-    # undo_run_effects to skip already-reversed effects, tracked in TECH_DEBT as IDEM-12.
+    # IDEM-11 — declared EXACTLY_ONCE as defence-in-depth for a same-payload retry.
+    # IDEM-12 (CLOSED 2026-09-16): undo_run_effects is itself re-entrant — an effect with a
+    # `reversed` audit row is skipped and reported `already_reversed`, so a deliberate
+    # second undo (or one with the gate off) never re-invokes a compensator. The gate
+    # keys on the request; the engine keys on the effect. Both hold.
     execution_guarantee="EXACTLY_ONCE",
 )
 SYSCALL_REGISTRY["sys.v1.agent.simulate"] = SyscallEntry(

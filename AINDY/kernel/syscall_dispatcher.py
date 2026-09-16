@@ -273,11 +273,11 @@ def _syscall_idempotency_enabled() -> bool:
     that is a meaningful fraction of ``reserved`` has a weaker guarantee than the name suggests.
     Pinned by ``tests/integration/test_soak_idempotency_contention.py``.
 
-    ★ **Do NOT read this flip as closing IDEM-12.** ``undo_run_effects`` selects effects by
-    ``status == "success"`` and never consults ``effect_reversals``, so a deliberate second
-    ``sys.v1.agent.undo`` still re-invokes every compensator. The gate is defence-in-depth, not
-    the fix, and making reversal correctness depend on an env var is the shape IDEM-10 already
-    paid for.
+    ★ This flip did not close IDEM-12, and IDEM-12 is closed WITHOUT it (2026-09-16):
+    ``undo_run_effects`` now skips any effect carrying a ``reversed`` audit row, so a
+    deliberate second ``sys.v1.agent.undo`` re-invokes no compensator whether this gate is on
+    or off. The gate remains defence-in-depth for a same-payload retry; reversal correctness
+    does not depend on an env var — the shape IDEM-10 already paid for.
     """
     return os.getenv("AINDY_SYSCALL_IDEMPOTENCY", "").strip().lower() not in {"0", "false", "no", "off"}
 
