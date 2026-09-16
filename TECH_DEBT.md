@@ -7779,8 +7779,9 @@ call, not skip the boundary.
 
 ## CANCEL-REACH-1 — cancellation is durable but never reaches an in-flight effect
 
-**Status: NARROWED 2026-09-03 (#566) — still OPEN (P1) for two residuals below.** Filed
-2026-08-15 from the substrate-boundary audit (F-3), verified.
+**Status: CLOSED 2026-09-15 — both residuals below closed; the narrowing (#566) stands.** Filed
+2026-08-15 from the substrate-boundary audit (F-3), verified. **The close record is at the end
+of this entry.**
 
 **What shipped.** `AINDY/kernel/cancellation.py` — `is_run_cancelled()` checked in `execute_tool`
 immediately before `entry["fn"]`, so a cancelled run refuses its **next** tool call. The window
@@ -7877,6 +7878,50 @@ in-process half; it should be built knowing the other half is coming.
 a compensating-undo engine precisely because effects are hard to take back; a pre-effect check
 is strictly cheaper than compensation. Additive, no migration risk, and it only ever narrows
 what a cancelled run does.
+
+### Close record — 2026-09-15
+
+**Residual 1 — the dispatcher chokepoint, taken.** The blocker was run identity: "pick the
+field, not the lookup — and settle it once." It WAS settled once, after that sentence was
+written: `COST-GOVERNOR-1` phase 3 (2026-09-13) made `llm_attribution_scope(tenant, run)` the
+identity of an execution span, set by `execute_run` for the whole run. `cancellation.
+current_run_id()` reads the run from there, and `_dispatch` refuses `entry.handler` for a
+cancelled run — placed after the effect-ledger reservation and inside its completion
+discipline, so a refusal completes the reserved record `failed` rather than leaving a `pending`
+row the TTL job never reaps. Outside a span (every route that is not an agent run) the
+predicate is not consulted at all. Surface label `syscall`. **★ A seventh `SyscallContext`
+field would have been the second vocabulary for the same fact; not added.** In-process only:
+a Nodus worker subprocess inherits no ContextVar — the guest's tools go through
+`execute_tool` in the parent, which is checked with an explicit run id.
+
+**Residual 2 — the worker over-claim, and it was worse than claimed.** Reading the seam to close
+the claim found that the isolated branch of `execute_tool` RETURNED before the cancel check —
+so a cancelled run's isolated tool was not merely un-killable in flight, it was spawned
+regardless. Two fixes: (a) the cancel check moved above the isolated branch — one refusal point
+for both paths, and it now also finalizes a reserved idempotent effect `failed` (the old check
+did not, despite its comment); (b) `_run_worker_or_kill_on_cancel` replaces `subprocess.run`:
+`Popen` + `communicate(timeout=0.5s)` retried in a loop (the stdlib guarantees no output is
+lost across a caught `TimeoutExpired`), polling `is_run_cancelled(run_id)` between waits — one
+DB read per run per 2 s by the predicate's own TTL, whatever the poll rate — and on a cancel
+`terminate()` → 2 s grace → `kill()`, the sandbox runner's ladder. Surface label `tool_worker`.
+**The worker still gets no `run_id`**, exactly as the residual demanded: the check runs in the
+parent, the one process that can act on the answer. This is "terminate strength is a function
+of the isolation class" made real for the one class the runtime spawns itself.
+
+**Not changed:** the predicate's fail-OPEN and no-per-effect-query properties (re-pinned by the
+existing suite); the Nodus worker (`subprocess.run(timeout=…)` in `nodus_runtime_adapter`), which
+runs guest SCRIPTS, not tools — a cancelled agent run on the nodus_vm backend is observed
+between segments as before, and its tools go through `execute_tool`; the in-process tool, which
+cannot be interrupted and says so.
+
+**Tests:** `tests/unit/test_cancel_reach_residuals.py` — the dispatcher refuses a cancelled run's
+syscall (handler NOT called), runs a live run's, does not even ask outside a span; the run is
+read from the span; a refusal completes the reserved effect record `failed`; a cancelled run does
+not spawn an isolated worker; `run_id` reaches the parent's wait loop and not the child; **a
+REAL subprocess sleeping 60 s is dead inside the budget once the predicate flips**; a live
+worker's output survives the polling `communicate`; the timeout still kills a worker nobody
+cancelled. **Mutation-tested 6/6.** Three `test_tool_isolation_enforcement.py` tests that
+patched `subprocess.run` were re-pointed at the new seam (same assertions). **Not re-run live.**
 
 ---
 

@@ -451,8 +451,90 @@ def _worker_confinement(tool_name: str):
     return kwargs, scratch
 
 
-def _run_tool_out_of_process(tool_name: str, args: dict, user_id: str) -> dict:
+#: How often the parent looks at the cancel predicate while an isolated worker runs. The
+#: predicate's own TTL bounds the DB reads (one per run per 2 s); this only bounds latency.
+_WORKER_CANCEL_POLL_S = 0.5
+#: After `terminate()`, how long a worker gets to exit before `kill()`.
+_WORKER_KILL_GRACE_S = 2.0
+
+
+def _run_worker_or_kill_on_cancel(
+    cmd: list, *, payload: str, tool_name: str, run_id: Optional[str], spawn_kwargs: dict
+):
+    """Run the worker to completion, its timeout, or the run's cancellation — whichever first.
+
+    Returns a `CompletedProcess`-shaped object on completion, ``None`` when the worker was
+    killed because its run was cancelled, and raises `subprocess.TimeoutExpired` on the budget.
+    ``communicate(timeout=)`` is retried across polls — the stdlib guarantees no output is lost
+    on a caught `TimeoutExpired`.
+    """
+    import subprocess
+    import time as _time
+
+    from AINDY.kernel.cancellation import is_run_cancelled, note_effect_refused
+
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        **spawn_kwargs,
+    )
+    deadline = _time.monotonic() + _TOOL_WORKER_TIMEOUT_S
+    pending_input = payload
+    try:
+        while True:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                _kill(proc)
+                raise subprocess.TimeoutExpired(cmd, _TOOL_WORKER_TIMEOUT_S)
+            try:
+                out, err = proc.communicate(input=pending_input, timeout=min(_WORKER_CANCEL_POLL_S, remaining))
+                return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+            except subprocess.TimeoutExpired:
+                pending_input = None  # stdin was written on the first call; do not resend
+            if run_id and is_run_cancelled(run_id):
+                _kill(proc)
+                note_effect_refused(surface="tool_worker")
+                logger.info(
+                    "[AgentTool] %s isolated worker killed — run %s is cancelled", tool_name, run_id
+                )
+                return None
+    except BaseException:
+        if proc.poll() is None:
+            _kill(proc)
+        raise
+
+
+def _kill(proc) -> None:
+    """`terminate()` → grace → `kill()`, the same ladder the sandbox runner uses."""
+    import subprocess
+
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+        proc.wait(timeout=_WORKER_KILL_GRACE_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=_WORKER_KILL_GRACE_S)
+        except subprocess.TimeoutExpired:  # pragma: no cover
+            pass
+    except Exception:  # pragma: no cover
+        pass
+
+
+def _run_tool_out_of_process(
+    tool_name: str, args: dict, user_id: str, *, run_id: Optional[str] = None
+) -> dict:
     """Execute a tool in a one-shot worker subprocess (step C2). Returns an execute_tool envelope.
+
+    ★ **`run_id` is the PARENT's knowledge and never crosses into the worker** (`CANCEL-REACH-1`
+    residual 2, closed 2026-09-15). While the worker runs, this side polls `is_run_cancelled`
+    (own session, one read per TTL, never per poll) and on a cancel terminates → kills the
+    worker and returns a `cancelled` envelope. That is "terminate strength is a function of the
+    isolation class" made real for this class: an in-process tool can only be refused before it
+    starts; a subprocess can be killed while it runs. Before this, the claim "hard-killable by
+    its isolation class" described a capability nothing invoked — the worker died only to its
+    timeout.
 
     ★ **This NEVER falls back to in-process, and that is the single most important line here.**
     The Nodus adapter deliberately does fall back — a warm-pool failure spills to a fresh
@@ -485,14 +567,16 @@ def _run_tool_out_of_process(tool_name: str, args: dict, user_id: str) -> dict:
     # would remove the only directory the worker is permitted to treat as its own, mid-run.
     spawn_kwargs, _scratch = _worker_confinement(tool_name)
     try:
-        proc = subprocess.run(
-            cmd,
-            input=payload,
-            capture_output=True,
-            text=True,
-            timeout=_TOOL_WORKER_TIMEOUT_S,
-            **spawn_kwargs,
+        proc = _run_worker_or_kill_on_cancel(
+            cmd, payload=payload, tool_name=tool_name, run_id=run_id, spawn_kwargs=spawn_kwargs
         )
+        if proc is None:
+            return {
+                "success": False,
+                "result": None,
+                "error": f"run {run_id} was cancelled; isolated tool {tool_name!r} was killed",
+                "cancelled": True,
+            }
     except subprocess.TimeoutExpired:
         logger.error("[AgentTool] %s worker exceeded %ss", tool_name, _TOOL_WORKER_TIMEOUT_S)
         return {
@@ -924,11 +1008,39 @@ def execute_tool(
                 _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
             return _refusal
 
+        # ── CANCEL-REACH-1: observe cancellation BEFORE the effect, not after ────
+        # `sys.v1.agent.cancel` commits a terminal status in a separate session, and the Nodus
+        # chain only checked it between SEGMENTS — so every remaining tool in the current
+        # segment ran to completion. Checking here narrows that to effect granularity.
+        #
+        # ★ Cooperative for an in-process tool: one already running is not interrupted, the NEXT
+        # one is refused. For an ISOLATED tool the parent also polls while the worker runs and
+        # kills it (`_run_worker_or_kill_on_cancel`) — terminate strength is a function of the
+        # isolation class, and this is the class where it can be more than a refusal.
+        #
+        # ★ Placed after the effect-ledger reservation, so a refusal cannot leave a reserved
+        # effect that never resolves — and BEFORE the isolated branch, which used to return
+        # above this check, so a cancelled run's isolated tool was spawned regardless
+        # (`CANCEL-REACH-1` residual 2; closed 2026-09-15).
+        if is_run_cancelled(run_id):
+            note_effect_refused(surface="tool")
+            logger.info(
+                "[AgentTool] %s refused — run %s is cancelled", tool_name, run_id
+            )
+            if _idempotent:
+                _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
+            return {
+                "success": False,
+                "result": None,
+                "error": f"run {run_id} was cancelled; tool {tool_name!r} not executed",
+                "cancelled": True,
+            }
+
         # ★ After the refusal, before the in-process handle: a declared tool never reaches the
         # in-process path at all. The result still goes through the effect ledger and the return
         # contract check below, so a confined tool is accounted for exactly like a local one.
         if entry.get("isolation") and _tool_isolation_enforced():
-            _isolated = _run_tool_out_of_process(tool_name, args or {}, user_id)
+            _isolated = _run_tool_out_of_process(tool_name, args or {}, user_id, run_id=run_id)
             if _idempotent:
                 _finalize_tool_effect(
                     db,
@@ -940,29 +1052,6 @@ def execute_tool(
             if _isolated.get("success"):
                 _check_tool_return(tool_name, entry, _isolated.get("result"))
             return _isolated
-
-        # ── CANCEL-REACH-1: observe cancellation BEFORE the effect, not after ────
-        # `sys.v1.agent.cancel` commits a terminal status in a separate session, and the Nodus
-        # chain only checked it between SEGMENTS — so every remaining tool in the current
-        # segment ran to completion. Checking here narrows that to effect granularity.
-        #
-        # ★ Cooperative, not preemptive: a tool already running is not interrupted, the NEXT one
-        # is refused. Hard-kill is a function of isolation class and belongs to
-        # TOOL-SEAM-ISOLATION-1; in-process degrades to this and says so.
-        #
-        # ★ Placed immediately before `entry["fn"]` and after the effect-ledger reservation, so
-        # a refusal cannot leave a reserved effect that never resolves.
-        if is_run_cancelled(run_id):
-            note_effect_refused(surface="tool")
-            logger.info(
-                "[AgentTool] %s refused — run %s is cancelled", tool_name, run_id
-            )
-            return {
-                "success": False,
-                "result": None,
-                "error": f"run {run_id} was cancelled; tool {tool_name!r} not executed",
-                "cancelled": True,
-            }
 
         _tool_db = RevocableToolSession(db, tool_name=tool_name)
         try:
