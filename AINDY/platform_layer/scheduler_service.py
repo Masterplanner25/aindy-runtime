@@ -325,6 +325,20 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
         max_instances=1,
     )
 
+    # SYSEVENT-RETENTION-1 — registered only when an operator has chosen a mode
+    # (`AINDY_SYSEVENT_RETENTION=report|prune`); unset is today's behaviour, no job at all.
+    from AINDY.core.system_event_retention import retention_enabled, retention_interval_hours
+    if retention_enabled():
+        scheduler.add_job(
+            _prune_system_events,
+            trigger=IntervalTrigger(hours=retention_interval_hours()),
+            id="system_event_retention",
+            name="system_events retention (per-type class, leaves only)",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
+
     scheduler.add_job(
         _process_deferred_async_jobs,
         trigger=IntervalTrigger(minutes=1),
@@ -664,6 +678,23 @@ def _recover_orphaned_approved_runs() -> None:
 
 
 # Job execution
+
+def _prune_system_events() -> None:
+    """Prune (or report) age-expired LEAF `system_events` per classified type (SYSEVENT-RETENTION-1)."""
+    try:
+        from AINDY.core.system_event_retention import prune_system_events
+
+        # opens, commits per batch and closes its own session — see the module for why leaves only
+        report = prune_system_events()
+        logger.info(
+            "[sysevent_retention] %s complete: %d type(s) touched, %d deleted in %d batch(es), "
+            "%d unclassified row(s) kept",
+            report["mode"], len(report["types"]), report["deleted"], report["batches"],
+            report["unclassified_rows"],
+        )
+    except Exception as exc:
+        logger.error("[sysevent_retention] failed: %s", exc)
+
 
 def _process_deferred_async_jobs() -> None:
     try:

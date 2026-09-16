@@ -649,6 +649,109 @@ beside the string on one refusal — this generalises that precedent.
 
 ---
 
+### DEC-026
+**Status:** `accepted` (2026-09-16 — `SYSEVENT-RETENTION-1`, #704)
+
+**Decision**
+The `system_events` retention job prunes LEAVES ONLY. A row referenced by any of the five
+columns that point at `system_events.id` — `system_events.parent_event_id`,
+`agent_events.system_event_id`, `memory_nodes.source_event_id`, `memory_nodes.root_event_id`,
+`event_edges.source_event_id` / `target_event_id` — is never eligible, whatever its type's
+class. The `event_edges` pair is in the predicate even though the database would not refuse
+that delete.
+
+**Why**
+Four of the five constraints are `NO ACTION`: a referenced event cannot be deleted at all, and a
+type-and-age `DELETE` on a real deployment aborts on the first parent row it meets — a job that
+aborts hourly is `SYSMAX-5`'s brownout with a new cause. The fifth is `CASCADE`, on the causal
+graph `build_trace_graph` reads: the delete passes and the edge vanishes silently, which is
+exactly the "missing row reads as never happened" failure `EVENT-OUTBOX-1` describes. So
+"referenced" is structurally "audit", and the type classes refine that rule rather than replace
+it. On the SQLite harness FKs are off, so the tests exercise the module's predicate — each
+anti-join paired with a control that selects the same row once its referrer is gone.
+
+**Implications**
+- a keepalive that became a parent (e.g. a decision that led to a dispatch) is kept for free
+- `event_edges`' `CASCADE` is NOT changed to `NO ACTION` — the predicate is the guard, pinned
+- any future referrer of `system_events.id` must be added to `_leaf_filter`, with its control
+
+**Related Docs**
+- `docs/design/SYSEVENT_RETENTION_DESIGN.md` §2
+- `AINDY/core/system_event_retention.py`
+
+---
+
+### DEC-027
+**Status:** `accepted` (2026-09-16 — `SYSEVENT-RETENTION-1`, #704)
+
+**Decision**
+An event type with no registered retention class is KEPT — never selected, and counted on
+`aindy_system_events_unclassified_rows`. The class table is a registry the runtime seeds and
+the app extends (`register_event_retention`, exact names or globs), not a literal keyed on the
+enum; a misspelled class is refused, never read as "keep".
+
+**Why**
+`SystemEventTypes` declares 46 names, the runtime emits 22 more as literals, and the app
+registers its own — a literal table would delete a new type by omission (green-check variant
+12). Default-delete-with-exceptions is the shape that loses data; default-keep-with-a-gauge is
+the inverse, and the gauge turns "someone should classify this" into a number an operator sees
+grow.
+
+**Implications**
+- a derived test asserts every enum type has a seed class, so the runtime's own types never
+  start unclassified
+- the app owns classifying its types; until it does, they cost disk, never audit
+
+**Related Docs**
+- `docs/design/SYSEVENT_RETENTION_DESIGN.md` §3
+- `AINDY/platform_layer/registry.py` `register_event_retention`
+
+---
+
+### DEC-028
+**Status:** `accepted` (2026-09-16 — `SYSEVENT-RETENTION-1`, #704)
+
+**Decision**
+The seed table in `system_event_retention.py`: failure-shaped events are `audit` regardless of
+family (`execution.failed` is audit while `execution.started` is operational); `capability.*`,
+`auth.*`, `platform.*`, dead-letter and recovery events are audit; the execution ledger, traces,
+embeddings, syscall and signal events are `operational`; `watchdog.scan.completed` and
+`health.liveness.completed` are `keepalive`. **`autonomy.decision` is `operational`** — the one
+class decided rather than derived.
+
+**Why**
+A failure is the row a support conversation starts from; its siblings say the run existed.
+`autonomy.decision` (25k rows of "deferred" on the FR-18 stack) is also the only record of why
+a trigger did not fire — but a decision old enough to prune is one nobody is still asking about,
+and a decision that led to a dispatch became a parent and is kept by DEC-026. If wrong, the
+class is one `register_event_retention` line.
+
+**Related Docs**
+- `docs/design/SYSEVENT_RETENTION_DESIGN.md` §4
+
+---
+
+### DEC-029
+**Status:** `accepted` (2026-09-16 — `SYSEVENT-RETENTION-1`, #704)
+
+**Decision**
+Defaults: `operational` 90 days, `keepalive` 7 days, `audit` never by age (no override exists).
+`AINDY_SYSEVENT_RETENTION` ships UNSET — no job registered, the pre-existing behaviour;
+`report` runs the selection and logs per-type counts without deleting; `prune` deletes in
+committed batches. An unrecognised value is off.
+
+**Why**
+An operator reads one report before the first real run, and a typo must never delete rows.
+The design considered shipping `report` as the default value; the env var ships unset instead so
+that upgrading changes nothing until someone chooses — the same discipline as every other
+default-off capability here.
+
+**Related Docs**
+- `docs/design/SYSEVENT_RETENTION_DESIGN.md` §5, §8
+- `AINDY/.env.example`
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
@@ -680,7 +783,7 @@ log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` 
 **Pending — designs filed 2026-09-16, each listing the decisions it asks for; recorded here as
 `DEC-NNN` by the PR that implements (or declines) them, per DEC-010:**
 `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §9 (three left — 1 and 2 are DEC-024/025), `SYSEVENT_RETENTION_DESIGN.md`
-§8 (four), `LEASE_FENCE_DESIGN.md` §7 (four), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (five), and
+§8 (none — DEC-026..029), `LEASE_FENCE_DESIGN.md` §7 (four), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (five), and
 `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (one — decline `ORCHESTRATOR-SPLIT-1` (a)
 until the runtime reads guest state). None is recorded yet because none has been approved.
 

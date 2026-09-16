@@ -766,6 +766,20 @@ def get_event_types() -> set[str]:
     return set(_event_types)
 
 
+def register_event_retention(event_type: str, retention_class: str) -> str:
+    """Declare how long `system_events` of ``event_type`` are kept (SYSEVENT-RETENTION-1).
+
+    ``retention_class`` is ``audit`` (never pruned by age), ``operational`` or ``keepalive``;
+    ``event_type`` may be an exact name or an ``fnmatch`` glob. An app that registers a type and
+    says nothing here gets the safe default — the type is kept forever. Same trust boundary as
+    ``register_event_type``: declaring a type's lifetime is declaring the type.
+    """
+    _require_in_process_extension_capability(INPROC_CAP_REGISTER_EVENT_TYPE)
+    from AINDY.core.system_event_retention import register_event_retention as _register
+
+    return _register(event_type, retention_class)
+
+
 def emit_event(event_type: str, context: dict[str, Any] | None = None) -> list[Any]:
     """Dispatch a generic registry event to app-registered handlers."""
     load_plugins()

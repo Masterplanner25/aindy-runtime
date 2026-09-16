@@ -137,6 +137,22 @@ syscall_unowned_unit_total = Counter(
 # mis-classification used to be indistinguishable from a hard failure; this is the number that
 # tells them apart. `classified_by="substring"` is the residue the fallback table still owns —
 # the phase-1 exit criterion is that it reads zero on the runtime's own refusal strings.
+# SYSEVENT-RETENTION-1 — what the prune job removed, PER TYPE (a silent prune is indistinguishable
+# from a lost write), and the pressure gauge: rows whose type has no retention class. Growth on
+# the gauge is the ask to classify; it never deletes anything.
+system_events_pruned_total = Counter(
+    "aindy_system_events_pruned_total",
+    "system_events rows deleted by the retention job, by event type.",
+    ["type"],
+    registry=REGISTRY,
+)
+system_events_unclassified_rows = Gauge(
+    "aindy_system_events_unclassified_rows",
+    "system_events rows whose type has no registered retention class (kept, never pruned) — "
+    "sampled on each retention job run.",
+    registry=REGISTRY,
+)
+
 retry_classifications_total = Counter(
     "aindy_retry_classifications_total",
     "Retry classifications by site, failure class, who classified it (site | substring | "

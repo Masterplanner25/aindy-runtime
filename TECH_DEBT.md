@@ -9448,7 +9448,18 @@ barrier probe is the witness, and they have said they will re-run it against the
 
 ## SYSEVENT-RETENTION-1 — `system_events` grows without bound and nothing prunes it
 
-**Status: OPEN — P2, filed 2026-08-22 out of `FR-18`.** The runtime prunes stale job logs
+**Status: CLOSED (2026-09-16) — #704, DEC-026 … DEC-029.** `AINDY/core/system_event_retention.py`:
+a retention CLASS per event type (`audit` never by age / `operational` 90 d / `keepalive` 7 d),
+seeded by the runtime (every enum type classified — derived test) and extended by the app via
+`register_event_retention` (globs allowed; a misspelled class is REFUSED, never read as keep);
+an unclassified type is kept and counted on `aindy_system_events_unclassified_rows`. **The job
+prunes LEAVES only** — six anti-joins over the five FK columns, the `event_edges` pair included
+precisely because the database would CASCADE rather than refuse. Committed batches; per-type log
+lines + `aindy_system_events_pruned_total{type}`. `AINDY_SYSEVENT_RETENTION` ships UNSET (no
+job); `report` logs what `prune` would delete, counted whole. Mutation-tested 12/12.
+**Remaining gap:** the app's own types are unclassified until it declares them — the gauge is
+the ask; and the job is not yet fenced (`LEASE_FENCE_DESIGN.md` phase 3). Filed 2026-08-22 out
+of `FR-18`. The runtime prunes stale job logs
 (`_cleanup_stale_logs`) and expired `EffectRecord` rows (`_cleanup_expired_effect_records`).
 It prunes **nothing** from `system_events`, which is the table every execution, every
 observability signal and every causal edge lands in. On the stack that produced FR-18 it
