@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from AINDY.kernel.scheduler.common import PRIORITY_NORMAL, _MAX_PRE_REHYDRATION_BUFFER, logger
+from AINDY.kernel.scheduler.common import (
+    PRIORITY_NORMAL,
+    _MAX_PRE_REHYDRATION_BUFFER,
+    correlation_admits,
+    logger,
+)
 from AINDY.kernel.scheduler.cross_instance import _cross_instance_resume, _cross_instance_tick
 
 
@@ -121,9 +126,9 @@ class SchedulerWaitMixin:
                         continue
                 elif entry.get("wait_for") != event_type:
                     continue
-                entry_corr = entry.get("correlation_id") or None
-                emit_corr = correlation_id or None
-                if entry_corr and emit_corr and entry_corr != emit_corr:
+                if not correlation_admits(
+                    entry.get("correlation_id"), correlation_id, run_scoped=target_run is not None
+                ):
                     continue
                 to_resume.append((run_id, entry))
 
@@ -238,9 +243,7 @@ class SchedulerWaitMixin:
                         continue
                 elif entry.get("wait_for") != event_type:
                     continue
-                entry_corr = entry.get("correlation_id") or None
-                emit_corr = correlation_id or None
-                if entry_corr and emit_corr and entry_corr != emit_corr:
+                if not correlation_admits(entry.get("correlation_id"), correlation_id, run_scoped=False):
                     continue
                 matched.append(run_id)
         return matched

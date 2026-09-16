@@ -12835,7 +12835,10 @@ the question becomes whether an untyped wait may still be resumed by such a call
 
 ## WAIT-PAYLOAD-PATH-1 — the event bus resumes a waiting run without its payload; only the resume route delivers one
 
-**Status: SUBSUMED 2026-09-13 by `NODUS-RESUME-BRIDGE-1` — run live, the route path did not deliver either.** That entry CLOSED the same day: the route path now delivers, and minimum fix (a) below is done in its cheap form — a payload-less wake logs `[nodus.execute] Resumed WITHOUT a payload` at WARNING (no state marker, no `SystemEvent`). **Still open here: (b), the local-vs-cross-instance correlation disagreement, and whether the bus should ever carry a payload.** Was: OPEN (P2). Filed 2026-09-13 from the tutorials correctness pass; every claim below
+**Status: CLOSED 2026-09-15 — (b) shipped, the bus-payload question DECIDED (no).** (a) had
+closed 2026-09-13 in its cheap form under `NODUS-RESUME-BRIDGE-1` (a payload-less wake logs
+`Resumed WITHOUT a payload` at WARNING). **The close record is at the end of this entry; the
+filing below is kept as written.** Was: SUBSUMED 2026-09-13 / OPEN (P2). Filed 2026-09-13 from the tutorials correctness pass; every claim below
 was read from source, and the tutorial that assumed otherwise was rewritten.
 
 **Two resume paths, one contract, different semantics.**
@@ -12884,6 +12887,55 @@ constraint argues against.
 **Related, distinct:** `WAIT-TYPED-CONTRACT-1` (payload unvalidated — this entry is about it
 not arriving), `GUEST-BUILTINS-DEAD-1` (the fake `event.wait()` API), `FR-15` (why the callback
 is zero-arg).
+
+### Close record — 2026-09-15
+
+**(b) One rule, one function.** `AINDY/kernel/scheduler/common.py::correlation_admits(wait,
+emit, *, run_scoped)` is now the only copy; `waits.py` (`notify_event`, `peek_matching_run_ids`)
+and `cross_instance.py` call it. The rule: **(1) a run-scoped wake is decisive — correlation
+gets no veto when the caller named the run; (2) otherwise correlation vetoes only when BOTH
+sides carry one and they differ.** Rule 2 is what the local scan already did; the cross-instance
+copy had `if correlation_id and wait_corr != correlation_id`, which vetoed a `None` wait on
+every emit (and every emit carries one). Live impact was bounded: a `None`-correlation wait
+whose instance had died was not lost, it waited for `resume_watchdog` — which passes the wait's
+OWN correlation and so never tripped the strict copy. Delayed, not lost; still two answers.
+
+**★ Reading the two copies side by side found a THIRD defect, live on the per-run route, and it
+is the one that mattered:** `route_event` reads `payload.get("correlation_id")` as the wake's
+correlation. A client whose payload happens to carry a `correlation_id` key — a common field
+name in any client's own domain — sent one that differed from the run's trace, so the local
+scan vetoed the wake **after** the payload had been injected: `resumed: true` on the wire, run
+parked forever. **Probed before fixing: `payload on row: True | woken: False`.** With `run_id`
+naming the run (`RESUME-FANOUT-UNSCOPED-1`: "the run id is the only thing unique to the run"),
+a secondary key cannot be allowed to veto — that is rule 1, and it is why the predicate takes
+`run_scoped` rather than being the local rule copied twice.
+
+**The bus-payload question — DECIDED: the bus stays payload-free, and the reason is a design
+statement rather than a limitation.** A payload's home is the durable row: `route_event` writes
+`state["event"]` and COMMITS, then publishes a wake that carries only `event_type`,
+`correlation_id`, `run_id`. That is exactly what makes a resume reconstructible from `run_id`
+alone (`FR-15`'s constraint, `build_flow_resume_callback`'s docstring) — the woken run reads its
+payload off its own row, on whichever instance claims it, after any restart. A payload on the
+Redis message would be a second, non-durable copy with a size and ordering question attached,
+delivering nothing the row does not. **Rule for any future payload path (webhook, connector,
+MCP): write the row, then wake by `run_id` — `route_event(run_id=…)` is the reference shape.**
+`sys.v1.event.emit` stays a payload-less wake by construction: it names an event, not a run.
+
+**Not changed, noted:** `resume_watchdog.py:89` matches `SystemEvent.trace_id == wait
+correlation` when the wait has one — a stricter, evidence-seeking question ("did this trace
+emit it?"), then wakes with the wait's own correlation, so it is consistent with the predicate
+by construction. Left as is.
+
+**Tests:** `tests/unit/test_wait_correlation_rule.py` — the predicate's truth table; the same
+7-row table driven through the REAL local scan and the REAL cross-instance fallback (registry
+and backup-row load faked at their boundaries, `_enqueue_resume` real, wake read off the queue);
+a **parity** test asserting both paths answer identically per row, kept separate so a rule
+change that updates one copy is caught even if the table is updated; the route trap through
+`route_event` on a real engine. `tests/integration/test_multi_instance_resume.py` gains the
+live-Redis case for the disagreeing row (None wait, correlated emit) — **red on the old rule,
+green on the new, checked by restoring it.** **Mutation-tested 4/4:** old cross rule (6 fail),
+predicate ignores `run_scoped` (4), old strict rule locally (7), local ignores run scope (3).
+**Not re-run live.**
 
 ---
 ## NODUS-RESUME-BRIDGE-1 — a Nodus script can suspend a run but can never receive what resumed it

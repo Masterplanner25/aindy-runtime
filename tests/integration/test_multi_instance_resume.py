@@ -189,6 +189,62 @@ class TestMultiInstanceResume:
         assert registry.get_spec("run-scoped-A") is None
         assert registry.get_spec("run-scoped-B") is not None, "run-B's wait was claimed"
 
+    def test_a_none_correlation_wait_resumes_cross_instance_on_a_correlated_emit(
+        self,
+        shared_redis,
+        db_session,
+        db_session_factory,
+    ):
+        """WAIT-PAYLOAD-PATH-1 (b) — the row of the rule table the two paths disagreed on.
+
+        A wait registered with ``correlation_id=None`` (the widest match) on instance A; the
+        emit carries one — as EVERY emit does, since `_notify_scheduler_of_event` falls back to
+        the trace id. Locally that wait always resumed. Cross-instance it NEVER did: the old
+        comparison (`if correlation_id and wait_corr != correlation_id`) vetoed it, so a
+        None-correlation wait whose instance had died waited for the watchdog. Every other test
+        in this file registers None AND publishes None, which is why it went unseen.
+        """
+        from AINDY.db.models.flow_run import FlowRun
+        from AINDY.db.models.waiting_flow_run import WaitingFlowRun
+        from AINDY.kernel.redis_wait_registry import RedisWaitRegistry
+        from AINDY.kernel.resume_spec import RESUME_HANDLER_EU, ResumeSpec
+
+        registry = RedisWaitRegistry(shared_redis)
+        registry.register(
+            "run-nonecorr",
+            ResumeSpec(
+                handler=RESUME_HANDLER_EU, eu_id="eu-nc", tenant_id="tenant-nc",
+                run_id="run-nonecorr", eu_type="flow",
+            ),
+        )
+        db_session.add(
+            FlowRun(
+                id="run-nonecorr", flow_name="test.flow", workflow_type="test_flow", state={},
+                current_node="wait_node", status="waiting", waiting_for="invoice.paid",
+                trace_id=None,
+            )
+        )
+        db_session.add(
+            WaitingFlowRun(
+                run_id="run-nonecorr", event_type="invoice.paid", correlation_id=None,
+                eu_id="eu-nc", priority="normal", instance_id="instance-a",
+            )
+        )
+        db_session.commit()
+
+        instance_b = _make_engine()
+        with patch("AINDY.kernel.event_bus.get_redis_client", return_value=shared_redis), patch(
+            "AINDY.db.SessionLocal", db_session_factory
+        ):
+            count = instance_b.notify_event(
+                "invoice.paid", correlation_id="trace-of-the-emitter", broadcast=False
+            )
+
+        assert count == 1, "a None-correlation wait must resume cross-instance on a correlated emit"
+        item = instance_b.dequeue_next()
+        assert item is not None and item.run_id == "run-nonecorr"
+        assert registry.get_spec("run-nonecorr") is None
+
     def test_only_one_instance_claims_concurrent_resume(
         self,
         shared_redis,
