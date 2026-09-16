@@ -161,12 +161,15 @@ def test_enforcement_can_be_disabled_without_disabling_the_declaration(monkeypat
 
 def test_a_worker_that_cannot_start_refuses_rather_than_running_locally(monkeypatch):
     """★ THE assertion. Falling back would run a tool that asked to be confined UNCONFINED."""
-    import subprocess
+    import AINDY.agents.tool_registry as tr
 
     def _no_spawn(*a, **kw):
         raise OSError("cannot fork")
 
-    monkeypatch.setattr(subprocess, "run", _no_spawn)
+    # CANCEL-REACH-1 (2026-09-15): the worker is driven by `_run_worker_or_kill_on_cancel`
+    # (Popen + a polling communicate) rather than `subprocess.run`; the seam moved, the
+    # assertion did not.
+    monkeypatch.setattr(tr, "_run_worker_or_kill_on_cancel", _no_spawn)
     ran = _register()
 
     result = _invoke()
@@ -180,10 +183,12 @@ def test_a_worker_timeout_refuses_rather_than_retrying_locally(monkeypatch):
     """A slow confined tool must not be quietly re-run without the boundary."""
     import subprocess
 
+    import AINDY.agents.tool_registry as tr
+
     def _timeout(*a, **kw):
         raise subprocess.TimeoutExpired(cmd="tool_worker", timeout=1)
 
-    monkeypatch.setattr(subprocess, "run", _timeout)
+    monkeypatch.setattr(tr, "_run_worker_or_kill_on_cancel", _timeout)
     ran = _register()
 
     result = _invoke()
@@ -205,11 +210,11 @@ def test_a_crashed_worker_refuses_and_says_it_crashed(monkeypatch):
     "unreadable response" sends you to the protocol. Asserting the exit code makes the check that
     produces that message load-bearing rather than decorative.
     """
-    import subprocess
+    import AINDY.agents.tool_registry as tr
 
     monkeypatch.setattr(
-        subprocess,
-        "run",
+        tr,
+        "_run_worker_or_kill_on_cancel",
         lambda *a, **kw: MagicMock(returncode=1, stdout="", stderr="boom"),
     )
     ran = _register()

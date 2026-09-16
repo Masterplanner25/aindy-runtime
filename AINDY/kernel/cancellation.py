@@ -11,11 +11,17 @@ This narrows the observation window from **segment** granularity to **effect** g
 ★ IT IS COOPERATIVE, AND SAYING SO IS PART OF THE CONTRACT
 -----------------------------------------------------------
 Nothing here preempts anything. A tool already executing is not interrupted; the *next* effect
-is refused. The runtime can already hard-kill a Nodus worker (`subprocess.run(timeout=…)`) and a
-sandboxed plugin (`terminate()` → `kill()`), and cannot hard-kill a tool it invoked in-process —
-that asymmetry is `TOOL-SEAM-ISOLATION-1`'s half of this design, where terminate strength is a
-function of the isolation class. This module is the in-process half and degrades honestly:
-it refuses the next effect and says that is what it did.
+is refused. The runtime can hard-kill a Nodus worker (`subprocess.run(timeout=…)`), a sandboxed
+plugin (`terminate()` → `kill()`) and — since 2026-09-15 — an isolated TOOL worker, whose parent
+polls this module while the worker runs and kills it on a cancel (`aindy_run_cancel_observed_total
+{surface="tool_worker"}`). It cannot hard-kill a tool it invoked in-process — that asymmetry is
+`TOOL-SEAM-ISOLATION-1`'s half of this design, where terminate strength is a function of the
+isolation class. In-process degrades honestly: it refuses the next effect and says so.
+
+Two chokepoints observe it, the same two lines the effect ledger brackets: `execute_tool` before
+`entry["fn"]` (surface `tool`, and `tool_worker` for the isolated path) and the syscall
+dispatcher before `entry.handler` (surface `syscall`, the run read from the execution span —
+see `current_run_id`).
 
 ★★ WHY IT FAILS OPEN, WHICH IS THE OPPOSITE OF MOST GUARDS HERE
 -----------------------------------------------------------------
@@ -88,14 +94,12 @@ def is_run_cancelled(run_id: Optional[str], *, ttl_seconds: float = DEFAULT_TTL_
     """Whether ``run_id`` has been cancelled. Cheap to call in a loop; never raises.
 
     ``None``/empty returns ``False``: an effect with no run to belong to cannot be cancelled by
-    one. That is the out-of-process tool worker's case, which passes ``run_id=None``.
+    one.
 
-    ★ **That is a known gap, not a solved case.** The reasoning for it — "the isolated path is
-    hard-killable by its isolation class instead" — describes a capability nothing invokes: the
-    worker is killed by ``subprocess.run(timeout=…)`` and by nothing else, so no cancel reaches
-    it. Recorded as `CANCEL-REACH-1` residual 2. **Do not close that by passing ``run_id`` into
-    the worker** — that runs the check in a process that cannot act on it; kill the subprocess
-    from the cancel path instead.
+    ★ The out-of-process tool WORKER still gets no ``run_id`` — and that is now correct rather
+    than a gap (`CANCEL-REACH-1` residual 2, closed 2026-09-15): the check runs in the PARENT,
+    which polls this while the worker runs and kills it on a cancel. Running the check inside
+    the worker would put it in the one process that cannot act on the answer.
     """
     if not run_id:
         return False
@@ -122,6 +126,29 @@ def is_run_cancelled(run_id: Optional[str], *, ttl_seconds: float = DEFAULT_TTL_
         else:
             _NEGATIVE[key] = time.monotonic() + max(0.0, ttl_seconds)
     return cancelled
+
+
+def current_run_id() -> Optional[str]:
+    """The run the current execution span belongs to, or ``None`` outside one.
+
+    `CANCEL-REACH-1` residual 1 asked for a run identity on `SyscallContext` and said "pick the
+    field, not the lookup — and settle it once". It was settled once, elsewhere, after that was
+    written: `COST-GOVERNOR-1` phase 3 made `llm_attribution_scope(tenant, run)` the identity of
+    an execution span, set by `execute_run` for the whole run. This reads the run from there.
+    A second ContextVar or a seventh context field carrying the same fact would be the second
+    vocabulary every entry here warns about.
+
+    ★ In-process only. A Nodus worker subprocess does not inherit a ContextVar; a guest `sys()`
+    dispatched there carries no run for this check to see — the guest's tools go through
+    `execute_tool` in the parent, which is checked with an explicit run id.
+    """
+    try:
+        from AINDY.platform_layer.token_meter import current_llm_attribution
+
+        _tenant, run_id = current_llm_attribution()
+        return str(run_id) if run_id else None
+    except Exception:  # pragma: no cover - fail OPEN, like everything else here
+        return None
 
 
 def note_effect_refused(*, surface: str) -> None:

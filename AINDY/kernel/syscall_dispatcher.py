@@ -71,6 +71,9 @@ from contextvars import ContextVar
 # (MEB-0) in kernel/effect_ledger.py. The dispatcher gate uses it via these aliases;
 # the previously-duplicated private copies were removed here. See
 # docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
+from AINDY.kernel.cancellation import current_run_id as _current_run_id_for_cancel
+from AINDY.kernel.cancellation import is_run_cancelled as _is_run_cancelled
+from AINDY.kernel.cancellation import note_effect_refused as _note_effect_refused
 from AINDY.kernel.effect_ledger import (
     STALE_PENDING_THRESHOLD_SECONDS,
     complete_effect_record as _complete_effect_record,
@@ -760,6 +763,35 @@ class SyscallDispatcher:
                         "error": None,
                         "warning": None,
                     }
+
+        # ── CANCEL-REACH-1 residual 1 — the SECOND chokepoint, before `entry.handler` ──────
+        # The run is read from the execution span (`current_run_id`), not from a new context
+        # field: `COST-GOVERNOR-1` settled the span's identity once and this reuses it. Placed
+        # after the effect-ledger reservation and inside its completion discipline, so a
+        # refusal cannot leave a `pending` record that never resolves. Fails OPEN by construction
+        # (`is_run_cancelled` never raises and reads "unreadable" as "not cancelled").
+        _cancel_run = _current_run_id_for_cancel()
+        if _cancel_run and _is_run_cancelled(_cancel_run):
+            _note_effect_refused(surface="syscall")
+            logger.info(
+                "[SyscallDispatcher] '%s' refused — run %s is cancelled", name, _cancel_run
+            )
+            self._emit_syscall_event(name, context, "error")
+            if _gate_db is not None and _gate_action_id is not None:
+                _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
+                if _gate_lock is not None:
+                    _gate_lock.release()
+                    _gate_lock = None
+                _gate_db.close()
+                _gate_db = None
+            return self._error_envelope(
+                name,
+                context,
+                f"run {_cancel_run} was cancelled; syscall '{name}' not executed",
+                t_start,
+                version=parsed_version,
+                already_logged=True,
+            )
 
         # Step 3 â€" execute handler
         try:

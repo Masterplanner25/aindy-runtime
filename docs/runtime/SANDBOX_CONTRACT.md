@@ -1,6 +1,6 @@
 ---
 title: "Sandbox Contract"
-last_verified: "2026-09-13"
+last_verified: "2026-09-15"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -303,10 +303,12 @@ recorded reason or an open item with a `TECH_DEBT.md` entry.
 - **The container runner runs no post-launch probe.** Only `strong_sandbox_vm` does. The
   container runner's launch attestation (backend identity, digest, mount mode, resource-limit
   mode) is what `container-sandbox-certified` rests on.
-- **Isolation is cooperative with respect to cancellation.** A cancelled run refuses its *next*
-  tool call; a tool already executing in a worker is never interrupted, and nothing invokes the
-  worker's `subprocess.run(timeout=…)` kill on cancel — only the timeout does
-  (`CANCEL-REACH-1`).
+- **Cancellation reach is a function of the isolation class.** A cancelled run refuses its
+  *next* tool call and its *next* syscall (both chokepoints, `CANCEL-REACH-1`). An in-process
+  tool already executing is never interrupted — cooperative by construction. An **isolated**
+  tool's worker IS killed: the parent polls the cancel predicate while the worker runs and
+  terminates → kills it (`aindy_run_cancel_observed_total{surface="tool_worker"}`). Until
+  2026-09-15 that kill existed only as the timeout and the contract over-claimed it.
 - **`AINDY_TOOL_ISOLATION=0` reverts declared tools to in-process.** It is a deployment-wide
   switch, visible in one place, never per-call. Declarations are still validated and still
   refused when unsatisfiable.
