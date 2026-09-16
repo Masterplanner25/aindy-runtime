@@ -1532,6 +1532,43 @@ the tag, from source), and this entry is written from its first and only run.
 
 ---
 
+## Entry 033 — 2026-09-16
+
+**Trigger:** `v2.19.0` release tag (`sandbox-escape-linux.yml`, run `35145094765`).
+**Commit:** `29731fa3a467` (release PR #700's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–032.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 5.85s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `35145094765`).
+
+**One file inside the certified boundary moved, and it is the one this audit should read
+closely: `plugin_host.py` (#694, `SANDBOX-EVIDENCE-1`).** `git diff v2.18.0..v2.19.0` over
+`sandbox_runner.py`, `sandbox_certification.py` and `tests/sandbox/` is empty; `plugin_host.py`
+is +38/−18, all in `_start_record`. What changed is the FAILURE path after a worker is launched:
+every post-launch check — the hostile-third-party attestation AND the strong-sandbox live
+verification — now takes one path (mark the record with the failure's kind, force-kill the
+worker, re-raise) for every caller. Before, a failed live verification through
+`restart_plugin_host` or an `execute_plugin_host` restart raised without killing, leaving an
+UNVERIFIED worker running as `running`; and `start_plugin_host` marked one attestation
+violation twice. **This tightens invariant 11 (`SANDBOX_CONTRACT.md`), and for the first time
+the post-launch kill has a witness** — `tests/unit/test_plugin_host_attestation_kill.py`
+launches the real `StrongSandboxVmRunner` over a fake process, breaks one attestation field,
+and asserts the process is dead through both entry points (mutation 5/5). That suite runs in
+`Runtime Contracts`, not here: this gate targets `containerized_oci` escape attempts from
+inside the container, and the admission/kill logic sits on the host side of that boundary.
+The 17 escape tests measure what they always measured, and nothing they measure moved.
+
+**Also in this release, outside the boundary:** `AINDY_NODUS_MAX_MEMORY_MB` (#697) — a
+per-execution RSS-growth ceiling for the Nodus guest VM, enforced by nodus-lang 5.13 inside
+`nodus_worker.py`, unset by default. It is a resource bound on the guest, not an isolation
+control, and `nodus_worker.py` is not on this gate's path. No dependency pin moved.
+
+**Release-process note:** Boot Smoke on the published wheel installed `aindy-runtime==2.19.0`
+**on attempt 1** — the first tag since #672 to need no retry (`v2.16.0`: 2, `v2.17.0`: 2,
+`v2.18.0`: 3). One data point; Entry 032's budget note stands.
+
 ## Entry 032 — 2026-09-16
 
 **Trigger:** `v2.18.0` release tag (`sandbox-escape-linux.yml`, run `35111941901`).
