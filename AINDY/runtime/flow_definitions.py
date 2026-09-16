@@ -17,6 +17,11 @@ def register_all_flows() -> None:
     flow_definitions_memory.register()
     flow_definitions_engine.register()
     flow_definitions_observability.register()
+    # FR-31 — the two flows the runtime runs under a recorded `flow_name` must be in
+    # FLOW_REGISTRY before any rehydrated resume can look them up, not on first use.
+    from AINDY.runtime.nodus_execution_service import ensure_runtime_flows_registered
+
+    ensure_runtime_flows_registered()
 
 
 def __getattr__(name: str) -> Any:

@@ -97,6 +97,41 @@ def derive_wait_condition_from_flow(flow_run) -> "WaitCondition | None":
     return None
 
 
+def _reregister_wait(r_id: str, *, flow_name: str, user_id, workflow_type: str, eid: str) -> None:
+    """Re-arm a wait whose callback could not run here (FR-31 ask 2). Reads the run's own row for
+    the event and correlation, builds the same callback, registers it under the run id."""
+    try:
+        from AINDY.core.wait_condition import WaitCondition
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.models.flow_run import FlowRun
+        from AINDY.kernel.scheduler_engine import get_scheduler_engine
+
+        db = SessionLocal()
+        try:
+            run = db.query(FlowRun).filter(FlowRun.id == str(r_id)).first()
+            if run is None or run.status != "waiting" or not run.waiting_for:
+                return
+            event = str(run.waiting_for)
+            corr = str(run.trace_id or run.id)
+        finally:
+            db.close()
+        get_scheduler_engine().register_wait(
+            run_id=str(r_id),
+            wait_for_event=event,
+            tenant_id=str(user_id or ""),
+            eu_id=str(eid or ""),
+            resume_callback=build_flow_resume_callback(
+                r_id=str(r_id), flow_name=flow_name, user_id=user_id, workflow_type=workflow_type, eid=eid
+            ),
+            correlation_id=corr,
+            trace_id=corr,
+            eu_type="flow",
+            wait_condition=WaitCondition.for_event(event, correlation_id=corr),
+        )
+    except Exception as exc:  # noqa: BLE001 — never let re-arming fail the caller
+        logger.warning("[flow_rehydrate] could not re-register the wait for run=%s: %s", r_id, exc)
+
+
 def build_flow_resume_callback(
     *,
     r_id: str,
@@ -128,12 +163,34 @@ def build_flow_resume_callback(
 
         flow = FLOW_REGISTRY.get(flow_name)
         if flow is None:
+            # FR-31 — the runtime's own dynamic flows were registered lazily (`nodus_execute`)
+            # or resolvable only for resume (`agent_execution`), so a rehydrated resume found
+            # nothing here on a fresh boot. `nodus_execute` is registered at boot now; this is
+            # the belt for a process that skipped boot, and the ONLY way `agent_execution` is
+            # resolved. Only a flow the process genuinely does not hold falls through.
+            try:
+                from AINDY.runtime.nodus_execution_service import (
+                    ensure_runtime_flows_registered,
+                    resolve_resumable_flow,
+                )
+
+                ensure_runtime_flows_registered()
+                flow = resolve_resumable_flow(flow_name)
+            except Exception:  # pragma: no cover - a failed ensure is the miss below
+                flow = None
+        if flow is None:
+            # ★ FR-31 ask 2 — a skipped resume must NOT consume the run's registration. The
+            # scheduler deleted this wait before dispatching us, so without re-registering, a
+            # second resume finds nothing and the run is orphaned until the next boot. Put the
+            # wait back (same callback), so the next wake — after the flow's plugin loads, or
+            # on another instance — can succeed.
             logger.warning(
-                "[flow_rehydrate] resume callback: flow=%r not in FLOW_REGISTRY "
-                "for run=%s — skipping resume",
+                "[flow_rehydrate] resume callback: flow=%r not in FLOW_REGISTRY for run=%s — "
+                "this process cannot resume it; the wait is RE-REGISTERED so a later wake can",
                 flow_name,
                 r_id,
             )
+            _reregister_wait(r_id, flow_name=flow_name, user_id=user_id, workflow_type=workflow_type, eid=eid)
             return
 
         _db = SessionLocal()

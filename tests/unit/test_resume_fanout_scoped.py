@@ -158,7 +158,7 @@ def test_the_named_run_is_actually_resumed(db_session, engine):
 
     assert result["status"] == "SUCCESS", result
     assert result["output_patch"]["flow_run_resume_result"]["results"] == [
-        {"run_id": str(a.id), "payload_injected": True}
+        {"run_id": str(a.id), "payload_injected": True, "woken": True}
     ]
     db_session.expire_all()
     assert db_session.query(FlowRun).filter(FlowRun.id == a.id).one().state["event"] == PAYLOAD

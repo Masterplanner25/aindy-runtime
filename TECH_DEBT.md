@@ -8819,6 +8819,70 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ---
 
+## FR-31 / RESUME-FLOW-UNREGISTERED-1 — a run parked across a restart could not be resumed on a fresh process, and the first attempt orphaned it 🔴 defect
+
+**Status: SHIPPED 2026-09-16.** Filed by the app team 2026-09-16 from the 2.17.0 upgrade's own
+verification step (`RUNTIME_FEATURE_REQUESTS.md` FR-31; their `RUNTIME_2_17_0_UPGRADE.md` §5).
+Pre-existing on every release; not a 2.17.0 change. Their mechanism was verified line for line.
+
+**What they hit.** A Tutorial 2 run parked on 2.16.0, resumed after the rebuild on 2.17.0:
+`200 resumed: true, payload_injected: true` — and 60 s later still `waiting`, history `[WAIT]`,
+`state.event` set, the `waiting_flow_runs` row GONE, one WARNING: `[flow_rehydrate] resume
+callback: flow='nodus_execute' not in FLOW_REGISTRY … skipping resume`. A second resume: 200, no
+log line, still waiting. Restart → run any script → resume → `success`. The only variable was
+whether a script had run in the process before the resume.
+
+**The mechanism, and the sibling it exposed.** `nodus_execute` was registered into FLOW_REGISTRY
+LAZILY — `ensure_nodus_script_flow_registered()` from the script-run path — and the rehydrated
+callback (`build_flow_resume_callback._callback`) looked the row's `flow_name` up at WAKE time.
+On a fresh boot: miss → WARNING → `return`, after `notify_event` had already deleted the wait, so
+the skip was terminal for that registration. **★ Reading it found the worse case: `agent_execution`
+— the AGENT_FLOW backend's `flow_name` — was NEVER in FLOW_REGISTRY at all.**
+`execute_agent_flow_orchestration` hands `AGENT_FLOW` to the runner directly and only labels the
+row. So an agent run parked by the authority WAIT gate (#681, shipped the day before) could not
+have survived any restart. Every earlier live run parked and resumed inside one process lifetime;
+rehydration of a Nodus wait had never been exercised — and no gate-parked agent run had existed
+to exercise the other.
+
+**Three asks, all built:**
+
+1. **Resolvable before anything needs it.** `ensure_runtime_flows_registered()` registers
+   `nodus_execute` at boot — from `register_all_flows()` (the API's `_register_flow_engine`) and
+   from the FR-15 worker's `__main__`, which ran `register_flows()` (plugins) but never the
+   runtime-owned set and so could not have rebuilt a `nodus_execute` resume either. Both resume
+   builders (`flow_run_rehydration`, `resume_reconstruction._build_flow`) call it on a miss as
+   belt and braces. **★ `agent_execution` is NOT registered publicly (DEC-020):** a flow in
+   FLOW_REGISTRY is startable through `sys.v1.flow.run` by any holder of `flow.run`, and
+   `agent_execute_step` checks tool capability only when the state carries an `execution_token`
+   — a public registration would let a caller run tools with no token, bypassing approval. It is
+   resolvable for RESUME ONLY via `resolve_resumable_flow()`, which the two builders use.
+2. **A skipped resume no longer consumes the registration.** When the flow genuinely is not held
+   here (a plugin flow not loaded in this process), `_reregister_wait` re-arms the wait under the
+   run id — same callback, event and correlation from the row — and the WARNING says so. The next
+   wake, after the flow appears or on another instance, resumes it. The run is never claimed.
+3. **The route says whether anything was WOKEN.** `route_event` (per-run form) adds
+   `woken: bool` to each result from the publish count, and the resume node's `resumed` now means
+   *woken*, not "payload stored". `payload_injected: true, woken: false` — FR-31's second
+   attempt — warns that the run is not being resumed by this call; the payload is on the row and
+   the next boot's rehydration delivers it. Not a 409: the store DID happen.
+
+**Tests:** `tests/unit/test_fr31_rehydrated_resume_finds_the_flow.py` — private engine (the
+shared fixture's session `close()` rolls back the test's rows; a long-lived session holds a SQLite
+read lock the callback's connection trips over — both hit writing this). The FR-31 reproduction
+as filed (registry emptied of the runtime flows, real rehydration, real callback, real worker:
+`success` on the FIRST wake); `register_all_flows` registers `nodus_execute`; the worker boot does
+too (AST); `agent_execution` resolves for resume and is NOT in FLOW_REGISTRY; **a gate-parked agent
+run survives a restart**; a genuine miss re-arms the wait and the next wake resumes; `woken`
+false/true on the route. **Mutation 5/5** — after fixing the test's own wake helper, which read the
+callback without consuming the entry and so could not tell a re-armed wait from an unconsumed one
+(the re-arm mutation survived the first draft). **Not re-run live**; the app's §5 step 4 order
+("run a script first") is no longer required and their handoff note can be retired.
+
+**Related:** `FR-15` (the worker rebuild that also lacked the runtime flows), `AUTHORITY-NEGOTIATION-1`
+phase 2 (the gate whose parked runs this makes restart-safe), `SESSION-COMMIT-1` (#686 fixed the
+cross-instance callback's rollback the day before; the same `_build_flow` miss now resolves).
+
+---
 ## FR-30 / EU-FINALIZE-UNCOMMITTED-1 — a request's execution unit never reached `completed`: the finalize was flushed after the last commit 🔴 defect
 
 **Status: CLOSED (2026-09-15, PR #673); VERIFIED LIVE by the app team 2026-09-16 on 2.16.0** — 18

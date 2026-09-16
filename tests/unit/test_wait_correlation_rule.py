@@ -178,6 +178,6 @@ def test_a_payload_that_carries_a_correlation_id_key_still_wakes_the_named_run(d
             run_id=run.id,
         )
 
-    assert results == [{"run_id": run.id, "payload_injected": True}]
+    assert results == [{"run_id": run.id, "payload_injected": True, "woken": True}]
     assert _drain(eng) == {run.id}, "the named run was injected into and then not woken"
     assert eng.waiting_for(run.id) is None
