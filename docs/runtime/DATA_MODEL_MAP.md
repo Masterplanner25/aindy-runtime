@@ -1,6 +1,6 @@
 ---
 title: "Data Model Map"
-last_verified: "2026-08-05"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -61,6 +61,7 @@ here.
 - `acquired_at`: DateTime(timezone=True), nullable=False, server_default=func.now()
 - `heartbeat_at`: DateTime(timezone=True), nullable=False, server_default=func.now()
 - `expires_at`: DateTime(timezone=True), nullable=False
+- `fence`: BigInteger, nullable=False, server_default=0 — **LEASE-FENCE-1 (Alembic 0019, 2026-09-16)**: monotonic; 1 on first claim, unchanged on renew, +1 on every takeover. Read `FOR SHARE` by a fenced leader-only job inside its own transaction (`assert_lease_fence`); a mismatch refuses the write.
 - Primary key: `id`
 - Unique constraints: `name`
 - Indexes: `name` (index=True, `ix_background_task_leases_name`), `owner_id` (index=True, `ix_background_task_leases_owner_id`)

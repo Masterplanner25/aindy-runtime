@@ -140,6 +140,17 @@ syscall_unowned_unit_total = Counter(
 # SYSEVENT-RETENTION-1 — what the prune job removed, PER TYPE (a silent prune is indistinguishable
 # from a lost write), and the pressure gauge: rows whose type has no retention class. Growth on
 # the gauge is the ask to classify; it never deletes anything.
+# LEASE-FENCE-1 — the ONLY evidence the fence ever fired: a leader-only job refused its own write
+# because leadership changed hands mid-job. A refusal happens on a scheduler thread, where caplog
+# cannot see it (green-check variant 10), which is why this is a metric and not a log line.
+lease_fence_refusals_total = Counter(
+    "aindy_lease_fence_refusals_total",
+    "Leader-only job writes refused by the background-lease fence (leadership changed hands "
+    "between the job's selection and its commit), by job.",
+    ["job"],
+    registry=REGISTRY,
+)
+
 system_events_pruned_total = Counter(
     "aindy_system_events_pruned_total",
     "system_events rows deleted by the retention job, by event type.",

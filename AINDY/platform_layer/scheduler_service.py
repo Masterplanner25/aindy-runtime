@@ -646,6 +646,22 @@ def _recover_orphaned_approved_runs() -> None:
             .limit(50)
             .all()
         ]
+        # LEASE-FENCE-1 — this is the least-idempotent leader-only job: `execute_run`'s entry
+        # guard is a read-then-set and the 10-minute threshold above assumes ONE leader. Two
+        # leaders' jobs firing close together would both re-dispatch the same orphan. Prove
+        # leadership at the moment of the decision, inside this transaction, and refuse
+        # otherwise; the check is skipped (None) on the in-process profile, which has no lease.
+        from AINDY.platform_layer.leadership import (
+            LeaseFenceLost,
+            assert_lease_fence,
+            background_leader_fence,
+        )
+        try:
+            assert_lease_fence(db, background_leader_fence(), job="recover_orphaned_approved_runs")
+        except LeaseFenceLost:
+            db.rollback()
+            db.close()
+            return
         db.close()
 
         if not orphaned:

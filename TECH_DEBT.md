@@ -14972,7 +14972,21 @@ quota, which inherits the wrong subject).
 
 ## LEASE-FENCE-1 — the background lease has no fencing token, so a stale leader's writes are indistinguishable from the real one's
 
-**Status: OPEN — P2, defence-in-depth.** Filed 2026-08-18. Provenance:
+**Status: CLOSED (2026-09-16) — #705, DEC-030 … DEC-033.** `background_task_leases.fence`
+(BigInteger, Alembic 0019; contract 2026-09-16): 1 on first claim, unchanged on renew, +1 on
+every takeover. `assert_lease_fence(db, background_leader_fence(), job=…)` reads the row
+`FOR SHARE` INSIDE a leader-only job's transaction — a takeover's `FOR UPDATE` blocks until the
+job commits, a takeover that already committed leaves a higher fence, so the stale leader is
+REFUSED (`LeaseFenceLost`, `aindy_lease_fence_refusals_total{job}`). **The entry's question —
+which job is least idempotent — was answered from source: `_recover_orphaned_approved_runs`,
+whose `execute_run` entry guard is a read-then-set and whose 10-minute argument assumes ONE
+leader; it and `deferred_async_job_retry` are fenced, the ten idempotent jobs deliberately not**
+(a row lock per job delays takeover). `execute_run` untouched. Negative control first: a
+takeover between selection and commit is refused through both real entry points; the Postgres
+`FOR SHARE`-blocks-takeover half is an integration test. Mutation-tested 8/8 — one survivor was
+a defective mutation that exposed a real path (a claim that RAISES leaves the elector's hold
+stale; the fence property now consults leadership). **Remaining:** the `system_events` prune is
+not yet fenced (design phase 3, one line); store 4's `claim` is nodus-side. Filed 2026-08-18. Provenance:
 `PI_ON_AINDY_RUNTIME_AUDIT.md` (`C:\codev\openclaw_research\`) — an audit of Pi, the agent-loop
 library OpenClaw embeds. **It is the one primitive in the comparative corpus that an excluded layer
 has and this substrate does not.**

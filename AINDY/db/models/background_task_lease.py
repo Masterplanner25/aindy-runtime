@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, String
+from sqlalchemy import BigInteger, Column, DateTime, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 import uuid
@@ -15,3 +15,7 @@ class BackgroundTaskLease(Base):
     acquired_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     heartbeat_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
+    # LEASE-FENCE-1 — monotonic, incremented ONLY on takeover (1 on first claim, unchanged on
+    # renew). A leader-only job reads it FOR SHARE inside its own transaction and refuses to
+    # commit if it moved: a stale leader is refused, not asked to notice. Alembic 0019.
+    fence = Column(BigInteger, nullable=False, server_default="0", default=0)
