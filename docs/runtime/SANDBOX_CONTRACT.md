@@ -1,6 +1,6 @@
 ---
 title: "Sandbox Contract"
-last_verified: "2026-09-15"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -160,11 +160,16 @@ red if the invariant is broken, per the repo's rule that a job name is not evide
     10) and *after* launch against `hostile_third_party_attestation_violations()`; on any
     violation the process is force-terminated and the host marked `contract_violation`.
     `/health/deep` then reports `plugin_sandbox_attestation` as a failure (503).
-    *Enforced:* `plugin_host.py:858-880`, `health_service.py:876-883`. *Pinned by:*
-    `test_plugin_host.py` (`…rejects_container_runner_in_hostile_profile`) and
-    `test_deployment_profiles.py` for the **pre-spawn** refusal. **The post-launch kill path
-    has no direct test** — no unit test drives a host whose attestation fails *after* launch
-    and asserts termination. Recorded here rather than claimed — `SANDBOX-EVIDENCE-1`.
+    *Enforced:* `plugin_host.py::_start_record` (one failure path for every post-launch
+    check: mark with the failure's kind, force-kill, raise), `health_service.py:876-883`.
+    *Pinned by:* `test_plugin_host.py` (`…rejects_container_runner_in_hostile_profile`) and
+    `test_deployment_profiles.py` for the **pre-spawn** refusal; **the post-launch kill by
+    `test_plugin_host_attestation_kill.py`** (2026-09-16, `SANDBOX-EVIDENCE-1` closed) — a
+    strong runner whose argv-derived launch attestation and live probe are the real code over a
+    fake process, one field broken, the process asserted dead through both `start_plugin_host`
+    and `restart_plugin_host`. **The same guarantee now holds for a failed strong-sandbox live
+    verification** (`_verify_post_launch_state` ≠ passed): it used to raise without marking or
+    killing, so through `restart_plugin_host` an unverified worker stayed alive as `running`.
 
 12. **A container or strong runner will not launch without a configured image, a valid runtime
     identity, and — for strong — a Linux host and a launcher on `PATH`.**
@@ -366,8 +371,7 @@ worker (which has no container to escape). A green `Runtime Contracts` proves th
 check*: the escape suite skips silently when Docker is absent, so its result is meaningful only
 when `sandbox_escape_test_posture()` reports `all_pass` with a recent `last_run`.
 
-**Coverage gaps in this table, stated so they are not inferred as covered:** invariant 11's
-post-launch termination has no direct test (`SANDBOX-EVIDENCE-1`); the strong runner's argv is
+**Coverage gaps in this table, stated so they are not inferred as covered:** the strong runner's argv is
 asserted by `test_sandbox_runner.py` but its launcher (`aindy-sandbox-vm`) is out-of-tree, and its
 launch attestation marks fields verified by checking that argv, so what those flags *do* is
 verified only by the post-launch `/proc` probe on a live Linux host, never in CI

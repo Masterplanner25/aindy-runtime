@@ -2428,8 +2428,53 @@ shared worker policy certification suite (`tier_status: certified` at `strong-sa
 
 ## SANDBOX-EVIDENCE-1 — the `hostile-third-party` post-launch kill has no test
 
-**Status: OPEN (P2).** Filed 2026-09-13 while writing `docs/runtime/SANDBOX_CONTRACT.md`
-(invariant 11); found by trying to name the pin and finding none.
+**Status: CLOSED 2026-09-16 (#694) — the kill WITNESSED, and the test found two defects beside
+it.** Filed 2026-09-13 while writing `docs/runtime/SANDBOX_CONTRACT.md` (invariant 11); found
+by trying to name the pin and finding none.
+
+**What the witness found, verified before any edit.** `tests/unit/test_plugin_host_attestation_kill.py`
+launches the REAL `StrongSandboxVmRunner` with only the process boundary faked — the argv-derived
+launch attestation is production code, the probe is what a healthy worker reports, echoing the
+`sandbox_instance_id` the host handed it — under the same settings the deployment-profile tests
+use, so pre-spawn policy passes for real. A liveness control proves the harness CAN be admitted
+(zero violations, no kill). Then one field is broken.
+
+1. **The hostile kill works.** `launch_attestation.backend_identity.verified = False` → the real
+   `hostile_third_party_attestation_violations` names it, the process is force-killed, the record
+   reads `contract_violation`. On BOTH `start_plugin_host` and `restart_plugin_host`. The entry's
+   fear was not the case.
+2. **★ The public path marked the same failure TWICE.** `start_plugin_host` wrapped
+   `_start_record` in its own `except: _mark_failure(...)` with the default kind — so after one
+   attestation violation the record said `last_failure_kind == "runtime_failure"` (the cause
+   relabelled), `total_failures == 2`, `consecutive_failures == 2`, backoff doubled. The snapshot
+   an operator reads lied about WHY.
+3. **★★ The sibling gap, one branch over: a failed strong-sandbox live verification left the
+   worker ALIVE.** `_verify_post_launch_state() != passed` raised out of `_start_record` with no
+   mark and no kill. `start_plugin_host`'s outer catch saved that path; `restart_plugin_host` and
+   both `execute_plugin_host` restart sites do not wrap the call, so through them an UNVERIFIED
+   worker (its runtime-API channel not hidden, say) stayed running with `state == "running"` —
+   and `execute_plugin_host` would run one plugin call on it before its own post-result
+   verification caught up. Reproduced: `worker left alive after failed verification`.
+
+**Fix.** `_start_record` owns ONE failure path: any exception after the runner exists marks the
+record with the exception's `failure_kind` (a `_PostLaunchRejection` carries
+`contract_violation`; anything else is `_classify_failure`d) and force-kills, then re-raises —
+for every caller. `start_plugin_host`'s outer mark is removed. Strong verification failure is
+classified `runtime_failure`, matching what the execute and heartbeat paths already record for
+the same failure; the hostile branch stays `contract_violation`. **Mutation 5/5:** remove the
+kill (4 fail); never raise on attestation (2); never raise on verification (2 — and the hostile
+attestation STILL kills that worker via `post_launch_verification.status`, on a different
+message: defence in depth exists only under the hostile profile); reintroduce the outer mark (1);
+reclassify instead of carrying the kind (2).
+
+**★ Two harness facts worth keeping.** A marked failure opens the restart circuit, so the
+snapshot reports `lifecycle_state == "backoff"` over a dead pid — assert THAT, not `"failed"`
+(the record's `state` is `failed`; the snapshot's lifecycle is what the operator sees). And
+`pid()` non-None on a non-Linux host makes `read_all_kernel_evidence` report "not observable"
+and fall back to the worker's self-report — the same degradation a macOS/Windows host sees, so
+the test exercises the real fallback rather than skipping it.
+
+### Original entry (2026-09-13) — retained
 
 **The claim.** Under `hostile-third-party`, admission is checked twice. Before spawn,
 `validate_external_third_party_plugin_runtime_policy()` refuses anything but
