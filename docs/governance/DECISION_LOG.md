@@ -1,6 +1,6 @@
 ---
 title: "Decision Log"
-last_verified: "2026-09-13"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -48,6 +48,7 @@ Suggested statuses:
 - `accepted`
 - `provisional`
 - `superseded`
+- `declined` — a considered-and-refused option, recorded so it is not re-derived (DEC-010)
 - `needs review`
 
 ---
@@ -237,6 +238,227 @@ These surfaces are the most important for operator truth and cross-repo coordina
 
 ---
 
+### DEC-010
+**Status:** `accepted` (2026-09-16)
+
+**Decision**
+This log is the single register of runtime decisions. A decision made in conversation is recorded
+here as `DEC-NNN` **in the PR that acts on it** — the same discipline `changelog.d/` enforces for
+changelog entries. `TECH_DEBT.md` entries and `docs/design/` documents keep the decision's
+*narrative* inline (they need the context) and **cite the id**; `CLAUDE.md` §Recorded decisions
+is an **index** of ids, never the record. Decisions made before this date stay where they are
+(`DEC-001..009` here; `TECH_DEBT.md` `DECISIONS-2026-08-01`) with pointers; they are not
+back-filled except where a decision from the week this rule was written had no other formatted
+home (DEC-011..019 below).
+
+**Why**
+Three places held decisions and none had a rule for which (#648 flagged it 2026-09-13). The one
+with a format — this log — had not been written to since June, so the six decisions made in the
+week of 2026-09-15 landed as `DECIDED` / `DECLINED` markers in prose with no id anyone could
+cite. Re-litigation is prevented by a citable id, not by prose.
+
+**Implications**
+- a PR that records a decision touches this file; `tests/unit/test_decision_log_integrity.py`
+  pins that every `DEC-NNN` cited anywhere in the repo exists here and that ids are unique
+- an inline `DECIDED` / `DECLINED` in an entry or design doc should carry `(DEC-NNN)`; the guard
+  does not enforce that yet (phase 2 if the markers drift)
+- `Status` values: `accepted`, `provisional`, `superseded`, `declined` — `declined` is added for
+  a considered-and-refused option, which is what most of the entries below are
+
+**Related Docs**
+- `../../CLAUDE.md` §Recorded decisions (the index), §CHANGELOG protocol (the sibling rule)
+- `../../TECH_DEBT.md` `DECISIONS-2026-08-01` (the legacy batch, unchanged)
+
+---
+
+### DEC-011
+**Status:** `accepted` (2026-09-15, #677 — `WAIT-TYPED-CONTRACT-1` phase 1)
+
+**Decision**
+A waiting node's declared `resume_schema` is recorded on the run's **state** under a reserved
+key (`__pending_request`), not in a `flow_runs` column.
+
+**Why**
+An additive column makes every existing deployment owe `bootstrap-schema --reconcile` (Alembic
+0018's operator note) for a defence-in-depth check. The stated cost: the DUR-4 history fold does
+not reconstruct the record, so a run recovered from a torn snapshot resumes untyped — absent is
+never a mismatch, so the degradation is to the pre-feature behaviour, never a wrong rejection.
+
+**Implications**
+- `test_a_state_reconstructed_by_the_fold_resumes_untyped` pins the degradation; changing either
+  side (fold or record placement) is a decision, not a drift
+
+**Related Docs**
+- `AINDY/core/pending_request.py`; `TECH_DEBT.md` `WAIT-TYPED-CONTRACT-1` phase-1 record
+
+---
+
+### DEC-012
+**Status:** `declined` (2026-09-15, #677)
+
+**Decision**
+A resumed Nodus script does **not** get its prior `nodus_output_state` seeded back into its
+namespace. A re-run starts with an empty namespace plus `nodus_received_events`.
+
+**Why**
+The two-phase run-from-the-top shape is the documented contract (`NODUS_DEVELOPER_GUIDE.md` §4,
+Tutorial 2). Seeding prior state would re-apply phase 1's effects on every re-run unless the
+author guards them. What the script set before it parked stays readable on the waiting run's
+`nodus_output_state`; it is not handed back.
+
+**Related Docs**
+- `NODUS_DEVELOPER_GUIDE.md` §4; `TECH_DEBT.md` `NODUS-RESUME-BRIDGE-1` (the question's origin)
+
+---
+
+### DEC-013
+**Status:** `accepted` (2026-09-15, #678 — `WAIT-PAYLOAD-PATH-1`)
+
+**Decision**
+The event bus never carries a resume payload. A payload's home is the durable **row**
+(`flow_runs.state["event"]`), written and committed **before** the wake; the wake carries only
+`event_type`, `correlation_id`, `run_id`. Any future payload path (webhook, connector, MCP)
+writes the row, then wakes by `run_id` — `route_event(run_id=…)` is the reference shape.
+`sys.v1.event.emit` stays a payload-less wake by construction: it names an event, not a run.
+
+**Why**
+This is exactly what makes a resume reconstructible from `run_id` alone (`FR-15`): the woken run
+reads its payload off its own row on whichever instance claims it, after any restart. A payload
+on the Redis message would be a second, non-durable copy with a size and ordering question
+attached, delivering nothing the row does not.
+
+**Related Docs**
+- `AINDY/runtime/flow_engine/event_router.py`; `TECH_DEBT.md` `WAIT-PAYLOAD-PATH-1` close record
+
+---
+
+### DEC-014
+**Status:** `accepted` (2026-09-15, #679 — `EU-WAIT-SIGNAL-DEAD-1`)
+
+**Decision**
+There is no request-level WAIT. `ExecutionWaitSignal` was **removed** rather than repaired; a
+request's execution unit completes when its handler returns, by every path.
+
+**Why**
+The promise ("raise from any handler to park the request's unit, to be resumed later") was
+unfulfillable by construction — a route has already answered its client before it can raise, and
+nothing re-executes a request — nothing in four repos raised it, and its resume callbacks rolled
+back on close. Building semantics for a surface with no possible caller would have been
+`SUBSTRATE-WITNESS-1`'s shape.
+
+**Implications**
+- a request's unit cannot enter `waiting` by any path (pinned behaviourally and by AST)
+- `execution.waiting` stays in the frozen-hash event enum with no emitter
+
+**Related Docs**
+- `EXECUTION_CONTRACT.md`; `TECH_DEBT.md` `EU-WAIT-SIGNAL-DEAD-1`
+
+---
+
+### DEC-015
+**Status:** `declined` (2026-09-15, #680 — `FLOW-PARALLEL-1` phase 3b)
+
+**Decision**
+No `SwitchCaseEdgeGroup` type. An ordered list of `{"target", "when": "<name>"}` edges ending in
+`when: "default"` **is** a switch-case.
+
+**Why**
+The design row came from MAF, where a switch subclasses fan-out because its edges have no
+first-match semantics. Ours do: `resolve_next_node` takes the first matching edge in declaration
+order, a non-terminal node with no match already fails the run loudly, and the order is already
+in the graph signature. A distinct type would be a second spelling of one semantics; if ever
+wanted for readability it is registration-time sugar expanding to the `when` list.
+
+**Related Docs**
+- `docs/design/FLOW_PARALLEL_DESIGN.md` §6a
+
+---
+
+### DEC-016
+**Status:** `accepted` (2026-09-15, #681 — `AUTHORITY-NEGOTIATION-1` phase 2)
+
+**Decision**
+The authority WAIT gate's operator decisions are `skip` and `abort`. **Not `grant`** — the gate
+cannot widen authority (design §7). **Provide-a-result** (human-as-the-tool) is *deferred*, not
+declined: if built, it is a third decision on this gate, never a new gate.
+
+**Why**
+`grant` would be a second minting path, the one thing the enforcement matrix's single hard
+cryptographic guarantee cannot survive. An asserted result is `EFFECT-PARTIAL-1`'s lie in a nicer
+costume until it is designed on its own terms — who vouches, how it is marked, what downstream
+steps may assume.
+
+**Related Docs**
+- `docs/design/AUTHORITY_NEGOTIATION_DESIGN.md` §5a
+
+---
+
+### DEC-017
+**Status:** `accepted` (2026-09-16 — `WAIT-TYPED-CONTRACT-1` / `GUEST-BUILTINS-DEAD-1` step 2; PR to follow)
+
+**Decision**
+The guest wait contract is a host function, `await_event(event_type, schema=None)`, layered on
+the three state keys (`nodus_wait_requested`, `nodus_wait_event_type`, `nodus_wait_resume_schema`),
+which remain the wire contract. It sets the keys and raises to halt the script at the call; on
+the resumed run it returns the payload. `nodus_builtins.py` (the raise-based `event.wait()` /
+`NodusWaitSignal` design, 530 lines, zero importers) and `WorkerWaitSignal` are deleted.
+
+**Why**
+Two facts measured before deciding: nodus 5.13 **swallows host-function exceptions** into an
+`{"ok": False}` result, so the raise-based design could never have worked on any version; and
+`wait` is a **reserved nodus built-in** (`builtins/coroutine.py`) that cannot be registered over
+— the `NODUS-SYS-SURFACE-1` trap under another name. The halt still works because the worker
+checks `nodus_wait_requested` before it looks at `ok`. The keys were already the documented API;
+the function is the ergonomic surface over them.
+
+**Implications**
+- everything before `await_event()` re-runs on resume; the `if received == nil` guard remains
+  the safe pattern unless phase-1 effects are mediated (DUR-1/2) — documented, not hidden
+
+**Related Docs**
+- `NODUS_DEVELOPER_GUIDE.md` §4; `TECH_DEBT.md` `GUEST-BUILTINS-DEAD-1`, `WAIT-TYPED-CONTRACT-1`
+
+---
+
+### DEC-018
+**Status:** `declined` (2026-08-18, *ADK research*; back-filled from `CLAUDE.md`)
+
+**Decision**
+No first-non-`None`-wins hook precedence (`HOOK-PRECEDENCE-1`).
+
+**Why**
+Our ~40 `register_*` hooks are either keyed (one handler per key — the key disambiguates) or
+run-all-and-collect (nothing is discarded). First-wins makes a handler's effect depend on
+registration order relative to handlers it cannot see, so one plugin can silently suppress
+another and nothing records it. What would change the answer: a genuine policy-arbitration point
+where exactly one handler must win and the key cannot say which — none exists; if one appears the
+right shape is an explicit declared arbiter (`DISPATCH-ADMISSION-1`'s conclusion).
+
+**Related Docs**
+- `TECH_DEBT.md` `HOOK-PRECEDENCE-1`; `COMPARATIVE_RESEARCH_INDEX.md`
+
+---
+
+### DEC-019
+**Status:** `declined` (2026-07-12, `ECOGAP-1` phase 3 reframe; back-filled from `CLAUDE.md`)
+
+**Decision**
+No kernel deterministic replay (Temporal-style: store non-deterministic results and re-run the
+code with them injected).
+
+**Why**
+Determinism is a VM concern, not a kernel one; forward-resume never re-executes code, so the
+problem does not arise; and it is a constraint on every line of workflow code rather than a
+feature. Six audits have cited "replay" meaning three different things — `ECOGAP-1` carries the
+taxonomy: (1) event-sourced state fold, **shipped** as DUR-4; (2) deterministic code replay,
+**declined**; (3) ordering replay, specified in `FLOW-PARALLEL-1`. The honest residual is the
+single re-run node's un-mediated side effects.
+
+**Related Docs**
+- `TECH_DEBT.md` `ECOGAP-1`; `docs/design/DURABLE_EXECUTION_PROGRAM.md`
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
@@ -258,13 +480,12 @@ a canonical home is the drift this docset keeps paying for.)*
   `AINDY/kernel/condition_codes.py`, documented in `CONDITION_CODES.md` and
   `DEGRADED_MODE_MATRIX.md` (2026-06-06)
 
-**Where decisions are recorded now.** Since 2026-08-01, owner decisions are recorded in
-`TECH_DEBT.md` (`DECISIONS-2026-08-01`) and the *Recorded decisions — considered and declined,
-do not re-litigate* section of `CLAUDE.md`; design-level decisions live in the relevant
-`docs/design/` document's status header. `DEC-001..009` above remain accepted and are the
-principles those later decisions were made under. **There are therefore three places a decision
-can be recorded**; consolidating them is a docset decision not yet taken, and until it is, this
-log is the record of the *founding* decisions only.
+**Where decisions are recorded now — DEC-010 (2026-09-16).** Here, as `DEC-NNN`, in the PR
+that acts on the decision. `TECH_DEBT.md` entries and `docs/design/` documents keep the narrative
+and cite the id; `CLAUDE.md` §Recorded decisions indexes the ids. `TECH_DEBT.md`
+`DECISIONS-2026-08-01` (seven owner answers from 2026-08-01) is the one legacy batch outside this
+log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` pins that every
+`DEC-NNN` cited anywhere in the repo exists here, once.
 
 ---
 

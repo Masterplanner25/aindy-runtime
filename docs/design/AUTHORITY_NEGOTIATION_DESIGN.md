@@ -1,7 +1,7 @@
 ---
 title: "Authority Negotiation — Design"
 api_version: "1.0"
-last_verified: "2026-09-15"
+last_verified: "2026-09-16"
 status: current
 owner: "platform-team"
 ---
@@ -163,7 +163,7 @@ mirrors the nodus_vm chain: `AgentRun.status = "waiting"`, a durable `wait_state
 flow_run_id, authority_gate}`, the `WAITING` agent event. The agent's own execution unit stays
 `executing` while parked (nothing resumes an agent EU; parking it would strand it).
 
-**The decisions — two, and the two that are absent are decisions too:**
+**The decisions — two, and the two that are absent are decisions too (DEC-016):**
 
 - **`skip`** — the step is recorded as an `AgentStep` with `status="skipped"` and the note; the
   run advances. The nine steps of work survive; the tenth is a human's call.

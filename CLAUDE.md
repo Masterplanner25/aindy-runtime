@@ -171,6 +171,17 @@ doesn't exist, `CREATE INDEX ... ON missing_table` still raises `UndefinedTable`
 
 ---
 
+## ★ Decisions protocol — record the `DEC-NNN` in the PR that acts on it
+
+**A decision made in conversation — a declined option, a chosen shape, a deferral — is recorded as
+`DEC-NNN` in `docs/governance/DECISION_LOG.md` in the same PR** (DEC-010, 2026-09-16). Entries in
+`TECH_DEBT.md` and design docs keep the narrative and **cite the id**; the CLAUDE.md §Recorded
+decisions list is an index of ids. Same reasoning as the CHANGELOG protocol below: the reasoning
+decays fastest, and a decision without a citable id gets re-derived. `test_decision_log_integrity.py`
+fails on a cited id that does not exist.
+
+---
+
 ## ★ CHANGELOG protocol — write the entry in the PR that makes the change
 
 **A PR that changes behaviour, API surface, configuration, schema, or what CI proves writes its own changelog entry in the same PR.** Not at release time.
@@ -1031,10 +1042,23 @@ file — because findings were written where they were discovered instead of whe
 - **SYSCALL-STABILITY-\*** — `-1` fixed 2026-08-13. `SyscallEntry.stable` (advertised maturity) and `_STABLE_SYSCALLS` (rename guard) measure different things and may legitimately differ. **Two gotchas: the duplicate-registration guard is on `SyscallRegistry.__setitem__`, not `register_syscall`; and `stable` defaults to `True`, so an unset flag is not necessarily accidental.** Open app-side: the monolith defines `register_all_domain_handlers` twice.
 - **AUDIT-INVARIANTS-VERIFIED-1** — **RECORD, not a defect.** The claimed guarantees were swept, not just the gaps; most held. **Two did not:** the boot-time route proof (→ ROUTE-AST-UNWIRED-1), and *"output validation is warn-only"* — **FALSE for `stable` syscalls**, which return an error envelope; only *experimental* ones warn. **★ Method note: verify the guarantees, not just the gaps — both errors were in "already covered" sections, the part of an audit least likely to be re-checked.**
 
-### Recorded decisions — considered and declined, do not re-litigate
+### Recorded decisions — an INDEX of `docs/governance/DECISION_LOG.md`, not the record
 
-- **HOOK-PRECEDENCE-1** — *(ADK research)* first-non-`None`-wins hook semantics: **declined.** Our ~40 `register_*` hooks are either **keyed** (one handler per `route_prefix`/`entity_type` — the key disambiguates) or **run-all-and-collect** (nothing is discarded, so precedence is not a question). **★ The objection is substantive, not stylistic: first-wins makes a handler's effect depend on registration order relative to handlers it cannot see, so one plugin can silently suppress another and nothing records it.** **What would change the answer:** a genuine policy-arbitration point where exactly one handler must win and the key cannot express which — none exists today, and if one appears the right shape is an explicit declared arbiter, the same conclusion `DISPATCH-ADMISSION-1` reached. Not `CAPABILITY-PROVIDER-TIMEOUT-1`, which was a defect in a run-all path.
-- **Kernel deterministic replay** — declined in `ECOGAP-1`'s Phase 3 reframe. **★ That entry now carries a three-way taxonomy, because six audits have cited "replay" at us meaning different things: (1) event-sourced state fold — SHIPPED as DUR-4; (2) deterministic code replay (Temporal) — DECLINED; (3) ordering replay — specified in `FLOW-PARALLEL-1`.** #2 stores non-deterministic *results* and re-runs the code with them injected so the world doesn't move; it is declined because determinism is a VM concern not a kernel one, because forward-resume never re-executes code so the problem doesn't arise, and because it is a constraint on every line of workflow code rather than a feature. **The honest residual is not "we lack replay" — it is "the single re-run node's un-mediated side effects."**
+**★ DEC-010 (2026-09-16): a decision made in conversation is recorded as `DEC-NNN` in
+`DECISION_LOG.md` in the PR that acts on it** — the `changelog.d` discipline applied to decisions.
+Entries and design docs keep the narrative and cite the id; this list is one line per id.
+`tests/unit/test_decision_log_integrity.py` pins that every cited id exists, once. Before DEC-010,
+decisions landed in three places with no rule (#648); the two that lived only here are DEC-018/019.
+
+- **DEC-011** — `WAIT-TYPED-CONTRACT-1`: the pending request is a STATE KEY, not a column (the fold resumes untyped, pinned).
+- **DEC-012** — a resumed Nodus script does NOT get `nodus_output_state` seeded back — *declined*.
+- **DEC-013** — the event bus never carries a payload; the ROW is the payload's home (write row, wake by `run_id`).
+- **DEC-014** — no request-level WAIT: `ExecutionWaitSignal` removed, not repaired.
+- **DEC-015** — `FLOW-PARALLEL-1` 3b `SwitchCaseEdgeGroup` — *declined*; an ordered `when` list + `default` already is one.
+- **DEC-016** — the authority WAIT gate decides `skip | abort`; never `grant`; provide-a-result *deferred*.
+- **DEC-017** — the guest wait contract is `await_event()` over the three state keys; the raise-based `nodus_builtins.py` is deleted (host exceptions are swallowed; `wait` is a reserved nodus name).
+- **DEC-018** — `HOOK-PRECEDENCE-1` first-non-`None`-wins hooks — *declined*; keyed or run-all-and-collect only.
+- **DEC-019** — kernel deterministic replay — *declined*; `ECOGAP-1` carries the three-way "replay" taxonomy.
 
 ### Standing rule — not an item
 

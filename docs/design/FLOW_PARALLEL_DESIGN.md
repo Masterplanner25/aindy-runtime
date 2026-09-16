@@ -1,7 +1,7 @@
 ---
 title: "Flow Fan-Out and Supersteps — Design"
 api_version: "1.0"
-last_verified: "2026-09-15"
+last_verified: "2026-09-16"
 status: current
 owner: "platform-team"
 ---
@@ -192,7 +192,7 @@ beside today's `{"target": …, "condition": <callable>}`. Rules, each pinned by
   its call, on the same terms (handoff item).
 - `"default"` is a built-in predicate (always true): the named form of `lambda s: True`.
 
-**3b — `SwitchCaseEdgeGroup`: DECLINED as redundant.** The row in §8 came from MAF, where a
+**3b — `SwitchCaseEdgeGroup`: DECLINED as redundant (DEC-015).** The row in §8 came from MAF, where a
 switch *subclasses* fan-out because their edges have no first-match semantics. Ours already do:
 `resolve_next_node` takes the first matching edge in declaration order, a non-terminal node with
 no match already fails the run loudly, and the order is already in the signature. With named
