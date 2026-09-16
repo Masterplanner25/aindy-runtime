@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from AINDY.kernel.scheduler.common import PRIORITY_NORMAL, logger
+from AINDY.kernel.scheduler.common import PRIORITY_NORMAL, correlation_admits, logger
 
 
 def _load_wait_entry_from_db(run_id: str):
@@ -57,8 +57,12 @@ def _cross_instance_resume(
             if wait_entry is None or getattr(wait_entry, "event_type", None) != event_type:
                 continue
 
+            # WAIT-PAYLOAD-PATH-1 (b) — the SAME rule the local scan applies. This used to be
+            # `if correlation_id and wait_corr != correlation_id`, which vetoed a None-correlation
+            # wait on every emit (an emit always carries one), so such a wait woke locally and
+            # never here. One predicate, both paths.
             wait_corr = getattr(wait_entry, "correlation_id", None)
-            if correlation_id and wait_corr != correlation_id:
+            if not correlation_admits(wait_corr, correlation_id, run_scoped=target_run is not None):
                 continue
 
             try:

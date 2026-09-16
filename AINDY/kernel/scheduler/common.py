@@ -27,6 +27,37 @@ _MAX_PRE_REHYDRATION_BUFFER = _int_env(
 )
 
 
+def correlation_admits(
+    wait_correlation: str | None,
+    emit_correlation: str | None,
+    *,
+    run_scoped: bool,
+) -> bool:
+    """THE correlation rule for waking a wait — one function, every path (`WAIT-PAYLOAD-PATH-1` (b)).
+
+    1. **A run-scoped wake is decisive.** When the caller named the run (`run_id`), correlation
+       does not get a veto: the run id is the only key unique to the run
+       (`RESUME-FANOUT-UNSCOPED-1`), and a wake that names a run and then declines to wake it
+       because of a secondary key is a silent no-op. Observed: `POST …/runs/{id}/resume` with a
+       payload that happened to carry a client-side ``correlation_id`` key injected the payload,
+       reported ``resumed: true``, and never woke the run — its own key vetoed it.
+    2. **Otherwise correlation vetoes only when BOTH sides carry one and they differ.** A wait
+       registered without one matches any emit; an emit without one matches any wait.
+
+    Until 2026-09-15 the local scan (`waits.py`) applied rule 2 and the cross-instance fallback
+    (`cross_instance.py`) applied a stricter one — skip whenever the emit carries an id the
+    wait's does not equal — so a wait registered with ``correlation_id=None`` resumed locally on
+    any emit and NEVER cross-instance, because `_notify_scheduler_of_event` always supplies one.
+    Two instances, two answers to the same emit. Three hand-copies of a rule is how they drift;
+    this is the one copy.
+    """
+    if run_scoped:
+        return True
+    wait_corr = wait_correlation or None
+    emit_corr = emit_correlation or None
+    return not (wait_corr and emit_corr and wait_corr != emit_corr)
+
+
 def _get_session_factory():
     from AINDY.db.database import SessionLocal
 

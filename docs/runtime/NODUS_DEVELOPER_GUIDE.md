@@ -301,7 +301,14 @@ The WAIT/RESUME cycle:
      through a zero-argument callback. **No payload crosses the bus.** The re-run script finds
      `nodus_received_events` absent, re-requests the wait, and the run parks again. It also only
      matches if the emit carries no `correlation_id` or the same one the wait registered — an
-     emit from an unrelated request carries its own `trace_id` and is skipped.
+     emit from an unrelated request carries its own `trace_id` and is skipped. (One rule on
+     every instance since 2026-09-15, `WAIT-PAYLOAD-PATH-1`: the resume route's wake names the
+     run and is never vetoed by correlation — including a `correlation_id` key inside your own
+     payload, which until then silently vetoed its own wake after injecting.)
+   - **The bus never carries a payload, by design.** The payload's home is the run's row,
+     written and committed before the wake; that is what lets whichever instance claims the run
+     read it back after a restart. Anything that wants to deliver a payload writes the row and
+     wakes by run id — the resume route is the reference shape.
 4. The scheduler re-enqueues the flow; the `nodus.execute` node runs the script again.
 5. On the route path, the payload is in `state["nodus_received_events"]["event.name"]`.
 
