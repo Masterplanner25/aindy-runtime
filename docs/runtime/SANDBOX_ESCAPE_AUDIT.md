@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-15"
+last_verified: "2026-09-16"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1529,3 +1529,35 @@ already answered 200 for the version. The check that gates Boot Smoke asks the J
 origin; `pip install` resolves through the simple index behind Fastly, which lagged by minutes.
 A `--failed` rerun passed and created the release. The sandbox gate was unaffected (it runs on
 the tag, from source), and this entry is written from its first and only run.
+
+---
+
+## Entry 030 — 2026-09-16
+
+**Trigger:** `v2.16.0` release tag (`sandbox-escape-linux.yml`, run `34977777990`).
+**Commit:** `726e184a359e` (release PR #674's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–029.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.27s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `34977777990`).
+
+**The certified boundary is untouched.** `git diff v2.15.0..v2.16.0` over `sandbox_runner.py`,
+`plugin_host.py`, `sandbox_certification.py` and `tests/sandbox/` is **empty**. No dependency pin
+moved.
+
+**What this release changed, and why it is not what this gate measures.** 2.16.0 is one
+host-side pipeline fix — `EU-FINALIZE-UNCOMMITTED-1` (#673, the app team's FR-30): the execution
+pipeline now COMMITS a request's terminal `execution_units` status instead of flushing it into a
+session that closes without committing, and the boot-time `waiting_flow_runs` seed skips an id
+that is not a flow run. Both are host-side bookkeeping about a request after its handler has
+returned; neither touches how a guest is spawned or what reaches its namespace.
+
+**★ Release-process note — Entry 029's fix was exercised, and it held.** `publish.yml`'s Boot
+Smoke on the published wheel installed `aindy-runtime==2.16.0` **on attempt 2**: the PyPI CDN's
+simple index lagged behind the JSON API again, exactly as on `v2.15.0`, and the retry added in
+#672 absorbed it. Without it this release would have failed Boot Smoke and skipped the GitHub
+release for the second tag running. The check that was at its least proven the day it shipped
+was proven by the very next tag. The sandbox gate was unaffected (it runs on the tag, from
+source); this entry is written from its first and only run.
