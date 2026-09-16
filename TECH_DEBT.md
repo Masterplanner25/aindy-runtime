@@ -4370,7 +4370,24 @@ guest script — is now boundable cheaply, and `EXEC-ENV-BIND-1`'s `resources` d
 natural place to declare it, which makes this a candidate for that entry's phase 4 rather than
 for the OS integration described above.
 
-**★ Not adopted.** #606 changed pins only; nothing passes `max_memory_mb` yet.
+**★★ GUEST HALF SHIPPED 2026-09-16 (#697); the entry stays OPEN for every other EU type.**
+`AINDY_NODUS_MAX_MEMORY_MB` (unset = no ceiling) puts `resources.memory_bytes` on the guest
+floor at call time; `nodus_runtime_kwargs` turns it into `max_memory_mb`; a per-execution
+`env_spec` may narrow it, never widen it; `enforced_resources(spec, guest=True)` lists memory
+and the default path still does not (`GUEST_RESOURCES_ENFORCED`). **Measured before building:**
+nodus bounds RSS *growth* from a baseline read at run start, polled — a growing 120k-iteration
+script dies in 0.3 s under a 1 MB ceiling with a `sandbox` error *"Memory limit exceeded: this
+run grew the process to 45 MB, past its 45 MB ceiling"*; the same script unbounded runs 39 s to
+completion; and a script that grows 64 MB in **26 instructions** FINISHES under an 8 MB ceiling,
+because the poll never fires — the limit is a growth bound, not an allocation cap, and the test
+file is shaped by that. **★ A declared ceiling the host cannot meter is REFUSED** (nodus raises
+at construction for the same reason; the worker pre-checks and returns a failure payload naming
+the cause instead of a crash the pool would retry). **Not done here:** the row-level
+`env_applied.resources_enforced` for a guest unit — no guest execution reaches the gate with a
+spec today (the worker reads `payload["env_spec"]`, nothing upstream sets it), so there is no
+row to write it on; and no default value — the ceiling ships unset, a flip is a decision.
+Mutation 4/4 (`tests/unit/test_guest_memory_ceiling.py`).
+
 
 **Reopen trigger:** First OOM incident in a production deployment, or when `hostile-third-party` deployment profile becomes the active default.
 

@@ -1,7 +1,7 @@
 ---
 title: "ExecutionEnvironmentSpec — Design (EXEC-ENV-BIND-1)"
 api_version: "1.0"
-last_verified: "2026-09-13"
+last_verified: "2026-09-16"
 status: current
 owner: "platform-team"
 ---
@@ -303,6 +303,7 @@ the moment it is most interesting. Settle before implementing.
 | **1** | ✅ **SHIPPED** — spec type, three columns, resolution + refusal at `require_execution_unit`, per-run record | **no execution path changed**; mutation-tested 7/7 |
 | **2** | ✅ **SHIPPED** — the guest path asks; `nodus_worker` derives every confinement arg from a spec clamped to `GUEST_FLOOR`, with an explicit per-execution scratch root. Closes `GUEST-CONFINE-1`'s residual | confinement suite re-run against the real VM, green; mutation-tested 6/6 |
 | **3** | the tool seam asks — `TOOL-SEAM-ISOLATION-1`'s command transform reads the descriptor | the P0 |
+| **4b** | ✅ **SHIPPED (#697, 2026-09-16)** — `resources.memory_bytes` ENFORCED on the guest path via nodus 5.13's `max_memory_mb` (`SYSMAX-3` guest half): operator ceiling `AINDY_NODUS_MAX_MEMORY_MB` on the guest floor, narrow-only, `enforced_resources(guest=True)`; an unmeterable host refuses a declared ceiling | guest path only; ships unset; mutation-tested 4/4 |
 | **4** | ✅ **SHIPPED (#639, 2026-09-13)** — `resources.tokens` added; `require_execution_unit` declares effective ceilings to `resource_manager`, which enforces `min(global, declared)` for wall time, syscalls and (via the governor) tokens; `env_applied.resources_enforced` records which bind; `AINDY_RUN_SCOPED_QUOTA` (default off) makes the run the subject for guest `sys()` and agent spans | touched `resource_manager`; mutation-tested 5/5 |
 
 Phase 1 is deliberately the whole accountability story and none of the enforcement story.
