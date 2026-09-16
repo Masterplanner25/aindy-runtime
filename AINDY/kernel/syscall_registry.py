@@ -964,39 +964,6 @@ def _handle_agent_count_runs(payload: dict, context: SyscallContext) -> dict:
             db.close()
 
 
-def _handle_agent_list_recent_durations(payload: dict, context: SyscallContext) -> dict:
-    """sys.v1.agent.list_recent_durations - list recent AgentRun timing fields for duration calculations."""
-    from AINDY.db.models import AgentRun
-
-    db, owns_session = _acquire_handler_db(context)
-    window_hours = int(payload.get("window_hours", 1))
-    try:
-        window_start = datetime.now(timezone.utc) - timedelta(hours=window_hours)
-        query = db.query(AgentRun).filter(AgentRun.created_at >= window_start)
-
-        normalized_user_id = _resolve_tenant_user_id(context, payload)
-        if normalized_user_id is None:
-            return {"durations": [], "count": 0}
-        query = query.filter(AgentRun.user_id == normalized_user_id)
-
-        rows = query.all()
-        durations = [
-            {
-                "started_at": (row.started_at or row.created_at).isoformat()
-                if (row.started_at or row.created_at)
-                else None,
-                "completed_at": (row.completed_at or row.started_at or row.created_at).isoformat()
-                if (row.completed_at or row.started_at or row.created_at)
-                else None,
-            }
-            for row in rows
-        ]
-        return {"durations": durations, "count": len(durations)}
-    finally:
-        if owns_session:
-            db.close()
-
-
 def _handle_agent_list_recent_runs(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.agent.list_recent_runs - list recent AgentRun rows for a user as plain dicts."""
     from AINDY.agents.agent_runtime import run_to_dict
@@ -1761,25 +1728,6 @@ SYSCALL_REGISTRY["sys.v1.agent.count_runs"] = SyscallEntry(
     },
     stable=False,
 )
-SYSCALL_REGISTRY["sys.v1.agent.list_recent_durations"] = SyscallEntry(
-    handler=_handle_agent_list_recent_durations,
-    capability="agent.read",
-    description="List recent AgentRun timing fields for duration calculations.",
-    input_schema={
-        "properties": {
-            "user_id": {"type": "string"},
-            "window_hours": {"type": "int"},
-        },
-    },
-    output_schema={
-        "required": ["durations", "count"],
-        "properties": {
-            "durations": {"type": "list"},
-            "count": {"type": "int"},
-        },
-    },
-    stable=False,
-)
 SYSCALL_REGISTRY["sys.v1.agent.list_recent_runs"] = SyscallEntry(
     handler=_handle_agent_list_recent_runs,
     capability="agent.read",
@@ -2030,7 +1978,10 @@ def get_registered_syscalls() -> list[str]:
 
 # Minimum number of syscalls expected after a complete boot (all static built-ins).
 # Any count below this floor means Phase 8 did not finish, or a registration was lost.
-# Add 1 per new static entry added to this file.  Do not lower this value.
-SYSCALL_REGISTRY_MIN_COUNT: int = 24
+# Add 1 per new static entry added to this file.  Do not lower this value EXCEPT in the
+# PR that deliberately removes an entry, citing its DEC-NNN (DEC-022 removed
+# `sys.v1.agent.list_recent_durations`, 24 → 23) — a lowered floor with no removal
+# beside it is the lost-registration case this constant exists to catch.
+SYSCALL_REGISTRY_MIN_COUNT: int = 23
 
 
