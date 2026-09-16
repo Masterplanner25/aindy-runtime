@@ -102,10 +102,13 @@ def validate_tenant_path(path: str, tenant_id: str) -> None:
     Raises:
         PermissionError: TENANT_VIOLATION — path belongs to another tenant.
     """
+    # One rule, shared with `TenantContext.validate_memory_path` (kernel-owned so the memory
+    # layer can import it, not the other way round). The exact tenant root is inside the
+    # namespace; an empty tenant owns nothing.
+    from AINDY.kernel.tenant_context import TENANT_VIOLATION, tenant_owns_memory_path
+
     expected_prefix = f"{MAS_ROOT}/{tenant_id}/"
-    exact = f"{MAS_ROOT}/{tenant_id}"
-    if not (path.startswith(expected_prefix) or path == exact):
-        from AINDY.kernel.tenant_context import TENANT_VIOLATION
+    if not tenant_owns_memory_path(path, tenant_id):
         raise PermissionError(
             f"{TENANT_VIOLATION}: path {path!r} is not under tenant "
             f"namespace {expected_prefix!r}"

@@ -75,12 +75,16 @@ class TestBuildTenantContext:
         ctx = build_tenant_context(12345)
         assert ctx.tenant_id == "12345"
 
-    def test_empty_user_id_produces_a_degenerate_prefix(self):
-        """No guard rejects an empty tenant; the prefix collapses to `/memory//`."""
+    def test_empty_user_id_owns_no_memory_path(self):
+        """An empty tenant is degenerate (the prefix collapses to `/memory//`) and owns NOTHING:
+        the shared rule fails closed, matching the dispatcher's refusal of an empty tenant. It
+        used to pass `/memory//anything` on a raw `startswith` — while MAS refused the same
+        string on its normalised form (two guards, two answers)."""
         ctx = build_tenant_context("")
         assert ctx.tenant_id == ""
         assert ctx.memory_prefix() == "/memory//"
-        assert ctx.validate_memory_path("/memory//anything") is True
+        assert ctx.validate_memory_path("/memory//anything") is False
+        assert ctx.validate_memory_path("/memory/") is False
 
 
 class TestTenantContextFromSyscallContext:
@@ -131,18 +135,36 @@ class TestMemoryPathIsolation:
     def test_bare_root_is_refused(self, ctx):
         assert ctx.validate_memory_path("/memory/") is False
 
-    def test_exact_tenant_root_without_trailing_slash_is_refused(self, ctx):
-        """Worth knowing: this guard and MAS's `validate_tenant_path` disagree here.
-
-        `TenantContext.validate_memory_path` requires the trailing slash, so the exact
-        tenant root fails; `memory_address_space.validate_tenant_path` accepts the
-        exact form. Two tenant guards, two answers for the same string.
-        """
-        assert ctx.validate_memory_path("/memory/t1") is False
+    def test_exact_tenant_root_is_inside_the_namespace(self, ctx):
+        """The tenant root is the tenant's own tree. This guard used to refuse it (it required
+        the trailing slash) while MAS's `validate_tenant_path` accepted it — two tenant guards,
+        two answers for one string. Both now share `tenant_owns_memory_path`."""
+        assert ctx.validate_memory_path("/memory/t1") is True
+        assert ctx.validate_memory_path("/memory/t1/") is True
 
         from AINDY.memory.memory_address_space import validate_tenant_path
 
-        validate_tenant_path("/memory/t1", "t1")  # the other guard allows it
+        validate_tenant_path("/memory/t1", "t1")  # and the other guard agrees
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/memory/t1", "/memory/t1/", "/memory/t1/node-abc", "/memory/t1//node", "/memory//t1/x",
+            "/memory/t12/node", "/memory/t2/node", "/memory/", "/memory", "/other/t1/node", "",
+        ],
+    )
+    def test_both_guards_give_one_answer(self, ctx, path):
+        """Derived agreement: for every spelling, the kernel guard's bool and MAS's raise/no-raise
+        are the same decision. A future divergence in either is a red test, not a footnote."""
+        from AINDY.memory.memory_address_space import validate_tenant_path
+
+        kernel_says = ctx.validate_memory_path(path)
+        try:
+            validate_tenant_path(path, "t1")
+            mas_says = True
+        except PermissionError:
+            mas_says = False
+        assert kernel_says == mas_says, f"{path!r}: kernel={kernel_says} mas={mas_says}"
 
     def test_a_path_in_another_root_is_refused(self, ctx):
         assert ctx.validate_memory_path("/other/t1/node") is False
