@@ -10,6 +10,7 @@ from AINDY.agents.runtime_guardrails import AgentRuntimeGuardrailViolation
 from AINDY.core.execution_signal_helper import record_agent_event
 from AINDY.core.system_event_service import emit_error_event
 from AINDY.platform_layer.trace_context import get_parent_event_id, get_trace_id, reset_parent_event_id, set_parent_event_id
+from AINDY.platform_layer.genai_telemetry import agent_operation
 from AINDY.platform_layer.token_meter import llm_attribution_scope
 
 from AINDY.agents.agent_runtime.shared import LOCAL_AGENT_ID, get_runtime_compat_module, logger
@@ -249,8 +250,16 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
                 _unit_cm = bind_execution_unit(str(run.id), run.trace_id or get_trace_id())
             else:
                 _unit_cm = _contextlib.nullcontext()
+            # OTEL-GENAI-SEMCONV-1 — `invoke_agent {agent_type}` has exactly the attribution
+            # scope's lifetime; the LLM and tool spans inside nest under it.
             with _rm.observed_unit(str(user_db_id or ""), str(run.id)), _unit_cm, llm_attribution_scope(
                 tenant_id=str(user_db_id) if user_db_id else None, run_id=str(run.id)
+            ), agent_operation(
+                agent_name=str(getattr(run, "agent_type", None) or "default"),
+                run_id=str(run.id),
+                agent_id=str(getattr(run, "spawned_by_agent_id", None) or "") or None,
+                user_id=str(user_db_id) if user_db_id else None,
+                trace_id=run.trace_id or get_trace_id(),
             ):
                 try:
                     execute_agent_run_via_nodus(

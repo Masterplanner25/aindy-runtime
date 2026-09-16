@@ -840,6 +840,105 @@ also calls, for a race the fence has already made unobservable in practice.
 
 ---
 
+### DEC-034
+**Status:** `accepted` (2026-09-16 — `OTEL-GENAI-SEMCONV-1`, #706)
+
+**Decision**
+"Adopt the GenAI semantic conventions" means EMIT three new span kinds — `chat {model}`,
+`execute_tool {tool}`, `invoke_agent {agent}` — at the three chokepoints that already exist
+(the four provider clients, `execute_tool`, `execute_run`), additively. The two existing span
+names, `syscall.{name}` and `async_job.{task}`, are unchanged: semconv has no vocabulary for a
+syscall, and a `gen_ai.*` name for one would be false alignment.
+
+**Why**
+Measured before the change, the runtime emitted no LLM, tool or agent span at all and
+`set_attribute` had zero call sites; the entry's "rename a public surface" risk applied to five
+attribute keys on two span kinds. Standard tooling could not read our traces not because the
+names were wrong but because the operations it looks for were not there.
+
+**Related Docs**
+- `docs/design/OTEL_GENAI_SEMCONV_DESIGN.md` §1, §2
+
+---
+
+### DEC-035
+**Status:** `accepted` (2026-09-16 — `OTEL-GENAI-SEMCONV-1`, #706)
+
+**Decision**
+The token meter lives INSIDE the span helper: a provider client wraps its raw call in
+`with llm_operation(...) as op:` and calls `op.record(response)`, which is the one call to
+`observe_llm_usage`. A direct `observe_llm_usage` call in a client is refused by the derived
+census guard, and a `with` that never records is refused too.
+
+**Why**
+One seam, one shape: a client cannot meter without tracing or trace without metering, and the
+census (`test_token_meter.py`, itself the answer to catalogue variant 12) asserts exactly that
+with one more `With` node to find. The meter's own accounting is untouched — `record` calls it
+exactly once, and the double-count guard moved its count from `observe_llm_usage` to `record`.
+
+**Related Docs**
+- `docs/design/OTEL_GENAI_SEMCONV_DESIGN.md` §3
+- `AINDY/platform_layer/genai_telemetry.py`
+
+---
+
+### DEC-036
+**Status:** `accepted` (2026-09-16 — `OTEL-GENAI-SEMCONV-1`, #706)
+
+**Decision**
+`enduser.id` is emitted beside `user.id` on the `syscall.*` span for one release; `user.id`
+is dropped the release after. This is the only rename; `trace.id` stays (redundant with the
+span's own trace id, not wrong, and a consumer may filter on it).
+
+**Why**
+The entry's "additive first, both emitted for a release, documented removal" protocol, applied
+to the only key it actually applies to — `user.id` exists on the syscall span alone; the async
+job span carries `job.name`/`job.id`/`trace.id`.
+
+**Related Docs**
+- `docs/design/OTEL_GENAI_SEMCONV_DESIGN.md` §5
+
+---
+
+### DEC-037
+**Status:** `accepted` (2026-09-16 — `OTEL-GENAI-SEMCONV-1`, #706)
+
+**Decision**
+`gen_ai.client.token.usage` and `gen_ai.client.operation.duration` are emitted through an OTel
+`MeterProvider` beside the `TracerProvider`, over the same OTLP endpoint — BESIDE the Prometheus
+`aindy_llm_*` counters, never instead of them. Dimensions stop at provider and model (plus
+`gen_ai.token.type`); tenant attribution stays on the span (`enduser.id`) where cardinality is
+free.
+
+**Why**
+The Prometheus names are the operator surface the governor accrues from and the soak harness
+reads; two names for one number on two pipelines is the design. Per-tenant labels on a metric
+are a time series per customer (`token_meter.py` records why they were left out).
+
+**Related Docs**
+- `docs/design/OTEL_GENAI_SEMCONV_DESIGN.md` §6, §7
+
+---
+
+### DEC-038
+**Status:** `accepted` (2026-09-16 — `OTEL-GENAI-SEMCONV-1`, #706)
+
+**Decision**
+Content capture is OUT: no `gen_ai.input.messages` / `gen_ai.output.messages`, no prompt or
+completion bodies on any span or event, and a test refuses any `gen_ai.input*` / `gen_ai.output*`
+attribute on an emitted span. Auto-instrumentation packages (`opentelemetry-instrumentation-openai`
+et al.) are NOT used — they patch the SDK clients, would produce a second span per call beside
+ours, and enable content capture by default in some versions.
+
+**Why**
+A data-handling decision with its own answer — MAF ships it opt-in for exactly that reason — and
+it needs its own proposal. Our seam is the four clients we own.
+
+**Related Docs**
+- `docs/design/OTEL_GENAI_SEMCONV_DESIGN.md` §6, §7
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
@@ -871,7 +970,7 @@ log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` 
 **Pending — designs filed 2026-09-16, each listing the decisions it asks for; recorded here as
 `DEC-NNN` by the PR that implements (or declines) them, per DEC-010:**
 `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §9 (three left — 1 and 2 are DEC-024/025), `SYSEVENT_RETENTION_DESIGN.md`
-§8 (none — DEC-026..029), `LEASE_FENCE_DESIGN.md` §7 (none — DEC-030..033), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (five), and
+§8 (none — DEC-026..029), `LEASE_FENCE_DESIGN.md` §7 (none — DEC-030..033), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (none — DEC-034..038), and
 `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (one — decline `ORCHESTRATOR-SPLIT-1` (a)
 until the runtime reads guest state). None is recorded yet because none has been approved.
 

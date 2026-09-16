@@ -13865,7 +13865,20 @@ all), `SYSEVENT-RETENTION-1`.
 ---
 ## OTEL-GENAI-SEMCONV-1 — our traces are richer than the standard and illegible to standard tooling
 
-**Status: OPEN — P2.** Filed 2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`.
+**Status: CLOSED (2026-09-16) — #706, DEC-034 … DEC-038.** The premise was off: HEAD emitted TWO
+span kinds (`syscall.*`, `async_job.*`) and NO LLM/tool/agent span — nothing GenAI-shaped existed
+to rename. `AINDY/platform_layer/genai_telemetry.py` now EMITS, additively, `chat {model}` around
+every provider call (the token meter moved INSIDE it — `LlmOperation.record` is
+`observe_llm_usage`, so a client cannot meter without tracing; three derived census guards
+assert one shape), `execute_tool {tool}` around the real invocation, and `invoke_agent {type}`
+with the attribution scope's lifetime; keys read from the pinned semconv package
+(`gen_ai.provider.name`, not the renamed-away `gen_ai.system`). `gen_ai.client.token.usage` /
+`operation.duration` via a `MeterProvider` beside the tracer, BESIDE `aindy_llm_*`. Content
+capture out (guarded). The one genuine rename — `user.id` → `enduser.id`, on the syscall span
+only — ships both for one release. Mutation-tested 8/8 on an in-memory exporter through real
+entry points. **Remaining gap:** drop `user.id` the release after this ships; the isolated tool
+worker gets no child span (no tracer in that process — the parent's span brackets it). Filed
+2026-08-17. Provenance: `MAF-REFERENCE-2026-08-17`.
 
 **The gap.** The runtime has OpenTelemetry spans, Prometheus metrics and a causal `SystemEvent`
 graph (`parent_event_id`, `build_trace_graph`, `get_downstream_effects`) — **arguably richer than

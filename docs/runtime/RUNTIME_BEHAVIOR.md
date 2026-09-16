@@ -1,6 +1,6 @@
 ---
 title: "Runtime Behavior"
-last_verified: "2026-08-22"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -172,6 +172,22 @@ This document describes the current runtime behavior of the FastAPI backend as i
   - `RequestMetric` rows are persisted for observability
 - `SystemEvent` is the canonical durable ledger for core execution and observability, but some subsystems still retain parallel domain-specific durable records such as `AgentEvent`, `FlowHistory`, and async automation logs.
 - `SystemEvent` propagation now carries `trace_id`, `parent_event_id`, and `source`, allowing parent -> child reconstruction across core execution paths.
+- **OpenTelemetry spans (OTEL-GENAI-SEMCONV-1, 2026-09-16).** Five span kinds: `syscall.{name}`
+  (dispatcher), `async_job.{task}`, and the three GenAI semantic-convention operations —
+  `chat {model}` around every provider call (`gen_ai.provider.name`, `gen_ai.request.model`,
+  `gen_ai.usage.input_tokens`/`output_tokens`, `gen_ai.response.model`, finish reasons;
+  `enduser.id` and `gen_ai.conversation.id` from the attribution scope), `execute_tool {tool}`
+  around the actual invocation in `execute_tool` (refusals get no span — they are error
+  envelopes the caller already sees), and `invoke_agent {agent_type}` with exactly the
+  attribution scope's lifetime in `execute_run`, under which the other two nest. Attribute
+  keys are read from the pinned `opentelemetry-semantic-conventions` package, never typed.
+  **The token meter lives inside the `chat` span** (`LlmOperation.record`), so a provider
+  client cannot meter without tracing; the derived census in `test_token_meter.py` asserts one
+  shape. GenAI metrics (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) are
+  emitted through a `MeterProvider` beside the `TracerProvider`, over the same OTLP endpoint,
+  and never replace the Prometheus `aindy_llm_*` counters the governor and soak harness read.
+  No prompt/completion content is placed on any span (a test guards it). `enduser.id` is
+  emitted beside `user.id` on syscall spans for one release; `user.id` is then dropped.
 - `RippleEdge` rows are now created from `SystemEvent` parentage and can additionally link source events to stored memory nodes.
 - Required execution lifecycle events are emitted on core execution paths.
 - Research, LeadGen, Freelance, Agent, Automation, Task, Goals, and Genesis route executions now share the centralized execution wrapper (`core/execution_service.py`) or pass through canonical execution envelopes that standardize `trace_id`, lifecycle events, and response shape.
