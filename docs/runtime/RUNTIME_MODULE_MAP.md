@@ -252,7 +252,8 @@ The execution-critical subset is marked below.
 | `sandbox_certification.py` | Sandbox capability reporting (`aindy-runtime sandbox`) |
 | `health_service.py` | Provides `/health` and `/ready` implementation |
 | `metrics.py` | Prometheus metrics registry |
-| `otel.py` | OpenTelemetry trace setup |
+| `otel.py` | OpenTelemetry trace + meter provider setup |
+| `genai_telemetry.py` | GenAI semconv spans/metrics at the three seams — `llm_operation` (the meter lives inside it), `tool_operation`, `agent_operation` (OTEL-GENAI-SEMCONV-1) |
 | `rate_limiter.py` | Per-tenant rate enforcement |
 | `registry.py` | Plugin/callback registration |
 | `registry_contracts.py` | Typed registry contracts |

@@ -22,7 +22,7 @@ from AINDY.platform_layer.llm_client import (
     LLMCallError,
     LLMClient,
 )
-from AINDY.platform_layer.token_meter import observe_llm_usage
+from AINDY.platform_layer.genai_telemetry import llm_operation
 
 logger = logging.getLogger(__name__)
 
@@ -83,15 +83,16 @@ class AzureOpenAILLMClient(LLMClient):
         **kwargs: Any,
     ) -> Any:
         try:
-            response = self._client.chat.completions.create(
-                model=model,
-                messages=messages,
-                timeout=self._chat_timeout if timeout is None else timeout,
-                **kwargs,
-            )
-            # COST-GOVERNOR-1 phase 0: the RAW path a structured caller uses — see the
-            # anthropic client for why metering chat() alone was not enough.
-            observe_llm_usage(provider="azure_openai", model=str(model), response=response)
+            # OTEL-GENAI-SEMCONV-1 — the span `chat {model}` brackets the call and `op.record`
+            # IS the meter (COST-GOVERNOR-1 phase 0): a client cannot meter without tracing.
+            with llm_operation(provider="azure_openai", model=str(model)) as op:
+                response = self._client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    timeout=self._chat_timeout if timeout is None else timeout,
+                    **kwargs,
+                )
+                op.record(response)
             return response
         except Exception as exc:
             raise LLMCallError("azure openai chat completion failed") from exc

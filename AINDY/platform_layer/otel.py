@@ -36,6 +36,9 @@ class _NoopSpan:
     def record_exception(self, *args, **kwargs):
         return None
 
+    def set_attribute(self, *args, **kwargs):
+        return None
+
 
 class _NoopTracer:
     def start_as_current_span(self, *args, **kwargs):
@@ -69,7 +72,32 @@ def init_otel(service_name: str = "aindy") -> None:
         logger.info("[otel] OTEL_EXPORTER_OTLP_ENDPOINT not set - tracing is no-op")
 
     trace.set_tracer_provider(provider)
+    _init_metrics(otlp_endpoint)
     _initialized = True
+
+
+def _init_metrics(otlp_endpoint: str | None) -> None:
+    """OTEL-GENAI-SEMCONV-1 — a MeterProvider beside the TracerProvider, so the GenAI client
+    instruments (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) have somewhere
+    to go. Exported over the same OTLP endpoint; without one they are recorded and dropped, the
+    same as spans. The Prometheus `aindy_llm_*` counters are a separate pipeline and unchanged."""
+    try:
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.resources import Resource
+
+        readers = []
+        if otlp_endpoint:
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+                from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+                readers.append(PeriodicExportingMetricReader(OTLPMetricExporter(endpoint=otlp_endpoint, insecure=True)))
+            except Exception as exc:
+                logger.warning("[otel] OTLP metric exporter setup failed (metrics dropped): %s", exc)
+        metrics.set_meter_provider(MeterProvider(resource=Resource.create({SERVICE_NAME: "aindy"}), metric_readers=readers))
+    except Exception as exc:
+        logger.info("[otel] metrics provider not initialised: %s", exc)
 
 
 def get_tracer(name: str = "aindy"):

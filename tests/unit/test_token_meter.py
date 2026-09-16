@@ -237,9 +237,29 @@ def test_every_provider_client_meters_its_response():
             for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         }
-        assert "observe_llm_usage" in called, (
-            f"{rel} does not call observe_llm_usage. Its response carries the usage object and "
-            f"the next line discards it — an unmetered provider is invisible spend."
+        # OTEL-GENAI-SEMCONV-1 — the meter now lives INSIDE the span helper: the client wraps
+        # its raw call in `with llm_operation(...) as op:` and calls `op.record(response)`.
+        # Calling `observe_llm_usage` directly would meter without tracing, so it is refused
+        # here; a `with` that never records would trace without metering, so both are asserted.
+        with_calls = {
+            item.context_expr.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.With)
+            for item in node.items
+            if isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Name)
+        }
+        recorded = any(
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "record"
+            for node in ast.walk(tree)
+        )
+        assert "llm_operation" in with_calls, (
+            f"{rel} does not wrap its raw provider call in `with llm_operation(...)`. The span is "
+            f"where the usage is metered AND traced; a bare call is invisible spend."
+        )
+        assert recorded, f"{rel} enters llm_operation but never calls op.record(response) — traced, not metered."
+        assert "observe_llm_usage" not in called, (
+            f"{rel} calls observe_llm_usage directly — that meters without tracing; route it through "
+            f"`op.record(response)` inside `llm_operation`."
         )
 
 
@@ -298,8 +318,9 @@ def test_a_chat_call_is_metered_exactly_once(monkeypatch):
 def test_only_the_raw_path_carries_the_meter():
     """★ Structural companion to the test above, so the reason survives a refactor.
 
-    Each client must call `observe_llm_usage` exactly once. Two call sites in one client is the
-    double-count; zero is an unmetered provider.
+    Each client must record exactly once. Two `op.record(...)` sites in one client is the
+    double-count; zero is an unmetered provider. (Since OTEL-GENAI-SEMCONV-1 the meter is
+    `LlmOperation.record`, which calls `observe_llm_usage` once — the count moved, not the rule.)
     """
     import ast
     from pathlib import Path
@@ -308,11 +329,11 @@ def test_only_the_raw_path_carries_the_meter():
         tree = ast.parse(Path(rel).read_text(encoding="utf-8"))
         calls = [
             n for n in ast.walk(tree)
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-            and n.func.id == "observe_llm_usage"
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == "record"
         ]
         assert len(calls) == 1, (
-            f"{rel} has {len(calls)} observe_llm_usage call sites, expected exactly 1. "
+            f"{rel} has {len(calls)} op.record(...) call sites, expected exactly 1. "
             f"Two means chat() and the raw path it delegates to both meter, doubling every "
             f"chat call; zero means the provider is unmetered."
         )

@@ -1074,30 +1074,38 @@ def execute_tool(
         # ★ After the refusal, before the in-process handle: a declared tool never reaches the
         # in-process path at all. The result still goes through the effect ledger and the return
         # contract check below, so a confined tool is accounted for exactly like a local one.
-        if entry.get("isolation") and _tool_isolation_enforced():
-            _isolated = _run_tool_out_of_process(tool_name, args or {}, user_id, run_id=run_id)
-            if _idempotent:
-                _finalize_tool_effect(
-                    db,
-                    _action_id,
-                    "success" if _isolated.get("success") else "failed",
-                    _isolated.get("result"),
-                    tool_name,
-                )
-            if _isolated.get("success"):
-                _check_tool_return(tool_name, entry, _isolated.get("result"))
-            return _isolated
+        # OTEL-GENAI-SEMCONV-1 — `execute_tool {tool}` brackets the actual invocation on BOTH
+        # branches; a refusal above is an error envelope the caller already sees (and the
+        # `syscall.*` span records refusals at the dispatcher), so it gets no span of its own.
+        from AINDY.platform_layer.genai_telemetry import tool_operation
 
-        _tool_db = RevocableToolSession(db, tool_name=tool_name)
-        try:
-            with _egress_cm, capability_scope(_scoped_caps):
-                result = entry["fn"](args=args, user_id=user_id, db=_tool_db)
-        finally:
-            _tool_db.revoke()
-        _check_tool_return(tool_name, entry, result)
-        if _idempotent:
-            _finalize_tool_effect(db, _action_id, "success", result, tool_name)
-        return {"success": True, "result": result, "error": None}
+        with tool_operation(tool_name=tool_name, run_id=run_id) as _tool_span:
+            if entry.get("isolation") and _tool_isolation_enforced():
+                _isolated = _run_tool_out_of_process(tool_name, args or {}, user_id, run_id=run_id)
+                if _idempotent:
+                    _finalize_tool_effect(
+                        db,
+                        _action_id,
+                        "success" if _isolated.get("success") else "failed",
+                        _isolated.get("result"),
+                        tool_name,
+                    )
+                if _isolated.get("success"):
+                    _check_tool_return(tool_name, entry, _isolated.get("result"))
+                _tool_span.outcome(_isolated)
+                return _isolated
+            _tool_db = RevocableToolSession(db, tool_name=tool_name)
+            try:
+                with _egress_cm, capability_scope(_scoped_caps):
+                    result = entry["fn"](args=args, user_id=user_id, db=_tool_db)
+            finally:
+                _tool_db.revoke()
+            _check_tool_return(tool_name, entry, result)
+            if _idempotent:
+                _finalize_tool_effect(db, _action_id, "success", result, tool_name)
+            _outcome = {"success": True, "result": result, "error": None}
+            _tool_span.outcome(_outcome)
+            return _outcome
     except Exception as exc:
         logger.warning("[AgentTool] %s failed: %s", tool_name, exc)
         if _idempotent:

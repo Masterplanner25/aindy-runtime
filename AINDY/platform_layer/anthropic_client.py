@@ -26,7 +26,7 @@ from AINDY.platform_layer.llm_client import (
     LLMCallError,
     LLMClient,
 )
-from AINDY.platform_layer.token_meter import observe_llm_usage
+from AINDY.platform_layer.genai_telemetry import llm_operation
 
 logger = logging.getLogger(__name__)
 
@@ -120,12 +120,15 @@ class AnthropicLLMClient(LLMClient):
         if system:
             params["system"] = system
         try:
-            response = self._client.messages.create(**params, **kwargs)
             # COST-GOVERNOR-1 phase 0: the RAW path a structured caller uses. Metering
             # only chat() left this unmetered — and chat() is not the method a caller
             # needing tool blocks can use, so the one real consumer would route through
             # the seam and still measure nothing.
-            observe_llm_usage(provider="anthropic", model=str(model), response=response)
+            # OTEL-GENAI-SEMCONV-1 — the span `chat {model}` brackets the call and `op.record`
+            # IS the meter: a client cannot meter without tracing.
+            with llm_operation(provider="anthropic", model=str(model)) as op:
+                response = self._client.messages.create(**params, **kwargs)
+                op.record(response)
             return response
         except Exception as exc:
             raise LLMCallError("anthropic messages.create failed") from exc

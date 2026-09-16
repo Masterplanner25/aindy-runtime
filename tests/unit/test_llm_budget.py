@@ -321,8 +321,9 @@ def test_governor_reserves_only_for_metered_methods(rm, caps):
 
 def test_metered_methods_constant_matches_the_provider_clients():
     """★ Variant 12: the constant the governor reserves against is compared AGAINST a census
-    derived from source — every provider method that calls `observe_llm_usage` must be in it,
-    and every raw entry in it must exist in some client — never used AS the census."""
+    derived from source — every provider method that meters (since OTEL-GENAI-SEMCONV-1: calls
+    `op.record(...)` inside `with llm_operation(...)`, which IS `observe_llm_usage`) must be in
+    it, and every raw entry in it must exist in some client — never used AS the census."""
     import ast
     from pathlib import Path
 
@@ -340,7 +341,11 @@ def test_metered_methods_constant_matches_the_provider_clients():
                 c.func.id for c in ast.walk(node)
                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
             }
-            if "observe_llm_usage" in calls:
+            records = any(
+                isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "record"
+                for c in ast.walk(node)
+            )
+            if "observe_llm_usage" in calls or records:
                 metering_methods.add(node.name)
 
     assert metering_methods, "liveness: no provider client meters anything — the census is broken"

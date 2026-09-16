@@ -8,7 +8,20 @@ owner: "platform-team"
 
 # OpenTelemetry GenAI semantic conventions — design
 
-**`OTEL-GENAI-SEMCONV-1`. DESIGN ONLY — nothing shipped.** The entry frames this as a *rename*
+**`OTEL-GENAI-SEMCONV-1`. PHASES 1 + 2 SHIPPED 2026-09-16 (#706; DEC-034 … DEC-038) — entry CLOSED;
+phase 3 (drop `user.id`) is owed the release AFTER the one that ships this.** Live record:
+`AINDY/platform_layer/genai_telemetry.py`, `docs/runtime/RUNTIME_BEHAVIOR.md` §5.
+
+> **As built, where it differs from the text below:** `user.id` exists only on the `syscall.*`
+> span — the `async_job.*` span carries `job.name`/`job.id`/`trace.id` — so §5's rename is one
+> key on one span kind. The `MeterProvider` is initialised inside `init_otel` (`_init_metrics`).
+> The `execute_tool` span carries `aindy.success` / `aindy.failure_class` from the envelope and
+> sets ERROR status on a failed result. Three derived census guards (`test_token_meter.py` ×2,
+> `test_llm_budget.py`) learned the new metering shape — `op.record(...)` inside
+> `with llm_operation(...)` — and a direct `observe_llm_usage` call in a client is now REFUSED
+> by the census. Mutation-tested 8/8, all through real entry points on an in-memory exporter.
+
+**Originally:** DESIGN ONLY — nothing shipped. The entry frames this as a *rename*
 of a public surface, gated on release discipline ("additive first, both emitted for a release,
 documented removal"). §1 measures the surface and finds the premise mostly wrong in a way that
 makes the work **smaller and safer**: there is almost nothing GenAI-shaped to rename, because
