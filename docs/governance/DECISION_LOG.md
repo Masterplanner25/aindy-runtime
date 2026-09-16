@@ -752,6 +752,94 @@ default-off capability here.
 
 ---
 
+### DEC-030
+**Status:** `accepted` (2026-09-16 — `LEASE-FENCE-1`, #705)
+
+**Decision**
+The background lease carries one integer, `background_task_leases.fence`, incremented ONLY on a
+takeover of an expired lease (1 on the first claim, unchanged on renew). Alembic `0019`; a row
+predating the column reads 0 and its next takeover makes it 1.
+
+**Why**
+Expiry bounds how long two leaders coexist and says nothing about what the stale one writes
+before its next tick — and a job already running when the lease is lost runs to completion as
+leader. A fence that moves only on takeover is exactly the generation counter Pi's writer lease
+and Temporal's shard `RangeID` carry; renew must not move it, or a leader's own heartbeat would
+refuse its own in-flight job.
+
+**Related Docs**
+- `docs/design/LEASE_FENCE_DESIGN.md` §3a
+- `alembic/versions/0019_background_task_lease_fence.py`
+
+---
+
+### DEC-031
+**Status:** `accepted` (2026-09-16 — `LEASE-FENCE-1`, #705)
+
+**Decision**
+The check is `assert_lease_fence(db, held)`: a `FOR SHARE` read of the lease row INSIDE the
+job's own transaction, before its commit, raising `LeaseFenceLost` on mismatch. It is NOT a
+wrapper that consults the elector's local `is_leader` before starting a job.
+
+**Why**
+The local boolean is the same belief the stale leader already holds — updated on its next
+successful tick, which a stalled process has not had; a wrapper on it is a second copy of the
+thing that is wrong. `FOR SHARE` reads the row under a lock a takeover must contend for:
+a takeover's `FOR UPDATE` blocks until the job's transaction ends, so a job that passed commits
+before anyone can lead; one that already committed leaves a higher fence. Refused, not asked.
+On SQLite the lock clause is a no-op (as `claim_lease` already documents), so the unit suite
+pins the comparison and an integration test pins the blocking.
+
+**Implications**
+- `expected_fence=None` (in-process profile; no elector) skips the check — refusing there would
+  stop maintenance on every non-distributed deployment
+- the elector exposes its fence only while leader; a claim that raised leaves the hold stale
+
+**Related Docs**
+- `docs/design/LEASE_FENCE_DESIGN.md` §3b, §4
+- `tests/integration/test_lease_fence_contention.py`
+
+---
+
+### DEC-032
+**Status:** `accepted` (2026-09-16 — `LEASE-FENCE-1`, #705)
+
+**Decision**
+Two jobs are fenced — `recover_orphaned_approved_runs` and `deferred_async_job_retry` — and the
+other leader-only jobs are deliberately NOT.
+
+**Why**
+Read for what a second leader running the same job at the same moment would do: ten of thirteen
+re-run harmlessly (CAS-guarded, status-filtered, atomic queue ops, or process-local). The orphan
+job spawns `execute_run` per row, whose entry guard is a read-then-set that `CLAUDE.md` says not
+to guard twice because "the 10-minute threshold ensures the original thread is dead" — an
+argument that holds for ONE leader. The deferred-job path double-dispatches a handler. A fence on
+the idempotent ten is a row lock per job for nothing, and contention on the lease row delays
+takeover, the one thing the elector must stay fast at.
+
+**Related Docs**
+- `docs/design/LEASE_FENCE_DESIGN.md` §2, §6
+
+---
+
+### DEC-033
+**Status:** `accepted` (2026-09-16 — `LEASE-FENCE-1`, #705)
+
+**Decision**
+`execute_run` is untouched: no second CAS is added to its entry guard.
+
+**Why**
+`CLAUDE.md` declines it, and the fence is what makes that decline hold under two leaders: the
+window shrinks from "as long as the stale leader stays stale" to the length of one job's
+dispatch decision. Closing the last milliseconds would mean a CAS in a path that `approve_run`
+also calls, for a race the fence has already made unobservable in practice.
+
+**Related Docs**
+- `docs/design/LEASE_FENCE_DESIGN.md` §3c
+- `CLAUDE.md` §Agent approve path
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
@@ -783,7 +871,7 @@ log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` 
 **Pending — designs filed 2026-09-16, each listing the decisions it asks for; recorded here as
 `DEC-NNN` by the PR that implements (or declines) them, per DEC-010:**
 `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §9 (three left — 1 and 2 are DEC-024/025), `SYSEVENT_RETENTION_DESIGN.md`
-§8 (none — DEC-026..029), `LEASE_FENCE_DESIGN.md` §7 (four), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (five), and
+§8 (none — DEC-026..029), `LEASE_FENCE_DESIGN.md` §7 (none — DEC-030..033), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (five), and
 `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (one — decline `ORCHESTRATOR-SPLIT-1` (a)
 until the runtime reads guest state). None is recorded yet because none has been approved.
 

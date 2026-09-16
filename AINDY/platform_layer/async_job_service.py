@@ -983,6 +983,20 @@ def process_deferred_jobs(limit: int = 25) -> int:
                 db.commit()
                 continue
             log.status = "pending"
+            # LEASE-FENCE-1 — the write that dispatches this job. A stale leader that reached
+            # here after a takeover would double-dispatch the handler; the fence check runs
+            # inside this transaction so a takeover cannot commit under it, and one that
+            # already committed refuses us. Skipped (None) on the in-process profile.
+            from AINDY.platform_layer.leadership import (
+                LeaseFenceLost,
+                assert_lease_fence,
+                background_leader_fence,
+            )
+            try:
+                assert_lease_fence(db, background_leader_fence(), job="deferred_async_job_retry")
+            except LeaseFenceLost:
+                db.rollback()
+                return resumed
             db.commit()
             if settings.TEST_MODE:
                 _execute_job(log.id, log.task_name, log.payload or {})

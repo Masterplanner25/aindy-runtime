@@ -122,10 +122,14 @@ def _elector(monkeypatch, *, results, enabled=True):
 
     outcomes = iter(results)
 
-    def fake_acquire(db, owner_id, **kwargs):
-        return next(outcomes)
+    def fake_claim(db, owner_id, **kwargs):
+        # LEASE-FENCE-1: the elector claims through `claim_lease` and keeps the hold;
+        # a scripted True is a hold under fence 1, a False is "someone else leads".
+        from datetime import datetime, timezone
 
-    monkeypatch.setattr(leadership, "try_acquire_lease", fake_acquire)
+        return leadership.LeaseHold(owner_id, 1, datetime.now(timezone.utc)) if next(outcomes) else None
+
+    monkeypatch.setattr(leadership, "claim_lease", fake_claim)
     elector = BackgroundLeadershipElector(
         db_factory=_FakeDB,
         owner_id="owner-X",

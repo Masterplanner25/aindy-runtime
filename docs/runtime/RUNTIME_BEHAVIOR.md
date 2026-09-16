@@ -40,6 +40,18 @@ This document describes the current runtime behavior of the FastAPI backend as i
 - For `lease-elected` profiles, leader election is enforced by an atomic claim on the `background_task_leases` table (`AINDY/platform_layer/leadership.py`, LEASE-1). Each electing process runs a `BackgroundLeadershipElector` that renews the lease on a heartbeat within a TTL; a follower takes over within one TTL of a leader's death, and a leader that loses the lease stands its scheduler down to prevent split-brain. The lease is released on graceful shutdown.
 - Only the lease leader starts APScheduler jobs; a missing APScheduler dependency means background jobs are disabled but the API remains responsive for tests or constrained environments.
 - Lease timestamps are normalized to timezone-aware UTC in Python before comparison or persistence.
+- **Fencing (LEASE-FENCE-1, 2026-09-16).** The lease row carries a monotonic `fence` (1 on first
+  claim, unchanged on renew, +1 on every takeover). Expiry bounds how long two leaders coexist;
+  it does nothing about what a stale leader *writes* before its next tick, and a job already
+  running keeps running as leader. So the two leader-only jobs whose re-run is not harmless —
+  `recover_orphaned_approved_runs` (re-dispatches `execute_run`, whose entry guard assumes one
+  leader) and `deferred_async_job_retry` (re-dispatches a handler) — call
+  `assert_lease_fence(db, background_leader_fence())` inside their own transaction before the
+  write. It reads the row `FOR SHARE`: a takeover's `FOR UPDATE` blocks until the job commits,
+  and a takeover that already committed leaves a higher fence, so the stale leader is refused
+  (`LeaseFenceLost`, counted on `aindy_lease_fence_refusals_total{job}`) rather than asked to
+  notice. The other jobs are deliberately unfenced (idempotent, or process-local); the
+  in-process profile holds no lease and the check is skipped there.
 - Scheduler lifecycle:
   - startup: `emit_event("system.startup")` -> determine leader/follower role -> `scheduler_service.start()` on leader only
   - shutdown: `emit_event("system.shutdown")` -> `scheduler_service.stop()`

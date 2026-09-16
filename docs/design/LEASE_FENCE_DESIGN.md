@@ -8,9 +8,22 @@ owner: "platform-team"
 
 # Background lease fencing — design
 
-**`LEASE-FENCE-1`. DESIGN ONLY — nothing shipped. Proposal under `AGENT_WORKING_RULES.md` §3/§8:
-it adds a column to `background_task_leases` (schema — contract bump, Alembic `0019`) and
-changes what a leader-only job does when it is no longer leader.** The entry says "one integer
+**`LEASE-FENCE-1`. SHIPPED 2026-09-16 (#705; DEC-030 … DEC-033) — phases 1 and 2; entry CLOSED.**
+Live record: `AINDY/platform_layer/leadership.py` (`claim_lease`, `LeaseHold`, `assert_lease_fence`)
+and `docs/runtime/RUNTIME_BEHAVIOR.md` §2. Phase 3 (fencing the `system_events` prune) is a
+one-line follow-up when wanted.
+
+> **As built, where it differs from §3:** `try_acquire_lease` keeps its boolean contract and a
+> new `claim_lease()` returns the `LeaseHold` (six existing tests assert `is True`); the elector
+> exposes `fence` only while it is leader — a claim that *raised* leaves `_hold` stale, and the
+> property consults leadership so a database blip cannot leave a fence exposed (found by a
+> mutation that survived on the happy path). The deferred-job check sits before the
+> `status="pending"` commit that dispatches. Mutation-tested 8/8; the Postgres `FOR SHARE`
+> contention is `tests/integration/test_lease_fence_contention.py`.
+
+**Originally a proposal under `AGENT_WORKING_RULES.md` §3/§8** (a column on
+`background_task_leases`, and a change to what a leader-only job does when it is no longer
+leader); approved 2026-09-16. The entry says "one integer
 column and one comparison" and asks which leader-only job is least idempotent before fencing
 anything. §2 answers that from source, and the answer is sharper than the entry expected: the
 job whose safety argument *assumes one leader* is the one `CLAUDE.md` tells you not to guard

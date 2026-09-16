@@ -42,13 +42,28 @@ Clock note: expiry is evaluated against the kernel clock (``utcnow``) of the
 calling process, not the database clock. ``LEASE_TTL_SECONDS`` (60s) is wide
 relative to ``LEASE_HEARTBEAT_SECONDS`` (20s) to tolerate the clock skew expected
 between co-deployed instances.
+
+Fencing (LEASE-FENCE-1)
+-----------------------
+Expiry bounds how LONG two leaders coexist and does nothing about what the stale
+one WRITES: a leader stalled past its TTL learns it lost the lease at its next
+tick, and a job already running keeps running as leader. So the row carries a
+monotonic ``fence`` — 1 on the first claim, unchanged on renew, +1 on every
+takeover — and a leader-only job whose re-run is NOT harmless calls
+``assert_lease_fence(db, background_leader_fence())`` INSIDE its own transaction,
+before its commit. The check reads the row ``FOR SHARE``: a takeover's
+``FOR UPDATE`` blocks until the job commits, and a takeover that already
+committed leaves a higher fence, so the stale leader is REFUSED rather than
+asked to notice. Design: ``docs/design/LEASE_FENCE_DESIGN.md`` — §2 names which
+jobs are fenced and why the other ten deliberately are not.
 """
 from __future__ import annotations
 
 import logging
 import os
 import threading
-from datetime import timedelta, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from sqlalchemy.exc import IntegrityError
@@ -92,18 +107,35 @@ def _as_utc(value):
     return value
 
 
-def try_acquire_lease(
+@dataclass(frozen=True)
+class LeaseHold:
+    """What a successful claim returns: who holds it, under which fence, until when."""
+
+    owner_id: str
+    fence: int
+    expires_at: datetime
+
+
+class LeaseFenceLost(RuntimeError):
+    """The lease row's fence is not the one this process holds — a takeover happened.
+
+    Raised INSIDE a leader-only job's transaction by ``assert_lease_fence``; the job must
+    roll back and do nothing. Not a bug: it is the fence doing its one job.
+    """
+
+
+def claim_lease(
     db,
     owner_id: str,
     *,
     name: str = LEASE_NAME,
     ttl_seconds: int = LEASE_TTL_SECONDS,
-) -> bool:
-    """Atomically claim, renew, or take over the background lease.
+) -> Optional[LeaseHold]:
+    """Atomically claim, renew, or take over the background lease; return the hold or ``None``.
 
-    Returns ``True`` iff ``owner_id`` holds the lease after the call. Renew and
-    acquire share one implementation — a renew is simply a claim by the current
-    owner.
+    Renew and acquire share one implementation — a renew is simply a claim by the current
+    owner. The fence moves ONLY on a takeover (LEASE-FENCE-1): 1 on a fresh insert, unchanged
+    on renew, ``+1`` when an expired lease changes hands.
     """
     from AINDY.db.database import utcnow
 
@@ -124,48 +156,112 @@ def try_acquire_lease(
                     acquired_at=now,
                     heartbeat_at=now,
                     expires_at=expires,
+                    fence=1,
                 )
             )
             db.commit()
-            return True
+            return LeaseHold(owner_id, 1, expires)
 
         if row.owner_id == owner_id:
-            # Renew — same owner extends its hold.
+            # Renew — same owner extends its hold; the fence is untouched.
             row.heartbeat_at = now
             row.expires_at = expires
             db.commit()
-            return True
+            return LeaseHold(owner_id, int(row.fence or 0), expires)
 
         current_expiry = _as_utc(row.expires_at)
         if current_expiry is None or current_expiry <= now:
-            # Previous leader's lease has lapsed — take over.
+            # Previous leader's lease has lapsed — take over, and move the fence so anything
+            # the previous leader still has in flight is refused at its next fenced commit.
+            # `or 0` covers a row that predates the column (Alembic 0019 default).
+            new_fence = int(row.fence or 0) + 1
             row.owner_id = owner_id
             row.acquired_at = now
             row.heartbeat_at = now
             row.expires_at = expires
+            row.fence = new_fence
             db.commit()
             logger.info(
-                "[leadership] lease %r taken over by owner_id=%s (previous lease expired)",
+                "[leadership] lease %r taken over by owner_id=%s (previous lease expired; fence=%d)",
                 name,
                 owner_id,
+                new_fence,
             )
-            return True
+            return LeaseHold(owner_id, new_fence, expires)
 
         # Live lease held by another owner.
         db.rollback()
-        return False
+        return None
     except IntegrityError:
         # Lost the INSERT race against a concurrent fresh claim — the other
         # process holds the lease; UNIQUE(name) rejected our insert.
         db.rollback()
-        return False
+        return None
     except Exception:
         db.rollback()
         raise
 
 
+def try_acquire_lease(
+    db,
+    owner_id: str,
+    *,
+    name: str = LEASE_NAME,
+    ttl_seconds: int = LEASE_TTL_SECONDS,
+) -> bool:
+    """Boolean form of :func:`claim_lease` — ``True`` iff ``owner_id`` holds the lease after."""
+    return claim_lease(db, owner_id, name=name, ttl_seconds=ttl_seconds) is not None
+
+
 # Renewing and acquiring are the same atomic operation (claim by current owner).
 renew_lease = try_acquire_lease
+
+
+def assert_lease_fence(
+    db,
+    expected_fence: Optional[int],
+    *,
+    name: str = LEASE_NAME,
+    job: str = "unknown",
+) -> None:
+    """Refuse a leader-only write if leadership changed hands — call INSIDE the job's transaction.
+
+    Reads the lease row ``FOR SHARE`` (``with_for_update(read=True)``): a takeover's
+    ``FOR UPDATE`` blocks until this transaction ends, so a job that passed the check commits
+    before anyone can become leader; a takeover that already committed left a higher fence and
+    this raises ``LeaseFenceLost``. On SQLite the lock clause is a no-op (as ``claim_lease``
+    already documents for itself) and only the comparison runs.
+
+    ``expected_fence=None`` means this process holds no fenced lease — the ``single-instance``
+    in-process profile, or a hold that predates the column — and the check is skipped: there is
+    nothing to compare, and refusing would stop maintenance on every non-distributed deployment.
+    """
+    if expected_fence is None:
+        return
+    row = (
+        db.query(BackgroundTaskLease)
+        .filter(BackgroundTaskLease.name == name)
+        .with_for_update(read=True)
+        .first()
+    )
+    current = None if row is None else int(row.fence or 0)
+    if current != expected_fence:
+        _count_fence_refusal(job)
+        logger.warning(
+            "[leadership] fence refused job=%s: held fence=%s, row fence=%s (owner=%s) — "
+            "leadership changed hands; this process's write is refused",
+            job, expected_fence, current, None if row is None else row.owner_id,
+        )
+        raise LeaseFenceLost(f"lease fence moved: held {expected_fence}, row {current}")
+
+
+def _count_fence_refusal(job: str) -> None:
+    try:
+        from AINDY.platform_layer.metrics import lease_fence_refusals_total
+
+        lease_fence_refusals_total.labels(job=job).inc()
+    except Exception:  # noqa: BLE001 — observability never decides
+        pass
 
 
 def release_lease(db, owner_id: str, *, name: str = LEASE_NAME) -> None:
@@ -230,6 +326,7 @@ class BackgroundLeadershipElector:
         self._interval = heartbeat_seconds
         self._enabled = enabled
         self._is_leader = False
+        self._hold: Optional[LeaseHold] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -238,14 +335,20 @@ class BackgroundLeadershipElector:
     def is_leader(self) -> bool:
         return self._is_leader
 
+    @property
+    def fence(self) -> Optional[int]:
+        """The fence this process holds leadership under, or ``None`` when it is not leader."""
+        hold = self._hold
+        return hold.fence if (hold is not None and self._is_leader) else None
+
     def _attempt(self) -> bool:
         if not self._enabled:
             return False
         db = self._db_factory()
         try:
-            return try_acquire_lease(
-                db, self.owner_id, name=self._name, ttl_seconds=self._ttl
-            )
+            hold = claim_lease(db, self.owner_id, name=self._name, ttl_seconds=self._ttl)
+            self._hold = hold
+            return hold is not None
         finally:
             db.close()
 
@@ -356,3 +459,10 @@ def background_leader_status() -> bool:
     """Whether this process currently holds background leadership."""
     elector = _ELECTOR
     return bool(elector and elector.is_leader)
+
+
+def background_leader_fence() -> Optional[int]:
+    """The fence this process leads under, or ``None`` (no elector — in-process profile — or
+    not leader). Pass it to ``assert_lease_fence`` from a leader-only job."""
+    elector = _ELECTOR
+    return elector.fence if elector is not None else None
