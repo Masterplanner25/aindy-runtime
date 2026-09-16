@@ -30,7 +30,17 @@ class SystemStateThresholds:
 
 
 def compute_current_state(db, *, force_refresh: bool = False, persist_snapshot: bool = True) -> dict[str, Any]:
-    from AINDY.kernel.syscall_dispatcher import dispatch_syscall
+    """Compute the SYSTEM-wide state snapshot: every tenant, read directly on ``db``.
+
+    SYSTEM-STATE-TENANT-1: the two agent inputs used to go through the tenant-scoped
+    ``sys.v1.agent.count_runs`` / ``list_recent_durations`` syscalls with ``user_id=None``.
+    The dispatcher refuses an empty tenant before any handler runs, on every call, and the
+    error envelope was swallowed into ``count=0`` / ``[]`` — so ``active_runs`` and
+    ``avg_execution_time`` never included an agent run. A supplied tenant would not have
+    been the fix either: both handlers scope to ONE user, and this reading is not per-user.
+    ``AgentRun`` is now read the way ``FlowRun`` always was here.
+    """
+    from AINDY.db.models import AgentRun
 
     now = datetime.now(timezone.utc)
     if not force_refresh and _cache_valid(now):
@@ -55,17 +65,10 @@ def compute_current_state(db, *, force_refresh: bool = False, persist_snapshot: 
         .filter(FlowRun.status.in_(("running", "waiting")))
         .count()
     )
-    _agent_count_result = dispatch_syscall(
-        "sys.v1.agent.count_runs",
-        {"status": ["approved", "executing", "pending_approval"]},
-        db=db,
-        user_id=None,
-        capability="agent.read",
-    )
-    active_agent_runs = int(
-        (_agent_count_result.get("data") or {}).get("count", 0)
-        if _agent_count_result.get("status") == "success"
-        else 0
+    active_agent_runs = (
+        db.query(AgentRun)
+        .filter(AgentRun.status.in_(("approved", "executing", "pending_approval")))
+        .count()
     )
     active_runs = active_flow_runs + active_agent_runs
 
@@ -80,25 +83,13 @@ def compute_current_state(db, *, force_refresh: bool = False, persist_snapshot: 
         _duration_ms(row.created_at, row.completed_at or row.updated_at)
         for row in db.query(FlowRun).filter(FlowRun.created_at >= window_start).all()
     ]
-    _agent_dur_result = dispatch_syscall(
-        "sys.v1.agent.list_recent_durations",
-        {"window_hours": 1},
-        db=db,
-        user_id=None,
-        capability="agent.read",
-    )
-    _dur_rows = (
-        (_agent_dur_result.get("data") or {}).get("durations", [])
-        if _agent_dur_result.get("status") == "success"
-        else []
-    )
     agent_durations = [
         _duration_ms(
-            datetime.fromisoformat(row["started_at"]) if row.get("started_at") else None,
-            datetime.fromisoformat(row["completed_at"]) if row.get("completed_at") else None,
+            row.started_at or row.created_at,
+            row.completed_at or row.started_at or row.created_at,
         )
-        for row in _dur_rows
-        if row.get("started_at")
+        for row in db.query(AgentRun).filter(AgentRun.created_at >= window_start).all()
+        if row.started_at or row.created_at
     ]
     avg_execution_time = round(_avg(flow_durations + agent_durations + [avg_request_duration]), 2)
 
