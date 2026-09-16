@@ -575,6 +575,7 @@ def _run_tool_out_of_process(
                 "success": False,
                 "result": None,
                 "error": f"run {run_id} was cancelled; isolated tool {tool_name!r} was killed",
+                "failure_class": "cancelled",
                 "cancelled": True,
             }
     except subprocess.TimeoutExpired:
@@ -586,6 +587,7 @@ def _run_tool_out_of_process(
                 f"tool {tool_name!r} exceeded its {_TOOL_WORKER_TIMEOUT_S}s isolated-execution "
                 f"budget. It was NOT retried in-process — it declared isolation."
             ),
+            "failure_class": "transient",
         }
     except Exception as exc:  # noqa: BLE001 — spawn failure is a refusal, not a fallback
         logger.error("[AgentTool] %s worker could not be started: %s", tool_name, exc)
@@ -597,6 +599,7 @@ def _run_tool_out_of_process(
                 f"({type(exc).__name__}: {exc}). Running it in-process would defeat the "
                 f"declaration, so it was refused."
             ),
+            "failure_class": "transient",
         }
 
     finally:
@@ -614,6 +617,7 @@ def _run_tool_out_of_process(
             "success": False,
             "result": None,
             "error": f"tool {tool_name!r} isolated worker failed (exit {proc.returncode})",
+            "failure_class": "transient",
         }
 
     try:
@@ -623,10 +627,16 @@ def _run_tool_out_of_process(
             "success": False,
             "result": None,
             "error": f"tool {tool_name!r} worker returned an unreadable response: {exc}",
+            "failure_class": "transient",
         }
 
     if not response.get("ok"):
-        return {"success": False, "result": None, "error": str(response.get("error") or "failed")}
+        return {
+            "success": False,
+            "result": None,
+            "error": str(response.get("error") or "failed"),
+            "failure_class": _declared_failure_class(response),
+        }
     return {"success": True, "result": response.get("result"), "error": None}
 
 
@@ -725,6 +735,7 @@ def _isolation_refusal(tool_name: str, entry: dict) -> Optional[dict]:
             f"tool {tool_name!r} requires isolation {declared!r}; this host provides "
             f"{host_class!r}. The tool was not executed."
         ),
+        "failure_class": "fatal",
     }
 
 
@@ -768,6 +779,22 @@ def register_tool_suggestion_provider(provider: Callable) -> Callable:
 from AINDY.kernel.cancellation import is_run_cancelled, note_effect_refused
 
 
+def _declared_failure_class(source: Any) -> Optional[str]:
+    """RETRY-CLASSIFY-1 — the class a tool or its worker DECLARED for its own failure, if any.
+
+    A worker response is a dict that may carry ``failure_class``; an exception may carry one as
+    an attribute. ``None`` means the site did not decide and the fallback table will — the key
+    is still present so the census can see this return was considered, not forgotten.
+    """
+    from AINDY.core.retry_policy import FAILURE_CLASSES
+
+    if isinstance(source, dict):
+        value = source.get("failure_class")
+    else:
+        value = getattr(source, "failure_class", None)
+    return value if isinstance(value, str) and value in FAILURE_CLASSES else None
+
+
 def execute_tool(
     tool_name: str,
     args: dict,
@@ -784,12 +811,14 @@ def execute_tool(
             "success": False,
             "result": None,
             "error": f"Tool '{tool_name}' not found in registry",
+            "failure_class": "not_found",
         }
     if run_id and execution_token is None:
         return {
             "success": False,
             "result": None,
             "error": "capability token is required for agent run tool execution",
+            "failure_class": "permission",
         }
     # AGENT-HARDEN-9 — capabilities the tool may resolve secrets under (from the token).
     _scoped_caps: list = []
@@ -800,6 +829,7 @@ def execute_tool(
                 "success": False,
                 "result": None,
                 "error": "run_id is required when execution_token is supplied",
+                "failure_class": "invalid",
             }
         try:
             from AINDY.agents.capability_service import check_tool_capability
@@ -829,6 +859,7 @@ def execute_tool(
                     "success": False,
                     "result": None,
                     "error": capability_check["error"],
+                    "failure_class": "permission",
                 }
             queue_system_event(
                 db=db,
@@ -892,6 +923,7 @@ def execute_tool(
                             f"{first['value']!r} not allowed by capability "
                             f"'{first['capability']}'"
                         ),
+                        "failure_class": "permission",
                     }
 
                 # Rate limits are checked last (they increment a counter, so only
@@ -907,6 +939,7 @@ def execute_tool(
                             f"capability rate limit exceeded: '{first['capability']}' "
                             f"over {first['limit']}/{first['window_secs']}s"
                         ),
+                        "failure_class": "transient",
                     }
         except Exception as exc:
             logger.warning("[AgentTool] %s capability check failed: %s", tool_name, exc)
@@ -914,6 +947,7 @@ def execute_tool(
                 "success": False,
                 "result": None,
                 "error": "capability enforcement failed",
+                "failure_class": "fatal",
             }
     # MEB-0 — tool-path effect boundary (idempotency). Doubly-gated and opt-in: the global
     # AINDY_TOOL_IDEMPOTENCY flag AND a per-tool execution_guarantee of EXACTLY_ONCE, with a
@@ -1033,6 +1067,7 @@ def execute_tool(
                 "success": False,
                 "result": None,
                 "error": f"run {run_id} was cancelled; tool {tool_name!r} not executed",
+                "failure_class": "cancelled",
                 "cancelled": True,
             }
 
@@ -1067,7 +1102,7 @@ def execute_tool(
         logger.warning("[AgentTool] %s failed: %s", tool_name, exc)
         if _idempotent:
             _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
-        return {"success": False, "result": None, "error": str(exc)}
+        return {"success": False, "result": None, "error": str(exc), "failure_class": _declared_failure_class(exc)}
 
 
 def get_tool_risk(tool_name: str) -> str:

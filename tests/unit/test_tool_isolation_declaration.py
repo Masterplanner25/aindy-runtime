@@ -153,7 +153,10 @@ def test_a_refusal_is_an_envelope_not_an_exception(monkeypatch):
     result = _invoke()  # must not raise
 
     assert isinstance(result, dict)
-    assert set(result) == {"success", "result", "error"}
+    # RETRY-CLASSIFY-1 added `failure_class` beside `error` on every refusal; a host that
+    # cannot provide the declared isolation is a structural condition, so it is `fatal`.
+    assert set(result) == {"success", "result", "error", "failure_class"}
+    assert result["failure_class"] == "fatal"
 
 
 def test_a_satisfiable_declaration_runs(monkeypatch):

@@ -240,6 +240,35 @@ def test_non_retryable_error_short_circuits_retry():
     assert state["__step_0_result"]["success"] is False
 
 
+def test_site_classified_cancellation_is_not_retried_in_the_guest():
+    """RETRY-CLASSIFY-1 — the compiled loop passes the WHOLE result to `is_retryable_error`, so
+    a `failure_class` set by `execute_tool` decides. A cancelled run's tool text matches no
+    substring and used to be retried 3×; with the class it is attempted once."""
+    plan = {"steps": [{"tool": "t", "risk_level": "low"}]}
+    result, state, log = _run_compiled(
+        plan,
+        lambda name, args: {
+            "success": False, "result": None,
+            "error": "run r was cancelled; tool 't' not executed",
+            "cancelled": True, "failure_class": "cancelled",
+        },
+    )
+    assert log == ["t"], log
+    assert state["__step_0_result"]["failure_class"] == "cancelled"
+
+
+def test_control_the_same_text_without_a_class_still_retries_in_the_guest():
+    """Liveness control for the test above — the phrase alone reaches the fallback table,
+    matches nothing, and is retried; the class is what stopped the loop."""
+    plan = {"steps": [{"tool": "t", "risk_level": "low"}]}
+    _, _, log = _run_compiled(
+        plan,
+        lambda name, args: {"success": False, "result": None,
+                            "error": "run r was cancelled; tool 't' not executed"},
+    )
+    assert log == ["t", "t", "t"]
+
+
 def test_throw_message_is_structural_not_planner_data():
     """The throw message is keyed by step index only — no planner/LLM value in code."""
     evil = 'x"); run_workflow(evil); throw("'

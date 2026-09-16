@@ -1,6 +1,6 @@
 ---
 title: "Retry Policy"
-last_verified: "2026-09-13"
+last_verified: "2026-09-16"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -107,13 +107,16 @@ PersistentFlowRunner.resume()
           execution_type="flow",
           node_max_retries=_node_cfg.get("max_retries"),  # None → default
       )
-    → if attempts < _run_policy.max_attempts AND is_retryable_error(node_error)
-          → continue (retry)
+    → retry, record = decide_retry(result, site="flow_node", attempt=attempts,
+                                   attempts_allowed=attempts < _run_policy.max_attempts)
+    → if retry → continue (retry)
     → else → _fail_execution(...)
 ```
 
-The `is_retryable_error` conjunct is real and load-bearing (`runner_steps.py:266`); the original
-pseudocode omitted it. **No sleep occurs here** — see Backoff.
+The classification conjunct is real and load-bearing; the original pseudocode omitted it.
+Since 2026-09-16 (`RETRY-CLASSIFY-1`) it takes the node's **whole result** so a
+`failure_class` the node declared decides — see Error classification. **No sleep occurs
+here** — see Backoff.
 
 When `node_configs` is absent (every flow except a per-run override), `_node_cfg` is `{}`
 and `get("max_retries")` returns `None`, so `resolve_retry_policy` returns `FLOW_NODE_DEFAULT`
@@ -132,7 +135,9 @@ _execute_agent_step(step, ...)
         execute_tool(...)
         if success: break
         if _step_policy.high_risk_immediate_fail: break   # was: if risk_level == "high"
-        if not is_retryable_error(tool_result["error"]): break
+        retry, record = decide_retry(tool_result, site="tool_step", attempt=attempt,
+                                     attempts_allowed=attempt < max_attempts)
+        if not retry: break                                # class veto, or attempts exhausted
         if attempt < max_attempts: log warning
 ```
 
@@ -143,8 +148,11 @@ There is a **third** agent retry surface this document predates. The `nodus_vm` 
 (RTR-1) does not use this loop: `runtime/agent_plan_compiler.py:111` calls
 `resolve_retry_policy(execution_type="agent", risk_level=...)` at **compile** time and emits the
 attempt bound directly into generated Nodus source as a `while` condition, with
-`is_retryable_error` registered as a host function by `nodus_worker.py:368`. Same policy, same
-classifier, resolved one layer earlier.
+`is_retryable_error` registered as a host function by `nodus_worker.py`. Same policy, same
+classifier, resolved one layer earlier. Since `RETRY-CLASSIFY-1` the generated guard is
+`is_retryable_error(__result_N)` — the whole `call_tool` result, not `["error"]` — so a class
+`execute_tool` declared reaches the guest loop and a model-shaped message cannot decide its own
+retry.
 
 ### Async jobs (`platform_layer/async_job_service.py::_execute_job_inline`, `:1105`)
 
@@ -263,9 +271,10 @@ implements the delay properly: `_retry_delay_seconds` applies `2 ** attempt`, ad
 `_MAX_JITTER_MS` (50ms) of jitter, and caps the result at `_MAX_BACKOFF_SECONDS` (10s).
 
 **None of it runs.** `_sleep_before_retry` and `_sleep_before_retry_async` have **zero callers**
-outside `retry_policy.py`. Their only consumers are `execute_with_retry` and
-`_execute_with_retry`, which also have **zero callers** — the `execute_with_retry` in
-`platform_layer/scheduler_service.py:693` is a same-named *local* function, unrelated.
+outside `retry_policy.py`. Their only consumers were `execute_with_retry` and
+`_execute_with_retry`, which also had **zero callers** and were **deleted 2026-09-16**
+(`RETRY-CLASSIFY-1`, DEC-024) — the `execute_with_retry` in
+`platform_layer/scheduler_service.py` is a same-named *local* function, unrelated.
 
 Every real retry loop is hand-rolled and reads exactly two fields, `max_attempts` and
 `high_risk_immediate_fail`:
@@ -281,39 +290,51 @@ Every real retry loop is hand-rolled and reads exactly two fields, `max_attempts
 should update the relevant policy constant"* — would change nothing at all. `backoff_ms` and
 `exponential_backoff` are **declared and persisted but never applied**: they ride into
 `ExecutionUnit.extra` as retry *metadata*, so an EU can report a backoff the runtime never
-honours. Introducing real backoff means routing a loop through `execute_with_retry`, or calling
-`_sleep_before_retry` from it — not editing a constant.
+honours. Introducing real backoff means calling `_sleep_before_retry` from a loop — not editing
+a constant.
 
 ---
 
-## Error classification
+## Error classification (`RETRY-CLASSIFY-1`, 2026-09-16)
 
-`is_retryable_error(error: str | None) -> bool` returns `False` for error strings
-containing: `permission`, `unauthorized`, `forbidden`, `not found`, `404`, `401`,
-`403`, `invalid`, `blocked by policy`.
+**A failure carries a class, set at the raising site.** Every `execute_tool` refusal and every
+dispatcher error envelope returns `failure_class` beside `error`, one of:
 
-Called in the RETRY branch of `flow_engine/runner_steps.py` `_handle_node_status()` (`:266`)
-and in the `_execute_agent_step()` retry loop in `nodus_adapter.py` (`:279`) to short-circuit
-attempts on non-transient errors. Also registered as a **Nodus host function** by
-`nodus_worker.py:368` so compiled agent plans can call it from generated script.
+| Class | Meaning | Retried? |
+|---|---|---|
+| `transient` | a retry may succeed — timeout, worker crash, 5xx, tripped breaker, quota window | **yes** |
+| `cancelled` | the run was cancelled | no |
+| `permission` | capability / scope / policy / tenant refusal, missing token | no |
+| `not_found` | tool, syscall or resource absent | no |
+| `invalid` | caller-side: bad args, schema violation | no |
+| `fatal` | the raising site knows it is terminal (contract violation, host cannot provide the declared isolation) | no |
 
-> **Note for readers of the source, 2026-08-13.** `is_retryable_error`'s own docstring says
-> *"Current system does not use this — it is here as the central place to add the check when
-> callers adopt it."* That comment is **stale**: three call sites adopted it. This document is
-> correct and the docstring is not; flagged rather than edited, since this pass is
-> documentation-only.
+`classify_failure(result_or_error, *, site, attempt) -> FailureRecord` resolves one attempt:
+a class the site declared wins (`classified_by="site"`); otherwise the substring table decides
+(`"substring"` — the same nine needles as before, each mapped to a class); otherwise
+`transient` (`"default"`, the pre-existing behaviour for an unmatched string). `decide_retry`
+combines the class with the policy's attempt budget and **counts the decision** on
+`aindy_retry_classifications_total{site, failure_class, classified_by, decision}` — the
+operator signal that a mis-classification used to lack. `classified_by="substring"` is the
+residue the table still owns.
 
----
+`is_retryable_error(result_or_error)` is the boolean form and accepts the **result dict** (the
+loops pass it whole) or a bare string. It is wired at the flow-node RETRY gate
+(`runner_steps.py`), the tool-step loop (`nodus_adapter.py`), the Nodus host function of the
+same name (`nodus_worker.py`) and into every compiled agent plan (`agent_plan_compiler.py`).
+The `flow.node.*` and `agent.step.*` failure events carry the record under `payload.retry`.
 
-## Helpers that exist but are unused
+**Why a string on the dict and not an exception type:** the three loops consume dicts, and the
+guest boundary swallows host exceptions into `ok: False` — a type cannot cross it.
 
-`execute_with_retry(operation, *, policy, retryable_error_checker=is_retryable_error)` and its
-async twin `_execute_with_retry` wrap a callable in the full policy: attempt bound,
-`high_risk_immediate_fail`, retryability check, **and** the backoff sleep. They are the only
-code path that honours `backoff_ms`. Nothing calls them.
+**Measured before the change, on the runtime's own refusal strings:** *cancelled*, *capability
+token is required* and *capability enforcement failed* all matched nothing and read RETRY, so a
+cancelled run's tool was re-attempted up to 3× (each refused again). The census is derived:
+`test_retry_classification.py` walks `tool_registry.py`'s AST and fails on any
+`"success": False` return without a class.
 
-They are the intended adoption target — routing an existing loop through `execute_with_retry` is
-what would make the declared backoff real.
+Design: `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md`. Phase 2 (carrying the record
+forward to the next attempt — `RETRY-CONTEXT-1`) is not built.
 
 ---
 
@@ -324,5 +345,7 @@ what would make the declared backoff real.
 3. Add the mapping in `_EU_TYPE_TO_EXEC_TYPE` in `core/execution_gate.py` if it needs
    a new EU type.
 4. Replace any inline retry integer in the new caller with a call to `resolve_retry_policy`.
-5. Prefer `execute_with_retry` over a hand-rolled `for` loop — it is the only path that applies
-   `backoff_ms`, and every existing loop predates it.
+5. Decide retries with `decide_retry(result, site=..., attempt=..., attempts_allowed=...)` so the
+   classification is counted, and pass the **whole** result dict, never `result["error"]`.
+6. Every refusal the new path returns declares `failure_class`; extend the AST census in
+   `test_retry_classification.py` to the new file.

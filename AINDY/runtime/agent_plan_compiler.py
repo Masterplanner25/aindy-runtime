@@ -40,6 +40,11 @@ never schedules the dependent (``after``) steps, so no downstream step runs on a
 predecessor's bad output. This matches AGENT_FLOW, which returns ``FAILURE`` from
 a failed step and stops the flow.
 
+``is_retryable_error`` receives the WHOLE ``call_tool`` result, not ``["error"]``
+(RETRY-CLASSIFY-1): a ``failure_class`` the tool or ``execute_tool`` declared decides
+whether the loop continues; only an un-classed result falls back to the substring
+table. A model-shaped error string can therefore no longer decide its own retry.
+
 Note: the native step ``retries`` option is deliberately **not** emitted. In
 nodus's workflow runner that schedules a *durable* retry (``status:
 retry_scheduled``) that requires a resume call — it does not retry in-process,
@@ -52,7 +57,7 @@ Generated shape (for a 2-step plan; low-risk step_0, high-risk step_1):
       step step_0 {
         let __attempt_0 = 1
         let __result_0 = call_tool(input_payload["__step_0_tool"], input_payload["__step_0_args"])
-        while ((__result_0["success"] != true) && (__attempt_0 < 3) && is_retryable_error(__result_0["error"])) {
+        while ((__result_0["success"] != true) && (__attempt_0 < 3) && is_retryable_error(__result_0)) {
           __attempt_0 = __attempt_0 + 1
           __result_0 = call_tool(input_payload["__step_0_tool"], input_payload["__step_0_args"])
         }
@@ -64,7 +69,7 @@ Generated shape (for a 2-step plan; low-risk step_0, high-risk step_1):
       step step_1 after step_0 {
         let __attempt_1 = 1
         let __result_1 = call_tool(input_payload["__step_1_tool"], input_payload["__step_1_args"])
-        while ((__result_1["success"] != true) && (__attempt_1 < 1) && is_retryable_error(__result_1["error"])) {
+        while ((__result_1["success"] != true) && (__attempt_1 < 1) && is_retryable_error(__result_1)) {
           __attempt_1 = __attempt_1 + 1
           __result_1 = call_tool(input_payload["__step_1_tool"], input_payload["__step_1_args"])
         }
@@ -142,7 +147,7 @@ def _step_source(
         f"    let {result_var} = {call_expr}\n"
         f"    while (({result_var}[\"success\"] != true) && "
         f"({attempt_var} < {max_attempts}) && "
-        f"is_retryable_error({result_var}[\"error\"])) {{\n"
+        f"is_retryable_error({result_var})) {{\n"
         f"      {attempt_var} = {attempt_var} + 1\n"
         f"      {result_var} = {call_expr}\n"
         f"    }}\n"

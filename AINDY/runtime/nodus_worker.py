@@ -514,9 +514,17 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         (retryable) if the classifier is unavailable, so retry budget still applies.
         """
         try:
-            from AINDY.core.retry_policy import is_retryable_error
+            from collections.abc import Mapping
 
-            return bool(is_retryable_error(None if error is None else str(error)))
+            from AINDY.core.retry_policy import decide_retry
+
+            # RETRY-CLASSIFY-1 — the compiled plan passes the WHOLE `call_tool` result, so a
+            # `failure_class` the tool or `execute_tool` declared decides; a bare string still
+            # goes to the fallback table. The guest loop owns the attempt budget, so the class
+            # alone can veto here. Counted as site="compiled_plan".
+            source = error if (error is None or isinstance(error, Mapping)) else str(error)
+            retry, _record = decide_retry(source, site="compiled_plan", attempt=1, attempts_allowed=True)
+            return bool(retry)
         except Exception:
             return True
 

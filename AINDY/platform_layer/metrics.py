@@ -132,6 +132,19 @@ syscall_unowned_unit_total = Counter(
 # ★ Evictions are the OTHER half: a snapshot that was never reaped and aged past the TTL the
 # Redis backend already applies. Counted rather than silently dropped, because a prune that
 # says nothing is indistinguishable from a reap — and the count is the leak, measured.
+# RETRY-CLASSIFY-1 — one increment per retry DECISION at the three loops (flow node, tool step,
+# compiled plan via the guest host function) and the dispatcher's error envelope. A
+# mis-classification used to be indistinguishable from a hard failure; this is the number that
+# tells them apart. `classified_by="substring"` is the residue the fallback table still owns —
+# the phase-1 exit criterion is that it reads zero on the runtime's own refusal strings.
+retry_classifications_total = Counter(
+    "aindy_retry_classifications_total",
+    "Retry classifications by site, failure class, who classified it (site | substring | "
+    "default) and the decision the loop took (retry | stop).",
+    ["site", "failure_class", "classified_by", "decision"],
+    registry=REGISTRY,
+)
+
 resource_usage_evicted_total = Counter(
     "aindy_resource_usage_evicted_total",
     "In-memory usage snapshots evicted unreaped after EU_KEY_TTL_SECONDS — units accrued by "

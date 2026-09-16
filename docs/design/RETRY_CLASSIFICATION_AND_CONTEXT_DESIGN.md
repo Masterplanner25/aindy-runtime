@@ -8,8 +8,16 @@ owner: "platform-team"
 
 # Retry classification and carried context — design
 
-**`RETRY-CLASSIFY-1` + `RETRY-CONTEXT-1`. DESIGN ONLY — nothing shipped. Proposal under
-`AGENT_WORKING_RULES.md` §8 (runtime behaviour change: what a retry decides, and what it carries).**
+**`RETRY-CLASSIFY-1` + `RETRY-CONTEXT-1`. PHASE 1 SHIPPED 2026-09-16 (#703; DEC-024, DEC-025) —
+`RETRY-CLASSIFY-1` CLOSED; phase 2 (§6, the carry) is design only, and `RETRY-CONTEXT-1`
+stays open on it.** Live record: `docs/runtime/RETRY_POLICY.md` §Error classification.
+
+> **Phase 1 as built, where it differs from §5:** the counter is incremented by one
+> `decide_retry()` call per loop decision (classify + decide + count), which every loop uses;
+> the dispatcher envelope carries `failure_class` on **error** envelopes only, resolved at
+> `_error_envelope`; the AST census also allows a literal `None` class on the two returns
+> that relay a tool's or worker's own failure (`_declared_failure_class`) — the key is present
+> so the census sees the return was considered, and the fallback decides. Mutation-tested 7/7.
 The two entries are designed together because both entries say so: a classified failure *is*
 the payload a carried failure should contain, and designing either alone means designing the
 same dict twice. §2 corrects the census both entries inherit; §3 is the evidence that moved

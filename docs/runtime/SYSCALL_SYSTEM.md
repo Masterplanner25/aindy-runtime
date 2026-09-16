@@ -45,7 +45,7 @@ Registered handler
 PersistentFlowRunner → ExecutionPipeline → ExecutionDispatcher → Runtime
     ▼
 Standard response envelope
-    { status, data, version, warning, trace_id, duration_ms, error }
+    { status, data, version, warning, trace_id, duration_ms, error, failure_class }
 
 ---
 
@@ -106,6 +106,13 @@ emits the new values yet: a handler opts in via `AINDY.kernel.syscall_outcome`.
 
 - `version` — always present; the parsed ABI version string.
 - `warning` — set when the syscall is deprecated; null otherwise.
+- `failure_class` — **error envelopes only** (`RETRY-CLASSIFY-1`, 2026-09-16): one of
+  `transient | cancelled | permission | not_found | invalid | fatal`, declared by the path
+  that refused (unknown syscall → `not_found`, capability/tenant → `permission`, input
+  validation → `invalid`, quota → `transient`, cancelled run → `cancelled`, contract
+  violation → `fatal`); a handler's own exception is classified by the fallback table
+  (a tripped circuit breaker is `transient`). Absent on success. Only `transient` may be
+  retried — see `RETRY_POLICY.md`.
 - `error` — set on failure; null on success.
 - `data` — handler output on success; `{}` on error.
 

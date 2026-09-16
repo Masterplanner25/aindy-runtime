@@ -14360,7 +14360,7 @@ needs both *what failed* and *what class of failure it was*.
 (the other bounded-retry entry — note it is about retrying at *lower authority*, a different axis
 that composes with this one), `PROGRESS-CHANNEL-1` (same no-authority/no-effect discipline).
 
-### ★ DESIGN FILED 2026-09-16 — `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §6–§7
+### ★ DESIGN FILED 2026-09-16 — `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §6–§7 (phase 1 — the CLASSIFY half — shipped #703; this half is unbuilt)
 
 **The constraint this entry did not state, and it is the whole design: the carried failure must
 ride a SCOPE, never an argument.** `EffectRecord` keys on `sha256({action_type, input, scope})`,
@@ -15149,7 +15149,21 @@ between-boundaries limitation any revocation check would).
 
 ## RETRY-CLASSIFY-1 — retryability is decided by substring matching on an error string, in five places
 
-**Status: OPEN — P2.** Filed 2026-08-19. Provenance: `SWE_AGENT_AINDY_LENS_AUDIT.md`
+**Status: CLOSED (2026-09-16) — #703, DEC-024 / DEC-025.** A failure now carries a CLASS set at the
+raising site: `failure_class` (`transient | cancelled | permission | not_found | invalid | fatal`)
+on every `execute_tool` refusal (16 returns, AST-censused) and on every dispatcher error
+envelope; `classify_failure` / `decide_retry` in `retry_policy.py` honour the site's class,
+fall back to the substring table only for un-classed strings — and RECORD which one decided
+(`aindy_retry_classifications_total{site, failure_class, classified_by, decision}`; the
+`flow.node.*` / `agent.step.*` failure events carry the record under `payload.retry`). All four
+live loops pass the WHOLE result dict; the compiled plan emits `is_retryable_error(__result_N)`,
+so a model-shaped message can no longer decide its own retry. `execute_with_retry` /
+`_execute_with_retry` (zero callers) deleted. Verified on the three own-string
+misclassifications below through the real adapter loop and the real guest loop (one attempt,
+with a liveness control showing the phrase alone still retries). Mutation-tested 7/7.
+**Remaining gap:** `classified_by="substring"` is the residue — a tool's OWN error text still
+reaches the table unless the tool declares a class; and phase 2 (`RETRY-CONTEXT-1`) is not
+built. Filed 2026-08-19. Provenance: `SWE_AGENT_AINDY_LENS_AUDIT.md`
 (`C:\codev\swe agent research\`), whose absorb list asks for a **declarative error policy table**
 to replace *"the fragile sentinel-string channel"* — and points correctly at us.
 
