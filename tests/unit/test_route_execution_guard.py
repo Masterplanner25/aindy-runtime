@@ -19,7 +19,6 @@ from AINDY.core.route_execution_guard import (
     RouteExecutionViolation,
     _iter_api_routes,
     enforce_registered_route_execution,
-    validate_registered_route_execution,
 )
 from AINDY.exception_handlers import register_exception_handlers
 from AINDY.middleware import enforce_execution_contract
@@ -53,21 +52,34 @@ async def managed_alias_route(request: Request):
     )
 
 
-def test_registered_runtime_routes_are_wrapped_for_execution_enforcement():
-    app = FastAPI()
+def test_every_registered_non_exempt_route_is_wrapped_for_execution_enforcement():
+    """ROUTE-AST-UNWIRED-1 / DEC-023 — the boot-time property that IS true, over the REAL app.
 
+    Derived census (not a hand-picked route): every ``APIRoute`` ``register_routes`` puts on
+    the app, minus the exempt paths, carries the wrapper. This is what the deleted AST
+    validator was mis-cited as; the wrapper is the guarantee, and this proves it is on
+    every route, at boot, before any request.
+    """
+    from AINDY.core.execution_guard import is_execution_exempt_path
+
+    app = FastAPI()
     register_routes(app)
 
-    # FastAPI ≥ 0.137 stores included-router routes inside _IncludedRouter wrappers
+    # FastAPI >= 0.137 stores included-router routes inside _IncludedRouter wrappers
     # rather than flattening them into app.routes. Use _iter_api_routes so the check
     # works across both versions.
-    managed_routes = [
-        route
-        for route, _ in _iter_api_routes(app.routes)
-        if route.path == "/api/version"
+    managed = [
+        route for route, _ in _iter_api_routes(app.routes)
+        if not is_execution_exempt_path(route.path)
     ]
-    assert managed_routes
-    assert getattr(managed_routes[0], "_aindy_execution_wrapped", False) is True
+    assert len(managed) > 50, "the census must be non-empty and real"
+    unwrapped = [
+        f"{','.join(sorted(route.methods or []))} {route.path}"
+        for route in managed
+        if getattr(route, "_aindy_execution_wrapped", False) is not True
+    ]
+    assert unwrapped == []
+    assert any(route.path == "/api/version" for route in managed)
 
 
 def test_managed_route_succeeds_under_runtime_enforcement():
@@ -101,7 +113,10 @@ def test_exempt_route_is_not_required_to_enter_pipeline():
     assert is_execution_exempt_path("/health") is True
 
 
-def test_helper_indirection_route_is_allowed_by_runtime_wrapper_even_if_ast_audit_is_stricter():
+def test_helper_indirection_route_is_allowed_by_the_runtime_wrapper():
+    """A route that reaches the pipeline through an alias is a working route, and the
+    request-time wrapper judges what HAPPENED, not what the source looks like. (The
+    boot-time AST validator that rejected this exact route was deleted — DEC-023.)"""
     app = FastAPI()
     app.include_router(managed_router)
     enforce_registered_route_execution(app)
@@ -111,8 +126,6 @@ def test_helper_indirection_route_is_allowed_by_runtime_wrapper_even_if_ast_audi
 
     assert response.status_code == 200
     assert response.json()["data"]["alias"] is True
-    with pytest.raises(RouteExecutionViolation, match="/managed-alias"):
-        validate_registered_route_execution(app)
 
 
 def test_runtime_wrapper_blocks_successful_bypass_route():

@@ -547,6 +547,42 @@ capability; keeping it would mean documenting and guarding something with no use
 - `docs/runtime/SYSCALL_REFERENCE.md`, `docs/runtime/SYSCALL_SYSTEM.md`
 - `TECH_DEBT.md` `SYSTEM-STATE-TENANT-1`
 
+### DEC-023
+**Status:** `accepted` (2026-09-16 — `ROUTE-AST-UNWIRED-1`, #698)
+
+**Decision**
+The route execution contract is enforced at REQUEST time by the wrapper
+`enforce_registered_route_execution` installs on every registered, non-exempt route, and by
+nothing else. The boot-time AST validator `validate_registered_route_execution` is DELETED,
+not wired. The boot-time property that is true — every non-exempt route on the registered app
+carries the wrapper — is pinned by a derived census over the real app.
+
+**Why**
+The validator was never called by the application (three references repo-wide: its
+definition and one test), and by that test it raised on a route that works — a module-level
+alias of `execute_with_pipeline` — because it resolved calls by NAME inside one module. Wiring
+it would fail boot on a working application; teaching it cross-module, alias-aware resolution
+is building a static analyser whose only gain over the request-time refusal is catching a
+bypass before the first request, on a surface the per-route probe suite (FR-25b) already
+drives. Leaving a stricter, unrunnable twin beside the real guard is what let a "boot-time
+refusal" be CLAIMED in the first place (catalogue variant 8). The honest guarantee is the
+wrapper: it judges what HAPPENED on the request, not what the source looks like.
+
+**Implications**
+- `route_execution_guard.py` is smaller by the AST machinery; its module docstring now states
+  the guarantee precisely (request-time; required only where the router declared
+  `require_execution_context`; admin / user-agent / automation routers wrapped but not required)
+- `test_every_registered_non_exempt_route_is_wrapped_for_execution_enforcement` replaces a
+  one-route check with a derived census over `register_routes` (non-empty asserted); unwiring
+  the wrapper at boot turns it red
+- any future "structural proof" of the contract must be a CI check over the real app, not a
+  runtime function with no call site
+
+**Related Docs**
+- `AINDY/core/route_execution_guard.py`
+- `docs/runtime/EXECUTION_CONTRACT.md` (status note corrected)
+- `TECH_DEBT.md` `ROUTE-AST-UNWIRED-1`
+
 ---
 ## Future Decisions To Record
 
