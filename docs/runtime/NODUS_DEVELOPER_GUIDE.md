@@ -1,7 +1,7 @@
 ---
 title: "Nodus Developer Guide"
 api_version: "1.0"
-last_verified: "2026-09-13"
+last_verified: "2026-09-15"
 status: current
 owner: "platform-team"
 ---
@@ -255,7 +255,37 @@ if (received == nil) {
 ```
 
 **The script runs again from the top.** It does not continue from the wait; it must branch on
-whether `nodus_received_events` is present, as above.
+whether `nodus_received_events` is present, as above. It does **not** get its prior
+`set_state` values back — a re-run starts with an empty namespace plus `nodus_received_events`.
+(Decided 2026-09-15 under `WAIT-TYPED-CONTRACT-1`: seeding the prior state back would re-apply
+phase 1's effects on every re-run. What the script set before it parked is readable on the
+waiting run's `nodus_output_state`; it is not handed back to the script.)
+
+### Declaring what may resume you (`nodus_wait_resume_schema`)
+
+A resume payload is **checked, not trusted** (`WAIT-TYPED-CONTRACT-1`, 2026-09-15). Set a third
+key beside the two above and the runtime refuses any resume whose payload does not satisfy it —
+**before** the payload is injected or the run is woken, so the run keeps waiting and the caller
+gets **422** with the validator's errors:
+
+```nd
+set_state("nodus_wait_requested", true)
+set_state("nodus_wait_event_type", "review.approved")
+set_state("nodus_wait_resume_schema", {
+    "required": ["reviewer", "approved"],
+    "properties": {"reviewer": {"type": "string"}, "approved": {"type": "boolean"}}
+})
+```
+
+The dialect is the syscall registry's own (`required` + `properties[<name>].type`; types
+`string | integer | number | boolean | object | array`) and the validator is the one
+`SyscallDispatcher.dispatch()` applies to syscall inputs — deliberately, so the gate on outside
+data is no looser than the gate on a syscall. Without the key the wait is **untyped** and behaves
+exactly as before: any payload is accepted. Why declare one: the phase-2 branch above reads
+`event_payload["text"]`; an untyped resume with `{}` is accepted, the wait is consumed, and the
+script fails on its re-run — the malformed resume is not refused at the door, it destroys the
+run one step later. A declaration moves that refusal to the door. Adoption is visible on
+`aindy_flow_resume_payload_total{outcome="accepted|rejected|untyped"}`.
 
 The WAIT/RESUME cycle:
 1. Script sets `nodus_wait_requested = true` and `nodus_wait_event_type = "event.name"` and exits.

@@ -585,6 +585,11 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                     "error": None,
                     "stdout_log": stdout_buffer.getvalue(),
                     "wait_for": wait_for,
+                    # WAIT-TYPED-CONTRACT-1 — the guest's third wait key, beside the two above:
+                    # `set_state("nodus_wait_resume_schema", {...})` declares what may resume
+                    # it. Forwarded verbatim; the adapter turns it into the node's
+                    # `resume_schema` and the runner records it on the run.
+                    "resume_schema": _json_safe(state.get("nodus_wait_resume_schema")),
                 }
             else:
                 result_payload = {

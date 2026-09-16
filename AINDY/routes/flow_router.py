@@ -167,6 +167,18 @@ async def resume_flow_run(
         )
         if result.get("status") == "FAILED":
             error = _flow_failure(result)
+            if error.startswith("HTTP_422"):
+                # WAIT-TYPED-CONTRACT-1 — the payload failed the waiting node's declared
+                # schema. The run is still waiting; the client may correct and retry. Checked
+                # FIRST and by prefix: the validator's messages quote field names, and the two
+                # substring checks below would mis-map one that happens to contain "404".
+                raise HTTPException(
+                    422,
+                    {
+                        "message": "resume payload rejected by the waiting node's declared schema",
+                        "errors": error.split(":", 1)[-1].split("; "),
+                    },
+                )
             if "404" in error:
                 raise HTTPException(404, "Flow run not found")
             if "400" in error:

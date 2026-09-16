@@ -645,6 +645,12 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
                                  state — the runner merges WAIT patches);
                                  cleared when a resume delivers a payload or
                                  the script completes
+    nodus_wait_resume_schema dict — optional, set by the script beside the wait
+                                 keys: the payload shape a resume must satisfy
+                                 (syscall dialect: required + properties[type]).
+                                 Becomes the node's ``resume_schema``; a resume
+                                 that fails it is refused with 422 and the run
+                                 stays waiting (WAIT-TYPED-CONTRACT-1)
     nodus_received_events dict — {event_type: payload} for events delivered
                                  by POST …/runs/{id}/resume after a wait
                                  (populated on resume; the script reads it
@@ -827,9 +833,13 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         logger.info(
             "[nodus.execute] WAIT eu=%s waiting_for='%s'", execution_unit_id, wait_for
         )
+        # WAIT-TYPED-CONTRACT-1 — passed through as the node's declaration; the runner's WAIT
+        # branch records it and refuses a malformed one loudly. Absent → the wait is untyped.
+        resume_schema = raw.get("resume_schema")
         return {
             "status": "WAIT",
             "wait_for": wait_for,
+            "resume_schema": resume_schema,
             # ★ This patch is MERGED into the run's state by the flow runner (not only recorded
             #   in flow_history) — `nodus_wait_event_type` is what the resume bridge above keys
             #   on. `nodus_output_state` rides along so what the script set before it parked is

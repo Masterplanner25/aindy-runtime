@@ -1,6 +1,6 @@
 ---
 title: "Tutorial 2 — Event-Driven Automation"
-last_verified: "2026-09-14"
+last_verified: "2026-09-15"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -153,6 +153,22 @@ if (received == nil) {
 `set_state()`. `user_id` is an injected global. Do not rely on a phase-1 `set_state` value
 being readable in phase 2 — the script's `output_state` is stored under `nodus_output_state`,
 not merged top-level (same defect family).
+
+> **Optional, and worth doing: declare what may resume you.** Phase 2 reads
+> `approval["reviewer"]`, `approval["note"]` and `approval["approved"]`. As written, a resume
+> with `"payload": {}` is *accepted*, the wait is consumed, and the script fails on its second
+> run — the run ends `failed`, not `waiting`. Add a third key in phase 1 and the runtime refuses
+> a payload that does not fit **before** touching the run (HTTP **422**, run still waiting):
+>
+> ```js
+> set_state("nodus_wait_resume_schema", {
+>     "required": ["reviewer", "approved", "note"],
+>     "properties": {"reviewer": {"type": "string"}, "approved": {"type": "boolean"}, "note": {"type": "string"}}
+> })
+> ```
+>
+> Same dialect and validator as syscall input schemas (`WAIT-TYPED-CONTRACT-1`, runtimes released after 2.16.0;
+> see the developer guide §4). Not part of the recorded live run below, which was made without it.
 
 ---
 

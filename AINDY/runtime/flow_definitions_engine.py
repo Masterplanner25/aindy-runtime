@@ -116,6 +116,7 @@ def flow_run_history_node(state, context):
 def flow_run_resume_node(state, context):
     try:
         from uuid import UUID
+        from AINDY.core.pending_request import ResumePayloadRejected
         from AINDY.db.models.flow_run import FlowRun
         from AINDY.runtime.flow_engine import route_event
 
@@ -133,9 +134,26 @@ def flow_run_resume_node(state, context):
             return {"status": "FAILURE", "error": f"HTTP_400:Flow run waiting for '{run.waiting_for}', not '{event_type}'"}
         # RESUME-FANOUT-UNSCOPED-1 — the run we just checked ownership of is the ONLY run
         # this resume may touch. Without `run_id`, route_event is a broadcast.
-        results = route_event(
-            event_type=event_type, payload=payload, db=db, user_id=user_id, run_id=str(run.id)
-        )
+        try:
+            results = route_event(
+                event_type=event_type, payload=payload, db=db, user_id=user_id, run_id=str(run.id)
+            )
+        except ResumePayloadRejected as rejected:
+            # WAIT-TYPED-CONTRACT-1 — the waiting node declared a schema and the payload does not
+            # satisfy it. Nothing was injected or woken; the run is still waiting. 422 is the
+            # body-validation code a client already handles from the route's pydantic model.
+            return {
+                "status": "FAILURE",
+                "error": "HTTP_422:" + "; ".join(rejected.errors),
+                "output_patch": {
+                    "flow_run_resume_result": {
+                        "run_id": run_id,
+                        "resumed": False,
+                        "rejected": True,
+                        "errors": list(rejected.errors),
+                    }
+                },
+            }
         return {"status": "SUCCESS", "output_patch": {"flow_run_resume_result": {"run_id": run_id, "resumed": True, "results": results}}}
     except Exception as e:
         return {"status": "FAILURE", "error": str(e)}

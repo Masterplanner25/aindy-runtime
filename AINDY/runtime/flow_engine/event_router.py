@@ -28,9 +28,25 @@ def route_event(
     Without ``run_id`` this is the BROADCAST form — every matching wait, filtered only by the
     payload's ``correlation_id``. Nothing in the runtime calls that form today; it is kept for
     an explicit broadcast verb, which needs its own scope, not the per-run route's.
+
+    ★ **WAIT-TYPED-CONTRACT-1 — the payload is CHECKED before it is injected.** A waiting node
+    that declared ``resume_schema`` left a pending request on the run's state; the payload is
+    validated against it here, with the dispatcher's own validator, BEFORE any row is written
+    or any wake is published. Per-run form: a rejection raises `ResumePayloadRejected` and
+    nothing happens — the run stays ``waiting``, its scheduler entry stays registered. Broadcast
+    form: a rejecting run is skipped from injection (logged, counted); the wake still goes out
+    by event name, which the run then sees as a payload-less wake — the semantics it already had
+    for a bus emit. A run with no declaration is ``untyped`` and behaves exactly as before.
+    Every outcome lands on ``aindy_flow_resume_payload_total{outcome}``.
     """
+    from AINDY.core.pending_request import (
+        OUTCOME_REJECTED,
+        ResumePayloadRejected,
+        check_resume_payload,
+    )
     from AINDY.db.models.flow_run import FlowRun
     from AINDY.kernel.scheduler_engine import get_scheduler_engine
+    from AINDY.platform_layer.metrics import flow_resume_payload_total
 
     scheduler = get_scheduler_engine()
     corr = (payload or {}).get("correlation_id") or None
@@ -67,7 +83,30 @@ def route_event(
                 .all()
             )
 
+    # ── Check before touching anything ───────────────────────────────────────
+    # Decided for EVERY run first, so a per-run rejection leaves no partial write behind, and
+    # a broadcast skips exactly the runs whose declaration refuses this payload.
+    admitted: list = []
     for run in query_runs:
+        try:
+            outcome = check_resume_payload(
+                run.state, payload, run_id=str(run.id), event_type=event_type
+            )
+        except ResumePayloadRejected as rejected:
+            flow_resume_payload_total.labels(outcome=OUTCOME_REJECTED).inc()
+            logger.warning(
+                "[route_event] payload REJECTED run=%s event=%s: %s",
+                run.id,
+                event_type,
+                "; ".join(rejected.errors),
+            )
+            if run_id is not None:
+                raise
+            continue
+        flow_resume_payload_total.labels(outcome=outcome).inc()
+        admitted.append(run)
+
+    for run in admitted:
         try:
             state = dict(run.state or {})
             state["event"] = payload
