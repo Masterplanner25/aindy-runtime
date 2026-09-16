@@ -44,6 +44,17 @@ This document describes the current runtime behavior of the FastAPI backend as i
   - startup: `emit_event("system.startup")` -> determine leader/follower role -> `scheduler_service.start()` on leader only
   - shutdown: `emit_event("system.shutdown")` -> `scheduler_service.stop()`
 - This prevents follower instances from starting duplicate background schedulers.
+- **`system_events` retention (SYSEVENT-RETENTION-1, 2026-09-16)** — a leader-only job,
+  registered only when `AINDY_SYSEVENT_RETENTION` is `report` or `prune` (unset = no job, the
+  pre-existing behaviour). Retention is a class per event *type* (`audit` never by age;
+  `operational` 90 d; `keepalive` 7 d; both overridable), seeded by the runtime and extended by
+  the app via `register_event_retention`; an unclassified type is kept. **The job prunes leaves
+  only**: a row referenced by `parent_event_id`, `agent_events.system_event_id`,
+  `memory_nodes.source_event_id`/`root_event_id`, or either end of an `event_edges` row is never
+  eligible — the first four because the FK would refuse the delete, the last because it would
+  *not* (`CASCADE`) and the causal graph would silently lose the edge. Committed batches; per-type
+  log lines and `aindy_system_events_pruned_total{type}`; `aindy_system_events_unclassified_rows`
+  is the pressure to classify. Module: `AINDY/core/system_event_retention.py`.
 
 ## 3. Database Session Lifecycle
 - Per-request SQLAlchemy sessions are provided by `get_db()` in `AINDY/db/database.py`.

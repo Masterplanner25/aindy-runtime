@@ -8,8 +8,18 @@ owner: "platform-team"
 
 # `system_events` retention — design
 
-**`SYSEVENT-RETENTION-1`. DESIGN ONLY — nothing shipped. Proposal under `AGENT_WORKING_RULES.md`
-§8 (a background job that deletes rows is a runtime behaviour change).** The entry's shape —
+**`SYSEVENT-RETENTION-1`. SHIPPED 2026-09-16 (#704; DEC-026 … DEC-029) — entry CLOSED.** Live
+record: `AINDY/core/system_event_retention.py` and `docs/runtime/RUNTIME_BEHAVIOR.md` §2.
+
+> **As built, where it differs from §5:** the job is *registered* only when a mode is set
+> (unset = no job, not a no-op job); `report` counts the whole eligible set with the same
+> predicate rather than paging it; glob patterns (`capability.*`) are allowed in the registry
+> with exact-beats-glob, longest-glob-wins resolution; the `report` mode is the documented
+> first step rather than a shipped default value (the env var ships unset). Mutation-tested
+> 12/12 — each of the six anti-joins is killed by exactly its own test.
+
+**Originally a proposal under `AGENT_WORKING_RULES.md` §8** (a background job that deletes
+rows is a runtime behaviour change); approved 2026-09-16. The entry's shape —
 a retention *class per type*, default keep, log what was dropped — holds. What the entry did
 not have is §2: the table's foreign keys already decide most of the question, and they decide
 it in a way that makes the naïve `DELETE` fail rather than over-delete. §3 is the census the
