@@ -11059,7 +11059,41 @@ hand-rolled in a `while` loop, or improvised with `asyncio.create_task`.
 
 ## AUTHORITY-NEGOTIATION-1 — a capability denial has no bounded recovery path
 
-**★★ PHASE 1 SHIPPED 2026-09-10 — the negotiation is wired, default-OFF. Open for 2–3.**
+**★★ PHASE 2 SHIPPED 2026-09-15 — the WAIT gate; open for phase 3 only (the flip, on
+evidence — zero tools declare a variant or a gate at HEAD).** Phase 1 shipped 2026-09-10.
+
+### Phase 2 — the WAIT-gate fallback kind (`docs/design/AUTHORITY_NEGOTIATION_DESIGN.md` §5a)
+
+`register_tool(..., on_denial="wait")` (default `"fail"`). When a denial is not recovered by a
+variant, `agent_execute_step` returns `WAIT` on `agent.authority.decision` with the gate record
+on the flow state and a **`resume_schema`** — the runtime's first typed wait
+(`WAIT-TYPED-CONTRACT-1`). The operator resumes with `decision: skip | abort` (+ `note`); `grant`
+is not in the vocabulary (§7), an unknown decision re-parks the run and is recorded on the gate;
+a payload without `decision` is refused at the door (422), run still parked. Same flag.
+
+**★★ `AGENT_FLOW` — the backend the app runs — had NEVER waited.** Its orchestration
+(`execute_agent_flow_orchestration`) read any non-`SUCCESS` flow result as failure: a parked run
+would have been `failed` on the AgentRun while its FlowRun sat `waiting` for an operator. It now
+parks like the nodus_vm chain does (`waiting` + `wait_state` + `WAITING` event). **And a failure
+AFTER a resume had never reached the AgentRun on this backend** — the post-hoc block runs only
+after the original `runner.start`; a resumed run finishes on a scheduler thread. The node's
+failure branches now mark the run `failed` themselves and both terminal paths sync the agent's
+execution unit (`_sync_agent_eu_terminal`), which `execute_run`'s tail does only on the original
+path. The design row's "no new machinery" was half right.
+
+**Decisions recorded:** provide-a-result (human-as-the-tool) DEFERRED, not declined — a third
+decision on this gate if ever built, never a new gate; the agent's own EU stays `executing`
+while parked (nothing resumes an agent EU). Completion hooks and `SCORE_COMPUTED` do not run for
+a run that completes via a gate resume — the same gap the nodus_vm resumed path has (RTR-3).
+
+**Tests:** `tests/unit/test_authority_gate.py` — the REAL `PersistentFlowRunner` over the REAL
+`AGENT_FLOW` with real `AgentRun`/`AgentStep` rows (tool body + capability check stubbed at the
+seams the production code calls); resume through the REAL `route_event` + `resume()`. The
+AgentRun is `waiting` not `failed`; `on_denial="fail"` and flag-off are byte-for-byte today's
+denial; skip completes with the step recorded `skipped`; abort fails with the reason on the run;
+unknown decision re-parks and stays steerable; missing decision refused at the door; the events
+and counter. **Mutation-tested 6/6.** **Not re-run live.**
+
 `AINDY/agents/authority_negotiation.py` offers exactly one downgrade on a tool capability denial,
 gated by `AINDY_AUTHORITY_NEGOTIATION` (opt-IN; anything unrecognised reads as off).
 **★★ It cannot grant authority, structurally rather than carefully: it decides only WHICH TOOL to

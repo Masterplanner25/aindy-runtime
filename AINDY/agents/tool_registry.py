@@ -15,6 +15,13 @@ from AINDY.platform_layer.extension_boundary import sanitize_extension_context
 logger = logging.getLogger(__name__)
 
 TOOL_REGISTRY: dict[str, dict] = {}
+
+
+# AUTHORITY-NEGOTIATION-1 phase 2 — the two things a tool may ask for when refused and not
+# recovered by a variant. `fail` is every tool's behaviour today.
+ON_DENIAL_FAIL = "fail"
+ON_DENIAL_WAIT = "wait"
+ON_DENIAL_KINDS = (ON_DENIAL_FAIL, ON_DENIAL_WAIT)
 _SUGGESTION_PROVIDERS: list[Callable] = []
 _LOADING_PLUGINS = False
 # FR-25 (c) — the most recent plugin-load failure, or None when the last attempt succeeded.
@@ -144,6 +151,7 @@ def register_tool(
     isolation: Optional[str] = None,
     env_spec: Optional[dict] = None,
     degraded_variant: Optional[str] = None,
+    on_denial: str = ON_DENIAL_FAIL,
 ):
     """Register an agent tool implementation with platform metadata.
 
@@ -243,6 +251,19 @@ def register_tool(
                 f"same tool would retry the call that was just refused."
             )
 
+    # AUTHORITY-NEGOTIATION-1 phase 2 — what happens when this tool is refused for lack of
+    # authority AND no declared variant recovered it: fail the step (today, the default) or
+    # PARK THE RUN on a durable wait for an operator's decision. Declared by the TOOL, like the
+    # variant — the thing being constrained never chooses its own recovery. Composes with
+    # `degraded_variant` in a fixed order and without a chain: variant first (one attempt), then
+    # the gate; the gate is a park, not another downgrade.
+    if on_denial not in ON_DENIAL_KINDS:
+        raise ValueError(
+            f"register_tool({name!r}): on_denial={on_denial!r} is not one of "
+            f"{list(ON_DENIAL_KINDS)}. A misspelled kind must fail loudly — silently treating it "
+            f"as 'fail' would strand a run the author meant to park."
+        )
+
     def wrapper(fn: Callable) -> Callable:
         TOOL_REGISTRY[name] = {
             "fn": fn,
@@ -256,6 +277,7 @@ def register_tool(
             "isolation": isolation,
             "env_spec": env_spec,
             "degraded_variant": degraded_variant.strip() if degraded_variant else None,
+            "on_denial": on_denial,
         }
         return fn
 

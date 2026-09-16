@@ -1,14 +1,14 @@
 ---
 title: "Authority Negotiation — Design"
 api_version: "1.0"
-last_verified: "2026-09-10"
+last_verified: "2026-09-15"
 status: current
 owner: "platform-team"
 ---
 
 # Authority negotiation — design
 
-**`AUTHORITY-NEGOTIATION-1`. PHASES 0 AND 1 SHIPPED (0: 2026-09-08 #600; 1: 2026-09-10); phases 2–3 are design only.** Read this before building it — §2
+**`AUTHORITY-NEGOTIATION-1`. PHASES 0, 1 AND 2 SHIPPED (0: 2026-09-08 #600; 1: 2026-09-10; 2: 2026-09-15 — the WAIT gate, §5a); phase 3 is evidence, not code.** Read this before building it — §2
 overturns the mechanism the entry itself proposes, and §7 is the list of things not to build.
 
 ---
@@ -143,6 +143,50 @@ someone can get wrong.
   authority can ask what would have happened. Rehearsal informing a human is the use it was built
   for; rehearsal silently replacing an effect is not.
 
+### 5a. The WAIT gate as built (phase 2, 2026-09-15)
+
+**Declared by the tool:** `register_tool(..., on_denial="wait")` (default `"fail"`, every tool's
+behaviour today). Independent of `degraded_variant`; the two compose in a fixed order with no
+chain: the variant first (one attempt, phase 1), and only if there is none or the token does not
+grant it does the gate apply. The gate is a park, not another downgrade, so §4's bound holds.
+
+**Where:** `agent_execute_step` — the one negotiable site — returns `WAIT` on the event
+`agent.authority.decision`, with an `authority_gate` record (step, tool, denial, what the
+negotiation found) on the flow state, and a **`resume_schema`** (`WAIT-TYPED-CONTRACT-1`, the
+runtime's first typed wait): `{"required": ["decision"], "properties": {decision: string,
+note: string}}`. `AUTHORITY_NEGOTIATED` is recorded with `outcome: "waiting"`; the counter gets
+`waiting`.
+
+**★ `AGENT_FLOW` had never waited.** Its orchestration read any non-`SUCCESS` flow result as
+failure — a parked run would have been marked `failed` while its FlowRun sat `waiting`. It now
+mirrors the nodus_vm chain: `AgentRun.status = "waiting"`, a durable `wait_state {event_type,
+flow_run_id, authority_gate}`, the `WAITING` agent event. The agent's own execution unit stays
+`executing` while parked (nothing resumes an agent EU; parking it would strand it).
+
+**The decisions — two, and the two that are absent are decisions too:**
+
+- **`skip`** — the step is recorded as an `AgentStep` with `status="skipped"` and the note; the
+  run advances. The nine steps of work survive; the tenth is a human's call.
+- **`abort`** — the run fails with the operator's reason, recorded on the step and the run.
+- **Not `grant`.** §7: no widening path, not even an authorised one. The vocabulary does not
+  contain the word, and an unknown decision **re-parks** the run (recorded as
+  `last_refused_decision` on the gate) rather than failing it — a typo must not kill a run an
+  operator is trying to steer.
+- **Not provide-a-result** (human-as-the-tool). Deferred, not declined: it is the most useful
+  human-in-the-loop kind and the most dangerous — an asserted result is `EFFECT-PARTIAL-1`'s lie
+  in a nicer costume until it is designed on its own terms (who vouches, how it is marked, what
+  downstream steps may assume). If built, it is a third decision on this gate, not a new gate.
+
+**One gap the gate exposed and closed on the way:** on this backend a failure AFTER a resume
+never reached the AgentRun — the orchestration's post-hoc "flow failed → run failed" block runs
+only after the original `runner.start` returns, and a resumed run finishes on a scheduler thread.
+`agent_execute_step`'s failure branches now mark the AgentRun `failed` themselves, and
+`agent_finalize_run` / the failure path sync the agent's execution unit (`_sync_agent_eu_terminal`),
+because `execute_run`'s tail — which does that on the original path — never runs for a resume.
+Cancel-while-parked needs nothing new: `CANCEL-REACH-1` refuses the resumed step's tool call.
+
+**Still behind the same flag.** The gate is a negotiation outcome; phase 3's flip covers both.
+
 ---
 
 ## 6. Recorded, or it does not exist
@@ -195,8 +239,8 @@ and had nothing to offer, which is the expected steady state until tools start d
 |---|---|---|
 | ~~**0**~~ | ~~`degraded_variant=` on `register_tool`, validated at registration, **consulted by nothing**~~ | **DONE — #600.** One correction to this row: validation had to SPLIT. Local checks are in the decorator; the three cross-tool rules are a STARTUP sweep (`validate_degraded_variants`), because a forward reference is legitimate and the capability *definitions* the subset rule needs load later, from plugin providers. "At registration" was not achievable as written |
 | ~~**1**~~ | ~~The negotiation stage at the two `CAPABILITY_DENIED` sites, gated default-off~~ | **DONE.** Two corrections to this row: it is **one** site, not two (see §1's correction), and the subset rule of §2 is **asked of `check_tool_capability` rather than reimplemented** — a hand-rolled set comparison beside the real one would have omitted the granted-tools test and the agent capabilities that function also enforces |
-| **2** | The WAIT-gate fallback kind | reuses the durable wait; no new machinery |
-| **3** | Flip the default once a real tool declares a variant and a denial has been observed | evidence, not code |
+| ~~**2**~~ | ~~The WAIT-gate fallback kind~~ | **DONE — 2026-09-15**, §5a. The row's "no new machinery" was half right: the durable wait was reused as is, but **`AGENT_FLOW` had never waited** and its orchestration had to learn that `WAITING` is a park, not a failure; and a failure after a resume had never reached the AgentRun on that backend |
+| **3** | Flip the default once a real tool declares a variant or a gate and a denial has been observed | evidence, not code — zero tools declare either at HEAD |
 
 Phase 0 is worth landing alone: it is inert, it makes the vocabulary reviewable, and it is the
 same declare-then-enforce sequence that made `EXEC-ENV-BIND-1` safe to land in pieces.
