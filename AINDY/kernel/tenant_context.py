@@ -33,12 +33,46 @@ Usage
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
 # Structured error code returned in RESOURCE_LIMIT_EXCEEDED and TENANT_VIOLATION
 TENANT_VIOLATION = "TENANT_VIOLATION"
+
+#: The memory address space root. Owned here so the ONE tenant-path rule below can be stated
+#: without importing the memory layer (which imports this module).
+MEMORY_ROOT = "/memory"
+
+_MULTI_SLASH = re.compile(r"/+")
+
+
+def tenant_owns_memory_path(path: str, tenant_id: str) -> bool:
+    """THE tenant-path rule: is *path* inside *tenant_id*'s memory namespace?
+
+    One rule, one home. `TenantContext.validate_memory_path` and
+    `memory_address_space.validate_tenant_path` both used to implement this independently and
+    disagreed on two strings — the exact tenant root (`/memory/t1`: MAS accepted, the kernel
+    refused) and a doubled slash (`/memory//x` under an empty tenant: the kernel's raw
+    `startswith` accepted, MAS's normalised path refused). Both now ask here.
+
+    * Consecutive slashes collapse and a trailing slash is dropped before comparison, so the
+      answer does not depend on how the caller spelled the path.
+    * The exact tenant root (`/memory/{tenant}`) IS inside the namespace — it is the tenant's
+      own tree, and MAS's tree/list routes address it.
+    * An empty tenant owns NOTHING — by construction, not by a branch: its root would be
+      `/memory/`, which no normalised path equals or sits under (`/memory//…` cannot survive
+      the slash collapse). Pinned by `test_empty_user_id_owns_no_memory_path`; an explicit
+      `if not tenant_id` guard was tried and no input could reach it. The dispatcher refuses
+      an empty tenant at step 2b anyway; this is the same answer one layer down.
+    * The prefix's trailing slash is load-bearing: `t1` never authorises `t12`.
+    """
+    cleaned = _MULTI_SLASH.sub("/", str(path or "").strip())
+    if cleaned != MEMORY_ROOT and cleaned.endswith("/"):
+        cleaned = cleaned.rstrip("/")
+    root = f"{MEMORY_ROOT}/{tenant_id}"
+    return cleaned == root or cleaned.startswith(root + "/")
 RESOURCE_LIMIT_EXCEEDED = "RESOURCE_LIMIT_EXCEEDED"
 
 
@@ -68,11 +102,15 @@ class TenantContext:
 
     def memory_prefix(self) -> str:
         """Return the canonical memory namespace prefix for this tenant."""
-        return f"/memory/{self.tenant_id}/"
+        return f"{MEMORY_ROOT}/{self.tenant_id}/"
 
     def validate_memory_path(self, path: str) -> bool:
-        """Return True if *path* is within this tenant's memory namespace."""
-        return path.startswith(self.memory_prefix())
+        """Return True if *path* is within this tenant's memory namespace.
+
+        Delegates to :func:`tenant_owns_memory_path` — the same rule MAS's
+        ``validate_tenant_path`` applies, so the two guards cannot disagree.
+        """
+        return tenant_owns_memory_path(path, self.tenant_id)
 
     def assert_memory_path(self, path: str) -> None:
         """Raise PermissionError if *path* is outside the tenant namespace.

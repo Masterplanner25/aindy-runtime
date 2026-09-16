@@ -7267,10 +7267,21 @@ builder path.
 **★ The fix surfaced a second, worse defect — see `KERNEL-INIT-DUPLICATE-1` below.** Editing one
 copy of the class would have left another untouched.
 
-**Adjacent inconsistency, still open** (pinned by a test, not a bug per se): `TenantContext`'s
-`validate_memory_path` requires the trailing slash and so *rejects* the exact tenant root
-`/memory/t1`, while `memory_address_space.validate_tenant_path` *accepts* it. Two tenant guards
-give different answers for the same string. Unchanged by this fix.
+**Adjacent inconsistency — RESOLVED 2026-09-16 (#699).** `TenantContext.validate_memory_path`
+required the trailing slash and *rejected* the exact tenant root `/memory/t1` while
+`memory_address_space.validate_tenant_path` *accepted* it; and on a raw `startswith` the kernel
+guard *accepted* `/memory//anything` under an empty tenant while MAS's normalised form refused
+it. Two guards, two answers for two strings. **Now one rule, one home:**
+`kernel/tenant_context.py::tenant_owns_memory_path(path, tenant_id)` — slashes collapsed,
+trailing slash dropped, the exact root IS inside the namespace, the prefix's trailing slash
+stays load-bearing (`t1` never authorises `t12`), and an empty tenant owns nothing *by
+construction* (its root `/memory/` can equal no normalised path — an explicit `if not tenant_id`
+branch was tried and no input could reach it, so it was removed rather than kept as a guard a
+mutation cannot kill). MAS delegates to it (memory → kernel is the existing import direction).
+`test_both_guards_give_one_answer` is a derived agreement over eleven spellings; mutation 3/3
+on the rule (root excluded, slash uncollapsed, sibling-prefix slash dropped). Measured first:
+`validate_memory_path` had ZERO production callers — the disagreement was latent, which is why
+it was tidiness and not a hole.
 
 ---
 
@@ -10771,8 +10782,10 @@ diagnosis went wrong.
 
 ## KEY-SCOPE-ESCALATION-1 — an API key can mint itself a wider API key
 
-**Status: OPEN — P0 (security). Found 2026-08-16 while inventorying the routes left ungated by
-`HTTP-SCOPE-GAP-1` D.** Demonstrated end to end against real PostgreSQL, not inferred.
+**Status: CLOSED 2026-09-16 (#699) — items 1 and 2 fixed 2026-08-16 (#463, #465), item 3 done
+below.** Was: *OPEN — P0 (security), re-levelled P2 2026-08-18.* Found 2026-08-16 while
+inventorying the routes left ungated by `HTTP-SCOPE-GAP-1` D. Demonstrated end to end against
+real PostgreSQL, not inferred.
 
 **The chain, as run.** Starting from an API key holding the single scope `flow.read`:
 
@@ -10850,9 +10863,17 @@ requires nothing of one. Both are reachable on the same tree.
    authority is per-syscall in `_resolve_dispatch_capabilities` — pinned by an equality test so a
    47th ungated route fails CI. **No JWT caller is affected at all:** the parent gate already
    required `is_admin`, and an admin session derives `platform.admin` and `webhook.manage`.
-3. **Reconcile the two admin guards** so there is one answer to "is this principal an operator".
-   Still open, and now lower stakes: with (2) in place `require_platform_admin_access` is no
-   longer the only check on anything, so it is a tidiness problem rather than a hole.
+3. **Reconcile the two admin guards. DONE 2026-09-16 (#699) — the entry is CLOSED.** One
+   predicate, `is_operator_principal(user)`: a session is an operator iff `is_admin`; a key iff
+   it carries `platform.admin`. `require_admin_principal` IS that check. `require_platform_admin_access`
+   asks the same predicate for the session half and — deliberately, documented in its docstring
+   for the first time — ADMITS any key, because every route on the tree now enforces its own
+   scope (item 2). The two guards no longer carry parallel `auth_type == "api_key"` branches;
+   they answer two different questions and say which. **Not renamed** (SCOPE-NAMING-1's rule:
+   three router-level sites, a dozen comments, tests that match the name as a string — an alias
+   migration is a separate, mechanical PR if ever wanted). Behaviour unchanged; the existing
+   `test_auth_wiring.py` matrix pins all four principal × guard cells, and making a key an
+   operator regardless of scope turns two of them red.
 
 **★ Note for whoever takes (2): SQLite cannot reproduce this.** `platform_api_keys.scopes` is a
 PostgreSQL `ARRAY`; on SQLite the ORM insert fails at the driver with

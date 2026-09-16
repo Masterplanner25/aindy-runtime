@@ -530,45 +530,64 @@ def get_current_user(
     )
 
 
+def is_api_key_principal(current_user: dict) -> bool:
+    """Is this resolved principal an API key (as opposed to a JWT session)?"""
+    return current_user.get("auth_type") == "api_key"
+
+
+def is_operator_principal(current_user: dict) -> bool:
+    """THE one answer to "is this principal an operator" (KEY-SCOPE-ESCALATION-1 item 3).
+
+    * a JWT session is an operator iff its user row is ``is_admin``;
+    * an API key is an operator iff it carries the ``platform.admin`` scope.
+
+    Both admin guards below ask this function. They used to each carry their own
+    ``auth_type == "api_key"`` branch, which is how "what is an API key" came to have two
+    answers on one tree.
+    """
+    if is_api_key_principal(current_user):
+        return "platform.admin" in set(current_user.get("api_key_scopes") or [])
+    return bool(current_user.get("is_admin", False))
+
+
+def _admin_required() -> HTTPException:
+    return HTTPException(status_code=403, detail="Admin privileges required for this endpoint.")
+
+
 def require_platform_admin_access(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """Allow any authenticated API key; require is_admin for JWT users.
+    """The `/platform` TREE gate — not an operator check for API keys, and named before that
+    distinction was drawn (SCOPE-NAMING-1's shape; not renamed: three router-level sites,
+    a dozen comments, and tests that match the name as a string).
 
-    Used on the /platform router where API keys are pre-authorized at the
-    platform level (scope enforcement happens per-endpoint or per-syscall).
+    * a JWT session must be an operator (`is_operator_principal`);
+    * an API key is ADMITTED whatever its scopes — deliberately. Every route on the tree
+      then enforces its own scope via `enforce_api_key_scope` (HTTP-SCOPE-GAP-1 /
+      KEY-SCOPE-ESCALATION-1 item 2, #465; `POST /platform/syscall` and `GET /syscalls` are
+      per-syscall by decision), so a `flow.read` key reaches `/platform/flows` and nothing
+      else. This is what makes key scopes mean anything on the tree.
+
+    For "is this principal an operator, whatever it is" use `require_admin_principal`.
     """
-    if current_user.get("auth_type") == "api_key":
+    if is_api_key_principal(current_user):
         return current_user
-    if not current_user.get("is_admin", False):
-        raise HTTPException(
-            status_code=403,
-            detail="Admin privileges required for this endpoint.",
-        )
+    if not is_operator_principal(current_user):
+        raise _admin_required()
     return current_user
 
 
 def require_admin_principal(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """Require admin for both JWT users (is_admin) and API keys (platform.admin scope).
+    """Require an OPERATOR, whatever the auth method: an admin session, or an API key
+    carrying `platform.admin`. The one operator check; `is_operator_principal` is its rule.
 
-    Use this on endpoints that are admin-only regardless of auth method, such
-    as session invalidation and user management operations.
+    Use this on endpoints that are admin-only regardless of auth method, such as session
+    invalidation and user management operations.
     """
-    if current_user.get("auth_type") == "api_key":
-        scopes = set(current_user.get("api_key_scopes") or [])
-        if "platform.admin" not in scopes:
-            raise HTTPException(
-                status_code=403,
-                detail="Admin privileges required for this endpoint.",
-            )
-        return current_user
-    if not current_user.get("is_admin", False):
-        raise HTTPException(
-            status_code=403,
-            detail="Admin privileges required for this endpoint.",
-        )
+    if not is_operator_principal(current_user):
+        raise _admin_required()
     return current_user
 
 
