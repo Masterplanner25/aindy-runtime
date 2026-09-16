@@ -389,6 +389,40 @@ def execute_agent_flow_orchestration(
                 agent_run.flow_run_id = str(flow_run_id)
                 db.commit()
 
+        # AUTHORITY-NEGOTIATION-1 phase 2 — AGENT_FLOW can now PARK (a step refused for lack of
+        # authority whose tool declared `on_denial="wait"`). Until this the backend had no wait
+        # concept, and this block read any non-SUCCESS as failure — which would have marked a
+        # parked run `failed` while its FlowRun sat `waiting` for an operator. Mirror the
+        # nodus_vm segment chain: `waiting` + a durable `wait_state`, and the WAITING event.
+        if flow_result.get("status") == "WAITING":
+            agent_run = db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
+            if agent_run and agent_run.status == "executing":
+                _gate = ((flow_result.get("state") or {}).get("authority_gate")) or {}
+                agent_run.status = "waiting"
+                agent_run.steps_completed = int(_gate.get("step_index", agent_run.steps_completed or 0))
+                agent_run.current_step = agent_run.steps_completed
+                agent_run.wait_state = {
+                    "event_type": flow_result.get("wait_for")
+                    or (flow_result.get("data") or {}).get("waiting_for"),
+                    "flow_run_id": str(flow_run_id) if flow_run_id else None,
+                    "authority_gate": _gate or None,
+                }
+                db.commit()
+                # The agent's own execution unit stays `executing` while parked, as it does on
+                # the nodus_vm chain: nothing resumes an agent EU, so parking it would strand it.
+                record_agent_event(
+                    run_id=run_id, user_id=user_id, event_type="WAITING", db=db,
+                    correlation_id=correlation_id,
+                    payload={
+                        "wait_for": agent_run.wait_state["event_type"],
+                        "steps_completed": agent_run.steps_completed,
+                        "steps_total": len(steps),
+                        "authority_gate": _gate or None,
+                    },
+                    required=False,
+                )
+            return flow_result
+
         if flow_result.get("status") != "SUCCESS":
             agent_run = db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
             if agent_run and agent_run.status == "executing":

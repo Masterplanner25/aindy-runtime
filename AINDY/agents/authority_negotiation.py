@@ -165,3 +165,89 @@ def negotiate_capability_denial(
         _count(OUTCOME_NO_VARIANT)
         logger.warning("[AuthorityNegotiation] negotiation failed for %s: %s", tool_name, exc)
         return NegotiationOutcome(OUTCOME_NO_VARIANT, error=str(exc))
+
+
+# ── Phase 2 — the WAIT-gate fallback kind (design §5) ────────────────────────
+#
+# When no variant recovered the denial, a tool that declared `on_denial="wait"` PARKS THE RUN
+# on the existing durable wait instead of failing it. The accumulated state survives, and an
+# operator decides — with the run's context in front of them, and `sys.v1.agent.simulate`
+# available to ask what would have happened (§5: rehearsal informing a human, never replacing
+# an effect).
+#
+# ★ The operator can SKIP the step or ABORT the run. Not GRANT: §7's no-widening rule — the
+#   gate cannot mint, amend or widen anything, and the decision vocabulary does not contain the
+#   word. Not PROVIDE-A-RESULT either (deferred, recorded in the design): an asserted result is
+#   `EFFECT-PARTIAL-1`'s lie in a nicer costume until it is designed on its own terms.
+#
+# ★ The decision payload is TYPED — the runtime's own first use of `WAIT-TYPED-CONTRACT-1`'s
+#   `resume_schema`. A resume whose payload lacks `decision` is refused at the door (422) and
+#   the run stays parked; an unknown decision string re-parks the run and is recorded.
+
+OUTCOME_WAITING = "waiting"
+
+#: The event a parked step waits on. One name for every gate; the wake is run-scoped
+#: (`RESUME-FANOUT-UNSCOPED-1`), so a shared name cannot cross runs.
+AUTHORITY_DECISION_EVENT = "agent.authority.decision"
+
+DECISION_SKIP = "skip"
+DECISION_ABORT = "abort"
+DECISIONS = (DECISION_SKIP, DECISION_ABORT)
+
+#: Dispatcher dialect (`syscall_versioning.validate_payload`), checked by `route_event`.
+AUTHORITY_DECISION_SCHEMA = {
+    "required": ["decision"],
+    "properties": {"decision": {"type": "string"}, "note": {"type": "string"}},
+}
+
+#: The flow-state key carrying the gate while the run is parked. Reserved like
+#: `__pending_request`: the runtime's, not a step's.
+GATE_STATE_KEY = "authority_gate"
+
+
+def denial_gate_declared(tool_name: str) -> bool:
+    """Whether a refused *and unrecovered* step should park rather than fail.
+
+    True only when negotiation is enabled AND the tool declared ``on_denial="wait"``. The flag
+    is read here, not cached, and below no test-mode short-circuit — the same discipline as
+    `authority_negotiation_enabled`.
+    """
+    if not authority_negotiation_enabled():
+        return False
+    try:
+        from AINDY.agents.tool_registry import ON_DENIAL_WAIT, TOOL_REGISTRY
+
+        entry = TOOL_REGISTRY.get(tool_name)
+        return isinstance(entry, dict) and entry.get("on_denial") == ON_DENIAL_WAIT
+    except Exception:  # pragma: no cover - a broken lookup is "no gate", never a new failure
+        return False
+
+
+def build_authority_gate(*, step_index: int, tool_name: str, denied_error: str | None,
+                         negotiation_outcome: str, variant: str | None) -> dict:
+    """The record parked beside the wait: what was refused, and why no variant recovered it."""
+    return {
+        "step_index": int(step_index),
+        "tool": str(tool_name),
+        "denied_error": denied_error,
+        "negotiation_outcome": negotiation_outcome,
+        "variant": variant,
+        "event": AUTHORITY_DECISION_EVENT,
+        "decisions": list(DECISIONS),
+    }
+
+
+def read_gate_decision(payload: object) -> tuple[str | None, str | None]:
+    """``(decision, note)`` from a resume payload, or ``(None, note)`` when the decision is not
+    one of `DECISIONS`. The schema guarantees the key is present and a string; it cannot
+    guarantee the value, so an unknown one is refused HERE — the gate re-parks."""
+    if not isinstance(payload, dict):
+        return None, None
+    decision = str(payload.get("decision") or "").strip().lower()
+    note = payload.get("note")
+    note = str(note) if note is not None else None
+    return (decision if decision in DECISIONS else None), note
+
+
+def count_gate_outcome(outcome: str) -> None:
+    _count(outcome)

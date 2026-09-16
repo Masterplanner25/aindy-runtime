@@ -103,6 +103,187 @@ def agent_validate_steps(state: dict, context: dict) -> dict:
     }
 
 
+# ── AUTHORITY-NEGOTIATION-1 phase 2 — the WAIT gate ──────────────────────────
+
+
+def _sync_agent_eu_terminal(db, agent_run_id, status: str) -> None:
+    """Mirror a terminal AgentRun status onto its execution unit, if it is not terminal already.
+
+    `execute_run`'s tail does this on the ORIGINAL path; a run resumed from the authority gate
+    finishes on a scheduler thread where that tail never runs (the nodus_vm chain has the same
+    problem and `_sync_agent_eu_status` for it). Guarded on the current status so the ordinary
+    path's second sync is a no-op rather than an "invalid transition" warning.
+    """
+    try:
+        from AINDY.core.execution_unit_service import ExecutionUnitService
+
+        eus = ExecutionUnitService(db)
+        eu = eus.get_by_source("agent_run", str(agent_run_id))
+        if eu is not None and eu.status not in ("completed", "failed", "refused"):
+            eus.update_status(eu.id, status)
+            db.commit()
+    except Exception:
+        logger.debug("[NodusAdapter] agent EU terminal sync skipped", exc_info=True)
+
+
+def _mark_agent_run_failed(db, agent_run_db_id, *, error_msg: str, step_results: list) -> None:
+    """Terminal `failed` on the AgentRun from inside the node.
+
+    ★ Needed because a run RESUMED from the gate runs outside `execute_agent_flow_orchestration`,
+    whose post-hoc "flow did not succeed → AgentRun failed" block only runs after the original
+    `runner.start` returns. On the original path this is redundant with that block (which is
+    guarded by `status == "executing"` and becomes a no-op); on the resumed path it is the only
+    thing that keeps the AgentRun from staying `waiting` forever after the flow has failed.
+    """
+    from datetime import datetime, timezone
+
+    from AINDY.db.models import AgentRun
+
+    agent_run = db.query(AgentRun).filter(AgentRun.id == agent_run_db_id).first()
+    if agent_run is None or agent_run.status not in ("executing", "waiting"):
+        return
+    agent_run.status = "failed"
+    agent_run.error_message = error_msg
+    agent_run.completed_at = datetime.now(timezone.utc)
+    agent_run.result = {"steps": step_results}
+    agent_run.wait_state = None
+    db.commit()
+    _sync_agent_eu_terminal(db, agent_run.id, "failed")
+
+
+def _authority_gate(
+    *, state: dict, context: dict, idx: int, tool_name: str, tool_args: dict, risk_level: str,
+    description: str, capability_check: dict, negotiation,
+):
+    """Park the run, or act on the operator's decision. ``None`` → fall through to the ordinary
+    denial (the tool declared no gate, or the flag is off)."""
+    from datetime import datetime, timezone
+
+    from AINDY.agents.authority_negotiation import (
+        AUTHORITY_DECISION_EVENT,
+        AUTHORITY_DECISION_SCHEMA,
+        DECISION_ABORT,
+        DECISION_SKIP,
+        GATE_STATE_KEY,
+        OUTCOME_NO_VARIANT,
+        OUTCOME_WAITING,
+        build_authority_gate,
+        count_gate_outcome,
+        denial_gate_declared,
+        read_gate_decision,
+    )
+    from AINDY.core.execution_signal_helper import record_agent_event
+    from AINDY.db.models import AgentRun, AgentStep
+
+    db = context["db"]
+    agent_run_id = state["agent_run_id"]
+    agent_run_db_id = _db_run_id(agent_run_id)
+    user_id = state["user_id"]
+    pending = state.get(GATE_STATE_KEY)
+    pending_here = isinstance(pending, dict) and pending.get("step_index") == idx
+    incoming = state.get("event") if pending_here else None
+
+    # ── Resumed with a decision ──────────────────────────────────────────────
+    if pending_here and incoming is not None:
+        state.pop("event", None)
+        decision, note = read_gate_decision(incoming)
+        if decision is None:
+            # The schema admits any string; the vocabulary does not. Re-park, and say so on the
+            # gate so the next operator sees what was refused. Never fall through to a denial —
+            # a typo must not kill a run an operator is trying to steer.
+            refused = dict(pending)
+            refused["last_refused_decision"] = (incoming.get("decision") if isinstance(incoming, dict) else incoming)
+            state[GATE_STATE_KEY] = refused
+            logger.warning(
+                "[NodusAdapter] step %s: authority gate refused decision %r for %s — re-parking",
+                idx, refused["last_refused_decision"], tool_name,
+            )
+            return {
+                "status": "WAIT",
+                "wait_for": AUTHORITY_DECISION_EVENT,
+                "resume_schema": AUTHORITY_DECISION_SCHEMA,
+                "output_patch": {GATE_STATE_KEY: refused},
+            }
+
+        agent_run = db.query(AgentRun).filter(AgentRun.id == agent_run_db_id).first()
+        if agent_run is not None and agent_run.status == "waiting":
+            agent_run.status = "executing"
+            agent_run.wait_state = None
+        state.pop(GATE_STATE_KEY, None)
+        record_agent_event(
+            run_id=agent_run_id, user_id=user_id, event_type="AUTHORITY_NEGOTIATED", db=db,
+            correlation_id=state.get("correlation_id"),
+            payload={
+                "step_index": idx, "denied_tool": tool_name, "outcome": OUTCOME_WAITING,
+                "decision": decision, "note": note,
+            },
+            required=True,
+        )
+        count_gate_outcome(f"gate_{decision}")
+        step_status = "skipped" if decision == DECISION_SKIP else "failed"
+        error_msg = (
+            None if decision == DECISION_SKIP
+            else f"Step {idx} ({tool_name}) aborted by operator at the authority gate"
+            + (f": {note}" if note else "")
+        )
+        db.add(AgentStep(
+            run_id=agent_run_db_id, step_index=idx, tool_name=tool_name, tool_args=tool_args,
+            risk_level=risk_level, description=description, status=step_status,
+            result={"authority_gate": decision, "note": note}, error_message=error_msg,
+            execution_ms=0, executed_at=datetime.now(timezone.utc),
+            correlation_id=state.get("correlation_id"),
+        ))
+        if agent_run is not None:
+            agent_run.steps_completed = idx + 1
+            agent_run.current_step = idx + 1
+        db.commit()
+        step_result = {
+            "step_index": idx, "tool": tool_name, "status": step_status, "result": None,
+            "error": error_msg, "authority_gate": {"decision": decision, "note": note},
+        }
+        new_step_results = list(state.get("step_results", [])) + [step_result]
+        if decision == DECISION_ABORT:
+            _mark_agent_run_failed(db, agent_run_db_id, error_msg=error_msg, step_results=new_step_results)
+            logger.warning("[NodusAdapter] %s", error_msg)
+            return {"status": "FAILURE", "error": error_msg, "output_patch": {"step_results": new_step_results}}
+        logger.info("[NodusAdapter] Step %d (%s) skipped at the authority gate", idx, tool_name)
+        return {
+            "status": "SUCCESS",
+            "output_patch": {"current_step_index": idx + 1, "step_results": new_step_results},
+        }
+
+    # ── First denial: park, if the tool asked to ─────────────────────────────
+    if not denial_gate_declared(tool_name):
+        return None
+    gate = build_authority_gate(
+        step_index=idx, tool_name=tool_name, denied_error=capability_check.get("error"),
+        negotiation_outcome=(negotiation.outcome if negotiation is not None else OUTCOME_NO_VARIANT),
+        variant=(negotiation.variant if negotiation is not None else None),
+    )
+    record_agent_event(
+        run_id=agent_run_id, user_id=user_id, event_type="AUTHORITY_NEGOTIATED", db=db,
+        correlation_id=state.get("correlation_id"),
+        payload={
+            "step_index": idx, "denied_tool": tool_name, "denied_error": gate["denied_error"],
+            "fallback_tool": gate["variant"], "outcome": OUTCOME_WAITING,
+            "wait_for": AUTHORITY_DECISION_EVENT,
+        },
+        required=True,
+    )
+    count_gate_outcome(OUTCOME_WAITING)
+    logger.warning(
+        "[NodusAdapter] step %s: capability denied for %s (%s); no variant recovered it — "
+        "parking the run on %s for an operator decision (skip | abort)",
+        idx, tool_name, capability_check.get("error"), AUTHORITY_DECISION_EVENT,
+    )
+    return {
+        "status": "WAIT",
+        "wait_for": AUTHORITY_DECISION_EVENT,
+        "resume_schema": AUTHORITY_DECISION_SCHEMA,
+        "output_patch": {GATE_STATE_KEY: gate},
+    }
+
+
 # ── Node: agent_execute_step ──────────────────────────────────────────────────
 
 @register_node("agent_execute_step")
@@ -171,6 +352,7 @@ def agent_execute_step(state: dict, context: dict) -> dict:
     #   ordinary tool passes. Negotiation chooses what to attempt; the chokepoint still decides
     #   what may run.
     negotiated_from = None
+    _negotiation = None
     if not capability_check["ok"]:
         from AINDY.agents.authority_negotiation import negotiate_capability_denial
 
@@ -212,6 +394,20 @@ def agent_execute_step(state: dict, context: dict) -> dict:
                 user_id=user_id,
                 tool_name=tool_name,
             )
+
+    # ── AUTHORITY-NEGOTIATION-1 phase 2 — the WAIT gate (default-OFF, same flag) ──────────
+    # No variant recovered the denial. A tool that declared `on_denial="wait"` parks the RUN on
+    # the durable wait instead of failing it: the accumulated state survives, and an operator
+    # decides — `skip` this step or `abort` the run. Never `grant` (§7). On resume the SAME node
+    # re-runs at the SAME step, the check denies again, and the decision is read here.
+    if not capability_check["ok"]:
+        gate_response = _authority_gate(
+            state=state, context=context, idx=idx, tool_name=tool_name, tool_args=tool_args,
+            risk_level=risk_level, description=description, capability_check=capability_check,
+            negotiation=_negotiation,
+        )
+        if gate_response is not None:
+            return gate_response
 
     if not capability_check["ok"]:
         error_msg = (
@@ -295,6 +491,7 @@ def agent_execute_step(state: dict, context: dict) -> dict:
             "error": error_msg,
         }
         new_step_results = list(state.get("step_results", [])) + [step_result_dict]
+        _mark_agent_run_failed(db, agent_run_db_id, error_msg=error_msg, step_results=new_step_results)
         logger.warning("[NodusAdapter] %s", error_msg)
         return {
             "status": "FAILURE",
@@ -429,6 +626,7 @@ def agent_execute_step(state: dict, context: dict) -> dict:
             f"Step {idx} ({tool_name}, {risk_level})"
             f" failed{retry_note}: {tool_result.get('error')}"
         )
+        _mark_agent_run_failed(db, agent_run_db_id, error_msg=error_msg, step_results=new_step_results)
         logger.warning("[NodusAdapter] %s", error_msg)
         return {
             "status": "FAILURE",
@@ -495,7 +693,11 @@ def agent_finalize_run(state: dict, context: dict) -> dict:
         agent_run.status = "completed"
         agent_run.completed_at = datetime.now(timezone.utc)
         agent_run.result = result_payload
+        agent_run.wait_state = None
         db.commit()
+        # AUTHORITY-NEGOTIATION-1 phase 2 — a run resumed from the gate completes HERE, on a
+        # scheduler thread, where `execute_run`'s tail (which syncs the EU) never runs.
+        _sync_agent_eu_terminal(db, agent_run.id, "completed")
         logger.info(
             "[NodusAdapter] AgentRun %s finalised as completed (%d steps)",
             agent_run_id,
