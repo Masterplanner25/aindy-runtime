@@ -288,7 +288,6 @@ A soak assertion must not be stricter than the contract.
 - **INITIATOR-IDENTITY-1** — *(OpenClaw)* initiating identity ≠ authenticated one; an asserted subject may only CONSTRAIN, never a `User` row. Design filed; P0 the day an inbound consumer ships.
 - **AUTHORITY-LIFETIME-1** — *(OpenHands)* the capability token is clock-bound (24 h), not execution-bound. Design filed: widen `cancellation`'s cached read to every terminal status, fail-OPEN.
 - **EVENT-OUTBOX-1** — system events buffer in memory and emit after commit; a crash loses the record. Do NOT emit eagerly. Design filed: the row rides the handler's session; no outbox table.
-- **AUDIT-CORRELATION-1** — three joins the trail cannot make (`EffectRecord` has no `trace_id`). Design filed: three additive payload keys on `syscall.executed`, no FK.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s semantic half always returns `[]` (pgvector `ndarray` vs `list` guard). pgvector 0.5.0 fixes it — which is why #390 was HELD: it turns expansion on in the path that exhausted the pool.
 - **DB-NODUS-BUDGET-1** — both fixes shipped; remaining soak + flip `AINDY_MEMORY_RECALL_OWN_SESSION`. Do NOT roll back the caller's session.
@@ -320,6 +319,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - FR-35: **DEC-040** guest LLM usage rides the worker reply (fourth deferred collection) · **DEC-041** deferral REPLACES observation in the worker · **DEC-042** admission there, accounting in the parent · **DEC-043** parent attributes from the reply's explicit context · **DEC-044** `chat` span replayed as `aindy.deferred` · **DEC-045** ledger cap `AINDY_NODUS_LLM_LEDGER_MAX` (256).
 - **DEC-046** *(provisional)* HTTP-SCOPE-GAP-1: scope = VERB, row filter = OWNERSHIP · **DEC-047** *(provisional)* CLI-EXEC-SURFACE-1: operator half HTTP-only.
 - EGRESS-INPROC-1: **DEC-048** egress `(mode, domains)` resolved ONCE before the isolation branch (`none`/`scoped`-empty = deny-all) · **DEC-049** the worker installs it process-globally from its payload, never reads policy · **DEC-050** the mechanism is REPORTED on envelope + span, never refused · **DEC-051** `AINDY_EGRESS_ENFORCEMENT` stays the switch, default off.
+- AUDIT-CORRELATION-1: **DEC-052** joins 1+3 by additive keys (`capability`, `guarantee`, `action_id`), no schema · **DEC-053** join 2 is `env_applied`; attestation stays SANDBOX-EVIDENCE-2 · **DEC-054** convention on the unique `action_id`, NO FK · **DEC-055** `syscall.executed` stays `operational`; the join is TTL-bounded both sides.
 
 ### Standing rule — not an item
 
@@ -329,6 +329,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 
 ### Closed — kept as one line because the rule still bites
 
+- **AUDIT-CORRELATION-1** — CLOSED 2026-09-17 (#719; DEC-052..055). `syscall.executed` carries `capability`, `guarantee`, `action_id` (None unless the gate engaged); `capability.allowed` carries `action_id`. A documented CONVENTION on the unique `action_id` — no FK either way; both sides TTL-bounded. Join: `IDEMPOTENCY_CONTRACT.md`.
 - **EGRESS-INPROC-1** — CLOSED 2026-09-16 (#718; DEC-048..051). The ISOLATED branch returned before `egress_scope`, so a distrusted tool had NO egress enforcement. Now `(mode, domains)` is resolved once before the branch; the worker installs it process-globally from its payload; the envelope reports `egress.mechanism`. Flag stays default off.
 - **EU-DOUBLE-FINALIZE-1** — CLOSED 2026-09-17 (#713). Three sites finalised an agent run's unit; a verify-failed run's unit stayed `executing` forever. Use `ExecutionUnitService.finalize_for_run_status`. Read a consumer's "noise" as a claim.
 - **SESSION-COMMIT-1** — CLOSED 2026-09-16. `SessionLocal()` … write … `close()` without `commit()` is a rollback that every shared-fixture test reads as a commit; four instances in a week. Guard: `test_own_session_commits.py` (derived census, empty allowlist).

@@ -793,7 +793,7 @@ class SyscallDispatcher:
             logger.info(
                 "[SyscallDispatcher] '%s' refused — run %s is cancelled", name, _cancel_run
             )
-            self._emit_syscall_event(name, context, "error")
+            self._emit_syscall_event(name, context, "error", entry=entry, action_id=_gate_action_id)
             if _gate_db is not None and _gate_action_id is not None:
                 _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
                 if _gate_lock is not None:
@@ -864,7 +864,7 @@ class SyscallDispatcher:
             logger.warning(
                 "[SyscallDispatcher] handler error '%s': %s", name, exc, exc_info=True,
             )
-            self._emit_syscall_event(name, context, "error")
+            self._emit_syscall_event(name, context, "error", entry=entry, action_id=_gate_action_id)
             if _gate_db is not None and _gate_action_id is not None:
                 _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
                 if _gate_lock is not None:
@@ -893,7 +893,7 @@ class SyscallDispatcher:
                 type(data).__name__,
                 _gate_action_id or "n/a",
             )
-            self._emit_syscall_event(name, context, "error")
+            self._emit_syscall_event(name, context, "error", entry=entry, action_id=_gate_action_id)
             if _gate_db is not None and _gate_action_id is not None:
                 _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
                 if _gate_lock is not None:
@@ -926,7 +926,7 @@ class SyscallDispatcher:
                 "[SyscallDispatcher] '%s' made a malformed outcome claim: %s", name, _outcome.refusal
             )
             _count_outcome_refused(name, "malformed_claim")
-            self._emit_syscall_event(name, context, "error")
+            self._emit_syscall_event(name, context, "error", entry=entry, action_id=_gate_action_id)
             if _gate_db is not None and _gate_action_id is not None:
                 # ``failed`` is the entry's own reading of an unaccountable partial.
                 _complete_effect_record(_gate_db, _gate_action_id, _outcome.ledger_status, None)
@@ -953,7 +953,7 @@ class SyscallDispatcher:
                         name,
                         detail,
                     )
-                    self._emit_syscall_event(name, context, "error")
+                    self._emit_syscall_event(name, context, "error", entry=entry, action_id=_gate_action_id)
                     if _gate_db is not None and _gate_action_id is not None:
                         _complete_effect_record(_gate_db, _gate_action_id, "failed", None)
                         if _gate_lock is not None:
@@ -1035,6 +1035,7 @@ class SyscallDispatcher:
             self._emit_syscall_event(
                 name, context,
                 "success" if _outcome.status == ENVELOPE_STATUS_SUCCESS else _outcome.status,
+                entry=entry, action_id=_gate_action_id,
             )
         except Exception as exc:
             logger.debug("[SyscallDispatcher] observability skipped for '%s': %s", name, exc)
@@ -1106,11 +1107,26 @@ class SyscallDispatcher:
         name: str,
         context: SyscallContext,
         status: str,
+        *,
+        entry: "SyscallEntry | None" = None,
+        action_id: str | None = None,
     ) -> None:
         """Emit SYSCALL_EXECUTED to the A.I.N.D.Y. event bus.
 
         Non-fatal: all exceptions are swallowed and logged at DEBUG level
         so a broken event bus never kills a syscall execution.
+
+        AUDIT-CORRELATION-1 (DEC-052): three additive payload keys make the two joins the audit
+        trail could not make. ``capability`` / ``guarantee`` — the authority the dispatch
+        required and what the gate was asked to guarantee (the entry's own declaration; there
+        is no `ExecutionAuthority` object and this does not invent one). ``action_id`` — the
+        ledger row's unique key, ``None`` unless the idempotency gate engaged, so a reader can
+        tell "no effect record exists" from "the key was dropped". The join is a documented
+        CONVENTION on `uq_effect_records_action_id` (DEC-054): the ledger row commits in its own
+        session before the handler runs and this event is written after, under this swallowing
+        try — an FK in either direction would be a lie about ordering or a crash on a swallowed
+        emit. Both sides are TTL-bounded (DEC-055); `IDEMPOTENCY_CONTRACT.md` §"Reconstruction
+        join" is where the query lives.
         """
         try:
             from AINDY.db.database import SessionLocal
@@ -1132,6 +1148,14 @@ class SyscallDispatcher:
                         "extension_call": context.metadata.get("_extension_call")
                         if isinstance(context.metadata, dict)
                         else None,
+                        # AUDIT-CORRELATION-1 — joins (1) and (3); see the docstring.
+                        "capability": getattr(entry, "capability", None),
+                        "guarantee": (
+                            str(getattr(entry, "execution_guarantee", None)).upper()
+                            if getattr(entry, "execution_guarantee", None) is not None
+                            else None
+                        ),
+                        "action_id": action_id,
                     },
                 )
                 db.commit()

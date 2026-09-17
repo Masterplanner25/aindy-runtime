@@ -8,8 +8,11 @@ owner: "platform-team"
 
 # `AUDIT-CORRELATION-1` — the three joins, re-measured; two payload keys close what is left — design
 
-**DESIGN ONLY — nothing shipped. Proposal under `AGENT_WORKING_RULES.md` §8 only nominally —
-additive payload keys on existing events, no schema, no behaviour change.** The entry lists
+**IMPLEMENTED 2026-09-17 (#719) — DEC-052..055 accepted as written. Tool path: the value is
+HOISTED above the admission event (cheaper than moving the event, and it keeps the event order on a
+replay). Documented join: `IDEMPOTENCY_CONTRACT.md` §"Reconstruction join"; tests
+`tests/unit/test_audit_correlation.py`.** Originally a proposal under `AGENT_WORKING_RULES.md` §8
+only nominally — additive payload keys on existing events, no schema, no behaviour change. The entry lists
 three joins the audit trail cannot make and says two "fall out" of other entries. §1 re-measures
 all three at HEAD: one has already fallen out, one was mis-described, and the third is two
 keys. §3 is what not to build (a foreign key).
