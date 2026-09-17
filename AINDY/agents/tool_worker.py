@@ -4,15 +4,25 @@ Protocol: read one JSON request from **stdin**, write one JSON response to **std
 Deliberately the same shape as ``nodus_worker.main`` — the runtime already has this pattern and a
 second framing would be a second thing to get wrong.
 
-    request   {"tool_name": str, "args": dict, "user_id": str}
-    response  {"ok": true,  "result": <json>}
-              {"ok": false, "error": str}
+    request   {"tool_name": str, "args": dict, "user_id": str,
+               "egress": {"mode": "none|scoped|open", "domains": [str]}}   # optional, additive
+    response  {"ok": true,  "result": <json>, "egress_mechanism": str}
+              {"ok": false, "error": str,     "egress_mechanism": str}
 
 ★ **Authority is NOT re-evaluated here, and that is deliberate.** The parent's ``execute_tool``
 has already checked token, granted tools, capabilities, policy, rate limit, egress and secret
 scope before delegating. This worker resolves the function and runs it — nothing more. Re-running
 the checks would put the authority decision inside the very process the boundary exists to
 distrust, and calling ``execute_tool`` here would recurse: it routes declared tools *to a worker*.
+
+★ **The egress DECISION arrives in the request; the policy never does** (EGRESS-INPROC-1,
+DEC-049). The parent resolved ``(mode, domains)`` from the capability policies and the tool's
+effective ``authority.network``; this worker installs the socket guard PROCESS-GLOBALLY from
+that value before it resolves the function — which also closes the raw-``threading.Thread``
+contextvar bypass here (a worker runs one tool, so "the process" and "this call" coincide).
+It reports the mechanism it applied (``egress_mechanism``) so the parent's envelope says what
+was enforced rather than what was asked. A request without the key installs nothing and says
+``none`` — reporting, never refusing (DEC-050).
 
 ★ **``db`` is ``None``, by measurement not assumption.** All 18 tool functions that exist take a
 ``db`` parameter and **none of them uses it** (`TOOL-SEAM-ISOLATION-1` step A). A live SQLAlchemy
@@ -44,6 +54,11 @@ def run_one(request: dict[str, Any]) -> dict[str, Any]:
     if not tool_name:
         return {"ok": False, "error": "no tool_name in request"}
 
+    # EGRESS-INPROC-1 — install the carried decision BEFORE anything else runs, so the guard
+    # is in place before the plugin stack loads (a plugin's import-time network call is still
+    # this worker's egress) and before the tool function is even resolved.
+    mechanism = _install_carried_egress(request.get("egress"))
+
     try:
         from AINDY.agents.tool_registry import TOOL_REGISTRY, _ensure_tools_loaded
 
@@ -60,12 +75,13 @@ def run_one(request: dict[str, Any]) -> dict[str, Any]:
                     f"it, so the worker's plugin stack differs from the parent's — that is a "
                     f"deployment problem, not a missing tool."
                 ),
+                "egress_mechanism": mechanism,
             }
 
         result = entry["fn"](args=args, user_id=user_id, db=None)
     except Exception as exc:  # noqa: BLE001 — every failure becomes a response
         logger.warning("[ToolWorker] %s raised: %s", tool_name, exc)
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "egress_mechanism": mechanism}
 
     try:
         json.dumps(result)
@@ -81,9 +97,32 @@ def run_one(request: dict[str, Any]) -> dict[str, Any]:
                 f"across the worker boundary. Watch "
                 f"aindy_tool_return_contract_violations_total before declaring isolation."
             ),
+            "egress_mechanism": mechanism,
         }
 
-    return {"ok": True, "result": result}
+    return {"ok": True, "result": result, "egress_mechanism": mechanism}
+
+
+def _install_carried_egress(raw) -> str:
+    """Enforce the parent's egress decision for the rest of this process; return the mechanism.
+
+    No decision → nothing installed, ``none`` reported. An unreadable one is treated the same
+    way and logged — the parent reads the mechanism back, so a dropped decision is visible on
+    the envelope rather than silently open.
+    """
+    from AINDY.platform_layer.egress_guard import (
+        MECHANISM_NONE,
+        EgressDecision,
+        install_process_egress,
+    )
+
+    if raw is None:
+        return MECHANISM_NONE
+    decision = EgressDecision.from_payload(raw)
+    if decision is None:
+        logger.warning("[ToolWorker] unreadable egress decision %r — nothing installed", raw)
+        return MECHANISM_NONE
+    return install_process_egress(decision)
 
 
 def main() -> int:

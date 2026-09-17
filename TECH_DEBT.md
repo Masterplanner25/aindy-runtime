@@ -11874,8 +11874,23 @@ unauthorised.
 
 ## EGRESS-INPROC-1 — network policy is enforced in-process and documents its own bypasses
 
-**Status: OPEN — P2.** Filed 2026-08-15 from the Codex comparative audit (G6), verified.
-**This entry exists to re-home a mechanism, not to build one.**
+**Status: CLOSED (2026-09-16) — #718, DEC-048..051.** Filed 2026-08-15 from the Codex comparative
+audit (G6), verified. **This entry exists to re-home a mechanism, not to build one.**
+
+**What shipped (#718):** the decision `EgressDecision(mode, domains)` is resolved ONCE in
+`execute_tool` BEFORE the isolation branch (`egress_guard.resolve_egress_decision`: policy domains
++ the tool's effective `authority.network`; `none` and `scoped`-with-no-list are deny-all). The
+in-process branch scopes it (`egress_decision_scope`); the ISOLATED branch carries it to the worker
+as an additive request key and the worker installs it PROCESS-GLOBALLY (`install_process_egress`),
+which also closes the `threading.Thread` contextvar bypass there — pinned open in-process. The
+worker reports `egress_mechanism`; the envelope carries `egress: {mode, mechanism}` and the
+`execute_tool` span `aindy.egress.*` (per CALL — the design's `env_applied.network` is per UNIT,
+DEC-050). Red-first (the isolated tool resolved `evil.com` with the flag on at HEAD); 16 tests,
+5/5 mutations caught (parent drops the key; worker ignores it; scoped-empty resolves open; no
+process fallback; in-process scope removed). `AINDY_EGRESS_ENFORCEMENT` unchanged, default off.
+
+**What remains, by design:** the native-resolver bypass (both branches), and `netns` — the
+container runner at the tool seam is `EXEC-ENV-BIND-1`'s root note / `FS-SCOPE-1`, not this entry.
 
 **★ DESIGN FILED 2026-09-17 → `docs/design/EGRESS_INPROC_DESIGN.md` (four decisions pending) — and it found a
 DEFECT this entry did not name:** `execute_tool` computes the domain allowlist and enters `egress_scope` around the
