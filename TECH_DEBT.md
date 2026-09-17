@@ -7410,9 +7410,14 @@ and requires `bootstrap-schema` to either succeed or exit 3, with `--reconcile` 
 staying stable; it then boots `serve`, since `FR-14`'s symptom was a container that never reached
 it. **A `negative-control` job injects synthetic drift and requires the guard to see it** —
 without that, a release with no schema change (like the one shipping this) produces a green run
-that proves nothing, because a broken guard and a clean release look identical. Not yet a
-required check: a new workflow file does not trigger on the PR that adds it, so promote it after
-observing a real run. The original analysis follows.
+that proves nothing, because a broken guard and a clean release look identical. **★ PROMOTED to a
+REQUIRED check 2026-09-17 (#710) — both jobs, main and negative control — on the evidence this
+sentence asked for: 100/100 runs since #455, and on #705 (Alembic 0019, the first real schema
+change since the guard was built) the `--reconcile` step ran rather than being skipped. What
+stays open of FR-14 is the recurrence half — an upgrade actually run against an EXISTING
+production database — which is a deployment act, not runtime code.** *(Was:)* Not yet a required
+check: a new workflow file does not trigger on the PR that adds it, so promote it after observing
+a real run. The original analysis follows.
 
 **Their**
 own analysis names it: *the upgrade path is never exercised against an existing database.* CI

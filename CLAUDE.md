@@ -482,9 +482,13 @@ owner: "platform-team"
 
 `main` is protected. Direct pushes by anyone (including admin) are blocked — `enforce_admins: true`.
 
-**★ ALL TEN checks are required as of 2026-08-14** (was four; `strict: true`, so a branch must
-also be up to date before merge). The other six previously ran without blocking — verification
-that exists but does not enforce, the same shape as `DOCS-COVERAGE-CLAIM-1` / `CI-MARKER-1`.
+**★ ALL TWELVE checks are required as of 2026-09-17** (ten since 2026-08-14, four before that;
+`strict: true`, so a branch must also be up to date before merge). The other six previously ran
+without blocking — verification that exists but does not enforce, the same shape as
+`DOCS-COVERAGE-CLAIM-1` / `CI-MARKER-1`. **The two `Upgrade Path Guard` jobs were promoted
+2026-09-17 (#710)** on the evidence the entry asked for: 100/100 runs green since #455, and on
+#705 — the first real schema change since it was built — its `--reconcile` step RAN rather than
+being skipped, so the guard has been seen to exercise its real branch, not only its control.
 
 | Check | Workflow | What it guards |
 |---|---|---|
@@ -498,9 +502,10 @@ that exists but does not enforce, the same shape as `DOCS-COVERAGE-CLAIM-1` / `C
 | `Install Smoke Test` | `runtime-ci.yml` | wheel installs and imports |
 | `pip-audit (OSV)` | `security-audit.yml` | dependency CVEs |
 | `Boot Smoke — Linux / Python 3.11` | `smoke-postgres.yml` | published wheel boots against real PG |
-| *(not required yet)* `Upgrade Path Guard` | `upgrade-path-guard.yml` | previous release's DB → this build (`FR-8`/`FR-14`). **Read its `negative-control` job**: on a release with no schema change the main job passes trivially. |
+| `Upgrade Path — previous release → this build` | `upgrade-path-guard.yml` | previous release's DB → this build (`FR-8`/`FR-14`); `bootstrap-schema` must succeed or exit 3 and `--reconcile` must resolve it |
+| `Negative control — the guard must detect drift` | `upgrade-path-guard.yml` | **required BESIDE the main job on purpose**: on a release with no schema change the main job passes trivially (variant 9); this job injects drift and requires the guard to see it |
 
-**Before adding an eleventh, check what made these ten safe:** no `paths:` filter (the classic
+**Before adding a thirteenth, check what made these twelve safe:** no `paths:` filter (the classic
 trap — a filtered check never reports on unrelated PRs and blocks them forever), no job-level
 `if:`, and `Boot Smoke` guards its steps *individually* so a version-bump PR reports green
 rather than hanging pending.
@@ -909,14 +914,16 @@ prefix registry and in `docs/governance/RELEASE_CHECKLIST.md`.
 **Standing decisions** (full record: `TECH_DEBT.md` → `DECISIONS-2026-08-01`):
 
 - **FR-6 email delivery = hybrid** (registered `email` connector if present, else runtime SMTP).
-- **`/auth/register`'s duplicate-email enumeration oracle is to be fixed, but it is NOT
-  standalone work — it is a dependent of the FR-6 email decision.** Register returns an access
-  token on success and a duplicate cannot be given one, so the responses must differ; no
-  status-code or message choice closes the oracle while registration also authenticates. The
-  real fix is the standard shape (neutral `202`, token only after an emailed verification link,
-  duplicate gets a *"someone tried to register"* mail). **Second channel to remember: the
-  duplicate path returns before `hash_password`, so it skips bcrypt and is measurably faster — a
-  status-code-only fix leaves that timing oracle intact.** Build FR-6 first and fold this in.
+- **`/auth/register`'s duplicate-email enumeration oracle — CLOSED in 2.0.0 (2026-08-02, FR-6
+  Phase C), and this bullet said "to be fixed" for six weeks after.** Shipped as the standard
+  shape it described: register returns a neutral `202` with no token, `POST /auth/verify-email`
+  issues the token, a duplicate gets a *"someone tried to register"* mail
+  (`auth_router.py:289`), and the duplicate path equalises against the create path's bcrypt
+  cost (`auth_router.py:86`) so the timing channel is closed too. **What the reasoning was for,
+  kept:** it could not be fixed standalone — register also authenticated — which is why it
+  rode FR-6 (hybrid email: registered `email` connector, else runtime SMTP). FR-6 is fully
+  shipped (items 1–3 + Phase C); "no `email` connector" means the app never registered one and
+  mail rides SMTP — the hybrid working as designed, not a gap.
 - **The UI major cluster is decided from `C:\dev\aindy-ui-kit`**, not here.
 
 ---
@@ -1024,7 +1031,7 @@ file — because findings were written where they were discovered instead of whe
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests from `aindy-apps-monolith`. **Next available: FR-37.** FR-1..13, 16..18, 20..31, FR-19's runtime half shipped (FR-29/30/31 have their own entries). **★ 2026-09-16 intake (#708): FR-32 (option 2 — a plugin's `memory_execute_loop` WINS; the runtime's is a DEFAULT registered LAST on both boot paths, which had disagreed), FR-34 (`steps_completed` counts SUCCESSES — ★ the filing missed the `nodus_vm` backend's four sites), FR-36 (hook `user_id` as `str`; the boundary test handed a string where production hands a UUID).** **★ FR-22: `/apps/*` is NOT an ownership boundary — 35 such routes are RUNTIME-served; `AINDY/route_inventory.json`.** **FR-33 (#709 — `register_tool(args_schema=)`; catalog renders it; `execute_tool` checks BEFORE dispatch, `AINDY_TOOL_ARGS_VALIDATION` default `warn`).** Open: **FR-35** (nodus_vm tool-step LLM usage metered in the WORKER — design; one channel also closes #706's worker-span gap), **FR-14** (recurrence half), **FR-6 items 2+3** (no `email` connector). FR-18's retention half is `SYSEVENT-RETENTION-1` (closed).
+- **APP-FR-\*** — app-side feature requests from `aindy-apps-monolith`. **Next available: FR-37.** FR-1..13, 16..18, 20..31, FR-19's runtime half shipped (FR-29/30/31 have their own entries). **★ 2026-09-16 intake (#708): FR-32 (option 2 — a plugin's `memory_execute_loop` WINS; the runtime's is a DEFAULT registered LAST on both boot paths), FR-34 (`steps_completed` counts SUCCESSES — ★ the filing missed `nodus_vm`'s four sites), FR-36 (hook `user_id` as `str`).** **★ FR-22: `/apps/*` is NOT an ownership boundary — 35 such routes are RUNTIME-served; `AINDY/route_inventory.json`.** **FR-33 (#709 — `register_tool(args_schema=)`; catalog renders it; `execute_tool` checks BEFORE dispatch, `AINDY_TOOL_ARGS_VALIDATION` default `warn`).** Open: **FR-35** (nodus_vm tool-step LLM usage metered in the WORKER — design; one channel also closes #706's worker-span gap), **FR-14** (recurrence half only — a deployment act; the guard is a REQUIRED check since #710). ★ FR-6 fully shipped in 2.0.0 (items 1–3 + Phase C) — this line said 2+3 were open for six weeks.
 - **ECOGAP-\*** — ecosystem capability gaps (`ECOGAP-1..6`), roadmap gaps rather than classic debt. ECOGAP-2 is owned by C2/C3, ECOGAP-3 extends MEMORY-EMBEDDING-PROVIDER-1 — **don't double-track**. ECOGAP-1 Phases 1+2+2a and ECOGAP-4 G4b (MCP client + stdio server) shipped opt-in. **G4a remains built-but-INERT** — every guard vacuous until a policy is registered.
 - **RTR-\*** — runtime roadmap (`RTR-1..8`). RTR-1/5/6 closed; RTR-2/3/4/7 harden-halves done, BUILD halves deferred (RTR-3 full AgentRun↔FlowRun unification; RTR-4 remaining = soak+flip `AINDY_DELEGATION_PRIVATE_MEMORY`). RTR-8 stale/closed. **RTR-4 gotcha: delegate writes take the deferred capture path, so `MemoryNodeDAO.save` is the write chokepoint, not the syscall.**
 - **DOCS-\*** — docset findings. DOCS-BUCKET-A-1 and DOCS-STALE-1 closed; **`Runtime Docs Validation` now asserts `last_verified` is real and `>= 2026-05-17`** (it only checked key presence before). **DOCS-COVERAGE-CLAIM-1 half closed:** 6 docs cited 8 test files that never existed; all four areas now have suites (249 tests) *and* are made to actually run. **★ The pattern worth keeping: four separate docs mis-stated plugin-layer routes as runtime-owned. Check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence.** **★ Gotcha: `ResourceManager.can_execute` returns `(True, None)` unconditionally under `settings.is_testing`, so quota enforcement is vacuous in tests** — and `is_testing` is a pydantic *property*, so patch it on the class.
