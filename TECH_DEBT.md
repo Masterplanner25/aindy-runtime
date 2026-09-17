@@ -8897,6 +8897,36 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ---
 
+## FR-35 — on the `nodus_vm` backend, LLM usage spent by tool steps is metered in the worker process and never reaches `/metrics`, the tenant window, or the run 🔴 open (design filed)
+
+**Status: OPEN — DESIGN FILED 2026-09-17, `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` (proposal
+under §8).** Filed by the app 2026-09-16 from the first agent run whose step spent tokens at
+execution time (1,965 DeepSeek tokens; every API-side reading zero). Verified against source —
+the claim holds exactly: the provider client runs in the worker, `_attribute_usage` finds no
+scope there, the worker's Prometheus registry is never scraped.
+
+**★ The channel already exists.** The worker reply carries three DEFERRED collections the
+parent applies in `run_script` — `memory_writes`, `emitted_events`, `simulated_effects` — because
+a guest cannot commit, emit or accrue across the process boundary. Usage is a fourth of the same
+kind. The filing's ask 1 (carry usage on the reply, record in the parent) is taken; ask 2
+(worker accrues to Redis) is declined for accounting — double-counts on a Redis RM, invisible on
+an in-memory one — and ask 3 (multiprocess Prometheus) solves the graph, not the governor.
+
+**★ What the filing did not name: admission and accounting split differently.**
+`llm_budget_reservation` is reserve → call → reconcile, and reconcile only RELEASES the estimate;
+the actual is the meter's. So the refusal must run in the worker (the call is made there) under
+a forwarded subject — real only with a Redis-backed resource manager, and the design says so —
+while the actual is recorded in the parent from the reply, correct on every backend. **Deferral
+REPLACES observation in the worker** (no local counters, no accrual) or a Redis deployment counts
+every guest call twice. **★ The same ledger closes #706's gap:** the `chat {model}` span the
+worker could never export is replayed by the parent with the record's timestamps, marked
+`aindy.deferred`, under the trace an operator is actually looking at.
+
+Bound: 256 per-call records, tail aggregated per (provider, model). Six decisions in the design
+§8; tests in §9 assert the MECHANISM first (the worker's own counters must NOT move).
+
+---
+
 ## FR-33 — the planner was told a tool's name and one sentence, never its arguments; `register_tool` had nowhere to put them 🟡 capability
 
 **Status: SHIPPED 2026-09-16 (#709) — (1) and (2) additive; (3) gated, default `warn`.** Filed by
