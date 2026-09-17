@@ -8,9 +8,23 @@ owner: "platform-team"
 
 # FR-35 — guest-path LLM usage: metered where it is spent, recorded where it is owned
 
-**FR-35 (app filing 2026-09-16, runtime 2.19.0). DESIGN ONLY — nothing shipped. Proposal under
-`AGENT_WORKING_RULES.md` §8 (a change to what the worker reply carries and what the parent
-records).** The filing's ask 1 is the right shape and this design takes it; §2 says why the
+**FR-35 (app filing 2026-09-16, runtime 2.19.0). SHIPPED 2026-09-17 (#712; DEC-040 … DEC-045).**
+Live record: `token_meter.py` (`LlmUsageLedger`, `llm_usage_deferral_scope`, `record_llm_usage`),
+`nodus_worker.run_one` (the scopes; `llm_usage` on every reply), `nodus_runtime_adapter.
+_apply_deferred_llm_usage`, `genai_telemetry.replay_deferred_llm_span`.
+
+> **As built, and one thing the build found:** the worker's `run_agent_tool` normalised the
+> tool result to `{success, result, error}` — it had been DROPPING `failure_class` (and
+> `cancelled`), so on `nodus_vm` RETRY-CLASSIFY-1's class never reached the compiled plan's
+> guard and a cancelled / refused / budget-exceeded step was substring-classified in the guest
+> after all. Found by §9's admission test (the refusal arrived typed at `execute_tool` and
+> untyped in the guest). Fixed here; `LLMBudgetExceededError` now declares
+> `failure_class = "transient"`. Admission-in-the-worker is tested with a fake resource
+> manager that records the tenant the reserve saw (the forwarded one); the Redis-backed
+> integration half is owed. Mutation-tested 9/9.
+
+**Originally:** DESIGN ONLY — proposal under `AGENT_WORKING_RULES.md` §8 (a change to what the
+worker reply carries and what the parent records). The filing's ask 1 is the right shape and this design takes it; §2 says why the
 other two are declined. §3 is what the filing did not name — the governor's *admission* has the
 same split as its *accounting*, and they resolve differently. §7 is what not to build.
 

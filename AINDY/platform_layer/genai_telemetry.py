@@ -168,13 +168,21 @@ class LlmOperation:
         self.model = model
         self.operation = operation
         self.recorded = False
+        # FR-35 — when the call runs in a worker, its usage is DEFERRED to the parent, which
+        # replays the span with these timestamps: the span here has no exporter to reach.
+        self._started_epoch_ms = int(time.time() * 1000)
+        self._started_perf = time.perf_counter()
 
     def record(self, response: Any) -> None:
         """Observe the response: the meter (exactly once) and the span's usage attributes."""
         from AINDY.platform_layer.token_meter import extract_token_usage, observe_llm_usage
 
         self.recorded = True
-        observe_llm_usage(provider=self.provider, model=self.model, response=response)
+        observe_llm_usage(
+            provider=self.provider, model=self.model, response=response,
+            started_at_ms=self._started_epoch_ms,
+            duration_ms=int((time.perf_counter() - self._started_perf) * 1000),
+        )
         try:
             usage = extract_token_usage(response)
             if usage is not None:
@@ -267,6 +275,52 @@ def llm_operation(
                     duration.record(time.perf_counter() - started, dims)
                 except Exception:  # noqa: BLE001
                     pass
+
+
+def replay_deferred_llm_span(record: dict[str, Any], *, trace_id: Optional[str] = None) -> None:
+    """FR-35 — emit the `chat {model}` span a WORKER-side call could never export, in the parent,
+    with the record's own timestamps, under the current span. Late, not wrong: it says when the
+    call happened, in the trace an operator is looking at. Never raises."""
+    try:
+        from opentelemetry.trace import SpanKind, Status, StatusCode
+
+        provider = str(record.get("provider") or "unknown")
+        model = str(record.get("model") or "unknown")
+        started_ms = int(record.get("started_at_ms") or 0)
+        duration_ms = int(record.get("duration_ms") or 0)
+        if started_ms <= 0:
+            started_ms = int(time.time() * 1000) - duration_ms
+        start_ns = started_ms * 1_000_000
+        end_ns = (started_ms + duration_ms) * 1_000_000
+        attrs: dict[str, Any] = {
+            ATTR_OPERATION_NAME: OP_CHAT,
+            ATTR_PROVIDER_NAME: provider,
+            ATTR_REQUEST_MODEL: model,
+            ATTR_USAGE_INPUT_TOKENS: int(record.get("prompt_tokens") or 0),
+            ATTR_USAGE_OUTPUT_TOKENS: int(record.get("completion_tokens") or 0),
+            "aindy.deferred": True,
+        }
+        tool = record.get("tool")
+        if tool:
+            attrs[ATTR_TOOL_NAME] = str(tool)
+        try:
+            tenant_id, run_id = __import__("AINDY.platform_layer.token_meter", fromlist=["current_llm_attribution"]).current_llm_attribution()
+            if tenant_id:
+                attrs[ATTR_ENDUSER_ID] = str(tenant_id)
+            if run_id:
+                attrs[ATTR_CONVERSATION_ID] = str(run_id)
+        except Exception:  # noqa: BLE001
+            pass
+        tracer = get_tracer(_TRACER_NAME)
+        kwargs: dict[str, Any] = {"attributes": attrs, "kind": SpanKind.CLIENT, "start_time": start_ns, **_link_kwargs(trace_id)}
+        span = tracer.start_span(f"{OP_CHAT} {model}", **kwargs)
+        outcome = str(record.get("outcome") or "ok")
+        if outcome != "ok":
+            _set(span, ATTR_ERROR_TYPE, outcome.split(":", 1)[-1])
+            span.set_status(Status(StatusCode.ERROR, outcome))
+        span.end(end_time=max(end_ns, start_ns))
+    except Exception as exc:  # noqa: BLE001 — observability never decides
+        logger.debug("[genai] deferred span not replayed: %s", exc)
 
 
 # ---------------------------------------------------------------------------

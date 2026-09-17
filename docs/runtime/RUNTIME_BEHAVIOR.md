@@ -188,6 +188,15 @@ This document describes the current runtime behavior of the FastAPI backend as i
   and never replace the Prometheus `aindy_llm_*` counters the governor and soak harness read.
   No prompt/completion content is placed on any span (a test guards it). `enduser.id` is
   emitted beside `user.id` on syscall spans for one release; `user.id` is then dropped.
+  **On the `nodus_vm` backend (FR-35, 2026-09-17)** a tool step's LLM call runs in the Nodus
+  worker, which has no exporter: its usage rides the worker reply as a fourth deferred
+  collection (`llm_usage`, beside `memory_writes` / `emitted_events` / `simulated_effects`)
+  and the parent records it under the reply's explicit subject (`run_id` / `execution_unit_id`
+  / `user_id`) and replays the `chat {model}` span with the worker's timestamps, marked
+  `aindy.deferred`. The worker counts nothing itself — deferral replaces observation, or a
+  Redis-backed deployment would count every guest call twice. The governor's *reserve* still
+  runs in the worker under the forwarded attribution scope; it is real only with a
+  Redis-backed resource manager.
 - `RippleEdge` rows are now created from `SystemEvent` parentage and can additionally link source events to stored memory nodes.
 - Required execution lifecycle events are emitted on core execution paths.
 - Research, LeadGen, Freelance, Agent, Automation, Task, Goals, and Genesis route executions now share the centralized execution wrapper (`core/execution_service.py`) or pass through canonical execution envelopes that standardize `trace_id`, lifecycle events, and response shape.

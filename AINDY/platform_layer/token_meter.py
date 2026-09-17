@@ -62,9 +62,12 @@ default is to let the call through and make the unattributed fraction visible.
 from __future__ import annotations
 
 import logging
+import os
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Iterator
+from dataclasses import asdict, dataclass
+from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,144 @@ def resolve_llm_subject() -> tuple[str | None, str | None, str]:
     attributed = "run" if run_id else "unit" if unit_id else "tenant" if tenant_id else "none"
     return tenant_id, run_id or unit_id, attributed
 
+
+# ---------------------------------------------------------------------------
+# FR-35 — the guest-path ledger: usage METERED where it is spent, RECORDED where it is owned
+# ---------------------------------------------------------------------------
+#
+# On the `nodus_vm` backend a tool step's LLM call runs the provider client in the WORKER
+# process: this module's counters land in a registry nobody scrapes, `resolve_llm_subject()`
+# finds no scope there, and the run, the tenant window and `/metrics` all read zero for spend
+# that happened. The worker reply already carries three DEFERRED collections the parent applies
+# after the fact (`memory_writes`, `emitted_events`, `simulated_effects`); usage is a fourth.
+#
+# ★ Deferral REPLACES observation in the worker — append and nothing else — or a Redis-backed
+# deployment counts every guest call twice (worker accrual + parent replay).
+# Design: docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md.
+
+LLM_LEDGER_MAX_ENV = "AINDY_NODUS_LLM_LEDGER_MAX"
+DEFAULT_LLM_LEDGER_MAX = 256
+
+
+@dataclass(frozen=True)
+class LlmUsageRecord:
+    """One LLM call as the worker saw it — everything the parent needs to record and to trace."""
+
+    provider: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    started_at_ms: int = 0
+    duration_ms: int = 0
+    tool: Optional[str] = None
+    outcome: str = "ok"
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class LlmUsageLedger:
+    """Bounded per-call ledger + an aggregate tail, so a guest loop cannot produce a reply the
+    size of its call count. Accounting reads both halves; spans are replayed from records only."""
+
+    def __init__(self, max_records: Optional[int] = None) -> None:
+        self.max_records = max_records if max_records is not None else ledger_max_records()
+        self.records: list[LlmUsageRecord] = []
+        self.tail: dict[tuple[str, str], dict[str, int]] = {}
+        self.dropped_unreadable = 0
+
+    def append(self, record: LlmUsageRecord) -> None:
+        if len(self.records) < self.max_records:
+            self.records.append(record)
+            return
+        key = (record.provider, record.model)
+        bucket = self.tail.setdefault(key, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0})
+        bucket["calls"] += 1
+        bucket["prompt_tokens"] += int(record.prompt_tokens)
+        bucket["completion_tokens"] += int(record.completion_tokens)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "records": [r.as_dict() for r in self.records],
+            "tail": [{"provider": p, "model": m, **v} for (p, m), v in self.tail.items()],
+            "unreadable": self.dropped_unreadable,
+        }
+
+    def __len__(self) -> int:
+        return len(self.records) + sum(v["calls"] for v in self.tail.values())
+
+
+def ledger_max_records() -> int:
+    raw = os.getenv(LLM_LEDGER_MAX_ENV)
+    try:
+        return max(1, int(raw)) if raw and raw.strip() else DEFAULT_LLM_LEDGER_MAX
+    except (TypeError, ValueError):
+        return DEFAULT_LLM_LEDGER_MAX
+
+
+_DEFERRED_LLM_USAGE: ContextVar[Optional[LlmUsageLedger]] = ContextVar("aindy_llm_usage_deferral", default=None)
+_CURRENT_TOOL: ContextVar[Optional[str]] = ContextVar("aindy_llm_usage_tool", default=None)
+
+
+@contextmanager
+def llm_usage_deferral_scope(max_records: Optional[int] = None) -> Iterator[LlmUsageLedger]:
+    """Entered by the WORKER around a script: every `observe_llm_usage` inside appends to the
+    yielded ledger and observes NOTHING locally. The ledger is what the reply carries."""
+    ledger = LlmUsageLedger(max_records)
+    token = _DEFERRED_LLM_USAGE.set(ledger)
+    try:
+        yield ledger
+    finally:
+        _DEFERRED_LLM_USAGE.reset(token)
+
+
+def current_llm_usage_ledger() -> Optional[LlmUsageLedger]:
+    return _DEFERRED_LLM_USAGE.get()
+
+
+@contextmanager
+def llm_usage_tool_scope(tool_name: Optional[str]) -> Iterator[None]:
+    """Name the guest tool whose step is spending, so a deferred record (and its replayed span)
+    can say which tool it was. Cheap, and only meaningful inside a deferral scope."""
+    token = _CURRENT_TOOL.set(str(tool_name) if tool_name else None)
+    try:
+        yield
+    finally:
+        _CURRENT_TOOL.reset(token)
+
+
+def record_llm_usage(
+    *,
+    provider: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    tenant_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    unit_id: Optional[str] = None,
+) -> None:
+    """Record an ALREADY-KNOWN usage under an explicit subject — the accrual half of
+    `observe_llm_usage`, factored out so the parent can replay a worker's ledger (FR-35).
+
+    An explicit subject wins; a field left ``None`` falls back to the ambient one
+    (`resolve_llm_subject`), so a `sys.v1.nodus.execute` script with no run still accrues to
+    its unit and tenant. Never raises.
+    """
+    if not _METRICS_AVAILABLE:
+        return
+    model_label = str(model or "unknown")
+    try:
+        prompt = int(prompt_tokens or 0)
+        completion = int(completion_tokens or 0)
+        llm_tokens_total.labels(provider=provider, model=model_label, kind="prompt").inc(prompt)
+        llm_tokens_total.labels(provider=provider, model=model_label, kind="completion").inc(completion)
+        _attribute_usage(
+            provider=provider, tokens=prompt + completion,
+            tenant_id=tenant_id, run_id=run_id, unit_id=unit_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — accounting must not fail anything
+        logger.debug("[token_meter] usage not recorded for %s/%s: %s", provider, model_label, exc)
+
 try:
     from AINDY.platform_layer.metrics import (
         llm_calls_total,
@@ -175,7 +316,14 @@ def extract_token_usage(response: Any) -> tuple[int, int] | None:
     return (prompt or 0, completion or 0)
 
 
-def observe_llm_usage(*, provider: str, model: str, response: Any) -> None:
+def observe_llm_usage(
+    *,
+    provider: str,
+    model: str,
+    response: Any,
+    started_at_ms: Optional[int] = None,
+    duration_ms: Optional[int] = None,
+) -> None:
     """Record the token usage of one completed LLM call. Never raises.
 
     ★ Metering must not be able to fail a call that already succeeded — the tokens are spent
@@ -188,10 +336,29 @@ def observe_llm_usage(*, provider: str, model: str, response: Any) -> None:
     whose usage cannot be read increments its own counter, and a flat token count next to a
     rising unreadable count is a legible, actionable state rather than a mystery.
     """
+    model_label = str(model or "unknown")
+    # FR-35 — inside a worker's deferral scope the call is APPENDED to the ledger and observed
+    # nowhere else: the parent records it under the run's real subject. Two accrual sites would
+    # be the double-count this meter's design rejects.
+    ledger = _DEFERRED_LLM_USAGE.get()
+    if ledger is not None:
+        try:
+            usage = extract_token_usage(response)
+            if usage is None:
+                ledger.dropped_unreadable += 1
+                return
+            prompt, completion = usage
+            ledger.append(LlmUsageRecord(
+                provider=str(provider), model=model_label, prompt_tokens=int(prompt),
+                completion_tokens=int(completion),
+                started_at_ms=int(started_at_ms) if started_at_ms else int(time.time() * 1000),
+                duration_ms=int(duration_ms or 0), tool=_CURRENT_TOOL.get(), outcome="ok",
+            ))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[token_meter] deferred usage not recorded for %s/%s: %s", provider, model_label, exc)
+        return
     if not _METRICS_AVAILABLE:
         return
-
-    model_label = str(model or "unknown")
     try:
         usage = extract_token_usage(response)
         if usage is None:
@@ -212,18 +379,34 @@ def observe_llm_usage(*, provider: str, model: str, response: Any) -> None:
             pass
 
 
-def _attribute_usage(*, provider: str, tokens: int) -> None:
+def _attribute_usage(
+    *,
+    provider: str,
+    tokens: int,
+    tenant_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    unit_id: Optional[str] = None,
+) -> None:
     """Accrue one call's tokens onto the identity the span declared (phase 3). Never raises.
 
     Precedence for the UNIT key: the attributed run, else the bound execution unit. The tenant
     window is accrued whenever a tenant is known, from the attribution scope first and, failing
     that, from the bound unit's snapshot (a pipeline-bound request unit carries its tenant).
+    An EXPLICIT subject (FR-35: the parent replaying a worker's ledger from the reply's context)
+    overrides the ambient one field by field.
+
     Reads the dispatcher's ContextVar lazily so this module keeps no kernel import at load.
     """
     try:
         from AINDY.kernel.resource_manager import get_resource_manager
 
-        tenant_id, key, attributed = resolve_llm_subject()
+        amb_tenant, amb_key, amb_attributed = resolve_llm_subject()
+        if tenant_id or run_id or unit_id:
+            key = str(run_id) if run_id else str(unit_id) if unit_id else amb_key
+            tenant_id = str(tenant_id) if tenant_id else amb_tenant
+            attributed = "run" if run_id else "unit" if unit_id else amb_attributed
+        else:
+            tenant_id, key, attributed = amb_tenant, amb_key, amb_attributed
         rm = get_resource_manager()
         if key:
             rm.record_tokens(key, tokens, tenant_id=tenant_id)
