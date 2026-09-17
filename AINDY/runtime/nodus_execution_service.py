@@ -816,9 +816,13 @@ def _sync_agent_eu_status(db: Session, run_id: str, status: str) -> None:
     try:
         from AINDY.core.execution_unit_service import ExecutionUnitService
 
-        eu = ExecutionUnitService(db).get_by_source("agent_run", str(run_id))
+        eus = ExecutionUnitService(db)
+        eu = eus.get_by_source("agent_run", str(run_id))
         if eu:
-            ExecutionUnitService(db).update_status(eu.id, status)
+            # EU-DOUBLE-FINALIZE-1 — the run's vocabulary mapped to the unit's, once: this used
+            # to pass `verify_failed` through (refused every time — the unit stayed `executing`)
+            # and to complete a unit `execute_run`'s tail then completed again.
+            eus.finalize_for_run_status(eu.id, status)
     except Exception:
         logger.debug("[NodusExecutionService] agent EU status sync skipped", exc_info=True)
 

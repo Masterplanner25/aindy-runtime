@@ -8897,6 +8897,47 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ---
 
+## EU-DOUBLE-FINALIZE-1 — an agent run's unit was finalised by three sites with one guard; a verify-failed run's unit never finalised at all 🔴 defect
+
+**Status: CLOSED on filing (2026-09-17, #713).** Picked up from the app's 2.19.0 verification log
+(`RUNTIME_2_19_0_UPGRADE.md` — *"`[EU] invalid transition completed→completed` at finalize —
+the runtime completes the run's unit twice; noise, not filed"*). Read as a claim: the double
+write was real, and it was the smaller of two defects.
+
+### The mechanism, from source
+
+Three sites mirrored a terminal `AgentRun` status onto its execution unit:
+
+| Site | Guarded on "already terminal"? |
+|---|---|
+| `execute_run`'s tail (`execution.py`) | no — and mapped only `completed` / `failed`, so any other terminal run status left the unit alone |
+| the `nodus_vm` chain's `_sync_agent_eu_status` (`nodus_execution_service.py`) | no — and passed the RUN status straight through |
+| the `agent_flow` adapter's `_sync_agent_eu_terminal` (resumed-from-gate path) | **yes** — the only one |
+
+On the app's default backend (`nodus_vm`) the chain completed the unit at chain end and
+`execute_run`'s tail completed it again: `update_status` refused the second (`completed→completed`
+is not an edge) and logged the WARNING they saw, once per completed run. Cosmetic.
+
+**★ The one that mattered:** the chain called `_sync_agent_eu_status(db, run_id, "verify_failed")`.
+`verify_failed` is an `AgentRun` status, not an `ExecutionUnit` one — `executing → verify_failed`
+is refused by the same table every time — and `execute_run`'s tail maps neither, so **a
+verify-failed run's unit stayed `executing` forever.** `EU-FINALIZE-UNCOMMITTED-1`'s shape (a unit
+that never reaches a terminal state) on a different run type, reachable by any plan with an
+`expects` that fails.
+
+### Shipped
+
+`ExecutionUnitService.finalize_for_run_status(eu_id, run_status)` — one rule, one home: maps the
+RUN's terminal vocabulary to the UNIT's (`completed`→`completed`; `failed` / `verify_failed` /
+`cancelled` / `refused`→`failed`), leaves a unit that is already terminal alone **silently** (the
+second writer is late, not wrong), and returns whether it moved the unit. All three sites call
+it. Tests drive the real `nodus_vm` chain on a private engine with `execution_units` created: a
+verify-failed run's unit reads `failed`; a completed run's unit sees exactly one `completed`
+transition across the chain's sync and the tail's. Mutations: the old pass-through back → red;
+the terminal guard removed → red.
+
+---
+
 ## FR-35 — on the `nodus_vm` backend, LLM usage spent by tool steps was metered in the worker process and never reached `/metrics`, the tenant window, or the run 🔴 defect
 
 **Status: SHIPPED 2026-09-17 (#712; DEC-040 … DEC-045).** Usage spent in the worker now rides the

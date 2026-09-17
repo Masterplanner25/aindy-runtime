@@ -119,8 +119,8 @@ def _sync_agent_eu_terminal(db, agent_run_id, status: str) -> None:
 
         eus = ExecutionUnitService(db)
         eu = eus.get_by_source("agent_run", str(agent_run_id))
-        if eu is not None and eu.status not in ("completed", "failed", "refused"):
-            eus.update_status(eu.id, status)
+        # EU-DOUBLE-FINALIZE-1 — the guard this site always had is now the service's one rule.
+        if eu is not None and eus.finalize_for_run_status(eu.id, status):
             db.commit()
     except Exception:
         logger.debug("[NodusAdapter] agent EU terminal sync skipped", exc_info=True)
