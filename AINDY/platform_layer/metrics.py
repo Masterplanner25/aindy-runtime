@@ -143,6 +143,16 @@ syscall_unowned_unit_total = Counter(
 # LEASE-FENCE-1 — the ONLY evidence the fence ever fired: a leader-only job refused its own write
 # because leadership changed hands mid-job. A refusal happens on a scheduler thread, where caplog
 # cannot see it (green-check variant 10), which is why this is a metric and not a log line.
+# FR-33 — a tool call checked against its declared argument contract. `outcome="invalid"` under
+# `mode="warn"` is the number to read before flipping AINDY_TOOL_ARGS_VALIDATION to enforce.
+tool_args_validation_total = Counter(
+    "aindy_tool_args_validation_total",
+    "Tool calls checked against the tool's declared args_schema, by tool, outcome "
+    "(valid | invalid) and the validation mode in force (off | warn | enforce).",
+    ["tool", "outcome", "mode"],
+    registry=REGISTRY,
+)
+
 lease_fence_refusals_total = Counter(
     "aindy_lease_fence_refusals_total",
     "Leader-only job writes refused by the background-lease fence (leadership changed hands "
