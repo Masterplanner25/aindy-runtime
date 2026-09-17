@@ -1086,6 +1086,61 @@ right thing to lose.
 
 ---
 
+### DEC-046
+**Status:** `provisional` (2026-09-17 — `HTTP-SCOPE-GAP-1` remainder; closes the entry on acceptance)
+
+**Decision**
+A scope answers *which verb* and a row filter answers *whose data*; they are two checks and
+stay two. `execution.read`-class scopes are not widened to answer "may I read someone else's",
+and no cross-owner read path is added. A run is readable by its owner (row filter
+`FlowRun.user_id == user_id`, `flow_definitions_engine.py:60`) under the route's scope
+(`flow_router.py:39` `_REQUIRE_PLATFORM_ADMIN` on the run routes); an operator who needs
+another owner's run reads it through the operator surfaces (`/platform/*`), which are
+`is_operator_principal`-gated and row-unfiltered by design.
+
+**Why**
+The entry's remainder was a design question — *"`execution.read` conflates scope with data
+ownership"*. Measured at HEAD it does not conflate them: the scope is checked by the
+dependency and the ownership by the query, and neither is asked the other's question. Making
+a scope carry ownership (`execution.read:any`) would put an authorisation decision into a
+string the key's issuer types, which is `KEY-SCOPE-ESCALATION-1`'s shape from the other side.
+
+**Implications**
+- `HTTP-SCOPE-GAP-1` closes on acceptance; its three gotchas move to the closed line.
+- Any future cross-owner read is an operator route, never a scope variant.
+
+**Related Docs**
+- `TECH_DEBT.md` `HTTP-SCOPE-GAP-1`; `AINDY/services/auth_service.py::is_operator_principal`
+
+---
+
+### DEC-047
+**Status:** `provisional` (2026-09-17 — `CLI-EXEC-SURFACE-1`; closes the entry on acceptance)
+
+**Decision**
+The operator half of the runtime (resume, flow list/get, queue + DLQ, trace, health) stays
+HTTP-only. It is **not** added to the syscall vocabulary, so no transport — `/platform/syscall`,
+the MCP allowlist, or a CLI — can reach it by being a transport. No CLI is built.
+
+**Why**
+The scope doc's §8 reframe: a terminal command is a transport over the syscall vocabulary,
+and a transport cannot grant authority it does not have. The question was whether the
+*operator* half should be syscall-addressable, and the answer is decided by what an operator
+syscall opens — three doors at once (a route-ungated `/platform/syscall`, the MCP allowlist
+where an LLM client sits, and any future CLI). A DLQ drain reachable by an LLM client is a
+decision, and it is declined. The execution half (`flow.run`, `nodus.execute`, `agent.*`,
+`job.submit`, `memory.*`) is already syscall-addressable and unchanged.
+
+**Implications**
+- `CLI-EXEC-SURFACE-1` closes on acceptance. `INITIATOR-IDENTITY-1` and
+  `QUOTA-ACCRUAL-ORPHAN-1`'s transport notes stand on their own.
+- Reopening requires a per-syscall answer to "which of the three doors", not a CLI proposal.
+
+**Related Docs**
+- `docs/design/CLI_EXECUTION_SURFACE_SCOPE.md` §8; `AINDY/mcp_server.py`
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
@@ -1121,6 +1176,10 @@ log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` 
 `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (none — DEC-039). All five designs' decisions are
 now recorded (DEC-024..039); the paragraph stays as the record of how they arrived.
 `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §8 (six) — recorded as DEC-040..045 (#712).
+**Next tier, filed 2026-09-17:** `EVENT_OUTBOX_DESIGN.md` §6 (three), `RECOVERY_GRANULARITY_DESIGN.md` §6 (four),
+`AUTHORITY_LIFETIME_DESIGN.md` §5 (four), `INITIATOR_IDENTITY_DESIGN.md` §5 (four), `AUDIT_CORRELATION_DESIGN.md` §4 (four),
+`EGRESS_INPROC_DESIGN.md` §5 (four) — pending. `HTTP-SCOPE-GAP-1` remainder and `CLI-EXEC-SURFACE-1` needed no design:
+each is one decision, recorded PROVISIONAL as DEC-046 / DEC-047 and accepted (closing the entry) or declined by the owner.
 
 ---
 

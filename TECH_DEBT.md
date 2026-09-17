@@ -1945,6 +1945,10 @@ doc's §3 on purpose.
 **Status:** Open — P2. Filed 2026-08-22, **REFRAMED the same day — read this section first, the
 rest is the evidence that produced it.** Scope doc: `docs/design/CLI_EXECUTION_SURFACE_SCOPE.md`.
 
+**★ DECIDED 2026-09-17 — DEC-047 (provisional; the entry CLOSES on acceptance): the operator half stays
+HTTP-only.** Not syscall-addressable, so no transport reaches it by being a transport; no CLI built. Reopening
+needs a per-syscall answer to which of §8's three doors, not a CLI proposal.
+
 ### ★★ THE REFRAME — this is not a CLI entry, and the name is now narrower than the finding
 
 **In this architecture a terminal command is not a surface. It is a transport over the syscall
@@ -10720,6 +10724,15 @@ separate change: an event type is a **stored** value, so old rows keep the old n
 
 **Status: OPEN — P2.** Filed 2026-08-15 from the Hermes architectural map (§14), verified.
 
+**★ DESIGN FILED 2026-09-17 → `docs/design/AUDIT_CORRELATION_DESIGN.md` (four decisions pending) — re-measured, and
+two of the three joins were mis-described.** (1) `ExecutionAuthority` DOES NOT EXIST — `AUTHORITY-VALUE-1` closed as
+the `child_context` clamp; the `SYSCALL_EXECUTED` payload carries neither the required capability nor the guarantee.
+(2) fell out of `EXEC-ENV-BIND-1` (`execution_units.env_applied`); the attestation remainder is `SANDBOX-EVIDENCE-2`.
+(3) `EffectRecord` has NO `trace_id` column — the real join today is `execution_id` = `payload->>'execution_unit_id'`,
+unindexed JSONB, and it yields every event of the unit, not the dispatch. Fix: three additive payload keys
+(`capability`, `guarantee`, `action_id` — all locals at the emit site); NO FK in either direction. ★ `syscall.executed`
+is `operational` under retention, so the join is time-bounded on both sides — by construction, and documented.
+
 Observability and auditability are otherwise the runtime's strongest properties — a parented
 causal event graph, an append-only effect and reversal ledger, execution provenance on the
 `ExecutionUnit`. Three correlations are missing, and each weakens after-the-fact reconstruction
@@ -11162,6 +11175,13 @@ the finding behind an unrelated error. The proof above was run against a throwaw
 ---
 
 ## HTTP-SCOPE-GAP-1 — the capability model does not reach the runtime's own front door
+
+**★ REMAINDER DECIDED 2026-09-17 — DEC-046 (provisional; the entry CLOSES on acceptance).** Measured at HEAD the
+remainder does not conflate: the run routes gate the VERB by dependency (`flow_router.py:39`
+`_REQUIRE_PLATFORM_ADMIN`) and OWNERSHIP by the query (`FlowRun.user_id == user_id`,
+`flow_definitions_engine.py:60`); neither is asked the other's question. No cross-owner read path, no
+`execution.read:any` — an operator reads another owner's run through the `is_operator_principal`-gated
+`/platform/*` surfaces, which are row-unfiltered by design. The three gotchas below stay live either way.
 
 **★ FIRST HALF CLOSED 2026-08-16 (#449) — a JWT no longer bypasses scopes.**
 
@@ -11856,6 +11876,16 @@ unauthorised.
 
 **Status: OPEN — P2.** Filed 2026-08-15 from the Codex comparative audit (G6), verified.
 **This entry exists to re-home a mechanism, not to build one.**
+
+**★ DESIGN FILED 2026-09-17 → `docs/design/EGRESS_INPROC_DESIGN.md` (four decisions pending) — and it found a
+DEFECT this entry did not name:** `execute_tool` computes the domain allowlist and enters `egress_scope` around the
+IN-PROCESS call only (`tool_registry.py:1196`); the ISOLATED branch returns at `:1181` BEFORE it. So a tool that
+declared `isolation=` — the one moved out of process for being distrusted — runs with NO egress enforcement, flag
+on or off; the allowlist is computed for it and dropped. `CANCEL-REACH-1` residual 2's shape on the egress axis.
+Design: the decision `(mode, domains)` is resolved ONCE before the branch (policy domains + effective
+`authority.network`); the worker installs the socket guard process-globally from its request payload (closing the
+contextvar bypass there), never reads policy; `env_applied.network` reports the mechanism; a provider that cannot
+enforce `none` REPORTS, not refuses. `AINDY_EGRESS_ENFORCEMENT` stays the switch, default off.
 
 `egress_guard` wraps `socket.getaddrinfo`, `socket.socket.connect` and `connect_ex`, keyed on a
 contextvar allowlist, with IP-literal connects failing closed unless vouched for by an allowed
@@ -14673,6 +14703,14 @@ that names its scope selection *before* making its case produces findings a defe
 **Status: OPEN — P2 (cost and blast-radius, not correctness).** Filed 2026-08-18. Provenance:
 `LANGGRAPH-NODUS-2026-08-18`.
 
+**★ DESIGN FILED 2026-09-17 → `docs/design/RECOVERY_GRANULARITY_DESIGN.md` (four decisions pending).** The seam
+that can write per step already has a session: `nodus_worker.run_agent_tool` opens `session_factory()` for every
+`call_tool`. The row is `agent_steps` (already DBOS's `operation_outputs` shape) — written by the worker as each
+step completes, the parent's segment-end batch becomes an upsert. ★ Identity is the plan's STEP INDEX (compiler
+emits it as a third `call_tool` arg), NOT a call ordinal — the retry loop lives inside the guest, so attempt 2 of
+step 3 is ordinal 4. Replay only on a CONTINUED run, only from a `success` row, `replayed: True` on the result;
+replayed steps are not re-metered. `_count_completed_segments` unchanged; its docstring becomes false and is rewritten.
+
 **The property, stated once because it is the general form of three prior findings:**
 
 > The runtime checkpoints at the boundary of the unit it schedules. **Any control flow inside that
@@ -15127,6 +15165,14 @@ performed to fill the one folder in the comparative corpus that had no runtime-f
 **It is the only finding in twelve folders that required an inbound-event-driven comparand to
 produce.**
 
+**★ DESIGN FILED 2026-09-17 → `docs/design/INITIATOR_IDENTITY_DESIGN.md` (four decisions pending).**
+`SyscallContext.subject` — asserted, transport-set, never a `User` row. ★ Correction to this entry's own table:
+the memory-namespace row is not a collapse to fix, it is the one row that MUST stay collapsed — the operator
+authenticated, so the operator's namespace is the only one a read can be authorised from. Allowed readers
+(constrain-only, enumerated, AST-pinned): a per-subject quota sub-key under the tenant, an attribution label on
+the LLM ledger, an event payload key, `enduser.pseudo.id`. Forbidden: every authorisation, ownership and memory
+path. Header honoured for API-key principals only. No schema.
+
 **The runtime's assumption, stated where it is made.** `kernel/tenant_context.py:13` — *"A.I.N.D.Y.
 uses a single-user-per-tenant model: tenant_id == user_id."* The dispatcher establishes it by
 requiring an authenticated caller (`syscall_dispatcher.py:405-409`), and exactly two tables carry
@@ -15352,6 +15398,14 @@ first test. Schema — awaiting approval under §3/§8.
 `OPENHANDS_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md` (`C:\codev\OpenHands_research`, its **O3**),
 verified on both sides.
 
+**★ DESIGN FILED 2026-09-17 → `docs/design/AUTHORITY_LIFETIME_DESIGN.md` (four decisions pending).** The three
+questions the entry asks (where, negative cache, fail-open) were already answered for ONE terminal value by
+`CANCEL-REACH-1`: `cancellation.is_run_cancelled` reads the run on its own session, cached 2 s, fails OPEN, at
+`check_tool_capability` and the dispatcher. The design widens that read to every terminal status and makes a
+terminal answer STICKY (the negative cache is the cache); the HMAC check stays stateless; adds NO read to the
+hot path. Refusal `failure_class="permission"`. ★ A `waiting` run KEEPS its authority — OpenHands' pause-null is
+declined because a resume would need a grant path `DEC-016` denied.
+
 **The gap.** `agents/capability_service.py:25` — `TOKEN_TTL_HOURS = 24`, with `expires_at` threaded
 through mint and verify and a rotation grace key ring. A grep of that module for
 `revoke|revocation|invalidate` returns **nothing**.
@@ -15522,6 +15576,14 @@ signal. No schema. Decisions and phasing in the design §9–§10; awaiting appr
 `C:\codev\Ecosystem_Coverage_Analysis_v2.md` — *"RangeID monotonic CAS fence **+ transactional
 outbox** (Temporal)"*. The fence half became `LEASE-FENCE-1`; **this is the other half, and it had
 no entry.**
+
+**★ DESIGN FILED 2026-09-17 → `docs/design/EVENT_OUTBOX_DESIGN.md` (three decisions pending).** Two corrections
+narrow it: the buffer engages ONLY inside a request pipeline — `_persist_system_event` already writes on the
+caller's session and commits, so the scheduler, worker, resume and rehydration paths co-locate today; and the
+`memory_capture_engine` read is a SCORE input, not a gate — a lost row lowers a number. Observability item.
+Mechanism: inside a pipeline the row is ADDED to the handler's session without commit and rides its next commit
+(the EU finalize is the last one on every request since FR-30); the post-handler flush skips `persisted`
+entries; a raising handler leaves no row. No outbox table. Tests read through a separate connection.
 
 **The mechanism, traced.**
 
