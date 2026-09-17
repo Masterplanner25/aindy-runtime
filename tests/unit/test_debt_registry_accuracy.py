@@ -140,8 +140,12 @@ def test_closed_sections_are_not_empty():
 # already have a larger record in `TECH_DEBT.md`, so the detail has somewhere to go, and an
 # entry that cannot be trimmed without loss is one whose text was never indexed anywhere.
 
-_MAX_ENTRY_BYTES = 1144
-_MAX_CLOSED_ENTRY_BYTES = 833
+# Ratcheted 1144/833 -> 500/400 on 2026-09-16, when CLAUDE.md was trimmed from 153 KB to under the
+# 40 KB Claude Code limit (measured over the whole file: 152,649 -> ~36,000 chars). The high-water
+# marks after that pass were 472 B open / 379 B closed. Detail moved to `TECH_DEBT.md`; the pre-trim
+# lines are in `docs/archive/CLAUDE_md_2026-09-16_pre_trim.md`.
+_MAX_ENTRY_BYTES = 500
+_MAX_CLOSED_ENTRY_BYTES = 400
 
 
 def _size(line: str) -> int:

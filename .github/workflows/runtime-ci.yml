@@ -51,7 +51,7 @@ jobs:
           required_frontmatter = {"title", "last_verified", "api_version", "status", "owner"}
           # docs/upgrades/ holds the per-release app handoffs (moved out of docs/runtime/
           # 2026-09-13). Same rules apply; a folder outside this loop is unchecked by
-          # construction (CLAUDE.md, "Trusting a green check", variant 2).
+          # construction (docs/governance/TRUSTING_A_GREEN_CHECK.md, variant 2).
           # docs/handoffs/ holds outbound handoffs to sibling repos (same date).
           # docs/design/ holds design records with a status (2026-09-13).
           docs_roots = [Path("docs/runtime"), Path("docs/operations"), Path("docs/governance"),

@@ -120,6 +120,7 @@ Version-to-version moves are [`upgrades/`](upgrades/README.md), not here.
 
 **Verification**
 - [`CI_OWNERSHIP.md`](governance/CI_OWNERSHIP.md) — which checks are authoritative, and that a coverage threshold is not proof
+- [`TRUSTING_A_GREEN_CHECK.md`](governance/TRUSTING_A_GREEN_CHECK.md) — the 15-variant catalogue of checks that looked green and were not, the vendored-shim rule, and the test-mode short-circuit rule. **Moved here from `CLAUDE.md` 2026-09-16; read before citing CI as evidence.**
 - [`TEST_STRATEGY.md`](governance/TEST_STRATEGY.md) — the test strategy
 - [`INVARIANT_TEST_MAPPING.md`](governance/INVARIANT_TEST_MAPPING.md) — invariant → test
 - [`GITHUB_SETTINGS_CHECKLIST.md`](governance/GITHUB_SETTINGS_CHECKLIST.md) — the manual GitHub UI settings (branch protection, required checks)

@@ -1,0 +1,1322 @@
+<!-- ARCHIVE. This is CLAUDE.md exactly as it stood at commit 640ccbe (2026-09-16), before it was
+trimmed from 152,649 chars to under the 40,000-char Claude Code limit. It is kept so the reasoning
+behind every rule that survived as one line is still citable. It is NOT maintained; the live
+surface is /CLAUDE.md, the debt record is /TECH_DEBT.md, the decision record is
+docs/governance/DECISION_LOG.md, and the CI-evidence catalogue is
+docs/governance/TRUSTING_A_GREEN_CHECK.md. -->
+
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+**This file is the authoritative agent-instruction surface for this repo.** Two companions:
+
+- **[`docs/governance/AGENT_WORKING_RULES.md`](docs/governance/AGENT_WORKING_RULES.md)**
+  — the *collaboration* boundaries: what an agent may change without approval, what requires
+  sign-off, and how to behave at a boundary it cannot resolve. This file covers what is true
+  about the codebase; that one covers what you are permitted to do to it. **Read it before
+  making a change whose blast radius you are unsure of.**
+- **[`CODEX.md`](CODEX.md)** — a pointer to this file, not a parallel copy. It used to be a
+  hand-maintained duplicate and drifted badly; do not reintroduce content there.
+
+---
+
+## Commands
+
+```bash
+# Install (editable + test deps)
+pip install -e ".[test]"
+
+# Unit tests — no external services, SQLite in-memory
+pytest tests/unit/ -v
+pytest tests/unit/test_syscall_contract.py::test_name -v   # single test
+
+# Runtime-only CI subset (fastest, no DB required)
+pytest -m runtime_only -q
+
+# Sandbox escape suite — requires Docker, Linux containers mode, NO database needed
+pytest -m sandbox_escape -v
+SANDBOX_ESCAPE_IMAGE=python:3.12-alpine pytest -m sandbox_escape -v  # custom image
+
+# Integration tests — require live Postgres + Redis
+pytest -c pytest.integration.ini -v
+docker compose -f docker-compose.test.yml up -d            # spin up deps
+
+# Lint (runs from repo root; config in AINDY/ruff.toml)
+ruff check AINDY tests --config AINDY/ruff.toml   # exactly what CI's `Runtime Lint` runs
+
+# ★ Do NOT run `ruff format` casually — see LINT-FORMAT-1. The tree has never been
+# formatted: 457 of 559 files would change, so a stray run buries your diff in ~450
+# unrelated files. Nothing enforces it; `Runtime Lint` runs `check` only.
+
+# Regenerate schema baseline after any model change
+python scripts/check_schema_version.py
+
+# Run the server locally (requires DATABASE_URL + SECRET_KEY in env)
+aindy-runtime serve
+uvicorn AINDY.runtime_only:app   # equivalent ASGI form
+
+# Docker compose — full stack
+docker compose up -d                                        # api + postgres + redis + mongo
+docker compose --profile full up -d                        # + worker
+docker compose --profile full --profile monitoring up -d   # + Prometheus
+NGINX_CONF=nginx.tls.conf \
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  --profile full --profile proxy up -d                     # + nginx TLS, all internal ports closed
+```
+
+---
+
+## Architecture
+
+### Layer model
+
+Orientation only — the tagged, per-file inventory is `docs/runtime/RUNTIME_MODULE_MAP.md`.
+
+| `AINDY/` | Holds |
+|---|---|
+| `kernel/` | SyscallDispatcher, SyscallRegistry, EventBus, SchedulerEngine, CircuitBreaker, ResourceManager, TenantContext |
+| `platform_layer/` | LLM clients, metrics, OTel, rate limiter, cache, extension ABI + sandbox runner, scheduler_service |
+| `core/` | Execution pipeline middleware, RetryPolicy, DistributedQueue, SystemEventService, ResumeWatchdog |
+| `runtime/` | Flow engine (DAG executor), Nodus script execution, memory loop, flow definitions |
+| `agents/` | Agent runtime, planner backends, tool registry, AgentCoordinator, AutonomousController |
+| `memory/` | MemoryNode persistence, MemoryAddressSpace (MAS), embedding pipeline, scoring, traces |
+| `db/` | SQLAlchemy models, Alembic env, DAO layer, schema contract |
+| `routes/` | FastAPI routers — auth, flows, agents, memory, platform/* |
+| `worker/` | Background worker processes (memory ingestion, metric writing) |
+| `nodus/` | Nodus language stdlib (`memory.nd`) and runtime adapter |
+
+### Request → execution pipeline
+
+Every route handler runs inside `ExecutionPipeline` (`core/execution_pipeline/pipeline.py`), a middleware-like wrapper that: sets ContextVars (trace_id, pipeline_active), claims/releases an `ExecutionUnit` in the DB, records Prometheus metrics, captures memory signals from the response, and emits `SystemEvent` records. Handlers interact with the kernel only via `SyscallDispatcher.dispatch()`.
+
+### Syscall system (`sys.v1.domain.action`)
+
+`SyscallDispatcher` (`kernel/syscall_dispatcher.py`) is the single entry point for all capability calls. Every dispatch: validates syscall exists in `SYSCALL_REGISTRY`, enforces the caller's `SyscallContext.capabilities`, checks tenant isolation and resource quota, validates input/output schemas, runs the idempotency gate for `EXACTLY_ONCE` handlers (EffectRecord in DB), wraps the handler in an OTel span, and returns a uniform `{status, data, trace_id, duration_ms, error}` envelope.
+
+### Flow execution and WAIT/RESUME
+
+`FlowRun` rows move through a state machine (`pending → executing → waiting → completed/failed`). The `SchedulerEngine` (`kernel/scheduler/`) runs a priority queue (high/normal/low lanes). When a node requests a WAIT, the flow suspends: `FlowRun.status` → `waiting`, a callback is registered in the in-memory `_waiting` dict, and `EventBus.publish()` broadcasts the wait via Redis pub/sub to all instances. **★ Corrected 2026-09-10: this said *"when a node calls `sys.v1.event.wait`"* and NO SUCH SYSCALL EXISTS** — the registry holds 23 and `event.emit` is the only `event.*` one. Only the trigger was wrong; the mechanism described here is accurate. The real triggers are `execution_gate.py`'s `{"status": "WAIT", "wait_for": …}` and, on the guest path, a `nodus_wait_requested` state flag the worker reads after execution. A guest following the documented `event.wait()` example gets `Undefined variable: event` — see `GUEST-BUILTINS-DEAD-1`. When `publish_event(event_type)` fires later, the engine re-enqueues the matching flow. On restart, `flow_run_rehydration.py` re-registers all `waiting` rows so no flow is lost.
+
+### Nodus script execution
+
+`nodus_worker.py` (`runtime/`) compiles and runs `.nodus` / `.nd` scripts via `nodus-lang`. It injects `DeferredMemoryBuiltins` (recall/search/write backed by the `memory_context` dict from the flow) and a `WorkerWaitSignal` exception that propagates WAIT semantics back to the flow engine. Memory writes are deferred — collected as a list and committed after the script finishes.
+
+### Agent execution
+
+`execute_run()` (`agents/agent_runtime/execution.py`) is the entry point. It checks `AgentRun.status == "approved"`, validates the scoped capability token, resolves tools via `tool_registry.py`, optionally routes through `AgentCoordinator` for multi-agent delegation, then calls `execute_agent_run_via_nodus()` which compiles the agent objective into a Nodus execution context and runs it through the flow-backed execution path.
+
+### Memory system
+
+Memory nodes live in `memory_nodes` (PostgreSQL, `Vector(1536)` embedding column via pgvector). Writes go through `memory_ingest_service.py` → background embedding queue → `memory_ingest_worker.py` → OpenAI text-embedding API → pgvector upsert. Retrieval is hybrid: vector similarity + tag filter + `MemoryAddressSpace` path queries (`/memory/{tenant}/{namespace}/{type}/{id}`). Scoring uses impact score, usage count, and causal depth. `memory_scoring_service.py` ranks results; a Rust native scorer (`memory/native/`) is an optional performance path compiled via Maturin.
+
+---
+
+## Schema contract version protocol
+
+Any change to a file under `AINDY/db/models/` or `AINDY/memory/memory_persistence.py`
+requires three follow-up steps — in this order — or CI fails:
+
+1. Bump `SCHEMA_CONTRACT_VERSION` in `AINDY/db/schema_contract.py`.
+   - Use `"YYYY-MM-DD"` for the first change on a given date.
+   - Use `"YYYY-MM-DD.1"`, `"YYYY-MM-DD.2"`, … for subsequent changes on the same date.
+2. Regenerate the baseline: `python scripts/check_schema_version.py`
+   - Exit 0 with "Schema version baseline updated." confirms success.
+3. Update the two hardcoded version-string assertions in
+   `tests/unit/test_runtime_schema_contract.py` (grep `schema_contract_version`).
+
+---
+
+## Alembic migration conventions
+
+- All migrations use `IF NOT EXISTS` / `IF EXISTS` guards — every migration must be
+  idempotent when run against a schema already at that revision.
+- The runtime uses `alembic_version_runtime` (not the monolith's `alembic_version`).
+- Migration naming: `NNNN_short_description.py`, e.g. `0004_effect_records_completed_at_index.py`.
+- `downgrade()` must drop what `upgrade()` created. For index-only migrations, `DROP INDEX IF EXISTS` is sufficient.
+- **★ The current head is `RUNTIME_ALEMBIC_HEAD_REVISION` in `AINDY/db/alembic_head.py`, and the
+  chain is `ls alembic/versions/`. This file no longer enumerates it.** It used to, and it went
+  stale twice — once four migrations behind, then again the day `0017` shipped — *in the section
+  you read before writing a new migration*, which is the worst possible place for it. The
+  constant is CI-enforced by `tests/unit/test_runtime_alembic_head.py`, so it cannot drift;
+  a hand-copied list here can only ever be a slower, wrong second copy.
+
+**Head-revision bump protocol (APP-DEPLOY-1 / `bootstrap-schema`):** when you add a new
+`alembic/versions/NNNN_*.py`, also bump `RUNTIME_ALEMBIC_HEAD_REVISION` in
+`AINDY/db/alembic_head.py` to the new head. That constant is the packaged source of truth
+the `aindy-runtime bootstrap-schema` command stamps into `alembic_version_runtime` — the
+`alembic/` scripts dir lives at the repo root and is **not** shipped in the wheel
+(`packages.find = AINDY*`), so the command cannot read the head from the scripts at
+install time. `tests/unit/test_runtime_alembic_head.py` fails if the constant drifts from
+the actual scripts-dir head, so a forgotten bump is caught in CI. Note `memory_nodes`
+(defined in the runtime-owned `AINDY/memory/memory_persistence.py`) is runtime-owned and
+included by `runtime_owned_table_names()`; it is create_all-managed via the schema
+contract, NOT alembic-tracked (it is absent from env.py's `_RUNTIME_TABLES` autogenerate
+allowlist because alembic's `env.py` does not import the memory model — a deliberate,
+not-a-bug asymmetry).
+
+**Blank-database safety (ALEMBIC-FRESH-DB-1):** In Docker compose deployments, `alembic
+upgrade head` runs before the server starts, so before `_enforce_schema_guard` / `create_all`
+creates any tables. Any migration that touches a specific table in DML (`UPDATE`, `DELETE`) or
+DDL (`CREATE TABLE`, `CREATE INDEX ON`) must wrap that statement in a table-existence guard:
+
+```sql
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_tables
+    WHERE tablename='my_table' AND schemaname='public'
+  ) THEN
+    -- DML or DDL here
+  END IF;
+END $$
+```
+
+On a blank database the block skips; the server's Phase 5 `_enforce_schema_guard` then
+bootstraps the full schema from ORM metadata via `create_all`. On an existing deployment the
+block runs normally. `IF NOT EXISTS` on the index name alone is NOT sufficient — if the table
+doesn't exist, `CREATE INDEX ... ON missing_table` still raises `UndefinedTable`.
+
+---
+
+## ★ Decisions protocol — record the `DEC-NNN` in the PR that acts on it
+
+**A decision made in conversation — a declined option, a chosen shape, a deferral — is recorded as
+`DEC-NNN` in `docs/governance/DECISION_LOG.md` in the same PR** (DEC-010, 2026-09-16). Entries in
+`TECH_DEBT.md` and design docs keep the narrative and **cite the id**; the CLAUDE.md §Recorded
+decisions list is an index of ids. Same reasoning as the CHANGELOG protocol below: the reasoning
+decays fastest, and a decision without a citable id gets re-derived. `test_decision_log_integrity.py`
+fails on a cited id that does not exist.
+
+---
+
+## ★ CHANGELOG protocol — write the entry in the PR that makes the change
+
+**A PR that changes behaviour, API surface, configuration, schema, or what CI proves writes its own changelog entry in the same PR.** Not at release time.
+
+**★ Since 2026-08-16 the entry is a NEW FILE in `changelog.d/`, not an edit to `CHANGELOG.md`.** Create `changelog.d/<PR>-<slug>.md` containing exactly what you would have written under `## Unreleased`; prefix `00-` if an operator must read it before upgrading (those sort to the top). `python scripts/assemble_changelog.py` folds them in at release. **Do not hand-edit `## Unreleased`.**
+
+*Why the location moved: editing one shared section made every concurrent PR collide — three times in one afternoon (#449/#450/#451) — and the failure mode was worse than the annoyance. The reflexive "keep mine" resolution **silently reverted another PR's entry**, and a dropped changelog paragraph breaks no build. A new file cannot conflict with another new file. The rule below is unchanged; only where you put it moved.*
+
+**This is measured, not a style preference** — across six release windows the CHANGELOG was
+written in bursts at release time, worst case **1 of 50 commits** (`v2.0.1..main`), leaving the
+file stale for most of every cycle. **Why deferring costs more than it saves:** reconstructing
+50 commits later means writing from commit *subjects*, and the reasoning is not in the subject
+— "unique per owner" survives, *"a plain `UNIQUE (owner_user_id, name)` would not be equivalent,
+because SQL treats NULLs as distinct"* does not. The entries worth having decay fastest.
+(`PYPI-PUBLISH-1`'s "bump the pin and the CHANGELOG in one PR" is the *verification* step at
+release, not the place to author 50 entries.)
+
+**What needs an entry:** new or changed routes, syscalls, env vars, config defaults, response
+shapes, schema/migrations, behaviour changes (including "this used to return 500"), removed
+surfaces, dependency bumps with consumer impact, and **test/CI changes that alter what a green
+check means** (`CI-MARKER-1` changed which tests run at all — that belongs in the log).
+
+**What does not:** pure refactors with no observable change, doc-only edits, and tests that add
+coverage without changing what CI enforces. When unsure, write it — an over-documented change
+costs a paragraph; an undocumented behaviour change costs an operator an incident.
+
+**Format** — match the file. `### Added|Changed|Fixed|Removed — <short title> (#PR)`, then
+bullets that say what changed, and *why it was wrong* where that is not obvious. Call out
+anything an operator must read before upgrading at the top of `Unreleased`, not buried in a
+bullet.
+
+**Never rewrite a published entry.** Older entries are the audit trail of what was believed
+then. Correct them with a new dated entry that says what the earlier one over-reached on — as
+the `AINDY_REDIS_URL` entry does for its 2026-06-06 predecessor.
+
+---
+
+## Scheduler job pattern (`scheduler_service.py`)
+
+Reference implementation: `_cleanup_stale_logs` and `_cleanup_expired_effect_records`.
+
+**Function signature:**
+```python
+def _my_job() -> None:
+    """One-line description."""
+    try:
+        from AINDY.db.database import SessionLocal
+        # other imports inside try block
+        db = SessionLocal()
+        # ... work ...
+        db.commit()
+        db.close()
+    except Exception as exc:
+        logger.error("[my_job] failed: %s", exc)
+```
+
+- All imports go inside the `try` block.
+- `SessionLocal()` opened inside `try`, never at module level.
+- `db.commit()` and `db.close()` inside `try` (before the except).
+- Use `logger.error` for fatal job failures; `logger.warning` for recoverable/non-fatal issues.
+
+**Unit test patching:**
+Jobs import `SessionLocal` inside the function body, so patch at the source:
+```python
+with patch("AINDY.db.database.SessionLocal", return_value=mock_db):
+    _my_job()
+```
+Patching `AINDY.platform_layer.scheduler_service.SessionLocal` will fail with `AttributeError`.
+
+---
+
+## EffectRecord rules
+
+- `_resolve_effect_record` and `_complete_effect_record` use `db.commit()`, not `db.flush()`.
+  This is load-bearing: EffectRecord state must be durable across session close.
+- Pending rows are never eligible for deletion — the TTL cleanup job hard-excludes them.
+- Status values: `"pending"` | `"success"` | `"failed"`.
+
+---
+
+## Agent approve path — invariants and known gaps
+
+`approve_run()` (`AINDY/agents/agent_runtime/approvals.py`) guards the
+`pending_approval → approved` transition with an atomic SQLAlchemy CAS.
+
+**CAS fires only from `pending_approval`.** `approve_run()` returns immediately after the CAS;
+`execute_run` is dispatched to a daemon background thread. A process crash between approval and
+the thread's first `db.commit()` (which sets status `executing`) leaves the run stranded in
+`approved`. The orphan watchdog (`_recover_orphaned_approved_runs` in `scheduler_service.py`,
+runs every 5 minutes) re-dispatches `execute_run` for any `approved` row older than
+`ORPHANED_APPROVED_THRESHOLD_MINUTES` (10 min). **AGENT-APPROVE-001b: CLOSED 2026-06-04.** **★ That argument assumes ONE leader; under two, `LEASE-FENCE-1` (2026-09-16) makes the job refuse its dispatch when leadership changed hands — the fence is what lets this decline stand.**
+Do not add a second CAS guard in `execute_run` — the status check on entry is the correct
+guard; the 10-minute threshold ensures the original thread is dead before re-dispatch fires.
+
+**The approve path bypasses `SyscallDispatcher` entirely.** No EffectRecord idempotency
+gate is available for approve. Do not assume syscall-level idempotency applies here.
+
+**Unit test patching:** `execute_run` is re-exported via `AINDY/agents/agent_runtime/__init__.py`,
+so patch at:
+```python
+patch("AINDY.agents.agent_runtime.execute_run", ...)          # correct
+# NOT: patch("AINDY.agents.agent_runtime.execution.execute_run", ...)
+```
+`mint_token` and `record_agent_event` are imported directly in `approvals.py`:
+```python
+patch("AINDY.agents.agent_runtime.approvals.mint_token", ...)
+patch("AINDY.agents.agent_runtime.approvals.record_agent_event", ...)
+```
+
+---
+
+## Platform UI — SPA routing invariants
+
+The platform SPA is served by `_SPAStaticFiles` (a `StaticFiles` subclass) mounted at
+`/platform` in `AINDY/routing.py`.
+
+**Asset 404 discrimination:** `_SPAStaticFiles.get_response()` falls back to `index.html`
+only when the path does NOT start with `assets/`. Vite emits all static files under
+`assets/`; a 404 there is a real missing file, not a client-side route. Do not change
+this to an unconditional fallback — `/platform/assets/does-not-exist.js` must return
+404, not 200+HTML.
+
+**PlatformGuard invariants (platform/src/PlatformApp.tsx):**
+- `/login` must remain outside the `PlatformGuard` layout route. The guard renders
+  `<Navigate to="/login" replace />` (React Router — respects `basename="/platform"`,
+  no `window.location`). Do not reintroduce `window.location.href` or `redirectToApp`.
+- The authenticated-but-not-admin branch must render a terminal component (`<NotAdmin />`),
+  NOT navigate. Any `<Navigate>` here causes a redirect loop through the guard.
+- `VITE_APP_BASE_URL` is removed and must not be reintroduced as a load-bearing redirect
+  target. It may be documented as a future federation hook but must not drive any navigation.
+
+**`VITE_API_BASE_URL`** is the build-time base for all API calls (defaults to `""`
+— empty string, resolved at runtime as a relative URL against the current origin).
+It is distinct from the removed `VITE_APP_BASE_URL`. PLATFORM-UI-ENV-1 is closed
+(2026-06-05): the `"http://localhost:8000"` hardcoded fallback was replaced with `""`
+in `@aindy/ui-kit` `src/api/_core.js`; `platform/vite.config.ts` now includes
+`server.proxy` entries for local dev so `VITE_API_BASE_URL` is not required. Set it
+explicitly only when deploying the API at a non-standard origin.
+
+---
+
+## Platform UI — build chain
+
+`@aindy/ui-kit` is published to npm (`registry.npmjs.org`) as `@aindy/ui-kit@1.0.2`.
+The local source lives at `C:\dev\aindy-ui-kit\src\`. The installed package in
+`platform/node_modules/@aindy/ui-kit/` is a compiled bundle only (`dist/index.js`,
+`dist/index.cjs`) — no source files. Editing the source repo has no effect on the
+running bundle until you rebuild and replace it.
+
+**Docker does NOT build the SPA — it installs it, prebuilt, from PyPI.** *(Corrected
+2026-08-05. This section previously described a `node:20-alpine` `ui-builder` stage running
+`npm ci` + `npm run build`; that stage was **deleted 2026-06-15** in `0a427a6` when the
+image switched to installing the published wheel, and the doc was never updated.)*
+
+The Dockerfile has two stages, both `python:3.11-slim`, and no node at all. The builder does:
+
+```dockerfile
+RUN pip install --prefix=/install "aindy-runtime==2.0.0"
+```
+
+The SPA rides along inside that wheel as package data — `pyproject.toml` declares
+`[tool.setuptools.package-data] "AINDY" = [..., "platform/dist/**"]` with
+`include-package-data = true`. So `docker compose build` still needs no local UI build, but
+for a different reason than the old text gave, and with a **consequence that text hid**:
+
+> **A UI change does not reach any container until a release is cut AND the Dockerfile pin
+> is bumped.** The image ships whatever `AINDY/platform/dist` was packaged into the pinned
+> version. This is exactly why a running container served `assets/index-CmX9Wucu.css`
+> (tailwind 3) while the working tree had `index-C9NdGPSF.css` (tailwind 4) — not a caching
+> bug, the designed behaviour. Verify UI work against `npm run dev`, and treat the container
+> as showing the last *released* UI.
+
+The `dist/` that gets packaged is CI's own — `Runtime Package Build` runs after
+`Platform UI Build` in `runtime-ci.yml` — so the wheel never carries a locally-built bundle.
+
+**Local dev loop when ui-kit source changes:**
+1. Edit source in `C:\dev\aindy-ui-kit\src\`
+2. `npm run build` in `C:\dev\aindy-ui-kit` → regenerates `dist/`
+3. Copy new dist into `platform/node_modules/@aindy/ui-kit/dist/`:
+   ```powershell
+   Copy-Item -Path C:\dev\aindy-ui-kit\dist\* `
+     -Destination C:\dev\aindy-runtime\platform\node_modules\@aindy\ui-kit\dist\ `
+     -Recurse -Force
+   ```
+4. `npm run build` in `platform/` → writes new bundles to `AINDY/platform/dist/`
+5. Restart the `api` container: `docker compose restart api`
+
+**`bootIdentity` unwrap invariant:** `AuthContext` calls `bootIdentity` on page load
+to populate `system.runtime.boot_mode` (used by `PlatformHomeRedirect` to choose
+`/agent` vs `/flows`). `bootIdentity` must call `.then(unwrapEnvelope)` — if it
+returns the raw envelope `{ data: {...} }`, `useSystem()` cannot read `boot_mode`
+and the post-login redirect silently misfires. Same applies to `loginUser` and
+`registerUser` — all three must unwrap. Source: `C:\dev\aindy-ui-kit\src\api\auth.js`.
+
+---
+
+## Admin bootstrap — grant-only constraint
+
+`AINDY_BOOTSTRAP_ADMIN_EMAIL` and `aindy-runtime auth promote-admin <email>` are both
+grant-only operations. They set `is_admin=True`; they never set `is_admin=False`. Unsetting
+the env var must not revoke admin from any user.
+
+**First-registered-user-gets-admin is explicitly forbidden.** `POST /auth/register` is
+public and unauthenticated. On any non-localhost deployment the first caller wins, which
+is a privilege-escalation race. Do not implement this under any framing — not as a
+"convenience default," not as "only if no admin exists."
+
+The correct operator flow is: register via `POST /auth/register` → promote via env var
+(requires restart) or `aindy-runtime auth promote-admin <email>` (no restart needed).
+
+`_bootstrap_admin_email()` in `startup.py` runs as Phase 5.5 (after schema guard, before
+dev key bootstrap). It opens a DB session inside a try/finally, is idempotent (logs
+`already admin, no-op` on subsequent boots), and logs an INFO message when the email is
+set but no matching user exists yet.
+
+---
+
+## `AINDY.routes` namespace shadow — import hazard for tests
+
+`AINDY/routes/__init__.py` re-exports sub-router objects under the same names as the submodules:
+
+```python
+from AINDY.routes.health_router import router as health_router  # APIRouter object
+```
+
+This means **`from AINDY.routes import health_router` returns the `APIRouter` object, not the module**. Any attribute access like `health_router._check_syscall_registry_status()` raises `AttributeError: 'APIRouter' object has no attribute '_check_syscall_registry_status'`. The same failure happens with `import AINDY.routes.health_router as _hr` because Python resolves the package attribute first.
+
+**Workaround for tests that need module-level functions:**
+
+```python
+# Option A — direct function import (cleanest):
+from AINDY.routes.health_router import _check_syscall_registry_status
+
+# Option B — sys.modules bypass (needed if module isn't yet imported):
+import sys, importlib
+_hr = sys.modules.get("AINDY.routes.health_router") or importlib.import_module("AINDY.routes.health_router")
+result = _hr._check_syscall_registry_status()
+```
+
+The same shadow exists for every router exported from `AINDY/routes/__init__.py`
+(`observability_router`, `flow_router`, etc.).
+
+---
+
+## PLATFORM_ROUTERS prefix structure
+
+`PLATFORM_ROUTERS` in `AINDY/routes/__init__.py` contains child routers with bare prefixes
+(`/flows`, `/observability`, `/db`). In `AINDY/routing.py` they are registered as:
+
+```python
+app.include_router(route, prefix="/platform", ...)
+```
+
+So the effective HTTP paths are `/platform/flows`, `/platform/observability`, `/platform/db`.
+
+`platform_router` (prefix `/platform` already baked in) is registered separately and carries
+direct routes like `GET /platform/syscalls`. **Do not look for `/platform/syscalls` in
+`PLATFORM_ROUTERS` — it lives on `platform_router.routes`.**
+
+---
+
+## SyscallContractViolation guard
+
+`SyscallDispatcher.dispatch()` has a broad `except Exception` handler (belt-and-suspenders
+error envelope). Any exception type that must propagate out of `dispatch()` needs an
+explicit guard placed **before** the broad handler:
+
+```python
+except SyscallContractViolation:
+    raise
+except Exception as exc:  # belt-and-suspenders
+    ...
+```
+
+Add the same pattern for any future exception type that callers are expected to catch.
+
+---
+
+## `docs/{runtime,operations,governance,upgrades,handoffs,design,tutorials}/` — required YAML frontmatter
+
+Every `*.md` file under `docs/runtime/`, `docs/operations/`, `docs/governance/`, `docs/upgrades/`, `docs/handoffs/`, `docs/design/` or `docs/tutorials/` must start with a YAML frontmatter block containing all five required keys or CI fails (`Runtime Docs Validation` job):
+
+```markdown
+---
+title: "Document Title"
+api_version: "1.0"
+last_verified: "YYYY-MM-DD"
+status: current
+owner: "platform-team"
+---
+```
+
+**Missing any key → `Runtime Docs Validation` exits 1 and blocks merge.** The map of which folder holds what is `docs/README.md`; `docs/archive/` is deliberately outside the check. This bit us when `SANDBOX_ESCAPE_AUDIT.md` was created without `api_version`/`last_verified` and `MACOS_CONTAINER_POLICY.md` had no frontmatter at all. Always add all five keys when creating a new doc in this directory.
+
+---
+
+## Branch protection — `main`
+
+`main` is protected. Direct pushes by anyone (including admin) are blocked — `enforce_admins: true`.
+
+**★ ALL TWELVE checks are required as of 2026-09-17** (ten since 2026-08-14, four before that;
+`strict: true`, so a branch must also be up to date before merge). The other six previously ran
+without blocking — verification that exists but does not enforce, the same shape as
+`DOCS-COVERAGE-CLAIM-1` / `CI-MARKER-1`. **The two `Upgrade Path Guard` jobs were promoted
+2026-09-17 (#710)** on the evidence the entry asked for: 100/100 runs green since #455, and on
+#705 — the first real schema change since it was built — its `--reconcile` step RAN rather than
+being skipped, so the guard has been seen to exercise its real branch, not only its control.
+
+| Check | Workflow | What it guards |
+|---|---|---|
+| `Runtime Lint` | `runtime-ci.yml` | ruff |
+| `Runtime Docs Validation` | `runtime-ci.yml` | `docs/runtime/` frontmatter + `last_verified` floor |
+| `Runtime Contracts` | `runtime-ci.yml` | `pytest tests -m runtime_only`, schema contract, **native crate build** |
+| `Native Crate Build (Rust)` | `runtime-ci.yml` | `cargo build --locked --release` (NATIVE-CI-1) |
+| `Integration Tests (PostgreSQL + Redis)` | `runtime-ci.yml` | `pytest -c pytest.integration.ini` on live PG + Redis |
+| `Platform UI Build` | `runtime-ci.yml` | `npm ci` + SPA build (LOCKFILE-PLATFORM-1) |
+| `Runtime Package Build` | `runtime-ci.yml` | sdist + wheel |
+| `Install Smoke Test` | `runtime-ci.yml` | wheel installs and imports |
+| `pip-audit (OSV)` | `security-audit.yml` | dependency CVEs |
+| `Boot Smoke — Linux / Python 3.11` | `smoke-postgres.yml` | published wheel boots against real PG |
+| `Upgrade Path — previous release → this build` | `upgrade-path-guard.yml` | previous release's DB → this build (`FR-8`/`FR-14`); `bootstrap-schema` must succeed or exit 3 and `--reconcile` must resolve it |
+| `Negative control — the guard must detect drift` | `upgrade-path-guard.yml` | **required BESIDE the main job on purpose**: on a release with no schema change the main job passes trivially (variant 9); this job injects drift and requires the guard to see it |
+
+**Before adding a thirteenth, check what made these twelve safe:** no `paths:` filter (the classic
+trap — a filtered check never reports on unrelated PRs and blocks them forever), no job-level
+`if:`, and `Boot Smoke` guards its steps *individually* so a version-bump PR reports green
+rather than hanging pending.
+
+**Consequence to expect:** with `strict: true`, every PR needs a rebase when `main` moves, and
+`Integration Tests` (~6–7 min) sets merge latency. Combining dependency bumps into one PR is the
+normal move, not an optimization.
+
+---
+
+## ★ Trusting a green check — read this before citing CI as evidence
+
+**Fifteen separate times** this repo has shipped something that *looked* covered and was not.
+*(The fourteenth arrived 2026-09-10 and the fifteenth 2026-09-15, each predicted by this very
+sentence — which is the point.)* Assume there will be a sixteenth — the catalogue exists so you
+can recognise the shape, and the rules below are what it cost to learn:
+
+| # | Variant | How it looked green | Entry |
+|---|---|---|---|
+| 1 | Claimed and absent | 6 docs cited 8 test files that never existed | `DOCS-COVERAGE-CLAIM-1` |
+| 2 | Exists, not collected | 268 unit tests in 24 unmarked files ran in no job | `CI-MARKER-1` |
+| 3 | Collected, skipped | native suite skipped — nothing built the crate; a skip reads green | `NATIVE-CI-1` |
+| 4 | Runs, doesn't gate | 6 checks could be red without blocking | branch protection |
+| 5 | Gates, doesn't cover | Integration Tests never executed `EventBus.publish()` | `EVENTBUS-COVERAGE-1` |
+| 6 | Covers, asserts nothing | a test asserting an *absence* passes when the wire is broken | `EVENTBUS-COVERAGE-1` |
+| 7 | Asserts the source, not the behaviour | route tests read the handler as *text*, never called it — 500 instead of 409 for a day | `ROUTE-GUARD-1` |
+| 8 | Verification that never runs | the boot-time route AST proof has no call site in the app (deleted 2026-09-16, DEC-023) | `ROUTE-AST-UNWIRED-1` |
+| 9 | **Green because there was nothing to catch** | a check whose condition this release does not contain — `Upgrade Path Guard` passes trivially with no schema change | `FR-8`/`FR-14` |
+| 10 | **The instrument cannot see the thing** | `caplog` silently captured nothing for a warning emitted on a WORKER THREAD by a module logger — so the assertion could not tell *"the mechanism did not fire"* from *"I failed to observe it"* | soak harness |
+| 11 | **The answer went stale, not wrong** | seven PRs carried a green `pip-audit` for a week while the advisory refuting it was published — the check asks a question about the OUTSIDE WORLD, and the world moved without the diff moving | `security-audit.yml` |
+| 12 | **The check is right; its CENSUS is hand-written** | `test_every_provider_client_meters_its_response` walked the AST — correctly, per rule 7 — over three file paths typed out by hand, and a fourth client shipped unmetered | `COST-GOVERNOR-1` ph.0 |
+| 13 | **The FIXTURE blinds the test** | the suite patched `_ensure_tools_loaded` to a no-op to isolate the registry, so no test in it could observe that the code under test *called* it — and the call was the bug | `AUTHORITY-NEGOTIATION-1` ph.0 |
+| 14 | **The check is fine; its SUBJECT is dead** | a test read `inspect.signature` on a builtins class **nothing instantiates** — green, gating, over real source that no execution path can reach; the fix it guards was applied to unreachable code | `GUEST-BUILTINS-DEAD-1` |
+| 15 | **The FIXTURE shares the writer's transaction, so flush reads as commit** | a route test asserted an EU was `completed` and passed for a day on code that only FLUSHED the status and rolled it back on close — the test session and the app's session sat on ONE connection inside ONE outer transaction, where an uncommitted write is fully readable; the live table said `executing`, 900 rows deep | `EU-FINALIZE-UNCOMMITTED-1` |
+
+**Variant 9 is the one to design against, not just record:** it cannot be fixed by making the
+check better, because the check is fine — the *release* lacks the condition. The only answer
+is a **negative control that injects the condition**, which is why `upgrade-path-guard.yml`
+ships with one. A new check is at its least proven exactly when it is newest, and "it went
+green" is worth nothing until something has made it go red.
+
+**★ Variant 10 is the one that bites hardest in a CONCURRENT or CROSS-PROCESS test, and this
+repo is about to write more of those.** It surfaced when a soak assertion failed on a
+docstring-only commit — the signature of an unreliable instrument, not a regression. Three
+instruments were tried before one worked: `caplog` (could not see across the thread boundary), a
+logger spy (thread-safe, but observes a log line, which is not what an operator has), and finally
+a **Prometheus counter** — thread-safe, and the same signal production reads.
+
+**Rules that follow, and they generalise past logging:**
+
+- **Prefer the signal an operator would actually read.** If the assertion and the ops dashboard
+  disagree about where to look, the test is measuring a proxy.
+- **`caplog` is not thread-safe for practical purposes.** Anything asserting on a log emitted off
+  the main thread needs a different instrument. A test asserting the *absence* of such a log is
+  vacuous by construction — variant 6 with a specific, easy-to-miss cause.
+- **An instrument that can be absent must fail loudly when it is.** `soak_harness.read_metric`
+  raises on an unknown metric family rather than reading 0, because `None`-as-zero makes "did not
+  move" and "does not exist" indistinguishable. **Its first real use immediately found the other
+  half:** a labelled counter has no sample until `.labels()` is first called, so
+  "family exists, this label combination unobserved" must read 0 while "no such metric" still
+  raises. The guard was right to refuse; the rule was too coarse.
+
+**★ Variant 11 is the only one where the check was RIGHT when it ran, and this is the class to
+expect from every dependency, advisory or license check.** Such a check does not ask a question
+about the branch — it asks one about the OUTSIDE WORLD, so its answer decays on its own, with no
+commit to mark the moment. On 2026-08-31 `pip-audit (OSV)` went red on an **unchanged `main`**:
+`a2fe25c` passed it on 08-24 and failed it on 08-31, because `PYSEC-2026-3726` was published
+against a pinned `nltk` in between.
+
+**The four PRs it turned red were not the hazard — the seven it left green were.** The red ones
+were loud and got looked at. The seven older ones kept a green from 08-24 that any re-run would
+have refuted, and nothing about `gh pr checks` says so: it prints a duration, never a date. A
+week-old green on an external-input check is not evidence, and it is indistinguishable from a
+fresh one at a glance.
+
+**Rules that follow:**
+
+- **For a check whose input is external, the age of the result is part of the result.** Read the
+  run date before citing a dependency/advisory/license check — `gh run list --workflow=<f>
+  --branch <b>` prints `createdAt`; the PR checks view does not.
+- **A required check must gate the branch it protects, not only the PRs into it.** This one ran
+  on `pull_request` + a weekly `schedule` and had no `push` trigger, so `main` could sit red on a
+  CVE for up to a week with nothing surfacing it — and it only surfaced at all because a PR
+  happened to be open. Fixed by adding `push: branches: [main]`; the same question is worth
+  asking of any check whose value is time-varying.
+
+**★ Variant 12 is the one that survives every rule above it, which is why it is worth its own
+line.** The test was not lazy: it parsed the AST specifically so a comment could not satisfy it
+(rule 7), it ran in a collecting job (rule 2), it gated (rule 4), and breaking the thing it
+covered *did* turn it red. All of that rigour went into **how** it checked, and none into **what
+it checked over** — a literal set of three paths inside a test named `every`. **★ The census was
+incomplete the day it was authored, not through drift:** `deepseek_client.py` had existed since
+the initial repo extraction, three and a half months before the guard was written. This is what
+separates it from variant 11 — nothing decayed, the check never covered what its name claimed.
+
+**The rule: a guard that iterates a collection must DERIVE that collection from the source, and
+assert the derivation is non-empty.** A hand-maintained census inside a check is a second thing
+to keep in sync, and it is the half nobody re-reads — the check's own name becomes the lie. Where
+a literal is genuinely wanted (pinning an exact expected set), it must be compared *against* a
+derived set, never used *as* one. **The derivation then needs its own liveness assertion**, or an
+empty census silently satisfies every guard built on it — variant 6 arriving one level up.
+
+**★ Variant 13 is variant 12's cousin, and the difference is where the blindness comes from.**
+In 12 the check enumerated its subjects by hand; here the check was fine and the **fixture**
+removed what it needed to see. A phase-0 sweep called `_ensure_tools_loaded()`, which performs a
+trusted bootstrap registration and so was not inert at all — but every test in its own suite
+patched that function to a no-op *in order to isolate the registry*, which is a correct thing to
+isolate. **The isolation and the blindness were the same line.** CI caught it through an
+unrelated audit-surface assertion (`bootstrap_registration_count: 0` became `1`).
+
+**★ Variant 15 is variant 13 with a transaction instead of a patch.** The shared `db_session` /
+`runtime_only_app` fixtures bind the app's request session and the test's reader to one
+connection holding one outer transaction — correct for isolating tests from each other, and
+exactly what makes a `flush()` indistinguishable from a `commit()` to every assertion inside it.
+The FR-29 route tests read `completed` on code whose finalize was rolled back on every request.
+**The rule: an assertion about DURABILITY must read through a connection that did not share the
+writer's transaction, and the file must carry a liveness control proving a flush-then-close reads
+as rolled back** (`test_request_eu_finalize_commits_fr30.py`; the class is now also caught at the source by `test_own_session_commits.py` — `SESSION-COMMIT-1`). The storm test's note from 09-13
+— "the shared fixture's outer transaction erases the code's `rollback()`" — was the same fixture
+seen from the other side; a fixture that hides a rollback also hides a missing commit.
+
+**The rule: a fixture that neutralises a dependency also neutralises any test of HOW that
+dependency is used.** Stubbing something out is a claim that the interaction does not matter —
+so when it does, assert on the interaction *outside* the fixture that hides it. A no-op patch can
+never prove a call did not happen; only a spy or a real invocation can. **When a change claims to
+be inert, at least one test must exercise the real entry point**, because inertness is a property
+of the whole path and a suite scoped to one layer cannot see the other.
+
+Variants 2 and 3 are fixed at the mechanism level (`tests/unit/conftest.py` defaults the marker;
+`AINDY_REQUIRE_NATIVE_BRIDGE=1` turns a skip into a failure) — but both stay listed, because the
+failure mode is general and only those two paths are immune. Variant 8 is the first found in a
+runtime mechanism rather than a test.
+
+**Rules that follow:**
+
+- **Before citing a check as evidence for a change, confirm it executes that code.** The job
+  name is not evidence. `Runtime Contracts` runs `pytest tests -m runtime_only`, *not*
+  `tests/unit/`; `pytest.integration.ini` sets `testpaths = tests/integration`.
+- **Mutation-test a new suite.** Break the thing it covers and confirm it fails, and how many
+  tests fail. This is cheap and it is the only check that a test asserts anything: a first-draft
+  wire suite scored 4/7, because the absence-assertion passed with the wire broken. **A test
+  asserting an absence needs a liveness control** or it is vacuous by construction.
+- **A new test file must be selected by some job.** Under `tests/unit/` this is now automatic —
+  `tests/unit/conftest.py` applies `runtime_only` to every item that does not already carry it
+  or a marker handing it to another job (CI-MARKER-1) — so write `pytestmark` for readability,
+  not for safety. **Everywhere else the old rule still bites:** nothing marks a file outside
+  `tests/unit/`, and `pytest.integration.ini` only reaches `tests/integration`. Adding a test
+  directory means giving it a job, or its tests run nowhere.
+- **When a test can legitimately skip, make skipping loud where it must not happen** — an
+  env-gated assertion that fails in CI beats a silent skip.
+- **★ A route test must call the route.** Reading the handler's source proves the guard was
+  written, not that the caller receives its answer — and the status code *is* the contract:
+  a client cannot tell "rejected" from "the server broke" by a 500. Source assertions are fine
+  as a *supplement* (they catch a deleted guard cheaply); they are never the coverage.
+
+**★ Trusting your own verification — three rules that each cost something on 2026-08-20:**
+
+- **A check read moments after a push is the PREVIOUS commit's.** `gh pr checks` returned green
+  about a minute after a push; those were the prior head's results, the PR was merged on them, and
+  **a pushed commit was silently lost** (the design doc's settled decisions, recovered later from
+  an orphan). The merge succeeding proves the *merged* head was green, not that it was your
+  latest. **Compare `gh pr view --json headRefOid` against `git rev-parse HEAD` before merging.**
+  The tell that was missed: the remote branch survived `--delete-branch`.
+- **A local suite run that stops partway measures how far it got, not whether it passed.** Four
+  full-suite runs died at 31%, 57%, killed and 65%; each time "zero failures so far" was reported
+  as evidence and CI then found real failures in files the run never reached alphabetically. A
+  partial sweep is a *different measurement*, not a weaker one — report it as progress, and a
+  targeted subset that finishes is worth more than a broad one that does not.
+
+  **★★ CORRECTED 2026-09-09 — the cause is the MACHINE'S MEMORY, and it is checkable before you
+  start.** This bullet used to say "on this machine" as though the box could never finish a
+  sweep, and that inference outlived its evidence: after clearing ~14 GB of commit and rebooting,
+  `pytest -m runtime_only` completed **2,556 tests, exit 0, zero failures** — the first clean
+  local sweep on record. (#605 said 1,760; that was counted off progress dots rather than from
+  `--collect-only`, and was wrong. The count is the only thing that changed.) Same suite, same commit; the only variable was the host.
+
+  The four kills were memory pressure, measured: **9,593 hard page faults/sec with 575 MB
+  available**, against **18/sec with 1,248 MB available** on the run that finished. Check before
+  blaming the suite:
+
+  ```powershell
+  (Get-Counter '\Memory\Available MBytes').CounterSamples[0].CookedValue      # want > ~1500
+  (Get-Counter '\Memory\Pages Input/sec').CounterSamples[0].CookedValue       # want < ~100
+  ```
+
+  **★ The host is 7.7 GB of ON-PACKAGE memory — platform max 8 GB, four channels populated, not
+  upgradable.** So the lever is never "get more RAM", it is running less at once: Docker Desktop
+  idles at ~3.8 GB with zero containers, and stray `npm run dev` / `vite` servers were found
+  holding 1.85 GB three days after anyone used them. `explorer.exe` also leaks (1.1 GB / 11k
+  handles over 15 days), which a reboot clears.
+
+  **★ The rule that survives the correction: a partial run is still not evidence.** What changed
+  is that "it got killed again" is now a symptom with a cause and a number, not a property of the
+  box — so the first question is *how much memory is free*, not *which test is flaky*.
+- **A low mutation score is often bad mutations, not weak tests.** Two runs scored 2/4, and in
+  both cases every survivor was a defective mutation — one edited code the fixture disabled, one
+  added an unused class while the real branch still ran. **A mutation that does not change
+  behaviour proves nothing about the test.** Verify the mutation bites before concluding the
+  test is weak; the reverse mistake (weakening a good test to "fix" a score) is worse.
+
+- **★ A version number read from an interpreter is cwd-sensitive, and it bit BOTH sides of a
+  handoff on the same day (2026-09-11).** `importlib.metadata.version`, `pip show` and
+  `import AINDY._version` all answer for whichever `AINDY` `sys.path` resolves first, and `-c` /
+  `-m` put cwd first: from `C:\dev\aindy-runtime` the monolith's venv reports **2.11.0**; from the
+  monolith's own root the same venv reports **2.6.0**, which is what its `pytest` imports. We
+  measured 2.6.0 and inferred their deployment; they measured 2.11.0 and inferred an editable
+  install that does not exist. **Print `AINDY.__path__` beside the number, from the directory the
+  thing under test runs in** — if the path is not the one you expect, the number is not the one
+  you think. The container is the only place the answer is unambiguous. (`DEBT-COMPAT-1`.)
+
+**Chasing a flaky test:** never pipe the run through `tail`. Three observed failures of
+`FLAKY-1` were run as `pytest ... -q | tail`, which discarded the traceback and kept the summary
+— the evidence was destroyed at the moment it was produced, three times. Write to a file. And do
+not conclude from small samples: that test produced **three** wrong readings (deterministic,
+branch-caused, confined to `tests/unit/`) before the fourth run refuted each. Against a ~50% base
+rate, four clean runs happen ~6% of the time by luck.
+
+---
+
+## ★ Vendored shims on `pythonpath` — untested by construction
+
+`pytest.ini` sets **`pythonpath = . AINDY`**, so `import apscheduler` resolves to the
+hand-written shim in **`AINDY/apscheduler/`** for *every test in this repo*, not to the
+installed package. **Anything the runtime calls that the shim does not implement is untested by
+construction** — and where the call sits inside a `try/except`, it fails *silently*: the test
+passes, production takes a different branch.
+
+This has now bitten three times:
+
+1. `executors.pool` missing → the dedicated-executor branch shipped unexercised (`FR-15` (b)).
+2. `events` + `add_listener` missing → the starvation listener shipped unexercised (`SYSMAX-5`).
+3. `remove_job` missing → `_remove_from_scheduler` swallowed an `AttributeError` under a comment
+   claiming it was for an already-deleted job. **Removal could have been a permanent no-op with
+   every test green.**
+
+**Rule: grow the shim to match the guard, never weaken the guard to match the shim.** A
+source-derived guard now exists (`tests/unit/test_apscheduler_shim_parity.py`) — it scans
+`AINDY/` for scheduler method calls and fails if the shim cannot express one, so a fourth
+instance is a CI failure rather than a discovery.
+
+**`nodus` is the other shadowed name.** `AINDY/nodus/` shares the installed package's name and
+`AINDY/nodus/runtime/embedding.py` shares the exact module path `GUEST-CONFINE-1`'s tests import
+`NodusRuntime` from. It currently resolves to the **installed** package (pinned by a test), and
+the collision is self-limiting only because that file is a re-export — a real definition there
+would turn a loud failure into a silent one.
+
+---
+
+## `pytest.mark.integration` — skip hazard for Docker-only tests
+
+`pytest.mark.integration` triggers a conftest guard that **skips the entire test when `DATABASE_URL` is not a live PostgreSQL URL**. This fires even in the default dev environment where `DATABASE_URL=sqlite:///:memory:`.
+
+*Corrected 2026-08-15: this said the guard lives in `tests/conftest.py`. It is in **`tests/integration/conftest.py`** — but the warning below still holds, because that hook does **not** filter by path, and `pytest_collection_modifyitems` receives the whole session's items. So a `tests/sandbox` file marked `integration` is skipped by a conftest in a directory it has nothing to do with, which is exactly why the cause was hard to find. (The new `tests/unit/conftest.py` hook filters by path deliberately, for this reason.)*
+
+Tests that only need Docker (not a database) — such as the sandbox escape suite — **must NOT carry `pytest.mark.integration`**. Using that marker on Docker-only tests causes them to be silently skipped in the standard dev environment with no obvious error message.
+
+**Rule:** Sandbox / Docker-only tests use `pytest.mark.sandbox_escape` exclusively. Never add `pytest.mark.integration` to any test that doesn't actually open a database connection.
+
+```python
+# CORRECT — Docker-only test
+pytestmark = pytest.mark.sandbox_escape
+
+# WRONG — silently skips when DATABASE_URL=sqlite://
+pytestmark = [pytest.mark.sandbox_escape, pytest.mark.integration]
+```
+
+This bit us during C3 Phase 0: all 17 escape tests were silently skipped on first run because the files initially carried both markers.
+
+---
+
+## TECH_DEBT.md — maintenance convention
+
+Entries are numbered sequentially within a prefix. **Do not reuse a number** — next available is
+recorded on the prefix's line in the registry below.
+
+When closing an entry, change `Status: Deferred — Low Priority` to `Status: CLOSED (YYYY-MM-DD)`
+and replace the description with what was implemented and any remaining gap.
+
+**Write the finding in `TECH_DEBT.md`, not here.** The registry section below is a one-line
+index; it reached 104 KB — 68% of this file — by being used as the journal instead.
+
+---
+
+## CLI entry point — import-chain hazard
+
+`aindy-runtime` (`AINDY/runtime_only.py`) uses module-level `__getattr__` to lazily
+load the FastAPI `app`. This is load-bearing: it prevents `--help`, `--version`, and
+`sandbox` from pulling in `AINDY.main` → `AINDY.db` → `database.py`, which calls
+`create_engine(DATABASE_URL)` at import time and crashes when `DATABASE_URL` is unset.
+
+**Do not add module-level imports to `runtime_only.py` that reach `AINDY.main` or
+`AINDY.db`.** If you need something at module scope that touches either chain, the
+`__getattr__` pattern must cover it, or the import must move inside the function that
+needs it.
+
+The same hazard applies to `_run_sandbox_check()` in `runtime_only.py`. Any import from
+`AINDY.platform_layer.*` added to that function must be verified not to pull in
+`AINDY.db` transitively. Known unsafe: `AINDY.platform_layer.health_service` (imports
+`AINDY.db.schema_contract` at module level, line 48). The existing guard wraps it in
+try/except; new additions need the same treatment or a verified-safe import.
+
+---
+
+## `_maybe_wrap_runtime_callback` — subprocess isolation hazard
+
+`registry.py:_maybe_wrap_runtime_callback()` routes registered callbacks (trigger
+evaluators, agent completion hooks, capability definition providers, startup hooks)
+through a subprocess via `runtime_callback_worker.py`. **Exception (PLANNER-SUBPROC-1
++ INFINITY-COMPLETION-HOOK-BOUNDARY-1): `run_tool_provider`, `planner_context`, and
+`agent_completion_hook` run in-process** — they read live in-process state
+(`TOOL_REGISTRY`, planner context) or must re-open a session to reach live app state that a
+bare subprocess can't reconstruct (its cwd is read-only site-packages, so `load_plugins()`
+finds no app manifest → zero tools → planner 500 on Linux; and completion hooks no-op'd,
+killing the post-completion Infinity loop). They are listed in
+`_STATEFUL_IN_PROCESS_CALLBACK_SURFACES`. **Note:** the boundary sanitizer still strips
+`db`/`run` for completion hooks — the context carries `run_id` (a string that survives) so
+the hook re-fetches with its own session; the runtime never leaks a db/ORM handle. The
+subprocess is spawned with:
+
+```python
+cwd=str(Path(__file__).resolve().parents[2])
+```
+
+**In an installed wheel (Docker), this resolves to
+`/usr/local/lib/python3.11/site-packages` — a read-only directory, not `/app`.**
+Any relative-path file I/O at module import time in the wrapped module will fail.
+
+**Silent failure mode:** `invoke_runtime_callback` raises `RuntimeError` when the
+subprocess returns `{"ok": False}`. `evaluate_trigger()` in `autonomous_controller.py`
+catches all exceptions and collapses them to `_decision("defer", 0.0, "trigger evaluator
+failed")`. The HTTP response is still 202 — no 500, no visible error, permanent deferral.
+
+**Correct guard pattern in modules imported by the subprocess (e.g., `config.py`):**
+
+```python
+# For mkdir:
+try:
+    log_dir.mkdir(parents=True, exist_ok=True)
+except PermissionError:
+    pass  # subprocess cwd is site-packages (read-only)
+
+# For FileHandler:
+try:
+    handlers.append(logging.FileHandler(log_file))
+except OSError:  # covers both PermissionError and FileNotFoundError
+    pass
+```
+
+Use `except OSError` (not `except PermissionError`) for file-open operations. `mkdir`
+throws `PermissionError`; `FileHandler` throws `FileNotFoundError` when the parent
+directory doesn't exist. Both are `OSError` subclasses but only the broader catch
+covers both cases.
+
+Key files: `AINDY/platform_layer/runtime_callback_host.py` (subprocess spawn + CWD),
+`AINDY/platform_layer/runtime_callback_worker.py` (subprocess runner),
+`AINDY/config.py` (`_build_log_handler` — the fixed guards).
+
+---
+
+## Current phase + standing decisions (2026-08-20)
+
+**Phase: runtime testing.** Things get connected to the runtime in order to exercise it — which
+is why app-side feature requests keep arriving; they are a symptom of the testing method, not
+scope creep.
+
+**★★ SOAK HAPPENS HERE.** This section once said soak belonged in `aindy-apps-monolith`; that was
+false and it was the instruction standing between the runtime and its own backlog — eight items
+had "soak, then flip" as their entire remaining work and none moved for months. The apparatus
+exists: `tests/integration/soak_harness.py` (barrier-synchronised concurrency + before/after
+metric readback), four soak suites, an advisory flag-on CI step, live Postgres + Redis on every
+PR. It found that `EXACTLY_ONCE` is **not** exactly-once under contention — a *runtime* finding no
+amount of app-side traffic surfaces. **★ A soak assertion must not be stricter than the contract:
+the same suite asserted a race outcome (`< WORKERS`) and went red on a correct runtime.**
+
+Still true: capabilities ship default-off until there is evidence, and the app repo is where
+production traffic lives. What was wrong is inferring that evidence must therefore come from
+there.
+
+**★ Release state — there is deliberately no version number in this paragraph any more.** Read
+it from the four places that cannot go stale, and reconcile them:
+
+```bash
+git tag --sort=-creatordate | head -1      # newest tag
+cat AINDY/_version.py                      # what the next build will call itself
+grep 'aindy-runtime==' Dockerfile          # what the image installs
+sed -n '/^## Unreleased/,/^## [0-9]/p' CHANGELOG.md   # empty = drained, else a release is owed
+```
+
+*Why the numbers are gone rather than corrected: this paragraph was wrong **four** times, each
+correction accurate the day it was written and decayed the same way. A fifth was free, so the
+class was removed instead.* Per-release facts — schema contract, Alembic head,
+`recommended_runtime_requirement`, whether `bootstrap-schema` needs `--reconcile` — belong in
+that release's `CHANGELOG.md` entry and app handoff, where they stay attached to the release
+they describe.
+
+**What does not decay, and is why this section still exists: the newest *tag* and the newest
+*fix* are different things.** Work merged after a tag is in no installable release until the
+next one is cut — `2.4.0` shipped with the `nodus-lang` pin that `f7f3555` had already fixed on
+`main`, which is the whole reason `2.4.1` exists. **Before telling anyone a fix has shipped, run
+`git tag --contains <commit>`;** "it is on `main`" and "it is released" are separate claims and
+only the first is cheap to verify.
+
+The release *protocol* — which does not go stale either — is in the `PYPI-PUBLISH-1` line of the
+prefix registry and in `docs/governance/RELEASE_CHECKLIST.md`.
+
+**Standing decisions** (full record: `TECH_DEBT.md` → `DECISIONS-2026-08-01`):
+
+- **FR-6 email delivery = hybrid** (registered `email` connector if present, else runtime SMTP).
+- **`/auth/register`'s duplicate-email enumeration oracle — CLOSED in 2.0.0 (2026-08-02, FR-6
+  Phase C), and this bullet said "to be fixed" for six weeks after.** Shipped as the standard
+  shape it described: register returns a neutral `202` with no token, `POST /auth/verify-email`
+  issues the token, a duplicate gets a *"someone tried to register"* mail
+  (`auth_router.py:289`), and the duplicate path equalises against the create path's bcrypt
+  cost (`auth_router.py:86`) so the timing channel is closed too. **What the reasoning was for,
+  kept:** it could not be fixed standalone — register also authenticated — which is why it
+  rode FR-6 (hybrid email: registered `email` connector, else runtime SMTP). FR-6 is fully
+  shipped (items 1–3 + Phase C); "no `email` connector" means the app never registered one and
+  mail rides SMTP — the hybrid working as designed, not a gap.
+- **The UI major cluster is decided from `C:\dev\aindy-ui-kit`**, not here.
+
+---
+
+## TECH_DEBT.md — prefix registry
+
+**This is an index, not the record.** `TECH_DEBT.md` holds the full entry for every item here —
+diagnosis, measurements, corrections, and the reasoning that decays fastest. It is consistently
+2–5× longer than the line below it. **Read the `TECH_DEBT.md` entry before acting on any item;
+these lines exist so you know the trap is there, not so you can skip the source.**
+
+**Maintenance rule:** one line per item — status, the hook, the pointer. Detail goes in
+`TECH_DEBT.md`. Do not reuse a number within a prefix.
+
+**★ That rule is now enforced, because stating it three times did not work.**
+`tests/unit/test_debt_registry_accuracy.py` fails when a registry entry exceeds **1144 bytes**
+(**833** under a `### Closed` heading), measured in **UTF-8 bytes**. **★ It measured *characters* until 2026-09-04 while the constant said bytes — and it drifted loose precisely because these entries are dense with the multibyte characters this file uses most (`★`, `—`), so four entries sat over the stated cap with the guard green.** Both numbers are the *current high-water mark*, not an
+endorsement of that length — the cap is a **ratchet against regrowth**, and the history is why:
+the registry was trimmed to 66 KB, was back to 98.8 KB within a week, and the next "trim"
+(#487) reported −14,936 B while the file actually grew 96,913 → 115,234 B. Every one of those
+was honest work measured wrongly — **the trim was measured over the entries touched, not over
+the file.** Measure the whole file, before and after.
+
+**Where the detail belongs is not a judgement call: 79 of 91 entries already have a *larger*
+record in `TECH_DEBT.md`.** If trimming an entry would lose something, the loss is the signal
+that the text was never indexed anywhere — move it down first, then trim. Ratchet the cap
+downward in a dedicated pass; never raise it to accommodate a new entry.
+
+**★ Provenance tags → `docs/governance/COMPARATIVE_RESEARCH_INDEX.md`.** A line tagged
+*(Aider research)*, *(MAF research)*, *(Codex research)*, *(Claude Code research)*,
+*(CrewAI/Nodus research)*, *(GPT Engineer research)* or *(ADK research)* came from a comparative
+analysis in `C:\codev\<name> research\`, not from an audit of this codebase — a different class of
+finding (**absent vocabulary rather than broken wiring**). **Eight systems have been audited; the
+index records what each produced, what is already SETTLED and must not be re-litigated, the six
+recurring errors to check first on the next system, and which primitives were derived twice
+independently.** Each folder holds an `ACCURACY_CHECK_vs_aindy-runtime_*.md` recording which claims
+survived verification against source. `TECH_DEBT.md` provenance headers:
+`AIDER-PORTABILITY-2026-08-17`, `MAF-REFERENCE-2026-08-17`, `CREWAI-NODUS-2026-08-18`,
+`ADK-LENS-2026-08-18`; Codex, Claude Code, Hermes and GPT Engineer entries cite sources inline.
+**Read the index before acting on one of these, and before starting a new system — none is a
+defect, and several are things no internal audit would surface.**
+
+**★ A closed entry must not sit under an `### Open` heading.** This drifted: after one week of
+closures, six entries whose own text began `**CLOSED …**` were still filed under `Open — P0`/`P2`,
+and one read *"D open"* two days after D merged. Anyone scanning for open work got a wrong
+answer and nothing said so — the same shape as an index contradicting its entries.
+`tests/unit/test_debt_registry_accuracy.py` now fails when an Open entry headlines itself as
+closed. It deliberately does **not** guess at partial closure: `IDEM-11` and `HTTP-SCOPE-GAP-1`
+legitimately describe closed halves while staying open, and a checker that guessed would be
+disabled inside a month. (This section was 104 KB — 68% of this
+file — because findings were written where they were discovered instead of where they belong.)
+
+### Open — P0
+
+- **FR-15** — dispatch is serialised: `schedule()` is the only queue drainer and runs each item **synchronously**. (b)+(c) shipped 2026-08-15/16; **(a) thread-mode flipped 2026-09-01**. **★★ The DISTRIBUTED half is BUILT AND OPT-IN (#551–#556)** — a resume crosses the queue as `run_id`+`eu_type` and the worker rebuilds it; it does NOT inherit the thread default. **★★ FOUR silent losses were found here, all one shape — an unresolvable message ACKed as SUCCESS — and THREE were introduced by the fix for the previous one.** **★ STAYS OPEN: what remains is EVIDENCE, not code — the soak runs `process_one_job` IN-PROCESS, and a separate worker PROCESS is where all four lived.** **★★ EVIDENCE ATTEMPTED 2026-09-08 AND BLOCKED, not by FR-15: distributed mode moves BOTH services onto production-safe profiles whose sandbox chain NO shipped compose satisfies (in-container: `container_sandbox`/`strong_sandbox` UNSUPPORTED), and `AINDY_DEPLOYMENT_PROFILE` is no escape — a worker accepts ONLY `distributed-worker`.** **Do NOT close on the opt-in.** Source: `TECH_DEBT.md` FR-15.
+
+
+### Open — P1
+
+- **FLOW-PARALLEL-1** — **CONFLICT HALF #569; PHASES 0+1+2+3a SHIPPED (3a on 2026-09-15); open for 4 only.** `FanOutEdgeGroup(targets, join=all|any|quorum, quorum=k)` runs a node's successors as ONE superstep: per-branch sessions, one ordinal block at the barrier, central merge. Default-OFF (the flag gates CONCURRENCY, not semantics). **★★ Phase 2: a lenient join proceeding past a failed branch is the runtime's FIRST `partial` EMITTER.** **★ `all` keeps phase 1's RECORDED digest; a non-default join is shape.** **★★ The width bound is PROCESS-WIDE (`SYSMAX-5`).** **★ Phase 3a: a predicate is DATA — `{"target", "when": name}` + `@register_predicate`; the NAME is in the graph signature (closes `FLOW-GRAPH-SIGNATURE-1`'s blind spot for named edges); a missing name FAILS the run, never falls through; rebinding a name is refused. ★ 3b `SwitchCaseEdgeGroup` DECLINED: an ordered `when` list ending in `default` already is one.** **★ Open: phase 4, the default flip on evidence.** Design: `docs/design/FLOW_PARALLEL_DESIGN.md`.
+- **AUTHORITY-NEGOTIATION-1** — **PHASES 0+1+2 SHIPPED; open for 3 — the flip, on evidence: ★ HALF IN 2026-09-17 — the app's `leadgen.act` declares `on_denial="wait"` (#378); the FIRST DENIAL is NOT yet observed (theirs; asked in the 2.20.0 handoff).** A denied capability terminates the step; approval is whole-plan, so recovery discarded nine good steps. Bounded (exactly once), **downgrade-only**, recorded, **default-OFF** (`AINDY_AUTHORITY_NEGOTIATION`). **★★ It CANNOT grant authority, structurally: it picks WHICH TOOL to attempt and `execute_tool` re-runs `check_tool_capability`.** **★ The §2 subset rule is ASKED of the enforcing code, never reimplemented.** **★ Phase 2: `on_denial="wait"` PARKS the run on `agent.authority.decision` (typed `resume_schema`); operator decides `skip | abort`, never `grant`. ★★ `AGENT_FLOW` had NEVER waited; a failure AFTER a resume never reached the AgentRun; both fixed. ★ The TOOL declares it, never the plan.** Design: `docs/design/AUTHORITY_NEGOTIATION_DESIGN.md`.
+- **FS-SCOPE-1** — *(Aider research)* the capability vocabulary is **verb-shaped**, so no authority statement can name a path. `register_tool` carries `egress_scope` for network; `allowed_paths|path_scope|writable_root|allowed_dirs|fs_scope` returns **one hit repo-wide and it is a comment**. The runtime can say *may this run reach the network under scope X* and cannot say *may this run write `src/**` and nothing else*. **★ Do NOT build it as `fs_scope` beside `egress_scope`** — a second vocabulary for the question `EXEC-ENV-BIND-1` already asks. It is a field ON that descriptor: one structural change, three entries. **★ HALF DONE 2026-08-19: the vocabulary EXISTS — `visibility.filesystem {mode, roots}` on `ExecutionEnvironmentSpec`, ENFORCED on the guest path (nodus `allowed_paths`).** **★★ 2026-09-04, and do NOT read phase 3 as closing this: the TOOL seam only sets `cwd` to a scratch root. `roots` is NOT enforced there — a bare subprocess can still open any path the OS allows, so `cwd` is a default LOCATION, not a boundary. Enforcement needs the container runner, not another spawn argument.**
+
+> **`EXEC-ENV-BIND-1` and `FS-SCOPE-1` converge on one root, with the now-closed `GUEST-CONFINE-1` and `TOOL-SEAM-ISOLATION-1`:** `create_sandbox_runner` is reachable only from `plugin_host.py` (verified at HEAD — the only *execution* call sites are `plugin_host.py:346` and `:816`; every other reference reads `.metadata()`). Four audits found it from four starting points — guest VM, execution unit, tool seam, path authority. It is **one provider re-homed and the call sites taught to ask**, not four fixes. The two closed ones were taken first because they needed no new vocabulary. `FS-SCOPE-1` is a **field on `EXEC-ENV-BIND-1`'s descriptor**, not a second vocabulary beside it.
+- **SUBSTRATE-WITNESS-1** — *(Claude Code research)* **the substrate claim has no first-party consumer that exercises it.** Measured against `C:\dev\claw`: it integrates in 334 lines, all optional, mostly HTTP; `execute_tool`/`EffectRecord` appear **zero** times in its own source, so its real effects cross no chokepoint. **★ Corollary for reading this file: the coverage percentages across nine comparative audits describe capabilities the runtime HAS, not capabilities anything USES.** **★ Corrected 2026-08-19: "blocked" was the wrong word and eight entries inherited it — every consumer is first-party and owner-controlled, so the integration is available whenever wanted. It is a DECISION NOT TAKEN.** Recommended slice: route only Claw's outbound message delivery through `execute_tool` with `EXACTLY_ONCE`. **★ Do NOT close with a synthetic fixture** — what is missing is a consumer that would NOTICE if the guarantee broke. **★ Re-measured 2026-09-03: still ZERO.** Scope: `WITNESS_AND_BASELINE_SCOPE.md`.
+- **PERF-BASELINE-1** — *(Aider research)* **zero latency assertions across `tests/`.** **★★ MEASURED AND RENAMED 2026-08-19: the instrument EXISTED — 52 metrics — and NOTHING CONSUMED IT, and the integration suite was ENTIRELY SEQUENTIAL, so gated flags had been proven CORRECT and never under CONTENTION.** That was the real blocker behind eight "soak then flip" items — not production traffic, which is why deferring them to a consumer never helped. `tests/integration/soak_harness.py` (concurrency + metric readback, mutation-tested 6/6) and an advisory flag-on CI step now exist. **★ Re-measured 2026-09-03: metric readback 0→7 files, concurrency 0→7, soak suites 0→4 — that half is CLOSED; latency assertions still 1. Do NOT close the rest with wall-clock thresholds on shared CI — COUNT WORK (both real regressions here were query counts).** Scope: `WITNESS_AND_BASELINE_SCOPE.md`. **★ The gate metric that was missing now exists** (`aindy_effect_gate_outcomes_total`), so IDEM-11's production soak has something to read.
+
+### Open — P2 and below
+
+- **HTTP-SCOPE-GAP-1** — **Re-levelled P0 → P2 2026-08-18; REMAINDER DECIDED 2026-09-17 (DEC-046, provisional — closes on acceptance).** Route coverage is COMPLETE (91 scope-gated / 12 admin / 21 public / 2 identity-only of 126); a JWT derives scopes from `User.is_admin` per request. **★ Three gotchas that still bite: (1) a per-route `dependant` walk UNDER-reports — router-level `dependencies` are excluded and `_IncludedRouter` hides the nesting; (2) `enforce_api_key_scope` takes ANY-OF alternatives, which blinded a regex scan; (3) scanning `app.routes` for a prefix finds ZERO — use `_iter_api_routes`.** **★ The remainder does NOT conflate: scope answers the VERB (dependency), the row filter answers OWNERSHIP (`FlowRun.user_id == user_id`). No cross-owner read path, no `:any` scope — operators use `/platform/*`.**
+- **EFFECT-OUTCOME-UNKNOWN-1** — **VOCABULARY SHIPPED 2026-09-03 (#560), with `EFFECT-PARTIAL-1`.** The runtime had no word for *"dispatched, outcome unobserved"*; `EffectRecord.status` now has `unknown`. Narrowly: a **read timeout after a full request write**, the only genuinely ambiguous phase — DNS failure, refused connection and an incomplete write are knowably NOT dispatched, an ack is knowably landed. **★★ `pending` is now REFUSED as a completion, with an error saying why** — it was the obvious thing to reach for and wrong twice: the TTL job hard-excludes pending rows so an honest ambiguity there is never reaped, and the stale-handler warning fires on it hourly as a malfunction. **★ It is a claim about the WORLD, not the runtime's confidence — an unclassified exception is still `failed`.** **★ The ENVELOPE now carries it too (#569), resolved at the same point as `partial`.** Remaining: nothing emits it, and `AT_MOST_ONCE` is still absent from the guarantee frozenset. Source: `TECH_DEBT.md`.
+- **CLI-EXEC-SURFACE-1** — **★★ REFRAMED 2026-08-22: NOT a CLI entry — a terminal command is a TRANSPORT over the syscall vocabulary; a transport cannot grant authority it does not have** (`mcp-server` is that shape shipped). Real question: is the OPERATOR half (resume, flow list/get, queue+DLQ, trace, health — routes only) meant to be syscall-addressable? **★ An operator syscall opens THREE doors at once** (`/platform/syscall`, MCP allowlist, any CLI) — a DLQ drain reachable by an LLM client is a DECISION. **★ DECIDED 2026-09-17 — DEC-047 (provisional; closes on acceptance): the operator half stays HTTP-ONLY; no CLI built.** Transports still own identity (`INITIATOR-IDENTITY-1`) and call setup (`QUOTA-ACCRUAL-ORPHAN-1`). Scope: `CLI_EXECUTION_SURFACE_SCOPE.md` §8.
+- **SANDBOX-EVIDENCE-2** — the strong runner's launch attestation marks `mount_mode`/`network_policy` **verified by checking its own argv** (`sandbox_runner.py:1865`); the launcher is out-of-tree, no CI installs it, and the escape suite targets `containerized_oci` only. Real evidence is the live `/proc` probe — deployment-time, never CI. **Record-first: `strong-sandbox-certified` is a deployment-time claim and the contract says so.** Variant 7, emitted at runtime. Not `C3` (non-Linux); this is evidence for the Linux one.
+- **EFFECT-PRECONDITION-1** — *(Aider research)* an effect cannot declare the version of the world it expects; `EffectRecord` keys on `sha256({action_type, input, scope})` — the identity of the **request**, never of the state it acted on. **★ The reference implementation is Aider's Git discipline, verified in its source: dirty-commit establishes the precondition, the commit hash is the version token, and `/undo` refuses on four separate mismatches.** **★ The design answer, and it is cheaper than what we were heading toward: the version identity is whatever the external system's own mechanism produces — record it, carry it, refuse on mismatch, NEVER reimplement it. Content-addressed snapshots inside the runtime is the wrong shape.** **Genuinely premature — it needs an external mutable resource the runtime actually mutates, and there is no filesystem syscall and no `sys.v1.repo.*`, correctly. Build after `FS-SCOPE-1` or not at all.**
+- **EFFECT-MANIFEST-1** — *(Aider research)* **record-only, nothing is broken.** The reframe: plan-once is not about planning, it is about **knowing the effect set before executing it**. **★ The uncomfortable half: Aider's parse-validate-apply (three stages before the first byte hits disk) satisfies our own central assumption STRICTLY BETTER than we do — we derive the capability set from a plan the model produced without having seen the state it will act on.** One manifest per run / none per turn / several per turn are three granularities of one shape. **Do not build before `FS-SCOPE-1` + `EFFECT-PARTIAL-1`** or it carries only the verb-shaped capabilities the token already has.
+- **EMBEDDED-FLOOR-1** — *(Aider research)* no supported profile below `single-instance`, which declares `postgres: True` (`deployment_contract.py`). A consumer shaped like a library in a terminal is **out of contract by declaration, not omission** — which is the honest position, but it is a *no*. **★ This is a soak-and-deployment gate, NOT a capability gap: nothing says the single-process case requires Postgres in a way SQLite could not serve (`AINDY_ALLOW_SQLITE` exists, the whole unit suite runs on it). What is missing is a profile that DECLARES the reduced guarantees and a tier that ASSERTS them — work, not invention.** Keep separate from `DEPLOY-TARGET-1/2`, which scale *up*.
+- **RECOVERY-GRANULARITY-1** — *(LangGraph research)* **checkpoints at the boundary of the unit it SCHEDULES, so control flow inside a segment is invisible to recovery** — `_count_completed_segments` restarts a partial segment from step ONE, re-issuing every LLM call (P2: `DUR-2` means mediated effects do not double-fire; the cost is WORK). **★ DESIGN FILED 2026-09-17 → `docs/design/RECOVERY_GRANULARITY_DESIGN.md` (4 decisions pending): the worker seam `run_agent_tool` ALREADY holds a session — write `agent_steps` per step there (DBOS `operation_outputs` shape), parent batch → upsert. ★ Key on the plan's STEP INDEX (compiler-emitted), NOT a call ordinal — the retry loop is inside the guest, so attempt 2 of step 3 is ordinal 4. Replay only on a CONTINUED run from a `success` row.** Not kernel replay (`DEC-019`).
+- **RETRY-CONTEXT-1** — *(GPT Engineer research)* **a retry re-attempts the same call; it cannot make a better-informed one.** No channel carries the prior failure into the next attempt — not the flow node, the tool, or the compiled plan. **★ The CLASSIFY half shipped 2026-09-16 (#703, `RETRY-CLASSIFY-1` closed): `FailureRecord` is the payload; this half CARRIES it.** **★ The channel is a SCOPE, never an argument — a failure folded into `args` changes the `EffectRecord` key and un-dedups the retry.** K = 1 default, max 3, 2 KiB/record; ships default-off; **closes only on a first-party consumer** (a compiled plan's args are fixed at plan time; a repair stage is app content). ★ `execute_with_retry` was DELETED (DEC-024) — thread the scope into the three real loops. Design: `RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §6–§7.
+- **PROGRESS-CHANNEL-1** — *(Codex research, its N5)* an execution reports a result or nothing; **no partial-output surface exists** — zero `StreamingResponse`/`EventSourceResponse`/`text/event-stream` on any execution surface (the MCP server's SSE is a different surface). Surfaced only by an *interactive* comparator; nothing in the current batch-shaped workload asks it. **★ It is a runtime primitive because of three properties that are also its guard rails: carries NO authority, constitutes NO effect (no `EffectRecord`, not replayed, not in the idempotency key), attaches to the TRACE. The failure mode to design against is a progress channel quietly becoming a delivery guarantee — best-effort by construction, stated in the contract, not discovered.** Note `agent_continuation.py:11` already records the same boundary from the durability side; this makes mid-segment state **observable**, not durable.
+- **TEST-ORDER-RUNTIME-STATE-1** — P3, test fidelity. **The published deployment profile SHADOWS `AINDY_DEPLOYMENT_PROFILE` in every unit test:** `AINDY.main`'s import (shared conftest) boots and publishes `single-instance`; three runtime readers consult the published state FIRST and honour the env only when it is `unknown`. `test_deployment_profiles.py` resets the state to `unknown` after each test, UN-shadowing the env for whatever runs next — and `test_sandbox_runner.py::…fails_closed_without_fallback` then goes red with the CORRECT message, because its expectation contradicts its own declared profile (it was green only while shadowed). **★ #694's description said the opposite (a leaked `distributed-api`) — wrong.** Fix: a snapshot/restore guard in `tests/unit/conftest.py` (CONTEXTVAR-1's shape) + set the runner explicitly in that test.
+- **LINT-FORMAT-1** — P3, cosmetic, **filed because CLAUDE.md advertised a command the repo does not satisfy.** The Commands section listed `ruff format AINDY/` beside `ruff check`; CI's `Runtime Lint` runs **`check` only**, and `ruff format --check AINDY tests` reports **457 of 559 files would be reformatted** (259 under `AINDY/`, 198 under `tests/`). So the tree has never been formatted and running the documented command produces a ~450-file diff. **★ Do not fix by formatting the repo in one sweep** — that rewrites almost every file, destroys `git blame` on all of it, and buys nothing CI checks. If it is ever wanted: format, then add `ruff format --check` to `Runtime Lint` in the same PR, because formatting without enforcing just resets the clock. Note `line-length = 120`, so `format` and `check` do not disagree — this is drift, not a conflict.
+- **SCOPE-NAMING-1** — *(found while checking the Codex audit)* P3, cosmetic. **Filed because the source already claims it is filed** — `auth_service.py:601` says "`SCOPE-NAMING-1` tracks the rename" and the id existed nowhere until 2026-08-17. `enforce_api_key_scope` now gates **every** caller, not just API keys (JWT exemption removed by HTTP-SCOPE-GAP-1), so the name is narrower than the behaviour. **★ Deliberately not renamed: 41 call sites across 14 route files, and a missed call site on a security dependency fails OPEN. If ever done — alias, mechanical migration, pin the old name by test, then delete. Never rename in place.**
+- **DEBT-COMPAT-1** — **★★ REOPENED 2026-08-18 (P2); SECOND INSTANCE 2026-09-11.** `C:\dev\claw` carries `aindy_runtime-1.4.0` against **2.4.0**, below the floor we advertise (`>=2.0,<3.0`), and declares `aindy-runtime` NOWHERE — no pin, so no pin can go stale visibly. **★ The monolith is the stronger case: it DOES declare `>=2.11.0,<3.0` and its container IS on 2.11.0 — but its dev venv, and therefore its own `pytest`, import **2.6.0**, so both its "1,222 passed" upgrade verifications ran on the wrong runtime; and its rebuttal of our measurement was the cwd trap (from `C:\dev\aindy-runtime`, `import AINDY` shadows site-packages).** Declaring is not enough while nothing reads the declaration: `runtime_compatibility.py` publishes the policy on `/api/version` and NOTHING consumes it (`ROUTE-AST-UNWIRED-1`'s shape). Fix: one comparison where `/api/version` is already fetched; **warn, never refuse.** Do NOT close with a policy doc.
+- **INITIATOR-IDENTITY-1** — *(OpenClaw research)* **the identity that initiates work is not the identity the runtime authenticates** — `tenant_id == user_id` holds only while work is REQUESTED; an inbound-driven consumer has one operator and N peers. **★★ Rule: an asserted subject may only CONSTRAIN, never widen or SELECT** (LiteLLM `end_user`: limits, never authorisation). **★ Do NOT make the peer a `User` row.** **★ DESIGN FILED 2026-09-17 → `docs/design/INITIATOR_IDENTITY_DESIGN.md` (4 decisions pending): `SyscallContext.subject`, transport-set; readers ENUMERATED and AST-pinned (quota sub-key, ledger label, payload key, `enduser.pseudo.id`). ★ Correction: the MEMORY namespace stays the operator's — the entry listed it as a collapse; it is the one row that must STAY collapsed.** P0 the day an inbound consumer ships.
+- **AUTHORITY-LIFETIME-1** — *(OpenHands research)* **the capability token is bound to the clock (`TOKEN_TTL_HOURS = 24`), not to the execution it authorises** — a run that finished in 90 s stays valid all day; `revoke|invalidate` returns zero. Composes: `capability_ceiling` = WHAT may this bearer do; this = WHILE WHAT IS TRUE. **★ DESIGN FILED 2026-09-17 → `docs/design/AUTHORITY_LIFETIME_DESIGN.md` (4 decisions pending): the entry's three questions (where / negative cache / fail-open) were ALREADY answered for one terminal value by `CANCEL-REACH-1` — widen `cancellation`'s cached own-session read to every terminal status, STICKY once terminal, same two sites, fail-OPEN, HMAC stays stateless, NO new read on the hot path. ★ A `waiting` run KEEPS its authority (pause-null declined — a resume would need a grant `DEC-016` denied).**
+- **EVENT-OUTBOX-1** — **system events are buffered IN MEMORY and emitted AFTER the work commits** (`execution_signal_helper.py` ContextVar → `pipeline.py` flush, emits swallowed) — a crash in that window keeps the work and loses the record. P2: loses the audit/causal record, not an effect. **★ Do NOT fix by emitting eagerly** — that records work that rolled back. **★ DESIGN FILED 2026-09-17 → `docs/design/EVENT_OUTBOX_DESIGN.md` (3 decisions pending), NARROWER than filed: the buffer engages ONLY inside a request pipeline — `_persist_system_event` already writes on the caller's session and commits everywhere else; and the capture read is a SCORE, not a gate (observability item). Mechanism: ADD the row to the handler's session without commit — it rides the next commit (the FR-30 EU finalize is the last on every request); a raising handler leaves no row. No outbox table.**
+- **AUDIT-CORRELATION-1** — three joins the audit trail cannot make. **★ DESIGN FILED 2026-09-17 → `docs/design/AUDIT_CORRELATION_DESIGN.md` (4 decisions pending) — RE-MEASURED, two of three mis-described:** (1) `ExecutionAuthority` DOES NOT EXIST (`AUTHORITY-VALUE-1` closed as the clamp) — the `syscall.executed` payload carries neither capability nor guarantee; (2) fell out of `EXEC-ENV-BIND-1` (`env_applied`), attestation remainder = `SANDBOX-EVIDENCE-2`; (3) `EffectRecord` has NO `trace_id` column — the real join is `execution_id` = `payload->>'execution_unit_id'`, unindexed JSONB, per UNIT not per dispatch. **Fix: three additive payload keys (`capability`, `guarantee`, `action_id` — locals at the emit site), NO FK either way. ★ `syscall.executed` is `operational` under retention — the join is time-bounded on BOTH sides, by construction.**
+- **EGRESS-INPROC-1** — a re-homing, not a build. `egress_guard` is off by default and **its own docstring names both bypasses** (non-inheriting thread; native resolver). **★★ DESIGN FILED 2026-09-17 → `docs/design/EGRESS_INPROC_DESIGN.md` (4 decisions pending) — and it found a DEFECT the entry never named: `execute_tool` enters `egress_scope` around the IN-PROCESS call only (`tool_registry.py:1196`); the ISOLATED branch returns at `:1181` BEFORE it. A tool that declared `isolation=` — moved out of process for being distrusted — runs with NO egress enforcement, flag on or off; its allowlist is computed and dropped** (`CANCEL-REACH-1` residual 2's shape). Design: resolve `(mode, domains)` ONCE before the branch; the worker installs the guard process-globally from its payload, never reads policy; `env_applied.network` REPORTS the mechanism (a provider that cannot enforce `none` reports, not refuses). Flag stays default off.
+- **DISPATCH-ADMISSION-1** — deliberately deferred. **Do NOT build a general hook system** — an interception seam runs someone else's code in the kernel process, which the Tiered Isolation Contract reserves for Tier 1.
+- **MEM-EXPAND-DEAD-1** — `expand()`'s semantic-neighbour half returns `[]` on every call and always has (pgvector 0.4.2 returns `ndarray`, the guard tests `isinstance(list)`). **pgvector 0.5.0 fixes it — which is exactly why dependabot #390 was held, not merged:** taking it turns expansion on by default in the path that caused RT-MEMTXN-LEAK-1's pool exhaustion. **Widening the guard is not the safe option it looks like.**
+- **DB-NODUS-BUDGET-1** — both fixes shipped 2026-08-01 (idle-in-transaction cap 30s→60s + opt-in `AINDY_MEMORY_RECALL_OWN_SESSION`); remaining is soak then flip. **Do NOT "fix" this by rolling back the caller's session** — RT-MEMTXN-LEAK-1 tried that and it broke `test_agent_approve_idempotency`.
+- **MCP-SDK-2X-1** — `mcp 2.0.0` removed the 1.x API `nodus-mcp` is built on. Both install sites are capped `<2` (`pyproject.toml` **and** the separate CI step — a cap must be repeated in both). **Not a test bug — do not skip the live test to go green.** **★ A second instance ran in reverse and is now RESOLVED (2026-08-19): `nodus-mcp` capped `nodus-lang<5.0.0` and blocked a nodus major; 0.1.3 floated it unbounded. The FIRST instance (`mcp<2`) is still live — keep both caps.** **★ The rule the second instance established: never fix this by isolating the MCP tests** — pinning a nodus major that `nodus-mcp` caps below makes `aindy-runtime[mcp]` **uninstallable** (`ResolutionImpossible`), so green CI would ship a broken extra. **Ordering is a sequence, not a deadlock: nodus X publishes → nodus-mcp accepts `>=X` → the runtime bumps BOTH in ONE PR across ALL THREE sites.** ★ A prophylactic cap on a fast-moving first-party dep turns every major into a two-repo release train.
+- **LOCKFILE-PLATFORM-1** — a Windows-generated `platform/package-lock.json` cannot satisfy Linux `npm ci` (missing packages are `bundleDependencies` of an optional wasm32 package, so a machine that never installs it never walks that subtree). Resolver shipped: **`Platform Lockfile` workflow**, dispatch-only. Stays open — every future rolldown/oxide bump needs the same treatment. **Process rule: verify a lockfile change with `npm ci`, never `npm install` + build** (install silently repairs the mismatch). Expect a benign `"peer": true` diff; read *"Packages added"*, not the changed bit.
+- **DEP-UPGRADE-DEFERRED-1** — OTel and the UI major cluster both closed. **Two lessons kept:** the otel packages are version-locked so single-package PRs always die `ResolutionImpossible`; and **grouping is necessary but not sufficient** — dependabot resolves each package independently, so hand-align and verify with `pip install --dry-run`. react-router 7→8 deferred (needs a ui-kit release first).
+- **C3** — non-Linux strong sandbox. **C2 closed 2026-06-06** (container-grade, escape-tested); C3 is **open** — both supported-platform tuples are `(PLATFORM_LINUX,)`, so non-Linux hosts reach `container-sandbox-certified` but not `strong-sandbox-certified`. Pre-scoped in `C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`.
+- **CLI-1** — lazy settings getter / module-level import hazard. Deferred post-1.0.
+- **CLI-SANDBOX-FORMAT-1** — `sandbox` raw JSON output wall. Deferred to 1.0.1.
+- **SYSMAX-1 / -3 / -4** — thread-mode 100-job cap still the `.env.example` default (prod overlay enforces distributed); memory bytes not enforced per EU (needs OS integration); per-EU syscall and wall-time caps advisory. **★ SYSMAX-3 GUEST HALF SHIPPED 2026-09-16 (#697): `AINDY_NODUS_MAX_MEMORY_MB` → guest floor `memory_bytes` → nodus `max_memory_mb`, narrow-only, `enforced_resources(guest=True)`. ★ It bounds RSS GROWTH, polled — a script that grows 64 MB in 26 instructions finishes under an 8 MB ceiling; an unmeterable host REFUSES a declared ceiling. Ships unset. Other EU types still unbounded — stays open.**
+- **TIER3-10** — `async_job_service` coupling. Architectural, no bounded fix.
+- **DEPLOY-TARGET-1 / -2** — cloud deployment manifests; multi-tenant SaaS readiness gate. Triggers: first cloud deployment / first multi-tenant operator.
+- **BILLING-1..5** — deferred until commercial launch. Source: `docs/archive/MONETIZATION_AUDIT.md` (findings carried in `TECH_DEBT.md`).
+- **LAYER-1..5** — layer boundary violations. All deferred.
+- **ROUTE-EXTRACT-\*** — remaining candidates: `memory_router` (split required), `coordination_router` (AgentRegistry ownership gap).
+- **PACK-DEBT-\*, DEBT-COMPAT-\*, TENANT-\*, COMPAT-\*, DATA-\*, LOCAL-\*** — packaging, dependency and architectural gaps.
+
+### Open — programs and multi-item prefixes
+
+- **APP-FR-\*** — app-side feature requests from `aindy-apps-monolith`. **Next available: FR-37.** FR-1..13, 16..18, 20..31, FR-19's runtime half shipped (FR-29/30/31 have their own entries). **★ 2026-09-16 intake (#708): FR-32 (option 2 — a plugin's `memory_execute_loop` WINS over the runtime DEFAULT, registered LAST on both boot paths), FR-34 (`steps_completed` counts SUCCESSES — ★ the filing missed `nodus_vm`'s sites), FR-36 (hook `user_id` as `str`); FR-33 (#709 — `register_tool(args_schema=)`, checked BEFORE dispatch, `AINDY_TOOL_ARGS_VALIDATION` default `warn`).** **★ FR-22: `/apps/*` is NOT an ownership boundary — 35 such routes are RUNTIME-served; `AINDY/route_inventory.json`.** **FR-35 (#712 — guest LLM usage rides the worker reply as a 4th deferred collection, recorded in the parent; the worker counts NOTHING; ★ the seam had DROPPED `failure_class`).** Open: **FR-14** (recurrence half only — a deployment act; the guard is a REQUIRED check since #710). ★ FR-6 fully shipped in 2.0.0 (items 1–3 + Phase C) — this line said 2+3 were open for six weeks.
+- **ECOGAP-\*** — ecosystem capability gaps (`ECOGAP-1..6`), roadmap gaps rather than classic debt. ECOGAP-2 is owned by C2/C3, ECOGAP-3 extends MEMORY-EMBEDDING-PROVIDER-1 — **don't double-track**. ECOGAP-1 Phases 1+2+2a and ECOGAP-4 G4b (MCP client + stdio server) shipped opt-in. **G4a remains built-but-INERT** — every guard vacuous until a policy is registered.
+- **RTR-\*** — runtime roadmap (`RTR-1..8`). RTR-1/5/6 closed; RTR-2/3/4/7 harden-halves done, BUILD halves deferred (RTR-3 full AgentRun↔FlowRun unification; RTR-4 remaining = soak+flip `AINDY_DELEGATION_PRIVATE_MEMORY`). RTR-8 stale/closed. **RTR-4 gotcha: delegate writes take the deferred capture path, so `MemoryNodeDAO.save` is the write chokepoint, not the syscall.**
+- **DOCS-\*** — docset findings. DOCS-BUCKET-A-1 and DOCS-STALE-1 closed; **`Runtime Docs Validation` now asserts `last_verified` is real and `>= 2026-05-17`** (it only checked key presence before). **DOCS-COVERAGE-CLAIM-1 half closed:** 6 docs cited 8 test files that never existed; all four areas now have suites (249 tests) *and* are made to actually run. **★ The pattern worth keeping: four separate docs mis-stated plugin-layer routes as runtime-owned. Check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence.** **★ Gotcha: `ResourceManager.can_execute` returns `(True, None)` unconditionally under `settings.is_testing`, so quota enforcement is vacuous in tests** — and `is_testing` is a pydantic *property*, so patch it on the class.
+- **SYSCALL-STABILITY-\*** — `-1` fixed 2026-08-13. `SyscallEntry.stable` (advertised maturity) and `_STABLE_SYSCALLS` (rename guard) measure different things and may legitimately differ. **Two gotchas: the duplicate-registration guard is on `SyscallRegistry.__setitem__`, not `register_syscall`; and `stable` defaults to `True`, so an unset flag is not necessarily accidental.** Open app-side: the monolith defines `register_all_domain_handlers` twice.
+- **AUDIT-INVARIANTS-VERIFIED-1** — **RECORD, not a defect.** The claimed guarantees were swept, not just the gaps; most held. **Two did not:** the boot-time route proof (→ ROUTE-AST-UNWIRED-1), and *"output validation is warn-only"* — **FALSE for `stable` syscalls**, which return an error envelope; only *experimental* ones warn. **★ Method note: verify the guarantees, not just the gaps — both errors were in "already covered" sections, the part of an audit least likely to be re-checked.**
+
+### Recorded decisions — an INDEX of `docs/governance/DECISION_LOG.md`, not the record
+
+**★ DEC-010 (2026-09-16): a decision made in conversation is recorded as `DEC-NNN` in
+`DECISION_LOG.md` in the PR that acts on it** — the `changelog.d` discipline applied to decisions.
+Entries and design docs keep the narrative and cite the id; this list is one line per id.
+`tests/unit/test_decision_log_integrity.py` pins that every cited id exists, once. Before DEC-010,
+decisions landed in three places with no rule (#648); the two that lived only here are DEC-018/019.
+
+- **DEC-011** — `WAIT-TYPED-CONTRACT-1`: the pending request is a STATE KEY, not a column (the fold resumes untyped, pinned).
+- **DEC-012** — a resumed Nodus script does NOT get `nodus_output_state` seeded back — *declined*.
+- **DEC-013** — the event bus never carries a payload; the ROW is the payload's home (write row, wake by `run_id`).
+- **DEC-014** — no request-level WAIT: `ExecutionWaitSignal` removed, not repaired.
+- **DEC-015** — `FLOW-PARALLEL-1` 3b `SwitchCaseEdgeGroup` — *declined*; an ordered `when` list + `default` already is one.
+- **DEC-016** — the authority WAIT gate decides `skip | abort`; never `grant`; provide-a-result *deferred*.
+- **DEC-017** — the guest wait contract is `await_event()` over the three state keys; the raise-based `nodus_builtins.py` is deleted (host exceptions are swallowed; `wait` is a reserved nodus name).
+- **DEC-018** — `HOOK-PRECEDENCE-1` first-non-`None`-wins hooks — *declined*; keyed or run-all-and-collect only.
+- **DEC-019** — kernel deterministic replay — *declined*; `ECOGAP-1` carries the three-way "replay" taxonomy.
+- **DEC-020** — `agent_execution` resolves for RESUME ONLY (`resolve_resumable_flow`), never into the public `FLOW_REGISTRY` — a public registration would run tools with no `execution_token` via `flow.run`.
+- **DEC-021** — no `waiting → completed` edge on an execution unit — *declined*; `waiting` is an obligation (resume or fail), the app's paused-task mapping is the mismatch.
+- **DEC-022** — `sys.v1.agent.list_recent_durations` REMOVED (floor 24 → 23); its only caller was #692's refused dispatch.
+- **DEC-023** — the route execution contract is enforced at REQUEST time only; the boot-time AST validator is DELETED, not wired (`ROUTE-AST-UNWIRED-1`).
+- **DEC-024** — `RETRY-CLASSIFY-1`: `execute_with_retry` / `_execute_with_retry` DELETED (zero callers); `decide_retry()` is the primitive, called by the three inline loops.
+- **DEC-025** — `RETRY-CLASSIFY-1`: a failure's class is a STRING on the result dict, set at the raising site; the substring table is the RECORDED fallback; only `transient` retries.
+- **DEC-026** — `SYSEVENT-RETENTION-1`: prune LEAVES only — a row any of the five FK columns references is never eligible, `event_edges` included though the DB would CASCADE.
+- **DEC-027** — `SYSEVENT-RETENTION-1`: an unclassified event type is KEPT and gauged; the class table is a registry (runtime seed + `register_event_retention`), a bad class is refused.
+- **DEC-028** — `SYSEVENT-RETENTION-1`: the seed table — failure-shaped events are audit regardless of family; `autonomy.decision` is operational.
+- **DEC-029** — `SYSEVENT-RETENTION-1`: operational 90 d / keepalive 7 d / audit never; `AINDY_SYSEVENT_RETENTION` ships UNSET; `report` before `prune`; a typo is off.
+- **DEC-030** — `LEASE-FENCE-1`: `background_task_leases.fence` increments ONLY on takeover (Alembic 0019).
+- **DEC-031** — `LEASE-FENCE-1`: the check is a `FOR SHARE` read inside the job's transaction, never a wrapper on the local `is_leader`; `None` skips.
+- **DEC-032** — `LEASE-FENCE-1`: two jobs fenced (`recover_orphaned_approved_runs`, `deferred_async_job_retry`); the idempotent ten deliberately not.
+- **DEC-033** — `LEASE-FENCE-1`: `execute_run` untouched — no second CAS; the fence is what makes that decline hold under two leaders.
+- **DEC-034** — `OTEL-GENAI-SEMCONV-1`: adopt = EMIT three span kinds at existing seams; `syscall.*` / `async_job.*` names unchanged.
+- **DEC-035** — `OTEL-GENAI-SEMCONV-1`: the meter lives INSIDE `llm_operation` (`op.record`); a direct `observe_llm_usage` in a client is refused by the census.
+- **DEC-036** — `OTEL-GENAI-SEMCONV-1`: `enduser.id` beside `user.id` on the syscall span for one release, then `user.id` dropped; `trace.id` stays.
+- **DEC-037** — `OTEL-GENAI-SEMCONV-1`: `gen_ai.client.*` metrics via a `MeterProvider` BESIDE `aindy_llm_*`, never instead; no tenant label.
+- **DEC-038** — `OTEL-GENAI-SEMCONV-1`: content capture OUT (guarded); no auto-instrumentation packages.
+- **DEC-039** — `ORCHESTRATOR-SPLIT-1` (a) `WorkflowStore` over Postgres — *declined* until the runtime READS guest state; INV-OWN-003's import census is the trigger.
+- **DEC-040** — `FR-35`: guest LLM usage rides the worker reply as a FOURTH deferred collection (`llm_usage`), recorded in the parent.
+- **DEC-041** — `FR-35`: deferral REPLACES observation in the worker — no local counters, no accrual — or a Redis RM double-counts.
+- **DEC-042** — `FR-35`: ADMISSION stays in the worker under the forwarded scope (real only on a Redis RM); ACCOUNTING is the parent's.
+- **DEC-043** — `FR-35`: the parent attributes from the reply's EXPLICIT context; ContextVars are the fallback.
+- **DEC-044** — `FR-35`: the `chat {model}` span is REPLAYED with the record's timestamps, marked `aindy.deferred`.
+- **DEC-045** — `FR-35`: ledger cap `AINDY_NODUS_LLM_LEDGER_MAX` (256); the tail aggregates per (provider, model); spans from records only.
+- **DEC-046** — *provisional*: `HTTP-SCOPE-GAP-1` remainder — scope answers the VERB, the row filter answers OWNERSHIP; no cross-owner read path, no `:any` scope variant.
+- **DEC-047** — *provisional*: `CLI-EXEC-SURFACE-1` — the operator half stays HTTP-only; not syscall-addressable, no CLI built.
+
+### Standing rule — not an item
+
+- **★★ A TEST-MODE SHORT-CIRCUIT PLACED ABOVE THE REAL DECISION MAKES THE REAL PATH UNTESTABLE
+  WHILE EVERY TEST PASSES.** Two instances, both found in `FR-15`'s own path within a fortnight,
+  and both make a soak vacuous rather than failing:
+
+  - `async_heavy_execution_enabled()` returns False under `TESTING`/`TEST_MODE` **before** reading
+    its flag. `pytest.integration.ini` sets both, so **the ASYNC dispatch branch was unreachable
+    from every test in this repo and always had been.**
+  - `get_queue()` returns an `InMemoryQueueBackend` under the same two variables, **before**
+    checking `REDIS_URL`. So **no test here can reach the Redis backend.** A soak written the
+    obvious way enqueued and dequeued inside one process and passed 6/6 while proving nothing.
+
+  **This is worse than an untested path, because the test that appears to cover it passes.** The
+  second case was caught only by an unrelated hunch — asserting `backend_name == "redis"` on the
+  strength of `QUEUE-DURABILITY-CLASS-1` — which then failed immediately and named the cause.
+
+  **Rules:** when writing a soak, **assert the mechanism you think you are exercising is actually
+  the one running** (the backend, the branch, the mode) before asserting anything about its
+  behaviour. And when adding a test-mode guard, put it **below** the switch it is guarding, or
+  give it an explicit opt-in that test mode cannot veto — `async_scheduler_dispatch_enabled()` is
+  the worked example. Expect a third instance; grep for `TEST_MODE` above a decision, not after it.
+
+- **★ A SOURCE-TEXT ASSERTION IS A SUPPLEMENT, NEVER THE COVERAGE — four failures in one
+  fortnight.** A test that reads code as text cannot tell code from a comment, cannot tell
+  presence from reachability, and cannot tell order from behaviour. Observed: an assertion
+  matching its own explanatory comment that *quoted* the bad pattern; a `register_flows()` string
+  match satisfied by `# register_flows()`; a two-line ordering check that passed with the branch
+  disabled. **Prefer the AST when you must read source** (a comment cannot satisfy a `Call` node),
+  and prefer driving the real entry point when you can. `ROUTE-GUARD-1` said this about routes; it
+  generalises.
+
+- **★ Module-import-time env reads are invisible to behavioural tests.** Three bugs share this shape: FR-10 (`settings = Settings()` at import crash-looped the container), `ResourceManager._get_backend()` (caches the Redis-vs-in-process choice on first call), and the `AINDY_REDIS_URL` alias in `rate_limiter.py` — which survived a cleanup that believed it had removed the alias everywhere, because **nothing about the running limiter differs when the alias is honoured**. **When auditing env-var handling, grep the source; do not trust a passing suite.**
+
+### Closed — kept as one line because the rule still bites
+
+- **EU-DOUBLE-FINALIZE-1** — **CLOSED on filing 2026-09-17 (#713).** From the app's log ("noise, not filed"): three sites finalised an agent run's unit, ONE guarded on terminal — every completed `nodus_vm` run logged `completed→completed`. **★ The one that mattered: the chain passed the RUN status `verify_failed` through — not a unit status, refused every time — so a verify-failed run's unit stayed `executing` FOREVER** (EU-FINALIZE-UNCOMMITTED-1's shape). Now `ExecutionUnitService.finalize_for_run_status`: run vocabulary → unit vocabulary, once, silent when already terminal. ★ Read a consumer's "noise" as a claim.
+- **ORCHESTRATOR-SPLIT-1** — **CLOSED 2026-09-16 (#702 contract, #707 DEC-039).** `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md`: one AUTHORITY per unit of work; every other store is derived, a transport, a ledger, or WRITE-ONLY. **★ Stores 3/4 are recovered by NOBODY** (runtime never reads them; the guest sweep can only dead-letter and is off) — the crash-overlap needs an actor that does not exist. **(a) `WorkflowStore` over Postgres DECLINED**: a copy of runs written by the guest, read by nobody. INV-OWN-001..003 adopted; a derived import census pins that `AINDY/` imports no `nodus_lang_workflow` — **its going red is the trigger to re-decide §4, not to delete it.** `QUEUE-DURABILITY-CLASS-1` folded in.
+- **OTEL-GENAI-SEMCONV-1** — **CLOSED 2026-09-16 (#706; DEC-034..038).** The premise was off: HEAD emitted TWO span kinds and NO LLM/tool/agent span — nothing GenAI-shaped to rename. Now `genai_telemetry.py` EMITS `chat {model}` / `execute_tool {tool}` / `invoke_agent {type}` at the three existing seams, keys read from the pinned semconv package (`gen_ai.provider.name`, not `gen_ai.system`). **★ The token meter lives INSIDE the `chat` span (`op.record`) — a client cannot meter without tracing; the derived census REFUSES a direct `observe_llm_usage`.** GenAI metrics ride a `MeterProvider` BESIDE `aindy_llm_*`. Content capture OUT, guarded. **★ OWED next release: drop `user.id` (emitted beside `enduser.id` on syscall spans for one release).**
+- **LEASE-FENCE-1** — **CLOSED 2026-09-16 (#705; DEC-030..033; Alembic 0019).** Expiry bounds how LONG two leaders coexist, not what the stale one WRITES. `background_task_leases.fence` moves ONLY on takeover; `assert_lease_fence(db, background_leader_fence())` is a `FOR SHARE` read INSIDE the job's transaction — a takeover blocks until the job commits, a committed one refuses it. **★ Fenced: `recover_orphaned_approved_runs` (its `execute_run` read-then-set + 10-min argument assumed ONE leader) and `deferred_async_job_retry`; the ten idempotent jobs deliberately NOT (a lock per job delays takeover).** ★ Never a wrapper on `is_leader` — that is the stale belief itself. `None` fence (in-process) skips.
+- **SYSEVENT-RETENTION-1** — **CLOSED 2026-09-16 (#704; DEC-026..029).** `system_events` was never pruned. Now a CLASS per event TYPE (audit never / operational 90 d / keepalive 7 d), runtime-seeded, app-extended (`register_event_retention`); **unclassified = KEEP**, gauged. **★ PRUNE LEAVES ONLY: four FKs are `NO ACTION` (a referenced row cannot be deleted — a naive batch `DELETE` ABORTS) and `event_edges` is `CASCADE` (the causal graph vanishes SILENTLY) — the anti-join is the guard, not the FK.** Ships UNSET; `report` before `prune`; a typo is OFF. ★ Not yet fenced — `LEASE_FENCE_DESIGN.md` ph3.
+- **RETRY-CLASSIFY-1** — **CLOSED 2026-09-16 (#703; DEC-024/025).** Retryability was SUBSTRING MATCHING on the error string — and on `execute_tool`'s OWN refusals *cancelled*, *missing token* and *enforcement crashed* read RETRY. Now `failure_class` is set at the RAISING SITE (16 `execute_tool` returns, AST-censused; every dispatcher error envelope); the table is the recorded fallback; `aindy_retry_classifications_total{…classified_by}` is the signal. **★ Pass the WHOLE result dict, never `result["error"]`** — the compiled plan now emits `is_retryable_error(__result_N)`. **★ A string, not an exception type: the guest swallows host exceptions.** `execute_with_retry` deleted. **★ #712: the nodus_vm worker seam had DROPPED the class — fixed.**
+- **CANCEL-REACH-1** — **CLOSED 2026-09-15 (narrowed #566; residuals closed).** A cancelled run refuses its next TOOL and its next SYSCALL — the dispatcher reads the run from the execution span (`cancellation.current_run_id` ← `llm_attribution_scope`), not a 7th context field. **★ Fails OPEN, unlike every other guard: unreadable = not cancelled — a false cancel costs the run.** **★ Never per effect: own session, one read per run per 2s.** **★★ Residual 2 was WORSE than the over-claim: the isolated branch RETURNED before the cancel check, so a cancelled run's worker was SPAWNED regardless. Now refused pre-spawn, and the PARENT polls while the worker runs and kills it (`surface="tool_worker"`); the child still gets no `run_id` — the check runs where it can act.** Source: `AINDY/kernel/cancellation.py`.
+- **FLOW-GRAPH-SIGNATURE-1** — **CLOSED 2026-09-03 (#559); its blind spot HALF-CLOSED 2026-09-15 (`FLOW-PARALLEL-1` ph3a).** A suspended run resumed against **whatever flow definition existed then**, silently. A run records a hash of its graph SHAPE at start (`flow_runs.graph_signature`, Alembic 0018) and is **quarantined** on mismatch. **★★ What goes in the hash IS the design:** node identities, edge topology, targets IN ORDER; NOT bodies, `node_configs`, or callable predicates — a hash that moved every deploy would be switched off in a week. **★ Absent ≠ mismatch.** **★ A NAMED predicate (`{"when": name}`) IS in the hash — rename or reroute the decision and the run quarantines; a callable one still is not. Migrating an edge to a name moves the digest ONCE, so the runtime's own flows stay on callables.**
+- **WAIT-TYPED-CONTRACT-1** — **CLOSED 2026-09-16 (ph1 #677; DEC-017 the guest half).** A resume payload was **trusted, not checked** — `dispatch()` validated syscall inputs, the wait path (outside data, after a restart) nothing. A WAIT may declare `resume_schema` (dispatcher dialect); `route_event` checks BEFORE inject/wake; route → **422**, run stays waiting; counter `aindy_flow_resume_payload_total{outcome}`. **★ State key, NOT a column (DEC-011) — the DUR-4 fold resumes UNTYPED, pinned. ★ `nodus_output_state` seeding DECLINED (DEC-012).** Source: `AINDY/core/pending_request.py`.
+- **GUEST-BUILTINS-DEAD-1** — **CLOSED 2026-09-16 (DEC-017).** `nodus_builtins.py` (530 lines, ZERO importers; the documented `event.wait()`) DELETED with `WorkerWaitSignal`. **★ Measured first: nodus SWALLOWS host exceptions into `ok: False`, so the raise-based signal could never cross the guest boundary; and `wait` is a RESERVED nodus name.** The guest wait is now `await_event(event, schema)` — sets the three keys and halts (the worker checks the flag before `ok`); returns the payload on the resumed run. Keys stay the wire contract. **★ Everything before the call runs twice — DEC-012.** Catalogue variant 14 lives here.
+- **IDEM-12** — **CLOSED 2026-09-16 (#696).** A second `sys.v1.agent.undo` re-invoked EVERY compensator (reproduced: 2 effects, 2 undos, 4 invocations). Now re-entrant at reversal's own layer: an effect with a `reversed` audit row is skipped and reported `already_reversed`. **★ Only `reversed` suppresses — `failed` and `irreversible` stay retryable/re-surfaced; keyed on the EFFECT, never the action type.** No schema, no dependence on the IDEM-11 gate or flag. Still zero compensators at HEAD — closed before the first one lands.
+- **ROUTE-AST-UNWIRED-1** — **CLOSED 2026-09-16 (#698) by DELETION (DEC-023).** The boot-time AST validator had no call site and, by its own test, rejected a working route (a module-level alias of the pipeline helper); an unrunnable stricter twin beside the real guard is what let the boot-time refusal be CLAIMED. The guarantee is the REQUEST-time wrapper — required only where the router declared `require_execution_context`; admin / user-agent / automation routers are wrapped, not required. **★ The boot-time fact that holds — every non-exempt route is wrapped — is now a derived census over the real app (>50, non-empty asserted); unwiring it at boot is red.**
+- **KEY-SCOPE-ESCALATION-1** — **CLOSED 2026-09-16 (#699; escalations fixed #463/#465).** A `flow.read` key could mint itself `platform.admin` and rotate the signing key. **★ Gotchas that outlive it: SQLite CANNOT reproduce it (`scopes` is a PG `ARRAY`, the 201 reads as a 500); a 400 from `rotate-secret-key` is raised AFTER authorization.** Residual closed: ONE operator predicate, `is_operator_principal` (session `is_admin` / key `platform.admin`); `require_platform_admin_access` is the TREE gate and ADMITS any key BY DESIGN (routes enforce their own scope) — its docstring finally says so. Not renamed (SCOPE-NAMING-1's rule).
+- **SANDBOX-EVIDENCE-1** — **CLOSED 2026-09-16 (#694): the post-launch kill WITNESSED, and the test found two defects beside it.** The hostile attestation kill worked on both start and restart. **★ `start_plugin_host` marked the same failure TWICE (cause relabelled `runtime_failure`, counts doubled). ★★ A failed strong-sandbox LIVE VERIFICATION raised with no mark and no kill — through `restart_plugin_host` and both `execute_plugin_host` restart sites the UNVERIFIED worker stayed alive as `running`.** Now ONE failure path in `_start_record` for every caller. **★ The harness: the REAL strong runner over a fake process, one field broken, a liveness control first. Assert the snapshot reads `backoff`, not `failed` — a marked failure opens the circuit.**
+- **SYSTEM-STATE-TENANT-1** — **CLOSED 2026-09-16 on filing (#692).** `compute_current_state` — a SYSTEM-wide snapshot — asked for its agent half through two tenant-scoped syscalls with `user_id=None`; the dispatcher refused EVERY call (step 2b, request or job) and the service read the error envelope as `0` / `[]`, so `active_runs` and `avg_execution_time` excluded agent runs since the extraction. **★ Both of the app's inferences were wrong: nothing fills an empty tenant inside a request (no runtime route calls it), and passing a tenant is NOT the fix — the handlers scope to ONE user by construction; the syscalls were the wrong SHAPE.** Now reads `AgentRun` directly, as `FlowRun` always was. **★ A refusal read as an empty result — the number published was plausible.**
+- **SESSION-COMMIT-1** — **CLOSED 2026-09-16 on filing: the class is GUARDED, the 4th instance FIXED.** `SessionLocal()` … write … `close()` with no `commit()` — rolled back, and every fixture-shared test reads the flush as a commit (variant 15). Four in a week: FR-30's finalize, both request-EU resume callbacks, and **the CROSS-INSTANCE resume (`resume_spec`) — which ALSO moved only the unit: in thread mode a flow parked on a dead instance was "claimed" and stayed `waiting` forever; the integration test spied the call and never read the row.** Now rebuilds the real resume from the spec. **★ Guard: `test_own_session_commits.py`, a derived census over every own-session function; empty ALLOWLIST; function-level (a committing path masks a non-committing one — pair it with a separate-connection read).**
+- **EU-WAIT-SIGNAL-DEAD-1** — **CLOSED 2026-09-15 by REMOVAL.** `ExecutionWaitSignal` let a route handler park the REQUEST's execution unit; nothing raised it in 4 repos, and nothing COULD — a route has answered its client before it can raise. **★ Its resume callbacks (pipeline + boot rehydration) flushed and closed WITHOUT commit — FR-30's shape, third instance in a week: a callback that owns its session must commit.** **★ A request's unit now CANNOT enter `waiting` by any path** (behavioural + AST pin). **★ 09-16: `rehydrate_waiting_eus` REMOVED** (rollback-only, redundant with the flow callback); its durability test found the unit's `completed` transition hid inside an early-returning hook — now `finalize_flow_unit`.
+- **WAIT-PAYLOAD-PATH-1** — **CLOSED 2026-09-15 ((b) + the bus decision; (a) 09-13).** Local and cross-instance correlation rules DISAGREED — a `None` wait resumed locally on any emit and NEVER cross-instance (every emit carries one). Now ONE predicate, `scheduler/common.py::correlation_admits`: **a run-scoped wake is decisive; otherwise veto only when BOTH carry one and differ.** **★ Reading the two copies found the live defect: a resume PAYLOAD carrying a `correlation_id` key vetoed its OWN wake after injection — `resumed: true`, run parked forever.** **★ DECIDED: the bus never carries a payload — the payload's home is the ROW (`state["event"]`, committed BEFORE the wake); that is what makes a resume reconstructible from `run_id`. Any future payload path writes the row, then wakes by `run_id`.**
+- **EU-FINALIZE-UNCOMMITTED-1 / FR-30** — **CLOSED 2026-09-15 (#673), live-verified 09-16 (0 `executing` after 18 requests).** A request's execution unit NEVER reached `completed`/`failed`: `_safe_finalize_eu` → `update_status` only FLUSHES, it is the last write, the emit before it committed, `get_db` closes without commit — rolled back on every request since the table existed (900+ `executing` route rows on the app's stack). **★★ Catalogue variant 15: the FR-29 tests asserted `completed` and PASSED on the broken code — the shared fixture puts app and test on ONE connection/transaction, so flush reads as commit.** `test_request_eu_finalize_commits_fr30.py` reads through a SEPARATE connection, liveness control first.
+- **WAIT-DETECT-SHAPE-1 / FR-29** — **CLOSED 2026-09-14 (#670), live-verified 09-15.** The pipeline parked the REQUEST's EU on ANY handler result with `status: WAITING` — a GET of a waiting run parked the READER (armed by the app's `flow_run_get` result key), `nodus/run` parked the request on `"unknown"` (`waiting_for` is NESTED). **★ The dict path parked units and never resumed one.** Now only `ExecutionWaitSignal` parks a request EU; DB backup + rehydration seed skip a non-`FlowRun` id (#673 — the seed FK'd EVERY boot). **★ Mutation 3 SURVIVED the first draft: a RAISED signal never reaches `_detect_wait` — test the RETURNED form.** **★ The 105 stuck EUs were `executing` — FR-30, not this.**
+- **ASYNC-JOB-UNREGISTERED-STORM-1** — **CLOSED 2026-09-13.** An unregistered job handler was re-dispatched in-process ~87×/s forever: the `raise` preceded `attempt_count += 1`, the increment was committed only as a side effect of the started-event emit (the except branch's `rollback()` erased it), and the thread-mode retry was an immediate executor submit. Now: `AsyncJobHandlerNotRegistered` is TERMINAL; the attempt is numbered before the lookup and restored after the rollback; thread-mode retries wait `_compute_retry_delay` via a `Timer`. **★ The count fix alone stops the live case (`max_attempts=1`); the terminal class protects budgets > 1 — mutation-tested apart.** **★ Test the except branch on a PRIVATE engine: the shared fixture's outer transaction makes the code's `rollback()` erase the test's row.**
+- **ACTIVE-COUNT-WAIT-LEAK-1** — **CLOSED 2026-09-13.** A waiting run held a tenant concurrency slot until restart (`mark_started` at start, nothing on WAIT; cap 5; four parked waits 429'd a GET). Now a run holds a slot exactly while executing: acquired at node entry after `can_execute` (start and resume alike, `_holds_slot`), released by every WAIT via `mark_waiting` (keeps the usage snapshot) and by completion/failure. **★ Two latent defects beside it: `can_execute` was re-asked per node with the run's OWN slot in the count (the last-admitted run parked itself holding it), and the success release lived inside a hook that returns early without `workflow_type`.** **★ `can_execute` is `True` under `is_testing` — patch the class property or the test is vacuous.**
+- **RESUME-FANOUT-UNSCOPED-1** — **CLOSED 2026-09-13.** `POST …/runs/{A}/resume` injected the payload into, and woke, EVERY run waiting on that event name, any tenant — the ownership check covered the path parameter, the effect ignored it. Now the run id rides the wake end to end: `route_event(run_id=)` → `notify_event(run_id=)` → buffer → Redis message (additive key) → `_cross_instance_resume`. **★ NOT the correlation: a flow WAIT's correlation is its `trace_id`, which sibling runs under one request SHARE — a test pins that correlation-only scoping still fans out.** Without `run_id`, `route_event` is the broadcast form; nothing calls it.
+- **NODUS-RESUME-BRIDGE-1** — **CLOSED 2026-09-13.** A guest script could suspend a run but never receive what resumed it: the runner merged SUCCESS patches only, so `nodus_wait_event_type` reached `flow_history` and never `flow_runs.state`, and the bridge dropped the injected payload. Now `_MERGED_STATUSES = {SUCCESS, WAIT}`; the DUR-4 fold mirrors it (pinned equal). **★ Second defect found by the test: `resume()` ALIASED the ORM dict, so a later equal assignment was no UPDATE — production survived only because sessions expire on commit; every fixture is `expire_on_commit=False`. Copy a JSON column before mutating it.** **★ The assertion that mattered was the script's SECOND run.**
+- **TEST-ORDER-CONTEXTVAR-1 / TEST-ORDER-REGISTRY-1** — **both CLOSED 2026-09-13.** The sweep WAS order-dependent — through CONTEXTVARS, not registries: one file `.set()` three (`pipeline_active`, trace, `_EU_ID_CTX`) and reset none, so ~180 of 221 unit files ran with the ExecutionContract gate vacuously satisfied; the "capture tests need `allow_when_pipeline_active=True`" note was this leak. `tests/unit/conftest.py` now snapshots a DERIVED census of runtime ContextVars per test, restores what changed and fails the LEAKER (liveness suite mutation 3/3). **★ REGISTRY-1 did not reproduce at its own filing commit (0/6) and its fix predated it** — an "EMPTY capability set" is `FLAKY-1`'s subprocess signature read as ordering. **★ Reproduce an ordering defect twice, once reversed, before filing.**
+- **EXEC-ENV-BIND-1** — **CLOSED 2026-09-13 (#639): all four phases.** Phase 4: `resources.tokens` added; `require_execution_unit` hands EFFECTIVE ceilings to `ResourceManager.declare_limits`, which enforces `min(global, declared)` for wall time, syscalls and tokens — **a declaration narrows, never widens**; `env_applied.resources_enforced` says which bind (**memory is declared, NOT enforced — SYSMAX-3**). **★ The subject decision is THE RUN, behind `AINDY_RUN_SCOPED_QUOTA` (default off)**: on, guest `sys()` and agent spans bind the run's unit and the 100-syscall cap becomes REAL for them; flip on the evidence of `aindy_syscall_unowned_unit_total`. Accounting only — the gate keys on the caller's own id. Design: `EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`.
+- **COST-GOVERNOR-1** — **CLOSED 2026-09-13 (#638): the governor shipped OPT-IN and was VERIFIED LIVE** (admit, admit, 429 at a tenant window of 8000). Reserve → call → reconcile at the seam, OUTSIDE the breaker; `AINDY_QUOTA_MAX_TOKENS` / `AINDY_QUOTA_MAX_TENANT_TOKENS`, default 0 = unlimited. **★ Planning has NO run id — only the TENANT window catches a runaway planner.** **★ Reserve only for `METERED_METHODS` — embeddings ride the same seam and were being charged ~2k each.** **★ A refusal reaches the route one `__cause__` down (app planners rewrap) — walk the chain or it is a 500.** **★ The estimate is the caller's `max_tokens`: a window smaller than one reservation admits nothing.**
+- **QUOTA-ACCRUAL-ORPHAN-1** — **CLOSED 2026-09-12.** Filed as *"id-less dispatch lands on key `""` and locks out at 100"*; run through the REAL entry point neither held — each call minted its own unit, so the quota was VACUOUS and the store leaked one snapshot per call, forever. And routes were NOT exempt: the pipeline never told the dispatcher its unit. **★ Rule: a unit is reaped by whoever established it** — a minted root unit dies with its dispatch (counted: `aindy_syscall_unowned_unit_total`), the pipeline binds its unit, MCP owns one per call. **★ `check_quota` re-decided ADMISSION with the unit in the count — the fix would have made it live at 5/5.** **★ Second time this entry was filed from the wrong component: reproduce where the CALLER enters.**
+- **EFFECT-PARTIAL-1** — **CLOSED 2026-09-03 (#569).** The envelope had two values for three outcomes, so a part-applied batch was a **lie** (`success`) or a **waste** (`error`). One resolution point now feeds both the envelope and the ledger. **★ The real defect was the LEDGER write passing a hardcoded `"success"` — the column could hold `partial` and no path could store it; found by a SURVIVING MUTATION, not by review.** **★ A `partial` naming no units is REFUSED and recorded `failed`, never raised — the effect already landed.** **★ Widening was safe only because nothing emits it AND no consumer branches `== "error"`; the second was FALSE when written, and four dispatch consumers were fixed here.** ~~Residual: nothing emits it yet.~~ **First emitter 2026-09-13: `FLOW-PARALLEL-1` phase 2 (#640).**
+- **AGENT-EVENT-VOCAB-1** — **CLOSED 2026-09-10 (#615); the CAUSE is the rule.** Two `AGENT_EVENT_TYPES` sets, neither true: 9 names with ZERO importers under `db/models/`, 14 in the service, **22 in use**. **★★ It rotted STRUCTURALLY: `db/models/` is content-hashed, so adding one string there costs a schema-version bump + baseline regen + 2 assertion edits for a change with NO DDL. Never put a vocabulary under `db/models/`.** **★ A hash pins a list against ITSELF — the load-bearing guard is the AST census that every EMITTED type is declared; its own first draft missed variable-assigned and ternary-`else` names, so the survey said 6 and the truth was 8.**
+- **TOOL-SEAM-ISOLATION-1** — **CLOSED 2026-08-19 (A+B+C1+C2):** revocable DB handle; `register_tool(..., isolation=)` refused fail-closed; a return-contract counter that MEASURES rather than rejects; a worker subprocess so a declared tool runs OUT OF PROCESS. **★★ C2 has NO FALLBACK — a crashed, timed-out or unstartable worker means the tool does not run. The opposite of the nodus adapter, which spills to a fresh subprocess: there both paths give the same guarantee; here falling back would run a tool that asked to be confined UNCONFINED.** **★ `db` is None in the worker (18/18 take it, 0 use it); a worker rebuilds `TOOL_REGISTRY` from the plugin stack, so an ad-hoc parent registration is invisible there.** **Gap by design: UNDECLARED tools run in-process.** Scope: `TOOL_SEAM_ISOLATION_SCOPE.md`.
+- **IDEM-11** — **CLOSED 2026-08-19: `AINDY_SYSCALL_IDEMPOTENCY` defaults true** (`=0` disables). Dedups the 8 `EXACTLY_ONCE` syscalls on `(action_type, input, scope=execution unit id)` — a retry within ONE run replays; two calls in DIFFERENT runs are untouched, which made the flip safe. **★★ NOT exactly-once under contention — measured, 8 concurrent identical calls ran the handler TWICE** (strict at-most-once needs advisory locking). **★ Watch ALL labels of `aindy_effect_gate_outcomes_total`: THREE silent paths found and closed (#511, #516), the third being the COMMON one** — a loser that reads the committed `pending` row never races the insert, so it missed the only counted branch. **★ IDEM-12: closed (#696).** **★ `_durable` (DUR-2) engages the gate for ANY syscall, bypassing flag and declaration.**
+
+- **AUTHORITY-VALUE-1** — **CLOSED 2026-08-19: the clamp is ON by default.** `child_context()` could WIDEN the grant the calling frame supplied; it now narrows only, dropping a widening with a WARNING (`AINDY_CHILD_CONTEXT_CLAMP=0` reverts). **★ It shipped opt-in on a conclusion right about the mechanic and wrong about the cost: clamping DOES intersect the app's `_dispatch_owner_syscall` to EMPTY — still pinned — but 18 of the 19 widening functions are NEVER REGISTERED, and the one live caller widens for an OPTIONAL lookup inside `try/except` with a full fallback. Count: 1 degradation, 0 outages.** **★ The shape to remember: an executable fact had a wrong inference layered on it and nobody re-measured for three months.**
+- **NODUS-UPGRADE-2** — CLOSED 2026-08-19, `nodus-lang` 5.0.1 → 5.0.4. **★ Filed P3-routine; it was a SECURITY fix** — `<=5.0.2` bound `GLOBAL_MEMORY_STORE` at import, so every `NodusRuntime` in a process shared one guest memory dict, readable from any `.nd` script. **The rule: read the intervening release notes BEFORE assigning severity — a severity assigned from version distance is not an assessment.** **★ Upstream bugs invalidate downstream docstrings, and nothing greps for that:** `nodus_worker_pool.py` claimed a reused process *"never leaks state between runs"* — false, because `run_one` cannot reset a module global inside a dependency. Reproduce before believing either way.
+- **ROUTE-EFFECT-BYPASS-1** — CLOSED 2026-08-16. **★ Trap: `memory.write` REPLACED the caller's `extra` rather than merging, so a naive rewire was silent data loss behind a 201.** **★ A syscall that adds a mediation hop and no authority granularity just relocates the same undifferentiated power** — hence `memory.link`, which `memory.write` does not grant. **Still bypassing (1, pinned by a test): `POST /nodes/search`** — rewiring it would change SEMANTICS under cover of a mediation fix.
+- **CAPABILITY-PROVIDER-TIMEOUT-1** — FIXED 2026-08-16. Every tool capability check spawned a subprocess per provider — 10 lookups = 10 spawns / 56.4s before, 1 / 11.4s after. **★ It fails CLOSED, not open — established by running it, after the filing assumed the opposite.** **★ The cache lives ON THE PROVIDER OBJECT, not a module global** — a module-level latch must be added by hand to two registry-reset dicts, and forgetting either reintroduces the bug through its own fix.
+- **ISOLATION-DOC-STATUS-1** — CLOSED 2026-08-16. `ISOLATION_MODEL_PLAN.md` said "no implementation has begun" at line 6 and "Scope B1 complete" at line 148. **It sits at the repo root, outside the `docs/runtime/` frontmatter checks — which is why nothing caught it.**
+- **MEM-RECALL-N1-1** — CLOSED 2026-08-16. `recall()`'s scoring loop ran 3 queries per candidate to re-read 4 columns the originating SELECT already had; now carried on `_node_to_dict` with two grouped queries for the whole set. Performance-only.
+- **SYSMAX-5** — CLOSED 2026-08-16, latent by construction: ~33 scheduler jobs on a default pool of 10, never sized deliberately. Failure mode is a **maintenance brownout** — recovery jobs stop running exactly when the condition they clean up is happening, and nothing raises. **★ Fixed by isolation, not capacity: raising `default` would have been the WRONG fix**, because scheduler threads share the DB connection budget with request handling, so more of them starve the API instead. A test pins total lane threads to half that budget so the trade cannot be made accidentally.
+- **AGENT-HARDEN-1..10** — **all CLOSED 2026-07-05/06.** Cancel, HMAC tokens, compensating undo, simulation + virtual tools, LLM fallback chain, verifier, cassette contract tests, capability policy, secret broker, extension signing. MCP is not here — it is ECOGAP-4.
+- **NODUS-UPGRADE-1** — bump `nodus-lang` AND `nodus-mcp` across **ALL THREE sites**: `pyproject.toml`, `AINDY/requirements.txt`, and the `Install MCP extra` CI step, which installs directly and so re-resolves a constraint fixed only in the first two. **★ `--no-deps` in CI means pyproject's pins are NEVER applied there** — the effective env is `requirements.txt`, which is how CI tested nodus 4.1.0 for four months while the wheel required 4.2.0. **★ `NodusRuntime.__init__` has NO `**kwargs`, so a renamed deny-flag raises rather than silently unconfining the guest** — that absence is now a test. **Distinguish cosmetic from real before touching the sandbox:** 4 confinement tests went red on 5.0.0 and none was a regression.
+- **GUEST-CONFINE-1** — **FULLY CLOSED 2026-08-19** (escape 2026-08-15; residual by `EXEC-ENV-BIND-1` phase 2). The guest VM ran unconfined — a script reached subprocess/network/host env without touching the dispatcher, token, ledger, egress guard or tool registry. **Demonstrated, not inferred.** **★ The residual was a WRONG COMMENT, not a missing line: the source said `allowed_paths` defaults to the cwd and is therefore fine — true of nodus, false here, because NO spawn path sets the worker's cwd, so the guest inherited the SERVER's (`/home/aindy` in Docker, holding `alembic/`).** Now an explicit per-execution scratch root, which also makes `NODUS_ALLOWED_PATHS` inert.
+- **RT-MEMTXN-LEAK-1** — CLOSED. **Rules: never hold an open DB transaction on a request-shared session across a slow external call — order the code so the external call precedes the DB work; never `rollback()` a shared session to free its connection; and a memory capture must never enqueue work whose own lifecycle events are capturable (capture → job → capture is a cycle).** **Gotcha: after a commit, touching an ORM attribute silently re-opens a transaction.** **Diagnostic: `xact_age_s == idle_s` cannot distinguish "held across a slow call" from "held by a frame that never returned" — only a stack dump does.**
+- **CI-MARKER-1** — CLOSED 2026-08-15. `tests/unit/conftest.py` applies `runtime_only` by default, so a new unit file cannot silently run nowhere. **Everywhere else the old rule still bites: nothing marks a file outside `tests/unit/`, and `pytest.integration.ini` only reaches `tests/integration` — adding a test directory means giving it a job.** **Gotchas: `--collect-only -q` prints `<path>: <count>`, not node ids; exit code 5 is `EXIT_NOTESTSCOLLECTED`, not an error.**
+- **FLAKY-1** — CLOSED 2026-08-15 (15 healthy runs across two trees). **Rules that outlived it: when chasing a flake, never pipe the run through `tail`** — three failures were destroyed at the moment they were produced — **and do not conclude from small samples** (this one produced three wrong readings before the fourth run refuted each).
+- **MEM-DELETE-1** — core shipped. `sys.v1.memory.delete` is hard, syscall-only, tenant-scoped, irreversible, with its own `memory.delete` scope **not** granted by `memory.write`. **No SDK consumer — nothing calls it yet.** Four opt-in upgrades deferred (G1–G4).
+- **NODUS-SYS-SURFACE-1** — CLOSED. Idiomatic `import "std:sys"` routes to nodus's own 4-syscall stub, **not** the AINDY dispatcher; only the bare `sys(...)` builtin reaches `dispatch_syscall`. It could not be aliased, so there is a fail-loud guard in `nodus_worker.py`.
+- **MCP-BEHAVIOR-1** — `call_tool()` never raises; check `result.isError is True`. Full note in its own section below.
+- **NATIVE-CI-1** — CLOSED. `Native Crate Build (Rust)` runs `cargo build --locked --release` every PR. **Encoded gotchas: `--locked` is the point; no `cargo test` (pyo3 `extension-module` omits libpython, so the harness fails to link); deliberately not path-filtered, since a `paths:` filter on a required check never reports and blocks forever.** ★ A **`push`**-triggered workflow does not run on the PR that adds it; a **`pull_request`**-triggered one does, from the merge ref — so a new workflow can be validated before merge if it is `pull_request`-triggered. Builds on Linux, not MSVC.
+- **NATIVE-DISCOVERY-1** — CLOSED. Both crate consumers delegate to `AINDY/memory/native_bridge.py`. **★ Trip hazard: `cargo build` emits `libmemory_bridge_rs.so` / `memory_bridge_rs.dll` — Python imports neither; CI renames, a local build needs it by hand.** **And `sys.path.insert` in priority order puts the lowest-priority path first** — that inversion let a stale debug build shadow a fresh release one.
+- **NATIVE-PARITY-1** — CLOSED. Native and Python scorers disagreed on negative `impact_score`. **Severity was defense-in-depth, not live** — `MemoryNodeDAO.save()` clamps at the universal write chokepoint. **★ The regression guard is native-independent on purpose** — parity tests skip without a built crate, so pinning the clamp only there would repeat DOCS-COVERAGE-CLAIM-1 in miniature.
+- **EVENTBUS-PUBLISH-LATCH-1** — CLOSED. **Root cause was one field meaning two things:** `_enabled` was both the operator kill switch and the runtime give-up latch, which made a transient blip permanent *and* invisible. Now split: config vs. a `CircuitBreaker`. **Behaviour change: `/health/deep` reports the bus degraded during suspension rather than `ok`.**
+- **EVENTBUS-COVERAGE-1** — CLOSED. **★ Mutation-tested 5/7 — the first draft scored 4, because a test asserting an *absence* passes when the wire is broken; it now runs a liveness control first.** **Placement: marked `redis`, NOT `integration`** (that marker trips the conftest skip guard). **Both race pitfalls were real: buses in one process share a hostname-derived `_instance_id`, and Redis pub/sub has no readiness signal — republish inside the polling loop, never a fixed sleep.**
+- **ROUTE-GUARD-1** — CLOSED. Every `raise HTTPException` in three routers returned **500**; FR-12's reserved-namespace guard answered 500 instead of 409 for a full day. **★ Why nothing caught it: the tests assert on the route's *source text* and never call it. A route test must call the route** — the status code *is* the contract. `ADMIN-PROMOTE-UUID-1` (the promote route 500ing on a missing user under SQLite) closed 2026-09-11 with FR-25 (b), whose method — **probe every served route with a bad id, on BOTH engines, fresh app per route** — is the one to reuse.
+- **KERNEL-INIT-DUPLICATE-1** — CLOSED. `AINDY/kernel/__init__.py` was a byte-identical copy of `tenant_context.py`, so two different `TenantContext` classes existed and `isinstance` was silently `False` across them. Nothing had broken because nothing imported it. **All 337 `.py` files under `AINDY/` were hashed — no byte-identical duplicates remain.**
+- **TENANT-FROZEN-SHALLOW-1** — CLOSED. `frozen=True` does not deep-freeze; `capability_scope` is now a tuple. **Adjacent, RESOLVED 2026-09-16 (#699): both tenant guards now ask ONE kernel rule, `tenant_owns_memory_path` (root inside; slashes normalised; empty tenant owns nothing by construction).**
+- **MAS-FLATTEN-1** — CLOSED. `flatten_tree` dropped every node that was a parent of another. **★ The invariant that would have caught it in one line: `len(flatten_tree(tree)) == len(tree)`.** Zero callers, but documented as usable, so fixed rather than deleted.
+- **NODUS-WARMPOOL-1** — **CLOSED 2026-08-19: `AINDY_NODUS_WARM_POOL` defaults true** (`=0` restores fresh subprocesses). Any warm-path failure falls back to a fresh subprocess, so it cannot make execution worse than the path it replaces. **★ The prior "it's been soaking in CI" evidence was NOT what it looked like: the integration suite is SEQUENTIAL, and every pool test ran against FAKE processes while end-to-end was deferred to "app-side PG-tier integration" — a consumer that does not exercise it.** Soaked properly by `test_soak_warm_pool_contention.py` (6 concurrent callers vs a pool of 2, real workers, mutation-tested 4/4). **★ Flipping found that nothing asserted the warm path carries DUR-2b's durable-effects signal** — it does; there is now a test.
+- **INFINITY-RUNTIME-1** — FULLY CLOSED. **Gotcha: adding a `SystemEventTypes` value trips the frozen-hash baseline — regenerate `tests/baselines/system_event_contract.json` in lockstep.** Remaining is flag-flip after soak, not build.
+- **PYPI-PUBLISH-1** — CLOSED. **Release protocol (both halves bit us before): bump the Dockerfile builder-stage pin AND the CHANGELOG in one PR; after the tag publishes, append the `SANDBOX_ESCAPE_AUDIT.md` entry for the gate run.** `Boot Smoke` installs the pinned version from PyPI, so a bump PR skips-green until the tag exists. **★★ 2026-09-10: that skip had NO un-skip — every release shipped an UNBOOTED wheel until an unrelated push wandered by. ★ `on: release:` would not have fixed it (GITHUB_TOKEN raises no workflow runs); `publish.yml` now `workflow_call`s Boot Smoke between publish and release.** **★ 2026-09-15: that smoke then FAILED on index lag — its gate probes the JSON API, pip resolves via the CDN. Install retries now (#672) — PROVEN on the very next tag: v2.16.0 installed on attempt 2.**
+- **PLANNER-SUBPROC-1 / INFINITY-COMPLETION-HOOK-BOUNDARY-1** — CLOSED. Stateful callback surfaces run in-process. Full mechanism is in the `_maybe_wrap_runtime_callback` section above — read that, not this line.
+- **SDK-SYSCALL-GRANT-1** — CLOSED. Per-syscall least-privilege grants. **Two namespaces (`Scopes` vs capabilities) — do not conflate them.**
+
+### Closed — no live rule; see `TECH_DEBT.md` if you need the history
+
+`MEM-NODETYPE-1` · `LEASE-1` · `REPLAY-1` · `PROMETHEUS-PIN-1` ·
+`OPER-DEFER-001` · `OPER-DEFER-002` · `IDEM-1..10` (IDEM-10 closed at the mechanism level
+2026-07-11 via the MEB program; next available **IDEM-13**) · `DOCS-BUCKET-A-1` · `DOCS-STALE-1` ·
+`C2` · `SYSCALL-STABILITY-1`
+
+---
+
+## MCP protocol integration note (MCP-BEHAVIOR-1)
+
+When working with any MCP server via `mcp.ClientSession.call_tool()`, the SDK **never raises a Python exception** for tool failures. Instead, it returns `CallToolResult(isError=True)`. Always check `result.isError` explicitly:
+
+```python
+result = await session.call_tool("tool_name", args)
+if result.isError:
+    # handle error — result.content[0].text has the error message
+```
+
+Do not write `with pytest.raises(...)` around `call_tool()` — it will never fire.
+
+---
+
+## Key file locations
+
+| What | Where |
+|---|---|
+| Idempotency gate | `AINDY/kernel/syscall_dispatcher.py` |
+| EffectRecord model | `AINDY/db/models/effect_record.py` |
+| Schema version | `AINDY/db/schema_contract.py` — `SCHEMA_CONTRACT_VERSION` |
+| Schema baseline | `scripts/schema_version_baseline.json` |
+| Scheduler jobs | `AINDY/platform_layer/scheduler_service.py` |
+| Alembic migrations | `alembic/versions/` |
+| Runtime Alembic head constant + stamp helper | `AINDY/db/alembic_head.py` — `RUNTIME_ALEMBIC_HEAD_REVISION`, `stamp_runtime_alembic_head()` |
+| `bootstrap-schema` CLI command | `AINDY/runtime_only.py` — `_bootstrap_schema()` |
+| Idempotency contract | `docs/runtime/IDEMPOTENCY_CONTRACT.md` |
+| **Sandbox contract — numbered invariants, three seams, what is verified vs asserted** | `docs/runtime/SANDBOX_CONTRACT.md` |
+| Nodus developer guide (scripts + builtins) | `docs/runtime/NODUS_DEVELOPER_GUIDE.md` |
+| Syscall API reference (all registered calls) | `docs/runtime/SYSCALL_REFERENCE.md` |
+| Connector registration hook (FR-1) | `AINDY/platform_layer/registry.py` — `register_connector`; dispatch in `connector_service.py` |
+| Authorized outbound boundary (FR-1) | `AINDY/platform_layer/external_call_service.py` — `authorized_external_call`; client `outbound_http.py` |
+| Connector + outbound contract (FR-1) | `docs/runtime/CONNECTOR_CONTRACT.md` |
+| **What the runtime is (category + what a consumer inherits)** | `docs/runtime/WHAT_THE_RUNTIME_IS.md` |
+| Runtime module map (tagged inventory) | `docs/runtime/RUNTIME_MODULE_MAP.md` |
+| **Comparative research index (8 systems: what each produced, what is settled, recurring errors)** | `docs/governance/COMPARATIVE_RESEARCH_INDEX.md` |
+| Runtime execution invariants | `docs/runtime/EXECUTION_INVARIANTS.md` |
+| **`ExecutionEnvironmentSpec` design record (EXEC-ENV-BIND-1, CLOSED — all four phases shipped)** | `docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md` |
+| Runtime security matrix | `docs/runtime/SECURITY_MATRIX.md` |
+| Revocable tool DB handle (TOOL-SEAM-ISOLATION-1 step A) | `AINDY/agents/tool_session.py` |
+| **Execution environment vocabulary (EXEC-ENV-BIND-1)** | `AINDY/core/execution_environment.py` — `ExecutionEnvironmentSpec`, `assurance_rank()`, `clamp_to_floor()`, `GUEST_FLOOR` |
+| Out-of-process tool worker (TOOL-SEAM-ISOLATION-1 step C2) | `AINDY/agents/tool_worker.py` — one-shot, `db=None`, **no fallback** |
+| Effect-gate outcome counter | `AINDY/kernel/effect_ledger.py` — `aindy_effect_gate_outcomes_total` |
+| **Syscall outcome vocabulary (EFFECT-PARTIAL-1) — read before touching the envelope** | `AINDY/kernel/syscall_outcome.py` — `OUTCOME_KEY`, `partial()`, `unknown()`, `resolve_outcome()`; resolved at ONE point feeding both envelope and `EffectRecord` |
+| **Typed pending request on a wait (WAIT-TYPED-CONTRACT-1) — a node's `resume_schema`, checked by `route_event` before injection** | `AINDY/core/pending_request.py` — `PENDING_REQUEST_KEY`, `check_resume_payload()`, `ResumePayloadRejected`; the dialect and validator are `syscall_versioning.validate_payload`'s |
+| **Flow state conflict policy (FLOW-PARALLEL-1)** | `AINDY/runtime/flow_engine/state_merge.py` — `state_policies`; an undeclared double-write RAISES, no default is picked |
+| **Published route inventory (FR-22) — regenerate after ANY route change** | `AINDY/route_inventory.json`; `scripts/check_route_inventory.py [--check]`; pinned by `tests/unit/test_route_inventory.py` |
+| Operator console panels adopted from the app SPA (FR-21) | `platform/src/components/platform/WebhooksPanel.jsx`, `DeadLetterQueuePanel.jsx`; paths staged in `platform/src/api/_routes.js` — `RUNTIME_ROUTES` |
+| **Response envelope discriminator (FR-19)** | `AINDY/core/response_adapter.py` — `X-AINDY-Envelope: v1`, set on the envelope exit ONLY; exposed via `expose_headers` in `middleware.py` or a browser cannot read it |
+| **Liveness-probe event digest (FR-18) — read before touching `/health` event payloads** | `AINDY/core/health_liveness_signal.py` — digest + emit-on-change; counter `aindy_health_liveness_events_total` |
+| Async-job execution-boundary scope (FR-17) | `AINDY/platform_layer/async_execution_context.py` — `async_execution_scope()`; the contract gate's only exemption besides an active pipeline |
+| **Tool seam isolation scope record (TOOL-SEAM-ISOLATION-1, CLOSED) — how the seam was measured before A/B/C1/C2** | `docs/design/TOOL_SEAM_ISOLATION_SCOPE.md` |
+| **FR-27 advisory-lock design record (strict at-most-once) — APPROVED + SHIPPED #627, opt-in** | `docs/design/FR27_ADVISORY_LOCK_DESIGN.md` |
+| **Design records index — every scope/design/program/proposal doc with its status** | `docs/design/README.md` |
+| **Next design tier (2026-09-17, six designs + DEC-046/047): `EVENT-OUTBOX-1`, `RECOVERY-GRANULARITY-1`, `AUTHORITY-LIFETIME-1`, `INITIATOR-IDENTITY-1`, `AUDIT-CORRELATION-1`, `EGRESS-INPROC-1` — every decision pending** | `docs/design/EVENT_OUTBOX_DESIGN.md`, `RECOVERY_GRANULARITY_DESIGN.md`, `AUTHORITY_LIFETIME_DESIGN.md`, `INITIATOR_IDENTITY_DESIGN.md`, `AUDIT_CORRELATION_DESIGN.md`, `EGRESS_INPROC_DESIGN.md` |
+| **Authority negotiation design (AUTHORITY-NEGOTIATION-1) — §2 overturns the entry's own proposed primitive** | `docs/design/AUTHORITY_NEGOTIATION_DESIGN.md` |
+| **Retry classification (RETRY-CLASSIFY-1, CLOSED) + carried context (RETRY-CONTEXT-1, design) — `failure_class` at the raising site, `decide_retry()` in every loop; §6 the scope-not-argument constraint** | `AINDY/core/retry_policy.py` — `FAILURE_CLASSES`, `classify_failure()`, `decide_retry()`; design `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` |
+| **`system_events` retention (SYSEVENT-RETENTION-1, CLOSED) — class per type, prune LEAVES only, unclassified = keep** | `AINDY/core/system_event_retention.py` — `_leaf_filter()`, `RUNTIME_RETENTION_SEED`, `prune_system_events()`; design `docs/design/SYSEVENT_RETENTION_DESIGN.md` |
+| **Background lease fencing (LEASE-FENCE-1, CLOSED) — `claim_lease()` → `LeaseHold`, `assert_lease_fence()` FOR SHARE inside the job txn** | `AINDY/platform_layer/leadership.py`; migration `alembic/versions/0019_background_task_lease_fence.py`; design `docs/design/LEASE_FENCE_DESIGN.md` |
+| **FR-35 guest-path LLM usage (SHIPPED) — the ledger, the deferral scope, explicit-subject recording; admission vs accounting (design §3)** | `AINDY/platform_layer/token_meter.py` — `LlmUsageLedger`, `llm_usage_deferral_scope()`, `record_llm_usage()`; parent `nodus_runtime_adapter._apply_deferred_llm_usage`; design `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` |
+| **OTel GenAI semconv (OTEL-GENAI-SEMCONV-1, CLOSED) — `llm_operation` (meter inside), `tool_operation`, `agent_operation`; keys from the pinned package** | `AINDY/platform_layer/genai_telemetry.py`; provider setup `AINDY/platform_layer/otel.py`; design `docs/design/OTEL_GENAI_SEMCONV_DESIGN.md` |
+| **Durable state ownership contract (ORCHESTRATOR-SPLIT-1, CLOSED) — one authority per unit of work; stores 3/4 write-only and unrecovered; (a) declined (DEC-039); INV-OWN-001..003** | `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md`; pinned by `tests/unit/test_durable_state_ownership.py` |
+| **Witness + baseline scope (SUBSTRATE-WITNESS-1, PERF-BASELINE-1) — both are consumer-shaped, not code-shaped** | `docs/design/WITNESS_AND_BASELINE_SCOPE.md` |
+| **CLI as an execution surface — scope (CLI-EXEC-SURFACE-1)** | `docs/design/CLI_EXECUTION_SURFACE_SCOPE.md` |
+| **Outcome-ambiguity design + the runtime answer (EFFECT-OUTCOME-UNKNOWN-1) — read §5.3, §7, §14 before acting** | `C:\dev\Coding Language\docs\design\v5\03-outcome-ambiguity.md` |
+| Cross-repo compatibility policy | `docs/governance/CROSS_REPO_COMPATIBILITY.md` |
+| Runtime → SDK contract | `docs/runtime/SDK_CONTRACT.md` |
+| Runtime → UI contract | `docs/runtime/UI_CONTRACT.md` |
+| **Outbound handoffs index — what this repo is asking of Nodus, with per-ask status** | `docs/handoffs/README.md` |
+| **Nodus-side A2A/MCP packaging handoff (name collision + caps) — all fixes are Nodus's, none are ours** | `docs/handoffs/NODUS_HANDOFF_a2a_mcp_packaging.md` |
+| **Nodus-side workflow-store handoff — `migrate-store` reports a TRUNCATED census; read before trusting it as the 6.0.0 mitigation** | `docs/handoffs/NODUS_HANDOFF_workflow_store_migration.md` |
+| **Guest workflow store declaration proposal (`ORCHESTRATOR-SPLIT-1` store 4) — APPROVED + implemented #611; (a)/(b) of the entry untouched** | `docs/design/WORKFLOW_STORE_DECLARATION_PROPOSAL.md` |
+| **Upgrade index — start here for any version-to-version move; one row per release, schema steps in bold** | `docs/upgrades/README.md` |
+| Latest app-team handoff | `docs/upgrades/APP_HANDOFF_v2.20.0.md` — pin bump + rebuild + **ONE SCHEMA STEP** (Alembic 0019, `background_task_leases.fence`; their entrypoint branches on exit 3 — this release exercises it). All five of their FRs shipped (FR-32 opt 2, FR-33, FR-34, FR-35, FR-36). **Deprecation with a date: `user.id` → `enduser.id` on syscall spans, removed next release.** Consumer-visible numbers move: failed runs' `steps_completed` LOWER (successes only); `nodus_vm` LLM readings HIGHER (first time); cancelled/refused steps attempted ONCE. Past verify-failed units stay `executing` (not backfilled). Two asks: declare `args_schema`; observe the first `leadgen.act` denial (phase-3 evidence). Not yet verified by the app. **★ Verify a version by PRINTING `AINDY.__path__` beside the number, IN THE CONTAINER** |
+| Release verification checklist | `docs/governance/RELEASE_CHECKLIST.md` |
+| Cross-repo regression tests | `tests/unit/test_cross_repo_compatibility.py` |
+| **Soak harness — concurrency + metric readback** | `tests/integration/soak_harness.py`; guarded by `tests/unit/test_soak_harness.py` |
+| Unit-marker auto-default + its guard (CI-MARKER-1) | `tests/unit/conftest.py`, `tests/unit/test_ci_marker_default.py` |
+| Syscall registry floor constant | `AINDY/kernel/syscall_registry.py` — `SYSCALL_REGISTRY_MIN_COUNT` |
+| Native crate loader (single search policy) | `AINDY/memory/native_bridge.py` — `load_bridge()`, `search_paths()` |
+| Agent identity hook (FR-12) | `AINDY/platform_layer/registry.py` — `register_agent`; applied in `startup.py` `_apply_registered_agents()` |
+| Runtime-callback subprocess budget (FR-11) | `AINDY/platform_layer/runtime_callback_host.py` — `resolve_callback_timeout_seconds()` |
+| Event-bus publish circuit breaker | `AINDY/kernel/event_bus.py` — `_publish_breaker`; state via `get_status()` |
+| MAS / native / OS-layer / event-bus suites | `tests/unit/test_memory_address_space.py`, `test_memory_native_scorer.py`, `test_os_layer.py`, `test_event_bus.py` |
+| Event-bus wire test (needs live Redis) | `tests/integration/test_event_bus_wire.py` — marked `redis`, **not** `integration` |
+| Tech debt tracker | `TECH_DEBT.md` |
+| Docker compose | `docker-compose.yml` |
+| Dockerfile | `Dockerfile` |
+| pgvector init script | `docker/init-pgvector.sql` |
+| Prometheus config | `monitoring/prometheus.yml` |
+| Runtime env reference | `AINDY/.env.example` |
+| Agent admin routes (list / register / deactivate / restore) | `AINDY/routes/platform/admin_router.py` — mounted at `/platform`, runtime-owned |
+| User-owned agent routes (FR-12b) | `AINDY/routes/platform/agents_router.py` — `/platform/agents`, owner-scoped; `derive_user_namespace()` |
+| Platform system agent roster (single source) | `AINDY/db/models/agent.py` — `SYSTEM_AGENT_SPECS`; `SYSTEM_AGENTS` is derived from it |
+| Route-guard bypass test (ROUTE-GUARD-1) | `AINDY/core/route_execution_guard.py` — `_is_pipeline_bypass_on_error()` |
+| Auth router (issues JWTs) | `AINDY/routes/auth_router.py` |
+| Auth service (bcrypt, JWT, key ring) | `AINDY/services/auth_service.py` |
+| Admin bootstrap (Phase 5.5) | `AINDY/startup.py` — `_bootstrap_admin_email()` |
+| CLI auth subcommand | `AINDY/runtime_only.py` — `_promote_admin()` |
+| Platform SPA entry | `platform/src/PlatformApp.tsx` |
+| SPA static files (asset 404 guard) | `AINDY/routing.py` — `_SPAStaticFiles` |
+| Platform SPA Vite config | `platform/vite.config.ts` — `outDir: ../AINDY/platform/dist` |
+| ui-kit source | `C:\dev\aindy-ui-kit\src\` |
+| ui-kit auth API (unwrap invariant) | `C:\dev\aindy-ui-kit\src\api\auth.js` |
+| Subprocess callback spawn (CWD hazard) | `AINDY/platform_layer/runtime_callback_host.py` |
+| Subprocess callback runner | `AINDY/platform_layer/runtime_callback_worker.py` |
+| Log handler OSError guard | `AINDY/config.py` — `_build_log_handler` |
+| Sandbox escape test suite | `tests/sandbox/` — marker `sandbox_escape`, image `python:3.11-alpine` |
+| Sandbox escape results artifact | `tests/sandbox/sandbox_escape_results.json` |
+| Sandbox escape audit log (append-only) | `docs/runtime/SANDBOX_ESCAPE_AUDIT.md` |
+| Sandbox escape posture function | `AINDY/platform_layer/sandbox_runner.py` — `sandbox_escape_test_posture()` |
+| macOS container sandbox policy | `docs/operations/MACOS_CONTAINER_POLICY.md` |
+| WSL2 / macOS backend detection | `AINDY/platform_layer/sandbox_runner.py` — `_detect_wsl2()` |
+| Cloud deployment targets + readiness | `docs/operations/DEPLOYMENT_TARGETS.md` |
+| Route ownership inventory | `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md` |
+| nginx plain HTTP config | `nginx/nginx.conf` |
+| nginx TLS config (Let's Encrypt) | `nginx/nginx.tls.conf` |
+| Compose production port override | `docker-compose.prod.yml` |
+| Apps monolith project instructions | `C:\dev\aindy-apps-monolith\CLAUDE.md` |
+| Live stack verification scope (runtime + apps UI) | `C:\dev\aindy-apps-monolith\LIVE_VERIFICATION_SCOPE.md` |
