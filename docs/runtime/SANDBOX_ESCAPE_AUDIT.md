@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-16"
+last_verified: "2026-09-17"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1531,6 +1531,43 @@ A `--failed` rerun passed and created the release. The sandbox gate was unaffect
 the tag, from source), and this entry is written from its first and only run.
 
 ---
+
+## Entry 034 — 2026-09-17
+
+**Trigger:** `v2.20.0` release tag (`sandbox-escape-linux.yml`, run `35173672225`).
+**Commit:** `f7e033f2a92f` (release PR #714's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0d55920083f1ce1e38ac292e2772f924b4f8bb4188d336c79bf66963039e6146` — same as Entries
+021–033.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.10s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `35173672225`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.19.0..v2.20.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+The 17 escape tests measure what they always measured, and nothing they measure moved.
+
+**Two things in this release sit NEAR the boundary and are recorded so nobody reads them as
+inside it:**
+
+- **`nodus_worker.py` (#712, FR-35)** — the guest worker now enters an LLM-usage deferral scope
+  and an attribution scope around each script, and relays `failure_class` / `cancelled` on every
+  tool result. Both are accounting and classification on the *host's* side of the worker seam;
+  neither widens what a guest can reach. `nodus_worker.py` is not on this gate's path (Entry 033
+  said the same of `AINDY_NODUS_MAX_MEMORY_MB`).
+- **`tool_registry.execute_tool` (#703, #706, #709)** — every refusal now carries a
+  `failure_class`, a `execute_tool {tool}` OTel span brackets the invocation, and a declared
+  `args_schema` is checked before dispatch. All three run *after* the capability check and the
+  cancellation check that this gate's admission story depends on, and none of them changes what
+  a refused call can do: a refusal is still an error envelope, now a typed one.
+
+**Schema:** Alembic `0019` (`background_task_leases.fence`) — a coordination column on the host,
+nothing the guest sees. No dependency pin moved.
+
+**Release-process note:** Boot Smoke on the published wheel installed `aindy-runtime==2.20.0`
+**on attempt 2** (the JSON API answered 200 while the simple index lagged, exactly the #672
+shape). Series since the retry shipped: `v2.16.0`: 2, `v2.17.0`: 2, `v2.18.0`: 3, `v2.19.0`: 1,
+`v2.20.0`: 2. The one-attempt tag was the outlier; the retry is load-bearing.
 
 ## Entry 033 — 2026-09-16
 
