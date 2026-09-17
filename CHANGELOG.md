@@ -4,6 +4,234 @@
 
 _Nothing yet._
 
+## 2.20.0 — 2026-09-17
+
+**Operator notes — read before upgrading.**
+
+- **★ This release changes the schema — one additive column.** Alembic **`0019`** adds
+  `background_task_leases.fence` (`BIGINT NOT NULL DEFAULT 0`); `SCHEMA_CONTRACT_VERSION` moves
+  `2026-09-10` → **`2026-09-16`**. Docker compose runs `alembic upgrade head` before the server
+  and needs nothing else. **Any other deployment:** a bare `aindy-runtime bootstrap-schema` now
+  exits **3** (additive-reconcile-required) against an existing database — run
+  `bootstrap-schema --reconcile`, or branch on exit code 3 (`FR-14`). No data is backfilled; a
+  lease row that predates the column reads `fence = 0` and moves to 1 on its next takeover.
+- **★ Deprecation with a removal date: `user.id` on `syscall.*` OTel spans.** This release emits
+  `enduser.id` beside it (#706, DEC-036). **`user.id` is removed in the release after this
+  one** — repoint any dashboard filter or sampler now.
+- **Behaviour changes a client can see:**
+  - A cancelled run's tool, a tool call missing its capability token, and a crashed
+    capability-enforcement check are attempted **once**, not three times (#703, `RETRY-CLASSIFY-1`).
+    Every `execute_tool` refusal and every syscall **error** envelope now carries `failure_class`
+    (additive key; error envelopes only).
+  - A failed agent run's `steps_completed` is now lower than before — it counts steps that
+    **succeeded**, on both backends (#708, FR-34). "N of M done" is honest.
+  - Under a leadership split, the *old* leader's `recover_orphaned_approved_runs` and
+    `deferred_async_job_retry` log a warning and do nothing instead of re-dispatching work the new
+    leader also dispatches (#705). The single-instance profile holds no lease and is unaffected.
+  - A verify-failed agent run's execution unit now finalises as `failed`; it used to stay
+    `executing` forever (#713). **Units of past verify-failed runs are still `executing` in the
+    table — not backfilled.**
+  - On the `nodus_vm` agent backend, tool-step LLM spend now reaches `/metrics`, the tenant
+    window and `score.computed.llm_tokens` for the first time (#712, FR-35). Expect those readings
+    to rise where they read zero; the governor's tenant window now moves on this backend.
+- **New settings, all at inert defaults:** `AINDY_SYSEVENT_RETENTION` (**unset** = no job;
+  `report` before `prune`, #704), `AINDY_TOOL_ARGS_VALIDATION` (**`warn`**; `enforce` refuses a
+  plan whose args violate a tool's declared `args_schema`, #709), `AINDY_NODUS_LLM_LEDGER_MAX`
+  (256, #712). See `AINDY/.env.example` for each.
+- **What a green check means changed:** `Upgrade Path Guard` (both jobs) is a required check on
+  `main` (#710) — every merge now proves the previous release's database upgrades to this build.
+- **For the app team (`aindy-apps-monolith`):** all five FRs filed against 2.19.0 shipped here
+  (FR-32 option 2, FR-33, FR-34, FR-35, FR-36). Two asks in the handoff: declare `args_schema` on
+  your tools and drop the `Args:` prose convention; and **observe the first authority denial** on
+  `leadgen.act` (`on_denial="wait"`, your #378) with `AINDY_AUTHORITY_NEGOTIATION` live — that is
+  the second half of `AUTHORITY-NEGOTIATION-1` phase 3's evidence.
+
+### Changed — background lease fencing: a stale leader's maintenance write is refused (`LEASE-FENCE-1`, #705)
+
+**★ Operators: this release changes the schema.** Alembic `0019` adds
+`background_task_leases.fence BIGINT NOT NULL DEFAULT 0` (schema contract `2026-09-16`). It is
+additive, so a bare `aindy-runtime bootstrap-schema` exits **3** (additive-reconcile-required) on
+an existing deployment — run `bootstrap-schema --reconcile`, or branch on exit code 3 (`FR-14`).
+Docker compose runs `alembic upgrade head` before the server and needs nothing else.
+
+- The lease's expiry bounds how long two background leaders can coexist (a GC pause, a disk
+  stall) and did nothing about what the stale one *wrote* in that window; a job already running
+  when the lease was lost ran to completion as leader. The row now carries a monotonic `fence`
+  — 1 on first claim, unchanged on renew, +1 on every takeover — and the two leader-only jobs
+  whose re-run is not harmless (`recover_orphaned_approved_runs`, which re-dispatches
+  `execute_run`; `deferred_async_job_retry`, which re-dispatches a handler) read it `FOR SHARE`
+  inside their own transaction before writing. A takeover cannot commit under an open fenced
+  job, and a takeover that already committed refuses the stale leader's write.
+- **Behaviour change:** under a leadership split, a maintenance job on the *old* leader now
+  logs a warning and does nothing instead of re-dispatching work the new leader also dispatches.
+  The `single-instance` (in-process) profile holds no lease and is unaffected.
+- New metric `aindy_lease_fence_refusals_total{job}` — the only evidence the fence ever fired.
+- `leadership.claim_lease()` returns a `LeaseHold(owner_id, fence, expires_at)`;
+  `try_acquire_lease()` keeps its boolean contract. `background_leader_fence()` and
+  `assert_lease_fence()` are the API for any future leader-only job that is not idempotent.
+- Decisions recorded: DEC-030 … DEC-033. Design: `docs/design/LEASE_FENCE_DESIGN.md`.
+
+### Changed — a failure carries a class; retries are decided by it, not by substring matching (`RETRY-CLASSIFY-1`, #703)
+
+- Every `execute_tool` refusal and every syscall **error** envelope now returns `failure_class`
+  beside `error`: one of `transient | cancelled | permission | not_found | invalid | fatal`.
+  Only `transient` is retried. The syscall envelope change is additive (error envelopes only;
+  `docs/runtime/SYSCALL_SYSTEM.md`).
+- **Behaviour change:** a cancelled run's tool, a tool call missing its capability token, and a
+  crashed capability-enforcement check were re-attempted up to 3× — their error text matched
+  none of the nine substrings, so the classifier read *retryable*. Each is now attempted once.
+  Any *other* error text is classified exactly as before (the substring table survives as the
+  fallback for un-classed strings; an unmatched string is still `transient`).
+- Compiled agent plans now emit `is_retryable_error(__result_N)` — the whole `call_tool`
+  result — instead of `is_retryable_error(__result_N["error"])`, so a class `execute_tool`
+  declared reaches the guest loop and a model-shaped error message cannot decide its own retry.
+  The Nodus host function accepts a dict or a string.
+- New metric `aindy_retry_classifications_total{site, failure_class, classified_by, decision}`,
+  one increment per retry decision. `classified_by="substring"` is the residue the fallback
+  table still owns. `flow.node.*` / `agent.step.*` failure events carry the record under
+  `payload.retry`.
+- `execute_with_retry` / `_execute_with_retry` removed from `AINDY/core/retry_policy.py` —
+  zero callers (DEC-024). `is_retryable_error` now takes the result dict or a string.
+- Decisions recorded: DEC-024, DEC-025. Design: `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md`.
+
+### Added — `system_events` retention: a class per event type, pruning leaves only (`SYSEVENT-RETENTION-1`, #704)
+
+- New leader-only scheduler job `system_event_retention`, **registered only when
+  `AINDY_SYSEVENT_RETENTION` is `report` or `prune`** — unset (the default) registers nothing, so
+  upgrading changes no behaviour. `report` runs the selection on the interval and logs per-type
+  counts without deleting; read one before the first `prune`. Any other value is treated as unset.
+- Retention is a class per event **type**: `audit` (never pruned by age — every failure-shaped
+  event, `capability.*`, `auth.*`, `platform.*`, dead-letter and recovery events), `operational`
+  (90 days — the execution ledger, traces, signals, `autonomy.decision`) and `keepalive` (7 days —
+  `watchdog.scan.completed`, `health.liveness.completed`). Overrides:
+  `AINDY_SYSEVENT_RETENTION_OPERATIONAL_DAYS`, `_KEEPALIVE_DAYS`, `_INTERVAL_HOURS` (24),
+  `_BATCH` (1000). **A type with no class is kept forever**; apps declare theirs with
+  `register_event_retention(event_type, class)` (exact names or globs).
+- **The job prunes leaves only.** A row referenced by `parent_event_id`,
+  `agent_events.system_event_id`, `memory_nodes.source_event_id`/`root_event_id`, or either end
+  of an `event_edges` row is never eligible regardless of class — four of those constraints would
+  make the delete fail; the fifth (`event_edges`, `CASCADE`) would silently remove the causal
+  edge `build_trace_graph` reads, which is why it is checked in the predicate.
+- Deletes in committed batches. New metrics: `aindy_system_events_pruned_total{type}` and
+  `aindy_system_events_unclassified_rows` (rows kept only because their type has no class —
+  growth there is the ask to classify).
+- Decisions recorded: DEC-026 … DEC-029. Design: `docs/design/SYSEVENT_RETENTION_DESIGN.md`.
+
+### Added — OpenTelemetry GenAI semantic-convention spans and metrics (`OTEL-GENAI-SEMCONV-1`, #706)
+
+- Three new span kinds, emitted additively at seams that already existed: **`chat {model}`**
+  around every provider call (`gen_ai.provider.name`, `gen_ai.request.model`,
+  `gen_ai.usage.input_tokens` / `output_tokens`, `gen_ai.response.model`, finish reasons;
+  `enduser.id` and `gen_ai.conversation.id` when an attribution scope is active),
+  **`execute_tool {tool}`** around the actual invocation in `execute_tool` (a refusal gets no
+  span — it is an error envelope the caller already sees), and **`invoke_agent {agent_type}`**
+  with the attribution scope's lifetime in `execute_run`, under which the other two nest.
+  Attribute keys are read from the pinned `opentelemetry-semantic-conventions` package, so the
+  emitted key is the current `gen_ai.provider.name`, not the renamed-away `gen_ai.system`.
+- **The token meter now lives inside the `chat` span.** Provider clients call
+  `op.record(response)` inside `with llm_operation(...)`; that is the one call to
+  `observe_llm_usage`, so the `aindy_llm_*` counters are unchanged and counted exactly once as
+  before. A client that meters directly, or traces without recording, is refused by the
+  derived census in `test_token_meter.py`.
+- New OTel metrics `gen_ai.client.token.usage` and `gen_ai.client.operation.duration`, through
+  a `MeterProvider` initialised beside the `TracerProvider` and exported over the same
+  `OTEL_EXPORTER_OTLP_ENDPOINT`. They sit **beside** the Prometheus `aindy_llm_*` counters,
+  never instead of them.
+- **`syscall.*` spans now carry `enduser.id` beside `user.id`.** `user.id` is deprecated and
+  will be **removed in the release after this one** — repoint any dashboard filter now.
+- No prompt or completion content is placed on any span; a test refuses any `gen_ai.input*` /
+  `gen_ai.output*` attribute. Auto-instrumentation packages are not used.
+- Decisions recorded: DEC-034 … DEC-038. Design: `docs/design/OTEL_GENAI_SEMCONV_DESIGN.md`.
+
+### Fixed — app intake: FR-36, FR-34, FR-32 (#708)
+
+- **FR-36** — the agent-completion hook context carried `user_id` as a `uuid.UUID`, which the
+  extension-boundary sanitizer redacts to `{"_redacted_type": "UUID"}`; every first-party
+  completion hook (the app's Infinity loop after an agent run) had failed on it since the surface
+  existed. `user_id` is now a string, like `run_id`; `build_completion_hook_context` is the one
+  builder and a test runs it through the real sanitizer with a real UUID.
+- **FR-34** — `AgentRun.steps_completed` counted steps *attempted*; a run failing on step 2 of 2
+  recorded 2/2, and that pair is the `score.computed` progress dimension. It now counts steps
+  that **succeeded** on both backends (`agent_flow` in `nodus_adapter.py`; `nodus_vm` in
+  `nodus_execution_service.py` — four sites the filing did not name, and the backend its
+  observed runs were on). `current_step` is still the cursor. **Consumer-visible:** a failed
+  run's `steps_completed` is now lower than before; the "N of M done" the console shows is honest.
+- **FR-32** (option 2) — `memory_execute_loop` is now a runtime **default** a plugin may
+  replace: `register_default_flows()` runs after plugin flows on both the API and the worker, so
+  a plugin that registers `memory_execute_loop` wins. Before, the API registered the runtime's
+  graph first (the plugin could only overwrite it) and the worker registered plugins first — two
+  processes, two graphs. An app that declares its own loop may now delete its placeholder
+  `memory_execution_orchestrate` node. No change to `POST /memory/execute` or its response.
+
+### Added — a tool declares its argument contract; the planner sees it; `execute_tool` checks it (FR-33, #709)
+
+- `register_tool(..., args_schema={...})` — a JSON-Schema-shaped object in the dispatcher's
+  own dialect (`required` + `properties[].type`; other keywords carried, not checked). A
+  malformed schema, or a `required` name not declared under `properties`, is refused at
+  registration. `None` (the default) declares nothing — every existing tool is unchanged.
+- The runtime's default `get_tools_for_run` surfaces `args_schema` on each tool dict, and the
+  planner catalog renders `args={…}` for a tool that declares one — read from the dict, or from
+  the registry by name when an app's provider omits the key.
+- `execute_tool` checks `args` against the schema **before** dispatch (before any capability
+  event), under **`AINDY_TOOL_ARGS_VALIDATION`**: `warn` (**default** — log + count, dispatch
+  anyway; nothing changes on upgrade), `enforce` (refuse the step with `failure_class:
+  "invalid"`, which `RETRY-CLASSIFY-1` never re-attempts), `off` (count only). New metric
+  `aindy_tool_args_validation_total{tool, outcome, mode}` — read the `invalid` count under
+  `warn` before flipping to `enforce`.
+
+### Changed — `Upgrade Path Guard` is now a required check on `main` (#710)
+
+- Both jobs of `upgrade-path-guard.yml` — `Upgrade Path — previous release → this build` and
+  `Negative control — the guard must detect drift` — are required for merge, alongside the ten
+  checks required since 2026-08-14 (`strict: true` unchanged). **This changes what a green PR
+  means:** every merge now proves the previous release's database upgrades to this build
+  (`bootstrap-schema` succeeds or exits 3 and `--reconcile` resolves it, then `serve` boots), and
+  that the guard can see synthetic drift — so a release with no schema change cannot pass the
+  main job vacuously without the control also passing.
+- Promoted on the evidence `FR-14`'s entry asked for: 100/100 runs since it was built (#455), and
+  on #705 (Alembic 0019) its `--reconcile` step ran rather than being skipped. Merge latency
+  gains one ~3–4 minute job that already ran on every PR; nothing else changes for contributors.
+- Docs only otherwise: `CLAUDE.md`'s branch-protection table (ten → twelve), and two stale
+  lines corrected — FR-6 is fully shipped since 2.0.0 (the registry line said items 2+3 were
+  open) and the `/auth/register` enumeration oracle is closed (the standing-decisions bullet
+  said "to be fixed").
+
+### Fixed — on the `nodus_vm` backend, a tool step's LLM usage now reaches `/metrics`, the tenant window, and the run (FR-35, #712)
+
+- A tool that calls an LLM inside the Nodus worker was metered in the **worker's** registry —
+  never scraped — and attributed to nothing; the app measured 1,965 DeepSeek tokens spent and
+  every API-side reading zero, so the cost governor saw planning only. The worker now appends
+  each call to a ledger (`llm_usage`, a fourth deferred collection on the worker reply beside
+  `memory_writes` / `emitted_events` / `simulated_effects`) and **counts nothing itself**; the
+  API process records the ledger under the reply's explicit subject (`run_id` /
+  `execution_unit_id` / `user_id`). `aindy_llm_tokens_total`, `aindy_llm_calls_total
+  {attributed="run"}`, the tenant window and `score.computed.dimensions.llm_tokens` read the
+  spend on this backend for the first time.
+- The `chat {model}` span (#706) the worker could never export is replayed by the parent with
+  the worker's timestamps, marked `aindy.deferred`, under the current span.
+- The governor's *reserve* runs in the worker under the forwarded attribution scope; it is real
+  only with a Redis-backed resource manager (in-memory: the worker's window is empty — stated).
+  `LLMBudgetExceededError` now declares `failure_class: "transient"`.
+- New `AINDY_NODUS_LLM_LEDGER_MAX` (default 256): per-call records carried; the rest aggregated
+  per (provider, model).
+- **Also fixed, found building this:** the worker seam had dropped `failure_class` and
+  `cancelled` from every tool result, so on `nodus_vm` a cancelled / refused / budget-exceeded
+  step was still substring-classified in the compiled plan's guard (`RETRY-CLASSIFY-1`).
+- Decisions recorded: DEC-040 … DEC-045. Design: `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md`.
+
+### Fixed — an agent run's execution unit is finalised once, and a verify-failed run's unit now finalises at all (`EU-DOUBLE-FINALIZE-1`, #713)
+
+- Three sites mirrored a terminal `AgentRun` status onto its execution unit and only one guarded
+  on the unit already being terminal, so every completed run on the `nodus_vm` backend logged
+  `[EU] invalid transition completed→completed` at finalize. Cosmetic — the second write was
+  refused.
+- **Not cosmetic:** the chain passed the *run* status `verify_failed` straight through, which
+  is not a unit status; that transition was refused every time, and a verify-failed run's unit
+  stayed `executing` forever. `ExecutionUnitService.finalize_for_run_status` is now the one rule
+  (run vocabulary → unit vocabulary; `verify_failed` / `cancelled` / `refused` → `failed`; silent
+  when already terminal), called by all three sites. **Operators:** units of past verify-failed
+  agent runs are still `executing` in the table; this release does not backfill them.
+
 ## 2.19.0 — 2026-09-16
 
 **Operator notes — read before upgrading.**
