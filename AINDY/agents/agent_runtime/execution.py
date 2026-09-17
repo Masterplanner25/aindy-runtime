@@ -319,11 +319,12 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
         try:
             from AINDY.core.execution_unit_service import ExecutionUnitService
 
-            eu = ExecutionUnitService(db).get_by_source("agent_run", str(run.id))
+            eus = ExecutionUnitService(db)
+            eu = eus.get_by_source("agent_run", str(run.id))
             if eu:
-                final_status = "completed" if run.status == "completed" else "failed" if run.status == "failed" else None
-                if final_status:
-                    ExecutionUnitService(db).update_status(eu.id, final_status)
+                # EU-DOUBLE-FINALIZE-1 — once, in the unit's vocabulary (a `verify_failed` or
+                # `cancelled` run finalises its unit as `failed` rather than leaving it open).
+                eus.finalize_for_run_status(eu.id, run.status)
         except Exception:
             logger.debug("[EU] agent execute hook finish skipped", exc_info=True)
         return compat._run_to_dict(run)

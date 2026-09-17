@@ -107,6 +107,44 @@ class ExecutionUnitService:
 
     # ── Status updates ────────────────────────────────────────────────────────
 
+    #: A RUN's terminal vocabulary → the UNIT's. A unit knows two ends; a run knows several.
+    _RUN_TO_UNIT_TERMINAL: dict[str, str] = {
+        "completed": "completed",
+        "failed": "failed",
+        "verify_failed": "failed",
+        "cancelled": "failed",
+        "refused": "failed",
+    }
+
+    def finalize_for_run_status(self, eu_id, run_status: str) -> bool:
+        """Mirror a RUN's terminal status onto its unit exactly once (EU-DOUBLE-FINALIZE-1).
+
+        Three sites finalised an agent run's unit — `execute_run`'s tail, the nodus_vm chain's
+        end, and the agent_flow adapter's resumed path — and only one of them guarded on the
+        unit already being terminal, so every completed `nodus_vm` run logged
+        `[EU] invalid transition completed→completed`. Worse, the chain passed the RUN status
+        `verify_failed` straight through, which is not a unit status: that transition was
+        refused every time and a verify-failed run's unit stayed `executing` forever
+        (`EU-FINALIZE-UNCOMMITTED-1`'s shape, on a different run). One rule, one home: map the
+        run's vocabulary to the unit's, and a unit that is already terminal is left alone —
+        silently, because the second writer is not wrong, it is late.
+
+        Returns True iff this call moved the unit. Never raises.
+        """
+        target = self._RUN_TO_UNIT_TERMINAL.get(str(run_status or ""))
+        if target is None:
+            return False
+        try:
+            from AINDY.db.models.execution_unit import ExecutionUnit
+
+            eu = self.db.query(ExecutionUnit).filter(ExecutionUnit.id == _coerce_uuid(eu_id)).first()
+            if eu is None or eu.status in ("completed", "failed", "refused"):
+                return False
+            return self.update_status(eu.id, target)
+        except Exception as exc:  # noqa: BLE001 — a unit hook is never fatal to the run
+            logger.debug("[EU] finalize_for_run_status skipped id=%s: %s", eu_id, exc)
+            return False
+
     def update_status(self, eu_id, new_status: str) -> bool:
         """
         Transition EU to new_status. Returns True on success, False otherwise.
