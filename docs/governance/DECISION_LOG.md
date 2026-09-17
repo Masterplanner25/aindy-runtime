@@ -939,6 +939,41 @@ it needs its own proposal. Our seam is the four clients we own.
 
 ---
 
+### DEC-039
+**Status:** `accepted` (2026-09-16 — `ORCHESTRATOR-SPLIT-1`, #707)
+
+**Decision**
+Option (a) of `ORCHESTRATOR-SPLIT-1` — implement `WorkflowStore` over this runtime's PostgreSQL
+and inject it so the guest's workflow store (store 4) collapses into `flow_runs` — is DECLINED
+at HEAD. The trigger that reopens it is the first time the runtime wants to READ guest run
+state (a guest-side resume, a `nodus workflow` inspection surfaced in the operator console, or
+`RECOVERY-GRANULARITY-1` resuming a segment from the guest's step ordinal). Until then stores
+3 and 4 are write-only and advisory, and INV-OWN-003 pins that nothing under `AINDY/` imports
+`nodus_lang_workflow`.
+
+**Why**
+The entry kept (a) open as the only option that made the crash-overlap moot. The contract
+(`DURABLE_STATE_OWNERSHIP_CONTRACT.md` §4) shows the overlap is already moot for a different
+reason: the runtime never reads store 4, nodus's sweep can only dead-letter and is declared off
+(#611), and a resumed node runs a fresh VM that creates a new record (DEC-012). After a crash
+there is no second layer *acting* — two records of one run, not two executions. Moving a
+write-only advisory store into Postgres would give the authority table a second copy of runs it
+already tracks, written by the guest, read by nobody, and reaped by nothing (`running` is
+non-terminal there too). A migration of state nothing consumes is not a durability improvement.
+
+**Implications**
+- `ORCHESTRATOR-SPLIT-1` closes on the contract plus this decision; `QUEUE-DURABILITY-CLASS-1`
+  folds into the contract's §6 and closes with it
+- INV-OWN-001..003 are adopted in `EXECUTION_INVARIANTS.md` §7
+- the import census going red is the signal to re-decide §4 — not a reason to delete the test
+
+**Related Docs**
+- `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §4, §7
+- `tests/unit/test_durable_state_ownership.py`
+- `docs/design/WORKFLOW_STORE_DECLARATION_PROPOSAL.md`
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
@@ -971,8 +1006,8 @@ log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` 
 `DEC-NNN` by the PR that implements (or declines) them, per DEC-010:**
 `docs/design/RETRY_CLASSIFICATION_AND_CONTEXT_DESIGN.md` §9 (three left — 1 and 2 are DEC-024/025), `SYSEVENT_RETENTION_DESIGN.md`
 §8 (none — DEC-026..029), `LEASE_FENCE_DESIGN.md` §7 (none — DEC-030..033), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (none — DEC-034..038), and
-`docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (one — decline `ORCHESTRATOR-SPLIT-1` (a)
-until the runtime reads guest state). None is recorded yet because none has been approved.
+`docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (none — DEC-039). All five designs' decisions are
+now recorded (DEC-024..039); the paragraph stays as the record of how they arrived.
 
 ---
 

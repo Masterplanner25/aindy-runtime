@@ -44,11 +44,11 @@ its reasoning has been carried into a contract, which so far has never happened.
 | [`SYSEVENT_RETENTION_DESIGN.md`](./SYSEVENT_RETENTION_DESIGN.md) | `SYSEVENT-RETENTION-1` | **Shipped 2026-09-16 (#704)** — closed; ships with the env var unset | Prune **leaves only** — four `NO ACTION` FKs make a referenced row undeletable and the one `CASCADE` is on the causal graph; a class per type, unclassified = keep, `report` before `prune`. |
 | [`TOOL_SEAM_ISOLATION_SCOPE.md`](./TOOL_SEAM_ISOLATION_SCOPE.md) | `TOOL-SEAM-ISOLATION-1` | **Closed 2026-08-19** — A, B, C1, C2 all shipped | How the tool seam was measured against source before anything was built; the status table inside tracks each step. Header corrected 09-13 — it said "no code". |
 | [`WITNESS_AND_BASELINE_SCOPE.md`](./WITNESS_AND_BASELINE_SCOPE.md) | `SUBSTRATE-WITNESS-1`, `PERF-BASELINE-1` | **Open (P1)** — both are consumer-shaped, not code-shaped | Why neither closes with a synthetic fixture: what is missing is a consumer that would *notice* if the guarantee broke. |
-| [`WORKFLOW_STORE_DECLARATION_PROPOSAL.md`](./WORKFLOW_STORE_DECLARATION_PROPOSAL.md) | `ORCHESTRATOR-SPLIT-1` store 4 | **Approved + implemented 2026-09-09** (#611); the entry's (a) and (b) untouched | The worker *declares* its guest workflow store (`sqlite`, autosweep off) rather than migrating it; §8 is the decision. |
+| [`WORKFLOW_STORE_DECLARATION_PROPOSAL.md`](./WORKFLOW_STORE_DECLARATION_PROPOSAL.md) | `ORCHESTRATOR-SPLIT-1` store 4 | **Approved + implemented 2026-09-09** (#611); entry CLOSED 2026-09-16 — (b) published, (a) declined (DEC-039) | The worker *declares* its guest workflow store (`sqlite`, autosweep off) rather than migrating it; §8 is the decision. |
 
 **Not in this folder but of this kind:** `ORCHESTRATOR-SPLIT-1` (b) — *publish the ownership contract* — is a
 contract, so it lives with the others in [`docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md`](../runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md).
-Its §7 carries the design decision the entry still owes (decline option (a) until the runtime reads guest state).
+Its §7 records the decision (DEC-039: option (a) declined until the runtime reads guest state); the entry closed on it 2026-09-16.
 
 ## Conventions
 

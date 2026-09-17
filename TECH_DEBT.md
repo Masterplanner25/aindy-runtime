@@ -10066,7 +10066,7 @@ easy to change and the shape is not.
 
 ## QUEUE-DURABILITY-CLASS-1 — enqueued work can change durability class without the enqueuer knowing
 
-**Status: OPEN — P2, hardening.** Filed 2026-08-15 from the Hermes architectural map (G4),
+**Status: CLOSED (2026-09-16) — folded into `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §6 (#707).** The Redis row there is the durability class: the queue is a TRANSPORT, never the authority for the work it names; losing it loses at most latency, the rows it named are still the authority and the periodic jobs re-find them; `AINDY_REQUIRE_REDIS` makes the fallback raise and it already classifies `UNSAFE_DEGRADED`. No per-job durability class is needed while no job's authority lives in the queue. *(Original status line follows.)* **Was: OPEN — P2, hardening.** Filed 2026-08-15 from the Hermes architectural map (G4),
 verified.
 
 `_fallback_to_memory_backend` (`core/distributed_queue.py:418`) swaps a durable Redis queue for
@@ -10094,7 +10094,17 @@ exists, a per-job field partially duplicates a deployment-level control; do it w
 
 ## ORCHESTRATOR-SPLIT-1 — three durable work stores, three recovery paths, no shared transaction
 
-**Status: OPEN — P2.** Filed 2026-08-15 from the Hermes architectural map (§8, P2-1), verified
+**Status: CLOSED (2026-09-16) — (b) published #702, decision DEC-039 recorded #707.** The
+contract (`docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md`) states one AUTHORITY per unit of
+work; every other store is derived, a transport, a ledger, or write-only; stores 3/4 are
+recovered by NOBODY, so the crash-overlap below needs an actor that does not exist. Its three
+invariants are adopted as `EXECUTION_INVARIANTS.md` §7 (INV-OWN-001..003) and INV-OWN-003 is
+pinned by a derived import census (`test_durable_state_ownership.py`). **(a) — a `WorkflowStore`
+over Postgres — is DECLINED at HEAD (DEC-039)**: it would give the authority table a second copy
+of runs it already tracks, written by the guest and read by nobody. **The trigger that reopens
+it:** the first time the runtime wants to READ guest run state — the census test goes red on the
+import, and §4 must be re-decided before it stays. `QUEUE-DURABILITY-CLASS-1` folded into the
+contract's §6 and closed with it. Filed 2026-08-15 from the Hermes architectural map (§8, P2-1), verified
 by inspection of the three subsystems.
 
 Durable work state lives in three places with three independent recovery mechanisms:

@@ -172,19 +172,19 @@ write-only advisory store into Postgres would give the authority table a second 
 it already tracks, written by the guest, read by nobody, and reaped by nothing (`running` is
 non-terminal there too).
 
-**Recommendation: decline (a) at HEAD, and record the trigger that reopens it** — the first
+**DECIDED 2026-09-16 (DEC-039, #707): (a) is DECLINED at HEAD; the trigger that reopens it is** the first
 time the runtime wants to *read* guest run state (a guest-side resume, a `nodus workflow`
 inspection surfaced in the operator console, or `RECOVERY-GRANULARITY-1` choosing to resume a
 segment from the guest's step ordinal rather than the host's). At that point store 4 stops
 being advisory, and (a) is the right shape for making it authoritative. Until then it is a
-migration of state nothing consumes. To be recorded as a `DEC-NNN` on approval.
+migration of state nothing consumes.
 
-`ORCHESTRATOR-SPLIT-1` closes on this document plus that decision; `QUEUE-DURABILITY-CLASS-1`
-folds into §6's Redis row, as the entry suggested.
+`ORCHESTRATOR-SPLIT-1` CLOSED on this document plus that decision; `QUEUE-DURABILITY-CLASS-1`
+folded into §6's Redis row and closed with it.
 
 ---
 
-## 8. Invariants this contract adds (candidates for `EXECUTION_INVARIANTS.md`)
+## 8. Invariants this contract adds — ADOPTED as `EXECUTION_INVARIANTS.md` §7 (INV-OWN-001..003, 2026-09-16)
 
 - **INV-OWN-001** — a unit of work has exactly one authoritative status row, and every recovery
   path reads it before acting (§1).
@@ -195,4 +195,4 @@ folds into §6's Redis row, as the entry suggested.
   environment carries `NODUS_WORKFLOW_AUTOSWEEP=0`, and `AINDY/` imports nothing from
   `nodus_lang_workflow` (no `WorkflowRunner`, no `WorkflowStore`, no `sweep` of the guest's —
   `resource_manager._sweep` is the unrelated TTL sweep) — a derived census, non-empty asserted
-  on the environment side.
+  on the environment side. **Pinned:** `tests/unit/test_durable_state_ownership.py`.
