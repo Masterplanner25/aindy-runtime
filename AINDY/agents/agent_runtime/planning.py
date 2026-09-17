@@ -179,11 +179,28 @@ def _build_planner_prompt(
         prompt += "\n\nRelevant prior memory (recalled for this objective):\n" + memory_block
     if tools:
         prompt += "\n\nAvailable tools:\n" + "\n".join(
-            f"- {tool.get('name')}: {tool.get('description', '')} (risk={tool.get('risk', 'unknown')})"
-            for tool in tools
-            if isinstance(tool, dict) and tool.get("name")
+            _catalog_line(tool) for tool in tools if isinstance(tool, dict) and tool.get("name")
         )
     return prompt
+
+
+def _catalog_line(tool: dict) -> str:
+    """One catalog line; the argument contract (FR-33) is rendered when the tool declares one.
+
+    Read from the tool dict first, then from the registry by name — an app's run-tool provider
+    builds its own dicts and may not copy the key, and the contract is the registry's fact.
+    """
+    import json
+
+    from AINDY.agents.tool_registry import tool_args_schema
+
+    line = f"- {tool.get('name')}: {tool.get('description', '')} (risk={tool.get('risk', 'unknown')})"
+    schema = tool.get("args_schema")
+    if not isinstance(schema, dict):
+        schema = tool_args_schema(str(tool.get("name")))
+    if schema:
+        line += " args=" + json.dumps(schema, sort_keys=True, separators=(",", ":"))
+    return line
 
 
 def _get_planner_backend(name: str):

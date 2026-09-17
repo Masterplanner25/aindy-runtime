@@ -208,7 +208,9 @@ Surfaces in scope:
 - manifest declarative extension entries loaded through
   `AINDY.platform_layer.registry`
 - `AINDY.platform_layer.registry.register_*` helper shapes
-- `AINDY.agents.tool_registry.register_tool`
+- `AINDY.agents.tool_registry.register_tool` — including `args_schema` (FR-33, 2026-09-16): a
+  declared argument contract, surfaced on the tool dict and the planner catalog, checked by
+  `execute_tool` under `AINDY_TOOL_ARGS_VALIDATION`; `None` declares nothing
 - dynamic plugin nodes via
   `AINDY.platform_layer.node_registry.register_external_node(type="plugin")`
 - webhook nodes via

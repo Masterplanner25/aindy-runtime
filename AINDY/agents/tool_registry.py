@@ -152,8 +152,21 @@ def register_tool(
     env_spec: Optional[dict] = None,
     degraded_variant: Optional[str] = None,
     on_denial: str = ON_DENIAL_FAIL,
+    args_schema: Optional[dict] = None,
 ):
     """Register an agent tool implementation with platform metadata.
+
+    args_schema (FR-33): the tool's ARGUMENT CONTRACT — a JSON-Schema-shaped object
+    (``{"type": "object", "properties": {...}, "required": [...]}``) in the dispatcher's own
+    dialect (`syscall_versioning.validate_payload`: ``required`` + ``properties[].type``; other
+    keywords are carried, not checked). Until 2026-09-16 a tool's arguments had exactly one
+    channel — prose in its description, which nothing checked — so the planner sent
+    ``{"topic": …}`` to a tool that takes ``file_path`` and the run failed inside a domain
+    handler, after approval. Declared here, the schema is (1) surfaced on the tool dict
+    `get_tools_for_run()` returns and rendered into the planner's catalog, and (2) checked
+    against ``args`` by `execute_tool` BEFORE dispatch, under `AINDY_TOOL_ARGS_VALIDATION`
+    (``warn`` by default: count + log; ``enforce``: refuse the step with `failure_class`
+    ``invalid``; ``off``). ``None`` declares nothing and is every tool today.
 
     execution_guarantee (MEB-0): "AT_LEAST_ONCE" (default) or "EXACTLY_ONCE". A tool that
     is non-idempotent (send_email, etc.) declares "EXACTLY_ONCE" to opt into the tool-path
@@ -263,6 +276,8 @@ def register_tool(
             f"{list(ON_DENIAL_KINDS)}. A misspelled kind must fail loudly — silently treating it "
             f"as 'fail' would strand a run the author meant to park."
         )
+    if args_schema is not None:
+        _check_args_schema_shape(name, args_schema)
 
     def wrapper(fn: Callable) -> Callable:
         TOOL_REGISTRY[name] = {
@@ -278,6 +293,7 @@ def register_tool(
             "env_spec": env_spec,
             "degraded_variant": degraded_variant.strip() if degraded_variant else None,
             "on_denial": on_denial,
+            "args_schema": dict(args_schema) if args_schema else None,
         }
         return fn
 
@@ -779,6 +795,65 @@ def register_tool_suggestion_provider(provider: Callable) -> Callable:
 from AINDY.kernel.cancellation import is_run_cancelled, note_effect_refused
 
 
+ARGS_VALIDATION_ENV = "AINDY_TOOL_ARGS_VALIDATION"
+ARGS_VALIDATION_MODES = ("off", "warn", "enforce")
+
+
+def _check_args_schema_shape(name: str, schema: Any) -> None:
+    """Refuse a malformed `args_schema` at REGISTRATION (the `on_denial` / `isolation` rule)."""
+    if not isinstance(schema, dict):
+        raise ValueError(f"register_tool({name!r}): args_schema must be a dict, got {type(schema).__name__}")
+    props = schema.get("properties")
+    if props is not None and not isinstance(props, dict):
+        raise ValueError(f"register_tool({name!r}): args_schema['properties'] must be a dict")
+    req = schema.get("required")
+    if req is not None and not (isinstance(req, list) and all(isinstance(r, str) for r in req)):
+        raise ValueError(f"register_tool({name!r}): args_schema['required'] must be a list of field names")
+    if isinstance(props, dict) and isinstance(req, list):
+        undeclared = [r for r in req if r not in props]
+        if undeclared:
+            raise ValueError(
+                f"register_tool({name!r}): args_schema requires {undeclared} but does not declare "
+                f"them under 'properties' — a required argument the planner is never told about"
+            )
+
+
+def tool_args_schema(tool_name: str) -> Optional[dict]:
+    """The declared argument contract of a registered tool, or None (FR-33)."""
+    entry = TOOL_REGISTRY.get(tool_name)
+    schema = entry.get("args_schema") if isinstance(entry, dict) else None
+    return dict(schema) if isinstance(schema, dict) else None
+
+
+def args_validation_mode() -> str:
+    """``off`` | ``warn`` (default) | ``enforce``; an unrecognised value is ``warn``."""
+    raw = (os.getenv(ARGS_VALIDATION_ENV) or "warn").strip().lower()
+    return raw if raw in ARGS_VALIDATION_MODES else "warn"
+
+
+def validate_tool_args(tool_name: str, args: Any) -> list[str]:
+    """Errors from checking ``args`` against the tool's declared schema; empty = valid / undeclared."""
+    schema = tool_args_schema(tool_name)
+    if not schema:
+        return []
+    from AINDY.kernel.syscall_versioning import validate_payload
+
+    payload = args if isinstance(args, dict) else {}
+    errors = validate_payload(schema, payload)
+    if not isinstance(args, dict) and args is not None:
+        errors = [f"args must be an object, got {type(args).__name__}"] + errors
+    return errors
+
+
+def _count_args_validation(tool_name: str, outcome: str, mode: str) -> None:
+    try:
+        from AINDY.platform_layer.metrics import tool_args_validation_total
+
+        tool_args_validation_total.labels(tool=tool_name, outcome=outcome, mode=mode).inc()
+    except Exception:  # noqa: BLE001 — observability never decides
+        pass
+
+
 def _declared_failure_class(source: Any) -> Optional[str]:
     """RETRY-CLASSIFY-1 — the class a tool or its worker DECLARED for its own failure, if any.
 
@@ -831,6 +906,28 @@ def execute_tool(
                 "error": "run_id is required when execution_token is supplied",
                 "failure_class": "invalid",
             }
+    # FR-33 — the declared argument contract, checked BEFORE dispatch (and before any
+    # capability event is emitted for a call that was malformed to begin with). A bad plan
+    # fails here as `invalid`, not inside a domain handler with a domain message, after approval.
+    _args_errors = validate_tool_args(tool_name, args)
+    if _args_errors:
+        _mode = args_validation_mode()
+        _count_args_validation(tool_name, "invalid", _mode)
+        if _mode == "enforce":
+            return {
+                "success": False,
+                "result": None,
+                "error": f"tool {tool_name!r} args do not match its declared schema: " + "; ".join(_args_errors),
+                "failure_class": "invalid",
+            }
+        if _mode == "warn":
+            logger.warning(
+                "[AgentTool] %s args do not match its declared schema (mode=warn, dispatching anyway): %s",
+                tool_name, "; ".join(_args_errors),
+            )
+    elif tool_args_schema(tool_name):
+        _count_args_validation(tool_name, "valid", args_validation_mode())
+    if execution_token is not None:
         try:
             from AINDY.agents.capability_service import check_tool_capability
 

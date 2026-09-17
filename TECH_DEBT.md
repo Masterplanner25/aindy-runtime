@@ -8892,6 +8892,50 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ---
 
+## FR-33 — the planner was told a tool's name and one sentence, never its arguments; `register_tool` had nowhere to put them 🟡 capability
+
+**Status: SHIPPED 2026-09-16 (#709) — (1) and (2) additive; (3) gated, default `warn`.** Filed by
+the app the same day: four of seven parked runs planned `arm.analyze` with `{"topic": …}` because
+the description said "code or a topic" and the syscall takes `file_path`; each failed inside the
+domain handler, after approval. Their workaround — `Args: {…}` prose in every description plus a
+test making the convention mandatory — stays a workaround: prose the planner reads, nothing
+checks.
+
+### Shipped
+
+1. `register_tool(..., args_schema: dict | None = None)` — JSON-Schema-shaped, in the
+   dispatcher's own dialect (`syscall_versioning.validate_payload`: `required` +
+   `properties[].type`; other keywords carried, not checked — the same dialect
+   `WAIT-TYPED-CONTRACT-1`'s `resume_schema` uses, so a tool author learns one shape). A
+   malformed schema — not a dict, `properties` not a dict, `required` not a list of names, or a
+   required field not declared under `properties` — is refused at REGISTRATION, the
+   `on_denial` / `isolation` rule. Stored on the entry; `tool_args_schema(name)` reads it.
+2. The runtime default `get_tools_for_run` surfaces `args_schema` on the tool dict, and the
+   planner catalog line (`planning._catalog_line`) renders `args={…}` when present — read from
+   the dict first, then **from the registry by name**, because an app's run-tool provider builds
+   its own dicts and may not copy the key; the contract is the registry's fact, and a provider
+   that omits it must not hide it.
+3. `execute_tool` checks `args` against the schema BEFORE dispatch — after the token/run-id
+   gates, before `check_tool_capability`, so a malformed call emits no `capability.*` event.
+   `AINDY_TOOL_ARGS_VALIDATION`: `warn` (default — log + count, dispatch anyway), `enforce`
+   (refuse with `failure_class: "invalid"` — composes with `RETRY-CLASSIFY-1`: never
+   re-attempted), `off` (count only). Counter `aindy_tool_args_validation_total{tool, outcome,
+   mode}`; the `invalid` count under `warn` is the number to read before flipping. An
+   unrecognised value is `warn`.
+
+Tests drive the real decorator, the real catalog builder and the real `execute_tool` under each
+mode, each with its control (a valid call under the same mode dispatches); mutation-tested 8/8.
+
+**What the app should do:** replace the `Args: {…}` prose convention with `args_schema` on each
+`register_tool`; pass it through as the Claude planner's per-tool `input_schema` (the forced tool
+call was built to carry it); flip to `enforce` once the `invalid` count reads zero on their stack.
+
+**Not done, by the filing's own scope:** no schema on the runtime's `runtime.selftest` /
+default `memory.*` tools yet (they would benefit); `PlannerRequest` unchanged beyond the extra
+key in each tool dict.
+
+---
+
 ## FR-36 — the agent-completion hook received `user_id` as a `uuid.UUID`, which the extension boundary redacted; every first-party completion hook had been failing 🔴 defect
 
 **Status: SHIPPED 2026-09-16 (#708).** Filed by the app the same day, from the log of the first
