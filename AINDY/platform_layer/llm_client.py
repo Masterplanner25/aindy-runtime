@@ -23,6 +23,10 @@ class LLMBudgetExceededError(LLMCallError):
     circuit breaker and never counts toward opening it.
     """
 
+    #: RETRY-CLASSIFY-1 — a budget refusal is a WINDOW, not a fault: the class the tool seam
+    #: relays (`_declared_failure_class`) so the step is retryable rather than substring-matched.
+    failure_class = "transient"
+
     def __init__(self, message: str, *, scope: str, subject: str, used: int, reserved: int, cap: int):
         super().__init__(message)
         self.scope = scope

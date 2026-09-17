@@ -58,7 +58,9 @@ def test_with_token_invokes_execute_tool(monkeypatch):
         user_id="u1", run_id="r1", execution_token={"tok": 1},
         session_factory=lambda: db,
     )
-    assert r == {"success": True, "result": {"sent": True}, "error": None}
+    # RETRY-CLASSIFY-1 / FR-35 — the seam relays the class and the cancel flag to the guest
+    # (it used to DROP them, so the compiled plan's guard substring-matched on nodus_vm).
+    assert r == {"success": True, "result": {"sent": True}, "error": None, "failure_class": None, "cancelled": False}
     # Token + run_id + user threaded through to execute_tool.
     assert captured["tool_name"] == "send_email"
     assert captured["args"] == {"to": "x"}

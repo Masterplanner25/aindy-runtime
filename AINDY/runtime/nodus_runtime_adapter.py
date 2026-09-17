@@ -344,6 +344,9 @@ class NodusRuntimeAdapter:
         emitted_events = list(result.get("emitted_events") or [])
         memory_writes = list(result.get("memory_writes") or [])
         simulated_effects = list(result.get("simulated_effects") or [])
+        # FR-35 — the fourth deferred collection: tokens the guest spent, recorded HERE under the
+        # run's real subject. Applied before the waiting branch: a segment that parks still spent.
+        _apply_deferred_llm_usage(result.get("llm_usage"), context, trace_id=trace_id)
         worker_status = str(result.get("status") or "failure")
         worker_error = result.get("error")
 
@@ -380,6 +383,54 @@ class NodusRuntimeAdapter:
             raw_result=result,
             simulated_effects=simulated_effects,
         )
+
+
+def _apply_deferred_llm_usage(
+    ledger: Any,
+    context: NodusExecutionContext,
+    *,
+    trace_id: Optional[str] = None,
+) -> int:
+    """Record the guest's LLM usage in THIS process under an explicit subject (FR-35).
+
+    The subject comes from the context the worker was handed — `run_id` (the agent run when the
+    segment belongs to one, else nothing), `execution_unit_id`, `user_id` — never from a
+    ContextVar that happened to be set on this thread; that is how the spend was lost to begin
+    with. Per-call records also replay their `chat {model}` span here with the worker's
+    timestamps (#706's gap). Returns the number of calls recorded. Never raises.
+    """
+    if not isinstance(ledger, dict):
+        return 0
+    from AINDY.platform_layer.genai_telemetry import replay_deferred_llm_span
+    from AINDY.platform_layer.token_meter import record_llm_usage
+
+    run_id = str(context.run_id or "") or None
+    unit_id = str(context.execution_unit_id or "") or None
+    tenant_id = str(context.user_id or "") or None
+    count = 0
+    try:
+        for rec in list(ledger.get("records") or []):
+            if not isinstance(rec, dict):
+                continue
+            record_llm_usage(
+                provider=str(rec.get("provider") or "unknown"), model=str(rec.get("model") or "unknown"),
+                prompt_tokens=int(rec.get("prompt_tokens") or 0), completion_tokens=int(rec.get("completion_tokens") or 0),
+                tenant_id=tenant_id, run_id=run_id, unit_id=unit_id,
+            )
+            replay_deferred_llm_span(rec, trace_id=trace_id)
+            count += 1
+        for bucket in list(ledger.get("tail") or []):
+            if not isinstance(bucket, dict):
+                continue
+            record_llm_usage(
+                provider=str(bucket.get("provider") or "unknown"), model=str(bucket.get("model") or "unknown"),
+                prompt_tokens=int(bucket.get("prompt_tokens") or 0), completion_tokens=int(bucket.get("completion_tokens") or 0),
+                tenant_id=tenant_id, run_id=run_id, unit_id=unit_id,
+            )
+            count += int(bucket.get("calls") or 0)
+    except Exception as exc:  # noqa: BLE001 — accounting must not fail an execution that produced a result
+        logger.debug("[NodusAdapter] deferred llm usage not applied: %s", exc)
+    return count
 
 
 def _apply_deferred_events(

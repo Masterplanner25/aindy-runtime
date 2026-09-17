@@ -8897,10 +8897,19 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ---
 
-## FR-35 — on the `nodus_vm` backend, LLM usage spent by tool steps is metered in the worker process and never reaches `/metrics`, the tenant window, or the run 🔴 open (design filed)
+## FR-35 — on the `nodus_vm` backend, LLM usage spent by tool steps was metered in the worker process and never reached `/metrics`, the tenant window, or the run 🔴 defect
 
-**Status: OPEN — DESIGN FILED 2026-09-17, `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` (proposal
-under §8).** Filed by the app 2026-09-16 from the first agent run whose step spent tokens at
+**Status: SHIPPED 2026-09-17 (#712; DEC-040 … DEC-045).** Usage spent in the worker now rides the
+reply as `llm_usage` (records + an aggregate tail, cap `AINDY_NODUS_LLM_LEDGER_MAX`=256) and is
+recorded in the parent by `record_llm_usage` under the reply's EXPLICIT subject; the worker
+counts nothing (deferral replaces observation); the `chat {model}` span is replayed with the
+worker's timestamps (#706's gap closed); the attribution scope is forwarded so the governor's
+reserve names a subject in the worker. **★ Found building it: the worker seam DROPPED
+`failure_class` and `cancelled` from every tool result, so RETRY-CLASSIFY-1's class never reached
+the compiled plan's guard on `nodus_vm` — fixed; `LLMBudgetExceededError` declares `transient`.**
+Mutation-tested 9/9. **Remaining:** the Redis-backed admission integration test (a refusal inside
+the worker against a live window); on an in-memory RM admission is vacuous there, by design.
+*(Design filed 2026-09-17, `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md`.)* Filed by the app 2026-09-16 from the first agent run whose step spent tokens at
 execution time (1,965 DeepSeek tokens; every API-side reading zero). Verified against source —
 the claim holds exactly: the provider client runs in the worker, `_attribute_usage` finds no
 scope there, the worker's Prometheus registry is never scraped.

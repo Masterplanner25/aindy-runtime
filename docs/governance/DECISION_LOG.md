@@ -974,6 +974,118 @@ non-terminal there too). A migration of state nothing consumes is not a durabili
 
 ---
 
+### DEC-040
+**Status:** `accepted` (2026-09-17 — `FR-35`, #712)
+
+**Decision**
+LLM usage spent inside the Nodus worker rides the worker reply as a fourth DEFERRED collection
+(`llm_usage`, beside `memory_writes` / `emitted_events` / `simulated_effects`) and is recorded
+in the parent by `record_llm_usage`. The filing's ask 1.
+
+**Why**
+The reply is the one channel a guest already has for things it cannot do across the process
+boundary — commit, emit, accrue. One counter, one process, one registry; the same channel
+carries the timing that lets the parent emit the span the worker could not.
+
+**Related Docs**
+- `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §1–§2
+
+---
+
+### DEC-041
+**Status:** `accepted` (2026-09-17 — `FR-35`, #712)
+
+**Decision**
+Inside the worker's deferral scope, `observe_llm_usage` appends to the ledger and observes
+NOTHING else — no local counters, no `_attribute_usage`. Deferral replaces observation.
+
+**Why**
+Two accrual sites are the double-count the meter's own design rejects
+(`test_a_chat_call_is_metered_exactly_once`): on a Redis-backed resource manager the worker's
+accrual and the parent's replay would both land in the tenant window. The worker's Prometheus
+registry is never scraped, so nothing is lost by not counting there.
+
+**Related Docs**
+- `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §3
+
+---
+
+### DEC-042
+**Status:** `accepted` (2026-09-17 — `FR-35`, #712)
+
+**Decision**
+The governor's ADMISSION (reserve before the call) stays in the worker: `run_one` enters
+`llm_attribution_scope(tenant_id=ctx.user_id, run_id=<agent run>)` so `resolve_llm_subject()`
+answers there. It is real only with a Redis-backed resource manager; with an in-memory one the
+worker's window is empty and admission is vacuous on the guest path — stated, not hidden.
+ACCOUNTING is the parent's, from the reply, correct on every backend.
+
+**Why**
+`llm_budget_reservation` is reserve → call → reconcile and reconcile only releases the estimate;
+the call is made in the worker and cannot be refused from outside it. The two halves of the
+governor therefore have different homes, and pretending one place serves both would either
+double-count (accrue in the worker) or never refuse (reserve in the parent).
+
+**Related Docs**
+- `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §3
+
+---
+
+### DEC-043
+**Status:** `accepted` (2026-09-17 — `FR-35`, #712)
+
+**Decision**
+The parent attributes the replayed usage from the reply's EXPLICIT context — `run_id` (the agent
+run when the segment belongs to one), `execution_unit_id`, `user_id` — with the ambient
+ContextVars as the fallback, field by field.
+
+**Why**
+A ContextVar that happened to be set on the calling thread is how this spend was lost to begin
+with; a resumed segment runs from the scheduler with no scope at all. The request context is
+already carried to the worker and is the run's real identity.
+
+**Related Docs**
+- `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §5
+
+---
+
+### DEC-044
+**Status:** `accepted` (2026-09-17 — `FR-35`, #712)
+
+**Decision**
+For each per-call record the parent replays a `chat {model}` span with the record's own
+`started_at_ms` / `duration_ms` as explicit start and end times, nested under the current span,
+marked `aindy.deferred = true`, carrying `gen_ai.tool.name` when the seam knew the tool.
+
+**Why**
+The worker has no tracer provider, so #706's span was started and dropped there. A late span
+with true timestamps says when the call happened, in the trace the operator is looking at; a
+span with the replay's timestamps would be a lie about a call that had already finished.
+
+**Related Docs**
+- `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §5
+- `AINDY/platform_layer/genai_telemetry.py::replay_deferred_llm_span`
+
+---
+
+### DEC-045
+**Status:** `accepted` (2026-09-17 — `FR-35`, #712)
+
+**Decision**
+The ledger carries at most `AINDY_NODUS_LLM_LEDGER_MAX` (default 256) per-call records; calls
+past the cap are aggregated per `(provider, model)` into a tail of `{calls, prompt_tokens,
+completion_tokens}`. Accounting reads both halves; spans are replayed from records only.
+
+**Why**
+A guest loop that makes ten thousand calls must not produce a ten-thousand-entry reply. The
+tail keeps the accounting exact; what it gives up is per-call spans past the cap, which is the
+right thing to lose.
+
+**Related Docs**
+- `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §4
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
@@ -1008,8 +1120,7 @@ log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` 
 §8 (none — DEC-026..029), `LEASE_FENCE_DESIGN.md` §7 (none — DEC-030..033), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (none — DEC-034..038), and
 `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (none — DEC-039). All five designs' decisions are
 now recorded (DEC-024..039); the paragraph stays as the record of how they arrived.
-**Pending 2026-09-17:** `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §8 (six) — recorded by the
-PR that implements it.
+`docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §8 (six) — recorded as DEC-040..045 (#712).
 
 ---
 

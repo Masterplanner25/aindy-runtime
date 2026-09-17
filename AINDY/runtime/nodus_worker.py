@@ -155,15 +155,18 @@ def run_agent_tool(
     from AINDY.agents.tool_registry import execute_tool
 
     db = session_factory()
+    from AINDY.platform_layer.token_meter import llm_usage_tool_scope
+
     try:
-        result = execute_tool(
-            tool_name=str(tool_name),
-            args=tool_args,
-            user_id=user_id,
-            db=db,
-            run_id=run_id,
-            execution_token=execution_token,
-        )
+        with llm_usage_tool_scope(tool_name):
+            result = execute_tool(
+                tool_name=str(tool_name),
+                args=tool_args,
+                user_id=user_id,
+                db=db,
+                run_id=run_id,
+                execution_token=execution_token,
+            )
     except Exception as exc:
         # RETRY-CLASSIFY-1 — the seam's own exception is un-classed; the fallback table decides
         return {"success": False, "result": None, "error": str(exc), "failure_class": None}
@@ -175,6 +178,13 @@ def run_agent_tool(
         "success": bool(result.get("success")),
         "result": _json_safe(result.get("result")),
         "error": result.get("error"),
+        # RETRY-CLASSIFY-1 — the class `execute_tool` (or the tool) declared must reach the
+        # guest: the compiled plan's `is_retryable_error(__result_N)` reads it. Found by FR-35's
+        # admission test: this normalisation had DROPPED it on the nodus_vm backend, so a
+        # cancelled / refused / budget-exceeded step was substring-classified in the guest
+        # after all. Also `cancelled`, which the parent's loop reads.
+        "failure_class": result.get("failure_class"),
+        "cancelled": bool(result.get("cancelled", False)),
     }
 
 
@@ -647,7 +657,17 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         _unit_cm = bind_execution_unit(execution_unit_id, trace_id)
     else:
         _unit_cm = contextlib.nullcontext()
-    with _durable_cm, _unit_cm, contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stdout_buffer):
+    # FR-35 — the guest's LLM usage is APPENDED to a ledger here and recorded by the parent
+    # under the run's real subject (deferral replaces observation in this process); the
+    # attribution scope is entered too so the governor's RESERVE can name a subject where the
+    # resource manager is shared. Design: docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md.
+    from AINDY.platform_layer.token_meter import llm_attribution_scope, llm_usage_deferral_scope
+
+    _llm_ledger = None
+    _agent_run_id = tool_run_id if tool_run_id and tool_run_id != execution_unit_id else None
+    with llm_usage_deferral_scope() as _llm_ledger, llm_attribution_scope(
+        tenant_id=user_id or None, run_id=_agent_run_id
+    ), _durable_cm, _unit_cm, contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stdout_buffer):
         try:
             raw_result = runtime.run_source(
                 script,
@@ -675,6 +695,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                     "simulated_effects": simulated_effects,
                     "error": None,
                     "stdout_log": stdout_buffer.getvalue(),
+                    "llm_usage": _llm_ledger.as_dict() if _llm_ledger is not None else None,
                     "wait_for": wait_for,
                     # WAIT-TYPED-CONTRACT-1 — the guest's third wait key, beside the two above:
                     # `set_state("nodus_wait_resume_schema", {...})` declares what may resume
@@ -691,6 +712,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                     "simulated_effects": simulated_effects,
                     "error": error,
                     "stdout_log": stdout_buffer.getvalue(),
+                    "llm_usage": _llm_ledger.as_dict() if _llm_ledger is not None else None,
                 }
         except Exception as exc:
             result_payload = {
@@ -701,6 +723,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                 "simulated_effects": simulated_effects,
                 "error": str(exc),
                 "stdout_log": stdout_buffer.getvalue(),
+                "llm_usage": _llm_ledger.as_dict() if _llm_ledger is not None else None,
             }
 
     # ★ EXEC-ENV-BIND-1 phase 2 — release the guest's scratch root. Deliberately explicit
