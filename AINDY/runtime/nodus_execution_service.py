@@ -893,6 +893,10 @@ def _execute_agent_segment_chain(
 
         accumulated = accumulated + seg_results
         ran = len(accumulated)
+        # FR-34 — `steps_completed` means steps that SUCCEEDED; `ran` (steps attempted) stays
+        # the cursor. On this backend a run failing on step 2 of 2 used to record 2/2, and that
+        # pair is the `score.computed` dimension the accrual reads.
+        succeeded = sum(1 for r in accumulated if isinstance(r, dict) and r.get("status") == "success")
         now = datetime.now(timezone.utc)
         run = db.query(AgentRun).filter(AgentRun.id == _db_run_id(run_id)).first()
         flow_run_id = flow_result.get("run_id")
@@ -917,7 +921,7 @@ def _execute_agent_segment_chain(
             if run:
                 if flow_run_id:
                     run.flow_run_id = str(flow_run_id)
-                run.steps_completed = ran
+                run.steps_completed = succeeded
                 run.current_step = ran
                 run.result = {"steps": accumulated}
                 run.completed_at = now
@@ -936,7 +940,7 @@ def _execute_agent_segment_chain(
             record_agent_event(
                 run_id=run_id, user_id=user_id, event_type="FAILED", db=db,
                 correlation_id=correlation_id,
-                payload={"steps_completed": ran, "steps_total": total_tool_steps},
+                payload={"steps_completed": succeeded, "steps_total": total_tool_steps},
                 required=False,
             )
             return flow_result
@@ -946,7 +950,7 @@ def _execute_agent_segment_chain(
             if run:
                 if flow_run_id:
                     run.flow_run_id = str(flow_run_id)
-                run.steps_completed = ran
+                run.steps_completed = succeeded
                 run.current_step = ran
                 run.result = {"steps": accumulated}
                 run.status = "waiting"
@@ -968,7 +972,7 @@ def _execute_agent_segment_chain(
                 correlation_id=correlation_id,
                 payload={
                     "wait_for": seg["wait"]["event_type"],
-                    "steps_completed": ran, "steps_total": total_tool_steps,
+                    "steps_completed": succeeded, "steps_total": total_tool_steps,
                 },
                 required=False,
             )
@@ -995,7 +999,7 @@ def _execute_agent_segment_chain(
             if run:
                 if flow_run_id:
                     run.flow_run_id = str(flow_run_id)
-                run.steps_completed = ran
+                run.steps_completed = succeeded
                 run.current_step = ran
                 run.result = {"steps": accumulated, "verify": verdict}
                 run.completed_at = now
@@ -1035,7 +1039,7 @@ def _execute_agent_segment_chain(
         if run:
             if flow_run_id:
                 run.flow_run_id = str(flow_run_id)
-            run.steps_completed = ran
+            run.steps_completed = succeeded
             run.current_step = ran
             run.result = {"steps": accumulated}
             run.completed_at = now
@@ -1049,7 +1053,7 @@ def _execute_agent_segment_chain(
             run_id=run_id, user_id=user_id,
             event_type="COMPLETED" if completed_ok else "FAILED", db=db,
             correlation_id=correlation_id,
-            payload={"steps_completed": ran, "steps_total": total_tool_steps},
+            payload={"steps_completed": succeeded, "steps_total": total_tool_steps},
             required=False,
         )
         # Emit VERIFIED only when post-conditions were actually checked and held.

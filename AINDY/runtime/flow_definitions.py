@@ -24,6 +24,17 @@ def register_all_flows() -> None:
     ensure_runtime_flows_registered()
 
 
+def register_default_flows() -> None:
+    """Runtime DEFAULT graphs that a plugin may replace — call AFTER `registry.register_flows()`.
+
+    FR-32: a default is only a default if the plugin's registration is checked first. Both boot
+    paths (API `_register_flow_engine`, worker `__main__`) call this last.
+    """
+    from AINDY.runtime import flow_definitions_memory
+
+    flow_definitions_memory.register_default_memory_execute_loop()
+
+
 def __getattr__(name: str) -> Any:
     symbol = get_symbol(name)
     if symbol is None:

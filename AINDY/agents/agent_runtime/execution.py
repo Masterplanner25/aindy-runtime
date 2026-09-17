@@ -21,6 +21,33 @@ from AINDY.memory.memory_persistence import (
 )
 
 
+#: The keys a completion hook is documented to receive as PRIMITIVES. Every value here must
+#: survive `sanitize_extension_context` unchanged — a redacted documented key is the boundary
+#: hiding a bug, not doing its job (FR-36).
+COMPLETION_HOOK_PRIMITIVE_KEYS: frozenset[str] = frozenset({"run_id", "user_id", "run_type", "trace_id"})
+
+
+def build_completion_hook_context(run, *, db, user_db_id) -> dict:
+    """The context handed to `agent_completion_hook` surfaces, in the shape the boundary keeps.
+
+    `run` and `db` are present for in-process trust and are stripped/redacted by the
+    extension-boundary sanitizer; everything a hook is documented to READ is a primitive:
+    `run_id` and `user_id` as STRINGS (FR-36: `user_id` was passed as a `uuid.UUID`, the
+    sanitizer turned it into `{"_redacted_type": "UUID"}`, and every first-party completion
+    hook — the Infinity loop after an agent run — failed on it for as long as the surface
+    existed), so a hook re-fetches by `run_id` with its own session and never receives a
+    db/ORM handle. See INFINITY-COMPLETION-HOOK-BOUNDARY-1 / PLANNER-SUBPROC-1.
+    """
+    return {
+        "run": run,
+        "db": db,
+        "run_id": str(run.id),
+        "user_id": str(user_db_id) if user_db_id else None,
+        "run_type": getattr(run, "agent_type", "default"),
+        "trace_id": run.trace_id or get_trace_id(),
+    }
+
+
 def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
     try:
         compat = get_runtime_compat_module()
@@ -283,20 +310,7 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
         if run.status == "completed":
             hook_results = compat._run_completion_hooks(
                 getattr(run, "agent_type", "default"),
-                {
-                    "run": run,
-                    "db": db,
-                    # run_id is a string, so it survives the extension-boundary
-                    # sanitizer (which strips db and redacts the run ORM). A
-                    # first-party completion hook re-fetches the run by this id
-                    # with its own session — the runtime never leaks a db/ORM
-                    # handle across the boundary. See INFINITY-COMPLETION-HOOK-
-                    # BOUNDARY-1 / PLANNER-SUBPROC-1.
-                    "run_id": str(run.id),
-                    "user_id": user_db_id,
-                    "run_type": getattr(run, "agent_type", "default"),
-                    "trace_id": run.trace_id or get_trace_id(),
-                },
+                build_completion_hook_context(run, db=db, user_db_id=user_db_id),
             )
             db.refresh(run)
             hook_next_action = _select_completion_hook_next_action(hook_results)

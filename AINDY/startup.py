@@ -1397,10 +1397,12 @@ def _register_flow_engine() -> None:
     # Register runtime-owned platform flows first, then let app-plugin
     # bootstrap callbacks register app/domain flows through the registry
     # boundary.
-    from AINDY.runtime.flow_definitions import register_all_flows
+    from AINDY.runtime.flow_definitions import register_all_flows, register_default_flows
 
     register_all_flows()
     registry.register_flows()
+    # FR-32 — runtime DEFAULT graphs go last, so a plugin that declared one wins.
+    register_default_flows()
     _enforce_nodus_gate()
     _verify_flow_engines_started()
 
