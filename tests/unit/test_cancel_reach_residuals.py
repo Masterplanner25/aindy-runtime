@@ -212,7 +212,7 @@ def test_the_parent_hands_the_worker_its_run_id_but_not_the_child(monkeypatch):
 
     seen: dict = {}
 
-    def _spy(tool_name, args, user_id, *, run_id=None):
+    def _spy(tool_name, args, user_id, *, run_id=None, egress=None):
         seen["run_id"] = run_id
         return {"success": True, "result": {}, "error": None}
 

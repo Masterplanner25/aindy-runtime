@@ -289,7 +289,6 @@ A soak assertion must not be stricter than the contract.
 - **AUTHORITY-LIFETIME-1** — *(OpenHands)* the capability token is clock-bound (24 h), not execution-bound. Design filed: widen `cancellation`'s cached read to every terminal status, fail-OPEN.
 - **EVENT-OUTBOX-1** — system events buffer in memory and emit after commit; a crash loses the record. Do NOT emit eagerly. Design filed: the row rides the handler's session; no outbox table.
 - **AUDIT-CORRELATION-1** — three joins the trail cannot make (`EffectRecord` has no `trace_id`). Design filed: three additive payload keys on `syscall.executed`, no FK.
-- **EGRESS-INPROC-1** — a DEFECT: `execute_tool` enters `egress_scope` around the in-process call only, so an ISOLATED (distrusted) tool runs with NO egress enforcement. Design filed: resolve `(mode, domains)` before the branch; the worker installs the guard.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s semantic half always returns `[]` (pgvector `ndarray` vs `list` guard). pgvector 0.5.0 fixes it — which is why #390 was HELD: it turns expansion on in the path that exhausted the pool.
 - **DB-NODUS-BUDGET-1** — both fixes shipped; remaining soak + flip `AINDY_MEMORY_RECALL_OWN_SESSION`. Do NOT roll back the caller's session.
@@ -320,6 +319,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - **DEC-034** GenAI semconv = EMIT three span kinds · **DEC-035** the meter lives inside `llm_operation` · **DEC-036** `enduser.id` beside `user.id` for one release · **DEC-037** `gen_ai.client.*` via a MeterProvider BESIDE `aindy_llm_*` · **DEC-038** content capture OUT · **DEC-039** `WorkflowStore` over Postgres declined until the runtime READS guest state.
 - FR-35: **DEC-040** guest LLM usage rides the worker reply (fourth deferred collection) · **DEC-041** deferral REPLACES observation in the worker · **DEC-042** admission there, accounting in the parent · **DEC-043** parent attributes from the reply's explicit context · **DEC-044** `chat` span replayed as `aindy.deferred` · **DEC-045** ledger cap `AINDY_NODUS_LLM_LEDGER_MAX` (256).
 - **DEC-046** *(provisional)* HTTP-SCOPE-GAP-1: scope = VERB, row filter = OWNERSHIP · **DEC-047** *(provisional)* CLI-EXEC-SURFACE-1: operator half HTTP-only.
+- EGRESS-INPROC-1: **DEC-048** egress `(mode, domains)` resolved ONCE before the isolation branch (`none`/`scoped`-empty = deny-all) · **DEC-049** the worker installs it process-globally from its payload, never reads policy · **DEC-050** the mechanism is REPORTED on envelope + span, never refused · **DEC-051** `AINDY_EGRESS_ENFORCEMENT` stays the switch, default off.
 
 ### Standing rule — not an item
 
@@ -329,6 +329,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 
 ### Closed — kept as one line because the rule still bites
 
+- **EGRESS-INPROC-1** — CLOSED 2026-09-16 (#718; DEC-048..051). The ISOLATED branch returned before `egress_scope`, so a distrusted tool had NO egress enforcement. Now `(mode, domains)` is resolved once before the branch; the worker installs it process-globally from its payload; the envelope reports `egress.mechanism`. Flag stays default off.
 - **EU-DOUBLE-FINALIZE-1** — CLOSED 2026-09-17 (#713). Three sites finalised an agent run's unit; a verify-failed run's unit stayed `executing` forever. Use `ExecutionUnitService.finalize_for_run_status`. Read a consumer's "noise" as a claim.
 - **SESSION-COMMIT-1** — CLOSED 2026-09-16. `SessionLocal()` … write … `close()` without `commit()` is a rollback that every shared-fixture test reads as a commit; four instances in a week. Guard: `test_own_session_commits.py` (derived census, empty allowlist).
 - **IDEM-11** — CLOSED 2026-08-19: `AINDY_SYSCALL_IDEMPOTENCY` defaults on. NOT exactly-once under contention (8 concurrent calls ran twice; FR-27 advisory lock is the opt-in strict mode). Watch ALL labels of `aindy_effect_gate_outcomes_total`. `_durable` engages the gate for any syscall.

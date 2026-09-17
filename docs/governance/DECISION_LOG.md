@@ -1141,6 +1141,102 @@ decision, and it is declined. The execution half (`flow.run`, `nodus.execute`, `
 
 ---
 
+### DEC-048
+**Status:** `accepted` (2026-09-16 — `EGRESS-INPROC-1`, #718)
+
+**Decision**
+The egress decision for a tool call — `EgressDecision(mode, domains)` — is resolved ONCE in
+`execute_tool`, BEFORE the isolation branch, from the capability policies' domain allowlist and
+the tool's effective `authority.network` (declared spec clamped to the tool floor, which is
+`open`). Resolution: `none` → deny-all whatever the policies say; any policy domains → `scoped`
+to exactly those; `scoped` with no domains → deny-all (fail-closed); `open` with no domains →
+nothing to enforce. `egress_guard.resolve_egress_decision` is the one place this is computed.
+
+**Why**
+The allowlist was already computed at the right place; the *enforcement* was attached to the
+wrong branch. `egress_scope` was entered around the in-process call only, and the isolated
+branch returned above that `with` — so the tool the runtime distrusts enough to move out of
+process was the one tool the guard never covered, flag on or off. Making the decision a value
+resolved before the branch is what lets each provider enforce it; folding `authority.network`
+in is what stops the spec and the policy being two vocabularies for one question.
+
+**Implications**
+- A tool that declares `authority.network="none"` is now deny-all when the flag is on — on
+  both branches. Before, the tool seam ignored that axis entirely.
+- Flag off: no decision is resolved, nothing changes — byte-identical envelopes.
+
+**Related Docs**
+- `docs/design/EGRESS_INPROC_DESIGN.md` §2; `AINDY/platform_layer/egress_guard.py`
+
+---
+
+### DEC-049
+**Status:** `accepted` (2026-09-16 — `EGRESS-INPROC-1`, #718)
+
+**Decision**
+The tool worker receives the DECISION in its request payload (`{"egress": {"mode",
+"domains"}}`, an additive key) and installs the socket guard PROCESS-GLOBALLY from it
+(`install_process_egress`) before the plugin stack loads or the function is resolved. It never
+reads capability policy. The process-global install is what closes the raw-`threading.Thread`
+contextvar bypass in the worker; in-process that bypass stays open and documented.
+
+**Why**
+`tool_worker.py`'s standing rule: authority is not re-evaluated in the process the boundary
+distrusts, and the worker has no db to evaluate it with. A worker runs exactly one tool, so
+"this process" and "this call" are the same scope there — a global install is strictly stronger
+than the contextvar and costs nothing. Closing the same bypass in-process would mean wrapping
+`threading.Thread` globally, which the guard's docstring declines; the worker is where it can be
+closed without that.
+
+**Related Docs**
+- `AINDY/agents/tool_worker.py`; `tests/unit/test_egress_inproc_worker.py`
+
+---
+
+### DEC-050
+**Status:** `accepted` (2026-09-16 — `EGRESS-INPROC-1`, #718)
+
+**Decision**
+The mechanism that applied is REPORTED, never assumed: the worker's reply carries
+`egress_mechanism`, and the parent's envelope carries `egress: {mode, mechanism}` (only when
+enforcement is on) with `aindy.egress.mode` / `aindy.egress.mechanism` on the `execute_tool`
+span. Values: `socket_guard` (in-process, both documented bypasses apply),
+`socket_guard:worker` (thread bypass closed), `none` (nothing enforced — flag off, or a worker
+that never saw the decision). A provider that cannot enforce a declared mode REPORTS rather
+than refuses.
+
+**Why**
+The design named `env_applied.network` as the channel; that column is per execution UNIT and a
+unit runs many tools, so the per-call truth belongs on the call's envelope and span. Reporting
+over refusing: every host today lacks a container runner, so refusing a `none` that only the
+socket guard can approximate would fail every declared tool everywhere — and the point of
+`EXEC-ENV-BIND-1` was that a reader learns what BOUND, not what was asked. A reply with no
+mechanism reads as `none` on purpose: a dropped decision is visible on the envelope, not
+silently open.
+
+**Related Docs**
+- `docs/design/EGRESS_INPROC_DESIGN.md` §2 (the table); `EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`
+
+---
+
+### DEC-051
+**Status:** `accepted` (2026-09-16 — `EGRESS-INPROC-1`, #718)
+
+**Decision**
+`AINDY_EGRESS_ENFORCEMENT` remains the single switch and remains default-off. This change moves
+WHERE a decision is enforced when the switch is on; it does not turn it on. Flipping the default
+is `MEB-2b`'s soak, not this entry.
+
+**Why**
+The defect is closed for every deployment that has the flag on, and a deployment that has it off
+is exactly as it was. Coupling the fix to the flip would have made a correctness fix wait on
+evidence it does not need.
+
+**Related Docs**
+- `docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md` (MEB-2b)
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —

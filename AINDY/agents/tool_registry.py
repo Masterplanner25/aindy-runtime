@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -467,6 +466,27 @@ def _worker_confinement(tool_name: str):
     return kwargs, scratch
 
 
+def _tool_network_mode(entry: dict) -> str:
+    """The tool's EFFECTIVE `authority.network` — declared spec clamped to the tool floor, which
+    is `open`; so an undeclared or unusable spec is `open` and a declaration can only narrow.
+    The same clamp `_worker_confinement` applies, read for the one axis it cannot enforce."""
+    from AINDY.core.execution_environment import (
+        NET_OPEN,
+        ExecutionEnvironmentSpec,
+        clamp_to_floor,
+        tool_floor,
+    )
+
+    raw = (entry or {}).get("env_spec")
+    if not raw:
+        return NET_OPEN
+    try:
+        effective, _ = clamp_to_floor(ExecutionEnvironmentSpec.from_dict(raw), tool_floor())
+    except Exception:  # noqa: BLE001 — the floor, never a widening
+        return NET_OPEN
+    return effective.authority.network
+
+
 #: How often the parent looks at the cancel predicate while an isolated worker runs. The
 #: predicate's own TTL bounds the DB reads (one per run per 2 s); this only bounds latency.
 _WORKER_CANCEL_POLL_S = 0.5
@@ -539,9 +559,15 @@ def _kill(proc) -> None:
 
 
 def _run_tool_out_of_process(
-    tool_name: str, args: dict, user_id: str, *, run_id: Optional[str] = None
+    tool_name: str, args: dict, user_id: str, *, run_id: Optional[str] = None, egress=None
 ) -> dict:
     """Execute a tool in a one-shot worker subprocess (step C2). Returns an execute_tool envelope.
+
+    ★ ``egress`` is the resolved `EgressDecision` (EGRESS-INPROC-1) or ``None`` when enforcement
+    is off. It rides the request payload as an additive key; the worker installs it
+    process-globally and reports back the mechanism it applied, which lands on the envelope as
+    ``egress.mechanism``. Before this, the decision was computed and this branch returned
+    without it — the ISOLATED tool was the only one the guard never covered.
 
     ★ **`run_id` is the PARENT's knowledge and never crosses into the worker** (`CANCEL-REACH-1`
     residual 2, closed 2026-09-15). While the worker runs, this side polls `is_run_cancelled`
@@ -566,7 +592,10 @@ def _run_tool_out_of_process(
     """
     import subprocess
 
-    payload = json.dumps({"tool_name": tool_name, "args": args or {}, "user_id": user_id})
+    request: dict = {"tool_name": tool_name, "args": args or {}, "user_id": user_id}
+    if egress is not None:
+        request["egress"] = egress.to_payload()
+    payload = json.dumps(request)
     cmd = [sys.executable, "-m", "AINDY.agents.tool_worker"]
 
     # ── EXEC-ENV-BIND-1 phase 3: the tool seam ASKS ──────────────────────────────
@@ -647,13 +676,24 @@ def _run_tool_out_of_process(
         }
 
     if not response.get("ok"):
-        return {
+        envelope = {
             "success": False,
             "result": None,
             "error": str(response.get("error") or "failed"),
             "failure_class": _declared_failure_class(response),
         }
-    return {"success": True, "result": response.get("result"), "error": None}
+    else:
+        envelope = {"success": True, "result": response.get("result"), "error": None}
+    if egress is not None:
+        # The WORKER says what it enforced (DEC-050). A reply with no mechanism is a worker
+        # that never saw the decision — reported as `none`, so the gap is on the envelope.
+        from AINDY.platform_layer.egress_guard import MECHANISM_NONE
+
+        envelope["egress"] = {
+            "mode": egress.mode,
+            "mechanism": str(response.get("egress_mechanism") or MECHANISM_NONE),
+        }
+    return envelope
 
 
 def _check_tool_return(tool_name: str, entry: dict, result: Any) -> None:
@@ -1088,19 +1128,26 @@ def execute_tool(
                     "error": None,
                     "idempotent_replay": True,
                 }
-    # MEB-2b — socket-level egress chokepoint. When a domain policy applies to this tool's
-    # capability and AINDY_EGRESS_ENFORCEMENT is on, enforce the allowlist at DNS resolution
-    # for the duration of the fn call — catching runtime-built URLs that MEB-2a's static
-    # arg-string inspection misses. Inert otherwise. See MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
-    _egress_cm = contextlib.nullcontext()
-    if _egress_domains:
-        from AINDY.platform_layer.egress_guard import egress_enforcement_enabled
+    # MEB-2b — socket-level egress chokepoint. When AINDY_EGRESS_ENFORCEMENT is on, enforce the
+    # allowlist at DNS resolution for the duration of the tool call — catching runtime-built
+    # URLs that MEB-2a's static arg-string inspection misses. Inert otherwise.
+    #
+    # ★ EGRESS-INPROC-1 (DEC-048): the decision `(mode, domains)` is resolved ONCE, HERE, from
+    # the capability policies' domains and the tool's effective `authority.network` — and it is
+    # resolved BEFORE the isolation branch below. It used to be a context manager entered
+    # around the in-process call only; the isolated branch returned above that `with`, so the
+    # tool the runtime distrusted enough to move out of process was the one tool the guard
+    # never covered. Now the in-process branch scopes it and the worker installs it
+    # process-globally from its payload; each reports the mechanism it applied.
+    _egress_decision = None
+    _egress_mechanism = None
+    from AINDY.platform_layer.egress_guard import egress_enforcement_enabled
 
-        if egress_enforcement_enabled():
-            from AINDY.platform_layer.egress_guard import egress_scope, install_egress_guard
+    if egress_enforcement_enabled():
+        from AINDY.platform_layer.egress_guard import MECHANISM_NONE, MECHANISM_SOCKET_GUARD, resolve_egress_decision
 
-            install_egress_guard()
-            _egress_cm = egress_scope(_egress_domains)
+        _egress_decision = resolve_egress_decision(_tool_network_mode(entry), _egress_domains)
+        _egress_mechanism = MECHANISM_SOCKET_GUARD if _egress_decision.enforces else MECHANISM_NONE
     try:
         # AGENT-HARDEN-9 — a tool that calls resolve_secret(name) during execution is
         # gated by the run's granted capabilities via this ambient scope; the secret
@@ -1177,8 +1224,16 @@ def execute_tool(
         from AINDY.platform_layer.genai_telemetry import tool_operation
 
         with tool_operation(tool_name=tool_name, run_id=run_id) as _tool_span:
+            if _egress_decision is not None:
+                _tool_span.set_attribute("aindy.egress.mode", _egress_decision.mode)
             if entry.get("isolation") and _tool_isolation_enforced():
-                _isolated = _run_tool_out_of_process(tool_name, args or {}, user_id, run_id=run_id)
+                _isolated = _run_tool_out_of_process(
+                    tool_name, args or {}, user_id, run_id=run_id, egress=_egress_decision
+                )
+                if _egress_decision is not None:
+                    _tool_span.set_attribute(
+                        "aindy.egress.mechanism", (_isolated.get("egress") or {}).get("mechanism")
+                    )
                 if _idempotent:
                     _finalize_tool_effect(
                         db,
@@ -1192,8 +1247,10 @@ def execute_tool(
                 _tool_span.outcome(_isolated)
                 return _isolated
             _tool_db = RevocableToolSession(db, tool_name=tool_name)
+            from AINDY.platform_layer.egress_guard import egress_decision_scope
+
             try:
-                with _egress_cm, capability_scope(_scoped_caps):
+                with egress_decision_scope(_egress_decision), capability_scope(_scoped_caps):
                     result = entry["fn"](args=args, user_id=user_id, db=_tool_db)
             finally:
                 _tool_db.revoke()
@@ -1201,6 +1258,9 @@ def execute_tool(
             if _idempotent:
                 _finalize_tool_effect(db, _action_id, "success", result, tool_name)
             _outcome = {"success": True, "result": result, "error": None}
+            if _egress_decision is not None:
+                _outcome["egress"] = {"mode": _egress_decision.mode, "mechanism": _egress_mechanism}
+                _tool_span.set_attribute("aindy.egress.mechanism", _egress_mechanism)
             _tool_span.outcome(_outcome)
             return _outcome
     except Exception as exc:

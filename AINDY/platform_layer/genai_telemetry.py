@@ -344,6 +344,10 @@ class OperationSpan:
     def __init__(self, span) -> None:
         self._span = span
 
+    def set_attribute(self, key: str, value: Any) -> None:
+        """One runtime-owned attribute (``aindy.*``); ``None`` is skipped, never an error."""
+        _set(self._span, key, value)
+
     def outcome(self, result: Any) -> None:
         """Annotate the runtime's result envelope: success, and the failure class if any."""
         if not isinstance(result, dict):

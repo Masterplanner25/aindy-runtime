@@ -1,15 +1,20 @@
 ---
 title: "Egress Enforcement Re-homing — Design"
 api_version: "1.0"
-last_verified: "2026-09-17"
+last_verified: "2026-09-16"
 status: current
 owner: "platform-team"
 ---
 
 # `EGRESS-INPROC-1` — the egress decision is made once and enforced where the tool runs — design
 
-**DESIGN ONLY — nothing shipped. Proposal under `AGENT_WORKING_RULES.md` §8 (a change to where an
-authority decision is enforced).** The entry says *"a re-homing, not a build: fold the egress
+**IMPLEMENTED 2026-09-16 (#718) — DEC-048..051 accepted as written, with one refinement: the
+per-call mechanism is reported on the tool ENVELOPE (`egress: {mode, mechanism}`) and the
+`execute_tool` span (`aindy.egress.*`), not `env_applied.network`, which is per execution unit
+(DEC-050). Guard vocabulary: `egress_guard.EgressDecision`, `resolve_egress_decision`,
+`egress_decision_scope`, `install_process_egress`. Tests: `tests/unit/test_egress_inproc_worker.py`.**
+Originally a proposal under `AGENT_WORKING_RULES.md` §8 (a change to where an authority decision
+is enforced). The entry says *"a re-homing, not a build: fold the egress
 decision into `TOOL-SEAM-ISOLATION-1`'s provider"*. §1 finds the thing the entry did not say
 and which makes it more than cosmetic; §2 separates decision from enforcement, which is the
 whole design; §4 is what not to build.
