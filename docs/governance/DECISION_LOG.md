@@ -1008,6 +1008,8 @@ log and stays there with a pointer. `tests/unit/test_decision_log_integrity.py` 
 §8 (none — DEC-026..029), `LEASE_FENCE_DESIGN.md` §7 (none — DEC-030..033), `OTEL_GENAI_SEMCONV_DESIGN.md` §8 (none — DEC-034..038), and
 `docs/runtime/DURABLE_STATE_OWNERSHIP_CONTRACT.md` §7 (none — DEC-039). All five designs' decisions are
 now recorded (DEC-024..039); the paragraph stays as the record of how they arrived.
+**Pending 2026-09-17:** `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` §8 (six) — recorded by the
+PR that implements it.
 
 ---
 

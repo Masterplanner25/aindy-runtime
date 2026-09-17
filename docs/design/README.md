@@ -1,6 +1,6 @@
 ---
 title: "Design Records"
-last_verified: "2026-09-16"
+last_verified: "2026-09-17"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -26,7 +26,7 @@ its reasoning has been carried into a contract, which so far has never happened.
 
 ## Index
 
-| Document | Owner | Status (2026-09-16) | What it decides |
+| Document | Owner | Status (2026-09-17) | What it decides |
 |---|---|---|---|
 | [`AUTHORITY_NEGOTIATION_DESIGN.md`](./AUTHORITY_NEGOTIATION_DESIGN.md) | `AUTHORITY-NEGOTIATION-1` | **In flight** — phases 0+1 shipped (#600, 09-10); 2–3 design only | A denied capability gets one bounded, downgrade-only retry that cannot grant authority. **§2 overturns the entry's own proposed primitive.** |
 | [`C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`](./C3_NON_LINUX_STRONG_SANDBOX_PLAN.md) | `C3` | **Preparation, unscheduled** — phases 0–5 done; the native non-Linux strong-VM runner waits on a trigger | Windows-native and macOS tracks for `strong-sandbox-certified` off Linux, so either can start on day 1. |
@@ -34,6 +34,7 @@ its reasoning has been carried into a contract, which so far has never happened.
 | [`DURABLE_EXECUTION_PROGRAM.md`](./DURABLE_EXECUTION_PROGRAM.md) | `ECOGAP-1` phase 3 | **Complete 2026-07-12** — DUR-1..4 shipped, opt-in; soak-then-flip remains | Crash continuation resumes *forward* from the last completed node; it never re-executes code, which is why kernel replay was declined. |
 | [`EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`](./EXECUTION_ENVIRONMENT_SPEC_DESIGN.md) | `EXEC-ENV-BIND-1` | **Complete 2026-09-13** — all four phases (#567, #639) | The `ExecutionEnvironmentSpec` vocabulary: what a unit *requires* (visibility, authority, resources, `min_assurance`), clamped to a seam's floor. Header corrected 09-13 — it said phases 3–4 were still design. |
 | [`FLOW_PARALLEL_DESIGN.md`](./FLOW_PARALLEL_DESIGN.md) | `FLOW-PARALLEL-1` | **In flight** — phases 0–2 shipped (#603, 09-10, #640); 3–4 design only | Fan-out as one superstep with a barrier; join policies `all` / `any` / `quorum`; the runtime's first `partial` emitter. |
+| [`FR35_GUEST_LLM_USAGE_DESIGN.md`](./FR35_GUEST_LLM_USAGE_DESIGN.md) | `FR-35` | **Design only (2026-09-17)** — proposal under §8 | On `nodus_vm` a tool step's LLM usage is metered in the WORKER and reaches nothing. Usage rides the worker reply as a fourth deferred collection (beside `memory_writes`) and is recorded in the parent under an explicit subject; deferral REPLACES observation in the worker. **§3: the governor's admission and accounting split differently** — admission stays in the worker (real only on a Redis RM). Also closes #706's worker-span gap by replaying `chat {model}` with recorded timestamps. |
 | [`FR27_ADVISORY_LOCK_DESIGN.md`](./FR27_ADVISORY_LOCK_DESIGN.md) | `FR-27` | **Approved + shipped 2026-09-12** (#627), opt-in `AINDY_SYSCALL_IDEMPOTENCY_STRICT` | Strict at-most-once under contention via a session-level advisory lock with explicit unlock; the measured prototype (N−1 of N) is in the doc. |
 | [`LEASE_FENCE_DESIGN.md`](./LEASE_FENCE_DESIGN.md) | `LEASE-FENCE-1` | **Shipped 2026-09-16 (#705)** — closed; Alembic `0019`; phase 3 (fence the prune) is a follow-up | One `fence` integer, incremented on takeover; checked `FOR SHARE` inside a leader-only job's transaction. **§2 finds the least-idempotent job is the one `CLAUDE.md` says not to guard twice.** |
 | [`LLM_SEAM_ADOPTION_SCOPE.md`](./LLM_SEAM_ADOPTION_SCOPE.md) | `COST-GOVERNOR-1` | **Superseded by events** — governor shipped 2026-09-13 (#638) | Why the governor waited on a real consumer being routed through the seam first. The ordering, not the design. |
