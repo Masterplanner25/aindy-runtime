@@ -8892,6 +8892,92 @@ out-of-tree plugin.** FR-23 is now fully resolved (metric #622, ABI #626).
 
 ---
 
+## FR-36 — the agent-completion hook received `user_id` as a `uuid.UUID`, which the extension boundary redacted; every first-party completion hook had been failing 🔴 defect
+
+**Status: SHIPPED 2026-09-16 (#708).** Filed by the app the same day, from the log of the first
+successful `arm.analyze` run; verified against source — the claim held exactly.
+
+### The mechanism
+
+`execution.py` built the completion-hook context with `"user_id": user_db_id` — a `uuid.UUID` —
+two lines under the comment explaining that `run_id` is passed as a *string* so it survives the
+extension-boundary sanitizer. `extension_boundary._sanitize` turns every non-primitive into
+`{"_redacted_type": "UUID"}`, so the hook received a dict where it expected a tenant, and the
+app's Infinity job raised `user_id is required` — logged at WARNING and swallowed, once per
+completed run. **8 of 8 completed agent runs on the app's stack; none `loop_enforced`.** The
+app worked around it by taking the tenant from the run it re-fetches by `run_id`.
+
+★ **Why the existing boundary test never saw it (variant 13):** `test_completion_hook_boundary.py`
+built its context with `"user_id": "u1"` — a string where production hands a UUID — so the
+fixture could not observe the redaction the production shape produced.
+
+### Shipped
+
+- `build_completion_hook_context(run, db=, user_db_id=)` in `execution.py` — the one builder;
+  `user_id` is `str(user_db_id) if user_db_id else None`, the same treatment `run_id` gets.
+- `COMPLETION_HOOK_PRIMITIVE_KEYS` — the documented primitive keys (`run_id`, `user_id`,
+  `run_type`, `trace_id`); a test runs the real builder with a real `uuid.UUID` through the real
+  sanitizer and refuses any documented key that arrives `_redacted_type`, plus a liveness pin
+  that the builder produces exactly that set (+ `run`/`db`). Mutation: raw `user_db_id` → red.
+
+---
+
+## FR-34 — `AgentRun.steps_completed` counted steps *attempted*, not steps that succeeded, and that number is a scoring dimension 🔴 correctness
+
+**Status: SHIPPED 2026-09-16 (#708).** Filed by the app the same day. **★ The filing's census was
+short by one backend:** it named three sites in `nodus_adapter.py` (the `agent_flow` backend);
+the runs it observed were on `nodus_vm` — the app's default — where `steps_completed = ran`
+(steps attempted) is written at four more sites in `nodus_execution_service.py` and reported in
+three `score.computed` payloads. Fixing only the named sites would have left the observed defect
+in place. Read the consumer's diagnosis as a claim, not a finding (the seventh session's rule).
+
+### Shipped
+
+- `nodus_execution_service.py`: `succeeded = count of accumulated steps with status "success"`
+  beside `ran`; the four `run.steps_completed` writes and three payloads use it; `current_step`
+  stays `ran` (the cursor).
+- `nodus_adapter.py`: the two refusal sites (authority-gate skip/fail, capability denied) no
+  longer increment; the tool-step site increments only on `success`, clamped to the cursor so a
+  re-driven segment (crash continuation restarts a segment from step one) cannot count a step
+  twice on the common path.
+- Tests: the filed case on the vm backend (`test_agent_vm_execution.py`, the existing
+  failed-step test now asserts `(1, 2, 2)`), the adapter loop through the real
+  `agent_execute_step`, the clamp, and an AST pin that exactly one guarded assignment remains in
+  the adapter. Mutations: attempts-again ×2 sites, no-clamp, refusal-site-increments — all red.
+
+**Remaining:** `steps_completed` under a `skip` decision followed by a re-driven success can
+over-count by one (clamp is to the cursor, not to the succeeded set) — an edge of an edge,
+recorded not fixed.
+
+---
+
+## FR-32 — `memory_execute_loop` was a runtime-owned graph built entirely from app-owned nodes 🟡 ownership
+
+**Status: SHIPPED 2026-09-16 (#708) — option 2, the owner's call: a plugin's registration wins.**
+Filed by the app. `flow_definitions_memory.register()` registered the graph under `if
+"memory_execute_loop" not in FLOW_REGISTRY` — a guard that on the API ran BEFORE plugin flows
+(so it checked an empty registry and the runtime always won) and on the worker ran AFTER them
+(so the plugin won). **Two processes, two graphs** — a defect the filing did not name and the
+fix removes.
+
+### Shipped
+
+- `DEFAULT_MEMORY_EXECUTE_LOOP` + `register_default_memory_execute_loop()` (returns whether the
+  default was registered) in `flow_definitions_memory.py`; `register()` no longer registers it.
+- `flow_definitions.register_default_flows()` — runtime DEFAULT graphs a plugin may replace —
+  called LAST on both boot paths (`startup._register_flow_engine`, `worker/__main__`), after
+  `registry.register_flows()`.
+- Tests: default registers when no plugin declared one; a plugin's wins; both boot orders yield
+  the same graph; and through the real `_register_flow_engine`, the default **declines**
+  (returns False after the plugin) — the final dict cannot tell the orders apart because the
+  wrong order is exactly "the plugin overwrites the runtime's entry", which is what the FR
+  objected to. Mutations: unconditional default → 3 red; defaults-before-plugins → 1 red.
+
+The app may now delete its do-nothing `memory_execution_orchestrate` node once it declares its
+own `memory_execute_loop` ending at `memory_execution_run`.
+
+---
+
 ## FR-31 / RESUME-FLOW-UNREGISTERED-1 — a run parked across a restart could not be resumed on a fresh process, and the first attempt orphaned it 🔴 defect
 
 **Status: SHIPPED 2026-09-16.** Filed by the app team 2026-09-16 from the 2.17.0 upgrade's own

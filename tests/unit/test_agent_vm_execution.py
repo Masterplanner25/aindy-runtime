@@ -196,6 +196,10 @@ def test_vm_run_with_failed_step_marks_run_failed(session, monkeypatch, _mock_si
     session.refresh(run)
     assert run.status == "failed"
     assert run.error_message
+    # FR-34 — the filed case, on the backend the app actually runs: a run failing on step 2 of 2
+    # recorded steps_completed 2/2 and `score.computed` carried that as its progress dimension.
+    # `steps_completed` counts SUCCESSES; `current_step` is still the cursor (steps attempted).
+    assert (run.steps_completed, run.current_step, run.steps_total) == (1, 2, 2)
 
     from AINDY.db.models import AgentStep
     rows = session.query(AgentStep).order_by(AgentStep.step_index).all()

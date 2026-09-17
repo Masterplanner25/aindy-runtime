@@ -234,7 +234,7 @@ def _authority_gate(
             correlation_id=state.get("correlation_id"),
         ))
         if agent_run is not None:
-            agent_run.steps_completed = idx + 1
+            # FR-34 — a skipped or refused step is not a completed one; only the cursor moves
             agent_run.current_step = idx + 1
         db.commit()
         step_result = {
@@ -299,8 +299,8 @@ def agent_execute_step(state: dict, context: dict) -> dict:
 
     Persistence
     -----------
-    Writes one AgentStep audit row per execution and increments
-    AgentRun.steps_completed / current_step on every call (success or fail).
+    Writes one AgentStep audit row per execution; moves AgentRun.current_step on every
+    call and AgentRun.steps_completed only on SUCCESS (FR-34 — it is the progress dimension).
 
     The PersistentFlowRunner will loop back to this node via the conditional
     edge _more_steps() while current_step_index < len(steps), then advance
@@ -433,7 +433,7 @@ def agent_execute_step(state: dict, context: dict) -> dict:
 
         agent_run = db.query(AgentRun).filter(AgentRun.id == agent_run_db_id).first()
         if agent_run:
-            agent_run.steps_completed = idx + 1
+            # FR-34 — a skipped or refused step is not a completed one; only the cursor moves
             agent_run.current_step = idx + 1
         db.commit()
 
@@ -570,7 +570,12 @@ def agent_execute_step(state: dict, context: dict) -> dict:
     # Update AgentRun progress counters
     agent_run = db.query(AgentRun).filter(AgentRun.id == agent_run_db_id).first()
     if agent_run:
-        agent_run.steps_completed = idx + 1
+        # FR-34 — `steps_completed` means steps that SUCCEEDED, not steps attempted: it is the
+        # `score.computed` dimension the accrual reads and the "N of M done" the console shows,
+        # and a run failing on step 2 of 2 used to record 2/2. Clamped to the cursor so a
+        # re-driven segment (crash continuation) cannot count a step twice on the common path.
+        if step_status == "success":
+            agent_run.steps_completed = min((agent_run.steps_completed or 0) + 1, idx + 1)
         agent_run.current_step = idx + 1
     db.commit()
     emit_system_event(

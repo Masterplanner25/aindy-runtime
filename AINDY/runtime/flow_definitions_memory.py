@@ -464,15 +464,35 @@ def register() -> None:
         }
     )
 
-    if "memory_execute_loop" not in FLOW_REGISTRY:
-        register_flow(
-            "memory_execute_loop",
-            {
-                "start": "memory_execution_validate",
-                "edges": {
-                    "memory_execution_validate": ["memory_execution_run"],
-                    "memory_execution_run": ["memory_execution_orchestrate"],
-                },
-                "end": ["memory_execution_orchestrate"],
-            },
-        )
+    # `memory_execute_loop` is registered by `register_default_memory_execute_loop()` AFTER
+    # plugin flows — see it for why (FR-32).
+
+
+#: The runtime's DEFAULT shape for `POST /memory/execute`'s graph. Every node in it is
+#: app-owned (`memory_execution_validate` / `_run` / `_orchestrate` live in the app's flow
+#: definitions), so an app that declares its own `memory_execute_loop` owns the graph.
+DEFAULT_MEMORY_EXECUTE_LOOP: dict = {
+    "start": "memory_execution_validate",
+    "edges": {
+        "memory_execution_validate": ["memory_execution_run"],
+        "memory_execution_run": ["memory_execution_orchestrate"],
+    },
+    "end": ["memory_execution_orchestrate"],
+}
+
+
+def register_default_memory_execute_loop() -> bool:
+    """Register the runtime's default `memory_execute_loop` unless a plugin already has (FR-32).
+
+    Called AFTER `registry.register_flows()` (plugin flows), on both the API and the worker, so
+    the `not in FLOW_REGISTRY` guard is meaningful: a plugin's registration wins. Until
+    2026-09-16 this block ran inside `register()` — BEFORE plugins on the API and AFTER them on
+    the worker — so the guard checked an empty registry in one process and a populated one in
+    the other, and the app could reshape the graph only by overwriting a runtime-owned entry.
+    An app-node-only graph is app-shaped whichever module declares it; the runtime's is a
+    default. Returns True when the default was registered, False when a plugin's stood.
+    """
+    if "memory_execute_loop" in FLOW_REGISTRY:
+        return False
+    register_flow("memory_execute_loop", dict(DEFAULT_MEMORY_EXECUTE_LOOP))
+    return True
