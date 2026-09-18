@@ -1398,6 +1398,75 @@ The run id is the version; a resumed run is the same run.
 
 ---
 
+### DEC-060
+**Status:** `accepted` (2026-09-17 — `EVENT-OUTBOX-1`, #721)
+
+**Decision**
+Inside a request pipeline, a queued system event is ADDED to the handler's session (add +
+flush, `_persist_system_event(commit=False)`) and never committed by the event path. It rides
+whatever the handler commits next; the FR-30 execution-unit finalize is the last commit on every
+request, so a read-only handler's events ride that. The post-handler pass (`_apply_event_signals`)
+runs only the DERIVED effects for a persisted entry — internal handlers, feedback signals, memory
+capture, webhooks, the scheduler wake (`run_post_persist_effects`) — and keeps its swallowing
+`try`, which is now correct: what it does is derived from the record, not the record. No outbox
+table, no relay. The non-pipeline branch is untouched (it already wrote on the caller's session
+and committed).
+
+**Why**
+The in-memory bucket was written AFTER the handler, on separate commits, under a swallowing
+`try`: a crash between the handler's commit and that flush kept the work and lost the record —
+"better index, weaker record". One store, one connection: the row belongs in the transaction
+that holds the work. Every reason the buffer had is either gone (the provisional id is a
+client-side uuid4 either way) or preserved (post-handler-only content still goes post-handler).
+
+**Related Docs**
+- `docs/design/EVENT_OUTBOX_DESIGN.md` §2–§3; `AINDY/core/execution_signal_helper.py`
+
+---
+
+### DEC-061
+**Status:** `accepted` (2026-09-17 — `EVENT-OUTBOX-1`, #721)
+
+**Decision**
+The event's id stays client-assigned (`SystemEvent.id` defaults to `uuid4`); the id
+`queue_system_event` returns IS the row's id. Nothing changes for a caller holding it.
+
+**Why**
+The provisional id the bucket handed out was already a client-side `uuid4`; a row added with
+that id is referenceable before commit exactly as the buffered dict was.
+
+**Related Docs**
+- `tests/unit/test_event_outbox.py::test_the_returned_id_is_the_rows_id`
+
+---
+
+### DEC-062
+**Status:** `accepted` (2026-09-17 — `EVENT-OUTBOX-1`, #721)
+
+**Decision**
+A handler that RAISES leaves no event row. The pipeline rolls the request session back before
+recording `execution.failed` (`_safe_rollback_handler_work`), and only when the handler raised —
+once the handler has returned, its work stands whatever the post-handler machinery does. To
+make that safe, the execution-unit row is committed where it is created (`_safe_require_eu`),
+so the finalize that follows the rollback still finds it.
+
+**Why**
+The design said "a handler that raises rolls back its session … the error event is written on
+its own session, as today" — measured at implementation, neither held: nothing rolled the
+request session back, and the pipeline's `execution.failed` emit committed the REQUEST session
+through `_persist_system_event`, landing the handler's pending writes — and now its queued
+events — as a side effect (that function's own comment says it wants to avoid exactly that).
+Rollback semantics are the point of riding the transaction, so the pipeline now provides them.
+★ Behaviour change beyond events: a handler that raises no longer has its uncommitted writes
+landed by the failure event. ★ Test rule: under the shared fixture the app's rollback reaches
+the OUTER transaction and erases the test's own rows — a route that answers 4xx must be tested
+on the private engine (`tests/fixtures/db.py::build_private_engine`).
+
+**Related Docs**
+- `AINDY/core/execution_pipeline/resources.py`; `tests/unit/test_auth_password_change.py` (moved to the private engine)
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —

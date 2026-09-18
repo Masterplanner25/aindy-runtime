@@ -42,6 +42,43 @@ def _import_model_registry():
     import_runtime_model_registry()
 
 
+def build_private_engine(db_path):
+    """A file-backed SQLite engine with `NullPool` and NO shared outer transaction.
+
+    ★ The shared `db_session` / `runtime_only_app` fixtures bind the app's request session and the
+    test's reader to ONE connection holding ONE outer transaction. Inside it a flush reads like a
+    commit (catalogue variant 15) — and, the other way round, the app's `rollback()` rolls back
+    the OUTER transaction and erases the test's own fixture rows. Any test of a path that COMMITS
+    or ROLLS BACK (FR-30's finalize, EVENT-OUTBOX-1's handler rollback, a route answering 4xx)
+    must run on this instrument instead: two connections see one database, each session owns
+    its transaction, and `close()` rolls back exactly what production's `get_db` rolls back.
+
+    A module opts in by overriding `test_engine` / `db_session_factory` /
+    `testing_session_factory` with this engine — see `test_request_eu_finalize_commits_fr30.py`.
+    """
+    from sqlalchemy import create_engine
+
+    _import_model_registry()
+    from AINDY.db.database import Base
+
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False, "timeout": 10},
+        poolclass=NullPool,
+    )
+
+    @event.listens_for(engine, "connect")
+    def _pragmas(dbapi_connection, _record):
+        cur = dbapi_connection.cursor()
+        try:
+            cur.execute("PRAGMA foreign_keys=OFF")
+        finally:
+            cur.close()
+
+    Base.metadata.create_all(bind=engine)
+    return engine
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _setup_postgres_schema():
     database_url = os.getenv("DATABASE_URL", "")

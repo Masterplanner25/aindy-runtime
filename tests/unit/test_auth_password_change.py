@@ -31,6 +31,37 @@ from AINDY.services.auth_service import (
 
 pytestmark = pytest.mark.runtime_only
 
+
+# ── the private-engine instrument ────────────────────────────────────────────
+# EVENT-OUTBOX-1 (DEC-062): a handler that raises now has the request session ROLLED BACK before
+# the failure event is recorded. Under the shared fixture that rollback reaches the OUTER
+# transaction and erases `user_row` itself, so nothing can be asserted after a 401. These routes
+# answer 4xx on purpose; the module runs on its own engine, where the fixture row is committed
+# for real and the app's rollback undoes only the app's transaction.
+
+
+@pytest.fixture
+def test_engine(tmp_path):
+    from tests.fixtures.db import build_private_engine
+
+    engine = build_private_engine(tmp_path / "pwchange.db")
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def db_session_factory(test_engine):
+    from sqlalchemy.orm import sessionmaker
+
+    return sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=test_engine)
+
+
+@pytest.fixture
+def testing_session_factory(db_session_factory):
+    return db_session_factory
+
 _OLD = "correct-horse"
 _NEW = "battery-staple-9"
 

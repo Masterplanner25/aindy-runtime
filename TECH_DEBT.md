@@ -15614,7 +15614,26 @@ signal. No schema. Decisions and phasing in the design §9–§10; awaiting appr
 
 ## EVENT-OUTBOX-1 — system events are buffered in memory and emitted after the work commits, so a crash loses the record of work that happened
 
-**Status: OPEN — P2.** Filed 2026-08-19. Provenance: the **consolidated absorb register** in
+**Status: CLOSED (2026-09-17) — #721, DEC-060..062.** Filed 2026-08-19.
+
+**What shipped (#721):** inside a pipeline `queue_system_event` adds + flushes the row on the
+handler's session (`_persist_system_event(commit=False)`), never commits, and marks the bucket
+entry `persisted`; `_apply_event_signals` runs `run_post_persist_effects` (the derived half of
+`emit_system_event`, split out) for those and the old emit for anything else. **★ The design's
+rollback premise was FALSE and the pipeline now supplies it:** nothing rolled the request session
+back on a raise, and the `execution.failed` emit COMMITTED the request session (landing the
+handler's pending writes as a side effect — `_persist_system_event`'s own comment names the hazard
+and then commits). Now `_safe_rollback_handler_work` rolls back before the failure event, ONLY when
+the handler raised (`ctx.metadata["handler_returned"]` gates it — a crashed post-handler flush must
+not undo returned work), and `_safe_require_eu` commits the unit row at creation so the finalize
+still finds it. 9 tests on the FR-30 private-engine instrument (`build_private_engine`, now
+shared in `tests/fixtures/db.py`), 6/6 mutations caught. **★ Fixture rule that came out of it:**
+the app's rollback under the shared fixture rolls back the OUTER transaction and erases the test's
+own rows — `test_auth_password_change.py` (a 401 route) moved to the private engine. Not changed:
+the non-pipeline path; the pipeline's own `execution.*` trio (emitted on the request session with
+a commit, as before).
+
+*Original entry, kept:* **Status was: OPEN — P2.** Filed 2026-08-19. Provenance: the **consolidated absorb register** in
 `C:\codev\Ecosystem_Coverage_Analysis_v2.md` — *"RangeID monotonic CAS fence **+ transactional
 outbox** (Temporal)"*. The fence half became `LEASE-FENCE-1`; **this is the other half, and it had
 no entry.**

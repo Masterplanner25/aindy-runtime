@@ -1,3 +1,5 @@
+import uuid
+
 from AINDY.core.execution_pipeline.shared import Any, logger
 
 
@@ -124,19 +126,38 @@ def _apply_event_signals(self, ctx, events_signal: Any) -> None:
         if db is None:
             continue
         try:
-            from AINDY.core.system_event_service import emit_system_event
+            if event.get("persisted"):
+                # EVENT-OUTBOX-1 — the row is already on the handler's session (DEC-060). Only
+                # the DERIVED effects remain, and they may stay best-effort: they follow from the
+                # record, they are not it.
+                from AINDY.core.system_event_service import run_post_persist_effects
 
-            event_id = emit_system_event(
-                db=db,
-                event_type=event_type,
-                user_id=event.get("user_id") or ctx.user_id,
-                trace_id=event.get("trace_id") or ctx.request_id,
-                parent_event_id=event.get("parent_event_id"),
-                source=str(event.get("source") or ctx.metadata.get("source") or ctx.route_name),
-                agent_id=event.get("agent_id"),
-                payload=dict(event.get("payload") or {}),
-                required=bool(event.get("required", False)),
-            )
+                run_post_persist_effects(
+                    db=db,
+                    event_id=uuid.UUID(str(event["id"])),
+                    event_type=event_type,
+                    user_id=event.get("user_id") or ctx.user_id,
+                    trace_id=event.get("trace_id") or ctx.request_id,
+                    parent_event_id=event.get("parent_event_id"),
+                    source=str(event.get("source") or ctx.metadata.get("source") or ctx.route_name),
+                    agent_id=event.get("agent_id"),
+                    payload=dict(event.get("payload") or {}),
+                )
+                event_id = event["id"]
+            else:
+                from AINDY.core.system_event_service import emit_system_event
+
+                event_id = emit_system_event(
+                    db=db,
+                    event_type=event_type,
+                    user_id=event.get("user_id") or ctx.user_id,
+                    trace_id=event.get("trace_id") or ctx.request_id,
+                    parent_event_id=event.get("parent_event_id"),
+                    source=str(event.get("source") or ctx.metadata.get("source") or ctx.route_name),
+                    agent_id=event.get("agent_id"),
+                    payload=dict(event.get("payload") or {}),
+                    required=bool(event.get("required", False)),
+                )
         except Exception:
             logger.debug("execution.event_emit_skipped", exc_info=True)
             event_id = None
