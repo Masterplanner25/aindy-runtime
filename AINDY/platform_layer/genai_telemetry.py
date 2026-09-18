@@ -78,8 +78,9 @@ except Exception:  # pragma: no cover - the package is pinned; this is the no-OT
     OP_CHAT, OP_EXECUTE_TOOL, OP_INVOKE_AGENT, OP_EMBEDDINGS = "chat", "execute_tool", "invoke_agent", "embeddings"
     SEMCONV_AVAILABLE = False
 
-#: ``enduser.id`` — the stable semconv key for the caller's identity, emitted beside the
-#: runtime's own ``user.id`` for one release (design §5), then alone.
+#: ``enduser.id`` — the stable semconv key for the caller's identity. The runtime's own
+#: ``user.id`` was emitted beside it for one release (2.20.0, design §5, DEC-036) and dropped in
+#: 2.21.0.
 ATTR_ENDUSER_ID = "enduser.id"
 ATTR_ERROR_TYPE = "error.type"
 

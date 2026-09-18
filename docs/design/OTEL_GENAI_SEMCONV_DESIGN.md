@@ -1,7 +1,7 @@
 ---
 title: "OpenTelemetry GenAI Semantic Conventions — Design"
 api_version: "1.0"
-last_verified: "2026-09-16"
+last_verified: "2026-09-17"
 status: current
 owner: "platform-team"
 ---
@@ -9,7 +9,7 @@ owner: "platform-team"
 # OpenTelemetry GenAI semantic conventions — design
 
 **`OTEL-GENAI-SEMCONV-1`. PHASES 1 + 2 SHIPPED 2026-09-16 (#706; DEC-034 … DEC-038) — entry CLOSED;
-phase 3 (drop `user.id`) is owed the release AFTER the one that ships this.** Live record:
+phase 3 (drop `user.id`) shipped in 2.21.0 (#723) as announced.** Live record:
 `AINDY/platform_layer/genai_telemetry.py`, `docs/runtime/RUNTIME_BEHAVIOR.md` §5.
 
 > **As built, where it differs from the text below:** `user.id` exists only on the `syscall.*`

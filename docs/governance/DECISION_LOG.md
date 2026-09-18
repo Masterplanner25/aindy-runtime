@@ -1087,7 +1087,7 @@ right thing to lose.
 ---
 
 ### DEC-046
-**Status:** `provisional` (2026-09-17 — `HTTP-SCOPE-GAP-1` remainder; closes the entry on acceptance)
+**Status:** `accepted` (2026-09-17 — `HTTP-SCOPE-GAP-1` remainder; recorded provisional in #716, accepted by the owner 2026-09-17, #723 — the entry closes with it)
 
 **Decision**
 A scope answers *which verb* and a row filter answers *whose data*; they are two checks and
@@ -1115,7 +1115,7 @@ string the key's issuer types, which is `KEY-SCOPE-ESCALATION-1`'s shape from th
 ---
 
 ### DEC-047
-**Status:** `provisional` (2026-09-17 — `CLI-EXEC-SURFACE-1`; closes the entry on acceptance)
+**Status:** `accepted` (2026-09-17 — `CLI-EXEC-SURFACE-1`; recorded provisional in #716, accepted by the owner 2026-09-17, #723 — the entry closes with it)
 
 **Decision**
 The operator half of the runtime (resume, flow list/get, queue + DLQ, trace, health) stays

@@ -272,9 +272,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — P2 and below
 
-- **HTTP-SCOPE-GAP-1** — route coverage complete; remainder DEC-046 (provisional): scope answers the VERB, the row filter answers OWNERSHIP; no `:any` scope. Gotcha: `enforce_api_key_scope` takes ANY-OF alternatives.
 - **EFFECT-OUTCOME-UNKNOWN-1** — `unknown` status shipped (#560) for a read timeout after a full write only; nothing emits it; `AT_MOST_ONCE` absent from the guarantee set. A claim about the WORLD — an unclassified exception is still `failed`.
-- **CLI-EXEC-SURFACE-1** — DEC-047 (provisional): the operator half stays HTTP-only; a transport cannot grant authority it lacks. Scope: `CLI_EXECUTION_SURFACE_SCOPE.md`.
 - **SANDBOX-EVIDENCE-2** — the strong runner attests `mount_mode`/`network_policy` by reading its own argv; real evidence is the live `/proc` probe, deployment-time. `strong-sandbox-certified` is a deployment claim.
 - **EFFECT-PRECONDITION-1** — *(Aider)* an effect cannot name the world-version it expects. Record the external system's OWN version token; never reimplement. After FS-SCOPE-1 or not at all.
 - **EFFECT-MANIFEST-1** — *(Aider)* record-only: know the effect set before executing. Not before FS-SCOPE-1 + EFFECT-PARTIAL-1.
@@ -315,7 +313,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - **DEC-026** prune LEAVES only · **DEC-027** unclassified type KEPT · **DEC-028** failure-shaped = audit · **DEC-029** 90 d / 7 d / never, ships UNSET · **DEC-030** lease `fence` increments only on takeover · **DEC-031** the check is `FOR SHARE` inside the job txn · **DEC-032** two jobs fenced, ten not · **DEC-033** `execute_run` untouched — no second CAS.
 - **DEC-034** GenAI semconv = EMIT three span kinds · **DEC-035** the meter lives inside `llm_operation` · **DEC-036** `enduser.id` beside `user.id` for one release · **DEC-037** `gen_ai.client.*` via a MeterProvider BESIDE `aindy_llm_*` · **DEC-038** content capture OUT · **DEC-039** `WorkflowStore` over Postgres declined until the runtime READS guest state.
 - FR-35: **DEC-040** guest LLM usage rides the worker reply (fourth deferred collection) · **DEC-041** deferral REPLACES observation in the worker · **DEC-042** admission there, accounting in the parent · **DEC-043** parent attributes from the reply's explicit context · **DEC-044** `chat` span replayed as `aindy.deferred` · **DEC-045** ledger cap `AINDY_NODUS_LLM_LEDGER_MAX` (256).
-- **DEC-046** *(provisional)* HTTP-SCOPE-GAP-1: scope = VERB, row filter = OWNERSHIP · **DEC-047** *(provisional)* CLI-EXEC-SURFACE-1: operator half HTTP-only.
+- **DEC-046** HTTP-SCOPE-GAP-1: scope = VERB, row filter = OWNERSHIP · **DEC-047** CLI-EXEC-SURFACE-1: operator half HTTP-only (both accepted 2026-09-17, #723).
 - EGRESS-INPROC-1: **DEC-048** egress `(mode, domains)` resolved ONCE before the isolation branch (`none`/`scoped`-empty = deny-all) · **DEC-049** the worker installs it process-globally from its payload, never reads policy · **DEC-050** the mechanism is REPORTED on envelope + span, never refused · **DEC-051** `AINDY_EGRESS_ENFORCEMENT` stays the switch, default off.
 - AUDIT-CORRELATION-1: **DEC-052** joins 1+3 by additive keys (`capability`, `guarantee`, `action_id`), no schema · **DEC-053** join 2 is `env_applied`; attestation stays SANDBOX-EVIDENCE-2 · **DEC-054** convention on the unique `action_id`, NO FK · **DEC-055** `syscall.executed` stays `operational`; the join is TTL-bounded both sides.
 - AUTHORITY-LIFETIME-1: **DEC-056** authority ends with the run — refused at the two cancel sites, no third; the token stays stateless · **DEC-057** the cancel read widened to return the status, terminal answers STICKY · **DEC-058** fail-OPEN, HMAC expiry the outer bound · **DEC-059** `waiting` keeps its authority (pause-null declined).
@@ -330,6 +328,8 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 
 ### Closed — kept as one line because the rule still bites
 
+- **HTTP-SCOPE-GAP-1** — CLOSED 2026-09-17 (DEC-046 accepted, #723). Scope answers the VERB, the row filter answers OWNERSHIP; no `:any` scope. Gotchas: `enforce_api_key_scope` takes ANY-OF alternatives; router-level `dependencies` are invisible to a per-route `dependant` walk; scan routes with `_iter_api_routes`.
+- **CLI-EXEC-SURFACE-1** — CLOSED 2026-09-17 (DEC-047 accepted, #723). The operator half stays HTTP-only; a transport cannot grant authority it lacks; an operator syscall opens three doors at once.
 - **RECOVERY-GRANULARITY-1** — CLOSED 2026-09-17 (#722; DEC-063..066). The worker seam writes `agent_steps` per step as it completes, keyed on the plan's STEP INDEX (third `call_tool` arg, arity (2,3)); a CONTINUED run replays a `success` row (`replayed: True`). ★ nodus absorbs a step's `throw` — the worker reply reads `success`; the parent reads failure from the step results.
 - **EVENT-OUTBOX-1** — CLOSED 2026-09-17 (#721; DEC-060..062). In a pipeline a queued event rides the handler's session and its next commit. ★ The pipeline now ROLLS BACK the request session when the HANDLER raises (the failure emit used to commit its pending writes); the unit row commits at creation. Test a 4xx route on the private engine.
 - **AUTHORITY-LIFETIME-1** — CLOSED 2026-09-17 (#720; DEC-056..059). A token for a run in a TERMINAL status is refused at `check_tool_capability` (before the HMAC) and the dispatcher's agent gate — CANCEL-REACH-1's read widened (`run_terminal_status`), sticky once terminal, fail-OPEN. `waiting` KEEPS authority; the token stays stateless.

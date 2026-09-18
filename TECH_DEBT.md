@@ -1942,7 +1942,11 @@ doc's §3 on purpose.
 
 ## CLI-EXEC-SURFACE-1 — the operator half of the runtime is not in the syscall vocabulary
 
-**Status:** Open — P2. Filed 2026-08-22, **REFRAMED the same day — read this section first, the
+**Status: CLOSED (2026-09-17) — DEC-047 accepted (#723).** The operator half (resume, flow list/get,
+queue + DLQ, trace, health) stays HTTP-only; not syscall-addressable; no CLI built. A transport cannot
+grant authority it does not have; an operator syscall would open three doors at once.
+
+**Status was:** Open — P2. Filed 2026-08-22, **REFRAMED the same day — read this section first, the
 rest is the evidence that produced it.** Scope doc: `docs/design/CLI_EXECUTION_SURFACE_SCOPE.md`.
 
 **★ DECIDED 2026-09-17 — DEC-047 (provisional; the entry CLOSES on acceptance): the operator half stays
@@ -11187,7 +11191,11 @@ the finding behind an unrelated error. The proof above was run against a throwaw
 
 ## HTTP-SCOPE-GAP-1 — the capability model does not reach the runtime's own front door
 
-**★ REMAINDER DECIDED 2026-09-17 — DEC-046 (provisional; the entry CLOSES on acceptance).** Measured at HEAD the
+**Status: CLOSED (2026-09-17) — DEC-046 accepted (#723).** The first half closed 2026-08-16 (#449); the
+remainder was decided 2026-09-17 and accepted by the owner: scope answers the VERB, the row filter
+answers OWNERSHIP, no cross-owner read path, no `:any` scope. The three gotchas below stay live.
+
+**★ REMAINDER DECIDED 2026-09-17 — DEC-046 (accepted 2026-09-17).** Measured at HEAD the
 remainder does not conflate: the run routes gate the VERB by dependency (`flow_router.py:39`
 `_REQUIRE_PLATFORM_ADMIN`) and OWNERSHIP by the query (`FlowRun.user_id == user_id`,
 `flow_definitions_engine.py:60`); neither is asked the other's question. No cross-owner read path, no

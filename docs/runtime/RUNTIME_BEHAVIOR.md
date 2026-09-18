@@ -1,6 +1,6 @@
 ---
 title: "Runtime Behavior"
-last_verified: "2026-09-16"
+last_verified: "2026-09-17"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -186,8 +186,9 @@ This document describes the current runtime behavior of the FastAPI backend as i
   shape. GenAI metrics (`gen_ai.client.token.usage`, `gen_ai.client.operation.duration`) are
   emitted through a `MeterProvider` beside the `TracerProvider`, over the same OTLP endpoint,
   and never replace the Prometheus `aindy_llm_*` counters the governor and soak harness read.
-  No prompt/completion content is placed on any span (a test guards it). `enduser.id` is
-  emitted beside `user.id` on syscall spans for one release; `user.id` is then dropped.
+  No prompt/completion content is placed on any span (a test guards it). `enduser.id` is the
+  caller-identity key on syscall spans; `user.id` was emitted beside it for one release (2.20.0)
+  and dropped in 2.21.0 (DEC-036).
   **On the `nodus_vm` backend (FR-35, 2026-09-17)** a tool step's LLM call runs in the Nodus
   worker, which has no exporter: its usage rides the worker reply as a fourth deferred
   collection (`llm_usage`, beside `memory_writes` / `emitted_events` / `simulated_effects`)

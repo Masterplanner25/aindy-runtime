@@ -229,10 +229,11 @@ def test_llm_span_inherits_attribution_from_the_scope(spans):
 
 
 # ---------------------------------------------------------------------------
-# The one genuine rename (design §5): enduser.id beside user.id for one release
+# The one genuine rename (design §5): enduser.id beside user.id for one release (2.20.0),
+# then alone (2.21.0, DEC-036)
 # ---------------------------------------------------------------------------
 
-def test_syscall_span_carries_enduser_id_beside_user_id_for_one_release(spans):
+def test_syscall_span_carries_enduser_id_and_no_longer_user_id(spans):
     """Through the real dispatcher on a throwaway syscall — a refusal returns before the span
     opens, so the syscall must actually run for the span to exist."""
     import AINDY.kernel.syscall_dispatcher as syscall_dispatcher
@@ -256,11 +257,12 @@ def test_syscall_span_carries_enduser_id_beside_user_id_for_one_release(spans):
     found = _by_name(spans, f"syscall.{name}")
     assert len(found) == 1, [s.name for s in spans.get_finished_spans()]
     a = dict(found[0].attributes)
-    assert a["user.id"] == a["enduser.id"] == "user-semconv"
+    assert a["enduser.id"] == "user-semconv"
+    assert "user.id" not in a, "user.id was deprecated with a date (2.20.0 notes) and removed in 2.21.0"
 
 
-def test_dispatcher_span_attributes_declare_both_keys():
-    """Structural companion: the span-attribute dict in the dispatcher names both keys."""
+def test_dispatcher_span_attributes_declare_the_semconv_key_only():
+    """Structural companion: the span-attribute dict names `enduser.id` and not `user.id`."""
     import ast
     import pathlib
 
@@ -272,7 +274,8 @@ def test_dispatcher_span_attributes_declare_both_keys():
         for k in node.keys
         if isinstance(k, ast.Constant) and isinstance(k.value, str)
     }
-    assert {"user.id", "enduser.id", "syscall.name"} <= keys
+    assert {"enduser.id", "syscall.name"} <= keys
+    assert "user.id" not in keys
 
 
 # ---------------------------------------------------------------------------
