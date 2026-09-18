@@ -136,6 +136,16 @@ curl -s ... | jq '.metadata.side_effects["handler.rollback"]'       # {"status":
 2. **Declare `args_schema`** on tools you own (FR-33 shipped in 2.20.0; `AINDY_TOOL_ARGS_VALIDATION`
    defaults to `warn`).
 
-And one new one, small: **grep your pipeline routes for a write followed by a raise with no
-commit between** (§1) before the rebuild, and tell us if you find any — if the pattern is common
-on your side we would rather know before it bites than after.
+And two new ones, both small:
+
+3. **Grep your pipeline routes for a write followed by a raise with no commit between** (§1)
+   before the rebuild, and tell us if you find any — if the pattern is common on your side we
+   would rather know before it bites than after.
+4. **Declare `nltk` and `textstat` in your own `pyproject.toml`** (`PACK-DEBT-6`).
+   `apps/search/services/seo_services.py` imports both; your manifest declares neither. They
+   arrive today only because the runtime pins them — and nothing in the runtime uses them. Once
+   you declare them (the versions the runtime pins, `nltk==3.10.3` / `textstat==0.7.13`, are fine
+   as a floor), the runtime will announce a dated removal of both pins in the following release
+   notes and drop them the release after. Nothing changes for you at any point; the dependency
+   just moves to where the import is. (Context: the two nltk Dependabot alerts on the runtime —
+   no fix released, not reachable on either side — were dismissed 2026-09-18 with this plan.)
