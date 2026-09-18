@@ -528,15 +528,18 @@ def reconstruct_agent_step_results(
         ok = bool(tool_result.get("success"))
         if not ok:
             any_failed = True
-        step_results.append(
-            {
-                "step_index": meta["index"],
-                "tool": meta["tool"],
-                "status": "success" if ok else "failed",
-                "result": tool_result.get("result"),
-                "error": tool_result.get("error"),
-            }
-        )
+        entry = {
+            "step_index": meta["index"],
+            "tool": meta["tool"],
+            "status": "success" if ok else "failed",
+            "result": tool_result.get("result"),
+            "error": tool_result.get("error"),
+        }
+        if tool_result.get("replayed"):
+            # RECOVERY-GRANULARITY-1 — a replayed step's row and event already exist. The key is
+            # present ONLY when true, so `run.result["steps"]` keeps its shape on a normal run.
+            entry["replayed"] = True
+        step_results.append(entry)
     return step_results, any_failed
 
 
@@ -548,8 +551,15 @@ def _run_agent_segment_flow(
     db: Session,
     correlation_id: str | None,
     scoped_token: dict[str, Any] | None,
+    continuation: bool = False,
 ) -> tuple[list[dict[str, Any]], bool, dict[str, Any]]:
     """Run ONE compiled segment through the flow-backed Nodus path.
+
+    RECOVERY-GRANULARITY-1 (DEC-063): the worker seam now writes each step's ``AgentStep`` row
+    as it completes, so the batch below is an UPSERT by ``(run_id, step_index)`` that fills
+    only what the worker did not write (a crash between the tool returning and the row
+    committing). A replayed step (``continuation``, a recorded `success`) gets no new row and no
+    new step event — nothing happened.
 
     Persists an ``AgentStep`` row + step event for each step that ran and returns
     ``(segment_step_results, segment_failed, flow_result)``. ``segment_failed`` is
@@ -588,6 +598,8 @@ def _run_agent_segment_flow(
             # ACROSS segments. workflow_name is agent_plan_seg<N> — distinct per segment and
             # reproduced identically on a continuation re-run. See DUR-2b.
             "__effect_scope": str(compiled.get("workflow_name") or ""),
+            # RECOVERY-GRANULARITY-1 — reaches the worker context; the seam replays recorded steps.
+            "__continuation": bool(continuation),
         },
     )
 
@@ -596,25 +608,43 @@ def _run_agent_segment_flow(
     ran_by_index = {r["step_index"] for r in step_results}
 
     now = datetime.now(timezone.utc)
+    existing = {
+        row.step_index: row
+        for row in db.query(AgentStep)
+        .filter(AgentStep.run_id == _db_run_id(run_id), AgentStep.step_index.in_([m["index"] for m in compiled["steps"]]))
+        .all()
+    }
     for meta in compiled["steps"]:
         if meta["index"] not in ran_by_index:
             continue
         entry = next(r for r in step_results if r["step_index"] == meta["index"])
-        db.add(
-            AgentStep(
-                run_id=_db_run_id(run_id),
-                step_index=meta["index"],
-                tool_name=meta["tool"],
-                tool_args=meta["args"],
-                risk_level=meta["risk_level"],
-                description=meta["description"],
-                status=entry["status"],
-                result=entry["result"],
-                error_message=entry["error"],
-                executed_at=now,
-                correlation_id=correlation_id,
+        row = existing.get(meta["index"])
+        if row is None:
+            db.add(
+                AgentStep(
+                    run_id=_db_run_id(run_id),
+                    step_index=meta["index"],
+                    tool_name=meta["tool"],
+                    tool_args=meta["args"],
+                    risk_level=meta["risk_level"],
+                    description=meta["description"],
+                    status=entry["status"],
+                    result=entry["result"],
+                    error_message=entry["error"],
+                    executed_at=now,
+                    correlation_id=correlation_id,
+                )
             )
-        )
+        else:
+            # The worker wrote it; the plan's descriptive fields are the parent's to fill.
+            if not row.risk_level:
+                row.risk_level = meta["risk_level"]
+            if not row.description:
+                row.description = meta["description"]
+            if not row.correlation_id and correlation_id:
+                row.correlation_id = correlation_id
+        if entry.get("replayed"):
+            continue
         record_agent_event(
             run_id=run_id, user_id=user_id,
             event_type="AGENT_STEP_COMPLETED" if entry["status"] == "success" else "AGENT_STEP_FAILED",
@@ -639,8 +669,13 @@ def _build_agent_resume_callback(
     scoped_token: dict[str, Any] | None,
     total_tool_steps: int,
     claim_status: str = "waiting",
+    continuation: bool = False,
 ):
     """Build the 0-arg resume closure shared by live-registration and rehydration.
+
+    ``continuation`` (RECOVERY-GRANULARITY-1) marks a CRASH re-drive: the segment it re-runs
+    replays its recorded `success` steps. A wait resume is not a continuation — its segment
+    has never run.
 
     On fire it opens its own ``SessionLocal`` and does an **atomic claim** —
     ``UPDATE agent_runs SET status='executing', wait_state=NULL WHERE id=? AND
@@ -722,6 +757,7 @@ def _build_agent_resume_callback(
                     correlation_id=correlation_id,
                     scoped_token=effective_token,
                     total_tool_steps=total_tool_steps,
+                    continuation=continuation,
                 )
             finally:
                 deactivate_async_execution_context(_async_token)
@@ -838,8 +874,12 @@ def _execute_agent_segment_chain(
     correlation_id: str | None,
     scoped_token: dict[str, Any] | None,
     total_tool_steps: int,
+    continuation: bool = False,
 ) -> dict[str, Any]:
     """Run one plan segment, then complete / fail / suspend the AgentRun.
+
+    ``continuation`` (RECOVERY-GRANULARITY-1) applies to THIS segment only — the one a crash
+    re-drive re-runs; the segments it chains to afterwards have never run and start fresh.
 
     Runs exactly one segment per call. On success with a trailing wait, it parks
     the run (``status="waiting"``) and registers a resume for the next segment.
@@ -893,6 +933,7 @@ def _execute_agent_segment_chain(
                 db=db,
                 correlation_id=correlation_id,
                 scoped_token=scoped_token,
+                continuation=continuation,
             )
 
         accumulated = accumulated + seg_results
@@ -1373,6 +1414,7 @@ def execute_nodus_runtime(
     simulate: bool = False,
     virtual_tools: dict[str, Any] | None = None,
     effect_scope: str = "",
+    continuation: bool = False,
 ):
     """
     Canonical Nodus runtime entrypoint used by both route helpers and flow nodes.
@@ -1411,6 +1453,7 @@ def execute_nodus_runtime(
         simulate=bool(simulate),
         virtual_tools=virtual_tools or {},
         effect_scope=str(effect_scope or ""),
+        continuation=bool(continuation),
     )
     adapter = adapter_cls(db=db)
     if script is not None:

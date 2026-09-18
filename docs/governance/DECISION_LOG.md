@@ -1467,6 +1467,88 @@ on the private engine (`tests/fixtures/db.py::build_private_engine`).
 
 ---
 
+### DEC-063
+**Status:** `accepted` (2026-09-17 — `RECOVERY-GRANULARITY-1`, #722)
+
+**Decision**
+The per-step durable write happens at the WORKER seam — `nodus_worker.run_agent_tool`, the
+`call_tool` host function — on its own short-lived session, committed, as each step completes
+and before the segment's script returns. The parent's segment-end batch
+(`_run_agent_segment_flow`) becomes an upsert by `(run_id, step_index)` that inserts only what
+the worker did not write and fills the plan's descriptive fields (risk, description,
+correlation) on rows the worker did.
+
+**Why**
+That seam already holds a session for `execute_tool`; the write crosses no new process
+boundary. A crash between the tool returning and the row committing is the only window left,
+and the parent's upsert covers it. Nothing about `_count_completed_segments` changes — it still
+picks the segment holding the first unfinished step; replay is what makes re-running it cheap.
+
+**Related Docs**
+- `docs/design/RECOVERY_GRANULARITY_DESIGN.md` §1–§2; `AINDY/runtime/nodus_worker.py::_record_step`
+
+---
+
+### DEC-064
+**Status:** `accepted` (2026-09-17 — `RECOVERY-GRANULARITY-1`, #722)
+
+**Decision**
+The row is `agent_steps`, keyed `(run_id, step_index)`. No new table, no new column, no unique
+constraint added (query-then-write; the seam is the only concurrent writer for a run's step).
+`steps_completed` keeps FR-34's meaning (successes).
+
+**Why**
+`AgentStep` already carries `(run_id, step_index, status, result, error_message, executed_at)`
+— DBOS's `operation_outputs` shape. A second table would be a copy read by the same reader.
+
+**Related Docs**
+- `AINDY/db/models/agent_run.py` (`AgentStep`)
+
+---
+
+### DEC-065
+**Status:** `accepted` (2026-09-17 — `RECOVERY-GRANULARITY-1`, #722)
+
+**Decision**
+Identity is the plan's STEP INDEX, emitted by the compiler as a third `call_tool` argument
+(`call_tool(tool, args, N)`; `register_function` arity `(2, 3)`), never a call ordinal. A
+hand-written `call_tool(name, args)` is unkeyed and unrecorded, as before. A failed attempt
+writes a `failed` row that the next attempt of the SAME index overwrites.
+
+**Why**
+The compiled plan's retry loop lives INSIDE the guest, so attempt 2 of step 3 is the next
+`call_tool` in ordinal terms; an ordinal would record it as step 4 — the mutation the suite
+pins. The compiled source already knows `N` (`__step_N_result`).
+
+**Related Docs**
+- `AINDY/runtime/agent_plan_compiler.py::_step_source`; `tests/unit/test_recovery_granularity.py::test_a_retry_overwrites_the_same_row`
+
+---
+
+### DEC-066
+**Status:** `accepted` (2026-09-17 — `RECOVERY-GRANULARITY-1`, #722)
+
+**Decision**
+Replay only on a CONTINUED run (`continuation=True`, set by `continue_crashed_agent_runs`,
+threaded through the resume callback → segment chain → segment flow → `__continuation` in flow
+state → the worker context) and only from a `success` row; the replayed result carries
+`replayed: True`, no new row is written and no step event is emitted for it. A fresh run never
+replays; a `failed` row never replays; an unreadable row executes. Not kernel replay
+(`DEC-019`): a finished step's RESULT is recorded, nothing is intercepted.
+
+**Why**
+A run id is never reused, so a fresh run with a matching row is an upstream bug, and even then
+executing is the safe direction. Replayed steps make no LLM call, so the FR-35 ledger and the
+effect gate see nothing — which is the cost the entry is about. ★ Implementation note: the
+first draft returned `None` for "no row", which also meant "a success row whose result is
+`None`" — a tool that returned nothing re-ran on every continuation; found by a surviving
+mutation, fixed with a sentinel.
+
+**Related Docs**
+- `docs/design/RECOVERY_GRANULARITY_DESIGN.md` §4; `AINDY/runtime/nodus_worker.py::_read_recorded_step`
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —

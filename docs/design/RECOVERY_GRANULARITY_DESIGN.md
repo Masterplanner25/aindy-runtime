@@ -8,8 +8,11 @@ owner: "platform-team"
 
 # `RECOVERY-GRANULARITY-1` — a step's result is durable before the segment's checkpoint — design
 
-**DESIGN ONLY — nothing shipped. Proposal under `AGENT_WORKING_RULES.md` §8 (a change to what
-crash continuation re-executes).** The entry names the shape (DBOS `operation_outputs`,
+**IMPLEMENTED 2026-09-17 (#722) — DEC-063..066 accepted as written. `continuation` is an explicit
+flag threaded from `continue_crashed_agent_runs` to the worker context (not derived from the
+`durable_effects` signal — one field, one meaning); `call_tool` is registered with arity `(2, 3)`.
+Tests: `tests/unit/test_recovery_granularity.py`.** Originally a proposal under
+`AGENT_WORKING_RULES.md` §8 (a change to what crash continuation re-executes). The entry names the shape (DBOS `operation_outputs`,
 replay-by-ordinal) and the constraint (does NOT reopen the declined kernel replay). §1 measures
 where the per-step write actually happens today; §2 is the finding that makes the build small —
 the seam that can write per step already has a session; §3 is why the identity is the plan's

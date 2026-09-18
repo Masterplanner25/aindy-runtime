@@ -119,8 +119,24 @@ def run_agent_tool(
     run_id: str,
     execution_token: Optional[dict],
     session_factory: Any = None,
+    step_index: Optional[int] = None,
+    continuation: bool = False,
+    correlation_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Execute an AINDY agent tool from inside a Nodus run (RTR-1 Phase 2a seam).
+
+    ★ RECOVERY-GRANULARITY-1 (DEC-063..066) — THIS seam is where a step becomes durable. It
+    already holds a session for `execute_tool`; with a ``step_index`` (the compiler's third
+    `call_tool` argument, absent for a hand-written script) it writes the `agent_steps` row for
+    ``(run_id, step_index)`` as soon as the tool returns, on its own short-lived session,
+    committed — BEFORE the segment's script returns and the parent checkpoints. A failed attempt
+    writes a `failed` row that the next attempt overwrites; keyed on the plan index, a retry
+    is the same row, never a new one. On a CONTINUED run (``continuation`` set by
+    `continue_crashed_agent_runs` and carried in the worker context) a `success` row for the
+    key is REPLAYED: the recorded result is returned with ``replayed: True`` and the tool does
+    not run — no LLM call, no ledger record, no effect reaching the gate. A fresh run never
+    replays; a `failed` row never replays. The write never breaks the call: a failure to record
+    is logged and the live result still returns.
 
     This is the capability-enforced bridge from the Nodus VM to
     ``AINDY.agents.tool_registry.execute_tool``. It is registered as the
@@ -152,6 +168,12 @@ def run_agent_tool(
     if session_factory is None:
         from AINDY.db.database import SessionLocal as session_factory
 
+    keyed = step_index is not None and bool(run_id)
+    if keyed and continuation:
+        recorded = _read_recorded_step(session_factory, run_id, int(step_index))
+        if recorded is not _NO_RECORD:
+            return {"success": True, "result": _json_safe(recorded), "error": None, "replayed": True}
+
     from AINDY.agents.tool_registry import execute_tool
 
     db = session_factory()
@@ -169,12 +191,15 @@ def run_agent_tool(
             )
     except Exception as exc:
         # RETRY-CLASSIFY-1 — the seam's own exception is un-classed; the fallback table decides
-        return {"success": False, "result": None, "error": str(exc), "failure_class": None}
+        outcome = {"success": False, "result": None, "error": str(exc), "failure_class": None}
+        if keyed:
+            _record_step(session_factory, run_id, int(step_index), str(tool_name), tool_args, outcome, correlation_id)
+        return outcome
     finally:
         with contextlib.suppress(Exception):
             db.close()
 
-    return {
+    outcome = {
         "success": bool(result.get("success")),
         "result": _json_safe(result.get("result")),
         "error": result.get("error"),
@@ -186,6 +211,89 @@ def run_agent_tool(
         "failure_class": result.get("failure_class"),
         "cancelled": bool(result.get("cancelled", False)),
     }
+    if keyed:
+        _record_step(session_factory, run_id, int(step_index), str(tool_name), tool_args, outcome, correlation_id)
+    return outcome
+
+
+#: "No replayable row" — distinct from a success row whose recorded result is `None` (a tool
+#: may legitimately return nothing; that step still replays).
+_NO_RECORD = object()
+
+
+def _read_recorded_step(session_factory: Any, run_id: str, step_index: int) -> Any:
+    """The recorded result of a `success` row for ``(run_id, step_index)``, else `_NO_RECORD`.
+
+    Only `success` replays (DEC-066). A read failure is `_NO_RECORD` — the step executes, which
+    is the pre-change behaviour and the safe direction: re-running costs work, skipping a step
+    that never succeeded costs correctness.
+    """
+    try:
+        from AINDY.db.models import AgentStep
+        from AINDY.runtime.nodus_adapter import _db_run_id
+
+        db = session_factory()
+        try:
+            row = (
+                db.query(AgentStep.status, AgentStep.result)
+                .filter(AgentStep.run_id == _db_run_id(run_id), AgentStep.step_index == step_index)
+                .first()
+            )
+        finally:
+            with contextlib.suppress(Exception):
+                db.close()
+    except Exception as exc:  # noqa: BLE001 — fail towards executing
+        logger.debug("[NodusWorker] step %s/%s unreadable, executing: %s", run_id, step_index, exc)
+        return _NO_RECORD
+    if row is None or str(row[0]) != "success":
+        return _NO_RECORD
+    return row[1]
+
+
+def _record_step(
+    session_factory: Any,
+    run_id: str,
+    step_index: int,
+    tool_name: str,
+    tool_args: dict,
+    outcome: dict,
+    correlation_id: Optional[str],
+) -> None:
+    """Upsert the `agent_steps` row for ``(run_id, step_index)`` and COMMIT it — the per-step
+    durable write (DEC-063/064). Query-then-write: the table has no unique constraint on the
+    pair (no schema change), and the seam is the only concurrent writer for a run's step.
+    """
+    try:
+        from datetime import datetime, timezone
+
+        from AINDY.db.models import AgentStep
+        from AINDY.runtime.nodus_adapter import _db_run_id
+
+        status = "success" if outcome.get("success") else "failed"
+        db = session_factory()
+        try:
+            row = (
+                db.query(AgentStep)
+                .filter(AgentStep.run_id == _db_run_id(run_id), AgentStep.step_index == step_index)
+                .first()
+            )
+            if row is None:
+                row = AgentStep(run_id=_db_run_id(run_id), step_index=step_index, tool_name=tool_name)
+                db.add(row)
+            row.tool_name = tool_name
+            row.tool_args = _json_safe(tool_args)
+            row.status = status
+            row.result = _json_safe(outcome.get("result"))
+            row.error_message = outcome.get("error")
+            row.executed_at = datetime.now(timezone.utc)
+            if correlation_id and not row.correlation_id:
+                row.correlation_id = str(correlation_id)
+            db.commit()
+        finally:
+            with contextlib.suppress(Exception):
+                db.close()
+    except Exception as exc:  # noqa: BLE001 — recording must never break the call
+        logger.warning("[NodusWorker] could not record step %s/%s: %s", run_id, step_index, exc)
 
 
 def _remember_factory(memory: DeferredMemoryBuiltins) -> Any:
@@ -396,6 +504,9 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     tool_execution_token = ctx.get("execution_token")
     if not isinstance(tool_execution_token, dict):
         tool_execution_token = None
+    # RECOVERY-GRANULARITY-1 — set by `continue_crashed_agent_runs` and carried across the
+    # process boundary; a fresh run never replays a recorded step.
+    tool_continuation = bool(ctx.get("continuation"))
     # AGENT-HARDEN-4 — effect simulation. When set, call_tool is shadowed: no real
     # tool runs, and each call records a predicted "would-write" intent here.
     simulate_mode = bool(ctx.get("simulate"))
@@ -497,7 +608,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None,
         **env_kwargs,
     )
-    def _call_tool(tool_name: Any, args: Any) -> Any:
+    def _call_tool(tool_name: Any, args: Any, step_index: Any = None) -> Any:
         if simulate_mode:
             from AINDY.runtime.tool_simulation import simulate_agent_tool
 
@@ -517,6 +628,11 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
             user_id=user_id,
             run_id=tool_run_id,
             execution_token=tool_execution_token,
+            # RECOVERY-GRANULARITY-1 — the compiled plan passes its step index as a third
+            # argument; a hand-written `call_tool(name, args)` passes nothing and is unkeyed.
+            step_index=int(step_index) if isinstance(step_index, (int, float)) and not isinstance(step_index, bool) else None,
+            continuation=tool_continuation,
+            correlation_id=trace_id or None,
         )
 
     def _is_retryable_error(error: Any) -> bool:
@@ -582,7 +698,9 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     runtime.register_function("get_state", _get_state, arity=1)
     runtime.register_function("await_event", _await_event, arity=2)
     runtime.register_function("sys", _sys_dispatch, arity=2)
-    runtime.register_function("call_tool", _call_tool, arity=2)
+    # arity (2, 3): `call_tool(name, args)` for scripts, `call_tool(name, args, step_index)` for
+    # compiled plans (RECOVERY-GRANULARITY-1).
+    runtime.register_function("call_tool", _call_tool, arity=(2, 3))
     runtime.register_function("is_retryable_error", _is_retryable_error, arity=1)
     runtime.register_function("recall", bridge.recall, arity=3)
     runtime.register_function("remember", bridge.remember, arity=3)

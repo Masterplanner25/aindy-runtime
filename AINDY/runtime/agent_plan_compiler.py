@@ -56,10 +56,10 @@ Generated shape (for a 2-step plan; low-risk step_0, high-risk step_1):
     workflow agent_plan {
       step step_0 {
         let __attempt_0 = 1
-        let __result_0 = call_tool(input_payload["__step_0_tool"], input_payload["__step_0_args"])
+        let __result_0 = call_tool(input_payload["__step_0_tool"], input_payload["__step_0_args"], 0)
         while ((__result_0["success"] != true) && (__attempt_0 < 3) && is_retryable_error(__result_0)) {
           __attempt_0 = __attempt_0 + 1
-          __result_0 = call_tool(input_payload["__step_0_tool"], input_payload["__step_0_args"])
+          __result_0 = call_tool(input_payload["__step_0_tool"], input_payload["__step_0_args"], 0)
         }
         set_state("__step_0_result", __result_0)
         if (__result_0["success"] != true) {
@@ -68,10 +68,10 @@ Generated shape (for a 2-step plan; low-risk step_0, high-risk step_1):
       }
       step step_1 after step_0 {
         let __attempt_1 = 1
-        let __result_1 = call_tool(input_payload["__step_1_tool"], input_payload["__step_1_args"])
+        let __result_1 = call_tool(input_payload["__step_1_tool"], input_payload["__step_1_args"], 1)
         while ((__result_1["success"] != true) && (__attempt_1 < 1) && is_retryable_error(__result_1)) {
           __attempt_1 = __attempt_1 + 1
-          __result_1 = call_tool(input_payload["__step_1_tool"], input_payload["__step_1_args"])
+          __result_1 = call_tool(input_payload["__step_1_tool"], input_payload["__step_1_args"], 1)
         }
         set_state("__step_1_result", __result_1)
         if (__result_1["success"] != true) {
@@ -140,7 +140,11 @@ def _step_source(
     after = f" after step_{prev_index}" if prev_index is not None else ""
     attempt_var = f"__attempt_{index}"
     result_var = f"__result_{index}"
-    call_expr = f'call_tool(input_payload["{tool_key}"], input_payload["{args_key}"])'
+    # RECOVERY-GRANULARITY-1 (DEC-065) — the step's PLAN INDEX rides as the third argument. The
+    # worker seam keys the durable per-step row on it. It must be the index, not a call ordinal:
+    # the retry loop below is INSIDE the guest, so attempt 2 of this step is the next `call_tool`
+    # in ordinal terms — an ordinal would record it as the following step.
+    call_expr = f'call_tool(input_payload["{tool_key}"], input_payload["{args_key}"], {index})'
     return (
         f"  step step_{index}{after} {{\n"
         f"    let {attempt_var} = 1\n"

@@ -101,10 +101,14 @@ def _durable_resume(callback):
 
 
 def _count_completed_segments(segments: list, completed_steps: int) -> int:
-    """Number of segments fully covered by `completed_steps` committed tool steps.
+    """Number of segments fully covered by `completed_steps` committed tool steps — the
+    first segment to (re-)run.
 
-    AgentStep is batch-written per segment, so `completed_steps` always lands on a
-    segment boundary — this yields the first segment to (re-)run.
+    RECOVERY-GRANULARITY-1: `completed_steps` may land mid-segment now (the worker seam records
+    each step as it completes), and that is the point — this still picks the segment holding
+    the first unfinished step, and the worker REPLAYS that segment's recorded `success` steps
+    instead of re-executing them, so re-running the segment costs only the steps that never
+    finished.
     """
     total = 0
     idx = 0
@@ -189,6 +193,7 @@ def continue_crashed_agent_runs(db) -> int:
                     scoped_token=run.capability_token,
                     total_tool_steps=total_tool_steps,
                     claim_status="executing",
+                    continuation=True,
                 )
                 # DUR-2 — mark the re-driven segment's effects at-most-once (declaration-free)
                 # for the duration of the resume. Set inside the thread so the contextvar

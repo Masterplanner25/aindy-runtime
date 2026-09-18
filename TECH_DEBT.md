@@ -14726,7 +14726,23 @@ that names its scope selection *before* making its case produces findings a defe
 
 ## RECOVERY-GRANULARITY-1 — recovery granularity is welded to scheduling granularity
 
-**Status: OPEN — P2 (cost and blast-radius, not correctness).** Filed 2026-08-18. Provenance:
+**Status: CLOSED (2026-09-17) — #722, DEC-063..066.** Filed 2026-08-18.
+
+**What shipped (#722):** the compiler emits the step index as a third `call_tool` argument
+(arity `(2, 3)`); `run_agent_tool` writes the `agent_steps` row for `(run_id, step_index)` on its
+own session, committed, as each step completes (`_record_step`, query-then-write upsert — no
+schema); on a continued run (`continuation` threaded `continue_crashed_agent_runs` → resume
+callback → chain → segment flow → `__continuation` flow state → worker context) a `success` row
+replays (`_read_recorded_step`, sentinel for "no row" vs "null result") with `replayed: True` and
+the tool does not run; the parent's batch is an upsert that skips the step event for replayed
+steps; `_count_completed_segments` unchanged, docstring rewritten. 15 tests on the private engine
+including two through the real `run_one` on a compiled two-step plan; 7/7 mutations caught (the
+ordinal-keying one included). **★ Gotcha: nodus's workflow runner ABSORBS a step's `throw` — the
+worker reply says `success`; the parent reads failure from the step results, as it always did.**
+Residual by design: a crash between the tool returning and the row committing re-runs that one
+step (mediated effects still dedup via DUR-2); salvage-on-terminal-failure still not opened.
+
+*Original entry, kept:* **Status was: OPEN — P2 (cost and blast-radius, not correctness).** Filed 2026-08-18. Provenance:
 `LANGGRAPH-NODUS-2026-08-18`.
 
 **★ DESIGN FILED 2026-09-17 → `docs/design/RECOVERY_GRANULARITY_DESIGN.md` (four decisions pending).** The seam
