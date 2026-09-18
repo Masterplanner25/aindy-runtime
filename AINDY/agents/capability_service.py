@@ -719,6 +719,33 @@ def check_execution_capability(
         }
 
 
+def _run_authority_ended(run_id) -> Optional[dict]:
+    """The refusal for a run whose authority has ended, or ``None`` while it is live."""
+    from AINDY.kernel.cancellation import note_authority_ended, note_effect_refused, run_terminal_status
+
+    status = run_terminal_status(run_id) if run_id else None
+    if status is None:
+        return None
+    note_authority_ended(status=status, surface="tool")
+    if status == "cancelled":
+        note_effect_refused(surface="tool")
+        return {
+            "ok": False,
+            "error": f"run {run_id} was cancelled; authority ended with the run",
+            "granted_tools": [],
+            "allowed_capabilities": [],
+            "failure_class": "cancelled",
+            "cancelled": True,
+        }
+    return {
+        "ok": False,
+        "error": f"run {run_id} is {status}; authority ended with the run",
+        "granted_tools": [],
+        "allowed_capabilities": [],
+        "failure_class": "permission",
+    }
+
+
 def check_tool_capability(
     token: Optional[dict],
     run_id: str,
@@ -727,8 +754,19 @@ def check_tool_capability(
 ) -> dict:
     """
     Enforce that a token is valid and grants the requested tool's capability.
+
+    AUTHORITY-LIFETIME-1 (DEC-056): a token presented for a run in a TERMINAL status is refused
+    HERE, before the HMAC check — authority ends with the run, not with the clock. The read is
+    `cancellation.run_terminal_status` (own session, cached, sticky once terminal, fails OPEN).
+    `validate_token` itself stays stateless: the planner path and any caller without a run keep
+    the pure HMAC check. A cancelled run keeps the envelope CANCEL-REACH-1 promised
+    (`failure_class="cancelled"`, `cancelled=True`); every other terminal status is `permission`.
     """
     try:
+        _ended = _run_authority_ended(run_id)
+        if _ended is not None:
+            return _ended
+
         validation = validate_token(token=token, run_id=run_id, user_id=user_id)
         if not validation["ok"]:
             return {

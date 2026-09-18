@@ -39,6 +39,21 @@ candidate to re-read four columns the originating SELECT already had.
 So this never touches the caller's session and never queries per effect. It uses **its own
 short-lived session**, at most once per run per TTL window, and a `cancelled` answer is cached
 **forever** because cancellation is terminal — a run cannot un-cancel, so re-asking is pure cost.
+
+★ AUTHORITY-LIFETIME-1 (DEC-056..059) — THE SAME READ, WIDENED TO EVERY TERMINAL STATUS
+------------------------------------------------------------------------------------------
+A capability token was bound to the clock (`TOKEN_TTL_HOURS = 24`), not to the run it
+authorises: a run that finished in 90 s could present its token all day. The three questions the
+entry asked — where the check lives, whether to negative-cache, fail-open or closed — were
+answered HERE, with evidence, for the `cancelled` value of the same column. So `run_terminal_status`
+is that read returning the status instead of a bool; `is_run_cancelled` is `== "cancelled"` over
+it (unchanged behaviour, pinned); the two sites that read it are the two that read cancel —
+`check_tool_capability` (before the HMAC check) and the dispatcher's agent gate — and no third.
+Every terminal answer is sticky for the process lifetime (a run never leaves a terminal state),
+so the negative cache is the cache. It fails OPEN for the same reason cancel does, and the token's
+expiry stays the outer bound. ★ A `waiting` run KEEPS its authority (DEC-059): a parked run
+resumes with the same token, and revoking on wait would make every resume a re-mint — a grant
+path `DEC-016` deliberately denied.
 """
 from __future__ import annotations
 
@@ -55,14 +70,24 @@ logger = logging.getLogger(__name__)
 DEFAULT_TTL_SECONDS = 2.0
 
 _LOCK = threading.Lock()
-#: run_id -> (answer, expires_at). Only ever holds negatives; positives go to `_CANCELLED`.
+#: run_id -> expires_at. Only ever holds NON-terminal answers; terminal ones go to `_TERMINAL`.
 _NEGATIVE: dict[str, float] = {}
-#: run_ids observed cancelled. Terminal, so no expiry — and bounded by the number of runs a
-#: process actually cancels, which is small.
-_CANCELLED: set[str] = set()
+#: run_id -> the terminal status observed. No expiry — a run never leaves a terminal state — and
+#: bounded by the number of runs a process actually sees end, which is small.
+_TERMINAL: dict[str, str] = {}
 
 try:
-    from AINDY.platform_layer.metrics import run_cancel_observed_total
+    from AINDY.kernel.condition_codes import AGENT_TERMINAL_STATUSES as _AGENT_TERMINAL
+except Exception:  # pragma: no cover - the kernel vocabulary is always importable in practice
+    _AGENT_TERMINAL = frozenset({"completed", "failed", "cancelled", "verify_failed"})
+
+#: The statuses after which a run's authority has ended. Derived from the kernel's own agent
+#: vocabulary (variant 12: never a hand-written census), plus `refused` — the value
+#: `finalize_for_run_status` maps and an admission gate may write before a run ever executes.
+TERMINAL_RUN_STATUSES: frozenset[str] = frozenset(_AGENT_TERMINAL) | {"refused"}
+
+try:
+    from AINDY.platform_layer.metrics import authority_lifetime_refusals_total, run_cancel_observed_total
 
     _METRICS_AVAILABLE = True
 except Exception:  # pragma: no cover - metrics optional at import time
@@ -73,7 +98,7 @@ def reset_cancellation_cache() -> None:
     """Clear cached state. For tests, and for a worker recycling its process state."""
     with _LOCK:
         _NEGATIVE.clear()
-        _CANCELLED.clear()
+        _TERMINAL.clear()
 
 
 def _read_status(run_id: str) -> Optional[str]:
@@ -90,42 +115,59 @@ def _read_status(run_id: str) -> Optional[str]:
         db.close()
 
 
+def run_terminal_status(
+    run_id: Optional[str], *, ttl_seconds: float = DEFAULT_TTL_SECONDS
+) -> Optional[str]:
+    """The run's TERMINAL status, or ``None`` while it is live (or unknown). Never raises.
+
+    AUTHORITY-LIFETIME-1's read — the one `is_run_cancelled` always did, returning the status
+    instead of a bool. ``None``/empty run returns ``None``: an effect with no run to belong to
+    has no run to end. A missing row is ``None`` too (a run that does not exist has not ended;
+    the token's own run binding is what refuses it). An unreadable status is ``None`` — fail
+    OPEN, see the module docstring.
+
+    A terminal answer is cached for the process lifetime; a live answer for ``ttl_seconds``.
+    """
+    if not run_id:
+        return None
+    key = str(run_id)
+
+    with _LOCK:
+        terminal = _TERMINAL.get(key)
+        if terminal is not None:
+            return terminal
+        expires = _NEGATIVE.get(key)
+        if expires is not None and expires > time.monotonic():
+            return None
+
+    try:
+        status = _read_status(key)
+    except Exception as exc:  # noqa: BLE001 — see the module docstring: fail OPEN
+        logger.debug("[cancellation] status unreadable for run %s: %s", run_id, exc)
+        return None
+
+    with _LOCK:
+        if status in TERMINAL_RUN_STATUSES:
+            _TERMINAL[key] = str(status)
+            _NEGATIVE.pop(key, None)
+            return str(status)
+        _NEGATIVE[key] = time.monotonic() + max(0.0, ttl_seconds)
+        return None
+
+
 def is_run_cancelled(run_id: Optional[str], *, ttl_seconds: float = DEFAULT_TTL_SECONDS) -> bool:
     """Whether ``run_id`` has been cancelled. Cheap to call in a loop; never raises.
 
     ``None``/empty returns ``False``: an effect with no run to belong to cannot be cancelled by
-    one.
+    one. Since AUTHORITY-LIFETIME-1 this is `run_terminal_status(...) == "cancelled"` — the same
+    read and the same cache, pinned identical in behaviour.
 
     ★ The out-of-process tool WORKER still gets no ``run_id`` — and that is now correct rather
     than a gap (`CANCEL-REACH-1` residual 2, closed 2026-09-15): the check runs in the PARENT,
     which polls this while the worker runs and kills it on a cancel. Running the check inside
     the worker would put it in the one process that cannot act on the answer.
     """
-    if not run_id:
-        return False
-    key = str(run_id)
-
-    with _LOCK:
-        if key in _CANCELLED:
-            return True
-        expires = _NEGATIVE.get(key)
-        if expires is not None and expires > time.monotonic():
-            return False
-
-    try:
-        status = _read_status(key)
-    except Exception as exc:  # noqa: BLE001 — see the module docstring: fail OPEN
-        logger.debug("[cancellation] status unreadable for run %s: %s", run_id, exc)
-        return False
-
-    cancelled = status == "cancelled"
-    with _LOCK:
-        if cancelled:
-            _CANCELLED.add(key)
-            _NEGATIVE.pop(key, None)
-        else:
-            _NEGATIVE[key] = time.monotonic() + max(0.0, ttl_seconds)
-    return cancelled
+    return run_terminal_status(run_id, ttl_seconds=ttl_seconds) == "cancelled"
 
 
 def current_run_id() -> Optional[str]:
@@ -149,6 +191,20 @@ def current_run_id() -> Optional[str]:
         return str(run_id) if run_id else None
     except Exception:  # pragma: no cover - fail OPEN, like everything else here
         return None
+
+
+def note_authority_ended(*, status: str, surface: str) -> None:
+    """Count an effect refused because its run had already reached ``status`` (terminal).
+
+    A cancelled run is ALSO counted on `note_effect_refused` by its callers — that counter is
+    CANCEL-REACH-1's narrowing signal and must keep moving when a cancel is observed early.
+    """
+    if not _METRICS_AVAILABLE:
+        return
+    try:
+        authority_lifetime_refusals_total.labels(status=str(status), surface=surface).inc()
+    except Exception:  # pragma: no cover
+        pass
 
 
 def note_effect_refused(*, surface: str) -> None:

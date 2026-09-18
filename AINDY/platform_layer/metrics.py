@@ -196,6 +196,17 @@ run_cancel_observed_total = Counter(
     registry=REGISTRY,
 )
 
+# AUTHORITY-LIFETIME-1 — a token presented for a run in a TERMINAL status is refused: authority
+# ends with the run, not with the clock. `status` is the terminal value observed (a cancelled
+# run is counted here AND on the cancel counter above — one is the lifetime signal, the other
+# is CANCEL-REACH-1's narrowing signal, and dashboards on the second must keep working).
+authority_lifetime_refusals_total = Counter(
+    "aindy_authority_lifetime_refusals_total",
+    "Effects refused because their run had already reached a terminal status",
+    ["status", "surface"],  # status: completed|failed|verify_failed|cancelled|refused; surface: tool | syscall
+    registry=REGISTRY,
+)
+
 # ── Typed resume (WAIT-TYPED-CONTRACT-1 phase 1) ─────────────────────────────
 #
 # ★ `untyped` is the label that matters while adoption is zero: it is what separates "no wait

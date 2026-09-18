@@ -1321,6 +1321,83 @@ classes the retention entry protected stay KEEP.
 
 ---
 
+### DEC-056
+**Status:** `accepted` (2026-09-17 — `AUTHORITY-LIFETIME-1`, #720)
+
+**Decision**
+Authority ends with the run. A capability token presented for a run in a TERMINAL status
+(`TERMINAL_RUN_STATUSES` = the kernel's `AGENT_TERMINAL_STATUSES` + `refused`) is refused at
+exactly the two sites `CANCEL-REACH-1` already reads — `check_tool_capability`, BEFORE the HMAC
+check, and the dispatcher's agent-span gate — and nowhere else. `verify_token` / `validate_token`
+stay stateless (AST-pinned): the planner path and any caller without a run keep the pure HMAC
+check. A cancelled run keeps the envelope CANCEL-REACH-1 promised (`failure_class="cancelled"`,
+`cancelled=True`); every other terminal status refuses as `permission`.
+
+**Why**
+`TOKEN_TTL_HOURS = 24` bound the token to the clock; a run that finished in 90 s could present
+its token all day — not as a bearer escape (the ceiling and run binding hold) but as a stale
+worker, a replayed request or a leaked token continuing a finished run's work. The cancel
+chokepoints are the two places an effect is about to happen under a run's authority; a third
+site would be a third read on the hot path for the same fact.
+
+**Related Docs**
+- `docs/design/AUTHORITY_LIFETIME_DESIGN.md` §2; `AINDY/kernel/cancellation.py`
+
+---
+
+### DEC-057
+**Status:** `accepted` (2026-09-17 — `AUTHORITY-LIFETIME-1`, #720)
+
+**Decision**
+The read is `cancellation.py`'s existing own-session, per-run-cached read, widened to return
+the status (`run_terminal_status`); `is_run_cancelled` is `== "cancelled"` over it, behaviour
+pinned identical. A terminal answer is STICKY for the process lifetime — the negative cache is
+the cache — so after the first terminal read a finished run costs zero queries.
+
+**Why**
+This adds NO read to the hot path: `is_run_cancelled` already ran once per tool call and once
+per dispatch on every agent run. A run never leaves a terminal state (`_STATUS_TRANSITIONS`),
+so re-asking is pure cost; a separate revocation list would be a second store to keep in sync.
+
+**Related Docs**
+- `docs/design/AUTHORITY_LIFETIME_DESIGN.md` §3; `tests/unit/test_authority_lifetime.py`
+
+---
+
+### DEC-058
+**Status:** `accepted` (2026-09-17 — `AUTHORITY-LIFETIME-1`, #720)
+
+**Decision**
+Fail-OPEN, as cancel does: an unreadable run status answers "live". The token's HMAC expiry
+remains the outer bound.
+
+**Why**
+Refusing an effect because a database blip made the answer unreadable would abort live work
+nobody ended, and an aborted effect is not recoverable by retrying the check. A missed refusal
+costs one more effect under a finished run's ceiling; a false refusal costs the run.
+
+**Related Docs**
+- `AINDY/kernel/cancellation.py` module docstring ("why it fails open")
+
+---
+
+### DEC-059
+**Status:** `accepted` (2026-09-17 — `AUTHORITY-LIFETIME-1`, #720)
+
+**Decision**
+A `waiting` run KEEPS its authority. OpenHands' "nulled on pause" is declined; so is revocation
+on `pending_approval` (no token exists yet) and any token version / rotate-on-resume.
+
+**Why**
+A parked run resumes with the same token (`FR-31`); revoking on wait would make every resume a
+re-mint, which needs a grant path the authority WAIT gate was deliberately denied (`DEC-016`).
+The run id is the version; a resumed run is the same run.
+
+**Related Docs**
+- `docs/design/AUTHORITY_LIFETIME_DESIGN.md` §2, §4; `DEC-016`
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —

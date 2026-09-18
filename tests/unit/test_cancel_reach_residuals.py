@@ -102,7 +102,7 @@ def test_the_dispatcher_refuses_a_syscall_for_a_cancelled_run(monkeypatch, handl
     run_id = str(uuid.uuid4())
     before = _count("syscall")
     d = _dispatcher(monkeypatch)
-    with patch.object(syscall_dispatcher, "_is_run_cancelled", lambda rid: rid == run_id):
+    with patch.object(syscall_dispatcher, "_run_terminal_status", lambda rid: "cancelled" if rid == run_id else None):
         with llm_attribution_scope(tenant_id="t", run_id=run_id):
             result = d.dispatch(_SYSCALL, {}, _ctx())
 
@@ -116,7 +116,7 @@ def test_the_dispatcher_runs_a_live_runs_syscall(monkeypatch, handler):
     from AINDY.platform_layer.token_meter import llm_attribution_scope
 
     d = _dispatcher(monkeypatch)
-    with patch.object(syscall_dispatcher, "_is_run_cancelled", lambda rid: False):
+    with patch.object(syscall_dispatcher, "_run_terminal_status", lambda rid: None):
         with llm_attribution_scope(tenant_id="t", run_id=str(uuid.uuid4())):
             result = d.dispatch(_SYSCALL, {}, _ctx())
 
@@ -128,7 +128,7 @@ def test_outside_an_execution_span_the_dispatcher_does_not_even_ask(monkeypatch,
     pointless read per dispatch on every route that is not an agent run)."""
     asked: list[str] = []
     d = _dispatcher(monkeypatch)
-    with patch.object(syscall_dispatcher, "_is_run_cancelled", lambda rid: asked.append(rid) or False):
+    with patch.object(syscall_dispatcher, "_run_terminal_status", lambda rid: asked.append(rid) or None):
         result = d.dispatch(_SYSCALL, {}, _ctx())
 
     assert handler == [1] and result["status"] == "success"
@@ -167,7 +167,7 @@ def test_a_refusal_completes_the_reserved_effect_record_as_failed(monkeypatch):
     )
     try:
         with patch("AINDY.db.database.SessionLocal", return_value=MagicMock()), patch.object(
-            syscall_dispatcher, "_is_run_cancelled", lambda rid: True
+            syscall_dispatcher, "_run_terminal_status", lambda rid: "cancelled"
         ), llm_attribution_scope(tenant_id="t", run_id=str(uuid.uuid4())):
             result = d.dispatch(_SYSCALL, {}, _ctx())
     finally:
