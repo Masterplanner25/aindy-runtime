@@ -839,9 +839,8 @@ class SyscallDispatcher:
                         "syscall.name": name,
                         "syscall.version": parsed_version or "unknown",
                         "syscall.capability": entry.capability if entry else "unknown",
-                        # OTEL-GENAI-SEMCONV-1 — `enduser.id` is the semconv key; `user.id`
-                        # stays for ONE release (design §5), then is dropped.
-                        "user.id": str(context.user_id or ""),
+                        # OTEL-GENAI-SEMCONV-1 — `enduser.id` is the semconv key. `user.id` was
+                        # emitted beside it for one release (2.20.0, DEC-036) and dropped in 2.21.0.
                         "enduser.id": str(context.user_id or ""),
                         "trace.id": str(context.trace_id or ""),
                     }
