@@ -4,6 +4,169 @@
 
 _Nothing yet._
 
+## 2.21.0 — 2026-09-17
+
+**Operator notes — read before upgrading.**
+
+- **No schema change.** `SCHEMA_CONTRACT_VERSION` stays `2026-09-16`, Alembic head stays `0019`.
+  `bootstrap-schema` needs no `--reconcile`; compose needs nothing.
+- **★ A route handler that raises is now rolled back** (`EVENT-OUTBOX-1`, #721). Before, the
+  pipeline's `execution.failed` emit committed the request session as a side effect, so a handler
+  that wrote without committing and then raised — an `HTTPException` included — kept those writes.
+  It no longer does; a handler that *returned* is never rolled back. If an app route relied on the
+  accident, it now has to commit before raising. Recorded on the envelope as side effect
+  `handler.rollback`. (For app-side test suites that share one session between app and test: the
+  app's rollback under a shared outer transaction erases the test's own fixture rows — a route
+  that answers 4xx/5xx must be tested on a private engine; the runtime ships the recipe as
+  `tests/fixtures/db.py::build_private_engine`.)
+- **★ `user.id` is gone from `syscall.*` OTel spans** (#723; announced with this date in 2.20.0).
+  `enduser.id` carries the same value — move any dashboard or alert filtering on it before upgrading.
+- **Guest surface:** `call_tool(name, args, step_index)` gains an optional third argument
+  (`RECOVERY-GRANULARITY-1`, #722). Compiled agent plans pass it; hand-written scripts are unchanged.
+  On a crash continuation a recorded step returns with `replayed: true` on `__step_N_result` /
+  `result.steps` — the key is present only when true.
+- **`AINDY_EGRESS_ENFORCEMENT` semantics when ON** (#718): a tool that declared `isolation=` is now
+  actually enforced (it never was), and a tool whose `env_spec` declares `authority.network="none"`
+  is deny-all on both branches. The flag stays default-off; off, nothing changes.
+- **Authority ends with the run** (#720): a capability token presented for a run in a terminal
+  status is refused (`failure_class="permission"`) at the tool seam and the dispatcher. New counter
+  `aindy_authority_lifetime_refusals_total{status, surface}`.
+- **Audit joins** (#719): `syscall.executed` gains `capability`, `guarantee`, `action_id`;
+  `capability.allowed` gains `action_id`. Additive; nothing renamed.
+- **Decisions accepted:** DEC-046 / DEC-047 (`HTTP-SCOPE-GAP-1`, `CLI-EXEC-SURFACE-1` closed), plus
+  DEC-048..066 across the five entries below. Five entries closed since 2.20.0: `EGRESS-INPROC-1`,
+  `AUDIT-CORRELATION-1`, `AUTHORITY-LIFETIME-1`, `EVENT-OUTBOX-1`, `RECOVERY-GRANULARITY-1`.
+
+### Removed — `user.id` on `syscall.*` spans (#723; DEC-036, deprecated with a date in 2.20.0)
+
+- The `syscall.*` OTel span no longer carries `user.id`. It was emitted beside the semconv key
+  `enduser.id` for one release (2.20.0) as announced; `enduser.id` carries the same value. A
+  dashboard or alert filtering on `user.id` for syscall spans must move to `enduser.id` before
+  upgrading.
+
+### Changed — `CLAUDE.md` trimmed to the 40 KB Claude Code limit; the CI-evidence catalogue is now a governance doc (#717)
+
+- `CLAUDE.md` went from 152,649 to ~36,000 chars. Claude Code warns and degrades at 40,000, so the
+  authoritative agent-instruction surface had been over the limit it is loaded under. Every rule
+  survives as one line; the narrative moved to where it belongs — `TECH_DEBT.md` (the record),
+  `docs/governance/DECISION_LOG.md`, and the new **`docs/governance/TRUSTING_A_GREEN_CHECK.md`**,
+  which holds the 15-variant "green check" catalogue, the vendored-shim rule and the three standing
+  rules verbatim as a *living* doc (it expects a sixteenth variant).
+- The pre-trim file is archived verbatim at `docs/archive/CLAUDE_md_2026-09-16_pre_trim.md`
+  (outside the frontmatter check by design), so nothing that was written is lost — it is citable,
+  not maintained.
+- **What CI enforces changed:** `tests/unit/test_debt_registry_accuracy.py` ratchets the per-entry
+  registry caps 1144/833 → **500/400 UTF-8 bytes**, the new high-water marks (472/379). The ratchet
+  was the test's own stated maintenance action; the caps are never raised to fit a new entry.
+
+### Fixed — `EGRESS-INPROC-1`: an isolated tool ran with no egress enforcement; the decision is now made once and enforced where the tool runs (#718; DEC-048..051)
+
+- **The defect:** `execute_tool` computed the capability-policy domain allowlist and entered
+  `egress_scope` around the IN-PROCESS call only. The `isolation=` branch returned before it, so
+  the one tool the runtime distrusts enough to move out of process was the one tool the socket
+  guard never covered — with `AINDY_EGRESS_ENFORCEMENT` on or off. The allowlist was computed for
+  it and dropped. (Same shape as `CANCEL-REACH-1` residual 2, on the egress axis.)
+- **Now:** `EgressDecision(mode, domains)` is resolved once, BEFORE the branch, from the policy
+  domains and the tool's effective `authority.network` — `none` and `scoped`-with-no-list are
+  deny-all, fail-closed. The in-process branch scopes it as before; the worker receives it as an
+  additive request key (`egress`) and installs the guard **process-globally**, which also closes
+  the raw-`threading.Thread` contextvar bypass there (still open in-process, by the guard's own
+  docstring). The worker never reads policy.
+- **Reported, not assumed:** when enforcement is on, the tool envelope carries
+  `egress: {mode, mechanism}` (`socket_guard` | `socket_guard:worker` | `none`) and the
+  `execute_tool` span carries `aindy.egress.mode` / `aindy.egress.mechanism`. A provider that
+  cannot enforce a declared mode reports rather than refuses.
+- **Behaviour change to read before enabling the flag:** a tool whose `env_spec` declares
+  `authority.network="none"` is now deny-all on both branches when the flag is on — the tool seam
+  previously ignored that axis. `AINDY_EGRESS_ENFORCEMENT` stays default-off; flag off, nothing
+  changes and envelopes are byte-identical.
+- Worker protocol: request gains optional `egress`; every reply gains `egress_mechanism`.
+
+### Added — `AUDIT-CORRELATION-1`: the audit trail can join an effect to the dispatch that produced it (#719; DEC-052..055)
+
+- `syscall.executed` payload gains three additive keys: `capability` (the authority the dispatch
+  required), `guarantee` (the entry's declared execution guarantee) and `action_id` (the effect
+  ledger row's unique key — `null` unless the idempotency gate engaged, so a reader can tell "no
+  effect record" from "key dropped"). Every emit site, success and error.
+- The tool path's admission event `capability.allowed` gains `action_id`. The id is now computed
+  before the event (a pure hash of tool, args and run scope); the ledger is consulted where it
+  always was, so event order is unchanged.
+- The join is a **documented convention** on `uq_effect_records_action_id` — no foreign key in
+  either direction, no schema change — and it is **time-bounded on both sides** (`syscall.executed`
+  stays `operational` retention; effect records keep their TTL). The queries and rules are in
+  `docs/runtime/IDEMPOTENCY_CONTRACT.md` §"Reconstruction join".
+- Consumers: the keys are additive; nothing is renamed or removed.
+
+### Changed — `AUTHORITY-LIFETIME-1`: a capability token is valid while its run is live, not while the clock says so (#720; DEC-056..059)
+
+- A token presented for a run in a **terminal** status (`completed | failed | verify_failed |
+  cancelled | refused`) is now refused at the two effect chokepoints — `check_tool_capability`
+  (before the HMAC check) and the syscall dispatcher's agent gate. Before, `TOKEN_TTL_HOURS = 24`
+  was the only bound: a run that finished in 90 seconds could present its token all day.
+- The read is `CANCEL-REACH-1`'s existing own-session, per-run-cached status read, widened to
+  return the status (`cancellation.run_terminal_status`). **No new read on the hot path**; a
+  terminal answer is sticky for the process lifetime, so a finished run costs zero queries after
+  the first. Fails OPEN (an unreadable status reads as live); the token's expiry stays the outer
+  bound. `is_run_cancelled` is unchanged in behaviour.
+- Refusal shape: `failure_class="permission"`, error `run <id> is <status>; authority ended with
+  the run`. A **cancelled** run keeps its existing envelope (`failure_class="cancelled"`,
+  `cancelled=true`) — it is now observed one step earlier on the tool path, before the effect
+  ledger reserves anything.
+- **A `waiting` run keeps its authority** — a parked run resumes with the same token. The token
+  itself stays stateless: callers without a run (the planner path) see no change.
+- New counter `aindy_authority_lifetime_refusals_total{status, surface}`; a cancel still moves
+  `aindy_run_cancel_observed_total` as before.
+
+### Changed — `EVENT-OUTBOX-1`: inside a request, a queued system event rides the handler's transaction; a handler that raises is rolled back (#721; DEC-060..062)
+
+- **Events:** `queue_system_event` inside a pipeline now adds the `system_events` row to the
+  handler's own session and never commits it itself; it rides whatever the handler commits next
+  (the FR-30 execution-unit finalize is the last commit on every request). Before, the event was
+  a dict in memory, written after the handler on its own commit under a swallowing `try` — a crash
+  between the handler's commit and that flush kept the work and lost the record of it. The id
+  returned is the row's id (it always was a client-side uuid). The post-handler pass still runs the
+  derived effects (internal handlers, feedback signals, memory capture, webhooks, scheduler wake)
+  once per event. Non-request paths (scheduler, worker, callbacks) are unchanged — they already
+  wrote on the caller's session.
+- **★ Behaviour change to read before upgrading — a handler that RAISES is now rolled back.**
+  The pipeline rolls the request session back before recording `execution.failed`. Previously the
+  failure event's own commit landed the handler's pending, uncommitted writes as a side effect; a
+  route that raised (an `HTTPException` included) after writing without committing would keep
+  those writes. It no longer does. A handler that *returned* is never rolled back, whatever the
+  post-handler machinery does. Recorded on the envelope as side effect `handler.rollback`.
+- The request's execution-unit row is committed where it is created (it used to ride the next
+  commit), so the finalize that follows a rollback still finds it.
+- **Test-suite rule** (for app-side suites that reuse the shared-session fixture shape): the app's
+  rollback under a shared outer transaction erases the test's own fixture rows — a route that
+  answers 4xx/5xx must be tested on a private engine (`tests/fixtures/db.py::build_private_engine`).
+
+### Changed — `RECOVERY-GRANULARITY-1`: an agent step is durable as it completes, and a crash continuation replays recorded steps instead of re-running the segment (#722; DEC-063..066)
+
+- On the `nodus_vm` backend the `AgentStep` rows were written in a batch only when a segment's
+  guest script returned, and crash continuation re-ran a partial segment from its first step —
+  every LLM call in it re-issued. Now the `call_tool` host function writes each step's row as it
+  completes (own session, committed, before the script returns), keyed on the plan's step index.
+- **Replay:** on a crash continuation, a step with a recorded `success` row returns the recorded
+  result with `replayed: true` and the tool does not run — no LLM call, no usage, nothing reaching
+  the effect gate. A fresh run never replays; a failed step re-executes.
+- **Guest surface:** `call_tool(name, args, step_index)` — an optional third argument (arity
+  `(2, 3)`). Compiled agent plans pass it; hand-written scripts that call `call_tool(name, args)`
+  are unchanged and unrecorded. Consumers reading `output_state["__step_N_result"]` may see a
+  `replayed` key on a continued run.
+- Row semantics: a retried step overwrites its own row (one row per step, never one per attempt);
+  `steps_completed` keeps FR-34's meaning. No schema change. The parent's segment-end write is now
+  an upsert and emits no step event for a replayed step.
+- Residual by design: a crash between the tool returning and its row committing re-runs that one
+  step (mediated effects still dedup under DUR-2).
+
+### Changed — `HTTP-SCOPE-GAP-1` and `CLI-EXEC-SURFACE-1` closed by decision (#723; DEC-046, DEC-047 accepted)
+
+- No code change. DEC-046: a scope answers the VERB and a row filter answers OWNERSHIP; no
+  cross-owner read path and no `:any` scope variant is added. DEC-047: the operator half of the
+  runtime (resume, flow list/get, queue + DLQ, trace, health) stays HTTP-only — not
+  syscall-addressable, no CLI. Both were recorded provisional in #716 and accepted by the owner.
+
+
 ## 2.20.0 — 2026-09-17
 
 **Operator notes — read before upgrading.**
