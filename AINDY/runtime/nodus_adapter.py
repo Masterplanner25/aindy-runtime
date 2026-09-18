@@ -1005,6 +1005,9 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
     _virtual_tools = state.get("virtual_tools")
     if not isinstance(_virtual_tools, dict):
         _virtual_tools = {}
+    # RECOVERY-GRANULARITY-1 — set by the crash re-drive via extra_initial_state; the worker
+    # replays this segment's recorded `success` steps.
+    _continuation = bool(state.get("__continuation"))
 
     # ── Execute via NodusRuntimeAdapter ──────────────────────────────────────
     nodus_result = execute_nodus_runtime(
@@ -1026,6 +1029,7 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         effect_scope=_dur_effect_scope(context, state),
         simulate=_simulate,
         virtual_tools=_virtual_tools,
+        continuation=_continuation,
         event_sink=_build_event_sink(
             db=db,
             user_id=user_id,

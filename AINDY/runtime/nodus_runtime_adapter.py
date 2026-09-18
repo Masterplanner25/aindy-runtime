@@ -125,6 +125,9 @@ class NodusExecutionContext:
     # AGENT-HARDEN-4b — fake tool implementations (the simulated world) consulted by
     # the shadow seam during simulate: tool_name -> {"result", "success"?, "error"?}.
     virtual_tools: dict[str, Any] = field(default_factory=dict)
+    # RECOVERY-GRANULARITY-1 — this execution re-drives a crashed run (set by
+    # `continue_crashed_agent_runs`); the worker replays recorded `success` steps.
+    continuation: bool = False
 
 
 @dataclass
@@ -236,6 +239,8 @@ class NodusRuntimeAdapter:
                     # DUR-2c — the per-(run, segment) memory-effect scope, so the worker can
                     # dedup immediate in-subprocess bridge writes (remember/record_outcome).
                     "effect_scope": str(context.effect_scope or ""),
+                    # RECOVERY-GRANULARITY-1 — a continued run replays recorded steps.
+                    "continuation": bool(context.continuation),
                 },
             }
         )

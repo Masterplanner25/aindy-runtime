@@ -103,12 +103,13 @@ def test_compiled_workflow_executes_and_captures_results():
     order = []
     results = {}
 
-    def call_tool(name, args):
+    def call_tool(name, args, step_index=None):
         order.append((name, dict(args) if isinstance(args, dict) else args))
         return {"success": True, "result": {"ran": name}, "error": None}
 
     rt = NodusRuntime()
-    rt.register_function("call_tool", call_tool, arity=2)
+    # RECOVERY-GRANULARITY-1 — compiled plans pass the step index as a third argument
+    rt.register_function("call_tool", call_tool, arity=(2, 3))
     rt.register_function("set_state", lambda k, v: results.__setitem__(k, v), arity=2)
 
     runnable = c["source"] + f"\nrun_workflow({c['workflow_name']})"
@@ -163,12 +164,12 @@ def _run_compiled(plan, call_tool):
     state = {}
     log = []
 
-    def _call(name, args):
+    def _call(name, args, step_index=None):
         log.append(str(name))
         return call_tool(str(name), dict(args) if isinstance(args, dict) else args)
 
     rt = NodusRuntime()
-    rt.register_function("call_tool", _call, arity=2)
+    rt.register_function("call_tool", _call, arity=(2, 3))
     rt.register_function("set_state", lambda k, v: state.__setitem__(k, v), arity=2)
     rt.register_function("is_retryable_error", lambda e: is_retryable_error(e), arity=1)
     runnable = c["source"] + f"\nrun_workflow({c['workflow_name']})"

@@ -1,7 +1,7 @@
 ---
 title: "Nodus Developer Guide"
 api_version: "1.0"
-last_verified: "2026-09-16"
+last_verified: "2026-09-17"
 status: current
 owner: "platform-team"
 ---
@@ -141,7 +141,7 @@ not persist partial writes.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `call_tool` | `call_tool(tool_name, args)` | Execute a registered AINDY agent tool with capability-token enforcement. Returns `{success, result, error}`. |
+| `call_tool` | `call_tool(tool_name, args)` or `call_tool(tool_name, args, step_index)` | Execute a registered AINDY agent tool with capability-token enforcement. Returns `{success, result, error}`. The optional third argument is the plan step index; compiled agent plans pass it and the runtime then records the step durably as it completes and replays it on a crash continuation (`replayed: true` on the result). A hand-written script normally omits it. |
 
 ```nd
 let r = call_tool("send_email", { to: "x@example.com", subject: "hi" })

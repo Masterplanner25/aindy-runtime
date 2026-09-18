@@ -279,7 +279,6 @@ A soak assertion must not be stricter than the contract.
 - **EFFECT-PRECONDITION-1** — *(Aider)* an effect cannot name the world-version it expects. Record the external system's OWN version token; never reimplement. After FS-SCOPE-1 or not at all.
 - **EFFECT-MANIFEST-1** — *(Aider)* record-only: know the effect set before executing. Not before FS-SCOPE-1 + EFFECT-PARTIAL-1.
 - **EMBEDDED-FLOOR-1** — *(Aider)* no profile below `single-instance`; a soak-and-declare gate, not a capability gap.
-- **RECOVERY-GRANULARITY-1** — *(LangGraph)* a partial segment restarts from step ONE. Design filed: `agent_steps` keyed on the plan's STEP INDEX, not a call ordinal.
 - **RETRY-CONTEXT-1** — *(GPT Engineer)* the classify half shipped (#703); the carry half is a SCOPE, never an argument (a failure folded into `args` un-dedups the retry). Closes on a first-party consumer.
 - **PROGRESS-CHANNEL-1** — *(Codex)* no partial-output surface. If built: NO authority, NO effect, attaches to the trace, best-effort by contract.
 - **TEST-ORDER-RUNTIME-STATE-1** — P3: the published deployment profile shadows `AINDY_DEPLOYMENT_PROFILE` in unit tests; one file un-shadows it for whatever runs next. Fix: snapshot/restore in conftest.
@@ -321,6 +320,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - AUDIT-CORRELATION-1: **DEC-052** joins 1+3 by additive keys (`capability`, `guarantee`, `action_id`), no schema · **DEC-053** join 2 is `env_applied`; attestation stays SANDBOX-EVIDENCE-2 · **DEC-054** convention on the unique `action_id`, NO FK · **DEC-055** `syscall.executed` stays `operational`; the join is TTL-bounded both sides.
 - AUTHORITY-LIFETIME-1: **DEC-056** authority ends with the run — refused at the two cancel sites, no third; the token stays stateless · **DEC-057** the cancel read widened to return the status, terminal answers STICKY · **DEC-058** fail-OPEN, HMAC expiry the outer bound · **DEC-059** `waiting` keeps its authority (pause-null declined).
 - EVENT-OUTBOX-1: **DEC-060** in a pipeline the event rides the handler's session, no commit by the event path; post-handler pass runs derived effects only · **DEC-061** the id stays client-assigned · **DEC-062** a handler that raises leaves no row — the pipeline rolls back (handler-raised only) and commits the unit row at creation.
+- RECOVERY-GRANULARITY-1: **DEC-063** per-step durable write at the worker seam; the parent batch is an upsert · **DEC-064** the row is `agent_steps`, no new table · **DEC-065** identity is the plan's STEP INDEX (compiler-emitted), never a call ordinal · **DEC-066** replay only on a CONTINUED run from a `success` row, `replayed: True`.
 
 ### Standing rule — not an item
 
@@ -330,6 +330,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 
 ### Closed — kept as one line because the rule still bites
 
+- **RECOVERY-GRANULARITY-1** — CLOSED 2026-09-17 (#722; DEC-063..066). The worker seam writes `agent_steps` per step as it completes, keyed on the plan's STEP INDEX (third `call_tool` arg, arity (2,3)); a CONTINUED run replays a `success` row (`replayed: True`). ★ nodus absorbs a step's `throw` — the worker reply reads `success`; the parent reads failure from the step results.
 - **EVENT-OUTBOX-1** — CLOSED 2026-09-17 (#721; DEC-060..062). In a pipeline a queued event rides the handler's session and its next commit. ★ The pipeline now ROLLS BACK the request session when the HANDLER raises (the failure emit used to commit its pending writes); the unit row commits at creation. Test a 4xx route on the private engine.
 - **AUTHORITY-LIFETIME-1** — CLOSED 2026-09-17 (#720; DEC-056..059). A token for a run in a TERMINAL status is refused at `check_tool_capability` (before the HMAC) and the dispatcher's agent gate — CANCEL-REACH-1's read widened (`run_terminal_status`), sticky once terminal, fail-OPEN. `waiting` KEEPS authority; the token stays stateless.
 - **AUDIT-CORRELATION-1** — CLOSED 2026-09-17 (#719; DEC-052..055). `syscall.executed` carries `capability`, `guarantee`, `action_id` (None unless the gate engaged); `capability.allowed` carries `action_id`. A documented CONVENTION on the unique `action_id` — no FK either way; both sides TTL-bounded. Join: `IDEMPOTENCY_CONTRACT.md`.
