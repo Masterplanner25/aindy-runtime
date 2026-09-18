@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-17"
+last_verified: "2026-09-18"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1701,3 +1701,44 @@ simple index lagged behind the JSON API again, exactly as on `v2.15.0`, and the 
 release for the second tag running. The check that was at its least proven the day it shipped
 was proven by the very next tag. The sandbox gate was unaffected (it runs on the tag, from
 source); this entry is written from its first and only run.
+
+---
+
+## Entry 035 — 2026-09-18
+
+**Trigger:** `v2.21.0` release tag (`sandbox-escape-linux.yml`, run `35309801532`).
+**Commit:** `85cedb0a87f9` (release PR #724's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0495f5559318affa673172ec7e35cd0a5213e4aaf4c76d0a66554c0af97b157e` — **★ NOT the digest
+Entries 021–034 ran on** (`0d55920083f1…`). The upstream tag moved between `v2.20.0` and
+`v2.21.0`; nothing in this repository selects a digest. Recorded, not hidden: the 17 tests
+measure the boundary against whatever `python:3.11-alpine` resolves to on the day, and a tag
+that moves is an input this gate does not pin (the same class as `pip-audit`'s external input —
+the answer is dated). They pass on the new image.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 5.06s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `35309801532`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.20.0..v2.21.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Four things in this release sit NEAR the boundary and are recorded so nobody reads them as
+inside it:**
+
+- **`egress_guard.py` + `tool_worker.py` (#718, `EGRESS-INPROC-1`)** — the socket-level egress
+  guard gained a process-global install that the isolated TOOL worker applies from its request
+  payload. This narrows what a distrusted tool can reach when `AINDY_EGRESS_ENFORCEMENT` is on
+  (it was never enforced for that tool before); it widens nothing, and the flag is off by
+  default. The tool worker is `TOOL-SEAM-ISOLATION-1`'s boundary, not this gate's: this gate
+  certifies the plugin-host container runner, and no tool worker runs inside it.
+- **`nodus_worker.py` (#722, `RECOVERY-GRANULARITY-1`)** — the guest worker's `call_tool` host
+  function now writes `agent_steps` rows on its own session and replays recorded steps on a
+  continued run. Host-side accounting at the seam; the guest's reach is unchanged (Entries 033
+  and 034 said the same of `AINDY_NODUS_MAX_MEMORY_MB` and FR-35).
+- **`capability_service.check_tool_capability` (#720, `AUTHORITY-LIFETIME-1`)** — refuses a
+  token whose run has ended, before the HMAC check. A refusal is an error envelope; nothing a
+  refused call can do changed.
+- **`execution_pipeline` (#721, `EVENT-OUTBOX-1`)** — a raising route handler is rolled back.
+  Request-side transaction discipline, nothing the sandbox sees.
+
+**Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
