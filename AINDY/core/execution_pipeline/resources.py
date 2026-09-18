@@ -29,6 +29,23 @@ def _safe_require_eu(self, ctx) -> str | None:
             )
             return None
         ctx.metadata["eu_id"] = eu_id
+        # EVENT-OUTBOX-1 (DEC-062) — commit the unit where it is created. `require_execution_unit`
+        # only FLUSHES the row; before this it rode whichever commit came next (the handler's, or
+        # the `execution.completed` / `.failed` emit's). Now the pipeline ROLLS BACK the request
+        # session when the handler raises, so the row must already be durable or the finalize
+        # that follows would find nothing to finalise. At this point the session holds only the
+        # started event (already committed) and this row.
+        try:
+            db.commit()
+        except Exception as commit_exc:  # noqa: BLE001 — recorded, not fatal
+            self._record_side_effect(
+                ctx,
+                "execution_unit.create",
+                status="failed",
+                required=True,
+                error=f"commit failed: {commit_exc}",
+            )
+            return eu_id
         self._record_side_effect(
             ctx,
             "execution_unit.create",
@@ -121,6 +138,28 @@ def _safe_rm_record_and_complete(self, ctx, duration_ms: float) -> None:
         rm.mark_completed(str(ctx.user_id), eu_id)
     except Exception:
         logger.warning("execution.rm_record_and_complete_failed (non-fatal)", exc_info=True)
+
+
+def _safe_rollback_handler_work(self, ctx) -> None:
+    """EVENT-OUTBOX-1 (DEC-062) — a handler that raised leaves NO record of work that did not
+    happen. Roll the request session back BEFORE the `execution.failed` emit, which otherwise
+    commits the request session and lands the handler's pending writes — and the events queued
+    on it — as a side effect (`_persist_system_event`'s own comment says it wants to avoid
+    exactly that, and then commits two lines later). The unit row survives: it is committed at
+    creation (`_safe_require_eu`); the failure event and the finalize are written after this.
+
+    ★ Only when the HANDLER raised. Once the handler has returned its work stands, whatever the
+    post-handler machinery does next — a crashed signal flush is the window this entry closes,
+    not a reason to undo the work.
+    """
+    db = ctx.metadata.get("db")
+    if db is None or ctx.metadata.get("handler_returned"):
+        return
+    try:
+        db.rollback()
+        self._record_side_effect(ctx, "handler.rollback", status="ok", required=False)
+    except Exception as exc:  # noqa: BLE001 — recorded; the failure path continues
+        self._record_side_effect(ctx, "handler.rollback", status="failed", required=False, error=str(exc))
 
 
 def _safe_finalize_eu(self, ctx, status: str) -> None:

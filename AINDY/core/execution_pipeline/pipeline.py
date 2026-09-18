@@ -2,6 +2,7 @@ from AINDY.core.execution_pipeline.context import ExecutionResult
 from AINDY.core.execution_pipeline.resources import (
     _safe_check_quota,
     _safe_finalize_eu,
+    _safe_rollback_handler_work,
     _safe_require_eu,
     _safe_rm_mark_completed,
     _safe_rm_mark_started,
@@ -79,6 +80,7 @@ class ExecutionPipeline:
     _safe_rm_mark_completed = _safe_rm_mark_completed
     _safe_rm_record_and_complete = _safe_rm_record_and_complete
     _safe_finalize_eu = _safe_finalize_eu
+    _safe_rollback_handler_work = _safe_rollback_handler_work
 
     async def run(self, ctx, handler: Callable[[Any], Any]) -> ExecutionResult:
         from AINDY.core import execution_pipeline as execution_pipeline_module
@@ -143,6 +145,10 @@ class ExecutionPipeline:
             result = handler(ctx)
             if inspect.isawaitable(result):
                 result = await result
+            # EVENT-OUTBOX-1 (DEC-062) — the handler RETURNED: its work stands. A failure in the
+            # post-handler machinery below (signals, envelope, events) must not roll it back;
+            # only a handler that raised has "work that did not happen".
+            ctx.metadata["handler_returned"] = True
             if isinstance(result, Response):
                 self._handle_contract_violation("ExecutionContract violation: raw Response returned")
             result, signals = self._extract_execution_result_and_signals(result)
@@ -188,6 +194,7 @@ class ExecutionPipeline:
                 metadata=ctx.metadata,
             )
         except HTTPException as exc:
+            self._safe_rollback_handler_work(ctx)
             failed_event_id = self._safe_emit_event(
                 ctx,
                 event_type="execution.failed",
@@ -209,6 +216,7 @@ class ExecutionPipeline:
                 metadata={**ctx.metadata, "status_code": exc.status_code, "detail": exc.detail},
             )
         except Exception as exc:
+            self._safe_rollback_handler_work(ctx)
             failed_event_id = self._safe_emit_event(
                 ctx,
                 event_type="execution.failed",

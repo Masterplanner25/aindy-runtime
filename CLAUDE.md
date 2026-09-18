@@ -199,8 +199,9 @@ and re-fetch, never a db handle.
   shim to the guard, never the reverse**; `test_apscheduler_shim_parity.py` derives the census.
   `AINDY/nodus/` shadows the installed `nodus` the same way (pinned to resolve installed).
 - The shared `db_session` / `runtime_only_app` fixture puts app and test on ONE connection in ONE
-  transaction: **a flush reads as a commit** (variant 15). A durability assertion reads through a
-  separate connection with a liveness control first (`test_request_eu_finalize_commits_fr30.py`).
+  transaction: **a flush reads as a commit** (variant 15) — and the app's `rollback()` erases the
+  test's own rows. A durability assertion, or a route that answers 4xx/5xx, runs on the private engine
+  (`tests/fixtures/db.py::build_private_engine`) with a liveness control first.
 - `ResourceManager.can_execute` is `(True, None)` under `settings.is_testing` (a pydantic property —
   patch it on the class); test-mode short-circuits above the real decision make the real path
   unreachable while green (`async_heavy_execution_enabled`, `get_queue` — put the guard BELOW the
@@ -286,7 +287,6 @@ A soak assertion must not be stricter than the contract.
 - **SCOPE-NAMING-1** — P3: `enforce_api_key_scope` gates every caller. Not renamed on purpose — a missed call site on a security dependency fails OPEN.
 - **DEBT-COMPAT-1** — P2: consumers run below the advertised floor and nothing reads `runtime_compatibility.py`. Fix: one comparison where `/api/version` is fetched; warn, never refuse.
 - **INITIATOR-IDENTITY-1** — *(OpenClaw)* initiating identity ≠ authenticated one; an asserted subject may only CONSTRAIN, never a `User` row. Design filed; P0 the day an inbound consumer ships.
-- **EVENT-OUTBOX-1** — system events buffer in memory and emit after commit; a crash loses the record. Do NOT emit eagerly. Design filed: the row rides the handler's session; no outbox table.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s semantic half always returns `[]` (pgvector `ndarray` vs `list` guard). pgvector 0.5.0 fixes it — which is why #390 was HELD: it turns expansion on in the path that exhausted the pool.
 - **DB-NODUS-BUDGET-1** — both fixes shipped; remaining soak + flip `AINDY_MEMORY_RECALL_OWN_SESSION`. Do NOT roll back the caller's session.
@@ -320,6 +320,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - EGRESS-INPROC-1: **DEC-048** egress `(mode, domains)` resolved ONCE before the isolation branch (`none`/`scoped`-empty = deny-all) · **DEC-049** the worker installs it process-globally from its payload, never reads policy · **DEC-050** the mechanism is REPORTED on envelope + span, never refused · **DEC-051** `AINDY_EGRESS_ENFORCEMENT` stays the switch, default off.
 - AUDIT-CORRELATION-1: **DEC-052** joins 1+3 by additive keys (`capability`, `guarantee`, `action_id`), no schema · **DEC-053** join 2 is `env_applied`; attestation stays SANDBOX-EVIDENCE-2 · **DEC-054** convention on the unique `action_id`, NO FK · **DEC-055** `syscall.executed` stays `operational`; the join is TTL-bounded both sides.
 - AUTHORITY-LIFETIME-1: **DEC-056** authority ends with the run — refused at the two cancel sites, no third; the token stays stateless · **DEC-057** the cancel read widened to return the status, terminal answers STICKY · **DEC-058** fail-OPEN, HMAC expiry the outer bound · **DEC-059** `waiting` keeps its authority (pause-null declined).
+- EVENT-OUTBOX-1: **DEC-060** in a pipeline the event rides the handler's session, no commit by the event path; post-handler pass runs derived effects only · **DEC-061** the id stays client-assigned · **DEC-062** a handler that raises leaves no row — the pipeline rolls back (handler-raised only) and commits the unit row at creation.
 
 ### Standing rule — not an item
 
@@ -329,6 +330,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 
 ### Closed — kept as one line because the rule still bites
 
+- **EVENT-OUTBOX-1** — CLOSED 2026-09-17 (#721; DEC-060..062). In a pipeline a queued event rides the handler's session and its next commit. ★ The pipeline now ROLLS BACK the request session when the HANDLER raises (the failure emit used to commit its pending writes); the unit row commits at creation. Test a 4xx route on the private engine.
 - **AUTHORITY-LIFETIME-1** — CLOSED 2026-09-17 (#720; DEC-056..059). A token for a run in a TERMINAL status is refused at `check_tool_capability` (before the HMAC) and the dispatcher's agent gate — CANCEL-REACH-1's read widened (`run_terminal_status`), sticky once terminal, fail-OPEN. `waiting` KEEPS authority; the token stays stateless.
 - **AUDIT-CORRELATION-1** — CLOSED 2026-09-17 (#719; DEC-052..055). `syscall.executed` carries `capability`, `guarantee`, `action_id` (None unless the gate engaged); `capability.allowed` carries `action_id`. A documented CONVENTION on the unique `action_id` — no FK either way; both sides TTL-bounded. Join: `IDEMPOTENCY_CONTRACT.md`.
 - **EGRESS-INPROC-1** — CLOSED 2026-09-16 (#718; DEC-048..051). The ISOLATED branch returned before `egress_scope`, so a distrusted tool had NO egress enforcement. Now `(mode, domains)` is resolved once before the branch; the worker installs it process-globally from its payload; the envelope reports `egress.mechanism`. Flag stays default off.

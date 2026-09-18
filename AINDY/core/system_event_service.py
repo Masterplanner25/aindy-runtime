@@ -65,7 +65,15 @@ def _persist_system_event(
     source: str | None,
     agent_id: str | uuid.UUID | None,
     payload: Optional[dict[str, Any]],
- ) -> uuid.UUID:
+    commit: bool = True,
+) -> uuid.UUID:
+    """Write one `SystemEvent` row on ``db``.
+
+    ``commit=False`` (EVENT-OUTBOX-1, DEC-060) adds and flushes the row on the caller's session
+    and leaves the commit to the caller — the in-pipeline path, where the row rides the
+    handler's next commit and rolls back with the handler's work. Every other caller keeps the
+    commit here, which is what a scheduler-thread or worker caller relies on.
+    """
     from AINDY.db.models.system_event import SystemEvent
 
     normalized_parent_event_id = None
@@ -122,8 +130,110 @@ def _persist_system_event(
             target_event_id=event_id,
             relationship_type=relationship_type,
         )
-    db.commit()
+    if commit:
+        db.commit()
     return event_id
+
+
+def run_post_persist_effects(
+    *,
+    db,
+    event_id,
+    event_type: str,
+    user_id,
+    trace_id: str | None,
+    parent_event_id,
+    source: str | None,
+    agent_id,
+    payload: Optional[dict[str, Any]],
+    skip_memory_capture: bool = False,
+) -> None:
+    """Everything `emit_system_event` does AFTER the row exists: internal handler dispatch,
+    behavioural feedback signals, memory auto-capture, webhook fan-out, the scheduler wake.
+
+    Split out for EVENT-OUTBOX-1: a row persisted on the handler's session during the request
+    still needs these DERIVED effects, run once by the post-handler pass — they are derived from
+    the record, not the record itself, which is why they may stay best-effort while the row may
+    not. Each step swallows its own failure, as it always did inside `emit_system_event`.
+    """
+    try:
+        from AINDY.platform_layer.event_service import dispatch_internal_event_handlers
+
+        dispatch_internal_event_handlers(
+            db=db,
+            event_type=event_type,
+            event_id=str(event_id) if event_id else "",
+            payload=payload or {},
+            user_id=str(user_id) if user_id else None,
+            trace_id=trace_id,
+            source=source,
+        )
+    except Exception as handler_exc:
+        logger.warning(
+            "[SystemEvent] internal handler dispatch skipped for %s id=%s: %s",
+            event_type,
+            event_id,
+            handler_exc,
+        )
+    try:
+        _detect_behavioral_feedback_signals(
+            db=db,
+            event_id=event_id,
+            event_type=event_type,
+            user_id=user_id,
+            trace_id=trace_id,
+            parent_event_id=parent_event_id,
+            source=source,
+            agent_id=agent_id,
+            payload=payload,
+        )
+    except Exception as signal_exc:
+        logger.warning(
+            "[SystemEvent] feedback signal detection skipped for %s id=%s: %s",
+            event_type,
+            event_id,
+            signal_exc,
+        )
+    try:
+        if not skip_memory_capture:
+            from AINDY.db.models.system_event import SystemEvent
+            from AINDY.memory.memory_capture_engine import capture_system_event_as_memory
+
+            persisted_event = db.query(SystemEvent).filter(SystemEvent.id == event_id).first()
+            if persisted_event:
+                capture_system_event_as_memory(db, persisted_event)
+    except Exception as capture_exc:
+        logger.warning(
+            "[SystemEvent] memory auto-capture skipped for %s id=%s: %s",
+            event_type,
+            event_id,
+            capture_exc,
+        )
+    # ── Webhook fan-out ──────────────────────────────────────────────────────
+    # Fire-and-forget: runs in background thread pool, never blocks here.
+    try:
+        from AINDY.platform_layer.event_service import dispatch_webhooks_async
+        dispatch_webhooks_async(
+            event_type=event_type,
+            event_id=str(event_id) if event_id else "",
+            payload=payload or {},
+            user_id=str(user_id) if user_id else None,
+            trace_id=trace_id,
+            source=source,
+        )
+    except Exception as wh_exc:
+        logger.debug(
+            "[SystemEvent] webhook dispatch skipped for %s id=%s: %s",
+            event_type, event_id, wh_exc,
+        )
+    # ── Scheduler wake-up ────────────────────────────────────────────────────
+    # Non-fatal: wakes any ExecutionUnit waiting for this event_type.
+    # Runs synchronously but never raises — zero impact on emission path.
+    _notify_scheduler_of_event(
+        event_type,
+        trace_id=trace_id,
+        payload=payload,
+    )
 
 
 def _emit_system_event_failure_fallback(
@@ -483,85 +593,18 @@ def emit_system_event(
             effective_parent_event_id,
             user_id,
         )
-        try:
-            from AINDY.platform_layer.event_service import dispatch_internal_event_handlers
-
-            dispatch_internal_event_handlers(
-                db=db,
-                event_type=event_type,
-                event_id=str(event_id) if event_id else "",
-                payload=payload or {},
-                user_id=str(user_id) if user_id else None,
-                trace_id=effective_trace_id,
-                source=source,
-            )
-        except Exception as handler_exc:
-            logger.warning(
-                "[SystemEvent] internal handler dispatch skipped for %s id=%s: %s",
-                event_type,
-                event_id,
-                handler_exc,
-            )
-        try:
-            _detect_behavioral_feedback_signals(
-                db=db,
-                event_id=event_id,
-                event_type=event_type,
-                user_id=user_id,
-                trace_id=effective_trace_id,
-                parent_event_id=effective_parent_event_id,
-                source=source,
-                agent_id=agent_id,
-                payload=payload,
-            )
-        except Exception as signal_exc:
-            logger.warning(
-                "[SystemEvent] feedback signal detection skipped for %s id=%s: %s",
-                event_type,
-                event_id,
-                signal_exc,
-            )
-        try:
-            if not skip_memory_capture:
-                from AINDY.db.models.system_event import SystemEvent
-                from AINDY.memory.memory_capture_engine import capture_system_event_as_memory
-
-                persisted_event = db.query(SystemEvent).filter(SystemEvent.id == event_id).first()
-                if persisted_event:
-                    capture_system_event_as_memory(db, persisted_event)
-        except Exception as capture_exc:
-            logger.warning(
-                "[SystemEvent] memory auto-capture skipped for %s id=%s: %s",
-                event_type,
-                event_id,
-                capture_exc,
-            )
-        # â”€â”€ Webhook fan-out â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        # Fire-and-forget: runs in background thread pool, never blocks here.
-        try:
-            from AINDY.platform_layer.event_service import dispatch_webhooks_async
-            dispatch_webhooks_async(
-                event_type=event_type,
-                event_id=str(event_id) if event_id else "",
-                payload=payload or {},
-                user_id=str(user_id) if user_id else None,
-                trace_id=effective_trace_id,
-                source=source,
-            )
-        except Exception as wh_exc:
-            logger.debug(
-                "[SystemEvent] webhook dispatch skipped for %s id=%s: %s",
-                event_type, event_id, wh_exc,
-            )
-        # â”€â”€ Scheduler wake-up â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        # Non-fatal: wakes any ExecutionUnit waiting for this event_type.
-        # Runs synchronously but never raises â€” zero impact on emission path.
-        _notify_scheduler_of_event(
-            event_type,
+        run_post_persist_effects(
+            db=db,
+            event_id=event_id,
+            event_type=event_type,
+            user_id=user_id,
             trace_id=effective_trace_id,
+            parent_event_id=effective_parent_event_id,
+            source=source,
+            agent_id=agent_id,
             payload=payload,
+            skip_memory_capture=skip_memory_capture,
         )
-        # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         return event_id
     except Exception as exc:
         try:

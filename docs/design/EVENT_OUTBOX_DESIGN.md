@@ -8,8 +8,13 @@ owner: "platform-team"
 
 # `EVENT-OUTBOX-1` — the event rides the handler's transaction — design
 
-**DESIGN ONLY — nothing shipped. Proposal under `AGENT_WORKING_RULES.md` §8 (a change to when a
-system event is written relative to the work it records).** §1 corrects the entry's premise in two
+**IMPLEMENTED 2026-09-17 (#721) — DEC-060..062 accepted, with one correction found at
+implementation: §3's "a handler that raises rolls back its session … the error event is written on
+its own session, as today" did not hold — nothing rolled the request session back, and the
+`execution.failed` emit COMMITTED it. The pipeline now rolls back (only when the handler raised)
+and commits the unit row at creation (DEC-062). Tests: `tests/unit/test_event_outbox.py` on the
+private-engine instrument.** Originally a proposal under `AGENT_WORKING_RULES.md` §8 (a change to
+when a system event is written relative to the work it records). §1 corrects the entry's premise in two
 places that shrink the work; §2 answers the question the entry said to answer first; §3 is the
 mechanism, which is the entry's own "cheaper fix" made precise; §5 is what not to build.
 
