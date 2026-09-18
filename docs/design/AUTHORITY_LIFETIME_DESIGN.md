@@ -8,8 +8,11 @@ owner: "platform-team"
 
 # `AUTHORITY-LIFETIME-1` — a token is valid while its run is live, not while the clock says so — design
 
-**DESIGN ONLY — nothing shipped. Proposal under `AGENT_WORKING_RULES.md` §8 (an authority check
-gains a stateful component on the hot path).** The entry asks three questions to settle *before*
+**IMPLEMENTED 2026-09-17 (#720) — DEC-056..059 accepted as written. `cancellation.run_terminal_status`
++ `TERMINAL_RUN_STATUSES`; `capability_service._run_authority_ended` before the HMAC check; the
+dispatcher's cancel branch widened in place; counter `aindy_authority_lifetime_refusals_total`.
+Tests: `tests/unit/test_authority_lifetime.py`.** Originally a proposal under `AGENT_WORKING_RULES.md`
+§8 (an authority check gains a stateful component on the hot path). The entry asks three questions to settle *before*
 code: where the check lives, whether a negative cache is used, fail-open or fail-closed. §2
 answers all three by pointing at a mechanism that already exists and already made the same
 three choices; §4 is what not to build.

@@ -15420,7 +15420,23 @@ first test. Schema — awaiting approval under §3/§8.
 
 ## AUTHORITY-LIFETIME-1 — the capability token is bound to the clock, not to the execution it authorises
 
-**Status: OPEN — P2, additive hardening.** Filed 2026-08-19. Provenance:
+**Status: CLOSED (2026-09-17) — #720, DEC-056..059.** Filed 2026-08-19.
+
+**What shipped (#720):** `cancellation.run_terminal_status(run_id)` — the CANCEL-REACH-1 read
+returning the status; `is_run_cancelled` is `== "cancelled"` over it (pinned identical); terminal
+answers sticky for the process lifetime; fail-OPEN. Refused at `check_tool_capability` BEFORE the
+HMAC check (`_run_authority_ended`; the spy pins that `validate_token` is never reached for a
+terminal run) and at the dispatcher's agent gate (the widened cancel branch) — no third site;
+`verify_token`/`validate_token` AST-pinned stateless. Cancelled keeps its envelope; other terminal
+statuses refuse `permission` with `run <id> is <status>; authority ended with the run`. Counter
+`aindy_authority_lifetime_refusals_total{status, surface}` (a cancel ALSO moves the cancel counter).
+`waiting` keeps authority (DEC-059). 18 tests, 6/6 mutations caught (predicate narrowed; not
+sticky; HMAC first; fail-closed; dispatcher ignores non-cancel; waiting terminal). Residual: the
+worker-poll path (`_run_worker_or_kill_on_cancel`) still asks `is_run_cancelled` only — a worker
+whose run COMPLETED underneath it is not killed, by design (nothing completes a run with a live
+worker); the two sites are the effect chokepoints.
+
+*Original entry, kept:* **Status was: OPEN — P2, additive hardening.** Filed 2026-08-19. Provenance:
 `OPENHANDS_ON_AINDY_RUNTIME_PORTABILITY_ANALYSIS.md` (`C:\codev\OpenHands_research`, its **O3**),
 verified on both sides.
 

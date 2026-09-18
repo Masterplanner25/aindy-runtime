@@ -286,7 +286,6 @@ A soak assertion must not be stricter than the contract.
 - **SCOPE-NAMING-1** — P3: `enforce_api_key_scope` gates every caller. Not renamed on purpose — a missed call site on a security dependency fails OPEN.
 - **DEBT-COMPAT-1** — P2: consumers run below the advertised floor and nothing reads `runtime_compatibility.py`. Fix: one comparison where `/api/version` is fetched; warn, never refuse.
 - **INITIATOR-IDENTITY-1** — *(OpenClaw)* initiating identity ≠ authenticated one; an asserted subject may only CONSTRAIN, never a `User` row. Design filed; P0 the day an inbound consumer ships.
-- **AUTHORITY-LIFETIME-1** — *(OpenHands)* the capability token is clock-bound (24 h), not execution-bound. Design filed: widen `cancellation`'s cached read to every terminal status, fail-OPEN.
 - **EVENT-OUTBOX-1** — system events buffer in memory and emit after commit; a crash loses the record. Do NOT emit eagerly. Design filed: the row rides the handler's session; no outbox table.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s semantic half always returns `[]` (pgvector `ndarray` vs `list` guard). pgvector 0.5.0 fixes it — which is why #390 was HELD: it turns expansion on in the path that exhausted the pool.
@@ -320,6 +319,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - **DEC-046** *(provisional)* HTTP-SCOPE-GAP-1: scope = VERB, row filter = OWNERSHIP · **DEC-047** *(provisional)* CLI-EXEC-SURFACE-1: operator half HTTP-only.
 - EGRESS-INPROC-1: **DEC-048** egress `(mode, domains)` resolved ONCE before the isolation branch (`none`/`scoped`-empty = deny-all) · **DEC-049** the worker installs it process-globally from its payload, never reads policy · **DEC-050** the mechanism is REPORTED on envelope + span, never refused · **DEC-051** `AINDY_EGRESS_ENFORCEMENT` stays the switch, default off.
 - AUDIT-CORRELATION-1: **DEC-052** joins 1+3 by additive keys (`capability`, `guarantee`, `action_id`), no schema · **DEC-053** join 2 is `env_applied`; attestation stays SANDBOX-EVIDENCE-2 · **DEC-054** convention on the unique `action_id`, NO FK · **DEC-055** `syscall.executed` stays `operational`; the join is TTL-bounded both sides.
+- AUTHORITY-LIFETIME-1: **DEC-056** authority ends with the run — refused at the two cancel sites, no third; the token stays stateless · **DEC-057** the cancel read widened to return the status, terminal answers STICKY · **DEC-058** fail-OPEN, HMAC expiry the outer bound · **DEC-059** `waiting` keeps its authority (pause-null declined).
 
 ### Standing rule — not an item
 
@@ -329,6 +329,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 
 ### Closed — kept as one line because the rule still bites
 
+- **AUTHORITY-LIFETIME-1** — CLOSED 2026-09-17 (#720; DEC-056..059). A token for a run in a TERMINAL status is refused at `check_tool_capability` (before the HMAC) and the dispatcher's agent gate — CANCEL-REACH-1's read widened (`run_terminal_status`), sticky once terminal, fail-OPEN. `waiting` KEEPS authority; the token stays stateless.
 - **AUDIT-CORRELATION-1** — CLOSED 2026-09-17 (#719; DEC-052..055). `syscall.executed` carries `capability`, `guarantee`, `action_id` (None unless the gate engaged); `capability.allowed` carries `action_id`. A documented CONVENTION on the unique `action_id` — no FK either way; both sides TTL-bounded. Join: `IDEMPOTENCY_CONTRACT.md`.
 - **EGRESS-INPROC-1** — CLOSED 2026-09-16 (#718; DEC-048..051). The ISOLATED branch returned before `egress_scope`, so a distrusted tool had NO egress enforcement. Now `(mode, domains)` is resolved once before the branch; the worker installs it process-globally from its payload; the envelope reports `egress.mechanism`. Flag stays default off.
 - **EU-DOUBLE-FINALIZE-1** — CLOSED 2026-09-17 (#713). Three sites finalised an agent run's unit; a verify-failed run's unit stayed `executing` forever. Use `ExecutionUnitService.finalize_for_run_status`. Read a consumer's "noise" as a claim.

@@ -1013,12 +1013,17 @@ def execute_tool(
                     },
                     required=True,
                 )
-                return {
+                _refused = {
                     "success": False,
                     "result": None,
                     "error": capability_check["error"],
-                    "failure_class": "permission",
+                    # AUTHORITY-LIFETIME-1 — a terminal run's refusal carries its own class
+                    # (`cancelled` keeps CANCEL-REACH-1's envelope); everything else is permission.
+                    "failure_class": capability_check.get("failure_class") or "permission",
                 }
+                if capability_check.get("cancelled"):
+                    _refused["cancelled"] = True
+                return _refused
             queue_system_event(
                 db=db,
                 event_type="capability.allowed",

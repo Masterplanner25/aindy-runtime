@@ -72,8 +72,9 @@ from contextvars import ContextVar
 # the previously-duplicated private copies were removed here. See
 # docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
 from AINDY.kernel.cancellation import current_run_id as _current_run_id_for_cancel
-from AINDY.kernel.cancellation import is_run_cancelled as _is_run_cancelled
+from AINDY.kernel.cancellation import note_authority_ended as _note_authority_ended
 from AINDY.kernel.cancellation import note_effect_refused as _note_effect_refused
+from AINDY.kernel.cancellation import run_terminal_status as _run_terminal_status
 from AINDY.kernel.effect_ledger import (
     STALE_PENDING_THRESHOLD_SECONDS,
     complete_effect_record as _complete_effect_record,
@@ -787,11 +788,26 @@ class SyscallDispatcher:
         # after the effect-ledger reservation and inside its completion discipline, so a
         # refusal cannot leave a `pending` record that never resolves. Fails OPEN by construction
         # (`is_run_cancelled` never raises and reads "unreadable" as "not cancelled").
+        #
+        # AUTHORITY-LIFETIME-1 (DEC-056): the SAME read, widened — a run in ANY terminal status
+        # has no authority left, and `cancelled` is one terminal value. The cancel envelope is
+        # unchanged; every other terminal status refuses as `permission`. No third site.
         _cancel_run = _current_run_id_for_cancel()
-        if _cancel_run and _is_run_cancelled(_cancel_run):
-            _note_effect_refused(surface="syscall")
+        _run_ended = _run_terminal_status(_cancel_run) if _cancel_run else None
+        if _run_ended is not None:
+            _note_authority_ended(status=_run_ended, surface="syscall")
+            if _run_ended == "cancelled":
+                _note_effect_refused(surface="syscall")
+                _ended_error = f"run {_cancel_run} was cancelled; syscall '{name}' not executed"
+                _ended_class = "cancelled"
+            else:
+                _ended_error = (
+                    f"run {_cancel_run} is {_run_ended}; authority ended with the run — "
+                    f"syscall '{name}' not executed"
+                )
+                _ended_class = "permission"
             logger.info(
-                "[SyscallDispatcher] '%s' refused — run %s is cancelled", name, _cancel_run
+                "[SyscallDispatcher] '%s' refused — run %s is %s", name, _cancel_run, _run_ended
             )
             self._emit_syscall_event(name, context, "error", entry=entry, action_id=_gate_action_id)
             if _gate_db is not None and _gate_action_id is not None:
@@ -804,11 +820,11 @@ class SyscallDispatcher:
             return self._error_envelope(
                 name,
                 context,
-                f"run {_cancel_run} was cancelled; syscall '{name}' not executed",
+                _ended_error,
                 t_start,
                 version=parsed_version,
                 already_logged=True,
-                failure_class="cancelled",
+                failure_class=_ended_class,
             )
 
         # Step 3 â€" execute handler
