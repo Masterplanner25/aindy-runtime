@@ -1237,6 +1237,90 @@ evidence it does not need.
 
 ---
 
+### DEC-052
+**Status:** `accepted` (2026-09-17 — `AUDIT-CORRELATION-1`, #719)
+
+**Decision**
+Joins (1) capability → dispatch and (3) effect → dispatch close by ADDITIVE payload keys, no
+schema: `syscall.executed` gains `capability` (the entry's required capability), `guarantee`
+(the entry's declared execution guarantee) and `action_id` (the ledger row's key, `None` unless
+the idempotency gate engaged); the tool path's admission event `capability.allowed` gains
+`action_id`, computed BEFORE the event (the value is a pure hash of tool, args and run scope;
+the ledger is still consulted where it always was).
+
+**Why**
+The entry said join (1) would fall out of `AUTHORITY-VALUE-1`'s `ExecutionAuthority`; that
+object does not exist — the entry closed as the `child_context` clamp. The capability string
+plus the run's granted set is what admitted the call, and it was already a local at the emit
+site. For (3), the only join was `effect_records.execution_id = payload->>'execution_unit_id'`
+— unindexed JSONB, yielding every event of the UNIT rather than the one dispatch. The
+`action_id` names the dispatch and was already a local too. On the tool path the event was
+emitted before the id existed; hoisting the pure computation keeps the event ORDER unchanged —
+moving the event below the gate would have silenced admission on a replay.
+
+**Related Docs**
+- `docs/design/AUDIT_CORRELATION_DESIGN.md` §1; `docs/runtime/IDEMPOTENCY_CONTRACT.md` §"Reconstruction join"
+
+---
+
+### DEC-053
+**Status:** `accepted` (2026-09-17 — `AUDIT-CORRELATION-1`, #719)
+
+**Decision**
+Join (2) environment → execution is closed by `EXEC-ENV-BIND-1`'s `execution_units.env_applied`
+(what bound to the unit). The attestation remainder — the strong runner self-reporting
+`mount_mode` / `network_policy` — is `SANDBOX-EVIDENCE-2`, not this entry.
+
+**Why**
+Re-measured at HEAD the join already exists; recording it here stops it being re-derived as
+open work under this id.
+
+**Related Docs**
+- `docs/design/EXECUTION_ENVIRONMENT_SPEC_DESIGN.md`; `TECH_DEBT.md` `SANDBOX-EVIDENCE-2`
+
+---
+
+### DEC-054
+**Status:** `accepted` (2026-09-17 — `AUDIT-CORRELATION-1`, #719)
+
+**Decision**
+The effect ↔ event join is a DOCUMENTED CONVENTION on the unique-indexed
+`effect_records.action_id` (`uq_effect_records_action_id`). No foreign key in either direction;
+no `trace_id` column on `EffectRecord`; no GIN index on `system_events.payload`.
+`test_audit_correlation.py` pins the absence of a cross-table FK.
+
+**Why**
+The ledger row is committed in the gate's own session BEFORE the handler runs
+(`_resolve_effect_record` commits); the event is written AFTER, on a separate session, under a
+swallowing `try`. An FK from effect to event would require the event first; from event to
+effect it would turn a swallowed emit failure into a constraint violation. `execution_id` is
+already the stronger key on the ledger; `action_id` lookups are forensic, not hot.
+
+**Related Docs**
+- `docs/design/AUDIT_CORRELATION_DESIGN.md` §3; CLAUDE.md "EffectRecord rules"
+
+---
+
+### DEC-055
+**Status:** `accepted` (2026-09-17 — `AUDIT-CORRELATION-1`, #719)
+
+**Decision**
+`syscall.executed` stays `operational` under `SYSEVENT-RETENTION-1` (90 d default). The join is
+time-bounded by the shorter of the operational window and the effect-record TTL, and
+`IDEMPOTENCY_CONTRACT.md` says so. A deployment that wants the join for longer sets
+`AINDY_SYSEVENT_RETENTION_OPERATIONAL_DAYS` to match its effect TTL; it does not reclass the event.
+
+**Why**
+`syscall.executed` is the highest-volume event type; keeping it forever is the growth the
+retention entry was built to stop. An effect record is a dedup key with a TTL, not a permanent
+audit row, so a join bounded on both sides is the honest shape. The `error.*` / `capability.*`
+classes the retention entry protected stay KEEP.
+
+**Related Docs**
+- `docs/design/SYSEVENT_RETENTION_DESIGN.md`; `AINDY/core/system_event_retention.py`
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —

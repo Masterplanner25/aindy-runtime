@@ -967,6 +967,27 @@ def execute_tool(
             )
     elif tool_args_schema(tool_name):
         _count_args_validation(tool_name, "valid", args_validation_mode())
+    # AUDIT-CORRELATION-1 (DEC-052) — decide whether the effect ledger will engage, and what its
+    # key is, BEFORE the admission event below, so `capability.allowed` can name the ledger row.
+    # `compute_action_id` is pure (a hash of tool, args, run scope); the ledger itself is still
+    # consulted where it always was, after the checks. Hoisting the value keeps the event order
+    # unchanged — moving the event below the gate would have silenced admission on a replay.
+    from AINDY.kernel.effect_ledger import durable_effects_active
+
+    _durable = durable_effects_active()
+    _guarantee = str(entry.get("execution_guarantee", "AT_LEAST_ONCE")).upper()
+    _idempotent = (
+        (_guarantee == "EXACTLY_ONCE" or _durable)
+        and bool(run_id)
+        and (_tool_idempotency_enabled() or _durable)
+    )
+    _action_id = None
+    if _idempotent:
+        from AINDY.core.execution_gate import compute_action_id
+
+        _action_id = compute_action_id(
+            action_type=tool_name, input_payload=args or {}, scope=str(run_id)
+        )
     if execution_token is not None:
         try:
             from AINDY.agents.capability_service import check_tool_capability
@@ -1008,6 +1029,9 @@ def execute_tool(
                     "tool_name": tool_name,
                     "allowed_capabilities": capability_check.get("allowed_capabilities", []),
                     "granted_tools": capability_check.get("granted_tools", []),
+                    # AUDIT-CORRELATION-1 — the ledger row this admission leads to (None when
+                    # the gate will not engage); the mirror of `syscall.executed.action_id`.
+                    "action_id": _action_id,
                 },
                 required=True,
             )
@@ -1093,23 +1117,9 @@ def execute_tool(
     # #157 lookup path. See docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md (MEB-0).
     # DUR-2 — a continued run's per-run at-most-once signal engages the gate for ANY tool
     # (declaration-free), independent of the tool's guarantee + AINDY_TOOL_IDEMPOTENCY.
-    from AINDY.kernel.effect_ledger import durable_effects_active
-
-    _durable = durable_effects_active()
-    _guarantee = str(entry.get("execution_guarantee", "AT_LEAST_ONCE")).upper()
-    _idempotent = (
-        (_guarantee == "EXACTLY_ONCE" or _durable)
-        and bool(run_id)
-        and (_tool_idempotency_enabled() or _durable)
-    )
-    _action_id = None
     if _idempotent:
-        from AINDY.core.execution_gate import compute_action_id
         from AINDY.kernel.effect_ledger import resolve_effect_record
 
-        _action_id = compute_action_id(
-            action_type=tool_name, input_payload=args or {}, scope=str(run_id)
-        )
         try:
             _already, _cached = resolve_effect_record(
                 db, _action_id, tool_name, args or {},

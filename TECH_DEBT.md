@@ -10722,7 +10722,18 @@ separate change: an event type is a **stored** value, so old rows keep the old n
 
 ## AUDIT-CORRELATION-1 — three joins the audit trail cannot make
 
-**Status: OPEN — P2.** Filed 2026-08-15 from the Hermes architectural map (§14), verified.
+**Status: CLOSED (2026-09-17) — #719, DEC-052..055.** Filed 2026-08-15 from the Hermes architectural
+map (§14), verified.
+
+**What shipped (#719):** three additive keys on `syscall.executed` (`capability`, `guarantee`,
+`action_id` — `None` unless the gate engaged) at every emit site through `_emit_syscall_event`; the
+tool path computes `_action_id` BEFORE the admission event (pure hash; the ledger consult stays where
+it was — hoisting the value keeps the event order, moving the event would have silenced admission on
+a replay) and `capability.allowed` carries it. No schema, no FK either way (DEC-054), the event stays
+`operational` (DEC-055); the documented join is `IDEMPOTENCY_CONTRACT.md` §"Reconstruction join".
+`tests/unit/test_audit_correlation.py` reads BOTH rows back through separate sessions on the real
+engine (the dispatcher's own `SessionLocal()`s routed to the test factory) — 8 tests, 5/5 mutations
+caught. Join (2) closed by citation to `env_applied` (DEC-053); attestation stays `SANDBOX-EVIDENCE-2`.
 
 **★ DESIGN FILED 2026-09-17 → `docs/design/AUDIT_CORRELATION_DESIGN.md` (four decisions pending) — re-measured, and
 two of the three joins were mis-described.** (1) `ExecutionAuthority` DOES NOT EXIST — `AUTHORITY-VALUE-1` closed as

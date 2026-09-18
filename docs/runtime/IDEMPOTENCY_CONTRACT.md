@@ -1,6 +1,6 @@
 ---
 title: "Idempotency Contract"
-last_verified: "2026-09-12"
+last_verified: "2026-09-17"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -207,6 +207,37 @@ Rules:
 - The digest is a 64-character lowercase hex string (SHA-256).
 - **Do not change this algorithm.** Any change invalidates all existing `EffectRecord`
   rows in production.
+
+### Reconstruction join (AUDIT-CORRELATION-1, DEC-052..055)
+
+The `action_id` is the key that joins an effect to the dispatch that produced it. Since #719 the
+`syscall.executed` event carries it (with `capability` and `guarantee`), and the tool path's
+`capability.allowed` admission event carries it too:
+
+```sql
+-- effect → the dispatch that produced it
+SELECT * FROM system_events
+ WHERE type = 'syscall.executed' AND payload->>'action_id' = :action_id;
+
+-- dispatch → its effect (hits uq_effect_records_action_id)
+SELECT * FROM effect_records WHERE action_id = :payload_action_id;
+```
+
+Rules:
+
+- `action_id` on the event is **`NULL` unless the idempotency gate engaged** — a reader can tell
+  "no effect record exists" from "the key was dropped". `capability` and `guarantee` are always
+  present.
+- **This is a convention, not a constraint** (DEC-054). There is no FK in either direction: the
+  ledger row commits in the gate's own session before the handler runs; the event is written
+  after, on another session, under a swallowing `try`. Nothing about ordering or durability
+  should be inferred from the join existing.
+- **The join is time-bounded on both sides** (DEC-055): `syscall.executed` is `operational`
+  retention (default 90 d, `AINDY_SYSEVENT_RETENTION_OPERATIONAL_DAYS`) and completed effect
+  records are reaped by the TTL cleanup job. A deployment that wants the join for longer aligns
+  the two windows; it does not reclass the event.
+- `action_id` lookups on the event side are forensic, not hot — there is deliberately no GIN
+  index on `payload`.
 
 ---
 
