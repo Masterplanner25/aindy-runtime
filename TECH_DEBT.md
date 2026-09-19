@@ -2796,6 +2796,51 @@ is limited to `starlette.exceptions.HTTPException` — a stable import).
 
 ---
 
+## PACK-DEBT-6 — `nltk` and `textstat` are runtime dependencies nothing in the runtime uses
+
+**Status:** OPEN — P3 (ownership, not exposure). Filed 2026-09-18 while checking the two high
+Dependabot alerts GitHub had printed on every push since 2026-09-02.
+
+**The finding.** `nltk==3.10.3` and `textstat==0.7.13` are pinned in BOTH `pyproject.toml` and
+`AINDY/requirements.txt` (since the initial extraction, `0d5d382`). `import nltk` and
+`import textstat` have **zero** hits across `AINDY/`, `tests/`, `scripts/`. Four accepted
+`pip-audit` ignores in `security-audit.yml` exist only because of them (`PYSEC-2026-97`,
+`GHSA-rf74-v2fm-23pw`, `PYSEC-2026-597`, `PYSEC-2026-3740`), and the last of those —
+`CVE-2026-81726 / GHSA-8mgp-746c-j5xp`, no fix released — was ALSO the pair of Dependabot alerts
+(#20 on `AINDY/requirements.txt`, #21 on `pyproject.toml`), dismissed 2026-09-18 as `not_used`
+with the same reachability argument the audit records.
+
+**★ Why the pins cannot simply go.** `aindy-apps-monolith/apps/search/services/seo_services.py`
+does `import nltk` / `import textstat` (`nltk.data.find("tokenizers/punkt")`, `word_tokenize`,
+`textstat.flesch_reading_ease`) — and the app's `pyproject.toml` declares only `aindy-runtime`
+and `aindy-sdk`. Its search service runs because the runtime happens to install two packages
+the runtime does not use. That is `DEBT-COMPAT-1`'s shape from the other side: a consumer
+depending on what the runtime INSTALLS rather than what it DECLARES. Drop the pins today and the
+app's next runtime bump fails at import, on a module the runtime never touched.
+
+**Exposure, measured on both sides:** none. The advisory names caller-controlled model paths
+(`TransitionParser`); the runtime calls nothing in nltk; the app's calls pass hardcoded resource
+names. The `security-audit.yml` acceptance note (2026-09-02) already says so for the runtime and
+was CORRECTED once before for claiming "never calls `nltk.data.find`" when textstat did — the
+correction is the reason this entry re-checked the argument instead of trusting it.
+
+**Plan — the `user.id` protocol, applied to a dependency:**
+
+1. **App declares** `nltk` and `textstat` in its own `pyproject.toml` (asked in
+   `APP_HANDOFF_v2.21.0.md` §6). Nothing changes for them; the pins now come from two places.
+2. **Runtime deprecates with a date** in the release notes after the app confirms: "nltk and
+   textstat are removed from the runtime's dependencies in X.Y+1".
+3. **Runtime drops both pins** from `pyproject.toml` AND `AINDY/requirements.txt` (a pin must be
+   repeated in both — `MCP-SDK-2X-1`'s rule), deletes the four `--ignore-vuln` lines, and removes
+   the matching Accepted Findings from `SECURITY_POLICY.md`. The advisory then closes by absence,
+   which is the only way an advisory with no fix ever closes.
+
+**Do NOT** close this by adding a fifth ignore, and do NOT drop the pins before step 1 lands —
+"nothing in the runtime uses it" was true and insufficient, because the runtime's dependency set
+is a surface the app consumes.
+
+---
+
 ## DEBT-COMPAT-1 — Cross-version compatibility story between runtime and SDK
 
 **★★ REOPENED 2026-08-18 — P2. The trigger fired, in the only consumer, and nothing surfaced it.**
