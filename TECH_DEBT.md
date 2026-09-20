@@ -5436,7 +5436,23 @@ will keep passing off a populated `node_modules` long after the lockfile has gon
 
 ## MCP-SDK-2X-1 — `[mcp]` extra capped at `mcp<2`; nodus-mcp still targets the 1.x server API
 
-**Status:** Open — pinned workaround shipped 2026-07-31, upstream unblock pending.
+**Status:** CLOSED (2026-09-20) — cap lifted in #727; `nodus-mcp` 0.1.4 targets both SDK majors.
+
+**★ CLOSURE 2026-09-20 (#727).** The entry's own resolution condition was met: `nodus-mcp 0.1.4`
+(2026-09-18, its commit message names this entry) branches per `mcp` SDK major at import — on 2.x
+handlers go through `add_request_handler`, and the client adapter reads `input_schema` (under
+0.1.3 every tool discovered from a 2.x server arrived with an **empty schema and no error**, a
+second defect the cap had been hiding). Done in the order the entry asks: the `nodus-mcp` floor
+raised to `>=0.1.4`; the cap lifted in **both** `pyproject.toml` and the CI `Install MCP extra`
+step; the live round-trip re-run. Verified by a run, not the note: a throwaway venv with the
+runtime's `[test,mcp]` extras forced to `mcp 2.2.0` ran `test_mcp_client.py`,
+`test_mcp_client_live.py`, `test_mcp_server.py` and `test_quota_accrual_orphan.py` — **43 passed,
+0 skipped**; the live test's hand-built `SseServerTransport` app also works on 2.x, and
+`nodus_mcp_aindy.server._SDK_V2` was `True` in that process. `tests/unit/test_mcp_sdk_pin.py`
+deleted as its docstring instructed. **What remains:** the 1.x branch is no longer exercised by
+this repo's CI (it resolves to the newest 2.x); `nodus-mcp`'s own suite drives both. The rule
+survives the entry: **a cap on the `[mcp]` extra must be repeated in the CI step**, because that
+step installs directly and re-resolves past a cap fixed only in `pyproject.toml`.
 
 **★ SECOND INSTANCE 2026-08-17, in the other direction — `nodus-mcp` now blocks a *nodus* upgrade.**
 `nodus-lang 5.0.0` was published and #468 bumped both pin sites. CI failed with

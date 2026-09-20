@@ -287,7 +287,6 @@ A soak assertion must not be stricter than the contract.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s semantic half always returns `[]` (pgvector `ndarray` vs `list` guard). pgvector 0.5.0 fixes it — which is why #390 was HELD: it turns expansion on in the path that exhausted the pool.
 - **DB-NODUS-BUDGET-1** — both fixes shipped; remaining soak + flip `AINDY_MEMORY_RECALL_OWN_SESSION`. Do NOT roll back the caller's session.
-- **MCP-SDK-2X-1** — `mcp<2` capped in `pyproject.toml` AND the CI `Install MCP extra` step — repeat a cap in both. Never isolate the MCP tests to go green. nodus X → nodus-mcp `>=X` → runtime bumps all three sites in ONE PR.
 - **LOCKFILE-PLATFORM-1** — a Windows lockfile cannot satisfy Linux `npm ci`; `Platform Lockfile` workflow regenerates. Verify with `npm ci`, never `npm install` + build.
 - **DEP-UPGRADE-DEFERRED-1** — otel packages are version-locked; hand-align and `pip install --dry-run`. react-router 7→8 waits on a ui-kit release.
 - **PACK-DEBT-6** — P3: `nltk` + `textstat` are runtime pins NOTHING here imports; kept because the app's search service imports both UNDECLARED. Four audit ignores + the dismissed Dependabot pair exist only for them. App declares → runtime deprecates with a date → drops both. Never a fifth ignore.
@@ -329,6 +328,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 
 ### Closed — kept as one line because the rule still bites
 
+- **MCP-SDK-2X-1** — CLOSED 2026-09-20 (#727): `mcp<2` lifted; nodus-mcp 0.1.4 branches per SDK major. A cap on the `[mcp]` extra must be REPEATED in the CI `Install MCP extra` step (it installs directly). Never isolate the MCP tests to go green.
 - **HTTP-SCOPE-GAP-1** — CLOSED 2026-09-17 (DEC-046 accepted, #723). Scope answers the VERB, the row filter answers OWNERSHIP; no `:any` scope. Gotchas: `enforce_api_key_scope` takes ANY-OF alternatives; router-level `dependencies` are invisible to a per-route `dependant` walk; scan routes with `_iter_api_routes`.
 - **CLI-EXEC-SURFACE-1** — CLOSED 2026-09-17 (DEC-047 accepted, #723). The operator half stays HTTP-only; a transport cannot grant authority it lacks; an operator syscall opens three doors at once.
 - **RECOVERY-GRANULARITY-1** — CLOSED 2026-09-17 (#722; DEC-063..066). The worker seam writes `agent_steps` per step as it completes, keyed on the plan's STEP INDEX (third `call_tool` arg, arity (2,3)); a CONTINUED run replays a `success` row (`replayed: True`). ★ nodus absorbs a step's `throw` — the worker reply reads `success`; the parent reads failure from the step results.

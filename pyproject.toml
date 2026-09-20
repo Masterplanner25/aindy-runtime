@@ -53,7 +53,7 @@ dependencies = [
   "Mako==1.4.1",
   "MarkupSafe==3.0.3",
   "nltk==3.10.3",
-  "nodus-lang==5.13.0",
+  "nodus-lang==5.14.0",
   "numpy==2.4.6",
   "limits==5.8.0",
   "openai==2.46.0",
@@ -133,14 +133,13 @@ mcp = [
   # MCPClientAdapter SSE transport requires it. Install with: pip install aindy-runtime[mcp]
   # >=0.1.2 required for the server-side SSE transport (/messages/ mount, #7) and the
   # per-session auth_hook context (headers/session, #8) that MEB-3a multi-tenant uses.
-  "nodus-mcp>=0.1.3",
-  # Capped below 2.0.0 (MCP-SDK-2X-1): nodus-mcp 0.1.2 — the latest release — is built
-  # against the 1.x low-level server API and calls `Server.list_tools()`, which mcp 2.0.0
-  # removed. With mcp 2.0.0 installed, constructing a `NodusServer` raises
-  # `AttributeError: 'Server' object has no attribute 'list_tools'`, so the extra is
-  # broken at import-of-server time, not merely in tests. Lift the cap when a nodus-mcp
-  # release targets the 2.x API.
-  "mcp>=1.0.0,<2",
+  "nodus-mcp>=0.1.4",
+  # Uncapped since #727 (MCP-SDK-2X-1 CLOSED): nodus-mcp 0.1.4 branches per SDK major at
+  # import, so both 1.x and 2.x construct a `NodusServer`. The `<2` cap that held from
+  # 2026-07-31 existed because 0.1.2/0.1.3 called `Server.list_tools()`, which 2.0.0
+  # removed. If a cap is ever needed again it goes HERE and in the CI `Install MCP extra`
+  # step — that step installs directly, so a cap in one place is re-resolved by the other.
+  "mcp>=1.0.0",
   # SSE server transport (aindy-runtime mcp-server --transport sse).
   "uvicorn>=0.30.0",
   "starlette>=0.37.0",

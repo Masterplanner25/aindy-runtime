@@ -1,7 +1,7 @@
 ---
 title: "MCP Integration (client-side)"
 api_version: "1.0"
-last_verified: "2026-07-11"
+last_verified: "2026-09-20"
 status: current
 owner: "platform-team"
 ---
@@ -29,11 +29,11 @@ package; the runtime only wires it in.
    (`mcp` is pinned explicitly here because `nodus-mcp` treats the official SDK as
    optional and does not pull it in, but the SSE client transport requires it.)
 
-   > **The extra caps the SDK at `mcp<2`.** `nodus-mcp 0.1.2` is built against the 1.x
-   > low-level server API; under `mcp 2.0.0` constructing a server raises
-   > `AttributeError: 'Server' object has no attribute 'list_tools'`. If you install `mcp`
-   > yourself rather than through the extra, apply the same cap. See
-   > [TECH_DEBT MCP-SDK-2X-1](../../TECH_DEBT.md).
+   > **The extra no longer caps the SDK** (since 2.22.0 / #727). From 2026-07-31 it held
+   > `mcp<2` because `nodus-mcp` 0.1.2/0.1.3 called `Server.list_tools()`, which `mcp 2.0.0`
+   > removed; `nodus-mcp 0.1.4` branches per SDK major at import and the live round-trip
+   > test passes under both `mcp 1.27` and `2.2`. If you install `mcp` yourself, any
+   > version `>=1.0.0` works. History: [TECH_DEBT MCP-SDK-2X-1](../../TECH_DEBT.md).
 2. Configure servers and turn it on:
    ```bash
    AINDY_MCP_CLIENT_ENABLED=true
