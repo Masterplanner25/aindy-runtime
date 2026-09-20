@@ -13608,6 +13608,13 @@ damage. `CAPABILITY-PROVIDER-TIMEOUT-1` produced 10 lookups = 10 spawns / 56.4s 
 same way. **Both measurements were possible, both were made only after something broke, and
 neither left a standing instrument behind.** That is the pattern to end.
 
+**Note for the first measurement (2026-09-20, #727/#728).** `nodus-lang` 5.14.0 (#855) builds the
+TLS trust store once per process instead of once per `NodusRuntime` — i.e. once per unit here —
+so a tool-calling unit's first `http_get` no longer pays ~0.4–1.0 s for the CA bundle (upstream
+measured a second runtime's two 300 ms GETs 1045 → 618 ms). Any per-unit latency number taken
+after 2026-09-20 is on the cheaper side of that change; do not read the drop as noise or credit
+it to anything in this repo. The first request per process still pays it.
+
 ---
 
 ## MAF-REFERENCE-2026-08-17 — provenance note for the three entries below

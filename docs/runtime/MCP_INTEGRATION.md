@@ -29,7 +29,7 @@ package; the runtime only wires it in.
    (`mcp` is pinned explicitly here because `nodus-mcp` treats the official SDK as
    optional and does not pull it in, but the SSE client transport requires it.)
 
-   > **The extra no longer caps the SDK** (since 2.22.0 / #727). From 2026-07-31 it held
+   > **The extra no longer caps the SDK** (since #727). From 2026-07-31 it held
    > `mcp<2` because `nodus-mcp` 0.1.2/0.1.3 called `Server.list_tools()`, which `mcp 2.0.0`
    > removed; `nodus-mcp 0.1.4` branches per SDK major at import and the live round-trip
    > test passes under both `mcp 1.27` and `2.2`. If you install `mcp` yourself, any
