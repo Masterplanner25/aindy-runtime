@@ -87,6 +87,14 @@ class ExecutionPipeline:
 
         trace_id = str(ctx.request_id)
         ctx.metadata.setdefault("trace_id", trace_id)
+        # FR-41: the event source is the route name, a literal — check it fits the column HERE,
+        # once, rather than letting every request's required `execution.started` fail at WARNING
+        # and proceed unrecorded. Enforced like every other contract violation.
+        from AINDY.core.system_event_service import check_system_event_source
+
+        source_violation = check_system_event_source(ctx.metadata.get("source") or ctx.route_name)
+        if source_violation:
+            self._handle_contract_violation(source_violation)
         required_side_effects = self._requires_route_side_effects(ctx)
         started_event_id: str | None = None
         parent_token: Any = None

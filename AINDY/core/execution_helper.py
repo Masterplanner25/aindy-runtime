@@ -26,6 +26,13 @@ async def execute_with_pipeline(
     success_status_code: int = 200,
     return_result: bool = False,
 ):
+    """Run ``handler`` inside the ExecutionPipeline for the route named ``route_name``.
+
+    ``route_name`` (or ``metadata["source"]`` when given) is written as ``source`` on every
+    system event the request records. **It must fit ``system_events.source`` — 128 characters
+    (read it with ``system_event_service.system_event_source_max_length()``).** A longer name is
+    a contract violation refused at pipeline entry (FR-41); it is never truncated.
+    """
     active_request = request or get_current_request()
     ctx = ExecutionContext.from_request(active_request, route_name)
     trace_id = (metadata or {}).get("trace_id")
