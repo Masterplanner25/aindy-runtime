@@ -1,7 +1,7 @@
 ---
 title: "Nodus Developer Guide"
 api_version: "1.0"
-last_verified: "2026-09-17"
+last_verified: "2026-09-20"
 status: current
 owner: "platform-team"
 ---
@@ -485,10 +485,12 @@ set_state("approved_by", approval["approver_id"])
 
 ## 8. Nodus version and upgrade notes
 
-A.I.N.D.Y. pins **nodus-lang == 5.13.0** (`pyproject.toml`; `NODUS-UPGRADE-1` records the three
+A.I.N.D.Y. pins **nodus-lang == 5.14.0** (`pyproject.toml`; `NODUS-UPGRADE-1` records the three
 sites a bump must touch). History: 4.0.3 (2026-06-11) → 4.0.5 (2026-06-19) → 4.1.0 (2026-07-17)
 → 4.2.0 (2026-08-16) → 5.0.4 (2026-08-19, a security fix — `NODUS-UPGRADE-2`) → 5.13.0
-(2026-09-09). **Syntax change at 5.0: `if` and `while` conditions must be parenthesised** —
+(2026-09-09) → 5.14.0 (2026-09-20; `NodusRuntime`'s public surface is identical to 5.13.0's —
+the release fixes `nodus serve` / CLI paths this runtime does not use, plus a per-process TLS
+trust store, #855, that the guest's first HTTP call had paid ~0.5 s for). **Syntax change at 5.0: `if` and `while` conditions must be parenthesised** —
 `if (x == 1i) { … }`, `while (i < n) { … }`. Every example in this guide was corrected
 2026-09-13; the previous forms failed to parse on the current interpreter.
 
