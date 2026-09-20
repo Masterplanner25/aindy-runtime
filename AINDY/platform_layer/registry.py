@@ -961,6 +961,15 @@ def iter_agent_tools() -> Iterable[tuple[str, Any]]:
 
 
 def register_planner_context_provider(run_type: str, handler: Handler) -> Handler:
+    """Register the provider whose ``system_prompt`` / ``context_block`` the planner sends.
+
+    The handler receives ONE argument, the sanitized context: ``run_type`` (str) and
+    ``user_id`` (str — the tenant's id, never a ``uuid.UUID``; FR-39). **It receives no
+    ``db`` by design** — the extension boundary strips it — so a provider that needs the
+    database opens its own session and closes it. A provider that assumes ``db`` is present
+    returns nothing useful on every invocation and nothing raises (FR-39 found one that had
+    for four months).
+    """
     _require_in_process_extension_capability(INPROC_CAP_REGISTER_PLANNER_CONTEXT)
     validate_agent_planner_context(run_type, handler)
     _agent_planner_contexts[run_type] = _maybe_wrap_runtime_callback(
@@ -1003,6 +1012,11 @@ def register_agent_planner_context(run_type: str, handler: Handler) -> Handler:
 
 
 def register_run_tool_provider(run_type: str, handler: Handler) -> Handler:
+    """Register the provider that lists the tools a run of ``run_type`` may plan with.
+
+    Same contract as :func:`register_planner_context_provider`: one sanitized argument with
+    ``run_type`` and ``user_id`` (both str), **no ``db``** — open your own session.
+    """
     _require_in_process_extension_capability(INPROC_CAP_REGISTER_RUN_TOOL_PROVIDER)
     validate_agent_run_tools(run_type, handler)
     _agent_run_tools[run_type] = _maybe_wrap_runtime_callback(
