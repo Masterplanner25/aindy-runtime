@@ -1,7 +1,7 @@
 ---
 title: "FR-35 — Guest-Path LLM Usage: Metered Where It Is Spent, Recorded Where It Is Owned"
 api_version: "1.0"
-last_verified: "2026-09-17"
+last_verified: "2026-09-20"
 status: current
 owner: "platform-team"
 ---
@@ -213,3 +213,13 @@ metered as it is today, and the deferral scope is never active there.
   window, not a fault — `RETRY-CLASSIFY-1`'s class for it).
 - Mutation: drop the early-return in `observe_llm_usage` under deferral → the worker-side
   counters move → red; drop the replay → the parent's do not → red.
+
+---
+
+## Addendum 2026-09-20 — the fifth deferred collection (FR-40, DEC-067, #731)
+
+The same mechanism now carries `execute_tool`'s declared-args validation tally (`args_validation`
+on the reply): `args_validation_deferral_scope()` is entered beside `llm_usage_deferral_scope()`
+in the worker, deferral replaces observation there, and `nodus_runtime_adapter.run_script`
+records the tally under the api's registry and re-emits the `warn` WARNING. Cap:
+`AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (errors per tool; counts are never dropped).

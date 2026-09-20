@@ -352,6 +352,9 @@ class NodusRuntimeAdapter:
         # FR-35 — the fourth deferred collection: tokens the guest spent, recorded HERE under the
         # run's real subject. Applied before the waiting branch: a segment that parks still spent.
         _apply_deferred_llm_usage(result.get("llm_usage"), context, trace_id=trace_id)
+        # FR-40 — the fifth: declared-args validation outcomes the worker observed, counted and
+        # (under `warn`) logged HERE, where /metrics and the log are the api's.
+        _apply_deferred_args_validation(result.get("args_validation"))
         worker_status = str(result.get("status") or "failure")
         worker_error = result.get("error")
 
@@ -388,6 +391,17 @@ class NodusRuntimeAdapter:
             raw_result=result,
             simulated_effects=simulated_effects,
         )
+
+
+def _apply_deferred_args_validation(ledger: Any) -> int:
+    """Record the worker's args-validation tally in THIS process (FR-40). Never raises."""
+    try:
+        from AINDY.agents.tool_registry import apply_deferred_args_validation
+
+        return apply_deferred_args_validation(ledger, origin="nodus_vm worker")
+    except Exception as exc:  # noqa: BLE001 — accounting must not fail an execution that produced a result
+        logger.debug("[NodusAdapter] deferred args validation not applied: %s", exc)
+        return 0
 
 
 def _apply_deferred_llm_usage(
