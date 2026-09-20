@@ -9090,6 +9090,108 @@ key in each tool dict.
 
 ---
 
+## FR-41 — `system_events.source` is `String(32)`; a route name over 32 fails its *required* `execution.started` per request, at WARNING, and the request proceeds unrecorded 🔴 defect (intake)
+
+**Status: OPEN — filed by the app 2026-09-19 on 2.21.0, intake 2026-09-20.** Premise to verify on
+its own PR (read the filing as a claim): `system_event.py` `source = Column(String(32))`; the
+pipeline writes `source = metadata["source"] or route_name`; a 33+ char name raises
+`StringDataRightTruncation` → `SystemEventEmissionError` → `_safe_emit_event` records the side
+effect `failed` and the request continues. The app had 8 of 230 route names over 32 (longest 38),
+unrecorded since 2026-09-10; renamed on their side. Asks: widen to 128 (a schema step — contract
+bump + Alembic `ALTER COLUMN`); fail ONCE at registration / first emit per name (ERROR naming the
+route), not per request; document the width at `execute_with_pipeline`. Not asking for truncation.
+
+---
+
+## FR-40 — on `nodus_vm`, FR-33's `warn` mode has no witness: the counter and the WARNING happen in the worker and neither reaches the api 🟡 observability (intake)
+
+**Status: OPEN — filed by the app 2026-09-17 on 2.20.0, intake 2026-09-20.** Premise to verify:
+`execute_tool` counts `aindy_tool_args_validation_total{outcome, mode}` and logs the `warn` line
+in whichever process runs it; on `nodus_vm` that is the pool worker, whose registry `/metrics`
+never serves (FR-35's shape) and whose stderr is `DEVNULL` (`nodus_worker_pool.py`). The 2.20.0
+recipe — leave at `warn`, watch `invalid` read zero, then `enforce` — cannot be followed on the
+backend the app runs. Ask: ride a per-tool tally on the worker reply the way #712 rides
+`llm_usage` (DEC-040..045 are the precedent) and record it in the api. Not asking for worker
+stderr in the api log.
+
+---
+
+## FR-39 — the planner-context and tools-for-run hook contexts still handed the boundary a `uuid.UUID`; FR-36's fix and test covered the completion-hook builder only 🔴 defect
+
+**Status: SHIPPED 2026-09-20 (#729).** Filed by the app 2026-09-17 from the 2.20.0 verification
+log; verified against source — the claim held exactly. **Numbering reconciled on intake:** the
+app filed FR-37..FR-41 while this ledger's "next" still read FR-37; the app's numbers stand,
+next is FR-42.
+
+### The mechanism
+
+`shared.py::_get_planner_context` and `_get_tools_for_run` built their context with
+`"user_id": _db_user_id(user_id)` — a `uuid.UUID` for any well-formed id — and passed it to
+`registry.get_planner_context` / `get_tools_for_run`, whose sanitizer redacts a UUID to
+`{"_redacted_type": "UUID"}` and strips `db`. #708 applied `str()` in `execution.py`'s
+completion-hook builder and tested that builder; the other two tenant-bearing contexts the
+runtime builds were out of its scope and had the same bug. **Consequence on the app's stack:**
+its planner-context provider read `user_id` and `db` from the context to build the planner's
+KPI / recommendation / memory blocks; with both unusable it returned the bare base prompt on
+every invocation since the boundary landed (2026-05-20) — *every plan the planner made was made
+without the context the provider exists to supply*, and nothing raised. The app's half
+(`AGENT-PLANNER-CONTEXT-BOUNDARY-1`: open its own session) waited on the string arriving.
+
+### Shipped
+
+- `shared.py::build_provider_hook_context(run_type, user_id=, db=)` — the one builder for both
+  contexts; `user_id` is `str(_db_user_id(user_id))`, `None` stays `None` (never `"None"`), a
+  non-UUID string passes through unchanged. `PROVIDER_HOOK_PRIMITIVE_KEYS = {run_type, user_id}`.
+- `test_fr39_hook_context_boundary.py` — the boundary test **parametrised over every
+  tenant-bearing hook context the runtime builds** (planner context, tools-for-run, completion
+  hook; the census was derived: the other `_sanitized_extension_input` callers — `emit_event`
+  for `job_log.written` / `scheduler.tick`, `run_startup_hooks` — carry no tenant), with a real
+  `uuid.UUID` through the real sanitizer; plus an **AST census** that no call to
+  `get_planner_context` / `get_tools_for_run` / `run_agent_completion_hooks` under
+  `agents/agent_runtime/` passes an inline dict (how both FR-36 and FR-39 got in), asserted
+  non-empty. Mutations: raw UUID → 2 red; inline dict restored at one site → red naming the line.
+- Docstrings on `register_planner_context_provider` / `register_run_tool_provider`: one sanitized
+  argument, `user_id` is a str, **no `db` by design — open your own session.**
+
+**Not done, by the filing's scope:** the app's provider still has to open its own session
+(theirs). `tools_for_run` and `planner_context` share one builder — a future split must add a
+census row (the test says so).
+
+---
+
+## FR-38 — the authority gate is wired at `agent_execute_step` only; on `nodus_vm` a denied tool fails the step and never negotiates 🟡 AUTHORITY-NEGOTIATION-1's missing half (intake)
+
+**Status: OPEN — filed by the app 2026-09-16 on 2.19.0 with the first observed denial on BOTH
+backends, intake 2026-09-20.** This is the evidence `AUTHORITY-NEGOTIATION-1` was waiting for,
+and it says the flip is blocked on a seam, not on evidence: `negotiate_capability_denial` has one
+caller, `nodus_adapter.agent_execute_step` (the `agent_flow` backend), where the gate parks the
+run (`waiting`, `wait_state.authority_gate`, operator `skip` resume from another process — all
+observed working). On `nodus_vm` — the app's default — the worker's `call_tool` →
+`execute_tool` → `check_tool_capability` emits `capability.denied` and the run FAILS;
+`on_denial="wait"` is never consulted. Ask: wire the negotiation at the `call_tool` seam or inside
+`execute_tool` when the entry declares `degraded_variant` / `on_denial`, and park the compiled
+workflow's step the way the vm chain already parks approval waits. Design-level — a decision
+record before code (`docs/design/AUTHORITY_NEGOTIATION_DESIGN.md` is the home). Two small things
+filed alongside: `agent_runs.wait_state` is NOT cleared after a resumed run completes; a
+`skipped` step counted as `steps_completed 1/1` (FR-34's family: attempted ≠ succeeded ≠ skipped).
+
+---
+
+## FR-37 — `@aindy/ui-kit` unwraps by shape and never reads `X-AINDY-Envelope`; FR-19's discriminator has no consumer 🟡 ui-kit (intake)
+
+**Status: OPEN — filed by the app 2026-09-16 (ui-kit 2.0.0), intake 2026-09-20.** The ui-kit is
+the runtime's UI (owner's ruling 2026-09-16), repo `C:\dev\aindy-ui-kit`. Premise to verify:
+`src/api/_core.js::request()` parses the body and returns it; `unwrapEnvelope()` decides by shape
+(`"data" in response`), so a bare `{data: …}` row from a non-pipeline route is unwrapped as if it
+were an execution envelope — the runtime has stamped `X-AINDY-Envelope: v1` since 2.6.0 (#521)
+and the header is dropped two lines above the parse. Ask (option 1, the smaller): read the header
+in `request()`; when `v1`, return the body already unwrapped (surfacing `error` as `ApiError`);
+when absent, return it untouched — `unwrapEnvelope` becomes a no-op / pass-through and every
+`.then(unwrapEnvelope)` keeps working. Additive; no major bump. Then the app deletes its 11
+per-route workarounds (theirs).
+
+---
+
 ## FR-36 — the agent-completion hook received `user_id` as a `uuid.UUID`, which the extension boundary redacted; every first-party completion hook had been failing 🔴 defect
 
 **Status: SHIPPED 2026-09-16 (#708).** Filed by the app the same day, from the log of the first
