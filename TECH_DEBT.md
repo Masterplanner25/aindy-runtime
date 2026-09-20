@@ -2801,6 +2801,14 @@ is limited to `starlette.exceptions.HTTPException` — a stable import).
 **Status:** OPEN — P3 (ownership, not exposure). Filed 2026-09-18 while checking the two high
 Dependabot alerts GitHub had printed on every push since 2026-09-02.
 
+**★ Step 1 landed 2026-09-20; step 2 shipped the same day (#733).** The app's `pyproject.toml`
+declares `nltk>=3.10.3,<4.0` and `textstat>=0.7.13,<1.0` on its `main` (its #391, "adopt
+aindy-runtime 2.21.0 … nltk/textstat declared as ours"). The runtime's deprecation notice is in
+the next release's changelog: **both pins are removed in the release AFTER the one carrying the
+notice, and not before 2026-10-01** — one release of overlap, so an app on the notice release is
+already installing them itself before the runtime stops. Step 3 (drop both pins in BOTH files,
+delete the four `--ignore-vuln` lines, remove the Accepted Findings) is the release after that.
+
 **The finding.** `nltk==3.10.3` and `textstat==0.7.13` are pinned in BOTH `pyproject.toml` and
 `AINDY/requirements.txt` (since the initial extraction, `0d5d382`). `import nltk` and
 `import textstat` have **zero** hits across `AINDY/`, `tests/`, `scripts/`. Four accepted
