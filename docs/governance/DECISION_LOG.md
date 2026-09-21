@@ -1577,6 +1577,9 @@ a guest can loop a malformed call. Counts are never dropped: the counter is the 
 **Related Docs**
 - `AINDY/agents/tool_registry.py::ArgsValidationLedger`, `apply_deferred_args_validation`;
   `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` (the mechanism this copies)
+
+---
+
 ### DEC-068
 **Status:** `provisional` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; accepted by the PR that builds it)
 
