@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-18"
+last_verified: "2026-09-21"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1742,3 +1742,40 @@ inside it:**
   Request-side transaction discipline, nothing the sandbox sees.
 
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
+
+---
+
+## Entry 036 — 2026-09-21
+
+**Trigger:** `v2.22.0` release tag (`sandbox-escape-linux.yml`, run `35552550239`).
+**Commit:** `509f7ae` (release PR #736's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:0495f5559318affa673172ec7e35cd0a5213e4aaf4c76d0a66554c0af97b157e` — the same digest
+Entry 035 ran on (the upstream tag did not move between `v2.21.0` and `v2.22.0`). Compare
+future entries against 035/036, not 021–034.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.15s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `35552550239`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.21.0..v2.22.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Three things in this release sit NEAR the boundary and are recorded so nobody reads them as
+inside it:**
+
+- **`nodus_worker.py` (#734, FR-38)** — the guest worker's `call_tool` host function can now
+  raise the guest wait on a capability denial (the authority gate) and negotiate a declared
+  downgrade first. Negotiation grants nothing: the variant passes `execute_tool`'s own
+  `check_tool_capability`, the chokepoint this audit has always measured against. A
+  `skipped` `agent_steps` row (an operator's decision) replays on a continued run. Agent-run
+  control flow, not the process boundary.
+- **`nodus_worker.py` + `tool_registry.py` (#731, FR-40)** — a fifth deferred collection rides
+  the worker reply (`args_validation`, a tally); the parent records it. Observability crossing
+  the frame channel, the same shape as `llm_usage`; nothing the guest can reach.
+- **`nodus-lang` 5.13.0 → 5.14.0 (#727)** — `NodusRuntime`'s public surface is identical
+  (diffed); the release's fixes are `nodus serve` / CLI paths this runtime does not run, plus a
+  per-process TLS trust store. `GUEST-CONFINE-1`'s `allowed_paths` is still passed explicitly.
+  The `mcp<2` cap was lifted — the `[mcp]` extra, not the sandbox.
+
+**Schema:** ★ Alembic `0020` (`system_events.source` 32 → 128, FR-41) — a width, not a
+boundary. Boot Smoke installed the published wheel on attempt 1.
