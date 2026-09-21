@@ -355,6 +355,8 @@ class NodusRuntimeAdapter:
         # FR-40 — the fifth: declared-args validation outcomes the worker observed, counted and
         # (under `warn`) logged HERE, where /metrics and the log are the api's.
         _apply_deferred_args_validation(result.get("args_validation"))
+        # FR-38 / DEC-070 — negotiation resolutions counted in the worker ride the reply too.
+        _apply_deferred_negotiation_tally(result.get("authority_negotiation"))
         worker_status = str(result.get("status") or "failure")
         worker_error = result.get("error")
 
@@ -362,6 +364,14 @@ class NodusRuntimeAdapter:
         context.state.update(output_state)
 
         if worker_status == "waiting":
+            # FR-38 / DEC-068 — an authority-gate park is not a run-from-the-top wait: the steps
+            # before the gate RAN and will be REPLAYED on the re-drive (DEC-066), never re-run,
+            # so their deferred memory writes and events land now or never. An ordinary
+            # `await_event()` wait re-runs the script and re-produces them, which is why the
+            # branch below skips them for every other wait.
+            if isinstance(output_state.get("authority_gate"), dict):
+                _apply_deferred_memory_writes(self._db, memory_writes, context)
+                _apply_deferred_events(self._db, emitted_events, context)
             return NodusExecutionResult(
                 output_state=output_state,
                 emitted_events=emitted_events,
@@ -391,6 +401,17 @@ class NodusRuntimeAdapter:
             raw_result=result,
             simulated_effects=simulated_effects,
         )
+
+
+def _apply_deferred_negotiation_tally(tally: Any) -> int:
+    """Record the worker's authority-negotiation tally in THIS process (FR-38). Never raises."""
+    try:
+        from AINDY.agents.authority_negotiation import apply_deferred_negotiation_tally
+
+        return apply_deferred_negotiation_tally(tally)
+    except Exception as exc:  # noqa: BLE001 — accounting must not fail an execution that produced a result
+        logger.debug("[NodusAdapter] deferred negotiation tally not applied: %s", exc)
+        return 0
 
 
 def _apply_deferred_args_validation(ledger: Any) -> int:

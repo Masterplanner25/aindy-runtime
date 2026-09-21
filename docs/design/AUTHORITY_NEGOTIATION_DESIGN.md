@@ -12,8 +12,8 @@ owner: "platform-team"
 overturns the mechanism the entry itself proposes, and §7 is the list of things not to build.
 
 **★ 2026-09-20 — §9 corrects §1's census a second time (FR-38): there is a FIFTH denial site, and it is
-the one the app's default backend hits. Phases 1 and 2 are wired on `agent_flow` only; on `nodus_vm`
-the declaration is inert. §9 is the design for that backend, PROPOSED, decisions DEC-068..070.**
+the one the app's default backend hits. Phases 1 and 2 were wired on `agent_flow` only; §9 is the
+`nodus_vm` half, BUILT the same day (#734, DEC-068..070). Phase 3 can now be judged on both backends.**
 
 ---
 
@@ -264,8 +264,12 @@ registration", which is not achievable for the cross-tool rules. See the phase t
 
 ## 9. ★ The fifth site — `nodus_vm` (FR-38, filed by the app 2026-09-16 with the first observed denial)
 
-**Status: PROPOSED 2026-09-20. Nothing below is built.** Decisions `DEC-068`, `DEC-069`, `DEC-070`
-are filed `provisional` and become `accepted` in the PR that builds this.
+**Status: BUILT 2026-09-20 (#734), the same day it was proposed (#732).** `DEC-068..070` accepted.
+Read 9.3 with one refinement the build found: the flow layer does NOT park — inside an agent
+segment the `nodus.execute` node reports the gate as a terminal result and the segment CHAIN parks
+the AgentRun (DEC-068's "why", as amended). §9.6 steps 1–4 are `tests/unit/test_fr38_nodus_vm_authority_gate.py`,
+in that order; step 5 (the filing's manufactured denial re-run on a live `nodus_vm` stack) is
+owed from the app's container and recorded here when it happens.
 
 ### 9.1 The correction
 

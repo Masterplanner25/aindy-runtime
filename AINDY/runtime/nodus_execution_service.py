@@ -22,6 +22,12 @@ from AINDY.platform_layer.user_ids import require_user_id
 
 logger = logging.getLogger(__name__)
 
+# FR-38 — the authority gate's vocabulary, shared with the worker seam and the nodus.execute node.
+from AINDY.agents.authority_negotiation import (  # noqa: E402
+    AUTHORITY_DECISION_EVENT,
+    GATE_STATE_KEY,
+)
+
 
 def build_nodus_execution_summary(nodus_result) -> dict[str, Any]:
     """
@@ -528,13 +534,18 @@ def reconstruct_agent_step_results(
         ok = bool(tool_result.get("success"))
         if not ok:
             any_failed = True
+        # FR-38 / DEC-069 — an operator's skip replays as a success to the compiled plan (it
+        # advances) but is recorded as `skipped` here: it never counts toward `steps_completed`.
+        skipped = ok and bool(tool_result.get("skipped"))
         entry = {
             "step_index": meta["index"],
             "tool": meta["tool"],
-            "status": "success" if ok else "failed",
+            "status": "skipped" if skipped else ("success" if ok else "failed"),
             "result": tool_result.get("result"),
             "error": tool_result.get("error"),
         }
+        if skipped and isinstance(tool_result.get("authority_gate"), dict):
+            entry["authority_gate"] = tool_result["authority_gate"]
         if tool_result.get("replayed"):
             # RECOVERY-GRANULARITY-1 — a replayed step's row and event already exist. The key is
             # present ONLY when true, so `run.result["steps"]` keeps its shape on a normal run.
@@ -654,6 +665,12 @@ def _run_agent_segment_flow(
         )
 
     flow_ok = flow_result.get("status") == "SUCCESS"
+    # FR-38 / DEC-068 — a segment halted at the authority gate is neither failed nor complete:
+    # fewer results than steps, by design. The gate rides `flow_result` for the chain to park on.
+    gate = (flow_result.get("state") or {}).get(GATE_STATE_KEY) if flow_ok else None
+    if isinstance(gate, dict):
+        flow_result = dict(flow_result, **{GATE_STATE_KEY: gate})
+        return step_results, False, flow_result
     segment_failed = any_failed or (not flow_ok) or (len(step_results) != len(compiled["steps"]))
     return step_results, segment_failed, flow_result
 
@@ -960,6 +977,52 @@ def _execute_agent_segment_chain(
                 segment_index,
             )
             return {"status": "CANCELLED", "run_id": str(run_id)}
+
+        # ── FR-38 / DEC-068: parked at the authority gate, mid-segment ────────────
+        # The worker halted the guest at a refused step whose tool declared `on_denial="wait"`.
+        # Park the AgentRun the way a trailing wait does, but resume THIS segment as a
+        # continuation: the steps before the gate replay from their rows, the gated step
+        # replays the operator's `skipped` row (DEC-069), the rest run fresh. `run.result`
+        # holds the results accumulated BEFORE this segment — rehydration rebuilds the chain
+        # from it, and the re-driven segment re-contributes its own.
+        gate = flow_result.get(GATE_STATE_KEY)
+        if isinstance(gate, dict) and run is not None and run.status == "executing":
+            before_segment = accumulated[: len(accumulated) - len(seg_results)]
+            if flow_run_id:
+                run.flow_run_id = str(flow_run_id)
+            run.steps_completed = succeeded
+            run.current_step = ran
+            run.result = {"steps": before_segment}
+            run.status = "waiting"
+            run.wait_state = {
+                "event_type": AUTHORITY_DECISION_EVENT,
+                "correlation_key": None,
+                "resume_segment_index": segment_index,
+                "continuation": True,
+                GATE_STATE_KEY: gate,
+            }
+            db.commit()
+            _register_agent_wait(
+                run_id=run_id, event_type=AUTHORITY_DECISION_EVENT, correlation_key=None,
+                user_id=user_id, correlation_id=correlation_id,
+                resume_callback=_build_agent_resume_callback(
+                    run_id=run_id, segments=segments, next_segment_index=segment_index,
+                    accumulated=before_segment, user_id=user_id, correlation_id=correlation_id,
+                    scoped_token=scoped_token, total_tool_steps=total_tool_steps,
+                    continuation=True,
+                ),
+            )
+            record_agent_event(
+                run_id=run_id, user_id=user_id, event_type="WAITING", db=db,
+                correlation_id=correlation_id,
+                payload={
+                    "wait_for": AUTHORITY_DECISION_EVENT,
+                    "steps_completed": succeeded, "steps_total": total_tool_steps,
+                    GATE_STATE_KEY: gate,
+                },
+                required=False,
+            )
+            return {"status": "WAITING", "wait_for": AUTHORITY_DECISION_EVENT, "run_id": str(run_id), GATE_STATE_KEY: gate}
 
         # ── Failure: fail the whole run, stop the chain ───────────────────────────
         if segment_failed:

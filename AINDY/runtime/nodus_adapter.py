@@ -59,6 +59,12 @@ from AINDY.platform_layer.registry import emit_event as emit_registry_event
 from AINDY.platform_layer.user_ids import parse_user_id
 
 logger = logging.getLogger(__name__)
+
+# FR-38 — the gate's event and state key, shared with the worker seam and the segment chain.
+from AINDY.agents.authority_negotiation import (  # noqa: E402
+    AUTHORITY_DECISION_EVENT as _AUTHORITY_DECISION_EVENT,
+    GATE_STATE_KEY as _AUTHORITY_GATE_STATE_KEY,
+)
 from AINDY.core.observability_events import emit_observability_event
 
 MAX_STEP_RETRIES = 3  # kept for reference; retry gate now reads RetryPolicy
@@ -727,7 +733,13 @@ def agent_finalize_run(state: dict, context: dict) -> dict:
         event_type="COMPLETED",
         db=db,
         correlation_id=state.get("correlation_id"),
-        payload={"steps_completed": len(step_results), "loop_enforced": bool(result_payload.get("loop_enforced"))},
+        # FR-34 / FR-38 — steps that SUCCEEDED, not steps in the list: a step the operator
+        # skipped at the authority gate was counted here as completed (`1/1`).
+        payload={
+            "steps_completed": sum(1 for r in step_results if isinstance(r, dict) and r.get("status") == "success"),
+            "steps_total": len(step_results),
+            "loop_enforced": bool(result_payload.get("loop_enforced")),
+        },
         required=True,
     )
 
@@ -1042,6 +1054,29 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
     if nodus_result.status == "waiting":
         raw = nodus_result.raw_result or {}
         wait_for = raw.get("wait_for") or state.get("nodus_wait_event_type")
+        # FR-38 / DEC-068 — an authority gate raised inside an AGENT segment (the compiled plan
+        # runs as one node of a one-node flow) is reported to the segment chain as a terminal
+        # result, NOT parked here as a flow wait. Two waits on one event would compete, and the
+        # chain — which owns the AgentRun's park, rehydration and atomic claim, and must run
+        # the segments after this one — cannot be continued from a flow-level resume. The
+        # chain reads `authority_gate` off the output state and parks the AgentRun itself.
+        gate = (nodus_result.output_state or {}).get(_AUTHORITY_GATE_STATE_KEY)
+        if state.get("agent_run_id") and wait_for == _AUTHORITY_DECISION_EVENT and isinstance(gate, dict):
+            logger.info(
+                "[nodus.execute] authority gate at step %s (%s) eu=%s — reported to the agent chain",
+                gate.get("step_index"), gate.get("tool"), execution_unit_id,
+            )
+            state.pop("nodus_wait_event_type", None)
+            return {
+                "status": "SUCCESS",
+                "output_patch": {
+                    "nodus_status": "authority_gate",
+                    "nodus_output_state": nodus_result.output_state,
+                    "nodus_events": nodus_result.emitted_events,
+                    "nodus_memory_writes": nodus_result.memory_writes,
+                    _AUTHORITY_GATE_STATE_KEY: gate,
+                },
+            }
         if not wait_for:
             logger.error(
                 "[nodus.execute] WAIT without wait_for eu=%s", execution_unit_id

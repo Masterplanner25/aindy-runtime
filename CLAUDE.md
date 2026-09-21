@@ -265,7 +265,7 @@ A soak assertion must not be stricter than the contract.
 ### Open — P1
 
 - **FLOW-PARALLEL-1** — `FanOutEdgeGroup(join=all|any|quorum)`; phases 0–3a shipped, open for phase 4 (default flip on evidence). A lenient join past a failed branch is the first `partial` emitter; width bound is process-wide (SYSMAX-5); a named predicate is in the graph signature. 3b declined (DEC-015). Design: `docs/design/FLOW_PARALLEL_DESIGN.md`.
-- **AUTHORITY-NEGOTIATION-1** — phases 0–2 shipped, default-OFF; open for the flip. Half the evidence is in (the app's `leadgen.act` declares `on_denial="wait"`; the first denial is unobserved). It CANNOT grant authority — picks WHICH tool, `execute_tool` re-checks; the gate decides `skip | abort` (DEC-016). Design: `docs/design/AUTHORITY_NEGOTIATION_DESIGN.md`.
+- **AUTHORITY-NEGOTIATION-1** — phases 0–2 shipped on BOTH backends (nodus_vm half #734, design §9), default-OFF; open for the flip on evidence from both. It CANNOT grant authority — picks WHICH tool, `execute_tool` re-checks; the gate decides `skip | abort` (DEC-016). On nodus_vm the gate is a guest wait from `call_tool`; the CHAIN parks, the node never does. Design: `docs/design/AUTHORITY_NEGOTIATION_DESIGN.md`.
 - **FS-SCOPE-1** — *(Aider)* path authority exists as `visibility.filesystem {mode, roots}` on `ExecutionEnvironmentSpec`, enforced on the guest path only. **The tool seam sets `cwd`, not a boundary** — enforcement needs the container runner. Never a second vocabulary beside `egress_scope`.
 - **SUBSTRATE-WITNESS-1** — *(Claude Code)* no first-party consumer routes a real effect through `execute_tool`/`EffectRecord` (Claw: zero; re-measured 2026-09-03). A decision not taken, not a blocker. Do NOT close with a synthetic fixture. Scope: `WITNESS_AND_BASELINE_SCOPE.md`.
 - **PERF-BASELINE-1** — *(Aider)* metric readback + concurrency half CLOSED via the soak harness; latency assertions still 1. Do NOT close with wall-clock thresholds on shared CI — COUNT WORK (both real regressions were query counts).
@@ -296,7 +296,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-42** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-37 (ui-kit), FR-38 (nodus_vm authority seam — design first); FR-14 recurrence half. FR-40 shipped #731, FR-41 shipped #730 (Alembic 0020).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-42** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-37 (ui-kit #4, awaiting its tag); FR-14 recurrence half. FR-38 shipped #734, FR-40 #731, FR-41 #730 (Alembic 0020).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
@@ -320,7 +320,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - EVENT-OUTBOX-1: **DEC-060** event rides the handler's session · **DEC-061** id stays client-assigned · **DEC-062** a raising handler is rolled back; unit row commits at creation.
 - RECOVERY-GRANULARITY-1: **DEC-063** per-step write at the worker seam · **DEC-064** `agent_steps`, no table · **DEC-065** plan STEP INDEX, never an ordinal · **DEC-066** replay only continued + `success`.
 - **DEC-067** FR-40: args-validation tally rides the worker reply (fifth deferred collection); deferral replaces observation; errors capped `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (32), counts never.
-- FR-38 (PROVISIONAL, §9 of the design): **DEC-068** nodus_vm gate = a guest wait from inside `call_tool`, mid-segment park · **DEC-069** `skip` = a `skipped` `agent_steps` row replayed on re-drive (widens DEC-066) · **DEC-070** the event and counter come from the worker.
+- FR-38 (§9, #734): **DEC-068** nodus_vm gate = a guest wait from inside `call_tool`; the CHAIN parks mid-segment (the node reports, never parks) · **DEC-069** `skip` = a `skipped` `agent_steps` row replayed on re-drive (widens DEC-066) · **DEC-070** the event and counter come from the worker.
 
 ### Standing rule — not an item
 

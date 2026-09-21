@@ -10,7 +10,7 @@ This file is retained for reference only. Do not import the router from here.
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -220,6 +220,7 @@ def reject_agent_run(
 def resume_agent_run(
     request: Request,
     run_id: str,
+    payload: dict | None = Body(default=None),
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -228,15 +229,19 @@ def resume_agent_run(
     RTR-1 Phase 2e — the human-approval action for a waiting agent run. The live
     surface is app-owned (aindy-apps-monolith); this reference mirror calls the
     same runtime service (`resume_agent_run_runtime`).
+
+    FR-38: a run parked at the authority gate needs a body —
+    ``{"decision": "skip" | "abort", "note": "..."}`` (DEC-069); a plain resume of such a run
+    is refused with 409 and the run stays parked.
     """
     user_id = _current_user_id(current_user)
     return _execute_agent(
         request,
         "agent.run.resume",
-        lambda _ctx: resume_agent_run_runtime(db=db, user_id=user_id, run_id=run_id),
+        lambda _ctx: resume_agent_run_runtime(db=db, user_id=user_id, run_id=run_id, payload=payload),
         db=db,
         user_id=str(user_id),
-        input_payload={"run_id": run_id},
+        input_payload={"run_id": run_id, "payload": payload},
     )
 
 

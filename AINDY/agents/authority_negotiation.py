@@ -39,6 +39,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Optional
 
@@ -78,6 +81,43 @@ class NegotiationOutcome:
         return self.outcome == OUTCOME_SUCCEEDED
 
 
+#: FR-38 / DEC-070 — in a nodus_vm pool worker the counter is process-local and never served;
+#: inside `negotiation_tally_scope()` every `_count` lands here instead, the tally rides the
+#: worker reply as `authority_negotiation`, and the parent records it (deferral replaces
+#: observation, DEC-041 — the same shape as `llm_usage` and `args_validation`).
+_DEFERRED_TALLY: ContextVar[Optional[dict[str, int]]] = ContextVar(
+    "aindy_authority_negotiation_tally", default=None
+)
+
+
+@contextmanager
+def negotiation_tally_scope() -> Iterator[dict[str, int]]:
+    tally: dict[str, int] = {}
+    token = _DEFERRED_TALLY.set(tally)
+    try:
+        yield tally
+    finally:
+        _DEFERRED_TALLY.reset(token)
+
+
+def apply_deferred_negotiation_tally(tally: object) -> int:
+    """Record a shipped tally in THIS process. Returns the resolutions recorded. Never raises."""
+    if not isinstance(tally, dict):
+        return 0
+    total = 0
+    try:
+        from AINDY.platform_layer.metrics import authority_negotiation_total
+
+        for outcome, n in tally.items():
+            n = int(n or 0)
+            if n > 0:
+                authority_negotiation_total.labels(outcome=str(outcome)).inc(n)
+                total += n
+    except Exception:  # pragma: no cover - observability must not break execution
+        pass
+    return total
+
+
 def _count(outcome: str) -> None:
     """Record one negotiation resolution.
 
@@ -86,6 +126,10 @@ def _count(outcome: str) -> None:
     the counter is observability, and inverting that would let a Prometheus problem change what
     a run is permitted to do.
     """
+    tally = _DEFERRED_TALLY.get()
+    if tally is not None:
+        tally[outcome] = tally.get(outcome, 0) + 1
+        return
     try:
         from AINDY.platform_layer.metrics import authority_negotiation_total
 

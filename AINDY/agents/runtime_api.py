@@ -223,7 +223,7 @@ def reject_agent_run_runtime(*, db, user_id, run_id: str):
     return to_execution_response(run, db)
 
 
-def resume_agent_run_runtime(*, db, user_id, run_id: str):
+def resume_agent_run_runtime(*, db, user_id, run_id: str, payload: dict | None = None):
     """Resume a run parked on a mid-plan WAIT step (RTR-1 Phase 2e).
 
     Publishes the event the run is waiting on — scoped to the run's correlation —
@@ -233,6 +233,14 @@ def resume_agent_run_runtime(*, db, user_id, run_id: str):
 
     Correlation must match the wait's registration exactly (live-path, rehydration,
     and this route all resolve ``wait_state.correlation_key or run.correlation_id``).
+
+    ★ FR-38 / DEC-069 — a run parked at the AUTHORITY GATE (``wait_state.authority_gate``)
+    needs a decision, ``{"decision": "skip" | "abort", "note": …}``; without one the request
+    is refused (409) and the run stays parked. The bus carries no payload (DEC-013), so the
+    decision's durable home is the ROW: ``skip`` writes the gated step's `agent_steps` row as
+    `skipped` — the row the tool would have written — and the re-driven segment replays it;
+    ``abort`` fails the run here and publishes nothing. An unknown decision is refused (422)
+    and the run stays parked, recorded on the gate.
     """
     from AINDY.kernel.event_bus import publish_event
 
@@ -256,14 +264,117 @@ def resume_agent_run_runtime(*, db, user_id, run_id: str):
         raise HTTPException(status_code=409, detail="Run has no wait event to resume")
 
     correlation = wait_state.get("correlation_key") or run.correlation_id
-    waiters_notified = publish_event(event_type, correlation_id=correlation)
+    gate = wait_state.get("authority_gate")
+    decision_record = None
+    if isinstance(gate, dict):
+        decision_record = _decide_authority_gate(db=db, run=run, gate=gate, payload=payload)
+        if decision_record["decision"] == "abort":
+            return {
+                "run_id": str(run.id), "status": run.status, "resumed_event": None,
+                "correlation_id": correlation, "waiters_notified": 0, "authority_gate": decision_record,
+            }
+    if decision_record is not None:
+        # the gate's wake is RUN-scoped (RESUME-FANOUT-UNSCOPED-1): its wait_state carries no
+        # correlation key, and only this run's re-drive may fire on it
+        waiters_notified = publish_event(event_type, correlation_id=correlation, run_id=str(run.id))
+    else:
+        waiters_notified = publish_event(event_type, correlation_id=correlation)
     return {
         "run_id": str(run.id),
         "status": run.status,
         "resumed_event": event_type,
         "correlation_id": correlation,
         "waiters_notified": waiters_notified,
+        "authority_gate": decision_record,
     }
+
+
+def _decide_authority_gate(*, db, run, gate: dict, payload: dict | None) -> dict:
+    """Apply the operator's decision to a run parked at the nodus_vm authority gate."""
+    from AINDY.agents.authority_negotiation import (
+        AUTHORITY_DECISION_SCHEMA,
+        DECISION_ABORT,
+        DECISION_SKIP,
+        OUTCOME_WAITING,
+        count_gate_outcome,
+        read_gate_decision,
+    )
+    from AINDY.core.execution_signal_helper import record_agent_event
+    from AINDY.kernel.syscall_versioning import validate_payload
+
+    if not isinstance(payload, dict) or "decision" not in payload:
+        raise HTTPException(
+            status_code=409,
+            detail="Run is parked at the authority gate; resume needs a decision: "
+                   + " | ".join(gate.get("decisions") or [DECISION_SKIP, DECISION_ABORT]),
+        )
+    # the gate's typed resume (WAIT-TYPED-CONTRACT-1), the same validator the flow route uses
+    errors = validate_payload(AUTHORITY_DECISION_SCHEMA, dict(payload))
+    if errors:
+        raise HTTPException(status_code=422, detail={"resume_schema": AUTHORITY_DECISION_SCHEMA, "errors": errors})
+    decision, note = read_gate_decision(payload)
+    if decision is None:
+        refused = dict(gate, last_refused_decision=payload.get("decision"))
+        run.wait_state = dict(run.wait_state or {}, authority_gate=refused)
+        db.commit()
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown authority-gate decision {payload.get('decision')!r}; "
+                   f"the run stays parked (decisions: {', '.join(gate.get('decisions') or [])})",
+        )
+    step_index = int(gate.get("step_index"))
+    tool_name = str(gate.get("tool") or "")
+    now = datetime.now(timezone.utc)
+    row = (
+        db.query(AgentStep)
+        .filter(AgentStep.run_id == run.id, AgentStep.step_index == step_index)
+        .first()
+    )
+    if row is None:
+        row = AgentStep(run_id=run.id, step_index=step_index, tool_name=tool_name)
+        db.add(row)
+    row.tool_name = tool_name
+    row.tool_args = gate.get("tool_args") or {}
+    row.result = {"authority_gate": decision, "note": note}
+    row.executed_at = now
+    if not row.correlation_id and run.correlation_id:
+        row.correlation_id = run.correlation_id
+    record_agent_event(
+        run_id=str(run.id), user_id=str(run.user_id), event_type="AUTHORITY_NEGOTIATED", db=db,
+        correlation_id=run.correlation_id,
+        payload={"step_index": step_index, "denied_tool": tool_name, "outcome": OUTCOME_WAITING,
+                 "decision": decision, "note": note},
+        required=False,
+    )
+    count_gate_outcome(f"gate_{decision}")
+    if decision == DECISION_ABORT:
+        error_msg = f"Step {step_index} ({tool_name}) aborted by operator at the authority gate" + (f": {note}" if note else "")
+        row.status = "failed"
+        row.error_message = error_msg
+        run.status = "failed"
+        run.error_message = error_msg
+        run.completed_at = now
+        run.wait_state = None
+        db.commit()
+        record_agent_event(
+            run_id=str(run.id), user_id=str(run.user_id), event_type="FAILED", db=db,
+            correlation_id=run.correlation_id,
+            payload={"steps_completed": run.steps_completed or 0, "steps_total": run.steps_total or 0,
+                     "error": error_msg},
+            required=False,
+        )
+        try:
+            from AINDY.runtime.nodus_execution_service import _sync_agent_eu_status
+
+            _sync_agent_eu_status(db, str(run.id), "failed")
+        except Exception:  # noqa: BLE001 — the EU mirror is best-effort, as it is on the chain
+            pass
+        return {"decision": decision, "note": note, "step_index": step_index, "run_status": "failed"}
+    # skip — the row is the decision's durable home; the re-driven segment replays it (DEC-069)
+    row.status = "skipped"
+    row.error_message = None
+    db.commit()
+    return {"decision": decision, "note": note, "step_index": step_index, "run_status": "resuming"}
 
 
 def recover_agent_run_runtime(*, db, user_id, run_id: str, force: bool = False):

@@ -9214,11 +9214,53 @@ census row (the test says so).
 
 ---
 
-## FR-38 — the authority gate is wired at `agent_execute_step` only; on `nodus_vm` a denied tool fails the step and never negotiates 🟡 AUTHORITY-NEGOTIATION-1's missing half (intake)
+## FR-38 — the authority gate was wired at `agent_execute_step` only; on `nodus_vm` a denied tool failed the step and never negotiated 🟡 AUTHORITY-NEGOTIATION-1's missing half
 
-**Status: OPEN — filed by the app 2026-09-16 on 2.19.0 with the first observed denial on BOTH
-backends, intake 2026-09-20.** This is the evidence `AUTHORITY-NEGOTIATION-1` was waiting for,
-and it says the flip is blocked on a seam, not on evidence: `negotiate_capability_denial` has one
+**Status: SHIPPED 2026-09-20 (#734; design #732, DEC-068..070).** Filed by the app 2026-09-16 on
+2.19.0 with the first observed denial on both backends. Verified against source — the claim held
+exactly, and the design's §1 census gained its fifth site.
+
+### Shipped
+
+- **Worker (`run_agent_tool`)** — under the flag, `check_tool_capability` is asked first (as the
+  adapter does); a denial negotiates ONE downgrade to a declared variant the token grants (the
+  variant passes the chokepoint; nothing is granted), else a tool declaring `on_denial="wait"`
+  returns a GATE outcome that the `call_tool` closure turns into a guest wait — the three
+  `nodus_wait_*` keys + `authority_gate` in state, then `_AwaitHalt` (DEC-068). §9.6 step 1
+  proved it against the compiled step: one seam call, no retry re-entry, the next step never
+  runs, the reply reads `waiting`. `AUTHORITY_NEGOTIATED` is written from the worker on its own
+  session; the negotiation counter rides the reply as a tally the parent records (DEC-070).
+- **Node** — inside an agent segment the `nodus.execute` node reports the gate as a TERMINAL
+  result (`nodus_status: "authority_gate"`), not a flow wait (the refinement: two waits on one
+  event would compete, and the chain cannot be continued from a flow-level resume).
+- **Chain** — `_execute_agent_segment_chain` parks the AgentRun (`waiting`, `wait_state
+  {event_type, resume_segment_index: THIS segment, continuation: true, authority_gate}`,
+  `run.result` = the results accumulated BEFORE the segment) and registers the re-drive;
+  rehydration honours `continuation`. The steps that ran keep their deferred memory writes and
+  events (they replay, never re-run).
+- **Resume** — `resume_agent_run_runtime(payload=)` / `POST /api/agent/runs/{id}/resume` with
+  `{"decision": "skip" | "abort", "note"}`: no decision → 409, run stays parked; unknown → 422,
+  recorded as `last_refused_decision`; `skip` writes the gated step's `agent_steps` row
+  `skipped` (the decision's durable home, DEC-013/069) and publishes run-scoped; `abort` fails
+  the run here and publishes nothing. `_read_recorded_step` replays `success | skipped`
+  (DEC-069 widens DEC-066); `reconstruct_agent_step_results` records a replayed skip as
+  `skipped`, so it never counts toward `steps_completed`.
+- **The two small things:** `agent_finalize_run`'s COMPLETED payload counted a skipped step as
+  completed (`len(step_results)`) — now counts successes, `steps_total` beside it. The
+  "`wait_state` not cleared after a resumed run completed" was NOT reproduced at HEAD: the
+  `agent_flow` suite asserts `wait_state is None` at completion on the in-process path; the
+  cross-process (rehydrated) path is the suspect and is unverified here.
+- Tests: 11, worker and chain both real; mutations — no halt → step 1 red (on the
+  `__step_0_result` claim, the one that distinguishes the halt from the plan's own throw);
+  `skipped` not replayable → red; chain gate branch removed → `failed` not `waiting`.
+
+**What remains:** §9.6 step 5 — the filing's manufactured denial re-run on a live `nodus_vm`
+stack (the app's container; theirs to run, ours to record). Phase 3's flip is now a judgment on
+evidence from BOTH backends. The app's live resume surface must pass the body through.
+
+### The filing, as verified
+
+`negotiate_capability_denial` has one
 caller, `nodus_adapter.agent_execute_step` (the `agent_flow` backend), where the gate parks the
 run (`waiting`, `wait_state.authority_gate`, operator `skip` resume from another process — all
 observed working). On `nodus_vm` — the app's default — the worker's `call_tool` →
@@ -11945,6 +11987,10 @@ hand-rolled in a `while` loop, or improvised with `asyncio.create_task`.
 ---
 
 ## AUTHORITY-NEGOTIATION-1 — a capability denial has no bounded recovery path
+
+**★ 2026-09-20 (#734, FR-38):** the design's census had a FIFTH denial site — `execute_tool`'s own
+chokepoint, the one `nodus_vm` hits — so phases 1–2 were wired on `agent_flow` only. The `nodus_vm`
+half is built (design §9, DEC-068..070). Phase 3 can now be judged on both backends.
 
 **★★ PHASE 2 SHIPPED 2026-09-15 — the WAIT gate; open for phase 3 only (the flip, on
 evidence — zero tools declare a variant or a gate at HEAD).** Phase 1 shipped 2026-09-10.
