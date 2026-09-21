@@ -1,7 +1,7 @@
 ---
 title: "Authority Negotiation — Design"
 api_version: "1.0"
-last_verified: "2026-09-16"
+last_verified: "2026-09-20"
 status: current
 owner: "platform-team"
 ---
@@ -10,6 +10,10 @@ owner: "platform-team"
 
 **`AUTHORITY-NEGOTIATION-1`. PHASES 0, 1 AND 2 SHIPPED (0: 2026-09-08 #600; 1: 2026-09-10; 2: 2026-09-15 — the WAIT gate, §5a); phase 3 is evidence, not code.** Read this before building it — §2
 overturns the mechanism the entry itself proposes, and §7 is the list of things not to build.
+
+**★ 2026-09-20 — §9 corrects §1's census a second time (FR-38): there is a FIFTH denial site, and it is
+the one the app's default backend hits. Phases 1 and 2 are wired on `agent_flow` only; on `nodus_vm`
+the declaration is inert. §9 is the design for that backend, PROPOSED, decisions DEC-068..070.**
 
 ---
 
@@ -255,3 +259,118 @@ because it went red.**
 
 ★ **One thing phase 0 found that this document had wrong:** it specified validation "at
 registration", which is not achievable for the cross-tool rules. See the phase table above.
+
+---
+
+## 9. ★ The fifth site — `nodus_vm` (FR-38, filed by the app 2026-09-16 with the first observed denial)
+
+**Status: PROPOSED 2026-09-20. Nothing below is built.** Decisions `DEC-068`, `DEC-069`, `DEC-070`
+are filed `provisional` and become `accepted` in the PR that builds this.
+
+### 9.1 The correction
+
+§1's corrected census counted four `CAPABILITY_DENIED` emissions and named `nodus_adapter.py`'s
+`agent_execute_step` "the one" that can negotiate. That was the `agent_flow` backend's census.
+There is a fifth site, and it is not in the adapter at all: **`execute_tool`'s own
+`check_tool_capability` (`tool_registry.py`, the chokepoint)**. On `AINDY_AGENT_EXECUTION_BACKEND=nodus_vm`
+a plan is compiled into a native workflow whose tool steps are the worker's `call_tool` host
+function → `run_agent_tool` → `execute_tool`, and the denial is raised THERE — in the pool worker,
+by the chokepoint, before any adapter code. The workflow records the step `failed`, the compiled
+step's retry loop retries it (the filing saw `capability.denied` ×3), and the run fails.
+`degraded_variant` and `on_denial="wait"` are never consulted. **The app defaults every real
+boot to `nodus_vm`** (`apps/agent/bootstrap.py::_select_execution_backend`, RTR-1 §5), so the
+tool it was asked to declare (`leadgen.act`, `on_denial="wait"`, #378) cannot fire here.
+
+The filing observed both backends with an identical denial (a token minted under a capability
+ceiling that excludes `external_api_call` — the RTR-4 delegated-run path): on `agent_flow` the
+gate parked the run, the operator's `skip` resumed it **from a different process** (FR-31's
+rehydration), the step recorded `skipped`, the run completed, the completion hook ran. On
+`nodus_vm`: `AGENT_STEP_FAILED`, run `failed`. **Phase 3's evidence is complete for the backend
+that has the gate, and structurally impossible for the one the app runs.**
+
+### 9.2 What exists, so nothing new has to be invented
+
+| Need | Already built | Where |
+|---|---|---|
+| choose a declared fallback the token already grants | `negotiate_capability_denial` (pure; asks `check_tool_capability`, §2) | `agents/authority_negotiation.py` |
+| halt a guest mid-script and report a typed wait | the guest wait: `nodus_wait_requested` + `nodus_wait_event_type` + `nodus_wait_resume_schema` state keys; the worker reports `status: "waiting"` (DEC-017, WAIT-TYPED-CONTRACT-1) | `nodus_worker.py` reply assembly |
+| park an AgentRun durably and rehydrate across restart | `status="waiting"` + `wait_state` + `_register_agent_segment_wait` (Phase 2e) | `nodus_execution_service.py` |
+| re-drive a segment without re-running finished steps | RECOVERY-GRANULARITY-1: `agent_steps` rows keyed on step index, replayed on a CONTINUED run (DEC-063..066) | `nodus_worker.py::_read_recorded_step`, `_execute_agent_segment_chain(continuation=True)` |
+| the operator's half | `POST /platform/flows/runs/{id}/resume {"event_type": "agent.authority.decision", "payload": {"decision", "note"}}` and the `skip | abort` vocabulary (DEC-016) | shipped for `agent_flow`, §5a |
+
+### 9.3 The design — three moves, at the seam the filing named
+
+**(a) The variant, in the worker (`run_agent_tool`).** When `execute_tool` returns
+`failure_class == "permission"` from the capability check and the registry entry declares a
+`degraded_variant`, call `negotiate_capability_denial` exactly as `agent_execute_step` does and
+re-call `execute_tool` with the variant — **once**, §4's bound. The variant passes the same
+chokepoint; negotiation grants nothing (§2). Record `AUTHORITY_NEGOTIATED` from the worker on
+its own short-lived session — the seam already writes `agent_steps` rows that way (DEC-063), so a
+second event write there is the same pattern, not a new one (**DEC-070**). The counter
+`aindy_authority_negotiation_total` is process-local to the worker: it rides the reply the way
+FR-40's tally does (a `{outcome: n}` map on the `args_validation` ledger's sibling key
+`authority_negotiation`) and is recorded in the parent. **Not** a per-call record: the consumer is
+a counter.
+
+**(b) The gate, as a guest wait (`DEC-068`).** No variant, or the token does not grant it, and
+the entry declares `on_denial="wait"`: the worker sets the three guest-wait keys —
+`nodus_wait_event_type = "agent.authority.decision"`, `nodus_wait_resume_schema =` the §5a
+schema, plus an `authority_gate` record in state (`step_index`, `tool`, `denial`,
+`negotiation_outcome`) — and halts the guest by raising, exactly what `await_event()` does. The
+reply reads `status: "waiting", wait_for: "agent.authority.decision"`. The compiled step's retry
+loop must not swallow the halt: the halt is an exception the step does not catch (the guest wait
+already relies on this for `await_event` inside a step). **The parent** (`_run_agent_segment_flow`
+→ `_execute_agent_segment_chain`) learns a new branch: a worker reply of `waiting` mid-segment
+parks the run with `wait_state = {event_type, authority_gate, resume_segment_index: THIS segment,
+continuation: true}` and registers the resume — §5a's `agent_flow` block, moved one layer down.
+The agent's EU stays `executing` while parked (§5a's rule).
+
+**(c) The decision, replayed (`DEC-069`).** On `agent.authority.decision`:
+
+- **`skip`** — write the `agent_steps` row for `(run_id, step_index)` with `status="skipped"` and
+  the note (the row the worker would have written had the tool run), then re-drive the SAME
+  segment as a continuation. `_read_recorded_step` replays a `skipped` row as
+  `{"success": true, "skipped": true, "result": null, "replayed": true}` — the compiled step
+  sees a success and the plan advances; `steps_completed` does NOT count it (FR-34's family:
+  attempted ≠ succeeded ≠ skipped — the filing's second small thing). DEC-066 said "replay only a
+  `success` row"; this widens it to `success | skipped`, both terminal outcomes an operator or the
+  tool decided, never `failed`.
+- **`abort`** — fail the run with the operator's reason on the step and the run; no re-drive.
+- **unknown** — re-park, recorded as `last_refused_decision` on the gate (§5a's rule).
+
+Re-driving the segment replays every step before the skipped one from its `success` row (DEC-066)
+and executes everything after it fresh. Cancel-while-parked needs nothing: CANCEL-REACH-1 refuses
+the re-driven step's tool call.
+
+### 9.4 The two small things the filing saw, and where they belong
+
+- `agent_runs.wait_state` **not cleared** after a resumed `agent_flow` run completed — a consumer
+  reading it as "currently parked" would be wrong. That is §5a's path, not this one: the
+  completion path after a resume must null `wait_state` (the vm chain does, at three sites). Fix
+  it in the same PR; it is one line and a test on the resumed-run completion.
+- A `skipped` step counted `steps_completed 1/1` on `agent_flow`. 9.3(c) states the rule for both
+  backends; the `agent_flow` site (`nodus_adapter.py`, the skip decision) is corrected alongside.
+
+### 9.5 What this is NOT
+
+- Not a widening path (§7): the worker chooses what to attempt; the chokepoint decides.
+- Not a new wait mechanism: the guest wait, the durable `wait_state` and the resume route are the
+  ones that exist. If the guest wait cannot halt a compiled step from inside `call_tool`, that is
+  the first thing the build must prove — with a test, before the rest is written.
+- Not a change to `execute_tool`'s return for an undeclared tool: a tool with neither
+  `degraded_variant` nor `on_denial` fails exactly as today.
+- Still behind `AINDY_AUTHORITY_NEGOTIATION`. Phase 3's flip is then a judgment on evidence from
+  both backends — which is the state the filing was trying to reach.
+
+### 9.6 Order of work
+
+1. Prove (b)'s halt: a compiled two-step plan on `nodus_vm` whose first tool raises the guest
+   wait from inside `call_tool`; assert the worker reply is `waiting` with the gate record and
+   that the retry loop did not re-enter the tool. If this fails, stop and redesign; nothing else
+   in §9 is worth building without it.
+2. (a) + the reply-borne counter. Tests: variant granted → second `execute_tool` call with the
+   variant, one event row; variant not granted → `variant_denied`, then (b).
+3. (b) the parent's mid-segment park + rehydration across a restart (FR-31's test shape).
+4. (c) `skip` / `abort` / unknown, through the real resume route, from a different session; the
+   `skipped` replay; `steps_completed` unchanged by a skip on BOTH backends; `wait_state` nulled.
+5. Re-run the filing's manufactured denial on `nodus_vm` and record it in this section.

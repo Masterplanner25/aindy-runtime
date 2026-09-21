@@ -1,6 +1,6 @@
 ---
 title: "Design Records"
-last_verified: "2026-09-17"
+last_verified: "2026-09-20"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -30,7 +30,7 @@ its reasoning has been carried into a contract, which so far has never happened.
 |---|---|---|---|
 | [`AUDIT_CORRELATION_DESIGN.md`](./AUDIT_CORRELATION_DESIGN.md) | `AUDIT-CORRELATION-1` | **IMPLEMENTED 2026-09-17 (#719; DEC-052..055)** | Re-measures the three joins: `ExecutionAuthority` does not exist, (2) already fell out of `EXEC-ENV-BIND-1`, and `EffectRecord` has no `trace_id` — the real join is unindexed JSONB. Three additive payload keys on `syscall.executed`; **no FK in either direction**; the join is time-bounded by retention on both sides. |
 | [`AUTHORITY_LIFETIME_DESIGN.md`](./AUTHORITY_LIFETIME_DESIGN.md) | `AUTHORITY-LIFETIME-1` | **IMPLEMENTED 2026-09-17 (#720; DEC-056..059)** | Authority ends with the run: `CANCEL-REACH-1`'s cached own-session fail-open read widened to every terminal status, sticky once terminal, at the same two sites; the HMAC check stays stateless. **A `waiting` run keeps its authority.** |
-| [`AUTHORITY_NEGOTIATION_DESIGN.md`](./AUTHORITY_NEGOTIATION_DESIGN.md) | `AUTHORITY-NEGOTIATION-1` | **In flight** — phases 0+1 shipped (#600, 09-10); 2–3 design only | A denied capability gets one bounded, downgrade-only retry that cannot grant authority. **§2 overturns the entry's own proposed primitive.** |
+| [`AUTHORITY_NEGOTIATION_DESIGN.md`](./AUTHORITY_NEGOTIATION_DESIGN.md) | `AUTHORITY-NEGOTIATION-1` | **In flight** — phases 0–2 shipped on `agent_flow` (#600, 09-10, 09-15); **§9 (2026-09-20) is the `nodus_vm` half, PROPOSED — DEC-068..070 provisional** (FR-38: the app's default backend has a fifth denial site the census missed) | A denied capability gets one bounded, downgrade-only retry that cannot grant authority. **§2 overturns the entry's own proposed primitive.** |
 | [`C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`](./C3_NON_LINUX_STRONG_SANDBOX_PLAN.md) | `C3` | **Preparation, unscheduled** — phases 0–5 done; the native non-Linux strong-VM runner waits on a trigger | Windows-native and macOS tracks for `strong-sandbox-certified` off Linux, so either can start on day 1. |
 | [`CLI_EXECUTION_SURFACE_SCOPE.md`](./CLI_EXECUTION_SURFACE_SCOPE.md) | `CLI-EXEC-SURFACE-1` | **Decided 2026-09-17 — DEC-047 (provisional)**: the operator half stays HTTP-only; the entry closes on acceptance | §8: an operator syscall opens three doors at once (`/platform/syscall`, MCP, any CLI). Do **not** build a CLI to answer it. |
 | [`DURABLE_EXECUTION_PROGRAM.md`](./DURABLE_EXECUTION_PROGRAM.md) | `ECOGAP-1` phase 3 | **Complete 2026-07-12** — DUR-1..4 shipped, opt-in; soak-then-flip remains | Crash continuation resumes *forward* from the last completed node; it never re-executes code, which is why kernel replay was declined. |

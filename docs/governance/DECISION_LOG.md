@@ -1580,6 +1580,61 @@ a guest can loop a malformed call. Counts are never dropped: the counter is the 
 
 ---
 
+### DEC-068
+**Status:** `provisional` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; accepted by the PR that builds it)
+
+**Decision**
+On the `nodus_vm` backend the WAIT gate is a GUEST WAIT raised from inside `call_tool`: the worker
+sets the three guest-wait state keys (`nodus_wait_event_type = "agent.authority.decision"`, the
+§5a `resume_schema`, and an `authority_gate` record) and halts the guest exactly as
+`await_event()` does; the reply reads `waiting`, and the parent parks the run mid-segment with
+`wait_state {event_type, authority_gate, resume_segment_index: this segment, continuation: true}`.
+
+**Why**
+The vm chain parks only between segments, at waits the plan declared; a denial happens inside a
+segment, in the worker, where nothing can park today. Every primitive needed exists (the guest
+wait, the durable `wait_state`, the resume route); a second wait mechanism beside DEC-017's would
+be the vocabulary drift `FS-SCOPE-1` warns about. The halt-from-inside-a-compiled-step is the one
+unproven assumption and is the first thing the build must test (§9.6 step 1).
+
+---
+
+### DEC-069
+**Status:** `provisional` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; accepted by the PR that builds it)
+
+**Decision**
+An operator's `skip` on the `nodus_vm` gate is recorded as the `agent_steps` row for
+`(run_id, step_index)` with `status="skipped"` and the note, and the segment is re-driven as a
+continuation; `_read_recorded_step` replays a `skipped` row as
+`{"success": true, "skipped": true, "result": null, "replayed": true}`. This WIDENS `DEC-066`
+("replay only a `success` row") to `success | skipped` — both terminal outcomes that a tool or an
+operator decided; a `failed` row still never replays. A skipped step never increments
+`steps_completed`, on either backend.
+
+**Why**
+The re-drive already replays finished steps and executes the rest fresh; the skip only has to look
+like a finished step to the compiled plan. Writing the row the worker would have written keeps
+the record honest (the step index has an outcome, and it says `skipped`, with who said so), and
+keeps `steps_completed` a count of successes (FR-34) — the filing's second small thing was a
+`skipped` step counted as completed on `agent_flow`.
+
+---
+
+### DEC-070
+**Status:** `provisional` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; accepted by the PR that builds it)
+
+**Decision**
+`AUTHORITY_NEGOTIATED` is recorded FROM THE WORKER on its own short-lived session, the way
+`agent_steps` rows are (DEC-063); the negotiation counter is process-local there and rides the
+worker reply as a `{outcome: n}` map beside FR-40's `args_validation`, recorded in the parent.
+
+**Why**
+The worker already owns a per-step durable write at this seam; a second write on the same
+session pattern is not a new mechanism. The counter cannot be observed in the worker (FR-35,
+FR-40 — same shape), and a tally is the right carrier because the consumer is a counter.
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —
