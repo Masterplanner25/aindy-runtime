@@ -273,7 +273,12 @@ def resume_agent_run_runtime(*, db, user_id, run_id: str, payload: dict | None =
                 "run_id": str(run.id), "status": run.status, "resumed_event": None,
                 "correlation_id": correlation, "waiters_notified": 0, "authority_gate": decision_record,
             }
-    waiters_notified = publish_event(event_type, correlation_id=correlation, run_id=str(run.id))
+    if decision_record is not None:
+        # the gate's wake is RUN-scoped (RESUME-FANOUT-UNSCOPED-1): its wait_state carries no
+        # correlation key, and only this run's re-drive may fire on it
+        waiters_notified = publish_event(event_type, correlation_id=correlation, run_id=str(run.id))
+    else:
+        waiters_notified = publish_event(event_type, correlation_id=correlation)
     return {
         "run_id": str(run.id),
         "status": run.status,
