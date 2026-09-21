@@ -103,6 +103,8 @@ def rehydrate_waiting_agent_runs(
                 correlation_id=correlation_id,
                 scoped_token=run.capability_token,  # durable self-verifying token
                 total_tool_steps=total_tool_steps,
+                # FR-38 / DEC-068 — a gate park re-drives ITS OWN segment as a continuation.
+                continuation=bool(wait_state.get("continuation")),
             )
             _register_agent_wait(
                 run_id=run_id,

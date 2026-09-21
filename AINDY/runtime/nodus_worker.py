@@ -172,9 +172,36 @@ def run_agent_tool(
     if keyed and continuation:
         recorded = _read_recorded_step(session_factory, run_id, int(step_index))
         if recorded is not _NO_RECORD:
-            return {"success": True, "result": _json_safe(recorded), "error": None, "replayed": True}
+            status, result = recorded
+            if status == "skipped":
+                # DEC-069 — the operator skipped this step at the authority gate; the compiled
+                # plan sees a success and advances, and the result says what happened.
+                return {"success": True, "result": None, "error": None, "replayed": True,
+                        "skipped": True, "authority_gate": _json_safe(result)}
+            return {"success": True, "result": _json_safe(result), "error": None, "replayed": True}
 
     from AINDY.agents.tool_registry import execute_tool
+
+    # ── FR-38 / DEC-068..070 — the fifth denial site negotiates ─────────────────────────
+    # `execute_tool`'s own `check_tool_capability` is where a nodus_vm step is refused: in this
+    # process, before any adapter code. Ask the same question first, the way
+    # `agent_execute_step` does on the other backend, and offer the same two recoveries: one
+    # downgrade to a declared variant the token already grants (§4's bound), else — for a tool
+    # that declared `on_denial="wait"` — a GATE the closure turns into a guest wait. Rebinding
+    # `tool_name` grants nothing: `execute_tool` re-checks the variant at the chokepoint. Under
+    # the flag only; off, a denial fails exactly as it always did.
+    from AINDY.agents.authority_negotiation import authority_negotiation_enabled
+
+    tool_name = str(tool_name)
+    if authority_negotiation_enabled():
+        gated = _negotiate_denial(
+            session_factory, tool_name=tool_name, tool_args=tool_args, user_id=user_id,
+            run_id=run_id, execution_token=execution_token, step_index=step_index,
+            correlation_id=correlation_id,
+        )
+        if isinstance(gated, dict):
+            return gated
+        tool_name = gated
 
     db = session_factory()
     from AINDY.platform_layer.token_meter import llm_usage_tool_scope
@@ -221,12 +248,18 @@ def run_agent_tool(
 _NO_RECORD = object()
 
 
-def _read_recorded_step(session_factory: Any, run_id: str, step_index: int) -> Any:
-    """The recorded result of a `success` row for ``(run_id, step_index)``, else `_NO_RECORD`.
+#: The row statuses a CONTINUED run replays. DEC-066 said `success` only; DEC-069 (FR-38) adds
+#: `skipped` — an operator's decision at the authority gate, written as the row the tool would
+#: have written. A `failed` row still never replays.
+_REPLAYABLE_STEP_STATUSES = frozenset({"success", "skipped"})
 
-    Only `success` replays (DEC-066). A read failure is `_NO_RECORD` — the step executes, which
-    is the pre-change behaviour and the safe direction: re-running costs work, skipping a step
-    that never succeeded costs correctness.
+
+def _read_recorded_step(session_factory: Any, run_id: str, step_index: int) -> Any:
+    """``(status, result)`` of a replayable row for ``(run_id, step_index)``, else `_NO_RECORD`.
+
+    `success` and `skipped` replay (DEC-066, DEC-069). A read failure is `_NO_RECORD` — the step
+    executes, which is the pre-change behaviour and the safe direction: re-running costs work,
+    skipping a step that never succeeded costs correctness.
     """
     try:
         from AINDY.db.models import AgentStep
@@ -245,9 +278,9 @@ def _read_recorded_step(session_factory: Any, run_id: str, step_index: int) -> A
     except Exception as exc:  # noqa: BLE001 — fail towards executing
         logger.debug("[NodusWorker] step %s/%s unreadable, executing: %s", run_id, step_index, exc)
         return _NO_RECORD
-    if row is None or str(row[0]) != "success":
+    if row is None or str(row[0]) not in _REPLAYABLE_STEP_STATUSES:
         return _NO_RECORD
-    return row[1]
+    return (str(row[0]), row[1])
 
 
 def _record_step(
@@ -294,6 +327,101 @@ def _record_step(
                 db.close()
     except Exception as exc:  # noqa: BLE001 — recording must never break the call
         logger.warning("[NodusWorker] could not record step %s/%s: %s", run_id, step_index, exc)
+
+
+def _negotiate_denial(
+    session_factory: Any,
+    *,
+    tool_name: str,
+    tool_args: dict,
+    user_id: str,
+    run_id: str,
+    execution_token: dict,
+    step_index: Optional[int],
+    correlation_id: Optional[str],
+) -> Any:
+    """Return the tool to attempt (``tool_name`` or its granted variant), or a GATE outcome dict
+    for the closure to park on. Never raises: any failure here is "attempt the tool as asked",
+    which is the ordinary denial the chokepoint will produce."""
+    try:
+        from AINDY.agents.authority_negotiation import (
+            OUTCOME_WAITING,
+            build_authority_gate,
+            count_gate_outcome,
+            denial_gate_declared,
+            negotiate_capability_denial,
+        )
+        from AINDY.agents.capability_service import check_tool_capability
+
+        check = check_tool_capability(
+            token=execution_token, run_id=run_id, user_id=user_id, tool_name=tool_name,
+        )
+        if check.get("ok"):
+            return tool_name
+        negotiation = negotiate_capability_denial(
+            tool_name=tool_name, token=execution_token, run_id=run_id, user_id=user_id,
+        )
+        if negotiation.granted:
+            _record_authority_event(
+                session_factory, run_id=run_id, user_id=user_id, correlation_id=correlation_id,
+                payload={
+                    "step_index": step_index, "denied_tool": tool_name,
+                    "denied_error": check.get("error"), "fallback_tool": negotiation.variant,
+                    "outcome": negotiation.outcome,
+                },
+            )
+            logger.warning(
+                "[NodusWorker] step %s: capability denied for %s (%s); negotiated down to declared fallback %s",
+                step_index, tool_name, check.get("error"), negotiation.variant,
+            )
+            return str(negotiation.variant)
+        # A gate needs a step index to key the operator's decision on; a hand-written
+        # `call_tool(name, args)` has none and takes the ordinary denial.
+        if step_index is None or not denial_gate_declared(tool_name):
+            return tool_name
+        gate = build_authority_gate(
+            step_index=int(step_index), tool_name=tool_name, denied_error=check.get("error"),
+            negotiation_outcome=negotiation.outcome, variant=negotiation.variant,
+        )
+        gate["tool_args"] = _json_safe(tool_args)
+        _record_authority_event(
+            session_factory, run_id=run_id, user_id=user_id, correlation_id=correlation_id,
+            payload={
+                "step_index": int(step_index), "denied_tool": tool_name,
+                "denied_error": check.get("error"), "fallback_tool": negotiation.variant,
+                "outcome": OUTCOME_WAITING, "negotiation_outcome": negotiation.outcome,
+            },
+        )
+        count_gate_outcome(OUTCOME_WAITING)
+        return {
+            "success": False, "result": None, "error": check.get("error"),
+            "failure_class": "permission", "authority_gate": gate,
+        }
+    except Exception as exc:  # noqa: BLE001 — negotiation failing must degrade to the ordinary denial
+        logger.debug("[NodusWorker] negotiation skipped for %s: %s", tool_name, exc)
+        return tool_name
+
+
+def _record_authority_event(
+    session_factory: Any, *, run_id: str, user_id: str, correlation_id: Optional[str], payload: dict,
+) -> None:
+    """`AUTHORITY_NEGOTIATED`, written from the worker on its own short-lived session and
+    committed (DEC-070) — the same pattern as `_record_step`. Never breaks the call."""
+    try:
+        from AINDY.core.execution_signal_helper import record_agent_event
+
+        db = session_factory()
+        try:
+            record_agent_event(
+                run_id=run_id, user_id=user_id, event_type="AUTHORITY_NEGOTIATED", db=db,
+                correlation_id=correlation_id, payload=_json_safe(payload), required=False,
+            )
+            db.commit()
+        finally:
+            with contextlib.suppress(Exception):
+                db.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[NodusWorker] could not record AUTHORITY_NEGOTIATED for %s: %s", run_id, exc)
 
 
 def _remember_factory(memory: DeferredMemoryBuiltins) -> Any:
@@ -622,7 +750,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
             )
             simulated_effects.append(_json_safe(shadow["would_write"]))
             return shadow["call_result"]
-        return run_agent_tool(
+        outcome = run_agent_tool(
             tool_name,
             args,
             user_id=user_id,
@@ -634,6 +762,25 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
             continuation=tool_continuation,
             correlation_id=trace_id or None,
         )
+        # FR-38 / DEC-068 — a refused step whose tool declared the gate PARKS the run: set the
+        # three guest-wait keys plus the gate record and halt the guest exactly as
+        # `await_event()` does. The halt is what keeps the compiled step's retry loop from
+        # re-entering the tool, and the steps after it from running. The parent reads the gate
+        # off the reply; on the re-drive the operator's `skipped` row replays (DEC-069).
+        gate = outcome.get("authority_gate") if isinstance(outcome, dict) else None
+        if gate and not outcome.get("success"):
+            from AINDY.agents.authority_negotiation import (
+                AUTHORITY_DECISION_EVENT,
+                AUTHORITY_DECISION_SCHEMA,
+                GATE_STATE_KEY,
+            )
+
+            state["nodus_wait_requested"] = True
+            state["nodus_wait_event_type"] = AUTHORITY_DECISION_EVENT
+            state["nodus_wait_resume_schema"] = _json_safe(AUTHORITY_DECISION_SCHEMA)
+            state[GATE_STATE_KEY] = _json_safe(gate)
+            raise _AwaitHalt(AUTHORITY_DECISION_EVENT)
+        return outcome
 
     def _is_retryable_error(error: Any) -> bool:
         """Host function for RTR-1 Phase 2d compiled agent workflows.
@@ -784,12 +931,14 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     # FR-40 — the fifth deferred collection: what `execute_tool` observed about declared-args
     # validation. This process's counter never serves and its stderr is DEVNULL, so the tally
     # rides the reply and the parent records it (deferral replaces observation, DEC-041).
+    from AINDY.agents.authority_negotiation import negotiation_tally_scope
     from AINDY.agents.tool_registry import args_validation_deferral_scope
 
     _llm_ledger = None
     _args_ledger = None
+    _negotiation_tally: Optional[dict[str, int]] = None
     _agent_run_id = tool_run_id if tool_run_id and tool_run_id != execution_unit_id else None
-    with llm_usage_deferral_scope() as _llm_ledger, args_validation_deferral_scope() as _args_ledger, llm_attribution_scope(
+    with llm_usage_deferral_scope() as _llm_ledger, args_validation_deferral_scope() as _args_ledger, negotiation_tally_scope() as _negotiation_tally, llm_attribution_scope(
         tenant_id=user_id or None, run_id=_agent_run_id
     ), _durable_cm, _unit_cm, contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stdout_buffer):
         try:
@@ -821,6 +970,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                     "stdout_log": stdout_buffer.getvalue(),
                     "llm_usage": _llm_ledger.as_dict() if _llm_ledger is not None else None,
                     "args_validation": _args_ledger.as_dict() if _args_ledger is not None else None,
+                    "authority_negotiation": dict(_negotiation_tally) if _negotiation_tally is not None else None,
                     "wait_for": wait_for,
                     # WAIT-TYPED-CONTRACT-1 — the guest's third wait key, beside the two above:
                     # `set_state("nodus_wait_resume_schema", {...})` declares what may resume
@@ -839,6 +989,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                     "stdout_log": stdout_buffer.getvalue(),
                     "llm_usage": _llm_ledger.as_dict() if _llm_ledger is not None else None,
                     "args_validation": _args_ledger.as_dict() if _args_ledger is not None else None,
+                    "authority_negotiation": dict(_negotiation_tally) if _negotiation_tally is not None else None,
                 }
         except Exception as exc:
             result_payload = {
@@ -851,6 +1002,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                 "stdout_log": stdout_buffer.getvalue(),
                 "llm_usage": _llm_ledger.as_dict() if _llm_ledger is not None else None,
                 "args_validation": _args_ledger.as_dict() if _args_ledger is not None else None,
+                "authority_negotiation": dict(_negotiation_tally) if _negotiation_tally is not None else None,
             }
 
     # ★ EXEC-ENV-BIND-1 phase 2 — release the guest's scratch root. Deliberately explicit

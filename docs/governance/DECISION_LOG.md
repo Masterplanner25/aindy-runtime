@@ -1581,7 +1581,7 @@ a guest can loop a malformed call. Counts are never dropped: the counter is the 
 ---
 
 ### DEC-068
-**Status:** `provisional` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; accepted by the PR that builds it)
+**Status:** `accepted` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; filed provisional in #732, accepted by the build, #734)
 
 **Decision**
 On the `nodus_vm` backend the WAIT gate is a GUEST WAIT raised from inside `call_tool`: the worker
@@ -1597,10 +1597,21 @@ wait, the durable `wait_state`, the resume route); a second wait mechanism besid
 be the vocabulary drift `FS-SCOPE-1` warns about. The halt-from-inside-a-compiled-step is the one
 unproven assumption and is the first thing the build must test (§9.6 step 1).
 
+★ **Refined by the build (#734).** The guest wait is raised in the worker exactly as decided, but
+the FLOW layer does not park on it: inside an agent segment the `nodus.execute` node reports the
+gate as a TERMINAL node result (`nodus_status: "authority_gate"`) and the segment chain — which
+owns the AgentRun's park, rehydration and atomic claim, and must run the segments after this
+one — parks the AgentRun and registers the re-drive. Two waits on one event would have competed,
+and a flow-level resume runs on a scheduler thread the Python chain cannot be continued from.
+Also found: the halt raised from `call_tool` is redundant with the compiled step's own `throw`
+while `permission` stays non-retryable — kept anyway, because it halts AT the call (no failed
+`__step_N_result` for the parent to ignore) and covers a hand-written script; the test pins the
+difference.
+
 ---
 
 ### DEC-069
-**Status:** `provisional` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; accepted by the PR that builds it)
+**Status:** `accepted` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; filed provisional in #732, accepted by the build, #734)
 
 **Decision**
 An operator's `skip` on the `nodus_vm` gate is recorded as the `agent_steps` row for
@@ -1621,7 +1632,7 @@ keeps `steps_completed` a count of successes (FR-34) — the filing's second sma
 ---
 
 ### DEC-070
-**Status:** `provisional` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; accepted by the PR that builds it)
+**Status:** `accepted` (2026-09-20 — `FR-38` / `AUTHORITY-NEGOTIATION-1` §9; filed provisional in #732, accepted by the build, #734)
 
 **Decision**
 `AUTHORITY_NEGOTIATED` is recorded FROM THE WORKER on its own short-lived session, the way
