@@ -6,6 +6,9 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Callable, Optional
 
 from AINDY.core.execution_signal_helper import queue_system_event
@@ -885,13 +888,124 @@ def validate_tool_args(tool_name: str, args: Any) -> list[str]:
     return errors
 
 
-def _count_args_validation(tool_name: str, outcome: str, mode: str) -> None:
+def _count_args_validation(tool_name: str, outcome: str, mode: str, count: int = 1) -> None:
     try:
         from AINDY.platform_layer.metrics import tool_args_validation_total
 
-        tool_args_validation_total.labels(tool=tool_name, outcome=outcome, mode=mode).inc()
+        tool_args_validation_total.labels(tool=tool_name, outcome=outcome, mode=mode).inc(count)
     except Exception:  # noqa: BLE001 — observability never decides
         pass
+
+
+_ARGS_VALIDATION_WARN_MESSAGE = (
+    "[AgentTool] %s args do not match its declared schema (mode=warn, dispatching anyway): %s"
+)
+
+#: FR-40 — the errors the ledger keeps per tool. Past the cap only the COUNT grows; the
+#: parent's WARNING says how many were dropped. Same shape as DEC-045's LLM ledger cap.
+ARGS_VALIDATION_LEDGER_MAX_ENV = "AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX"
+_ARGS_VALIDATION_LEDGER_MAX_DEFAULT = 32
+
+
+def args_validation_ledger_max() -> int:
+    raw = os.getenv(ARGS_VALIDATION_LEDGER_MAX_ENV, "").strip()
+    if raw.isdigit() and int(raw) >= 0:
+        return int(raw)
+    return _ARGS_VALIDATION_LEDGER_MAX_DEFAULT
+
+
+class ArgsValidationLedger:
+    """FR-40 — what `execute_tool` observed about declared-args validation, per tool, in a
+    process whose counters and log never reach the api (the nodus_vm pool worker).
+
+    The worker's `/metrics` is not the api's, and the pool opens it with `stderr=DEVNULL`, so
+    under `warn` the recipe "watch `outcome=invalid` read zero, then `enforce`" had no witness
+    on that backend. The ledger rides the worker reply as `args_validation` (the fifth deferred
+    collection, beside `llm_usage`) and the parent records it: counter samples under the api's
+    registry and the `warn` WARNING re-emitted there. Deferral REPLACES observation in the
+    worker (DEC-041): nothing is counted twice.
+    """
+
+    def __init__(self, max_errors: Optional[int] = None) -> None:
+        self.max_errors = args_validation_ledger_max() if max_errors is None else int(max_errors)
+        self.tools: dict[str, dict[str, Any]] = {}
+
+    def record(self, tool_name: str, outcome: str, mode: str, errors: Optional[list[str]] = None) -> None:
+        row = self.tools.setdefault(
+            tool_name, {"valid": 0, "invalid": 0, "mode": mode, "errors": [], "dropped_errors": 0}
+        )
+        row["mode"] = mode
+        row[outcome] = int(row.get(outcome, 0)) + 1
+        for err in errors or []:
+            if len(row["errors"]) < self.max_errors:
+                row["errors"].append(str(err))
+            else:
+                row["dropped_errors"] += 1
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"tools": {name: dict(row, errors=list(row["errors"])) for name, row in self.tools.items()}}
+
+
+_DEFERRED_ARGS_VALIDATION: ContextVar[Optional[ArgsValidationLedger]] = ContextVar(
+    "aindy_tool_args_validation_deferral", default=None
+)
+
+
+@contextmanager
+def args_validation_deferral_scope(max_errors: Optional[int] = None) -> Iterator[ArgsValidationLedger]:
+    """Defer every validation observation inside the block into a ledger the caller ships."""
+    ledger = ArgsValidationLedger(max_errors=max_errors)
+    token = _DEFERRED_ARGS_VALIDATION.set(ledger)
+    try:
+        yield ledger
+    finally:
+        _DEFERRED_ARGS_VALIDATION.reset(token)
+
+
+def _observe_args_validation(
+    tool_name: str, outcome: str, mode: str, errors: Optional[list[str]] = None
+) -> None:
+    """Count (and under `warn`, log) a validation outcome — HERE, or into the deferral ledger
+    when one is active, never both (FR-40, DEC-041)."""
+    ledger = _DEFERRED_ARGS_VALIDATION.get()
+    if ledger is not None:
+        ledger.record(tool_name, outcome, mode, errors)
+        return
+    _count_args_validation(tool_name, outcome, mode)
+    if outcome == "invalid" and mode == "warn":
+        logger.warning(_ARGS_VALIDATION_WARN_MESSAGE, tool_name, "; ".join(errors or []))
+
+
+def apply_deferred_args_validation(ledger: Any, *, origin: str = "worker") -> int:
+    """Record a shipped ledger in THIS process: counter samples plus the `warn` WARNING the
+    worker could not deliver. Returns the number of tools recorded. Never raises."""
+    if not isinstance(ledger, dict):
+        return 0
+    count = 0
+    try:
+        for tool_name, row in dict(ledger.get("tools") or {}).items():
+            if not isinstance(row, dict):
+                continue
+            mode = str(row.get("mode") or "off")
+            valid = int(row.get("valid") or 0)
+            invalid = int(row.get("invalid") or 0)
+            if valid:
+                _count_args_validation(str(tool_name), "valid", mode, valid)
+            if invalid:
+                _count_args_validation(str(tool_name), "invalid", mode, invalid)
+                if mode == "warn":
+                    errors = [str(e) for e in (row.get("errors") or [])]
+                    dropped = int(row.get("dropped_errors") or 0)
+                    if dropped:
+                        errors.append(f"(+{dropped} more not carried)")
+                    logger.warning(
+                        _ARGS_VALIDATION_WARN_MESSAGE + " [%d call(s), observed in the %s]",
+                        tool_name, "; ".join(errors), invalid, origin,
+                    )
+            count += 1
+    except Exception as exc:  # noqa: BLE001 — accounting must not fail an execution that produced a result
+        logger.debug("[AgentTool] deferred args validation not applied: %s", exc)
+    return count
 
 
 def _declared_failure_class(source: Any) -> Optional[str]:
@@ -952,7 +1066,9 @@ def execute_tool(
     _args_errors = validate_tool_args(tool_name, args)
     if _args_errors:
         _mode = args_validation_mode()
-        _count_args_validation(tool_name, "invalid", _mode)
+        # FR-40 — counted and (under `warn`) logged here, OR deferred onto the worker reply when
+        # this process is a nodus_vm pool worker whose counters and log never reach the api.
+        _observe_args_validation(tool_name, "invalid", _mode, _args_errors)
         if _mode == "enforce":
             return {
                 "success": False,
@@ -960,13 +1076,8 @@ def execute_tool(
                 "error": f"tool {tool_name!r} args do not match its declared schema: " + "; ".join(_args_errors),
                 "failure_class": "invalid",
             }
-        if _mode == "warn":
-            logger.warning(
-                "[AgentTool] %s args do not match its declared schema (mode=warn, dispatching anyway): %s",
-                tool_name, "; ".join(_args_errors),
-            )
     elif tool_args_schema(tool_name):
-        _count_args_validation(tool_name, "valid", args_validation_mode())
+        _observe_args_validation(tool_name, "valid", args_validation_mode())
     # AUDIT-CORRELATION-1 (DEC-052) — decide whether the effect ledger will engage, and what its
     # key is, BEFORE the admission event below, so `capability.allowed` can name the ledger row.
     # `compute_action_id` is pure (a hash of tool, args, run scope); the ledger itself is still

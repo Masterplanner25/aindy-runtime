@@ -1549,6 +1549,37 @@ mutation, fixed with a sentinel.
 
 ---
 
+### DEC-067
+**Status:** `accepted` (2026-09-20 — `FR-40`, #731)
+
+**Decision**
+Declared-args validation outcomes observed in a nodus_vm pool worker ride the worker reply as
+`args_validation` — the FIFTH deferred collection, beside `llm_usage` — as a per-tool tally
+`{valid, invalid, mode, errors[], dropped_errors}`. Deferral REPLACES observation in the worker
+(`DEC-041` applies unchanged): inside `args_validation_deferral_scope()` `execute_tool` neither
+increments `aindy_tool_args_validation_total` nor logs the `warn` line. The parent
+(`nodus_runtime_adapter.run_script`) increments the counter under the api's registry by the
+tallied counts and re-emits ONE `warn` WARNING per tool naming the call count, the carried
+errors and the origin. The errors carried per tool are capped at
+`AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (default 32); past the cap only `dropped_errors` grows
+and the WARNING says how many were not carried. A reply without the key records nothing.
+
+**Why**
+The 2.20.0 recipe for FR-33 — leave at `warn`, watch `outcome=invalid` read zero, then
+`enforce` — could not be followed on the backend the app runs: the worker's registry never
+serves `/metrics` and the pool opens it with `stderr=DEVNULL`, so "every step validated clean"
+and "validation never ran" were indistinguishable from the api. Piping worker stderr into the api
+log was declined by the filing and here: the frame channel is the design, and `llm_usage` is the
+precedent for what crosses it. A tally rather than per-call records because the consumer is a
+counter; the errors are carried because the WARNING is useless without them, and capped because
+a guest can loop a malformed call. Counts are never dropped: the counter is the witness.
+
+**Related Docs**
+- `AINDY/agents/tool_registry.py::ArgsValidationLedger`, `apply_deferred_args_validation`;
+  `docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md` (the mechanism this copies)
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —

@@ -781,9 +781,15 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     # resource manager is shared. Design: docs/design/FR35_GUEST_LLM_USAGE_DESIGN.md.
     from AINDY.platform_layer.token_meter import llm_attribution_scope, llm_usage_deferral_scope
 
+    # FR-40 — the fifth deferred collection: what `execute_tool` observed about declared-args
+    # validation. This process's counter never serves and its stderr is DEVNULL, so the tally
+    # rides the reply and the parent records it (deferral replaces observation, DEC-041).
+    from AINDY.agents.tool_registry import args_validation_deferral_scope
+
     _llm_ledger = None
+    _args_ledger = None
     _agent_run_id = tool_run_id if tool_run_id and tool_run_id != execution_unit_id else None
-    with llm_usage_deferral_scope() as _llm_ledger, llm_attribution_scope(
+    with llm_usage_deferral_scope() as _llm_ledger, args_validation_deferral_scope() as _args_ledger, llm_attribution_scope(
         tenant_id=user_id or None, run_id=_agent_run_id
     ), _durable_cm, _unit_cm, contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stdout_buffer):
         try:
@@ -814,6 +820,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                     "error": None,
                     "stdout_log": stdout_buffer.getvalue(),
                     "llm_usage": _llm_ledger.as_dict() if _llm_ledger is not None else None,
+                    "args_validation": _args_ledger.as_dict() if _args_ledger is not None else None,
                     "wait_for": wait_for,
                     # WAIT-TYPED-CONTRACT-1 — the guest's third wait key, beside the two above:
                     # `set_state("nodus_wait_resume_schema", {...})` declares what may resume
@@ -831,6 +838,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                     "error": error,
                     "stdout_log": stdout_buffer.getvalue(),
                     "llm_usage": _llm_ledger.as_dict() if _llm_ledger is not None else None,
+                    "args_validation": _args_ledger.as_dict() if _args_ledger is not None else None,
                 }
         except Exception as exc:
             result_payload = {
@@ -842,6 +850,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                 "error": str(exc),
                 "stdout_log": stdout_buffer.getvalue(),
                 "llm_usage": _llm_ledger.as_dict() if _llm_ledger is not None else None,
+                "args_validation": _args_ledger.as_dict() if _args_ledger is not None else None,
             }
 
     # ★ EXEC-ENV-BIND-1 phase 2 — release the guest's scratch root. Deliberately explicit

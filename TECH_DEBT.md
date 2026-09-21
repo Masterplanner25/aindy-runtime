@@ -9124,9 +9124,35 @@ route), not per request; document the width at `execute_with_pipeline`. Not aski
 
 ---
 
-## FR-40 — on `nodus_vm`, FR-33's `warn` mode has no witness: the counter and the WARNING happen in the worker and neither reaches the api 🟡 observability (intake)
+## FR-40 — on `nodus_vm`, FR-33's `warn` mode had no witness: the counter and the WARNING happened in the worker and neither reached the api 🟡 observability
 
-**Status: OPEN — filed by the app 2026-09-17 on 2.20.0, intake 2026-09-20.** Premise to verify:
+**Status: SHIPPED 2026-09-20 (#731; DEC-067).** Filed by the app 2026-09-17 on 2.20.0; verified
+against source — the claim held exactly (`nodus_worker_pool.py` opens the worker with
+`stderr=subprocess.DEVNULL`; `_count_args_validation` increments the process-local registry).
+
+### Shipped
+
+- FR-35's mechanism, the **fifth deferred collection**: `ArgsValidationLedger` +
+  `args_validation_deferral_scope()` in `tool_registry.py`; `_observe_args_validation()` records
+  into the ledger when one is active, otherwise counts and warns exactly as before (deferral
+  REPLACES observation, DEC-041 — nothing counted twice). `nodus_worker` enters the scope beside
+  the LLM ledger and ships `args_validation` on all three reply shapes (success, failure, waiting).
+- `nodus_runtime_adapter.run_script` applies it: counter incremented by the tallied counts under
+  the api's registry, ONE `warn` WARNING per tool naming the call count, the carried errors and the
+  origin (`observed in the nodus_vm worker`). Errors per tool capped at
+  `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (default 32, `.env.example`); counts never dropped. A
+  reply without the key (an older worker) records nothing and raises nothing.
+- Tests drive the real worker (`run_one` with a real declared schema: `valid 1, invalid 1` on the
+  reply, the worker's counter unmoved) and the real parent (`run_script` with a patched
+  subprocess: counter +2/+3, one WARNING with `+1 more` and `2 call(s)`); `enforce` tallies
+  without a warning; missing / `None` / garbage key records nothing. Mutations: worker ignores the
+  ledger → 3 red; parent apply removed → 2 red.
+
+**The recipe holds on both backends now:** leave at `warn`, watch `outcome="invalid"` read zero on
+the api's `/metrics`, then `enforce`. **What remains:** nothing here; the app's flip is theirs.
+
+### The filing, as verified
+
 `execute_tool` counts `aindy_tool_args_validation_total{outcome, mode}` and logs the `warn` line
 in whichever process runs it; on `nodus_vm` that is the pool worker, whose registry `/metrics`
 never serves (FR-35's shape) and whose stderr is `DEVNULL` (`nodus_worker_pool.py`). The 2.20.0
