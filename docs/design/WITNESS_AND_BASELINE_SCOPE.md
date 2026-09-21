@@ -1,7 +1,7 @@
 ---
 title: "Substrate Witness and Performance Baseline — Scope"
 api_version: "1.0"
-last_verified: "2026-09-03"
+last_verified: "2026-09-21"
 status: current
 owner: "platform-team"
 ---
@@ -72,8 +72,10 @@ really about; the timing half can stay open honestly.
 | files referencing `execute_tool` | **0** |
 | files referencing `EffectRecord` | **0** |
 
-**Unchanged since filing.** The flagship consumer integrates in ~334 lines across 3 files, all
-optional and mostly HTTP, and **its real effects cross no chokepoint**.
+**Superseded 2026-09-21 (infinityclaw #1, #2):** Claw is on 2.22.0, its delivery crosses
+`execute_tool` as `claw.channel.send` (`EXACTLY_ONCE`), and one retry was watched being refused
+by the ledger on a real Postgres. `TECH_DEBT.md` `SUBSTRATE-WITNESS-1` carries the numbers and
+the two findings. What is still true: one effect class of Claw's, off by default, one run.
 
 ### ★ The corollary that matters for reading everything else
 

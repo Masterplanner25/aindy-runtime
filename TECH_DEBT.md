@@ -9098,6 +9098,32 @@ key in each tool dict.
 
 ---
 
+## FR-42 — `mint_token` writes `agent_capability_mappings` FK'd to `agent_runs`, so a non-agent run scope loses its capability-mapping audit row silently 🟡 audit gap (runtime-found)
+
+**Status: OPEN — filed 2026-09-21 from `SUBSTRATE-WITNESS-1`'s first live run (infinityclaw #2).**
+Numbered here, not in the app's register, like FR-28. Verified at source:
+`capability_service.mint_token` (`:497`) calls `create_run_capability_mappings` (`:313`, "best-effort
+persistence"), which inserts `AgentCapabilityMapping(agent_run_id=run_id)` — `agent_run_id` is
+`ForeignKey("agent_runs.id", ondelete="CASCADE")` (`db/models/capability.py:51`). A token minted
+for a run id that is not an `agent_runs` row (Claw's per-session run scope; any first-party
+consumer that is not an agent) raises `ForeignKeyViolation`, the `except Exception` logs a WARNING
+(`create_run_capability_mappings failed`), and the mint returns the token. **Observed:** the
+witness's token minted and admitted the tool; the mapping rows for its run were never written.
+
+**Why it matters:** the mapping table is the audit trail of WHICH capabilities a run was granted —
+`AUDIT-CORRELATION-1`'s joins assume it. For the consumer class the substrate claim is about
+(anything that is not an agent run) it is empty by construction, and nothing says so except a
+warning in a log nobody reads (the FR-39 shape).
+
+**Ask (either):** (a) make the run-scoped mapping conditional on the run being an `AgentRun`
+(read once, skip the run rows and keep the agent-type rows, say so on the token as
+`mapping_recorded: false`); or (b) drop the FK and let a non-agent scope record its grants — a
+schema step. Not asking for the warning to become an error: a mint must not fail on its audit
+trail. Design question first: is the audit row owed per RUN or per TOKEN? A token is the grant;
+the row keyed on the token's `execution_token` would cover both consumers without the FK.
+
+---
+
 ## FR-41 — `system_events.source` was `String(32)`; a route name over 32 failed its *required* `execution.started` per request, at WARNING, and the request proceeded unrecorded 🔴 defect
 
 **Status: SHIPPED 2026-09-20 (#730) — a SCHEMA STEP (contract `2026-09-20`, Alembic `0020`).** Filed
@@ -14497,9 +14523,42 @@ read keys from it.** Decisions in the design §8.
 
 ## SUBSTRATE-WITNESS-1 — the substrate claim has no first-party consumer that exercises it
 
-**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `claw-the-first-real-consumer.md` in
-`C:\codev\Claude Code research\docs\` (2026-08-15), the capstone of a nine-document port series.
-Re-verified against `C:\dev\claw` on 2026-08-17 — see the measurements below.
+**Status: OPEN — P1, ★ WITNESSED 2026-09-21 (the recommended slice, built and run live).** Filed
+2026-08-17. Provenance: `claw-the-first-real-consumer.md` in `C:\codev\Claude Code research\docs\`
+(2026-08-15), the capstone of a nine-document port series. Re-verified against `C:\dev\claw` on
+2026-08-17 — see the measurements below.
+
+**★ 2026-09-21 — the slice exists and the guarantee was watched holding, once, on a real ledger.**
+Claw adopted 2.22.0 (infinityclaw #1; its `events.emit` had 422'd on every runtime release —
+this entry's thesis observed) and then routed its outbound message delivery through
+`execute_tool` as `claw.channel.send`, declared `EXACTLY_ONCE`, one scoped token per session
+minted through `mint_token` (infinityclaw #2, `claw/aindy/effects.py`; default off,
+`[aindy] effects_backend = "aindy"`). Witnessed on the runtime's test Postgres bootstrapped at
+`0020` from Claw's own 2.22.0 wheel, nothing mocked below the seam: **send #1 delivered with a
+receipt; the retry of the same message key returned `idempotent_replay: True`; the adapter sent
+ONCE; `aindy_effect_gate_outcomes_total` read `reserved 1 / replayed 1 / degraded 0`; the ledger
+row completed `success`.** Mutation: `AINDY_TOOL_IDEMPOTENCY=0` and the retry duplicates — the
+ledger is what refused it. The three questions every port audit deferred are answered from a run:
+capability metadata IS derivable (the token was minted from the tool's declaration and admitted
+it); the ledger DOES survive a real tool result; a duplicate of a user-visible effect IS refused.
+
+**Two findings from the first run, both about what the substrate assumes a consumer is:**
+1. **The tenant is a UUID foreign key to `users`** (`system_events.user_id`; the effect ledger's
+   attribution rides the required `capability.allowed` event). Claw's `[aindy] user_id = "claw"`
+   failed on the first mediated effect. A consumer is a runtime USER, not a label — the same
+   fact `INITIATOR-IDENTITY-1` records from the other direction (an asserted subject may only
+   constrain, never be a `User` row). Claw now refuses a non-UUID at startup.
+2. **`mint_token` → `create_run_capability_mappings` writes rows FK'd to `agent_runs.id`**; a run
+   scope that is not an `AgentRun` (Claw's session) violates the FK, the write is best-effort and
+   logs a WARNING, the token still mints — so the capability-mapping AUDIT row is silently absent
+   for every non-agent consumer. Filed as **FR-42**.
+
+**What remains — and why the entry stays open:** the witness ran against a counting adapter, not a
+live channel, and for one retry, not a day of traffic. Step 3 is one real channel on a running
+Claw with the backend on, reading the gate counter after ordinary traffic — that is the soak
+`IDEM-11` has been waiting on, **now with traffic that can produce it**. Do not close on the
+witness alone; close on the soak row (`SOAK_REGISTER.md` #2 can now be exercised by Claw as well
+as the app).
 
 **2026-09-13 — two facts from running the tutorials live, both on the witness question.**
 (1) `examples/openclaw/` — the in-repo imitation of Claw — was removed: it ran in-process
