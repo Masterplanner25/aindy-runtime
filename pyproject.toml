@@ -93,7 +93,7 @@ dependencies = [
   "tzdata==2026.3",
   "tzlocal==5.4.4",
   "urllib3==2.7.0",
-  "uvicorn==0.52.3",
+  "uvicorn==0.53.0",
 ]
 
 [project.urls]
