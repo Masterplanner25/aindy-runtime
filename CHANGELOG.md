@@ -4,6 +4,180 @@
 
 _Nothing yet._
 
+## 2.22.0 — 2026-09-20
+
+**Operator notes — read before upgrading.**
+
+- **★ Schema change.** `SCHEMA_CONTRACT_VERSION` → `2026-09-20`, Alembic head → **`0020`**
+  (`system_events.source` widens 32 → 128, FR-41 #730). On an existing deployment a bare
+  `aindy-runtime bootstrap-schema` exits **3** (additive-reconcile-required): run
+  `bootstrap-schema --reconcile`, or branch on exit code 3 (FR-14's path). Widening only —
+  no row is rewritten. `downgrade()` narrows with `left(source, 32)`, lossy for rows written
+  with a longer name after the upgrade.
+- **★ An over-width `source` is now a contract violation at pipeline entry** (#730). A
+  route name longer than 128 used to fail its required `execution.started` on every request at
+  WARNING and proceed unrecorded; now, under `ENFORCE_EXECUTION_CONTRACT` (the default), the
+  request fails before the handler runs, and with it off the violation is logged at ERROR once
+  per name. Never truncated.
+- **The agent resume route takes a body** (FR-38, #734): `POST /api/agent/runs/{id}/resume`
+  `{"decision": "skip" | "abort", "note": "…"}` for a run parked at the authority gate on
+  `nodus_vm`. A resume of such a run **without** a decision is refused (409) and the run stays
+  parked. An ordinary (plan-declared) wait resumes exactly as before. An app-owned resume
+  surface must pass the body through to `resume_agent_run_runtime(payload=)`.
+- **`COMPLETED.steps_completed` counts successes only** (#734): a step skipped at the gate no
+  longer reads as completed; `steps_total` is added beside it. A `skipped` `agent_steps` row
+  now replays on a continued run (it used to execute again).
+- **Deprecation with a date** (#733): `nltk` and `textstat` leave the runtime's dependencies in
+  the release after this one, not before 2026-10-01. A consumer that imports either declares it.
+- **The `[mcp]` extra no longer caps `mcp<2`** (#727): `pip install aindy-runtime[mcp]` resolves
+  the newest 2.x; `nodus-mcp` 0.1.4 serves both majors. `nodus-lang` 5.14.0.
+- **Planner-context / tool providers receive `user_id` as a string** (FR-39, #729) — a provider
+  that read it as a UUID, or expected `db` in the context, must change (there is no `db` by
+  design; open your own session).
+- **Platform UI:** `@aindy/ui-kit` 2.1.0 — the SPA resolves bodies from `X-AINDY-Envelope`
+  (#735). Reaches the container with this release's Dockerfile pin.
+- **Decisions accepted:** DEC-067 (FR-40), DEC-068..070 (FR-38). Entries closed since 2.21.0:
+  `MCP-SDK-2X-1`; shipped: FR-38, FR-39, FR-40, FR-41; `PACK-DEBT-6` at step 2 of 3.
+
+### Changed — ★ schema step: `system_events.source` widens 32 → 128; an over-width source is refused at pipeline entry (FR-41, #730)
+
+- **Operators: this release changes the schema** — Alembic `0020`, contract `2026-09-20`. An existing
+  deployment's bare `aindy-runtime bootstrap-schema` exits **3** (additive-reconcile-required):
+  run `bootstrap-schema --reconcile` or branch on exit code 3 (FR-14's path). Widening only; no
+  row is rewritten. `downgrade()` narrows with `left(source, 32)`, which is lossy for rows written
+  with a longer name after the upgrade.
+- **Why it was wrong:** the pipeline writes every request's route name as `source`. At 32, a 33+
+  character name raised `StringDataRightTruncation` inside the REQUIRED `execution.started` emit
+  on every request; the pipeline caught it, logged a WARNING, recorded the side effect `failed`,
+  and the request proceeded with **no execution record at all**. The app that found it had 8 of
+  230 route names over the width, unrecorded since 2026-09-10.
+- **Fail once, not per request:** a `source` that cannot fit the column is now a contract violation
+  checked at pipeline ENTRY, before the handler — under `ENFORCE_EXECUTION_CONTRACT` (the default)
+  the request fails; otherwise it proceeds and the violation is logged at ERROR once per name.
+  Never truncated: a shortened source would collide across routes. The width is documented on
+  `execute_with_pipeline`'s `route_name` and readable via
+  `system_event_service.system_event_source_max_length()`.
+
+### Changed — `nodus-lang` 5.13.0 → 5.14.0, `nodus-mcp` floor → 0.1.4 (`NODUS-UPGRADE-1`, #727)
+
+- Bumped across **all three pin sites** the entry names — `pyproject.toml`,
+  `AINDY/requirements.txt`, and the `Install MCP extra` CI step, which installs directly and so
+  re-resolves a constraint fixed only in the first two.
+- **No change at our call site, verified rather than assumed.** `NodusRuntime.__init__` has no
+  `**kwargs`, so a renamed confinement argument raises instead of silently unconfining the guest.
+  The public surface was diffed between 5.13.0 and 5.14.0 in a throwaway venv: **identical** — the
+  version string is the only line that differs. All five arguments `nodus_runtime_kwargs()` passes
+  (`allowed_paths`, `allow_subprocess`, `allow_network`, `allow_env`, `max_memory_mb`) are present.
+- **Read the notes, per `NODUS-UPGRADE-2`: 5.14.0 fixes paths this runtime does not walk.**
+  `#862` (a step over budget hung a `nodus serve` request forever — a one-line denial of service)
+  and `#857`/`#858` (`--time-limit`, double-run of a self-running program) are `nodus serve` / CLI
+  paths with **zero references** in `AINDY/`; we embed `NodusRuntime` directly. `#856` (a coroutine
+  spawned through a foreign closure was owned by the wrong VM and dropped) is `spawn`/`run_loop`
+  across module VMs. `#855` builds the TLS trust store **once per process** instead of once per VM —
+  every guest's first HTTP call had paid ~0.5 s for it, so that is the one change a guest here
+  observes.
+- **`nodus-mcp` 0.1.4 is the release `MCP-SDK-2X-1` was waiting for** — `NodusServer` now branches
+  per `mcp` SDK major at import, and the client adapter reads 2.x's `input_schema` (under 0.1.3
+  every tool discovered from a 2.x server arrived with an empty schema and no error). The floor is
+  raised to `>=0.1.4` here; the `<2` cap is decided on a test run, not on the release note.
+
+### Changed — the `[mcp]` extra no longer caps `mcp<2` (`MCP-SDK-2X-1` CLOSED, #727)
+
+- **What a green check means changed:** the CI `Install MCP extra` step now resolves to the newest
+  `mcp` 2.x, so `Runtime Contracts` exercises `nodus-mcp`'s 2.x branch (`add_request_handler`),
+  and no longer its 1.x branch. `nodus-mcp`'s own suite drives both.
+- The cap had been right since 2026-07-31: `nodus-mcp` 0.1.2/0.1.3 called `Server.list_tools()`,
+  which `mcp 2.0.0` removed, so an uncapped extra was broken at server-construction time. It was
+  also hiding a second defect — under 0.1.3 every tool discovered from a 2.x server arrived with an
+  **empty schema and no error** (`inputSchema` → `input_schema`).
+- Lifted **in both places** the entry names (`pyproject.toml`, the CI step) — a cap fixed in one is
+  re-resolved by the other — and **verified by a run, not the release note**: a throwaway venv with
+  the runtime's `[test,mcp]` extras forced to `mcp 2.2.0` ran the three MCP suites plus
+  `test_quota_accrual_orphan.py`: **43 passed, 0 skipped**, the live SSE round-trip included.
+- `tests/unit/test_mcp_sdk_pin.py` deleted, as its docstring instructed. Operators who installed
+  `mcp` by hand beside the extra may now move to 2.x; nothing requires it.
+
+### Fixed — FR-39: the planner-context and tools-for-run hook contexts crossed the extension boundary as a `uuid.UUID`, which the boundary redacts (#729)
+
+- `shared.py` built both contexts with `"user_id": _db_user_id(user_id)` — a `uuid.UUID` — and
+  `sanitize_extension_context` turned it into `{"_redacted_type": "UUID"}` (and dropped `db`, by
+  design). #708 (FR-36) fixed and tested the completion-hook builder only; these two had the same
+  bug. **On the app's stack the planner-context provider had returned the bare base prompt on
+  every plan since 2026-05-20 — every plan was made without the context the provider exists to
+  supply — and nothing raised.**
+- One builder, `build_provider_hook_context()`, for both: `user_id` is a **string**, a missing
+  tenant stays `None`. `PROVIDER_HOOK_PRIMITIVE_KEYS` is the documented key set.
+- The boundary test now runs over **every** tenant-bearing hook context the runtime builds, with a
+  real `uuid.UUID`; an AST census refuses any hook call site that hands the registry an inline dict
+  (how FR-36 and FR-39 both got in).
+- `register_planner_context_provider` / `register_run_tool_provider` now document the contract:
+  one sanitized argument, `user_id` is a str, **no `db` — open your own session.**
+- **App side:** a planner-context / tool provider that reads `user_id` as a UUID or expects `db`
+  in the context must change; the app's `AGENT-PLANNER-CONTEXT-BOUNDARY-1` is that change.
+- Intake: FR-37, FR-38, FR-40, FR-41 filed as open in `TECH_DEBT.md`; the ledger's next is FR-42.
+
+### Fixed — FR-40: on `nodus_vm`, the declared-args validation tally now reaches the api (#731; DEC-067)
+
+- **Why it was wrong:** `execute_tool` counted `aindy_tool_args_validation_total{tool, outcome, mode}`
+  and logged FR-33's `warn` line in whichever process ran it. On the `nodus_vm` backend that is the
+  pool worker — its registry never serves `/metrics` and the pool opens it with `stderr=DEVNULL` —
+  so "every step validated clean" and "validation never ran" were indistinguishable from the api,
+  and the 2.20.0 recipe (leave at `warn`, watch `invalid` read zero, then `enforce`) could not be
+  followed on the backend the app runs.
+- Same mechanism as FR-35: the tally rides the worker reply as `args_validation` (the fifth deferred
+  collection) and is recorded in the api — counter samples under the api's registry, and one `warn`
+  WARNING per tool naming the call count, the errors and the origin. Deferral replaces observation
+  in the worker; nothing is counted twice. Errors carried per tool are capped by
+  `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (default 32); counts are never dropped.
+- **App side:** the recipe now holds on `nodus_vm` — read `outcome="invalid"` on the api's
+  `/metrics` before flipping `AINDY_TOOL_ARGS_VALIDATION=enforce`.
+
+### Deprecated — `nltk` and `textstat` leave the runtime's dependencies in the release after this one (PACK-DEBT-6, #733)
+
+- The runtime pins `nltk==3.10.3` and `textstat==0.7.13` and **imports neither**; they were kept
+  because `aindy-apps-monolith`'s search service imported both without declaring them — a consumer
+  depending on what the runtime *installs* rather than what it *declares*. The app now declares
+  them itself (its #391, 2026-09-20).
+- **Both pins are removed in the next release after this one, and not before 2026-10-01.** Nothing
+  changes in this release. A consumer that imports either package must declare it in its own
+  `pyproject.toml` before then; one that already does (the app) sees no change at all.
+- With the pins go the four `pip-audit --ignore-vuln` acceptances that existed only for them
+  (`PYSEC-2026-97`, `GHSA-rf74-v2fm-23pw`, `PYSEC-2026-597`, `PYSEC-2026-3740`) — an advisory
+  with no fix released closes by absence, which is the only way it ever closes.
+
+### Added — FR-38: the authority gate reaches the `nodus_vm` backend (#734; DEC-068..070)
+
+- **Why it was wrong:** `AUTHORITY-NEGOTIATION-1`'s census missed a fifth denial site —
+  `execute_tool`'s own `check_tool_capability`, which is where a `nodus_vm` step is refused, in the
+  pool worker, before any adapter code. Phases 1–2 (the declared variant, the WAIT gate) were wired
+  on `agent_flow` only; on the backend the app runs a denied step failed the run with
+  `capability.denied` ×3 and `on_denial="wait"` was never consulted.
+- **Now, under `AINDY_AUTHORITY_NEGOTIATION` (still default off):** in the worker a denial negotiates
+  one downgrade to a declared variant the token grants; failing that, a tool declaring
+  `on_denial="wait"` halts the guest at the call and the segment chain parks the AgentRun
+  (`waiting`, `wait_state.authority_gate`) mid-segment. The operator decides through the agent
+  resume route, which now takes a body: `POST /api/agent/runs/{id}/resume`
+  `{"decision": "skip" | "abort", "note": "…"}`. `skip` records the step `skipped` and re-drives
+  the segment as a continuation (finished steps replay, the skip replays, the rest run); `abort`
+  fails the run with the reason. A resume of a gate-parked run **without** a decision is refused
+  (409) and the run stays parked; an unknown decision is refused (422) and recorded on the gate.
+- `AUTHORITY_NEGOTIATED` is recorded from the worker; `aindy_authority_negotiation_total` counts
+  worker resolutions in the api (they ride the reply, like `llm_usage`).
+- **Consumer-visible:** a `skipped` step now replays on a continued run (it used to execute
+  again); `agent_finalize_run`'s `COMPLETED` payload `steps_completed` counts successes only
+  (a skipped step read as `1/1`) and gains `steps_total`. **App side:** its live resume surface
+  should pass the decision body through to `resume_agent_run_runtime(payload=)`.
+
+### Changed — platform UI: `@aindy/ui-kit` 2.0.0 → 2.1.0 — `request()` reads `X-AINDY-Envelope` (FR-37, #735)
+
+- The kit's `request()` now resolves a body from the header the runtime has stamped since 2.6.0:
+  an execution envelope is unwrapped there, and once the backend has been seen stamping, a bare
+  `{data: …}` row is never again mistaken for an envelope by shape (FR-19's client half). Against
+  a runtime older than 2.6.0 nothing changes. `unwrapEnvelope()`'s signature is unchanged.
+- Reaches a container only when a release is cut AND the Dockerfile pin bumped (the SPA ships
+  prebuilt in the wheel). Lockfile resolved on Linux by the `Platform Lockfile` workflow.
+
+
 ## 2.21.0 — 2026-09-17
 
 **Operator notes — read before upgrading.**
