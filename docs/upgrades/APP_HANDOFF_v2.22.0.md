@@ -1,7 +1,7 @@
 ---
 title: "App Handoff — Runtime v2.22.0"
 api_version: "1.0"
-last_verified: "2026-09-20"
+last_verified: "2026-09-21"
 status: current
 owner: "platform-team"
 ---
@@ -177,3 +177,13 @@ curl -s http://localhost:8000/metrics | grep aindy_tool_args_validation_total
    backend that could not fire before.
 2. **Pass the decision body through your resume surface** (§2, FR-38) and **bump `@aindy/ui-kit`
    to 2.1.0** (§2, FR-37). Both are the cleanups your own filings named as yours.
+
+---
+
+## 7. The soak register — the asks the flag backlog has been waiting on
+
+Eight runtime entries end in *"soak, then flip"* and none of them ever said what a soak is.
+[`SOAK_REGISTER.md`](./SOAK_REGISTER.md) does: one flag at a time, in an order, each with what it
+changes, what to watch, what counts as evidence, and what the runtime flips when the evidence
+lands. Start with row 1 (`AINDY_MEMORY_RECALL_OWN_SESSION` — already wired on your stack; confirm
+the value) and report per row in your `RUNTIME_<version>_UPGRADE.md`.
