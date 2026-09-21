@@ -1,6 +1,6 @@
 ---
 title: "aindy-sdk 1.0.0 — four wire mismatches against the runtime, found by running the tutorials"
-last_verified: "2026-09-13"
+last_verified: "2026-09-21"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -37,8 +37,15 @@ switch back when a release fixes them.
 
 | Ask | State |
 |---|---|
-| 1 — `events.emit` key | open |
-| 2 — `upload_script` key | open |
-| 3 — `tree()` docstring / client-side flatten | open |
-| 4 — release with the `initial_state` fix | open |
-| `extra` docstring note | open |
+| 1 — `events.emit` key | **shipped, aindy-sdk 1.0.1** (its #4, 2026-09-21) |
+| 2 — `upload_script` key | **shipped, 1.0.1** |
+| 3 — `tree()` docstring / client-side flatten | **docstring corrected, 1.0.1**; no client-side flatten (flatten yourself) |
+| 4 — release with the `initial_state` fix | **shipped, 1.0.1** |
+| `extra` docstring note | **shipped, 1.0.1** |
+
+**★ What the SDK gained beyond the fixes:** `tests/test_wire_contract.py` — every payload the SDK
+sends, validated against the runtime's OWN schemas (`aindy-runtime` is now its `[test]`
+dependency), with two controls asserting the 1.0.0 shapes are rejected. The SDK's other tests mock
+the dispatcher and pin what the SDK sends, which is how three wrong shapes stayed green for months.
+The runtime's tutorials can switch back from `client.syscalls.call(...)` /
+`client.post("/platform/nodus/upload", ...)` to the SDK methods.
