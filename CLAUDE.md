@@ -296,7 +296,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-42** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-37 (ui-kit), FR-38 (nodus_vm authority seam — design first), FR-40, FR-41 (schema step); FR-14 recurrence half. `/apps/*` is NOT an ownership boundary — 35 such routes are runtime-served (`AINDY/route_inventory.json`, regenerate after ANY route change).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-42** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-37 (ui-kit), FR-38 (nodus_vm authority seam — design first), FR-40; FR-14 recurrence half. FR-41 shipped #730 (Alembic 0020). `/apps/*` is NOT an ownership boundary — 35 such routes are runtime-served (`AINDY/route_inventory.json`, regenerate after ANY route change).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.

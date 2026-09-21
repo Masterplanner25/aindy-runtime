@@ -9090,10 +9090,31 @@ key in each tool dict.
 
 ---
 
-## FR-41 — `system_events.source` is `String(32)`; a route name over 32 fails its *required* `execution.started` per request, at WARNING, and the request proceeds unrecorded 🔴 defect (intake)
+## FR-41 — `system_events.source` was `String(32)`; a route name over 32 failed its *required* `execution.started` per request, at WARNING, and the request proceeded unrecorded 🔴 defect
 
-**Status: OPEN — filed by the app 2026-09-19 on 2.21.0, intake 2026-09-20.** Premise to verify on
-its own PR (read the filing as a claim): `system_event.py` `source = Column(String(32))`; the
+**Status: SHIPPED 2026-09-20 (#730) — a SCHEMA STEP (contract `2026-09-20`, Alembic `0020`).** Filed
+by the app 2026-09-19 on 2.21.0; verified against source — the claim held exactly.
+
+### Shipped
+
+- `source` widened to `String(128)` (matches `trace_id`); Alembic `0020` is `ALTER COLUMN TYPE` inside
+  the table-existence guard, `downgrade()` narrows with `USING left(source, 32)` (documented lossy).
+  `bootstrap-schema` exits 3 on an existing deployment — FR-14's path; the app's Dockerfile branches on it.
+- **Fail once, at entry.** `system_event_service.check_system_event_source()` reads the width OFF THE
+  MODEL COLUMN (never restated) and the pipeline calls it at ENTRY, before the handler, through
+  `_handle_contract_violation`: under `ENFORCE_EXECUTION_CONTRACT` (default) the request fails (500),
+  the handler never runs; otherwise it proceeds and the violation is logged at ERROR once per name.
+  Never truncated. Documented on `execute_with_pipeline`'s `route_name`.
+- Tests drive the real route: exactly-128 → 200; one over → 500 with the handler unrun / 200 with
+  enforcement off and the name remembered; the filed 38-char name is the fits case. Mutations: model
+  at 32 → 2 red; entry check removed → the enforcement route test red.
+
+**What remains:** nothing on the width. A source that is set per-request via `metadata["source"]`
+(not a literal) is checked per request, by design — it still fails at entry, not after the handler.
+
+### The filing, as verified
+
+`system_event.py` `source = Column(String(32))`; the
 pipeline writes `source = metadata["source"] or route_name`; a 33+ char name raises
 `StringDataRightTruncation` → `SystemEventEmissionError` → `_safe_emit_event` records the side
 effect `failed` and the request continues. The app had 8 of 230 route names over 32 (longest 38),

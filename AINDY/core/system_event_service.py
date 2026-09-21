@@ -33,6 +33,45 @@ class SystemEventEmissionError(RuntimeError):
     """Raised when required system event persistence fails."""
 
 
+def system_event_source_max_length() -> int:
+    """The width of ``system_events.source``, read off the model — the one place it is stated."""
+    from AINDY.db.models.system_event import SystemEvent
+
+    return int(SystemEvent.__table__.c.source.type.length)
+
+
+#: Source names already reported over-width, so the ERROR is logged ONCE per name per process —
+#: the width is a registration-time fact about a literal, not a per-request event (FR-41).
+_oversize_sources_reported: set[str] = set()
+
+
+def check_system_event_source(source: str | None) -> str | None:
+    """Return a contract-violation message if ``source`` cannot fit the column, else ``None``.
+
+    FR-41: a route name longer than the column raised ``StringDataRightTruncation`` inside the
+    REQUIRED ``execution.started`` emit on every request; ``_safe_emit_event`` caught it, logged a
+    WARNING, and the request proceeded with no execution record at all. The name is a literal at
+    the call site, so it is checked at pipeline ENTRY — before the handler — and the pipeline
+    treats a miss as a contract violation (``ENFORCE_EXECUTION_CONTRACT`` raises; otherwise the
+    request proceeds and this logs at ERROR, once per name). Never truncated: a shortened source
+    would collide across routes and hide the problem better than it is hidden now.
+    """
+    if source is None:
+        return None
+    text = str(source)
+    limit = system_event_source_max_length()
+    if len(text) <= limit:
+        return None
+    message = (
+        f"ExecutionContract violation: system_events.source {text!r} is {len(text)} characters; "
+        f"the column holds {limit}. Rename the route (source is never truncated)."
+    )
+    if text not in _oversize_sources_reported:
+        _oversize_sources_reported.add(text)
+        logger.error(message)
+    return message
+
+
 def _json_safe(value: Any) -> Any:
     if isinstance(value, uuid.UUID):
         return str(value)
