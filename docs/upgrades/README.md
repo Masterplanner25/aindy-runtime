@@ -19,6 +19,9 @@ inside the container afterwards. They are point-in-time by design — a handoff 
 the world on 2026-08-19 and is not maintained after — so the table below carries the facts that
 still matter across releases: **where the schema steps are.**
 
+**Standing register:** [`SOAK_REGISTER.md`](./SOAK_REGISTER.md) — the default-off flags waiting on
+evidence from the app's stack, one row each: what to turn on, what to watch, what flips it.
+
 ## How to use this page
 
 1. Find your current version in the **Release** column of the table.
