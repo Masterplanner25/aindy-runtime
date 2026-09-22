@@ -1,0 +1,123 @@
+# FR-15 EVIDENCE TOPOLOGY — a dev-host recipe, deliberately NOT a deployment profile.
+#
+# What this is for. FR-15's distributed half (a resume crossing the queue to a separate worker
+# PROCESS) has been built and opt-in since 2026-09-02 and its evidence has never been obtained,
+# because the production-safe profiles `distributed-api` / `distributed-worker` demand a
+# container-grade plugin sandbox and no shipped compose grants the worker one (the entry's
+# 2026-09-08 attempt: both services crash-loop on their own, correct, guards). This file is the
+# one topology that satisfies the chain, on a developer's Docker Desktop, to watch
+# `aindy_execution_dispatch_total{mode="async"}` move while the dead-letter queue stays flat.
+#
+# ★ DEC-072 — what it does that a shipped file must never do: it mounts the HOST'S DOCKER SOCKET
+# into the api and worker containers. Whatever runs in those containers can then start any
+# container on the host — root-equivalent on the host. That is an evidence-gathering trade on a
+# machine you own, made once, recorded; it is not a hardening posture and it must not be copied
+# into docker-compose.yml, docker-compose.prod.yml, or an operator document as a recipe.
+#
+# The sandbox chain it satisfies (deployment_contract.validate_plugin_sandbox_profile_policy):
+#   runner explicitly `containerized_oci` (not `auto`)        AINDY_PLUGIN_SANDBOX_RUNNER
+#   a DIGEST-PINNED container image                           AINDY_PLUGIN_CONTAINER_IMAGE
+#   a trusted identity chain (no source/issuer policy set,    (satisfied by the pin alone)
+#     no signature requirement -> accepted when pinned)
+#   a Linux host that can launch containers                   the docker CLI in the image + the socket
+#
+# Usage (from the repo root; the runtime image must exist — `docker compose build api` first):
+#   docker compose -f docker-compose.fr15-evidence.yml up -d --build
+#   docker compose -f docker-compose.fr15-evidence.yml down -v
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_USER: aindy
+      POSTGRES_PASSWORD: aindy
+      POSTGRES_DB: aindy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aindy -d aindy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      # CREATE EXTENSION IF NOT EXISTS vector on first init (the shipped compose does the same)
+      - ./docker/init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro
+    ports:
+      - "5434:5432"
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/fr15-evidence/Dockerfile
+      args:
+        RUNTIME_IMAGE: aindy-runtime:2.22.0
+    image: aindy-runtime-fr15-evidence:2.22.0
+    # the blessed blank-database path: packaged metadata, FK-ordered, stamps the alembic head
+    command: ["sh", "-c", "aindy-runtime bootstrap-schema && aindy-runtime serve"]
+    environment: &runtime_env
+      DATABASE_URL: postgresql://aindy:aindy@postgres:5432/aindy
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: fr15-evidence-only
+      AINDY_HOST: "0.0.0.0"
+      EXECUTION_MODE: distributed
+      # FR-15 (a): opt-in under distributed mode; nothing inherits it (see .env.example)
+      AINDY_ASYNC_SCHEDULER_DISPATCH: "1"
+      # the production-safe sandbox chain, satisfied minimally and explicitly
+      AINDY_PLUGIN_SANDBOX_RUNNER: containerized_oci
+      AINDY_PLUGIN_CONTAINER_RUNTIME: docker
+      # the digest the sandbox gate certified on (SANDBOX_ESCAPE_AUDIT.md Entries 035/036)
+      AINDY_PLUGIN_CONTAINER_IMAGE: python:3.11-alpine@sha256:0495f5559318affa673172ec7e35cd0a5213e4aaf4c76d0a66554c0af97b157e
+      NODUS_RUN_STATE_ROOT: /var/lib/aindy/nodus-state
+    volumes:
+      # ★ DEC-072: the host's docker daemon, root-equivalent. Evidence only.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - nodus_state:/var/lib/aindy/nodus-state
+      # the working tree over the installed wheel, so a fix can be witnessed BEFORE it ships
+      # (the image pins the published release; this overlay is what makes the topology an
+      # instrument rather than a re-run of the last release)
+      - ./AINDY:/usr/local/lib/python3.11/site-packages/AINDY:ro
+    # the socket is root:root inside the Docker Desktop VM; the image runs as uid 1000
+    group_add:
+      - "0"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8000/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  worker:
+    image: aindy-runtime-fr15-evidence:2.22.0
+    command: ["python", "-m", "AINDY.worker"]
+    healthcheck:
+      disable: true   # the image's HEALTHCHECK curls :8000, which a worker does not serve
+    environment:
+      <<: *runtime_env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - nodus_state:/var/lib/aindy/nodus-state
+      - ./AINDY:/usr/local/lib/python3.11/site-packages/AINDY:ro
+    group_add:
+      - "0"
+    # NOT on the api: `distributed-api` readiness REQUIRES a healthy worker heartbeat, so a
+    # worker that waits for a healthy api never starts and the api never becomes ready.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  nodus_state:

@@ -1670,6 +1670,42 @@ that is a per-token table, filed then, not a widened FK now.
 
 ---
 
+### DEC-072
+**Status:** `accepted` (2026-09-22 — `FR-15`, #751)
+
+**Decision**
+FR-15's process-boundary evidence is gathered on ONE dev-host topology, `docker-compose.fr15-evidence.yml`
++ `docker/fr15-evidence/Dockerfile`: the shipped runtime image plus a docker CLI, with the host's
+docker socket mounted into the api and worker containers, `EXECUTION_MODE=distributed`,
+`AINDY_ASYNC_SCHEDULER_DISPATCH=1`, and the production-safe sandbox chain satisfied minimally and
+explicitly (`containerized_oci`, a digest-pinned `python:3.11-alpine` — the gate's own digest — no
+source/issuer policy). That file is an evidence instrument: it is never a deployment profile, its
+socket mount is never copied into `docker-compose.yml` / `docker-compose.prod.yml` or an operator
+document, and it says so in its own header.
+
+**Why**
+The distributed half shipped 2026-09-02 and its evidence has never been obtained: the
+production-safe profiles demand a container-grade sandbox (`shutil.which("docker")` + a daemon),
+the shipped image has no docker binary and the shipped compose grants no daemon, so the stack
+crash-loops on its own correct guards (the 2026-09-08 attempt). Lowering the profile is refused
+by design; relaxing the guards would be the wrong fix. Mounting the socket gives whatever runs
+in those containers root-equivalence on the host — acceptable exactly once, on a machine the
+owner controls, to read two numbers (`aindy_execution_dispatch_total{mode="async"}` moving,
+`aindy_async_queue_dlq_depth` flat). Production unblocking is a different decision: a nested
+container runtime or a sandbox host the worker delegates to, and it is not taken here.
+
+**Related Docs**
+- `docker-compose.fr15-evidence.yml`; `TECH_DEBT.md` FR-15 (the 2026-09-08 blocker and the evidence)
+
+★ What the run added to the file: the worker must NOT depend on the api (the `distributed-api`
+readiness REQUIRES a worker heartbeat — a worker waiting on a healthy api never starts); the
+blank database is bootstrapped with `bootstrap-schema`, not `AINDY_SCHEMA_RECONCILE` (FK order);
+the pgvector init script is mounted; the working tree is overlaid on site-packages so a fix is
+witnessed before it ships; the docker CLI is downloaded on the host (the build VM's network
+fetched it at ~7 KB/s for three hours). Evidence obtained the same day: FR-15 losses #5 and #6.
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —

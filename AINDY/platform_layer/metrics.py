@@ -465,6 +465,13 @@ async_queue_delayed = Gauge(
     registry=REGISTRY,
 )
 
+scheduler_resume_forwarded_total = Counter(
+    "aindy_scheduler_resume_forwarded_total",
+    "Woken resumes forwarded straight to the dispatcher because this process runs no scheduler "
+    "heartbeat (a follower under EXECUTION_MODE=distributed) — FR-15 silent loss #5.",
+    registry=REGISTRY,
+)
+
 async_queue_dlq_depth = Gauge(
     "aindy_async_queue_dlq_depth",
     "Async jobs currently in the dead-letter queue",

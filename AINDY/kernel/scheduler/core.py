@@ -12,6 +12,21 @@ from AINDY.kernel.scheduler.common import (
 )
 
 
+def _distributed_execution_mode() -> bool:
+    import os
+
+    return os.getenv("EXECUTION_MODE", "").strip().lower() == "distributed"
+
+
+def _count_forwarded_resume() -> None:
+    try:
+        from AINDY.platform_layer.metrics import scheduler_resume_forwarded_total
+
+        scheduler_resume_forwarded_total.inc()
+    except Exception:  # noqa: BLE001 — observability never decides
+        pass
+
+
 class SchedulerCoreMixin:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -62,16 +77,34 @@ class SchedulerCoreMixin:
         callback: Callable[[], None],
         entry: dict,
     ) -> None:
-        self.enqueue(
-            ScheduledItem(
-                execution_unit_id=str(entry.get("eu_id") or ""),
-                tenant_id=str(entry.get("tenant_id") or "system"),
-                priority=entry.get("priority") or PRIORITY_NORMAL,
-                run_callback=callback,
-                run_id=run_id,
-                eu_type=entry.get("eu_type", "flow"),
-            )
+        item = ScheduledItem(
+            execution_unit_id=str(entry.get("eu_id") or ""),
+            tenant_id=str(entry.get("tenant_id") or "system"),
+            priority=entry.get("priority") or PRIORITY_NORMAL,
+            run_callback=callback,
+            run_id=run_id,
+            eu_type=entry.get("eu_type", "flow"),
         )
+        # FR-15 silent loss #5 — an item enqueued on a process with no heartbeat is an item
+        # lost. Under distributed mode a woken resume is forwarded NOW through the dispatcher
+        # (the async hint routes it to the durable queue for a worker process); a leader with a
+        # running heartbeat keeps the queue, which its own `schedule()` drains as before.
+        if _distributed_execution_mode() and not self._local_drainer_running():
+            logger.info(
+                "[Scheduler] no local drainer (follower process); forwarding woken resume run=%s to the dispatcher",
+                run_id,
+            )
+            _count_forwarded_resume()
+            try:
+                self._dispatch_item_now(item)
+                return
+            except Exception as exc:  # noqa: BLE001 — never lose it silently: fall back to the queue and SAY so
+                logger.error(
+                    "[Scheduler] forwarding woken resume run=%s failed (%s); queued locally where "
+                    "no heartbeat drains it",
+                    run_id, exc,
+                )
+        self.enqueue(item)
 
     def _unregister_redis_wait(self, run_id: str) -> None:
         try:

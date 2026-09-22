@@ -25,6 +25,29 @@ from AINDY.worker.worker_loop import run_worker_loop
 logger = logging.getLogger(__name__)
 
 
+def _rehydrate_and_open_scheduler(log) -> None:
+    """Rehydrate waiting flow runs into this process's scheduler, then open it to bus events."""
+    from AINDY.kernel.event_bus import get_event_bus
+    from AINDY.kernel.scheduler_engine import get_scheduler_engine
+
+    try:
+        from AINDY.core.flow_run_rehydration import rehydrate_waiting_flow_runs
+        from AINDY.db.database import SessionLocal
+
+        db = SessionLocal()
+        try:
+            registered = rehydrate_waiting_flow_runs(db)
+        finally:
+            db.close()
+        if registered:
+            log.info("[worker] FlowRun rehydration registered %d run(s)", registered)
+    except Exception as exc:  # noqa: BLE001 — an empty registry still beats a closed one
+        log.warning("[worker] FlowRun rehydration failed (scheduler opens anyway): %s", exc)
+    get_scheduler_engine().mark_rehydration_complete()
+    drained = get_event_bus().drain_buffered_events()
+    log.info("[worker] scheduler open to bus events; drained %s buffered", drained)
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -105,6 +128,13 @@ def main() -> None:
                 "Initialize or reconcile the packaged runtime schema before starting the worker."
             )
 
+        # FR-15 silent loss #6 (evidence topology, 2026-09-22): the worker's scheduler engine
+        # never had its rehydration marked complete — that happens in the api's lifespan — so
+        # every bus event the worker received was buffered and, at 1000, DROPPED
+        # ("[Scheduler] pre-rehydration buffer full"). A worker that became background LEADER
+        # then held rehydrated wait registrations nothing could wake. Same sequence the api's
+        # startup runs: rehydrate what is waiting, mark complete, drain what was buffered.
+        _rehydrate_and_open_scheduler(logger)
         concurrency = int(os.getenv("WORKER_CONCURRENCY", "1"))
         publish_worker_runtime_state(startup_complete=True)
         run_worker_loop(concurrency=concurrency)
