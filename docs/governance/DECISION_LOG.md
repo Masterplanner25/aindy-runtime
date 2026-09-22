@@ -1646,6 +1646,30 @@ FR-40 — same shape), and a tally is the right carrier because the consumer is 
 
 ---
 
+### DEC-071
+**Status:** `accepted` (2026-09-22 — `FR-42`, #750)
+
+**Decision**
+The capability-mapping audit row is owed per RUN. `create_run_capability_mappings` writes the
+run-scoped `agent_capability_mappings` rows only when the run id is an `agent_runs` row; for any
+other scope (a first-party consumer's session, `SUBSTRATE-WITNESS-1`) it writes the agent-type
+rows, skips the run rows deliberately, logs at INFO, and the minted token carries
+`mapping_recorded: false` — informational, outside the HMAC. The mint never fails on its audit
+trail; the foreign key stays.
+
+**Why**
+The alternative (drop the FK, record grants per token) was a schema step to serve a row nobody
+reads yet; the row's consumers (`AUDIT-CORRELATION-1`'s joins) are keyed on runs. Before this the
+non-agent case was a foreign-key violation caught by a broad `except` and logged as a failure —
+indistinguishable from a real write failure, and silent to the consumer. A decision that says so
+on the token is what the witness needed. If a non-agent consumer ever needs its grants recorded,
+that is a per-token table, filed then, not a widened FK now.
+
+**Related Docs**
+- `AINDY/agents/capability_service.py::create_run_capability_mappings`; `TECH_DEBT.md` FR-42
+
+---
+
 ## Future Decisions To Record
 
 *(Checked 2026-09-13. Every item below was resolved by 2026-06-06 and none was added here —

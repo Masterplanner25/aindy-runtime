@@ -296,7 +296,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-43** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-42 (runtime-found: capability-mapping audit row lost for a non-agent run scope); FR-14 recurrence half. FR-37 ui-kit 2.1.0 shipped; FR-38 #734, FR-40 #731, FR-41 #730 (Alembic 0020).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-43** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half. FR-42 closed #750 (DEC-071). FR-37 ui-kit 2.1.0 shipped; FR-38 #734, FR-40 #731, FR-41 #730 (Alembic 0020).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
@@ -319,7 +319,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - AUTHORITY-LIFETIME-1: **DEC-056** authority ends with the run, two sites · **DEC-057** cancel read widened, sticky · **DEC-058** fail-OPEN · **DEC-059** `waiting` keeps authority.
 - EVENT-OUTBOX-1: **DEC-060** event rides the handler's session · **DEC-061** id stays client-assigned · **DEC-062** a raising handler is rolled back; unit row commits at creation.
 - RECOVERY-GRANULARITY-1: **DEC-063** per-step write at the worker seam · **DEC-064** `agent_steps`, no table · **DEC-065** plan STEP INDEX, never an ordinal · **DEC-066** replay only continued + `success`.
-- **DEC-067** FR-40: args-validation tally rides the worker reply (fifth deferred collection); deferral replaces observation; errors capped `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (32), counts never.
+- **DEC-067** FR-40: args-validation tally rides the worker reply (fifth deferred collection); deferral replaces observation; errors capped `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (32), counts never. **DEC-071** FR-42: the capability-mapping audit row is per RUN; a non-AgentRun scope gets type rows only + `mapping_recorded: false` on the token, outside the HMAC.
 - FR-38 (§9, #734): **DEC-068** nodus_vm gate = a guest wait from inside `call_tool`; the CHAIN parks mid-segment (the node reports, never parks) · **DEC-069** `skip` = a `skipped` `agent_steps` row replayed on re-drive (widens DEC-066) · **DEC-070** the event and counter come from the worker.
 
 ### Standing rule — not an item
