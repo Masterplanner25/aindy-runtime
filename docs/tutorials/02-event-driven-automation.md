@@ -1,6 +1,6 @@
 ---
 title: "Tutorial 2 — Event-Driven Automation"
-last_verified: "2026-09-16"
+last_verified: "2026-09-21"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -206,7 +206,7 @@ for content, tags in [
 
 print("Uploading script...")
 with open("wait_resume.nd", encoding="utf-8") as f:
-    client.post("/platform/nodus/upload", {"name": "wait_resume", "content": f.read(), "overwrite": True})
+    client.nodus.upload_script("wait_resume", f.read(), overwrite=True)
 
 print("Starting script (phase 1 — will suspend)...")
 result = client.nodus.run_script(script_name="wait_resume", input={"sprint": "sprint-12"})["data"]
@@ -226,9 +226,9 @@ Starting script (phase 1 — will suspend)...
   Nodus status: None            ← "waiting" on a runtime carrying NODUS-RESUME-BRIDGE-1's fix
 ```
 
-The upload is `POST /platform/nodus/upload` (posted directly — `client.nodus.upload_script`
-sends `source` where the route wants `content`; aindy-sdk 1.0.0 is broken there, see the SDK
-handoff). `run_script` is `POST /platform/nodus/run`; its response is the pipeline envelope
+`upload_script` is `POST /platform/nodus/upload` (aindy-sdk **≥ 1.0.1**; 1.0.0 sent `source`
+where the route wants `content` and 422'd — the SDK handoff). `run_script` is
+`POST /platform/nodus/run`; its response is the pipeline envelope
 with the execution record under `data`. Both need `flow.execute`. The run is now a `flow_runs`
 row with `status = 'waiting'` and `waiting_for = 'review.approved'`, a `waiting_flow_runs` row
 holds the scheduler registration, and `flow_run_rehydration` re-registers it after a restart.
@@ -426,7 +426,7 @@ for content in ["Syscall versioning", "SDK tests", "Docs site"]:
     client.memory.write(f"/memory/{TENANT}/tasks/outcome", content, tags=["sprint-12"], node_type="outcome")
 
 with open("wait_resume.nd", encoding="utf-8") as f:
-    client.post("/platform/nodus/upload", {"name": "wait_resume", "content": f.read(), "overwrite": True})
+    client.nodus.upload_script("wait_resume", f.read(), overwrite=True)
 
 run_id = client.nodus.run_script(script_name="wait_resume")["data"]["run_id"]
 print(f"Suspended — run {run_id}")

@@ -1,6 +1,6 @@
 ---
 title: "Tutorials"
-last_verified: "2026-09-13"
+last_verified: "2026-09-21"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -65,15 +65,15 @@ line of real work (`/memory/demo/…` put `demo` in the tenant slot).
 **4. The SDK.**
 
 ```bash
-pip install aindy-sdk          # imported as `aindy_sdk`
+pip install "aindy-sdk>=1.0.1"   # imported as `aindy_sdk`
 ```
 
-**aindy-sdk 1.0.0 has three wire mismatches against this runtime**, found when these tutorials
-were run live (`docs/handoffs/SDK_HANDOFF_1_0_0_wire_mismatches.md`): `events.emit()` sends
-`type` (the syscall needs `event_type`), `nodus.upload_script()` sends `source` (the route needs
-`content`), and `memory.tree()`'s docstring promises a `flat` key that does not exist. The
-tutorials use `client.syscalls.call(...)` and `client.post(...)` where the typed method is
-broken, and say so inline.
+**Use aindy-sdk ≥ 1.0.1.** 1.0.0 had three wire mismatches against this runtime, found when
+these tutorials were first run live (`docs/handoffs/SDK_HANDOFF_1_0_0_wire_mismatches.md`):
+`events.emit()` sent `type` for `event_type`, `nodus.upload_script()` sent `source` for
+`content`, and `memory.tree()`'s docstring promised a `flat` key that does not exist. All three
+shipped in 1.0.1 (2026-09-21) and the tutorials use the typed methods again — each was
+re-verified against a live 2.22.0 server with the published 1.0.1 the same day.
 
 **5. On Windows,** `set PYTHONIOENCODING=utf-8` before running the scripts — the sample
 output uses `→` and `•`, which the default console code page cannot encode.

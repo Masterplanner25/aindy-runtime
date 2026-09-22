@@ -1,6 +1,6 @@
 ---
 title: "Tutorial 3 — Scheduled Intelligence"
-last_verified: "2026-09-13"
+last_verified: "2026-09-21"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -108,7 +108,7 @@ client = AINDYClient(
 TENANT = tenant_from_jwt(client.api_key)
 
 with open("daily_briefing.nd", encoding="utf-8") as f:
-    client.post("/platform/nodus/upload", {"name": "daily_briefing", "content": f.read(), "overwrite": True})
+    client.nodus.upload_script("daily_briefing", f.read(), overwrite=True)
 
 print("Manual run...")
 result = client.nodus.run_script(script_name="daily_briefing")["data"]
@@ -298,7 +298,7 @@ client = AINDYClient(base_url=os.environ["AINDY_BASE_URL"], api_key=os.environ["
 TENANT = tenant_from_jwt(client.api_key)
 
 with open("daily_briefing.nd", encoding="utf-8") as f:
-    client.post("/platform/nodus/upload", {"name": "daily_briefing", "content": f.read(), "overwrite": True})
+    client.nodus.upload_script("daily_briefing", f.read(), overwrite=True)
 
 test = client.nodus.run_script(script_name="daily_briefing")["data"]
 print("manual run:", test["status"], "-", test["output_state"]["briefing"])
