@@ -1,6 +1,6 @@
 ---
 title: "Tutorial 1 — Memory-Driven Task Analyzer"
-last_verified: "2026-09-13"
+last_verified: "2026-09-21"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -257,20 +257,16 @@ flat list. The recursive read above is simpler when all you want is the nodes.
 
 ```python
 print("\nEmitting completion event...")
-# NOT client.events.emit(): aindy-sdk 1.0.0 sends {"type": ...} and the syscall requires
-# "event_type", so that method 422s against every runtime release. The generic caller works.
-ev = client.syscalls.call("sys.v1.event.emit", {
-    "event_type": "sprint.analyzed",
-    "payload": {"sprint": "sprint-12", "task_count": len(nodes), "insight_id": node["id"]},
-})
+ev = client.events.emit("sprint.analyzed",
+                        {"sprint": "sprint-12", "task_count": len(nodes), "insight_id": node["id"]})
 print(f"  ✓ {ev['status']} — trace {ev['trace_id']}")
 print("\nDone. The memory-driven loop is working.")
 ```
 
-`sys.v1.event.emit` writes a `SystemEvent` row, fans out to any matching webhook
-subscription, and publishes on the event bus. Its `data` is empty by contract — the event's
-identity is the envelope's `trace_id`. (`client.events.emit` is the SDK method for this and is
-broken in 1.0.0 — `docs/handoffs/SDK_HANDOFF_memory_tree_flat.md` — hence the generic call.)
+`client.events.emit` dispatches `sys.v1.event.emit`, which writes a `SystemEvent` row, fans
+out to any matching webhook subscription, and publishes on the event bus. Its `data` carries the
+`event_id`; the envelope's `trace_id` is the request. (Needs aindy-sdk **≥ 1.0.1** — 1.0.0 sent
+the wrong wire key and 422'd on every call; `docs/handoffs/SDK_HANDOFF_1_0_0_wire_mismatches.md`.)
 
 ---
 
@@ -304,8 +300,7 @@ with open("analyze.nd", encoding="utf-8") as f:
 
 client.memory.write(f"/memory/{TENANT}/insights/decision", out["summary"],
                     tags=["sprint-12", "auto-generated"], node_type="decision")
-client.syscalls.call("sys.v1.event.emit", {"event_type": "sprint.analyzed",
-                     "payload": {"sprint": "sprint-12", "task_count": len(nodes)}})
+client.events.emit("sprint.analyzed", {"sprint": "sprint-12", "task_count": len(nodes)})
 
 print(f"Loop complete: {len(nodes)} tasks → 1 insight → 1 event")
 ```
