@@ -56,6 +56,7 @@ runtime flips a default in the release after the evidence lands, and the row mov
 | Absence signal | `degraded` stays at baseline (a `degraded` outcome is the gate giving up); p95 of your enveloped-route latency unchanged (the lock wait is the cost) |
 | Failure looks like | a request stuck for 300 s (the lock ceiling) — the trace shows the syscall waiting; file it with the two `action_id`s |
 | Flips | default on in the next release after the presence signal shows a refused duplicate |
+| ★ Claw can now produce this traffic | a real external channel reaches the seam end to end (Telegram, 2026-09-22): ordinary turns write `claw.channel.send` rows and a repeated `message_key` is replayed, not re-sent. What is still missing is VOLUME and CONCURRENCY in one session — `IDEM-11` is not exactly-once under contention and a sequential retry does not test it |
 | ★ If Claw is the traffic | only a NON-WebChat channel reaches the effect seam — WebChat streams and bypasses `deliver()` entirely (measured 2026-09-22, 0 ledger rows from 4 live turns; `SUBSTRATE-WITNESS-1`). And a live Claw's `/metrics` is nodus-observability's registry, not the runtime's, so `aindy_effect_gate_outcomes_total` cannot be read from outside the process: read the `effect_records` rows (durable, survives a restart) or expose the runtime registry first |
 
 ### 3. `AINDY_DELEGATION_PRIVATE_MEMORY=1` — `RTR-4` — **status: never on anywhere**
