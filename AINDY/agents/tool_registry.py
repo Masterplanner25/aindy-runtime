@@ -802,6 +802,42 @@ def _tool_idempotency_enabled() -> bool:
     return os.getenv("AINDY_TOOL_IDEMPOTENCY", "").strip().lower() in {"1", "true", "yes"}
 
 
+def _tool_idempotency_strict_enabled() -> bool:
+    """IDEM-13 strict at-most-once on the TOOL seam. **Default OFF — opt-in.**
+
+    ``AINDY_TOOL_IDEMPOTENCY_STRICT=1`` (or true/yes/on) makes a concurrent-duplicate loser BLOCK
+    on the advisory lock until the winner finishes, then replay its result — instead of degrading
+    to AT_LEAST_ONCE and running the tool a second time.
+
+    ★ Why this exists separately from ``AINDY_SYSCALL_IDEMPOTENCY_STRICT``: FR-27 built the lock
+    and wired it into ``syscall_dispatcher`` only, so the path that carries the real effects —
+    ``execute_tool``, which is where a first-party consumer's ``EXACTLY_ONCE`` tool lands — had no
+    strict mode at all. Measured on a real channel 2026-09-23 (IDEM-13): 5 concurrent sends of one
+    key delivered 5 messages against 1 ledger row, `degraded` ×20 over the run.
+
+    Read at call time, never at import — an import-time env read is invisible to behavioural
+    tests (the standing rule).
+    """
+    return os.getenv("AINDY_TOOL_IDEMPOTENCY_STRICT", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _tool_idempotency_strict_wait_seconds() -> float:
+    """How long a loser waits before it gives up and degrades (counted ``degraded_lock_timeout``).
+
+    Default 60s — deliberately LOWER than the syscall path's 300s: a tool call is a single
+    external effect with its own timeouts, and a caller blocked behind a wedged winner is worse
+    here than an extra delivery. Tune with ``AINDY_TOOL_IDEMPOTENCY_STRICT_WAIT_SECONDS``.
+    """
+    raw = os.getenv("AINDY_TOOL_IDEMPOTENCY_STRICT_WAIT_SECONDS", "").strip()
+    if not raw:
+        return 60.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 60.0
+    return value if value >= 0 else 60.0
+
+
 def _finalize_tool_effect(db, action_id: str, status: str, result, tool_name: str) -> None:
     """Finalize an EffectRecord best-effort — a ledger failure must never mask the tool
     outcome. On success, cache a JSON-safe result for replay; on failure, cache nothing
@@ -1233,6 +1269,31 @@ def execute_tool(
     # #157 lookup path. See docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md (MEB-0).
     # DUR-2 — a continued run's per-run at-most-once signal engages the gate for ANY tool
     # (declaration-free), independent of the tool's guarantee + AINDY_TOOL_IDEMPOTENCY.
+    # IDEM-13 — strict at-most-once on the tool seam. The lock is taken BEFORE the reserve and
+    # held across reserve -> tool -> complete, so a loser blocks until the winner's row is
+    # `success` and then replays it. Without it, `_resolve_existing_row` sees a live `pending`
+    # row and returns "go ahead" (counted `degraded`) — which is every concurrent caller
+    # executing, measured as C deliveries for C callers on a real channel.
+    _effect_lock = None
+    if _idempotent and _tool_idempotency_strict_enabled():
+        from AINDY.kernel.effect_ledger import acquire_effect_lock, count_gate_outcome
+
+        try:
+            _lock_state, _effect_lock = acquire_effect_lock(
+                db, _action_id, wait_seconds=_tool_idempotency_strict_wait_seconds(),
+            )
+        except Exception as _lock_exc:  # noqa: BLE001 — a lock failure degrades, never blocks
+            logger.warning("[AgentTool] %s strict lock failed (%s); proceeding AT_LEAST_ONCE",
+                           tool_name, _lock_exc)
+            _lock_state, _effect_lock = "error", None
+        if _lock_state == "timeout":
+            # An honest degrade, and a DIFFERENT signal from contention: the winner is slower
+            # than the wait ceiling.
+            count_gate_outcome("degraded_lock_timeout")
+            logger.warning(
+                "[AgentTool] %s strict idempotency lock timed out after %ss; proceeding "
+                "AT_LEAST_ONCE", tool_name, _tool_idempotency_strict_wait_seconds(),
+            )
     if _idempotent:
         from AINDY.kernel.effect_ledger import resolve_effect_record
 
@@ -1248,6 +1309,10 @@ def execute_tool(
             _already, _cached, _idempotent = False, None, False
         else:
             if _already:
+                # the winner already completed: replay, and drop the lock on the way out (this
+                # return is BEFORE the try/finally below, so it must release for itself)
+                if _effect_lock is not None:
+                    _effect_lock.release()
                 return {
                     "success": True,
                     "result": (_cached or {}).get("result") if isinstance(_cached, dict) else None,
@@ -1394,6 +1459,12 @@ def execute_tool(
         if _idempotent:
             _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
         return {"success": False, "result": None, "error": str(exc), "failure_class": _declared_failure_class(exc)}
+    finally:
+        # IDEM-13 — released after the ledger row reached a terminal status on EVERY exit, so a
+        # waiting loser wakes to `success` (replay) rather than to the `pending` row it would
+        # have degraded past. release() is idempotent and closes its own connection.
+        if _effect_lock is not None:
+            _effect_lock.release()
 
 
 def get_tool_risk(tool_name: str) -> str:

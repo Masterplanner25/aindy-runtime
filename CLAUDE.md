@@ -272,7 +272,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — P2 and below
 
-- **IDEM-13** — the TOOL seam's `EXACTLY_ONCE` has no strict mode: `FR-27`'s advisory lock is wired into `syscall_dispatcher` ONLY, and `execute_tool` (the path with the real effects) never acquires it. Measured on a real channel 2026-09-23: 5 concurrent sends of ONE key → 5 delivered messages, 1 row, `degraded 5`× — every concurrent caller delivers. The loss IS counted. Fix: `AINDY_TOOL_IDEMPOTENCY_STRICT` + `acquire_effect_lock`, default OFF.
+- **IDEM-13** — the TOOL seam's `EXACTLY_ONCE` had no strict mode: FR-27's lock was wired into `syscall_dispatcher` ONLY, so under contention EVERY concurrent caller ran (5 concurrent sends → 5 real messages; 8-way → 8 runs). ★ BUILT 2026-09-23: `AINDY_TOOL_IDEMPOTENCY_STRICT` (wait 60s) → 1 run / 7 replays / 0 degraded. Default OFF; open for the FLIP only.
 - **EFFECT-OUTCOME-UNKNOWN-1** — `unknown` status shipped (#560) for a read timeout after a full write only; nothing emits it; `AT_MOST_ONCE` absent from the guarantee set. A claim about the WORLD — an unclassified exception is still `failed`.
 - **SANDBOX-EVIDENCE-2** — the strong runner attests `mount_mode`/`network_policy` by reading its own argv; real evidence is the live `/proc` probe, deployment-time. `strong-sandbox-certified` is a deployment claim.
 - **EFFECT-PRECONDITION-1** — *(Aider)* an effect cannot name the world-version it expects. Record the external system's OWN version token; never reimplement. After FS-SCOPE-1 or not at all.

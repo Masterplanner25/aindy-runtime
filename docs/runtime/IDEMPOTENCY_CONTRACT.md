@@ -308,6 +308,41 @@ contention — the operator signal inverts in a useful direction.
 
 Design + measured prototype: `docs/design/FR27_ADVISORY_LOCK_DESIGN.md`.
 
+### The same mode on the TOOL seam — `AINDY_TOOL_IDEMPOTENCY_STRICT` (IDEM-13)
+
+**Default-off, opt-in, PostgreSQL only.** Everything above describes the SYSCALL path. The tool
+path (`execute_tool` → `resolve_effect_record`) reaches the same ledger and had none of it until
+2026-09-23: `FR-27` wired the lock into `syscall_dispatcher` alone. That mattered because the tool
+path is where a consumer's real effects are declared — a tool registered `EXACTLY_ONCE`, called
+inside an agent run.
+
+**What was measured before building it** (a live Telegram channel, `SUBSTRATE-WITNESS-1`): five
+concurrent sends of ONE `message_key` delivered **five messages** against one ledger row, with
+`degraded` counted five times. Reproduced deterministically at 8-way contention in
+`tests/integration/test_soak_idempotency_strict_tool_idem13.py`: **8 of 8 callers ran the tool.**
+Not "sometimes twice" — every concurrent caller executes, because a `pending` row is not a claim.
+
+With `AINDY_TOOL_IDEMPOTENCY_STRICT=1` the tool path takes the same `acquire_effect_lock` on the
+same dedicated connection, across `reserve → tool → complete`, and the same 8-way contention runs
+the tool **once** with 7 replays and `degraded 0`.
+
+- **Loser wait:** `AINDY_TOOL_IDEMPOTENCY_STRICT_WAIT_SECONDS`, default **60** — deliberately
+  lower than the syscall path's 300. A tool call is one external effect with its own timeouts, and
+  a caller blocked behind a wedged winner is worse here than an extra delivery. A timeout degrades
+  and is counted `degraded_lock_timeout`, exactly as above.
+- **Release:** on every exit — success, tool exception, and the replay early-return (which returns
+  before the `finally`, so it releases for itself). A lock held past an exit would wedge every
+  later caller of that `action_id`.
+- **Everything else is inherited:** non-PostgreSQL is `unsupported` and behaves exactly as before;
+  a lock failure degrades and is logged, never blocks the tool; across-process-crash exactly-once
+  remains out of scope.
+- **The gate must already be engaged.** Strict mode changes how a loser behaves; it does not
+  enable the gate. `AINDY_TOOL_IDEMPOTENCY=1` (or a durable run) plus a tool declared
+  `EXACTLY_ONCE` plus a `run_id` are still what turn the boundary on.
+
+Registry: `TECH_DEBT.md` `IDEM-13`. **Still default-off** — it ships with the mechanism proven and
+the flip unevidenced, per the standing rule that a capability ships off until a soak says otherwise.
+
 ---
 
 ---
