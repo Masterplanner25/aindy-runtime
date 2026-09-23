@@ -260,7 +260,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — P0
 
-- **FR-15** — dispatch is serialised (`schedule()` drains synchronously); thread mode flipped 2026-09-01, the DISTRIBUTED half is built and opt-in (#551–#556). Four silent losses found there, all "unresolvable message ACKed as SUCCESS", three introduced by the fix for the previous one. **Stays open for EVIDENCE from a separate worker PROCESS, blocked 2026-09-08: no shipped compose satisfies the production-safe profiles' sandbox chain.** Do NOT close on the opt-in.
+- **FR-15** — dispatch is serialised; DISTRIBUTED half opt-in (#551–#556). ★ 2026-09-22 evidence step (1) OBTAINED on the dev-host topology (`docker-compose.fr15-evidence.yml`, DEC-072 — socket mount, never a profile): a resume crossed api→Redis→worker, DLQ flat; found losses #5 (a FOLLOWER api queues a woken resume nothing drains → forwarded) and #6 (worker never opened its scheduler). Open for a production stack + reconstruction-primary waits. Do NOT close on the opt-in.
 
 ### Open — P1
 
@@ -319,7 +319,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - AUTHORITY-LIFETIME-1: **DEC-056** authority ends with the run, two sites · **DEC-057** cancel read widened, sticky · **DEC-058** fail-OPEN · **DEC-059** `waiting` keeps authority.
 - EVENT-OUTBOX-1: **DEC-060** event rides the handler's session · **DEC-061** id stays client-assigned · **DEC-062** a raising handler is rolled back; unit row commits at creation.
 - RECOVERY-GRANULARITY-1: **DEC-063** per-step write at the worker seam · **DEC-064** `agent_steps`, no table · **DEC-065** plan STEP INDEX, never an ordinal · **DEC-066** replay only continued + `success`.
-- **DEC-067** FR-40: args-validation tally rides the worker reply (fifth deferred collection); deferral replaces observation; errors capped `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (32), counts never. **DEC-071** FR-42: the capability-mapping audit row is per RUN; a non-AgentRun scope gets type rows only + `mapping_recorded: false` on the token, outside the HMAC.
+- **DEC-067** FR-40: args-validation tally rides the worker reply (fifth deferred collection); deferral replaces observation; errors capped `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (32), counts never. **DEC-071** FR-42: the capability-mapping audit row is per RUN; a non-AgentRun scope gets type rows only + `mapping_recorded: false` on the token, outside the HMAC. **DEC-072** FR-15 evidence topology mounts the host docker socket — an instrument, never a profile or operator recipe.
 - FR-38 (§9, #734): **DEC-068** nodus_vm gate = a guest wait from inside `call_tool`; the CHAIN parks mid-segment (the node reports, never parks) · **DEC-069** `skip` = a `skipped` `agent_steps` row replayed on re-drive (widens DEC-066) · **DEC-070** the event and counter come from the worker.
 
 ### Standing rule — not an item

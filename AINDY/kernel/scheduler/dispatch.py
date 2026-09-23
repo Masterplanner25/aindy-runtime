@@ -11,6 +11,46 @@ from AINDY.kernel.scheduler.common import (
 
 
 class SchedulerDispatchMixin:
+    def _local_drainer_running(self) -> bool:
+        """Whether THIS process runs the scheduler heartbeat that drains ``schedule()``.
+
+        FR-15 silent loss #5 (found on the evidence topology, 2026-09-22): under
+        ``EXECUTION_MODE=distributed`` the background lease is contended, and an api that lost it
+        is a FOLLOWER — no ``scheduler_service``, no heartbeat, ``schedule()`` never called. It
+        still registers waits (it ran the flow) and still answers the resume route, whose
+        ``notify_event`` enqueued the woken resume into this process's in-memory queue. Nothing
+        drained it: ``woken: true``, the run ``waiting`` forever, DLQ flat, counters flat.
+        """
+        try:
+            from AINDY.platform_layer import scheduler_service
+
+            sched = getattr(scheduler_service, "_scheduler", None)
+            return bool(sched is not None and getattr(sched, "running", False))
+        except Exception:  # noqa: BLE001 — an unreadable state is "not running", the safe direction
+            return False
+
+    def _dispatch_item_now(self, item: ScheduledItem) -> None:
+        """Dispatch ONE item through exactly the call ``schedule()`` makes — the resume descriptor
+        (``RESUME_CONTEXT_KEY``) and the async hint included, so under distributed mode it lands
+        on the durable queue for a worker process instead of in a queue no heartbeat drains."""
+        from AINDY.core.execution_dispatcher import (
+            async_scheduler_dispatch_enabled,
+            dispatch as _dispatch,
+        )
+        from AINDY.core.resume_reconstruction import RESUME_CONTEXT_KEY, resume_context
+
+        stub = _ResumedEUStub(id=item.execution_unit_id, type=item.eu_type, priority=item.priority)
+        if async_scheduler_dispatch_enabled():
+            stub.extra = {"async_hint": True}
+        context = {
+            "eu_id": item.execution_unit_id,
+            "run_id": item.run_id,
+            "source": "scheduler.resume",
+        }
+        if item.run_id:
+            context[RESUME_CONTEXT_KEY] = resume_context(run_id=item.run_id, eu_type=item.eu_type)
+        _dispatch(stub, item.run_callback, context)
+
     def schedule(self, *, tick_waits: bool = True) -> int:
         """Drain up to ``MAX_PER_SCHEDULE_CYCLE`` queued items.
 

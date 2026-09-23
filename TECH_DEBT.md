@@ -8334,6 +8334,74 @@ per-process difference, so this is not a theoretical gap — it is the one that 
 Also unexercised: the scheduler routing there for real (while it refused, `schedule()` never
 produced a distributed dispatch, so that combination has never run) and cross-process concurrency.
 
+### ★★ Evidence step (1) OBTAINED 2026-09-22 on the evidence topology (DEC-072, #751) — and it found silent losses #5 and #6
+
+**The topology.** `docker-compose.fr15-evidence.yml` + `docker/fr15-evidence/Dockerfile`: the
+shipped image plus a docker CLI, the host's docker socket mounted into api and worker, the
+production-safe sandbox chain satisfied minimally (`containerized_oci`, the gate's digest-pinned
+`python:3.11-alpine`), `EXECUTION_MODE=distributed`, `AINDY_ASYNC_SCHEDULER_DISPATCH=1`, and the
+working tree overlaid on site-packages so a fix is witnessed before it ships. A dev-host
+instrument, never a profile — DEC-072 records the socket mount as the security trade it is.
+**Both services booted past the chain** — `distributed-api` ready, `distributed-worker` looping,
+heartbeat in Redis — which the 2026-09-08 attempt never reached.
+
+**The evidence.** A wait-only guest script (`await_event` + two `set_state`) run through
+`POST /platform/nodus/run` on the api parks the flow run; `POST /platform/flows/runs/{id}/resume`
+with a payload; then, on the api: `aindy_scheduler_resume_forwarded_total 1`,
+`aindy_execution_dispatch_total{eu_type="flow",mode="async"} 1`,
+`aindy_async_queue_enqueue_total{backend="redis",outcome="accepted"} 1`,
+`aindy_async_queue_dlq_depth 0`; on the worker: `[Queue:redis] ack job_id=…` →
+`[nodus.execute] Resuming on 'review.approved'` → `SUCCESS` → `[Worker] resume_completed`; the
+run `success` with the payload in its state (`approved_by = fr15-evidence`). **A resume parked
+by one process, executed by another, DLQ flat** — the sentence this entry has waited on since
+2026-09-02. Not a production deployment: one host, one resume, the working tree.
+
+**★★ It took two fixes, both at the process boundary, exactly where the four before them were:**
+
+5. **A FOLLOWER api enqueued a woken resume into a queue only a leader drains.** Under
+   distributed mode the background lease is contended (the worker takes it whenever the api
+   restarts — observed, `fence=2`); an api that lost it runs no scheduler heartbeat, so
+   `schedule()` — whose ONLY caller is `scheduler_service.py:489` — is never called in that
+   process. It still registers waits (it ran the flow) and still answers the resume route,
+   whose `notify_event` → `_enqueue_resume` → `enqueue()` put the woken resume into the api's
+   in-memory queue. `woken: true`; the run `waiting` for 20+ minutes; no dispatch sample, no
+   enqueue sample, DLQ flat — the loss was invisible from every counter. Fix:
+   `_enqueue_resume` on a process with no local drainer under distributed mode dispatches the
+   item NOW through exactly the call `schedule()` makes (`_dispatch_item_now`: same stub, the
+   resume descriptor, the async hint → the durable queue); a leader keeps the queue; a failed
+   forward falls back to the queue and logs at ERROR where it sits. Counter:
+   `aindy_scheduler_resume_forwarded_total`.
+6. **The worker never marked its scheduler's rehydration complete** — that happens in the api's
+   lifespan — so every bus event the worker received was buffered and, at 1000, DROPPED
+   (`[Scheduler] pre-rehydration buffer full`, repeating). A worker that became LEADER held
+   rehydrated wait registrations (`[flow_rehydrate] registered run=…`) nothing could wake. Fix:
+   `worker/__main__.py::_rehydrate_and_open_scheduler` — rehydrate waiting flow runs, mark
+   complete, drain the buffer — the api's own startup sequence, before the loop starts.
+
+Tests: `tests/unit/test_fr15_follower_forwards_resume.py` (8) — the forward under distributed
+mode with no heartbeat, the leader keeping its queue, thread mode untouched, a failed forward
+falling back loudly, the forward being `schedule()`'s own call, the counter, the worker opening
+its scheduler (and opening it even when rehydration fails). Mutations: the forward's condition
+→ `False` → 2 red; the worker's `mark_rehydration_complete` removed → 2 red.
+
+**Two more things the topology surfaced, recorded not fixed:**
+- `AINDY_SCHEMA_RECONCILE=true` on a BLANK database creates `agent_capability_mappings` before
+  `capabilities` and fails on the FK (`reconcile_runtime_schema`, `schema_contract.py:614`).
+  `bootstrap-schema` (FK-ordered packaged metadata) is the blank-database path and works; the
+  reconcile knob is for an existing database. Worth a guard: refuse reconcile on a blank DB
+  with a pointer to bootstrap-schema.
+- With `LOG_LEVEL=DEBUG` on the worker, a three-line guest script hit the nodus warm worker's
+  45 s hard limit ("worker stuck") on the resumed segment; with the default level the same
+  script completed in seconds. Suspect, not proven: the nodus worker subprocess's STDOUT is
+  the frame channel (`nodus_worker_pool.py`), and a root-level DEBUG handler writing there
+  would corrupt it. Reproduce deliberately before filing.
+
+**What remains — the entry stays OPEN.** (1) is obtained on a dev host, not a production
+deployment, and for one resume, not a soak; the production topology needs a real sandbox host
+for the worker (DEC-072's "not taken here"). (2) unchanged: migrate the live wait registrations
+to reconstruction-primary, including `execution_pipeline/waits.py:56`. The P0 stays P0 until a
+production stack runs the distributed half with the flag on and the counters read.
+
 ### ★★ Evidence step ATTEMPTED 2026-09-08 and BLOCKED — the blocker is not FR-15's code
 
 A distributed stack was brought up to gather step (1): `EXECUTION_MODE=distributed`,
