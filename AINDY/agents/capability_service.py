@@ -315,16 +315,35 @@ def create_run_capability_mappings(
     agent_type: str,
     capability_names: list[str],
     db,
-) -> None:
-    """Best-effort persistence of run and agent-type capability mappings."""
+) -> bool:
+    """Best-effort persistence of run and agent-type capability mappings.
+
+    Returns whether the RUN-scoped rows were written. FR-42 / DEC-071: the audit row is owed per
+    run, and ``agent_run_id`` is a foreign key to ``agent_runs`` — so a token minted for a scope
+    that is not an ``AgentRun`` (a first-party consumer's session, `SUBSTRATE-WITNESS-1`) gets the
+    agent-type rows and NO run rows, deliberately, instead of a foreign-key violation caught by the
+    broad except below and logged as a failure. The caller reports it on the token as
+    ``mapping_recorded``; the mint never fails on its audit trail.
+    """
+    run_rows_written = False
     try:
+        from AINDY.db.models import AgentRun
         from AINDY.db.models.capability import AgentCapabilityMapping
 
         rows = _get_capability_rows(db)
         if not rows:
-            return
+            return False
 
         run_uuid = parse_user_id(run_id)
+        run_is_agent_run = bool(
+            run_uuid is not None
+            and db.query(AgentRun.id).filter(AgentRun.id == run_uuid).first() is not None
+        )
+        if run_id and not run_is_agent_run:
+            logger.info(
+                "[CapabilityService] run %s is not an agent run; capability mapping recorded per "
+                "agent type only (DEC-071)", run_id,
+            )
 
         existing = db.query(AgentCapabilityMapping).all()
         existing_keys = {
@@ -348,18 +367,21 @@ def create_run_capability_mappings(
                 existing_keys.add(type_key)
 
             run_key = (str(capability_row.id), "", str(run_id))
-            if run_id and run_key not in existing_keys:
+            if run_id and run_is_agent_run and run_key not in existing_keys:
                 db.add(
                     AgentCapabilityMapping(
                         capability_id=capability_row.id,
-                        agent_run_id=run_uuid or run_id,
+                        agent_run_id=run_uuid,
                     )
                 )
                 existing_keys.add(run_key)
+                run_rows_written = True
 
         db.flush()
     except Exception as exc:
         logger.warning("[CapabilityService] create_run_capability_mappings failed: %s", exc)
+        return False
+    return run_rows_written or run_is_agent_run
 
 
 def get_auto_grantable_tools(user_id: str, db) -> list[str]:
@@ -494,7 +516,7 @@ def mint_token(
             if any(get_policy_for_risk(risk) != "auto_allowed" for risk in tool_risks):
                 return None
 
-        create_run_capability_mappings(
+        mapping_recorded = create_run_capability_mappings(
             run_id=run_id,
             agent_type=agent_type,
             capability_names=allowed_capabilities,
@@ -521,6 +543,10 @@ def mint_token(
             "granted_tools": granted_tools,
             "allowed_capabilities": allowed_capabilities,
             "approval_mode": approval_mode,
+            # FR-42 / DEC-071 — informational, outside the HMAC: whether the run-scoped
+            # capability-mapping audit rows exist for this token's run (False for a scope that
+            # is not an AgentRun; the agent-type rows are written either way).
+            "mapping_recorded": bool(mapping_recorded),
             "token_hash": _token_hash(
                 run_id=str(run_id),
                 user_id=str(user_id),

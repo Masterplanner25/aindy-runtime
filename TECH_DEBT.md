@@ -9098,9 +9098,13 @@ key in each tool dict.
 
 ---
 
-## FR-42 — `mint_token` writes `agent_capability_mappings` FK'd to `agent_runs`, so a non-agent run scope loses its capability-mapping audit row silently 🟡 audit gap (runtime-found)
+## FR-42 — `mint_token` wrote `agent_capability_mappings` FK'd to `agent_runs`, so a non-agent run scope lost its capability-mapping audit row silently 🟡 audit gap (runtime-found)
 
-**Status: OPEN — filed 2026-09-21 from `SUBSTRATE-WITNESS-1`'s first live run (infinityclaw #2).**
+**Status: CLOSED 2026-09-22 (#750; DEC-071 — the row is owed per RUN).** The run-scoped rows are
+written only for an `AgentRun`; a non-agent scope gets the agent-type rows, an INFO line, and
+`mapping_recorded: false` on the token (outside the HMAC). Tests drive the real function on both
+scopes; mutation (guard removed) → the non-agent case red on the FK. Filed 2026-09-21 from
+`SUBSTRATE-WITNESS-1`'s first live run (infinityclaw #2).
 Numbered here, not in the app's register, like FR-28. Verified at source:
 `capability_service.mint_token` (`:497`) calls `create_run_capability_mappings` (`:313`, "best-effort
 persistence"), which inserts `AgentCapabilityMapping(agent_run_id=run_id)` — `agent_run_id` is
