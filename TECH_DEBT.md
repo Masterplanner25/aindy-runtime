@@ -14632,6 +14632,57 @@ Claw with the backend on, reading the gate counter after ordinary traffic — th
 witness alone; close on the soak row (`SOAK_REGISTER.md` #2 can now be exercised by Claw as well
 as the app).
 
+### ★★ Step 3 ATTEMPTED 2026-09-22 on the cheapest channel — and the cheapest channel CANNOT witness it
+
+**The rig was built and run, and it is reproducible** (nothing below was the obstacle): the
+runtime's test Postgres (`docker-compose.test.yml`, `postgres-test`, :5433) bootstrapped at `0020`
+with `bootstrap-schema` from **Claw's own venv wheel, 2.22.0** — a consumer's released runtime,
+not this tree; the witness user recreated (`f33f40c2-9580-4c42-a281-2d507c4eddff`,
+`claw@witness.local` — no CLI creates users, an ORM script does); an UNTRACKED `claw.witness.toml`
+(Claw's CLI takes `--config`, so the repo's `claw.toml` stays clean) with `enabled = true`,
+`effects_backend = "aindy"`, the database URL and the UUID `user_id`; `SECRET_KEY` in the
+environment. Claw started clean and said so:
+`[aindy_effects] delivery routed through execute_tool (claw.channel.send, EXACTLY_ONCE) user=f33f40c2…`.
+Four real turns were driven over a WebSocket client in its own process (the far side, counting for
+itself), each one a real Anthropic call (`HTTP/1.1 200 OK`) with the right reply text.
+
+**The measurement: `SELECT count(*) FROM effect_records` → `0`. `system_events` → `0`.** Not one
+mediated effect, from a gateway that had announced the seam, on traffic that delivered correctly.
+
+**★ The cause is structural, in `claw/gateway/server.py::_run_turn`:**
+
+```python
+if is_webchat:
+    await self.webchat_adapter.send_done(peer_id)        # chunks were streamed as they arrived
+elif adapter and result["content"]:
+    for index, block in enumerate(split_blocks(result["content"], max_block=max_len)):
+        await self.deliver(..., turn_id=execution_unit_id, index=index)   # ← the seam
+```
+
+`deliver()` → `_deliver_via` → `execute_tool` is the **`elif`**: it runs for every channel EXCEPT
+WebChat. WebChat replies are a STREAM (`stream_chunk` per chunk, then a `done` frame) — the client
+received exactly `{'chunk': 1, 'done': 1}`. And that is not an oversight to fix casually: the
+effect key is `session:turn:block`, and **a stream has no blocks**. WebChat is a transport for
+tokens, not a delivery of messages, so there is nothing for EXACTLY_ONCE to be about.
+
+**What this means for the entry.** The "cheap leg first, real channel later" plan does not exist:
+the only surfaces that route through the seam are the five external adapters Claw already ships
+(`claw_telegram/`, `claw_discord/`, `claw_slack/`, `claw_matrix/`, `claw_signal/` — config-driven,
+`[channels.extra.<name>]`, no code to write). **Step 3 requires one of those, with a real token.**
+The alternative is a Claw product decision — route the assembled WebChat response through
+`deliver()` as well — which invents block structure the stream does not have and changes the UI's
+streaming contract; it is Claw's call, recorded here, not taken.
+
+**★ Second finding, and it blocks the READING half of step 3:** a live Claw exposes `/metrics`,
+but that is **nodus-observability's** registry (`nodus_execution_total`, …). The runtime keeps its
+own `REGISTRY` (`AINDY/platform_layer/metrics.py`), so `aindy_effect_gate_outcomes_total` — the
+number this entry and `SOAK_REGISTER.md` #2 both say to read — **is not observable from outside a
+running Claw process**. Two consequences: (a) the durable evidence is the `effect_records` table
+itself (rows, `status`, the unique `action_id`), which outlives a restart and is the better soak
+instrument anyway; (b) if the gate counter is wanted live, Claw must expose the runtime registry
+when `effects_backend = "aindy"` — a small Claw-side addition, not a runtime change. **Do not
+report a soak from an unread counter: a counter nobody can read reads as zero.**
+
 **2026-09-13 — two facts from running the tutorials live, both on the witness question.**
 (1) `examples/openclaw/` — the in-repo imitation of Claw — was removed: it ran in-process
 with an unconfined `NodusRuntime`, i.e. it demonstrated the bypass rather than the substrate;

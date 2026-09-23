@@ -1,7 +1,7 @@
 ---
 title: "Soak Register — flags waiting on evidence from the app's stack"
 api_version: "1.0"
-last_verified: "2026-09-21"
+last_verified: "2026-09-22"
 status: current
 owner: "platform-team"
 ---
@@ -56,6 +56,7 @@ runtime flips a default in the release after the evidence lands, and the row mov
 | Absence signal | `degraded` stays at baseline (a `degraded` outcome is the gate giving up); p95 of your enveloped-route latency unchanged (the lock wait is the cost) |
 | Failure looks like | a request stuck for 300 s (the lock ceiling) — the trace shows the syscall waiting; file it with the two `action_id`s |
 | Flips | default on in the next release after the presence signal shows a refused duplicate |
+| ★ If Claw is the traffic | only a NON-WebChat channel reaches the effect seam — WebChat streams and bypasses `deliver()` entirely (measured 2026-09-22, 0 ledger rows from 4 live turns; `SUBSTRATE-WITNESS-1`). And a live Claw's `/metrics` is nodus-observability's registry, not the runtime's, so `aindy_effect_gate_outcomes_total` cannot be read from outside the process: read the `effect_records` rows (durable, survives a restart) or expose the runtime registry first |
 
 ### 3. `AINDY_DELEGATION_PRIVATE_MEMORY=1` — `RTR-4` — **status: never on anywhere**
 
