@@ -114,6 +114,14 @@ def _count_gate(outcome: str) -> None:
         pass
 
 
+def count_gate_outcome(outcome: str) -> None:
+    """Public alias of the gate counter, for callers outside this module (IDEM-13's tool path).
+
+    Observability must never break the effect path, so this cannot raise.
+    """
+    _count_gate(outcome)
+
+
 # FR-27 — strict at-most-once under contention. The gate below degrades every concurrent
 # duplicate (measured N−1 of N, pinned at N with a slow handler) because a *pending* row
 # protects nothing until it is *success*. An advisory lock keyed on the action_id, held across

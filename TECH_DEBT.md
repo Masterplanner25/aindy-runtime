@@ -10140,6 +10140,39 @@ is counted, never blocks the tool forever.
 the flag exists — under the current contract, a duplicate under contention is the documented
 outcome, and a test asserting otherwise is asserting a feature that was never built.
 
+### ★ BUILT the same day (2026-09-23) — `AINDY_TOOL_IDEMPOTENCY_STRICT`, default OFF
+
+`execute_tool` now takes `acquire_effect_lock` before the reserve and holds it across
+`reserve → tool → complete`, releasing on **every** exit: success, tool exception, and the replay
+early-return (that one returns BEFORE the `finally`, so it releases for itself — a lock held past
+an exit wedges every later caller of that `action_id`). Wait ceiling
+`AINDY_TOOL_IDEMPOTENCY_STRICT_WAIT_SECONDS`, default **60s**, deliberately lower than the syscall
+path's 300: a tool call is one external effect with its own timeouts, and a caller blocked behind a
+wedged winner is worse here than an extra delivery. A timeout counts `degraded_lock_timeout` and
+proceeds; a lock failure degrades and is logged; non-PostgreSQL is `unsupported` and behaves
+exactly as before.
+
+**Proven on live PostgreSQL** (`tests/integration/test_soak_idempotency_strict_tool_idem13.py`),
+8-way contention on one `action_id`:
+
+| | tool ran | `degraded` | `replayed` |
+|---|---|---|---|
+| flag off (the behaviour this entry measured) | **8 of 8** | ≥ 1 | — |
+| flag on | **1** | **0** | **7** |
+
+Mutation: disable the acquire and the strict test reports *"strict mode ran the tool 8 times under
+8-way contention"* — the same shape the Telegram channel produced, now deterministic in CI. Unit
+wiring (lock asked for only when the flag is on; released on all three exits; timeout counted;
+`unsupported` unchanged) is `tests/unit/test_tool_idempotency_strict_idem13.py`, all four halves
+mutation-checked.
+
+**Still OPEN, and this is the honest remainder:** the flag is off, and the evidence that justifies
+FLIPPING it is a soak on a real consumer — the same soak `SUBSTRATE-WITNESS-1` owes. What is
+closed is "no option exists"; what is open is "which default is right". Also unchanged: a winner
+whose PROCESS crashes leaves a `pending` row and the next caller degrades until
+`STALE_PENDING_THRESHOLD_SECONDS` — across-process-crash exactly-once stays out of scope
+(FR-27's decision, inherited here deliberately rather than half-built).
+
 ## IDEM-12 — `agent.undo` re-invokes every compensator when called twice
 
 **Status: CLOSED 2026-09-16 (#696).** Reproduced first — two reversible effects, two undos,
