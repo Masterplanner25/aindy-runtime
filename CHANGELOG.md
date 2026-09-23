@@ -1,8 +1,82 @@
 # Changelog
 
-## Unreleased
+## 2.23.0 — 2026-09-23
 
-_Nothing yet._
+### Changed — dependency bumps, grouped (#749)
+
+Seven dependabot PRs (#741–#747) taken as one, for the reason #485 and #669 recorded: `strict:
+true` branch protection means each individual merge forces a rebase of the others, and dependabot
+resolves each package independently, so the set was merged together and verified to resolve
+together (`pip install --dry-run` of the five Python bumps in one plan).
+
+| Package | From | To |
+|---|---|---|
+| `anyio` | 4.15.0 | 4.15.1 |
+| `joblib` | 1.5.3 | 1.6.0 |
+| `pymongo` | 4.18.0 | 4.18.1 |
+| `urllib3` | 2.7.0 | 2.8.0 |
+| `uvicorn` | 0.52.3 | 0.53.0 |
+| `cc` (native crate) | 1.4.5 | 1.4.7 |
+| `react-router-dom` (platform UI) | 7.18.3 | 7.18.4 |
+
+- **★ `joblib` 1.6.0 adds a transitive dependency, `cloudpickle`**, that nothing in the tree
+  named. Pinned at 3.1.2 in both pin files — the tree pins transitives, and an unpinned one is
+  the shape `NODUS-UPGRADE-1`'s third site exists for.
+- `uvicorn` 0.53.0 is the one bump with server surface; the health / version / boot / routing /
+  middleware / worker-pool / async-job suites ran green under it locally, the full sweep in CI.
+
+### Fixed — FR-42: a token minted for a non-agent run scope no longer trips a foreign key on its audit trail (#750; DEC-071)
+
+- **Why it was wrong:** `mint_token` → `create_run_capability_mappings` inserted
+  `agent_capability_mappings` rows FK'd to `agent_runs`; for a run scope that is not an `AgentRun`
+  (a first-party consumer's session — found by `SUBSTRATE-WITNESS-1`'s first live run) the insert
+  violated the FK, a broad `except` logged a WARNING, and the mint went on. The audit row was
+  silently absent and reported as a failure.
+- Now the run-scoped rows are written only for an `AgentRun`; any other scope gets the
+  agent-type rows, an INFO line, and **`mapping_recorded: false` on the token** — informational,
+  outside the HMAC, so tokens validate across runtimes with and without the key. The mint never
+  fails on its audit trail. The FK stays: the row is owed per run (DEC-071).
+
+### Fixed — FR-15: a follower api no longer loses a woken resume; the worker opens its scheduler (#751; DEC-072)
+
+- **Why it was wrong (silent loss #5):** under `EXECUTION_MODE=distributed` the background lease
+  is contended, and an api that is not the leader runs no scheduler heartbeat — `schedule()` is
+  never called there. It still registers waits and still answers `POST /platform/flows/runs/{id}/resume`,
+  whose `notify_event` enqueued the woken resume into the api's in-memory queue, which nothing
+  drained. `woken: true`, the run `waiting` forever, every counter flat. Now a process with no
+  local drainer forwards the woken resume straight to the dispatcher (the same call `schedule()`
+  makes; the async hint routes it to the durable queue). New counter
+  `aindy_scheduler_resume_forwarded_total`. A leader keeps its queue; thread mode is untouched.
+- **Silent loss #6:** the worker never marked its scheduler's rehydration complete, so every bus
+  event it received was buffered and, at 1000, dropped. The worker now rehydrates waiting flow
+  runs and opens its scheduler at startup, as the api's lifespan does.
+- **Evidence, first time:** a resume parked on the api was executed by the worker process over
+  Redis with the DLQ flat — on the new dev-host evidence topology `docker-compose.fr15-evidence.yml`
+  (DEC-072: it mounts the host's docker socket; an instrument, never a deployment profile).
+- Recorded, not fixed: `AINDY_SCHEMA_RECONCILE=true` on a blank database fails on FK order
+  (use `bootstrap-schema`); `LOG_LEVEL=DEBUG` on the worker coincided with the nodus warm worker
+  hanging on a trivial guest — suspected frame-channel corruption, unproven.
+
+### Added — `AINDY_TOOL_IDEMPOTENCY_STRICT`: strict at-most-once on the tool seam (#755; IDEM-13)
+
+- **Why it was wrong:** `FR-27` built the advisory lock that makes `EXACTLY_ONCE` hold under
+  concurrency and wired it into the SYSCALL dispatcher only. `execute_tool` — the path a
+  consumer's `EXACTLY_ONCE` tool actually runs on — never acquired it, so under contention the
+  gate deduplicated nothing: a `pending` row is not a claim, every loser was counted `degraded`
+  and executed. Measured on a live channel: five concurrent sends of one key delivered **five**
+  messages against one ledger row. Reproduced at 8-way contention: 8 of 8 callers ran the tool.
+- **What changed:** with `AINDY_TOOL_IDEMPOTENCY_STRICT=1` (**default off**, PostgreSQL only) the
+  tool path takes the same lock across `reserve → tool → complete`; losers block and then replay.
+  Same contention: 1 run, 7 replays, `degraded 0`. Wait ceiling
+  `AINDY_TOOL_IDEMPOTENCY_STRICT_WAIT_SECONDS` (default **60s**, lower than the syscall path's 300
+  on purpose); a timeout counts `degraded_lock_timeout` and proceeds rather than blocking.
+- **Operators:** nothing changes unless you set the flag. If you do, watch
+  `aindy_effect_gate_outcomes_total` — on PostgreSQL with the flag on, a non-zero `degraded` means
+  misconfiguration rather than contention, and `degraded_lock_timeout` means a tool is slower than
+  the wait. A blocked loser holds one pooled connection while it waits; size the pool for your
+  duplicate fan-in.
+- Across-process-crash exactly-once remains explicitly out of scope (inherited from FR-27).
+
 
 ## 2.22.0 — 2026-09-20
 
