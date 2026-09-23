@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-21"
+last_verified: "2026-09-23"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,44 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 037 — 2026-09-23
+
+**Trigger:** `v2.23.0` release tag (`sandbox-escape-linux.yml`, run `35903599279`).
+**Commit:** `1a18046` (release PR #756's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:cd04730b8511def3fbf14204d66a0c1536f290b8e896ed5a94cd64cb15ac1356` — ★ **the upstream tag
+MOVED** (`Status: Downloaded newer image`); Entries 035 and 036 both ran on
+`sha256:0495f5559318affa673172ec7e35cd0a5213e4aaf4c76d0a66554c0af97b157e`. A moving floating tag
+is the normal case, not an incident — it is recorded because a digest is the only thing that makes
+"the same image" a fact, and because `docker-compose.fr15-evidence.yml` pins the OLD digest as
+"the digest the sandbox gate certified on" (updated in the same PR as this entry).
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.04s`)
+**Artifact:** `linux-sandbox-escape-results` (run `35903599279`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.22.0..v2.23.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**One thing in this release sits NEAR the boundary, and one thing OUTSIDE it is worth naming:**
+
+- **`tool_registry.py` (#755, `IDEM-13`)** — `execute_tool` now takes a PostgreSQL advisory lock
+  around `reserve → tool → complete` when `AINDY_TOOL_IDEMPOTENCY_STRICT=1` (default off). It is
+  a database lock on a dedicated connection; it changes *whether a tool runs*, never *where* or
+  *with what authority*. The isolation branch, the worker spawn and every capability check are
+  untouched — a loser that blocks and replays never reaches the tool body at all, which is
+  strictly less execution than before, not more.
+- **★ `docker-compose.fr15-evidence.yml` (#751, DEC-072) mounts the host's Docker socket into the
+  api and worker containers** — root-equivalent on the host. It is a **dev-host evidence
+  instrument**, deliberately NOT a deployment profile, and it is the one file in this repo that
+  would fail every principle this audit exists to enforce. Recorded here so that a future reader
+  grepping for socket mounts finds the decision beside it rather than the file alone. It must
+  never be copied into `docker-compose.yml`, `docker-compose.prod.yml`, or an operator document.
+
+**Schema:** none. Alembic head stays `0020`, schema contract `2026-09-20`. The `Upgrade Path
+Guard`'s main job therefore passed trivially; its **negative control** is the half that carried
+meaning. PyPI propagation was immediate — the simple index and the JSON API both served `2.23.0`
+on the first check, so the usual Boot Smoke re-run was not needed.
 
 ## Entry 036 — 2026-09-21
 

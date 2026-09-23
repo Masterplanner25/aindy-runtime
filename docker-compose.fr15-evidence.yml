@@ -70,7 +70,11 @@ services:
       # the production-safe sandbox chain, satisfied minimally and explicitly
       AINDY_PLUGIN_SANDBOX_RUNNER: containerized_oci
       AINDY_PLUGIN_CONTAINER_RUNTIME: docker
-      # the digest the sandbox gate certified on (SANDBOX_ESCAPE_AUDIT.md Entries 035/036)
+      # A digest the sandbox gate certified on (SANDBOX_ESCAPE_AUDIT.md Entries 035/036).
+      # ★ The upstream `python:3.11-alpine` tag has MOVED since (Entry 037, v2.23.0:
+      # sha256:cd04730b8511...). This pin is deliberately NOT chased — an evidence rig
+      # wants a fixed image, and the chain only requires that the image be digest-pinned.
+      # If you re-pin it, say which entry certified the new digest.
       AINDY_PLUGIN_CONTAINER_IMAGE: python:3.11-alpine@sha256:0495f5559318affa673172ec7e35cd0a5213e4aaf4c76d0a66554c0af97b157e
       NODUS_RUN_STATE_ROOT: /var/lib/aindy/nodus-state
     volumes:
