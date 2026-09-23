@@ -14683,6 +14683,51 @@ instrument anyway; (b) if the gate counter is wanted live, Claw must expose the 
 when `effects_backend = "aindy"` — a small Claw-side addition, not a runtime change. **Do not
 report a soak from an unread counter: a counter nobody can read reads as zero.**
 
+### ★★★ Step 3's LIVE CHANNEL obtained 2026-09-22 — Telegram, a user-visible duplicate, refused
+
+The same rig with `[channels.extra.telegram]` instead of WebChat, a real bot
+(`@claw_witness_9137_bot`), a real phone. **Three ordinary conversation turns produced three
+`claw.channel.send` rows, all `success`, tenant = the runtime user** — one per reply Telegram
+delivered. Then the retry, sending the SAME `(session_key, message_key)` three times:
+
+| send | key | outcome |
+|---|---|---|
+| #1 | new | delivered; Telegram `message_id: 7`; ledger row `success` |
+| #2 | SAME | **`idempotent_replay: True`** — the FIRST result replayed out of the ledger (same `message_id: 7`, same `delivered_at`); no second message on the phone; **no new row** |
+| #3 | SAME, `AINDY_TOOL_IDEMPOTENCY=0` | delivered AGAIN, `message_id: 8` — the duplicate arrives |
+
+#3 is the mutation that makes #2 mean something: without the gate the same key sends twice. This
+is the claim the entry was filed for, at last made about the world and not about a test double —
+**the duplicate that was refused would have been a message a person saw twice.** `system_events`
+carried six `capability.allowed` rows for the six mints; `result_payload` on the newest row reads
+`{"result": {"delivered": true, "channel_id": "telegram", "message_id": "7", …}}`.
+
+**Three findings, all in Claw, all fixed in the same run (infinityclaw #4):**
+1. **`[channels.extra.<name>]` was inert.** The five external adapters were packaged and
+   `register_adapter` existed — with ZERO callers; nothing read `config.channels.extra`
+   (`claw doctor` listed the keys, which is how it looked configured). Enabling a channel did
+   nothing and the gateway came up WebChat-only. `claw/channels/factory.py` now builds them.
+2. **The Telegram adapter had never run against its own dependency**: aiogram 3.7 removed
+   `parse_mode=` from `Bot(...)` and the installed aiogram is 3.29 — every connect attempt failed.
+   An adapter nothing constructs is an adapter nothing type-checks. (1) is why (2) survived.
+3. **★ `ChannelAdapterRegistry.send` returned `None` on an unknown `channel_id` after a WARNING** —
+   which every caller read as delivered. With the seam on, that wrote a `success` EffectRecord for
+   a message that was never sent: **a ledger asserting delivery of nothing.** It now raises. Same
+   method also discarded the adapter's return value, so the provider's id never reached the
+   receipt; it is now carried as `result.message_id`.
+
+**FR-42 observed again, as predicted:** every mint logged
+`create_run_capability_mappings failed: ForeignKeyViolation … agent_capability_mappings_agent_run_id_fkey`.
+Claw runs released 2.22.0; the fix (#750, DEC-071) is on `main`, unreleased. A consumer sighting
+of the exact warning the fix removes.
+
+**What is left before this closes.** The live channel is obtained; the SOAK is not. Remaining:
+sustained traffic through a real channel (`SOAK_REGISTER.md` #2 — `reserved` growing with
+`replayed`/`reclaimed` non-zero), which still wants the gate counter readable (finding 2 above),
+and it wants CONCURRENT sends in one session — `IDEM-11` is known not to be exactly-once under
+contention, and three sequential turns do not test that. **Do not close on this run**: it proves
+the guarantee holds for a sequential retry on a real channel, which is not the same claim.
+
 **2026-09-13 — two facts from running the tutorials live, both on the witness question.**
 (1) `examples/openclaw/` — the in-repo imitation of Claw — was removed: it ran in-process
 with an unconfined `NodusRuntime`, i.e. it demonstrated the bypass rather than the substrate;
