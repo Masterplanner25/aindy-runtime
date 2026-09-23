@@ -10090,6 +10090,56 @@ in unclassified types as the pressure to classify. Seed classes, `autonomy.decis
 decision to make explicitly, `report` mode before `prune`, committed batches, per-type counter —
 all in the design; no schema. Awaiting approval under §8.
 
+## IDEM-13 — the TOOL seam's `EXACTLY_ONCE` has no strict mode; under contention every concurrent caller delivers
+
+**Status: OPEN — P1.** Filed 2026-09-23 from the `SUBSTRATE-WITNESS-1` soak (the numbers below are
+a measurement on a real Telegram channel, not a projection). Sibling of `IDEM-11` / `FR-27`.
+
+**The asymmetry.** `FR-27` built strict at-most-once — an advisory lock held across
+reserve → handler → complete, so a concurrent loser BLOCKS and then replays instead of executing.
+It is wired into ONE caller: `syscall_dispatcher.py:713`, behind `AINDY_SYSCALL_IDEMPOTENCY_STRICT`.
+The other caller of the same ledger — `execute_tool` (`tool_registry.py:1236` →
+`resolve_effect_record`) — never acquires it and has no flag of its own. The machinery is generic
+and already sits in `kernel/effect_ledger.py::acquire_effect_lock`; only the tool path does not use it.
+
+**That is the path with the effects.** `SUBSTRATE-WITNESS-1`'s consumer (Claw) declares
+`claw.channel.send` `EXACTLY_ONCE` and reaches the ledger through `execute_tool`, not through a
+syscall. So the one first-party consumer with user-visible effects cannot be protected by the
+strict mode that exists, and `SOAK_REGISTER.md` #2 (`AINDY_SYSCALL_IDEMPOTENCY_STRICT`) cannot be
+exercised by its traffic at all.
+
+**★ The measurement (2026-09-23, real bot, real phone, released 2.22.0 in the consumer's venv):**
+
+| regime | sends | gate counters | messages a PERSON received |
+|---|---|---|---|
+| volume — 10 distinct keys, sequential | 10 | `reserved 10` | 10 (one each) |
+| retry — the same 10 keys again | 10 | `replayed 10`, 0 rows added | **0** |
+| contention — 5 keys × 5 concurrent | 25 | `reserved 5`, **`degraded 20`** | **25 — five per key** |
+
+Exactly-once holds perfectly for a sequential retry and provides **no deduplication whatsoever**
+under contention: not "sometimes twice" (`IDEM-11`'s wording, from 8 concurrent calls) but
+**every concurrent caller delivers** — C simultaneous sends of one key produced C distinct
+Telegram message ids against ONE ledger row. The shape is regular, not probabilistic: the winner's
+row is `pending`, and `_resolve_existing_row` treats a live `pending` row as "go ahead"
+(`degraded`), by contract, because a pending row protects nothing until it is `success`.
+
+**What is right about it, and must not be lost in a fix:** the loss is fully COUNTED. `degraded`
+moved exactly 20 — an operator reading `aindy_effect_gate_outcomes_total` sees every one. The
+defect is the absence of an option, not a silent failure. (Reading it from a live consumer is a
+separate problem — see `SUBSTRATE-WITNESS-1`, finding 2; fixed consumer-side in infinityclaw #5.)
+
+**The fix, when it is built:** `AINDY_TOOL_IDEMPOTENCY_STRICT`, default OFF, engaging
+`acquire_effect_lock` around the tool path's reserve → execute → complete exactly as the
+dispatcher does, with `degraded_lock_timeout` counted on a wait timeout and a wait ceiling env of
+its own. Constraints inherited from FR-27 and not negotiable: the lock lives on a DEDICATED
+connection (never the handler's session — #157; never a session that commits mid-window);
+PostgreSQL-only, `unsupported` elsewhere and behave exactly as today; a lock failure degrades and
+is counted, never blocks the tool forever.
+
+**Do NOT** make it default-on, and do NOT write a soak assertion stricter than the contract before
+the flag exists — under the current contract, a duplicate under contention is the documented
+outcome, and a test asserting otherwise is asserting a feature that was never built.
+
 ## IDEM-12 — `agent.undo` re-invokes every compensator when called twice
 
 **Status: CLOSED 2026-09-16 (#696).** Reproduced first — two reversible effects, two undos,
@@ -14727,6 +14777,35 @@ sustained traffic through a real channel (`SOAK_REGISTER.md` #2 — `reserved` g
 and it wants CONCURRENT sends in one session — `IDEM-11` is known not to be exactly-once under
 contention, and three sequential turns do not test that. **Do not close on this run**: it proves
 the guarantee holds for a sequential retry on a real channel, which is not the same claim.
+
+### ★★ The SOAK ran 2026-09-23 — and the answer it produced is `IDEM-13`
+
+Three regimes over the same seam the gateway uses (`execute_tool` → ledger → adapter → Telegram),
+45 sends, one real chat:
+
+| regime | sends | gate | messages a PERSON received |
+|---|---|---|---|
+| volume — 10 distinct keys, sequential | 10 | `reserved 10`, 10 rows | 10 |
+| retry — the same 10 keys again | 10 | `replayed 10`, **0 rows added** | **0** |
+| contention — 5 keys × 5 concurrent | 25 | `reserved 5`, **`degraded 20`**, 5 rows | **25 — five per key** |
+
+Sequential exactly-once **holds** (regime 2 is the clean result this entry wanted: ten retries,
+nothing sent, nothing written). Under contention the gate deduplicates **nothing** — every
+concurrent caller delivered, five distinct Telegram ids against one ledger row. That is the
+documented contract (`_resolve_existing_row` degrades a live `pending` row), so it is not a
+failure of the implementation; it is the absence of an option, now priced in messages a person
+receives. Filed as **`IDEM-13`** with the numbers, and the reason the strict mode that DOES exist
+cannot help: `FR-27` wired the advisory lock into `syscall_dispatcher` only, and this consumer is
+on the tool path.
+
+**★ Correction to this entry's earlier framing, and to `SOAK_REGISTER.md` #2:** Claw traffic does
+NOT exercise `AINDY_SYSCALL_IDEMPOTENCY_STRICT`. It exercises the tool gate, which has no strict
+flag. Row 2 stays unexercised by this consumer until `IDEM-13` ships.
+
+**Closing condition, restated:** sustained real traffic with `reserved` growing and
+`replayed`/`reclaimed` non-zero — regimes 1 and 2 deliver exactly that at small N, so what remains
+is DURATION (days, not minutes) on a channel a person actually uses, plus `IDEM-13` for the
+contention half to be anything other than a documented degrade.
 
 **2026-09-13 — two facts from running the tutorials live, both on the witness question.**
 (1) `examples/openclaw/` — the in-repo imitation of Claw — was removed: it ran in-process
