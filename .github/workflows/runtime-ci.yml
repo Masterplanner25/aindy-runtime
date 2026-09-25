@@ -227,7 +227,7 @@ jobs:
         # `nodus-lang>=4.0.0`, so reordering these steps, or adding `--upgrade`, would
         # silently resolve to whatever is newest on PyPI while the wheel pins something
         # else. Bump this line with the other two.
-        run: python -m pip install "nodus-lang==5.14.0" "nodus-mcp>=0.1.4" "mcp>=1.0.0"
+        run: python -m pip install "nodus-lang==5.15.0" "nodus-mcp>=0.1.4" "mcp>=1.0.0"
 
       # ── Native scorer: build it HERE so its tests actually execute ──────────────
       #
