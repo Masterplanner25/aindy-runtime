@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -29,6 +30,8 @@ from AINDY.db.models import AgentRun, AgentStep, AgentTrustSettings
 from AINDY.platform_layer.async_job_service import defer_async_job, submit_autonomous_async_job
 from AINDY.platform_layer.trace_context import trace_scope
 from AINDY.utils.uuid_utils import normalize_uuid
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_run_id(run_id: str) -> Any:
@@ -265,6 +268,13 @@ def resume_agent_run_runtime(*, db, user_id, run_id: str, payload: dict | None =
 
     correlation = wait_state.get("correlation_key") or run.correlation_id
     gate = wait_state.get("authority_gate")
+    # FR-44 — the wait is an in-memory registration held by the process that parked the run (or
+    # re-armed at boot). A resume served by any other process published to nobody, answered
+    # `resuming`, and the run sat `waiting` until a restart. Arm it here first, before the gate
+    # decision is written, so the decision is applied with a waiter in place. An abort needs no
+    # waiter: it fails the run here and publishes nothing.
+    if not (isinstance(gate, dict) and _requested_gate_decision(payload) == "abort"):
+        _ensure_agent_wait_registered(db, str(run.id))
     decision_record = None
     if isinstance(gate, dict):
         decision_record = _decide_authority_gate(db=db, run=run, gate=gate, payload=payload)
@@ -277,6 +287,14 @@ def resume_agent_run_runtime(*, db, user_id, run_id: str, payload: dict | None =
         # the gate's wake is RUN-scoped (RESUME-FANOUT-UNSCOPED-1): its wait_state carries no
         # correlation key, and only this run's re-drive may fire on it
         waiters_notified = publish_event(event_type, correlation_id=correlation, run_id=str(run.id))
+        # ★ FR-44 ask 2 — `resuming` is a claim that something moved. `publish_event` counts
+        # LOCAL wakes only; after the arm above a local registration exists, so 0 here means
+        # nothing on this process woke (the arm failed, or another process claimed it first).
+        # The decision stays recorded on the row and replays on the next re-drive, but the
+        # route does not say `resuming` for it.
+        if not waiters_notified:
+            decision_record = dict(decision_record, run_status="waiting",
+                                   reason="no_local_waiter_woken")
     else:
         waiters_notified = publish_event(event_type, correlation_id=correlation)
     return {
@@ -287,6 +305,38 @@ def resume_agent_run_runtime(*, db, user_id, run_id: str, payload: dict | None =
         "waiters_notified": waiters_notified,
         "authority_gate": decision_record,
     }
+
+
+def _requested_gate_decision(payload: dict | None) -> str | None:
+    """The decision a resume asks for, normalised the way `read_gate_decision` reads it."""
+    if not isinstance(payload, dict):
+        return None
+    return str(payload.get("decision") or "").strip().lower() or None
+
+
+def _ensure_agent_wait_registered(db, run_id: str) -> bool:
+    """Arm this run's wait on THIS process if nothing here holds it (FR-44); True if held after.
+
+    Reuses boot rehydration, scoped to the one run. It already skips a run whose wait is
+    registered here. Arming a second registration while another process still holds one is
+    safe: the resume callback claims `waiting → executing` atomically, so exactly one
+    re-drive runs. Never raises. A run that cannot be rebuilt from its row stays parked, and
+    the caller reports that nothing was woken.
+    """
+    try:
+        from AINDY.core.agent_run_rehydration import rehydrate_waiting_agent_runs
+        from AINDY.kernel.scheduler_engine import get_scheduler_engine
+
+        scheduler = get_scheduler_engine()
+        if scheduler.waiting_for(run_id) is not None:
+            return True
+        armed = rehydrate_waiting_agent_runs(db, run_ids=[run_id])
+        if armed:
+            logger.info("[agent_resume] run %s had no wait on this process; armed it on demand", run_id)
+        return bool(armed)
+    except Exception as exc:  # noqa: BLE001 — a failed arm is reported through the wake count
+        logger.warning("[agent_resume] could not arm the wait for run %s: %s", run_id, exc)
+        return False
 
 
 def _decide_authority_gate(*, db, run, gate: dict, payload: dict | None) -> dict:
