@@ -631,12 +631,21 @@ def _run_agent_segment_flow(
         entry = next(r for r in step_results if r["step_index"] == meta["index"])
         row = existing.get(meta["index"])
         if row is None:
+            # FR-46 — the worker did not record this step, so the args it actually ran with are
+            # unknown here. The plan's args may hold step references; record them marked as the
+            # plan's, never passed off as the call.
+            from AINDY.agents.step_references import contains_reference
+
+            gap_args = (
+                {"plan_args": meta["args"], "resolved": False}
+                if contains_reference(meta["args"]) else meta["args"]
+            )
             db.add(
                 AgentStep(
                     run_id=_db_run_id(run_id),
                     step_index=meta["index"],
                     tool_name=meta["tool"],
-                    tool_args=meta["args"],
+                    tool_args=gap_args,
                     risk_level=meta["risk_level"],
                     description=meta["description"],
                     status=entry["status"],

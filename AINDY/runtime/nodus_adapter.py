@@ -521,7 +521,32 @@ def agent_execute_step(state: dict, context: dict) -> dict:
     tool_result = None
     exec_ms = 0
 
+    # FR-46 / DEC-074 — an argument may name an earlier step's result; resolve it here, before
+    # `execute_tool`, so the key, `args_schema` and the step row below all see the value. An
+    # unresolvable reference is the step's outcome (DEC-075) and the tool never runs.
+    reference_failure_result = None
+    from AINDY.agents.step_references import (
+        contains_reference,
+        lookup_from_step_results,
+        reference_failure,
+        resolve_step_references,
+        step_references_enabled,
+    )
+
+    if step_references_enabled() and contains_reference(tool_args):
+        _resolved, _ref_errors = resolve_step_references(
+            tool_args, lookup_from_step_results(state.get("step_results"))
+        )
+        if _ref_errors:
+            # the row records the plan's args as written; there is no call to record
+            reference_failure_result = reference_failure(_ref_errors)
+        else:
+            tool_args = _resolved
+
     for attempt in range(1, max_attempts + 1):
+        if reference_failure_result is not None:
+            tool_result = reference_failure_result
+            break
         start_ms = int(time.time() * 1000)
         tool_result = execute_tool(
             tool_name=tool_name,

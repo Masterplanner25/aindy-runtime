@@ -1,6 +1,6 @@
 ---
 title: "Public Runtime Surfaces"
-last_verified: "2026-08-06"
+last_verified: "2026-09-25"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -211,6 +211,11 @@ Surfaces in scope:
 - `AINDY.agents.tool_registry.register_tool` — including `args_schema` (FR-33, 2026-09-16): a
   declared argument contract, surfaced on the tool dict and the planner catalog, checked by
   `execute_tool` under `AINDY_TOOL_ARGS_VALIDATION`; `None` declares nothing
+- plan step references (FR-46, 2026-09-25, `AINDY_PLAN_STEP_REFERENCES`, default off): an
+  argument value `{"$from_step": N, "path": "a.b"}` is replaced by tool step N's result (or a
+  field in it) before `execute_tool` on both backends. It is validated at plan time; an
+  unresolvable reference fails the step `invalid`. Design:
+  `docs/design/FR46_STEP_REFERENCES_DESIGN.md`
 - dynamic plugin nodes via
   `AINDY.platform_layer.node_registry.register_external_node(type="plugin")`
 - webhook nodes via

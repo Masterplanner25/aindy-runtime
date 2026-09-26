@@ -180,6 +180,30 @@ def run_agent_tool(
                         "skipped": True, "authority_gate": _json_safe(result)}
             return {"success": True, "result": _json_safe(result), "error": None, "replayed": True}
 
+    # ── FR-46 / DEC-074 — resolve step references BEFORE `execute_tool` ─────────────────
+    # From the `agent_steps` rows this seam commits per step, never from guest state (which
+    # forgets every earlier segment). A continued run's replayed step returned above, with the
+    # args it originally resolved to recorded on its row. Unresolvable: the step fails `invalid`
+    # and the tool never runs (DEC-075).
+    from AINDY.agents.step_references import (
+        contains_reference,
+        lookup_from_agent_steps,
+        reference_failure,
+        resolve_step_references,
+        step_references_enabled,
+    )
+
+    if step_references_enabled() and run_id and contains_reference(tool_args):
+        _resolved, _ref_errors = resolve_step_references(
+            tool_args, lookup_from_agent_steps(session_factory, run_id)
+        )
+        if _ref_errors:
+            outcome = reference_failure(_ref_errors)
+            if keyed:  # the plan's args as written: there was no call
+                _record_step(session_factory, run_id, int(step_index), str(tool_name), tool_args, outcome, correlation_id)
+            return outcome
+        tool_args = _resolved
+
     from AINDY.agents.tool_registry import execute_tool
 
     # ── FR-38 / DEC-068..070 — the fifth denial site negotiates ─────────────────────────
@@ -741,7 +765,21 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     )
     def _call_tool(tool_name: Any, args: Any, step_index: Any = None) -> Any:
         if simulate_mode:
+            from AINDY.agents.step_references import (
+                contains_reference,
+                lookup_from_guest_state,
+                reference_failure,
+                resolve_step_references,
+                step_references_enabled,
+            )
             from AINDY.runtime.tool_simulation import simulate_agent_tool
+
+            # FR-46 — a dry run resolves against the simulated results, so a reference to a
+            # path the result will not have is reported here, before anything is real.
+            if step_references_enabled() and contains_reference(args):
+                args, _ref_errors = resolve_step_references(args, lookup_from_guest_state(state))
+                if _ref_errors:
+                    return reference_failure(_ref_errors)
 
             shadow = simulate_agent_tool(
                 tool_name,
