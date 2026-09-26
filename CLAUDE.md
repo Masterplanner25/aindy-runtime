@@ -238,7 +238,7 @@ the run date (`gh run list --workflow=… --branch …`) before citing it; it al
 
 ## Registry conventions (`TECH_DEBT.md`)
 
-Numbers are sequential per prefix and never reused (next: **FR-43**, **IDEM-14**). Closing an entry:
+Numbers are sequential per prefix and never reused (next: **FR-47**, **IDEM-14**). Closing an entry:
 `Status: CLOSED (YYYY-MM-DD)` + what shipped and what remains. **Write findings in `TECH_DEBT.md`,
 not here** — the registry below is one line per item, enforced by
 `tests/unit/test_debt_registry_accuracy.py` (UTF-8 byte cap per entry; a closed entry may not sit
@@ -297,7 +297,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-43** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half. FR-42 closed #750 (DEC-071). FR-37 ui-kit 2.1.0 shipped; FR-38 #734, FR-40 #731, FR-41 #730 (Alembic 0020).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-47** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half; FR-43; FR-44; FR-46 (design first). FR-45 closed #759. FR-42 closed #750 (DEC-071).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
@@ -355,7 +355,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - **FLAKY-1 / CI-MARKER-1 / EXEC-ENV-BIND-1 / COST-GOVERNOR-1 / QUOTA-ACCRUAL-ORPHAN-1** — CLOSED; rules kept above. Cost governor: reserve only for `METERED_METHODS`; planning has no run id, only the tenant window catches a runaway planner; a refusal reaches the route one `__cause__` down. Quota: a unit is reaped by whoever established it; reproduce where the CALLER enters.
 - **NODUS-SYS-SURFACE-1** — CLOSED: `import "std:sys"` hits nodus's own stub, not the dispatcher; only bare `sys(...)` reaches `dispatch_syscall`; fail-loud guard in `nodus_worker.py`.
 
-~50 further closed entries are history only or have their rules absorbed above — `TECH_DEBT.md`, or the pre-trim archive for the one-line form. Owed next release: drop `user.id` from syscall spans (OTEL-GENAI-SEMCONV-1). Adding a `SystemEventTypes` value: regenerate `tests/baselines/system_event_contract.json`.
+~50 further closed entries are history only or have their rules absorbed above — `TECH_DEBT.md`, or the pre-trim archive for the one-line form. Adding a `SystemEventTypes` value: regenerate `tests/baselines/system_event_contract.json`.
 
 ---
 

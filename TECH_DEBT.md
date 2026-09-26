@@ -9166,6 +9166,80 @@ key in each tool dict.
 
 ---
 
+## FR-46 — a plan step's `args` are literals written at planning time; no step can take an earlier step's result, so "research X, then use it" runs its second half blind 🔴 open (app-filed 2026-09-25, runtime 2.22.0)
+
+**Status: OPEN — design first** (it changes the plan format, both backends, and FR-33's
+`args_schema` contract). Verified at source: `runtime/agent_plan_compiler.py::compile_agent_segment`
+bakes each step's `args` into the workflow input as written (`input_payload[args_key] = args`,
+`:213`); `agent_flow` reads `step.get("args", {})` (`runtime/nodus_adapter.py:326`). Results are
+kept (`__step_N_result`, `agent_steps.result`) and nothing reads them back into a later step's
+arguments. No reference syntax exists anywhere in `AINDY/`.
+**Observed (app, run `02e9e214…`, Claude planner, `nodus_vm`, `completed 6/6`):** step 0's research
+came back real; step 2's `memory.write` stored the sentence the planner wrote before step 0 ran,
+and steps 3–5 created tasks from the planner's priors. Every step `success`, so nothing records
+the failure.
+**Ask:** (1) one reference form in `args` (e.g. `{"$from_step": 0, "path": …}`), validated at
+plan time and resolved at run time at one seam both backends pass through before `execute_tool`,
+with a failed resolution failing the step; (2) one line in the planner contract; (3) `args_schema`
+validates the RESOLVED value; (4) say where a result is truncated (a 2 KB research result arrived
+cut mid-word) and whether a reference sees the full result. **Not asked:** re-planning per step,
+free-form expressions.
+
+---
+
+## FR-45 — the runtime's own envelope-bodied response adapters never set `X-AINDY-Envelope`, so ui-kit 2.1.0's latch unwrapped their bodies depending on load order 🔴 defect (app-filed 2026-09-23, runtime 2.22.0 / ui-kit 2.1.0)
+
+**Status: CLOSED 2026-09-25 (#759), runtime half.** `platform_layer/response_adapters.py` has one
+helper, `_envelope_json`, which stamps exactly when the body is a dict carrying top-level `data`.
+That is the test ui-kit applies: a stamped body resolves to `body["data"]`. `raw_canonical`,
+`legacy_envelope` (not its passthrough of a payload without `data`), `memory_execute` and
+`memory_completion`'s success path now stamp; `raw_json` never does. Tests: a census derived
+from the module (a new adapter must be classified), one per adapter, and a pipeline route with a
+registered adapter. Mutations (stamp removed → 5 red; stamp unconditional → the passthrough red).
+`UI_CONTRACT.md` says an app's own adapter decides for itself.
+**Remaining — ui-kit, not here:** export `_resetEnvelopeDetection` from `dist/index.js` (declared
+in the `.d.ts`, not exported) and document the latch next to `unwrapEnvelope`.
+Verified at source: `core/response_adapter.py::adapt_response` stamps only its default exit, by
+design, and the registered-adapter branches returned before it. The app found 26 of its 78
+parameterless `/apps` GETs unstamped (45 route names through `raw_canonical_adapter`, 8 through
+the legacy one) and now stamps them itself (`apps/_shared/envelope.py`); any other app had the bug.
+
+---
+
+## FR-44 — the agent resume route records a gate decision and answers `resuming` when no process holds the run's waiter; the run stays `waiting` until the next restart 🔴 defect (app-filed 2026-09-23, runtime 2.22.0)
+
+**Status: OPEN.** Verified at source: `agents/runtime_api.py::resume_agent_run_runtime`
+publishes (`publish_event(…, run_id=…)`, `:279`) and returns `waiters_notified` from it, while
+`_decide_authority_gate` has already committed the `skipped` step and answers
+`run_status: "resuming"` (`:377`) whatever the publish reached. Agent-run waits are registered
+in memory by the parking process and re-registered only at boot
+(`core/agent_run_rehydration.rehydrate_waiting_agent_runs`, which already takes `run_ids` and
+guards on `scheduler.waiting_for`). **Observed (app, FR-38 re-run on `nodus_vm`, run `bea83301…`):**
+parked in a `docker exec`; `POST …/resume {"decision":"skip"}` → 200, `waiters_notified: 0`, run
+`waiting` for 3 minutes; after an api restart, the same request → `waiters_notified: 1` →
+`completed` in 11 s. **Ask:** (1) rehydrate the run on demand before publishing when nothing holds
+its wait, the agent-run analog of the flow resume route since FR-31; (2) never report `resuming`
+for 0 waiters. Distinct from FR-15's losses (distributed mode): this is single-instance.
+
+---
+
+## FR-43 — `bootstrap-schema` compares column types with the length stripped, so 2.22.0's widening was invisible: "no table changes", exit 0, and `0020` stamped over a `varchar(32)` 🔴 defect (app-filed 2026-09-23, runtime 2.22.0)
+
+**Status: OPEN.** Verified at source: `db/schema_contract.py::_normalize_type_name` keeps
+`compiled.lower().split("(", 1)[0]` (`:265`), so `VARCHAR(32)` and `VARCHAR(128)` compare
+equal. `_SAFE_RECONCILE_CODES` is `{missing_table, missing_column}` (`:39`), so even a detected
+widening would have been an offline-migration exit 4, not the exit 3 the 2.22.0 handoff promised.
+`_bootstrap_schema` then stamps the head: the revision whose DDL never ran is recorded as applied,
+and a later `alembic upgrade head` skips it. **Observed (app, first boot of 2.22.0 on its compose
+stack):** `ok: … (no table changes)` / `stamped … 0020`; `information_schema` said 32. Remedied
+out-of-band with 0020's own DDL. **Ask:** (1) compare length / precision / scale; a pure widening
+is its own safe code (`column_widen`, exit 3, applied by `--reconcile`), a narrowing stays exit
+4; (2) never stamp a head the schema does not match; (3) a release-gate test that builds the
+previous head, upgrades, and asserts the column. **Not asked:** automatic narrowing, or a change
+to what `AINDY_BOOTSTRAP_RECONCILE` means.
+
+---
+
 ## FR-42 — `mint_token` wrote `agent_capability_mappings` FK'd to `agent_runs`, so a non-agent run scope lost its capability-mapping audit row silently 🟡 audit gap (runtime-found)
 
 **Status: CLOSED 2026-09-22 (#750; DEC-071 — the row is owed per RUN).** The run-scoped rows are
