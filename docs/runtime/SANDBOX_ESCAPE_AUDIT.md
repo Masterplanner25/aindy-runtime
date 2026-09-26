@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-23"
+last_verified: "2026-09-26"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,49 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 038 — 2026-09-26
+
+**Trigger:** `v2.24.0` release tag (`sandbox-escape-linux.yml`, run `36258569993`).
+**Commit:** `4eb4cbb` (release PR #766's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:cd04730b8511def3fbf14204d66a0c1536f290b8e896ed5a94cd64cb15ac1356`. This is the **same
+digest Entry 037 ran on**; the upstream tag did not move between `v2.23.0` and `v2.24.0`. (The log's
+`Downloaded newer image` means the fresh runner had no local copy. The digest is the fact.)
+Compare future entries against 037/038.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 5.97s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `36258569993`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.23.0..v2.24.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Three things in this release sit NEAR the boundary, recorded so nobody reads them as inside it:**
+
+- **`nodus-lang` 5.14.0 → 5.15.0 (#758)** — the guest runtime. Two upstream fixes TIGHTEN guest
+  confinement across a park/resume: a resume now inherits the caller's instruction and time bounds
+  (nodus #873; a guest could escape both by parking), and a derived VM keeps the host state it
+  works for, so a module function's `agent_call` no longer reaches the process-global registry
+  (nodus #868). The `NodusRuntime` surface the runtime constructs guests through was diffed
+  between the two versions and is identical; the guest confinement suites
+  (`test_guest_confinement.py`, `test_guest_memory_ceiling.py`, `test_nodus_execution_budget.py`)
+  passed on 5.15.0. It narrows what a guest can do; it widens nothing.
+- **`nodus_worker.run_agent_tool` (#764, FR-46; #763, IDEM-14)** — the worker seam now resolves a
+  plan step's `{"$from_step": N}` argument from the run's own `agent_steps` rows before
+  `execute_tool`, and passes the step index into the idempotency key. Both change the ARGS a tool
+  receives or the KEY its effect is recorded under; neither changes where the tool runs, the
+  isolation branch, or the authority it runs with. Every call still passes `execute_tool`'s
+  `check_tool_capability`. A reference resolves only from the same run's rows (the lookup is keyed
+  on this run's id), so it cannot read another run's results. Default off
+  (`AINDY_PLAN_STEP_REFERENCES`).
+- **`tool_registry.execute_tool` (#763)** — gains an optional `step_index` that narrows the
+  effect key's scope to one step. It is a ledger key, not a permission.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`). But this release's `Upgrade Path
+Guard` carries more meaning than 037's: FR-43 (#761) gave it an independent `information_schema`
+width check in the main job and a widening case in the negative control, and both ran green on
+`4eb4cbb` before the tag. PyPI propagation was immediate: the JSON API and the simple index both
+served `2.24.0` on the first check, and Boot Smoke on the published wheel passed on attempt 1.
 
 ## Entry 037 — 2026-09-23
 
