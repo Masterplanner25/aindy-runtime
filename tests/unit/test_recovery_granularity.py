@@ -76,7 +76,7 @@ class _Tool:
         self.outcomes = list(outcomes)
         self.calls: list = []
 
-    def __call__(self, *, tool_name, args, user_id, db, run_id, execution_token):
+    def __call__(self, *, tool_name, args, user_id, db, run_id, execution_token, step_index=None):
         self.calls.append(tool_name)
         outcome = self.outcomes.pop(0) if self.outcomes else {"success": True, "result": {"live": True}, "error": None}
         if isinstance(outcome, Exception):
