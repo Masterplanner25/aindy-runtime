@@ -181,6 +181,12 @@ def _build_planner_prompt(
         prompt += "\n\nAvailable tools:\n" + "\n".join(
             _catalog_line(tool) for tool in tools if isinstance(tool, dict) and tool.get("name")
         )
+        # FR-46 / DEC-075 — the runtime renders the catalog, so the runtime says the plan format
+        # can reference an earlier step; no app prompt has to.
+        from AINDY.agents.step_references import PLANNER_REFERENCE_LINE, step_references_enabled
+
+        if step_references_enabled():
+            prompt += "\n\n" + PLANNER_REFERENCE_LINE
     return prompt
 
 
@@ -386,6 +392,16 @@ def generate_plan(
         # Reconcile WAIT steps with the execution backend (strip on AGENT_FLOW;
         # optionally insert an approval gate on nodus_vm).
         plan = apply_wait_policy(plan)
+
+        # FR-46 / DEC-073 — a step reference is checked against the plan's own step indices
+        # before the plan exists; a plan that names a later step, or a malformed path, is refused
+        # like any malformed plan (the reason reaches the route through `_plan_failure`).
+        from AINDY.agents.step_references import step_references_enabled, validate_plan_references
+
+        if step_references_enabled():
+            ref_errors = validate_plan_references(plan)
+            if ref_errors:
+                raise ValueError("invalid step reference(s): " + "; ".join(ref_errors))
         return plan
     except Exception as exc:
         compat = get_runtime_compat_module()

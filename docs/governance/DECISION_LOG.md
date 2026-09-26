@@ -1798,7 +1798,7 @@ This document should align with:
 - `CHANGE_IMPACT_MATRIX.md`
 
 ### DEC-073
-**Status:** `provisional` (2026-09-25 — `FR-46`; `docs/design/FR46_STEP_REFERENCES_DESIGN.md` §3.1–3.2)
+**Status:** `accepted` (2026-09-25 — `FR-46`; `docs/design/FR46_STEP_REFERENCES_DESIGN.md` §3.1–3.2; accepted by the owner, built #764)
 
 **Decision**
 A plan step's argument value may be exactly `{"$from_step": N, "path": "<dot.path>"}` (path
@@ -1814,7 +1814,7 @@ for. A `$`-key cannot collide with an argument name and survives every JSON hop 
 the runtime already has one path vocabulary into a step result.
 
 ### DEC-074
-**Status:** `provisional` (2026-09-25 — `FR-46`; design §3.3)
+**Status:** `accepted` (2026-09-25 — `FR-46`; design §3.3; accepted by the owner, built #764)
 
 **Decision**
 References are resolved by one pure resolver in the two callers of `execute_tool`, before it:
@@ -1831,7 +1831,7 @@ FR-33's `enforce` mode validate the value rather than the placeholder, and what 
 different findings from deduping against each other.
 
 ### DEC-075
-**Status:** `provisional` (2026-09-25 — `FR-46`; design §3.4–3.5)
+**Status:** `accepted` (2026-09-25 — `FR-46`; design §3.4–3.5; accepted by the owner, built #764)
 
 **Decision**
 An unresolvable reference (no entry, a status other than `success` including an authority-gate

@@ -29,7 +29,8 @@ from __future__ import annotations
 
 from typing import Any
 
-_MISSING = object()
+from AINDY.core.result_path import MISSING as _MISSING
+from AINDY.core.result_path import resolve_path as _resolve_path
 
 _COMPARISON_OPS = {"eq", "ne", "contains", "not_contains", "gt", "gte", "lt", "lte"}
 _PRESENCE_OPS = {"exists", "not_exists", "truthy", "falsy"}
@@ -58,21 +59,6 @@ def extract_post_conditions(plan: Any) -> dict[int, list[dict]]:
             conditions[ordinal] = expects if isinstance(expects, list) else [expects]
         ordinal += 1
     return conditions
-
-
-def _resolve_path(payload: Any, path: str) -> Any:
-    cur = payload
-    for part in str(path).split("."):
-        if isinstance(cur, dict) and part in cur:
-            cur = cur[part]
-        elif isinstance(cur, (list, tuple)):
-            try:
-                cur = cur[int(part)]
-            except (ValueError, IndexError):
-                return _MISSING
-        else:
-            return _MISSING
-    return cur
 
 
 def _eval_condition(condition: Any, step_result: dict | None) -> tuple[bool, str]:

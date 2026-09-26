@@ -159,6 +159,13 @@ def _create_run_from_plan(
 
         objective_text = compat._resolve_objective(objective, values)
         plan = plan or {}
+        # FR-46 / DEC-073 — a replayed plan never passed through `generate_plan`; check it here.
+        from AINDY.agents.step_references import step_references_enabled, validate_plan_references
+
+        if step_references_enabled():
+            ref_errors = validate_plan_references(plan)
+            if ref_errors:
+                raise ValueError("invalid step reference(s): " + "; ".join(ref_errors))
         enforce_run_creation_guardrails(
             db,
             user_id=str(user_id) if user_id is not None else None,

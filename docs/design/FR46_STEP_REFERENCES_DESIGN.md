@@ -8,9 +8,12 @@ owner: "platform-team"
 
 # FR-46: a plan step that takes an earlier step's result
 
-**Status: PROPOSED, nothing built.** Decisions DEC-073..075 are `provisional` until the owner
-accepts them. The build follows acceptance (`AGENT_WORKING_RULES.md` §8), because this changes
-the plan format both backends execute.
+**Status: BUILT 2026-09-25 (#764), default OFF.** Phase 1 of §7 shipped. DEC-073..075 were
+accepted by the owner on 2026-09-25. Phase 2 (the app re-runs its goal with
+`AINDY_PLAN_STEP_REFERENCES=1`) and phase 3 (the flip) remain. As built: the resolver is
+`agents/step_references.py`, the path grammar is `core/result_path.py` (now shared with the
+verifier), and the seams are `nodus_adapter.agent_execute_step` and
+`nodus_worker.run_agent_tool` (plus its simulate branch).
 
 ---
 

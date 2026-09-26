@@ -9168,9 +9168,19 @@ key in each tool dict.
 
 ## FR-46 — a plan step's `args` are literals written at planning time; no step can take an earlier step's result, so "research X, then use it" runs its second half blind 🔴 open (app-filed 2026-09-25, runtime 2.22.0)
 
-**Status: OPEN — DESIGNED, awaiting acceptance** (`docs/design/FR46_STEP_REFERENCES_DESIGN.md`,
-DEC-073..075 provisional; it changes the plan format, both backends, and FR-33's `args_schema`
-contract). The design answers ask 4 at source: the runtime truncates no step result; the 2 KB
+**Status: OPEN — BUILT #764 2026-09-25, default OFF (`AINDY_PLAN_STEP_REFERENCES`); open for
+the app's evidence run and the flip.** DEC-073..075 were accepted by the owner. As built:
+- `{"$from_step": N, "path"}` is validated at plan time (`generate_plan` and replay).
+- It is resolved before `execute_tool` in both callers: agent_flow from flow-state `step_results`,
+  nodus_vm from `agent_steps` rows, and simulation from guest state.
+- An unresolvable reference fails the step `invalid`, and the tool is not called.
+- The catalog line is rendered by the runtime.
+
+Tests run a REAL compiled segment through the real worker, within one segment and across two with
+empty guest state, under `enforce`. Mutations bite (worker off, adapter off, blind lookup, errors
+ignored, plan refusal off). The app filed two more runs on 09-26 (`214ac631`: placeholder notes
+ranked first in recall; `abf834d4`: an invented `strategy_id`, the `results.0.id` case, which is
+tested). Design: `docs/design/FR46_STEP_REFERENCES_DESIGN.md`. The design answers ask 4 at source: the runtime truncates no step result; the 2 KB
 cut is the app's `apps/search/syscalls.py:133` (`raw[:2000]`). Verified at source: `runtime/agent_plan_compiler.py::compile_agent_segment`
 bakes each step's `args` into the workflow input as written (`input_payload[args_key] = args`,
 `:213`); `agent_flow` reads `step.get("args", {})` (`runtime/nodus_adapter.py:326`). Results are
