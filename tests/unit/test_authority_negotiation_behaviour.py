@@ -360,7 +360,7 @@ def adapter_harness(monkeypatch):
 
     executed = []
 
-    def _execute_tool(*, tool_name, args, user_id, db, run_id, execution_token):
+    def _execute_tool(*, tool_name, args, user_id, db, run_id, execution_token, step_index=None):
         executed.append(tool_name)
         return {"success": True, "result": {"ok": True}, "error": None}
 

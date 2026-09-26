@@ -10194,7 +10194,20 @@ all in the design; no schema. Awaiting approval under §8.
 
 ## IDEM-14 — the tool seam's idempotency key is scoped to the RUN, not the step: two steps of one run with the same tool and args share an `action_id` 🟡 open question (runtime-found 2026-09-25)
 
-**Status: OPEN, a question before it is a defect.** Found reading the FR-46 seam
+**Status: CLOSED 2026-09-25 (#763; DEC-076, accepted by the owner: "idempotent per tool call /
+individual step — that's the actual safe bet").** `execute_tool` takes `step_index`; the scope
+is `tool_effect_scope(run_id, step_index)` = `"<run_id>#step:<N>"` when a step is known, else the
+run. Both agent callers pass it: `agent_execute_step` passes `current_step_index`, and the
+worker's `run_agent_tool` passes its step index. A hand-written `call_tool(name, args)` has no
+index and keeps the run scope, as do syscalls, MCP and extensions. The strict lock (IDEM-13) and
+the ledger both use the same `action_id`, so both narrow with it. Tests use the REAL
+`compute_action_id`: two steps with identical args both run, one step retried replays, a
+step-less caller is unchanged, and both seams pass the index. Three mutations each fail their
+own test. **Upgrade note:** a step whose effect completed under the old run-scoped key and that
+re-drives after the upgrade computes the new key and does not find that row. A `nodus_vm`
+continuation replays from `agent_steps` BEFORE `execute_tool`, so only an effect that finished
+without its step row being recorded is exposed. Accepted in DEC-076.
+Previously: **OPEN, a question before it is a defect.** Found reading the FR-46 seam
 (`docs/design/FR46_STEP_REFERENCES_DESIGN.md` §4). `execute_tool` computes
 `compute_action_id(action_type=tool_name, input_payload=args, scope=str(run_id))`
 (`agents/tool_registry.py:1135`); `compute_action_id` hashes exactly those three

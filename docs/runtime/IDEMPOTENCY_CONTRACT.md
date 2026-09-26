@@ -1,6 +1,6 @@
 ---
 title: "Idempotency Contract"
-last_verified: "2026-09-17"
+last_verified: "2026-09-25"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -204,6 +204,11 @@ Rules:
 - **`scope`** — `str(context.execution_unit_id)` at the time of dispatch (the original
   EU id, before trace context synthesis). Two retries of the same EU id with the same
   payload produce the same `action_id`.
+- **On the tool seam** (`execute_tool`), `action_type` is the tool name, `input_payload` is the
+  tool's args, and `scope` is `tool_effect_scope(run_id, step_index)`: `"<run_id>#step:<N>"`
+  when an agent backend names the plan step, otherwise `str(run_id)` (IDEM-14, DEC-076). A retry
+  of one step replays; two steps with identical args are two effects. The algorithm is
+  unchanged; only the tool seam's scope input narrowed.
 - The digest is a 64-character lowercase hex string (SHA-256).
 - **Do not change this algorithm.** Any change invalidates all existing `EffectRecord`
   rows in production.
