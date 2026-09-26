@@ -159,6 +159,41 @@ jobs:
           aindy-runtime bootstrap-schema
           echo "reconcile resolved the drift and is stable on re-run."
 
+      - name: Verify the upgraded column widths against the packaged models
+        run: |
+          set -euo pipefail
+          # FR-43: 2.22.0's widening of system_events.source passed this job. The "before"
+          # record above lists column NAMES only, and bootstrap-schema's own report could not
+          # see a length, so exit 0 was taken as proof. This reads information_schema directly
+          # and compares it with the models' declared lengths. It shares no code with the
+          # drift check it is auditing.
+          python - <<'PY'
+          import os, sys, psycopg2
+          from sqlalchemy.types import Enum, String
+          from AINDY.db.schema_contract import _runtime_owned_tables
+          from tests.helpers.runtime import import_runtime_model_registry
+          import_runtime_model_registry()
+          with psycopg2.connect(os.environ["DATABASE_URL"]) as conn, conn.cursor() as cur:
+              cur.execute("""SELECT table_name, column_name, character_maximum_length
+                             FROM information_schema.columns WHERE table_schema='public'""")
+              actual = {(t, c): n for t, c, n in cur.fetchall()}
+          checked, wrong = 0, []
+          for table in _runtime_owned_tables():
+              for col in table.columns:
+                  if isinstance(col.type, String) and not isinstance(col.type, Enum) and col.type.length:
+                      checked += 1
+                      got = actual.get((table.name, col.name))
+                      if got != col.type.length:
+                          wrong.append(f"{table.name}.{col.name}: {got} != model {col.type.length}")
+          if not checked:
+              print("::error title=Width check is vacuous::no bounded string column was found; the derivation is broken")
+              sys.exit(1)
+          if wrong:
+              print("::error title=Upgraded schema is narrower than the models::" + "; ".join(wrong))
+              sys.exit(1)
+          print(f"{checked} bounded string columns match the packaged models.")
+          PY
+
       - name: Boot the upgraded runtime
         run: |
           set -euo pipefail
@@ -255,3 +290,44 @@ jobs:
           aindy-runtime bootstrap-schema --reconcile
           aindy-runtime bootstrap-schema
           echo "--reconcile restored the column and the result is stable."
+
+      - name: ★ Inject a narrower column and require the guard to see it (FR-43)
+        run: |
+          set -euo pipefail
+          # 2.22.0 shipped a widening (system_events.source 32 -> 128) that bootstrap-schema
+          # reported as "no table changes" and then stamped over. A missing column (above) is
+          # a different drift shape, and it passed while this one was invisible.
+          python - <<'PY'
+          import os, psycopg2
+          with psycopg2.connect(os.environ["DATABASE_URL"]) as conn:
+              conn.autocommit = True
+              with conn.cursor() as cur:
+                  cur.execute("ALTER TABLE system_events ALTER COLUMN source TYPE VARCHAR(32)")
+                  cur.execute("DELETE FROM alembic_version_runtime")
+                  cur.execute("INSERT INTO alembic_version_runtime (version_num) VALUES ('0019')")
+          print("narrowed system_events.source to varchar(32) and set the stamp to 0019 (the app's state).")
+          PY
+
+          set +e
+          aindy-runtime bootstrap-schema
+          CODE=$?
+          set -e
+          if [ "$CODE" != "3" ]; then
+            echo "::error title=Guard is blind to a widening::bootstrap-schema exited $CODE against a column narrower than the model; expected 3. This is FR-43."
+            exit 1
+          fi
+          STAMP=$(python -c "import os,psycopg2; c=psycopg2.connect(os.environ['DATABASE_URL']).cursor(); c.execute('SELECT version_num FROM alembic_version_runtime'); print(c.fetchone()[0])")
+          if [ "$STAMP" != "0019" ]; then
+            echo "::error title=Stamped over an unapplied revision::the stamp moved to $STAMP although the schema did not match."
+            exit 1
+          fi
+          echo "guard detected the widening as exit 3 and did not stamp."
+
+          aindy-runtime bootstrap-schema --reconcile
+          WIDTH=$(python -c "import os,psycopg2; c=psycopg2.connect(os.environ['DATABASE_URL']).cursor(); c.execute(\"SELECT character_maximum_length FROM information_schema.columns WHERE table_name='system_events' AND column_name='source'\"); print(c.fetchone()[0])")
+          if [ "$WIDTH" != "128" ]; then
+            echo "::error title=Reconcile did not widen::system_events.source is $WIDTH after --reconcile; expected 128."
+            exit 1
+          fi
+          aindy-runtime bootstrap-schema
+          echo "--reconcile widened the column to 128 and the result is stable."

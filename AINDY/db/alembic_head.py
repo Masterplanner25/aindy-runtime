@@ -14,7 +14,7 @@ scripts-dir head, so a forgotten bump is caught in CI.
 """
 from __future__ import annotations
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 # Alembic version table for the runtime (distinct from the monolith's plain
@@ -23,6 +23,22 @@ RUNTIME_ALEMBIC_VERSION_TABLE = "alembic_version_runtime"
 
 # The current head of the runtime migration chain (alembic/versions/0001..NNNN).
 RUNTIME_ALEMBIC_HEAD_REVISION = "0020"
+
+
+def read_runtime_alembic_revision(engine: Engine) -> str | None:
+    """The revision ``alembic_version_runtime`` currently records, or None (no table, no row).
+
+    Never raises: it only feeds the stamp's report line, so a read failure must not stop it.
+    """
+    table = RUNTIME_ALEMBIC_VERSION_TABLE
+    try:
+        if not inspect(engine).has_table(table):
+            return None
+        with engine.connect() as conn:
+            row = conn.execute(text(f"SELECT version_num FROM {table}")).first()
+        return str(row[0]) if row else None
+    except Exception:
+        return None
 
 
 def stamp_runtime_alembic_head(

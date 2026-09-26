@@ -36,13 +36,16 @@ SCHEMA_STATE_INCOMPATIBLE_MANUAL = "incompatible_manual"
 # Must never change once deployed — advisory locks are keyed by this integer.
 _BOOTSTRAP_ADVISORY_LOCK_KEY = 4149443900
 
-_SAFE_RECONCILE_CODES = {"missing_table", "missing_column"}
+_SAFE_RECONCILE_CODES = {"missing_table", "missing_column", "column_widen"}
 REMEDIATION_BOOTSTRAP = "bootstrap"
 REMEDIATION_STARTUP_RECONCILE = "startup_reconcile"
 REMEDIATION_OFFLINE_MIGRATION = "offline_migration"
 REMEDIATION_MANUAL_REPAIR = "manual_repair"
 DRIFT_CLASS_ADDITIVE_MISSING_TABLE = "additive_missing_table"
 DRIFT_CLASS_ADDITIVE_MISSING_COLUMN = "additive_missing_column"
+#: FR-43 — a bounded type whose bound the packaged model RAISES (varchar(32) → varchar(128)).
+#: Every existing value still fits, and PostgreSQL applies it as a metadata-only change.
+DRIFT_CLASS_ADDITIVE_COLUMN_WIDEN = "additive_column_widen"
 DRIFT_CLASS_UNSUPPORTED_REQUIRED_COLUMN = "unsupported_required_column"
 DRIFT_CLASS_TYPE_MISMATCH = "column_type_mismatch"
 DRIFT_CLASS_NULLABILITY_MISMATCH = "column_nullability_mismatch"
@@ -160,6 +163,7 @@ def runtime_schema_contract_metadata() -> dict[str, object]:
             "explicit_startup_reconcile_only": [
                 DRIFT_CLASS_ADDITIVE_MISSING_TABLE,
                 DRIFT_CLASS_ADDITIVE_MISSING_COLUMN,
+                DRIFT_CLASS_ADDITIVE_COLUMN_WIDEN,
             ],
             "never_automatic": [
                 DRIFT_CLASS_UNSUPPORTED_REQUIRED_COLUMN,
@@ -221,6 +225,7 @@ def offline_migration_contract(
         "startup_reconcile_scope": [
             DRIFT_CLASS_ADDITIVE_MISSING_TABLE,
             DRIFT_CLASS_ADDITIVE_MISSING_COLUMN,
+            DRIFT_CLASS_ADDITIVE_COLUMN_WIDEN,
         ],
         "not_performed_automatically": [
             DRIFT_CLASS_TYPE_MISMATCH,
@@ -272,6 +277,60 @@ def _normalize_type_name(type_, *, dialect=None) -> str:
         return _PG_TYPE_ALIASES.get(raw, raw)
     raw = type(type_).__name__.lower()
     return _PG_TYPE_ALIASES.get(raw, raw)
+
+
+def _type_bound(type_):
+    """The bound a type carries that its name does not, or None if it carries none we compare.
+
+    FR-43: `_normalize_type_name` keeps only the name, so `VARCHAR(32)` and `VARCHAR(128)`
+    compared equal and 2.22.0's widening was invisible. Only two families are compared: the
+    string types' length, and `NUMERIC`'s precision and scale. Two are excluded on purpose:
+    - `Enum` subclasses `String` with a length SQLAlchemy computes, but a native PostgreSQL
+      enum reflects with none, so comparing it would report false drift.
+    - `Float` subclasses `Numeric`, and PostgreSQL reflects `DOUBLE PRECISION` with a
+      precision the model never declared.
+    """
+    from sqlalchemy.types import Enum, Float, Numeric, String
+
+    if isinstance(type_, Enum):
+        return None
+    if isinstance(type_, String):
+        return ("length", type_.length)
+    if isinstance(type_, Numeric) and not isinstance(type_, Float):
+        return ("numeric", type_.precision, type_.scale)
+    return None
+
+
+def _bound_change(expected_type, actual_type) -> str | None:
+    """``None`` if the bounds agree, ``"widen"`` if the model's bound admits every value the
+    column's does, otherwise ``"incompatible"``."""
+    expected, actual = _type_bound(expected_type), _type_bound(actual_type)
+    if expected is None or actual is None or expected == actual or expected[0] != actual[0]:
+        return None
+    if expected[0] == "length":
+        expected_len, actual_len = expected[1], actual[1]
+        if expected_len is None:
+            return "widen"  # unbounded admits any bounded value
+        if actual_len is None or expected_len < actual_len:
+            return "incompatible"
+        return "widen"
+    expected_precision, expected_scale = expected[1], expected[2]
+    actual_precision, actual_scale = actual[1], actual[2]
+    # Only a precision increase at the SAME scale is a pure widening; a scale change rewrites
+    # every value and belongs to an offline migration.
+    if expected_scale == actual_scale and (
+        expected_precision is None
+        or (actual_precision is not None and expected_precision > actual_precision)
+    ):
+        return "widen"
+    return "incompatible"
+
+
+def _compiled_type(type_, dialect) -> str:
+    try:
+        return str(type_.compile(dialect=dialect)).lower()
+    except Exception:
+        return type(type_).__name__.lower()
 
 
 def _runtime_owned_tables():
@@ -380,6 +439,35 @@ def _inspect_schema_issues(
                         remediation_category=REMEDIATION_OFFLINE_MIGRATION,
                     )
                 )
+            # FR-43 — same name, different bound. Skipped on SQLite, which does not enforce a
+            # declared length, so a difference there is not a constraint anyone relies on.
+            elif resolved.dialect.name != "sqlite":
+                change = _bound_change(expected_column.type, actual_column["type"])
+                if change is not None:
+                    actual_rendered = _compiled_type(actual_column["type"], resolved.dialect)
+                    expected_rendered = _compiled_type(expected_column.type, resolved.dialect)
+                    widen = change == "widen"
+                    issues.append(
+                        SchemaIssue(
+                            code="column_widen" if widen else "column_type_mismatch",
+                            table=table_name,
+                            column=expected_column.name,
+                            detail=(
+                                f"Runtime table {table_name!r} column {expected_column.name!r} "
+                                f"is {actual_rendered!r}; expected {expected_rendered!r}"
+                                + (" (a widening: every existing value fits)." if widen
+                                   else " (not a pure widening: an offline migration decides "
+                                        "what happens to existing values).")
+                            ),
+                            reconcile_supported=widen,
+                            drift_class=(
+                                DRIFT_CLASS_ADDITIVE_COLUMN_WIDEN if widen else DRIFT_CLASS_TYPE_MISMATCH
+                            ),
+                            remediation_category=(
+                                REMEDIATION_STARTUP_RECONCILE if widen else REMEDIATION_OFFLINE_MIGRATION
+                            ),
+                        )
+                    )
 
             actual_nullable = bool(actual_column.get("nullable", True))
             if actual_nullable != bool(expected_column.nullable):
@@ -634,6 +722,22 @@ def reconcile_runtime_schema(bind: Engine | Connection | Session) -> SchemaRepor
                     table.name,
                     expected_column.name,
                 )
+
+    # FR-43 — widen a bounded column to the packaged bound. Only issues the inspection above
+    # classed as a pure widening reach here (a narrowing is `column_type_mismatch`, which keeps
+    # the state out of UPGRADE_REQUIRED). In PostgreSQL, raising a varchar length or a numeric
+    # precision at the same scale changes metadata only; no row is rewritten.
+    tables_by_name = {table.name: table for table in _runtime_owned_tables()}
+    for issue in report.issues:
+        if issue.code != "column_widen":
+            continue
+        table = tables_by_name[issue.table]
+        column = table.columns[issue.column]
+        table_name = resolved.dialect.identifier_preparer.format_table(table)
+        column_name = resolved.dialect.identifier_preparer.format_column(column)
+        type_sql = column.type.compile(dialect=resolved.dialect)
+        _execute_ddl(resolved, f"ALTER TABLE {table_name} ALTER COLUMN {column_name} TYPE {type_sql}")
+        logger.info("[schema] widened %s.%s to %s", issue.table, issue.column, type_sql)
 
     validated = inspect_runtime_schema(resolved)
     return SchemaReport(
