@@ -215,6 +215,9 @@ def run_agent_tool(
                 db=db,
                 run_id=run_id,
                 execution_token=execution_token,
+                # IDEM-14 / DEC-076 — the key is per step; a hand-written `call_tool(name, args)`
+                # has no index and keeps the run scope
+                step_index=int(step_index) if step_index is not None else None,
             )
     except Exception as exc:
         # RETRY-CLASSIFY-1 — the seam's own exception is un-classed; the fallback table decides

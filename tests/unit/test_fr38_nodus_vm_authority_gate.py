@@ -63,7 +63,7 @@ def tools(monkeypatch):
     executed: list[str] = []
     granted = {OK_TOOL}
 
-    def _execute_tool(*, tool_name, args, user_id, db, run_id, execution_token):
+    def _execute_tool(*, tool_name, args, user_id, db, run_id, execution_token, step_index=None):
         executed.append(tool_name)
         return {"success": True, "result": {"ran": tool_name}, "error": None}
 

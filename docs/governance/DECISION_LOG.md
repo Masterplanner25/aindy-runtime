@@ -1844,3 +1844,24 @@ called with the literal or a partial resolution. The feature ships behind
 A step that runs on a placeholder is the quiet `success` FR-46 was filed for. `invalid` is not
 retried (DEC-025) because no retry can make an earlier result appear. Capabilities ship
 default-off until evidence; the evidence is the app's own goal re-run.
+
+### DEC-076
+**Status:** `accepted` (2026-09-25 — `IDEM-14`, by the owner; #763)
+
+**Decision**
+The tool seam's idempotency key is scoped to ONE STEP when the caller knows the step:
+`compute_action_id(tool, args, scope=f"{run_id}#step:{step_index}")`. Both agent backends pass
+the plan's tool-step index. Every caller without one (syscalls, MCP, extensions, a hand-written
+`call_tool(name, args)`) keeps the run scope. A re-attempt of one step is one effect and replays;
+two steps asking for the same effect are two effects.
+
+**Why**
+Scoped to the run, a plan whose steps 1 and 4 call the same `EXACTLY_ONCE` tool with identical
+args ran step 1 and REPLAYED it as step 4. The second effect never happened, and the run said
+`success`. The owner's call: "idempotent per tool call / individual step — that's the actual
+safe bet". The at-most-once the gate exists for is about a RETRY; a retry never changes its step.
+
+**Accepted cost**
+An in-flight step whose effect completed under the old run-scoped key and re-drives across the
+upgrade does not find that row. On `nodus_vm` the continuation replays from `agent_steps` before
+`execute_tool`, so only an effect whose step row was never recorded is exposed.

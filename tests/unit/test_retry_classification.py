@@ -151,7 +151,7 @@ def _drive_adapter(monkeypatch, tool_result: dict) -> list[str]:
 
     executed: list[str] = []
 
-    def _execute_tool(*, tool_name, args, user_id, db, run_id, execution_token):
+    def _execute_tool(*, tool_name, args, user_id, db, run_id, execution_token, step_index=None):
         executed.append(tool_name)
         return dict(tool_result)
 

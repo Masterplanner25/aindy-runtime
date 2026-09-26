@@ -530,6 +530,7 @@ def agent_execute_step(state: dict, context: dict) -> dict:
             db=db,
             run_id=agent_run_id,
             execution_token=execution_token,
+            step_index=idx,  # IDEM-14 / DEC-076 — the key is per step, not per run
         )
         exec_ms = int(time.time() * 1000) - start_ms
 

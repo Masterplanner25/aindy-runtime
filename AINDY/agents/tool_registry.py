@@ -1060,6 +1060,19 @@ def _declared_failure_class(source: Any) -> Optional[str]:
     return value if isinstance(value, str) and value in FAILURE_CLASSES else None
 
 
+def tool_effect_scope(run_id, step_index: int | None = None) -> str:
+    """The idempotency scope of one tool call: the run, narrowed to the step when it is known.
+
+    IDEM-14 / DEC-076. Scoped to the run alone, two steps of one plan that call the same
+    `EXACTLY_ONCE` tool with identical args shared an `action_id`, so the second step REPLAYED the
+    first and its effect never happened. A retry of one step (same run, same step, same args) still
+    maps to one key and still replays; that is the at-most-once the gate exists for.
+    """
+    if step_index is None:
+        return str(run_id)
+    return f"{run_id}#step:{int(step_index)}"
+
+
 def execute_tool(
     tool_name: str,
     args: dict,
@@ -1067,8 +1080,14 @@ def execute_tool(
     db,
     run_id: str = None,
     execution_token: dict = None,
+    step_index: int | None = None,
 ) -> dict:
-    """Execute a registered tool by name and return a normalized result."""
+    """Execute a registered tool by name and return a normalized result.
+
+    ``step_index`` is the plan's tool-step index when the caller is an agent backend. It scopes
+    the idempotency key to ONE step of the run (IDEM-14, DEC-076). Callers with no step (syscalls,
+    MCP, extensions, direct calls) omit it and keep the run scope.
+    """
     _ensure_tools_loaded()
     entry = TOOL_REGISTRY.get(tool_name)
     if not entry:
@@ -1133,7 +1152,7 @@ def execute_tool(
         from AINDY.core.execution_gate import compute_action_id
 
         _action_id = compute_action_id(
-            action_type=tool_name, input_payload=args or {}, scope=str(run_id)
+            action_type=tool_name, input_payload=args or {}, scope=tool_effect_scope(run_id, step_index)
         )
     if execution_token is not None:
         try:
