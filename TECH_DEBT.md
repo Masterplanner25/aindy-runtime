@@ -9225,7 +9225,22 @@ for 0 waiters. Distinct from FR-15's losses (distributed mode): this is single-i
 
 ## FR-43 — `bootstrap-schema` compares column types with the length stripped, so 2.22.0's widening was invisible: "no table changes", exit 0, and `0020` stamped over a `varchar(32)` 🔴 defect (app-filed 2026-09-23, runtime 2.22.0)
 
-**Status: OPEN.** Verified at source: `db/schema_contract.py::_normalize_type_name` keeps
+**Status: CLOSED 2026-09-25 (#761).** The drift check compares string length and `numeric`
+precision/scale when type names agree:
+- A pure widening is the new class `additive_column_widen`: exit 3, and `--reconcile` runs
+  `ALTER COLUMN … TYPE`, metadata-only in PostgreSQL.
+- A narrowing, or a scale change, stays `column_type_mismatch` (exit 4).
+- `Enum`, `Float` and SQLite are excluded by construction.
+
+Ask 2 is answered by the gate that already existed: the stamp is reached only on `report.ok`, and
+the report now sees bounds. The stamp line names the revision it moved from, and
+`(no table changes)` prints only for an ok report. Ask 3 is in the Upgrade Path Guard: an
+independent `information_schema` width check (89 columns) and a widening negative control (exit
+3, no stamp, 128 after `--reconcile`). Verified on a throwaway pgvector:pg16 in the app's exact
+state. Mutations bite. **Remaining:** the drift check still does not compare indexes, constraints
+or data (`SCHEMA_LIFECYCLE.md` now says so), so a revision whose only DDL is an index can still
+be stamped over unrun. The 2.24.0 handoff must correct the 2.22.0 handoff's exit-3 promise.
+Verified at source: `db/schema_contract.py::_normalize_type_name` keeps
 `compiled.lower().split("(", 1)[0]` (`:265`), so `VARCHAR(32)` and `VARCHAR(128)` compare
 equal. `_SAFE_RECONCILE_CODES` is `{missing_table, missing_column}` (`:39`), so even a detected
 widening would have been an offline-migration exit 4, not the exit 3 the 2.22.0 handoff promised.
