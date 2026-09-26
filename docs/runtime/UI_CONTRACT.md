@@ -1,6 +1,6 @@
 ---
 title: "Runtime → UI Contract"
-last_verified: "2026-08-22"
+last_verified: "2026-09-25"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -181,8 +181,18 @@ envelope has no `.length`, so the empty-state branch did not fire either.
 - **A blanket unwrap is not a substitute.** A bare body may legitimately carry a `data` key, and
   unwrapping it corrupts the response.
 - **The header is absent on error responses, on handler-built `Response` objects, and on routes
-  with a registered response adapter** — because those bodies are not the envelope. Absence means
-  "not enveloped", never "unknown".
+  whose registered response adapter returns some other shape.** Those bodies are not the
+  envelope. Absence means "not enveloped", never "unknown".
+- **The runtime's own adapters stamp when their body is an envelope** (FR-45). In
+  `AINDY.platform_layer.response_adapters`, `raw_canonical_adapter`, `legacy_envelope_adapter`,
+  `memory_execute_adapter` and the success path of `memory_completion_adapter` all set the
+  header. The rule is the one the client applies: a stamped body resolves to its top-level
+  `data`, so a body is stamped exactly when it carries one. `raw_json_adapter` never stamps.
+  Neither does the legacy adapter when it passes through a payload that has no `data`. **An
+  app's own adapter decides for itself**: if its body is an envelope, it must set the header.
+  ui-kit ≥ 2.1.0 treats every unstamped body as bare once the session has seen one stamped
+  response. So an unstamped envelope is unwrapped before that point and not after it: the same
+  route renders differently depending on which page was opened first.
 
 Browser clients on another origin can read it: the runtime lists it in
 `Access-Control-Expose-Headers` along with `X-Trace-ID`, `X-Request-ID`, `X-EU-ID` and

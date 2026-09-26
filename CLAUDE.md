@@ -238,7 +238,7 @@ the run date (`gh run list --workflow=… --branch …`) before citing it; it al
 
 ## Registry conventions (`TECH_DEBT.md`)
 
-Numbers are sequential per prefix and never reused (next: **FR-43**, **IDEM-14**). Closing an entry:
+Numbers are sequential per prefix and never reused (next: **FR-47**, **IDEM-14**). Closing an entry:
 `Status: CLOSED (YYYY-MM-DD)` + what shipped and what remains. **Write findings in `TECH_DEBT.md`,
 not here** — the registry below is one line per item, enforced by
 `tests/unit/test_debt_registry_accuracy.py` (UTF-8 byte cap per entry; a closed entry may not sit
@@ -297,7 +297,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-43** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half. FR-42 closed #750 (DEC-071). FR-37 ui-kit 2.1.0 shipped; FR-38 #734, FR-40 #731, FR-41 #730 (Alembic 0020).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-47** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half; FR-43 (`bootstrap-schema` blind to a widening, stamps over it); FR-44 (resume says `resuming` with 0 waiters); FR-46 (step args can't reference earlier results — design first). FR-45 closed #759 (ui-kit half remains). FR-42 closed #750 (DEC-071).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
