@@ -459,3 +459,145 @@ def test_rehydration_rebuilds_a_gate_park_as_a_continuation_of_the_same_segment(
     agent = _reload(db_session, run)
     assert agent.status == "completed" and agent.steps_completed == 1
     assert [(r.step_index, r.status) for r in _rows(db_session, run)] == [(0, "skipped"), (1, "success")]
+
+
+# ── FR-44 — a resume served by a process that does not hold the run's wait ──────────────────
+#
+# The wait is an in-memory registration on the process that parked the run. The app re-ran the
+# nodus_vm denial with the park made in a `docker exec`: the api's `POST …/resume {"decision":
+# "skip"}` answered 200 `resuming` with `waiters_notified: 0`, and the run sat `waiting` until an
+# api restart re-armed it. These drive the real route function with a scheduler that holds
+# registrations PER PROCESS, so "a different process" is a scheduler that never saw the park.
+
+
+class _ProcessScheduler:
+    """One process's in-memory waits, keyed by run id, woken the way `publish_event` wakes."""
+
+    def __init__(self):
+        self.waits: dict = {}
+
+    def register_wait(self, **kw):
+        self.waits[kw["run_id"]] = kw
+
+    def waiting_for(self, run_id):
+        return self.waits.get(run_id)
+
+    def publish(self, event_type, *, correlation_id=None, run_id=None):
+        if event_type != EVENT:
+            return 0  # `record_agent_event`'s own agent.* notifications
+        wait = self.waits.pop(run_id, None)
+        if wait is None:
+            return 0
+        wait["resume_callback"]()
+        return 1
+
+
+def _park_then_switch_process(chain, db, monkeypatch):
+    """Park on process A, then serve everything after it from process B."""
+    parking = _ProcessScheduler()
+    monkeypatch.setattr("AINDY.kernel.scheduler_engine.get_scheduler_engine", lambda: parking)
+    run = _vm_run(db)
+    _start(chain, db, run)
+    assert str(run.id) in parking.waits, "liveness: the park registered on the parking process"
+    serving = _ProcessScheduler()
+    monkeypatch.setattr("AINDY.kernel.scheduler_engine.get_scheduler_engine", lambda: serving)
+    return run, parking, serving
+
+
+def test_fr44_a_resume_on_another_process_arms_the_wait_and_the_run_completes(chain, db_session, monkeypatch):
+    from AINDY.agents.runtime_api import resume_agent_run_runtime
+
+    run, _parking, serving = _park_then_switch_process(chain, db_session, monkeypatch)
+    assert serving.waits == {}, "the serving process never saw the park: the app's topology"
+
+    with patch("AINDY.kernel.event_bus.publish_event", serving.publish):
+        reply = resume_agent_run_runtime(db=db_session, user_id=str(run.user_id), run_id=str(run.id),
+                                         payload={"decision": "skip", "note": "n"})
+
+    assert reply["waiters_notified"] == 1
+    assert reply["authority_gate"]["run_status"] == "resuming"
+    agent = _reload(db_session, run)
+    assert agent.status == "completed", (agent.status, agent.error_message)
+    assert [(r.step_index, r.status) for r in _rows(db_session, run)] == [(0, "skipped"), (1, "success")]
+    assert len(chain["calls"]) == 2, "re-driven exactly once"
+
+
+def test_fr44_a_wait_this_process_already_holds_is_not_armed_twice(chain, db_session, monkeypatch):
+    """The live registration wins: the on-demand arm is for the gap between boots only."""
+    from AINDY.agents.runtime_api import resume_agent_run_runtime
+
+    parking = _ProcessScheduler()
+    monkeypatch.setattr("AINDY.kernel.scheduler_engine.get_scheduler_engine", lambda: parking)
+    run = _vm_run(db_session)
+    _start(chain, db_session, run)
+    original = parking.waits[str(run.id)]["resume_callback"]
+
+    with patch("AINDY.core.agent_run_rehydration.rehydrate_waiting_agent_runs") as rehydrate, \
+            patch("AINDY.kernel.event_bus.publish_event", parking.publish):
+        reply = resume_agent_run_runtime(db=db_session, user_id=str(run.user_id), run_id=str(run.id),
+                                         payload={"decision": "skip"})
+    rehydrate.assert_not_called()
+    assert reply["waiters_notified"] == 1 and _reload(db_session, run).status == "completed"
+    assert original is not None
+
+
+def test_fr44_nothing_woken_is_reported_as_waiting_not_resuming(chain, db_session, monkeypatch):
+    """Ask 2: a 200 that says `resuming` while the run cannot move is the quiet failure. Here
+    the run cannot be rebuilt from its row (plan gone), so there is nothing to arm."""
+    from AINDY.agents.runtime_api import resume_agent_run_runtime
+
+    run, _parking, serving = _park_then_switch_process(chain, db_session, monkeypatch)
+    agent = _reload(db_session, run)
+    agent.plan = {}
+    db_session.commit()
+
+    with patch("AINDY.kernel.event_bus.publish_event", serving.publish):
+        reply = resume_agent_run_runtime(db=db_session, user_id=str(run.user_id), run_id=str(run.id),
+                                         payload={"decision": "skip", "note": "n"})
+
+    assert reply["waiters_notified"] == 0
+    assert reply["authority_gate"]["run_status"] == "waiting"
+    assert reply["authority_gate"]["reason"] == "no_local_waiter_woken"
+    assert _reload(db_session, run).status == "waiting"
+    # the decision is still the row's: the next re-drive (a restart's rehydration) replays it
+    assert [(r.step_index, r.status) for r in _rows(db_session, run)] == [(0, "skipped")]
+
+
+def test_fr44_an_abort_arms_nothing(chain, db_session, monkeypatch):
+    """An abort fails the run here and publishes nothing. A wait armed for it would sit in
+    memory with no event ever coming."""
+    from AINDY.agents.runtime_api import resume_agent_run_runtime
+
+    run, _parking, serving = _park_then_switch_process(chain, db_session, monkeypatch)
+    with patch("AINDY.kernel.event_bus.publish_event", serving.publish):
+        reply = resume_agent_run_runtime(db=db_session, user_id=str(run.user_id), run_id=str(run.id),
+                                         payload={"decision": "ABORT "})
+    assert reply["authority_gate"]["run_status"] == "failed"
+    assert serving.waits == {}
+
+
+def test_fr44_an_ordinary_plan_wait_is_armed_too(db_session, monkeypatch):
+    """Not only the gate: a plan-declared WAIT served by another process had the same gap."""
+    from AINDY.agents.runtime_api import resume_agent_run_runtime
+    from AINDY.db.models import AgentRun
+
+    serving = _ProcessScheduler()
+    monkeypatch.setattr("AINDY.kernel.scheduler_engine.get_scheduler_engine", lambda: serving)
+    run = AgentRun(id=uuid.uuid4(), user_id=uuid.uuid4(), goal="g", status="waiting", steps_total=1,
+                   plan={"steps": [{"tool": OK_TOOL, "args": {}, "risk_level": "low", "description": "d"}]},
+                   correlation_id=f"run_{uuid.uuid4()}",
+                   wait_state={"event_type": "invoice.approved", "resume_segment_index": 0})
+    db_session.add(run)
+    db_session.commit()
+    published: list = []
+
+    def _publish(event_type, *, correlation_id=None, run_id=None):
+        published.append(event_type)
+        return 1 if str(run.id) in serving.waits else 0
+
+    with patch("AINDY.kernel.event_bus.publish_event", _publish):
+        reply = resume_agent_run_runtime(db=db_session, user_id=str(run.user_id), run_id=str(run.id))
+
+    assert str(run.id) in serving.waits, "armed on the serving process before the publish"
+    assert serving.waits[str(run.id)]["wait_for_event"] == "invoice.approved"
+    assert published == ["invoice.approved"] and reply["waiters_notified"] == 1

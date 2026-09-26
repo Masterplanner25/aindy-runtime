@@ -9210,7 +9210,18 @@ the legacy one) and now stamps them itself (`apps/_shared/envelope.py`); any oth
 
 ## FR-44 — the agent resume route records a gate decision and answers `resuming` when no process holds the run's waiter; the run stays `waiting` until the next restart 🔴 defect (app-filed 2026-09-23, runtime 2.22.0)
 
-**Status: OPEN.** Verified at source: `agents/runtime_api.py::resume_agent_run_runtime`
+**Status: CLOSED 2026-09-25 (#760).** The resume route arms the run's wait on the serving
+process before the gate decision and the publish, if that process holds none. It uses
+`rehydrate_waiting_agent_runs(db, run_ids=[run_id])`; the resume callback's atomic
+`waiting → executing` claim makes a duplicate registration elsewhere safe. An `abort` arms
+nothing. `authority_gate.run_status` is `resuming` only when a local waiter woke, otherwise
+`waiting` + `reason: "no_local_waiter_woken"` (the decision stays on the row). ★ The scoped
+rehydration the ask relied on had never run: string ids against the UUID column raised
+`'str' object has no attribute 'hex'`. Ids are normalised now. Tests: five per-process-scheduler
+cases, plus the ROUTE on a real empty `SchedulerEngine` with the real `publish_event`. Four
+mutations each fail their own test. **Remaining:** the app's live two-process re-run on the
+release that ships it.
+Verified at source: `agents/runtime_api.py::resume_agent_run_runtime`
 publishes (`publish_event(…, run_id=…)`, `:279`) and returns `waiters_notified` from it, while
 `_decide_authority_gate` has already committed the `skipped` step and answers
 `run_status: "resuming"` (`:377`) whatever the publish reached. Agent-run waits are registered
