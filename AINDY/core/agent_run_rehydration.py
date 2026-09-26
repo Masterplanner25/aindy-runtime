@@ -49,7 +49,12 @@ def rehydrate_waiting_agent_runs(
 
     scheduler = get_scheduler_engine()
     query = db.query(AgentRun).filter(AgentRun.status == AgentRunStatus.WAITING.value)
-    scoped = {str(r) for r in (run_ids or []) if r}
+    # ★ FR-44 — normalise to the column's type. Strings raised `'str' object has no attribute
+    # 'hex'` in the UUID bind processor, and the per-run failure handling below never saw it,
+    # because the query runs first. Boot calls this unscoped, so the scope had never run.
+    from AINDY.utils.uuid_utils import normalize_uuid
+
+    scoped = {normalize_uuid(r) for r in (run_ids or []) if r}
     if scoped:
         query = query.filter(AgentRun.id.in_(scoped))
     waiting_runs = query.all()
