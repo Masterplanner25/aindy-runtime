@@ -230,3 +230,41 @@ def test_dry_run_writes_nothing(workspace):
     assert result.returncode == 0
     assert _changelog(workspace) == before
     assert (workspace / "changelog.d" / "10-alpha.md").exists(), "dry-run must not delete"
+
+
+# --------------------------------------------------------------------------------------
+# The heading is a LINE, never a substring (found cutting 2.24.0)
+# --------------------------------------------------------------------------------------
+
+
+def test_the_phrase_in_prose_is_not_the_heading(workspace):
+    """★ The 2.23.0 promotion left no `## Unreleased` heading, and a substring search found the
+    phrase quoted in an old entry's prose. Six entries were folded into the middle of that
+    sentence, 4,600 lines down, with exit 0. Now: refuse, and write or delete nothing."""
+    before = (
+        "# Changelog\n\n## 2.3.0 — 2026-09-23\n\nnewest.\n\n"
+        "## 2.1.0\n\nentries are files rather than an edit to `CHANGELOG.md`'s `## Unreleased`.\n"
+    )
+    (workspace / "CHANGELOG.md").write_text(before, encoding="utf-8")
+    _fragment(workspace, "10-alpha.md", "### Fixed — alpha (#1)\n\nalpha body.")
+
+    result = _run(workspace)
+
+    assert result.returncode == 2
+    assert "heading line" in result.stderr
+    assert _changelog(workspace) == before, "the changelog was written"
+    assert (workspace / "changelog.d" / "10-alpha.md").exists(), "a fragment was deleted"
+
+
+def test_the_real_heading_is_found_even_when_the_phrase_also_appears_in_prose(workspace):
+    """Liveness control for the test above: a genuine heading line still folds, and folds THERE."""
+    (workspace / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\n\n_Nothing yet._\n\n## 2.1.0\n\nan edit to `## Unreleased`.\n",
+        encoding="utf-8",
+    )
+    _fragment(workspace, "10-alpha.md", "### Fixed — alpha (#1)\n\nalpha body.")
+
+    assert _run(workspace).returncode == 0
+    text = _changelog(workspace)
+    assert text.index("alpha body.") < text.index("## 2.1.0")
+    assert "an edit to `## Unreleased`." in text, "the prose was touched"

@@ -1,6 +1,6 @@
 ---
 title: "Runtime Release Checklist"
-last_verified: "2026-08-19"
+last_verified: "2026-09-26"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -258,7 +258,12 @@ deployment that introduces TLS termination.
   then `--check` to confirm none are stranded. Entries live in `changelog.d/` as one file
   per PR (they cannot conflict); assembly is a release step, never a per-PR CI gate —
   fragments are *supposed* to exist during development.
-- [ ] `## Unreleased` is **complete**, then promoted to the version heading.
+- [ ] `## Unreleased` is **complete**, then promoted to the version heading, **and a fresh
+  `## Unreleased` + `_Nothing yet._` is left above it.** 2.23.0 promoted the heading and left
+  none; cutting 2.24.0, the assembler's substring search then found the phrase quoted in an old
+  entry and folded six entries into the middle of that sentence, exiting 0. The assembler now
+  refuses without a heading line (#766), so a missing one stops the next release rather than
+  corrupting it.
 
   Entries should already be there: per the CHANGELOG protocol in `CLAUDE.md`, each PR writes
   its own entry when it lands. This step **verifies** that; it is not the place to author them.
