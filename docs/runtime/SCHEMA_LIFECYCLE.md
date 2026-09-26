@@ -1,6 +1,6 @@
 ---
 title: "Schema Lifecycle"
-last_verified: "2026-05-20"
+last_verified: "2026-09-25"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -30,13 +30,17 @@ The runtime distinguishes four operator-facing schema states:
     - creating missing runtime-owned tables
     - adding missing nullable columns
     - adding missing columns that have a database `server_default`
+    - widening a bounded column to the packaged bound (`varchar(32)` →
+      `varchar(128)`, or a `numeric` precision increase at the same scale). Every
+      existing value fits, and PostgreSQL applies it without rewriting rows (FR-43)
   - startup does not apply this automatically unless the operator explicitly
     enables `AINDY_SCHEMA_RECONCILE=true`
 - `incompatible_manual`
   - the existing schema has unsafe drift or a change the runtime will not
     mutate in place
   - examples:
-    - column type mismatch
+    - column type mismatch, including a bound the packaged model LOWERS
+      (a narrowing) or a `numeric` scale change
     - nullability mismatch
     - primary-key mismatch
     - missing non-null column without a safe DB-side default
@@ -46,7 +50,7 @@ In addition to `schema_state`, the runtime now emits machine-readable:
 
 - `schema_drift_classes`
   - concrete drift categories such as `additive_missing_table`,
-    `additive_missing_column`, `unsupported_required_column`,
+    `additive_missing_column`, `additive_column_widen`, `unsupported_required_column`,
     `column_type_mismatch`, `column_nullability_mismatch`, or
     `primary_key_mismatch`
 - `schema_remediation_categories`
@@ -137,6 +141,7 @@ already-initialized production schema.
 - Supported at startup:
   - `additive_missing_table`
   - `additive_missing_column`
+  - `additive_column_widen`
 - Supported only through explicit startup reconcile:
   - the same additive classes above, and only when
     `AINDY_SCHEMA_RECONCILE=true`
@@ -157,10 +162,18 @@ What remains trusted:
 - packaged runtime ORM metadata under `AINDY/db/models/`
 - runtime-owned reconcile logic in `AINDY/db/schema_contract.py`
 
+**What the drift check compares** (and therefore what `bootstrap-schema` vouches for
+before it stamps `alembic_version_runtime` to head): tables, columns, type names, type
+bounds (string length; `numeric` precision and scale), nullability and primary keys.
+It does **not** compare indexes, constraints or data. Before FR-43 it did not compare
+bounds either, so 2.22.0's widening of `system_events.source` was reported as "no table
+changes" and `0020` was stamped over a `varchar(32)`. Bounds are not compared on SQLite,
+which does not enforce a declared length.
+
 What the runtime intentionally does not do:
 
 - apply destructive migrations automatically
-- coerce live column types
+- coerce live column types (a widening is the one exception: it cannot lose a value)
 - tighten nullability in place
 - rewrite primary-key shape
 - claim that unsupported drift can be fixed safely online

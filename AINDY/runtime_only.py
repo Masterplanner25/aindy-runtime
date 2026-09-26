@@ -254,6 +254,7 @@ def _bootstrap_schema(reconcile: bool) -> NoReturn:
         from AINDY.db.schema_contract import ensure_runtime_schema
         from AINDY.db.alembic_head import (
             RUNTIME_ALEMBIC_VERSION_TABLE,
+            read_runtime_alembic_revision,
             stamp_runtime_alembic_head,
         )
     except Exception as exc:
@@ -272,7 +273,9 @@ def _bootstrap_schema(reconcile: bool) -> NoReturn:
             print("ok: bootstrapped runtime-owned tables from packaged metadata.")
         elif report.reconciled:
             print("ok: reconciled runtime-owned tables to packaged metadata.")
-        else:
+        elif report.ok:
+            # FR-43 — only when the report says so. This line used to print for every
+            # not-bootstrapped, not-reconciled report, including one about to exit non-zero.
             print("ok: runtime-owned tables already present (no table changes).")
 
         if not report.ok:
@@ -295,8 +298,9 @@ def _bootstrap_schema(reconcile: bool) -> NoReturn:
             elif report.reconcile_supported:
                 code = EXIT_SCHEMA_RECONCILE_REQUIRED
                 remedy = (
-                    "Re-run with --reconcile to apply the additive column/index changes. "
-                    "This is safe to automate in an entrypoint: it adds, never drops."
+                    "Re-run with --reconcile to apply the additive changes (missing tables and "
+                    "columns, and column widenings). This is safe to automate in an "
+                    "entrypoint: it adds and widens, never drops or narrows."
                 )
             else:
                 code = EXIT_SCHEMA_MANUAL_REPAIR_REQUIRED
@@ -312,8 +316,22 @@ def _bootstrap_schema(reconcile: bool) -> NoReturn:
             raise SystemExit(code)
 
         # (b) Stamp the runtime's Alembic baseline (the half the app layer cannot do).
+        #
+        # ★ FR-43 — the stamp is only as honest as the report above. It records every revision
+        # up to head as applied without running one, so it is reached ONLY when the report
+        # matches the packaged models. The report compares tables, columns, type names, type
+        # bounds (length / precision / scale), nullability and primary keys. It does not
+        # compare indexes, constraints or data. Say which revision the stamp moved FROM, so an
+        # advance over a revision is a visible line, not a silent one.
+        previous = read_runtime_alembic_revision(engine)
         rev = stamp_runtime_alembic_head(engine)
-        print(f"ok: stamped {RUNTIME_ALEMBIC_VERSION_TABLE} to revision {rev}.")
+        if previous and previous != rev:
+            print(
+                f"ok: stamped {RUNTIME_ALEMBIC_VERSION_TABLE} from revision {previous} to {rev} "
+                "(the schema report matched the packaged models)."
+            )
+        else:
+            print(f"ok: stamped {RUNTIME_ALEMBIC_VERSION_TABLE} to revision {rev}.")
         raise SystemExit(0)
     except SystemExit:
         raise
