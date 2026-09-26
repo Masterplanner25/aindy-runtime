@@ -9166,6 +9166,34 @@ key in each tool dict.
 
 ---
 
+## FR-47 — `@aindy/ui-kit` aborted every request at 30 s with no per-call override; agent planning takes longer, so the console reported a failure for a run created seconds later 🔴 open (app-filed 2026-09-26, ui-kit 2.1.0)
+
+**Status: OPEN — the ui-kit half is BUILT (aindy-ui-kit #6, stacked on #5; ships in ui-kit 2.1.1).**
+Verified at source: `request()` and `requestAbsolute()` (`src/api/_core.js`) each armed
+`setTimeout(() => controller.abort(), 30_000)` and mapped ANY `AbortError` to
+`ApiError(408, "…30 seconds.")`, including an abort from the caller's own `signal`. Built:
+- `timeoutMs` per call (default `DEFAULT_TIMEOUT_MS` 30000; `0` = no kit timer).
+- A 408 only when the kit's timer fired; a caller's own abort now rejects with the `AbortError`.
+- ★ The 503 `Retry-After` retry had rebuilt the options, which would have dropped a per-call
+  timeout; it is carried through now.
+
+Fake-timer tests stub `window`, because the node environment has none and the timer path would
+otherwise never run. Three mutations bite.
+**Observed (app, 2026-09-26):** planning took 36 s. The console showed a failure, the server
+created the run, and the owner resubmitted: duplicate runs `6d3fbd85`, `7adfdb84`. App
+workaround #410 polls the run list on a 408.
+**Runtime side, recorded, not asked:**
+- Run creation has NO idempotency key, so a resubmit after a client timeout is always a second
+  run.
+- The runtime already has the non-blocking shape: with `AINDY_ASYNC_HEAVY_EXECUTION=1`,
+  `create_agent_run_runtime` returns **202 + a job** without planning inline. The app runs inline
+  (the default).
+
+Either is the structural answer to "a synchronous LLM call inside a request". Both are the app's
+choice or a future ask. **Closes** when ui-kit 2.1.1 is released and the app adopts `timeoutMs`.
+
+---
+
 ## FR-46 — a plan step's `args` are literals written at planning time; no step can take an earlier step's result, so "research X, then use it" runs its second half blind 🔴 open (app-filed 2026-09-25, runtime 2.22.0)
 
 **Status: OPEN — BUILT #764 2026-09-25, default OFF (`AINDY_PLAN_STEP_REFERENCES`); open for
