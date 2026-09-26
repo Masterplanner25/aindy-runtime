@@ -18,12 +18,18 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 FRAGMENT_DIR = ROOT / "changelog.d"
 CHANGELOG = ROOT / "CHANGELOG.md"
 UNRELEASED = "## Unreleased"
+#: The heading as a LINE. A substring match found the phrase quoted in an old entry's prose
+#: ("…`CHANGELOG.md`'s `## Unreleased`.") once a release had promoted the real heading without
+#: leaving a new one, and folded six entries into the middle of that sentence, 4,600 lines down,
+#: exiting 0 (found cutting 2.24.0).
+UNRELEASED_HEADING = re.compile(r"^## Unreleased[ 	]*$", re.M)
 PLACEHOLDER = "_Nothing yet._"
 
 
@@ -56,11 +62,17 @@ def assemble(*, dry_run: bool = False) -> int:
         return 0
 
     text = CHANGELOG.read_text(encoding="utf-8")
-    if UNRELEASED not in text:
-        print(f"error: {CHANGELOG.name} has no '{UNRELEASED}' heading.", file=sys.stderr)
+    match = UNRELEASED_HEADING.search(text)
+    if match is None:
+        print(
+            f"error: {CHANGELOG.name} has no '{UNRELEASED}' heading line. The release that "
+            f"promoted the last one should have left a new '{UNRELEASED}' + '{PLACEHOLDER}' "
+            "above it; add it and re-run. Nothing was written or removed.",
+            file=sys.stderr,
+        )
         return 2
 
-    head, _, tail = text.partition(UNRELEASED)
+    head, tail = text[: match.start()], text[match.end():]
     # Drop the placeholder if the section is otherwise empty, so we do not end up with
     # "_Nothing yet._" sitting above real entries.
     tail = tail.replace(f"\n\n{PLACEHOLDER}\n", "\n", 1)

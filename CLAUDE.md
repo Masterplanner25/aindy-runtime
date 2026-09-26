@@ -387,7 +387,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 | Runtime contracts (idempotency, sandbox, connector, SDK, UI, invariants, durable-state ownership) | `docs/runtime/*_CONTRACT.md`, `EXECUTION_INVARIANTS.md`, `SECURITY_MATRIX.md`, `SYSCALL_REFERENCE.md`, `NODUS_DEVELOPER_GUIDE.md` |
 | Design records index (every scope/design doc + status) | `docs/design/README.md` |
 | Comparative research index (8 systems; what is settled) | `docs/governance/COMPARATIVE_RESEARCH_INDEX.md` |
-| Release checklist; upgrades index; latest app handoff | `docs/governance/RELEASE_CHECKLIST.md`; `docs/upgrades/README.md`; `docs/upgrades/APP_HANDOFF_v2.23.0.md` |
+| Release checklist; upgrades index; latest app handoff | `docs/governance/RELEASE_CHECKLIST.md`; `docs/upgrades/README.md`; `docs/upgrades/APP_HANDOFF_v2.24.0.md` |
 | Outbound handoffs to Nodus | `docs/handoffs/README.md` |
 | Route ownership; deployment targets | `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md`; `docs/operations/DEPLOYMENT_TARGETS.md` |
 | Sibling repos | ui-kit `C:\dev\aindy-ui-kit\src\`; apps monolith `C:\dev\aindy-apps-monolith\CLAUDE.md` |

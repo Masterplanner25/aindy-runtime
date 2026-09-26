@@ -1,5 +1,170 @@
 # Changelog
 
+## Unreleased
+
+_Nothing yet._
+
+## 2.24.0 — 2026-09-26
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.24.0.md`.
+Pairs with `@aindy/ui-kit` **2.1.1**.
+
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`. **But
+  `bootstrap-schema` can now see a column widening (FR-43):** a deployment built before 2.22.0
+  whose `system_events.source` is still `varchar(32)` (2.22.0 stamped `0020` over it without
+  widening) now gets **exit 3**. `bootstrap-schema --reconcile` widens it. Check first:
+  `SELECT character_maximum_length FROM information_schema.columns WHERE
+  table_name='system_events' AND column_name='source'`. 128 means nothing to do.
+- **The agent resume route can answer `authority_gate.run_status: "waiting"`** (FR-44), with
+  `reason: "no_local_waiter_woken"`, when nothing on the serving process was woken. It used to
+  say `resuming` regardless. A client that branches on `run_status` must handle it.
+- **The tool idempotency key is per plan step (IDEM-14, DEC-076).** Two steps of one run that call
+  the same `EXACTLY_ONCE` tool with identical args are now two effects. `execute_tool` gains an
+  optional `step_index` keyword, so a test stub of it with a fixed signature must accept it.
+- **Plan step references ship default OFF** (`AINDY_PLAN_STEP_REFERENCES`, FR-46).
+- `nodus-lang` 5.15.0 carries two guest-confinement fixes across a park/resume (below).
+
+### Fixed — `bootstrap-schema` sees a column widening, reconciles it, and no longer stamps a head over a schema that does not match (FR-43, #761)
+
+- **Why it was wrong:** the drift check compared type NAMES only. `VARCHAR(32)` and
+  `VARCHAR(128)` were the same type to it. On a stack built before 2.22.0, the release's
+  widening of `system_events.source` (Alembic 0020) was reported as
+  `(no table changes)`. `bootstrap-schema` exited 0 and **stamped `0020` over a `varchar(32)`**,
+  so the revision was recorded as applied although its DDL never ran. The 2.22.0 handoff's
+  promise of exit 3 was not reachable for that change: even a detected type mismatch was an
+  exit-4 offline migration.
+- String length and `numeric` precision/scale are now compared. A **widening** (the packaged
+  bound admits every existing value) is a new drift class, `additive_column_widen`:
+  `bootstrap-schema` exits **3**, and `--reconcile` applies `ALTER COLUMN … TYPE`, which is
+  metadata-only in PostgreSQL. A **narrowing**, or a `numeric` scale change, stays
+  `column_type_mismatch` (exit 4). `Enum` and `Float` are not compared (their reflected bounds
+  differ from the model's by construction), and neither is anything on SQLite.
+- `(no table changes)` is printed only when the report is ok. The stamp line now names the
+  revision it moved from (`stamped … from revision 0019 to 0020`).
+- **Upgrade Path Guard:** the upgrade job now checks every bounded string column's width in
+  `information_schema` against the models (89 columns), independently of the drift check. The
+  negative control also injects a narrowed `system_events.source` and requires exit 3, no stamp,
+  and 128 after `--reconcile`. Before this, the guard recorded column names only, and 2.22.0
+  passed it.
+- **Operators:** a deployment that remedied 2.22.0 out of band (as the app did) sees no change. A
+  deployment that did not, and still has `system_events.source` at `varchar(32)`, now gets
+  exit 3 on this release. `bootstrap-schema --reconcile` widens it. Check with `SELECT
+  character_maximum_length FROM information_schema.columns WHERE table_name='system_events' AND
+  column_name='source'`.
+
+### Changed — `nodus-lang` 5.14.0 → 5.15.0 (`NODUS-UPGRADE-1`, #758)
+
+- Bumped at **all three pin sites**: `pyproject.toml`, `AINDY/requirements.txt`, and the
+  `Install MCP extra` CI step. That step installs directly, so a pin changed only in the first
+  two would not reach it.
+- **Our call site does not change. This was checked, not assumed.** We diffed the public surface
+  we import between 5.14.0 and 5.15.0 in throwaway venvs: `NodusRuntime.__init__` and its public
+  methods, `tokenize`, `Parser`, the `GoalDef`/`WorkflowDef` fields, and
+  `memory_metering_available`. It is **identical**. `nodus check --staged` on
+  `AINDY/nodus/stdlib/memory.nd` gives output identical to 5.14.0.
+- **Why take it:** 5.15.0 fixes what a workflow loses when it parks at `workflow_wait` and
+  resumes in another process. Two of the fixes are **confinement fixes on the guest side**:
+  - A resume now inherits the caller's bounds (nodus #873). Before, a guest could escape its
+    instruction budget and its deadline by parking.
+  - A derived VM now inherits the host state it works for, and a module function's `agent_call`
+    no longer reaches the process-global registry (nodus #868).
+
+  The host resumes through `PersistentFlowRunner`, not `resume_workflow`, so the three behaviour
+  changes the release lists (#870 checkpoint replay, #873's 200 ms `nodus run` default, #875
+  `max_terminal_runs`) do not reach any runtime call path. We set none of them.
+- `nodus-mcp` 0.1.5 is compatible and resolves under the existing `>=0.1.4` floor. It only fixes
+  the version string that 0.1.4 reported. The floor is not raised, because nothing here reads
+  that string.
+
+### Fixed — the runtime's own envelope-bodied response adapters now set `X-AINDY-Envelope` (FR-45, #759)
+
+- `raw_canonical_adapter`, `legacy_envelope_adapter`, `memory_execute_adapter` and the success
+  path of `memory_completion_adapter` (`AINDY.platform_layer.response_adapters`) return an
+  envelope as their body, but did not set the header. `adapt_response` stamps only its own
+  default exit, and the registered-adapter branches returned before it.
+- **Why it was wrong:** ui-kit ≥ 2.1.0 treats every unstamped body as bare once a session has
+  seen one stamped response. An app that registered these adapters had its envelopes unwrapped
+  before that point and not after it: the same page rendered or went blank depending on which
+  page the session opened first. The app team found 26 of its 78 parameterless GETs affected.
+- The rule is the one the client applies: a body is stamped exactly when it is a dict with a
+  top-level `data` key. `raw_json_adapter` never stamps, and neither does the legacy adapter's
+  passthrough of a payload without `data`. **An app's own adapter still decides for itself**
+  (`UI_CONTRACT.md`).
+- An app that already stamps these routes itself (the monolith's `apps/_shared/envelope.py`)
+  sets the same value twice. That is harmless, and the app can remove its own stamping on this
+  release.
+
+### Fixed — an agent-run resume served by a process that did not park the run now wakes it, and never answers `resuming` for nothing (FR-44, #760)
+
+- `POST …/agent/runs/{id}/resume` published the run's wait event and returned. A run's wait
+  is registered in memory, by the process that parked it, and re-armed only at boot. So a
+  resume served by any other process (a second api instance, a worker, an api that booted
+  before the park) reached 0 waiters. For an authority-gate decision it still answered
+  `run_status: "resuming"`, and the run stayed `waiting` until something restarted. The app
+  observed exactly that: 200, `waiters_notified: 0`, three minutes `waiting`, then `completed`
+  11 s after an api restart.
+- The route now arms the run's wait on the serving process before publishing, if that process
+  holds none. It reuses boot rehydration, scoped to the one run. If another process still holds
+  the wait, the second registration is safe: the resume callback's `waiting → executing` claim is
+  atomic, so exactly one re-drive runs. An `abort` arms nothing.
+- **`authority_gate.run_status` is `"resuming"` only when a waiter on this process was woken.**
+  Otherwise it is `"waiting"`, with `reason: "no_local_waiter_woken"`. The decision stays recorded
+  on the step row and replays on the next re-drive. `waiters_notified` still counts local wakes
+  only, as it always has.
+- **Also fixed:** `rehydrate_waiting_agent_runs(db, run_ids=[…])` raised on string ids in the
+  UUID column. Boot calls it unscoped, so the scoped form had never run.
+
+### Changed — the tool seam's idempotency key is per plan STEP, not per run (IDEM-14, DEC-076, #763)
+
+- **Why it was wrong:** `execute_tool` keyed an effect on `(tool, args, run_id)`. A plan whose
+  steps 1 and 4 call the same `EXACTLY_ONCE` tool with identical args ran step 1 and **replayed**
+  it as step 4. The second effect (a second reminder, the same message after a WAIT) never
+  happened, and the run reported `success`.
+- Both agent backends now pass the plan's step index, and the key's scope is
+  `"<run_id>#step:<N>"`. A retry of one step is still one effect and still replays. Syscalls,
+  MCP, extensions and a hand-written `call_tool(name, args)` have no step and keep the run scope.
+  The strict lock (`AINDY_TOOL_IDEMPOTENCY_STRICT`) uses the same key and narrows with it.
+- `execute_tool` gains an optional `step_index` keyword. An app that stubs `execute_tool` in its
+  tests with a fixed signature must accept it.
+- **Upgrade:** a step whose effect completed under the old key and that re-drives across the
+  upgrade computes the new key and does not find that row. A `nodus_vm` continuation replays from
+  `agent_steps` first, so only an effect whose step row was never recorded is exposed.
+
+### Added — a plan step's argument may take an earlier step's result, behind `AINDY_PLAN_STEP_REFERENCES` (FR-46, DEC-073..075, #764)
+
+- **Why:** a plan step's `args` were literals the planner wrote before any step ran, so "research
+  X, then use it" always ran its second half blind. In the app's first real goal, `memory.write`
+  stored the planner's pre-research sentence as its "findings", and every step said `success`.
+  The next runs compounded it: recall ranked those placeholder notes first, and a planner invented
+  a `strategy_id` because the recall's result could not reach the steps that needed it.
+- **The form:** an argument value, at any depth, may be exactly
+  `{"$from_step": N, "path": "a.b"}`. It is replaced whole by tool step N's result, or a field in
+  it (dot path; list items by number, `results.0.id`). N counts tool steps only and must be
+  earlier than the current step. A plan that breaks this is refused at plan time (on replay too).
+- **Where:** resolved before `execute_tool` on both backends. On agent_flow that happens in the
+  node; on nodus_vm it happens in the worker seam, from the `agent_steps` rows. That covers
+  earlier segments and WAITs, which the guest's own state forgets. So `args_schema` (FR-33)
+  validates the **value**, including under `enforce`; the idempotency key covers the value; and
+  `agent_steps.tool_args` records what the tool was actually called with.
+- **Failure:** a reference to a step that failed, was skipped at the authority gate, has no
+  result, or lacks the path fails the step with `failure_class: "invalid"` (not retried). The
+  tool is never called with the placeholder.
+- **Default off.** With the flag on, the runtime's tool catalog tells the planner the form in one
+  line, so an app's planner prompt does not need its own. **The runtime truncates no step result.**
+  A reference carries exactly what the tool returned (the app's 2 KB research cut is its own
+  `apps/search/syscalls.py`).
+- The verifier's dot-path resolver moved to `AINDY/core/result_path.py` and is shared (no
+  behaviour change).
+
+
+### Fixed — `scripts/assemble_changelog.py` matched `## Unreleased` as a substring (#766)
+
+- The 2.23.0 promotion left no `## Unreleased` heading, and the assembler's substring search found
+  the phrase quoted in an old entry's prose instead. Cutting 2.24.0, it folded all six entries
+  into the middle of that sentence, 4,600 lines down, and exited 0. It now matches the heading as
+  a line, and with no such line it refuses without writing or deleting anything. Each release
+  promotion leaves a fresh `## Unreleased` + `_Nothing yet._` above the new version.
+
 ## 2.23.0 — 2026-09-23
 
 ### Changed — dependency bumps, grouped (#749)
