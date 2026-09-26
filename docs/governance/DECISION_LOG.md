@@ -1796,3 +1796,51 @@ This document should align with:
 - `RUNTIME_STABILITY_INDEX.md`
 - `RELEASE_GATES.md`
 - `CHANGE_IMPACT_MATRIX.md`
+
+### DEC-073
+**Status:** `provisional` (2026-09-25 — `FR-46`; `docs/design/FR46_STEP_REFERENCES_DESIGN.md` §3.1–3.2)
+
+**Decision**
+A plan step's argument value may be exactly `{"$from_step": N, "path": "<dot.path>"}` (path
+optional): tool step N's result, or a field inside it, replacing the placeholder whole. N is the
+tool-step ordinal, strictly earlier. The path uses the verifier's `_resolve_path` vocabulary,
+lifted to one shared helper. It is validated at plan time in `generate_plan` and in
+`_create_run_from_plan`; an invalid reference refuses the plan. There are no string templates,
+no expressions, and no references to anything but an earlier tool step's result.
+
+**Why**
+The app's first real goal ran its second half blind (FR-46). One reference form is what it asked
+for. A `$`-key cannot collide with an argument name and survives every JSON hop unchanged, and
+the runtime already has one path vocabulary into a step result.
+
+### DEC-074
+**Status:** `provisional` (2026-09-25 — `FR-46`; design §3.3)
+
+**Decision**
+References are resolved by one pure resolver in the two callers of `execute_tool`, before it:
+`agent_execute_step` (lookup: flow state `step_results`) and `nodus_worker.run_agent_tool`
+(lookup: the `agent_steps` row by `(run_id, step_index)`, which covers WAIT boundaries and
+durable step granularity; guest state does not). The idempotency key, `args_schema` validation
+and the recorded `tool_args` all see the resolved args. A continuation replay returns before
+resolution, unchanged.
+
+**Why**
+`execute_tool` is the one seam, but it carries no step context, and threading plan semantics
+into it would reach direct tool calls, MCP and syscalls. Resolving before it is what makes
+FR-33's `enforce` mode validate the value rather than the placeholder, and what keeps two runs'
+different findings from deduping against each other.
+
+### DEC-075
+**Status:** `provisional` (2026-09-25 — `FR-46`; design §3.4–3.5)
+
+**Decision**
+An unresolvable reference (no entry, a status other than `success` including an authority-gate
+`skipped`, or a missing path) fails the step with `failure_class: "invalid"`. The step is never
+called with the literal or a partial resolution. The feature ships behind
+`AINDY_PLAN_STEP_REFERENCES`, off by default. When it is on, the runtime's tool catalog
+(`_build_planner_prompt`) carries the one planner line, so no app prompt has to.
+
+**Why**
+A step that runs on a placeholder is the quiet `success` FR-46 was filed for. `invalid` is not
+retried (DEC-025) because no retry can make an earlier result appear. Capabilities ship
+default-off until evidence; the evidence is the app's own goal re-run.

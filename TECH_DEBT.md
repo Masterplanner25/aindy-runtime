@@ -9168,8 +9168,10 @@ key in each tool dict.
 
 ## FR-46 — a plan step's `args` are literals written at planning time; no step can take an earlier step's result, so "research X, then use it" runs its second half blind 🔴 open (app-filed 2026-09-25, runtime 2.22.0)
 
-**Status: OPEN — design first** (it changes the plan format, both backends, and FR-33's
-`args_schema` contract). Verified at source: `runtime/agent_plan_compiler.py::compile_agent_segment`
+**Status: OPEN — DESIGNED, awaiting acceptance** (`docs/design/FR46_STEP_REFERENCES_DESIGN.md`,
+DEC-073..075 provisional; it changes the plan format, both backends, and FR-33's `args_schema`
+contract). The design answers ask 4 at source: the runtime truncates no step result; the 2 KB
+cut is the app's `apps/search/syscalls.py:133` (`raw[:2000]`). Verified at source: `runtime/agent_plan_compiler.py::compile_agent_segment`
 bakes each step's `args` into the workflow input as written (`input_payload[args_key] = args`,
 `:213`); `agent_flow` reads `step.get("args", {})` (`runtime/nodus_adapter.py:326`). Results are
 kept (`__step_N_result`, `agent_steps.result`) and nothing reads them back into a later step's
@@ -10163,6 +10165,26 @@ registry seeded by the runtime and extended by the app, unclassified = keep, wit
 in unclassified types as the pressure to classify. Seed classes, `autonomy.decision` as the one
 decision to make explicitly, `report` mode before `prune`, committed batches, per-type counter —
 all in the design; no schema. Awaiting approval under §8.
+
+## IDEM-14 — the tool seam's idempotency key is scoped to the RUN, not the step: two steps of one run with the same tool and args share an `action_id` 🟡 open question (runtime-found 2026-09-25)
+
+**Status: OPEN, a question before it is a defect.** Found reading the FR-46 seam
+(`docs/design/FR46_STEP_REFERENCES_DESIGN.md` §4). `execute_tool` computes
+`compute_action_id(action_type=tool_name, input_payload=args, scope=str(run_id))`
+(`agents/tool_registry.py:1135`); `compute_action_id` hashes exactly those three
+(`core/execution_gate.py:70`). No step index enters the key.
+**Consequence:** for an `EXACTLY_ONCE` tool (or any tool under durable effects), a plan whose
+steps 1 and 4 both call it with identical args runs step 1 and REPLAYS step 1's result as step 4.
+A retry of one step SHOULD replay (the same effect, attempted again); two steps asking for the
+same effect twice ("remind me now", then again after a WAIT) should arguably not.
+**The question for the owner:** is "the same tool with the same args in the same run" one effect
+by contract, or should the scope be `(run_id, step_index)` where the caller knows the index (both
+agent backends do; syscalls and MCP calls do not)? Unmeasured: how often real plans repeat an
+identical `EXACTLY_ONCE` call. FR-46 resolved args make it rarer, not impossible. Not changed
+here: re-scoping a key changes which past rows a live run replays, so it is a decision (DEC)
+first.
+
+---
 
 ## IDEM-13 — the TOOL seam's `EXACTLY_ONCE` has no strict mode; under contention every concurrent caller delivers
 
