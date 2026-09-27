@@ -50,6 +50,7 @@ class AppsRepoContractResponse(BaseModel):
 class RepoCompatibilityResponse(BaseModel):
     runtime_package: RuntimePackageResponse
     apps_repo_contract: AppsRepoContractResponse
+    consumers: list[dict] = []  # DEBT-COMPAT-1: each plugin distribution's declared range, checked
 
 
 class VersionResponse(BaseModel):

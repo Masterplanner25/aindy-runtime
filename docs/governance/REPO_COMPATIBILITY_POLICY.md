@@ -1,6 +1,6 @@
 ---
 title: "Repo Compatibility Policy"
-last_verified: "2026-05-29"
+last_verified: "2026-09-26"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -60,6 +60,26 @@ repo split.
 
 This metadata is descriptive, not a handshake protocol. It tells operators and
 tooling what compatibility shape downstream repos should declare and consume.
+
+## Runtime-side check at plugin load (DEBT-COMPAT-1, DEC-080)
+
+Nothing downstream fetches `/api/version`, so the runtime checks the declaration itself. When
+`load_plugins` loads a manifest's plugin modules, it finds the installed distribution that owns
+each module's top-level package and compares that distribution's declared `aindy-runtime`
+requirement with the running version. It logs a WARNING for:
+
+- `unsatisfied`: the running runtime is outside the declared range;
+- `undeclared`: the distribution declares no `aindy-runtime` dependency at all (a requirement
+  that applies only under an extra does not count);
+- `satisfied` with no upper bound: the next MAJOR would install without complaint.
+
+A module no installed distribution owns is `not_installed` (INFO). The runtime's own modules are
+skipped. **It warns and never refuses**, and it never raises. Every warning prints the runtime's
+`AINDY.__path__` beside the version, because version readings are cwd-sensitive. The results are
+served as `compatibility.consumers` on `GET /api/version`.
+
+The check reads the metadata pip wrote at the last install, not `pyproject.toml`. A range raised
+in source without a reinstall is not seen until the next `pip install`.
 
 ## Version Meaning
 

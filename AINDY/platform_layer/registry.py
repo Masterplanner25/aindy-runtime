@@ -2201,4 +2201,12 @@ def load_plugins(
             active_profile,
             ", ".join(loaded),
         )
+    # DEBT-COMPAT-1 / DEC-080 — compare each plugin distribution's declared aindy-runtime range
+    # with this runtime; warn, never refuse.
+    try:
+        from AINDY.platform_layer.runtime_compatibility import check_consumer_requirements
+
+        check_consumer_requirements(entry["module_name"] for entry in plugin_entries)
+    except Exception as exc:  # noqa: BLE001 — a compatibility probe must never fail a boot
+        logger.debug("DEBT-COMPAT-1 consumer check skipped: %s", exc)
     return loaded
