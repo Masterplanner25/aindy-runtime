@@ -68,24 +68,25 @@ def _capability_stub(monkeypatch, *, ok_for, granted_tools):
 # ── The flag ─────────────────────────────────────────────────────────────────
 
 
-def test_the_flag_is_off_by_default(monkeypatch):
-    """★ Phase 1 ships default-OFF; phase 3 flips it on evidence, not on code."""
+def test_the_flag_is_on_by_default(monkeypatch):
+    """★ Phase 3 (2026-09-26, DEC-081): flipped on evidence from both backends."""
     from AINDY.agents import authority_negotiation as an
 
     monkeypatch.delenv("AINDY_AUTHORITY_NEGOTIATION", raising=False)
-    assert an.authority_negotiation_enabled() is False
+    assert an.authority_negotiation_enabled() is True
 
 
 @pytest.mark.parametrize("value,expected", [
     ("1", True), ("true", True), ("TRUE", True), ("yes", True), ("on", True),
-    ("0", False), ("false", False), ("", False), ("   ", False), ("maybe", False),
+    ("", True), ("   ", True), ("maybe", True),
+    ("0", False), ("false", False), ("FALSE", False), ("no", False), (" off ", False),
 ])
-def test_the_flag_reads_only_affirmative_values(monkeypatch, value, expected):
-    """★ Opt-IN, so anything unrecognised must read as OFF.
+def test_only_an_explicit_off_disables(monkeypatch, value, expected):
+    """★ Default ON, so only an explicit off value disables; anything else is the default.
 
-    The inverse of the store-declaration flag deliberately: there, a blank meant "unset, declare
-    a default"; here a blank must mean "off", because the default IS off and an unparseable
-    value must never turn a behaviour change on.
+    The parse `AINDY_SYSCALL_IDEMPOTENCY` took when it flipped (IDEM-11). Before the flip it was
+    the inverse (opt-IN: unrecognised read as off), because then an unparseable value must not
+    turn a behaviour change on; now the default IS the behaviour, and only a clear off leaves it.
     """
     from AINDY.agents import authority_negotiation as an
 
@@ -101,7 +102,7 @@ def test_disabled_short_circuits_before_touching_the_registry(monkeypatch):
     """
     from AINDY.agents import authority_negotiation as an
 
-    monkeypatch.delenv("AINDY_AUTHORITY_NEGOTIATION", raising=False)
+    monkeypatch.setenv("AINDY_AUTHORITY_NEGOTIATION", "0")
     result = an.negotiate_capability_denial(
         tool_name="anything", token={}, run_id="r", user_id="u"
     )

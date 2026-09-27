@@ -198,7 +198,7 @@ def test_without_the_declaration_the_denial_fails_exactly_as_before(db_session, 
 
 
 def test_with_the_flag_off_the_declaration_is_inert(db_session, scheduler_spy, tools, monkeypatch):
-    monkeypatch.delenv("AINDY_AUTHORITY_NEGOTIATION", raising=False)
+    monkeypatch.setenv("AINDY_AUTHORITY_NEGOTIATION", "0")
     run = _agent_run(db_session, steps=_plan_steps())
     result = _start(db_session, run)
 

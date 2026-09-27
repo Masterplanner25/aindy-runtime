@@ -340,7 +340,7 @@ def agent_execute_step(state: dict, context: dict) -> dict:
             user_id=user_id,
             tool_name=tool_name,
         )
-    # ── AUTHORITY-NEGOTIATION-1 phase 1 (default-OFF) ─────────────────────────
+    # ── AUTHORITY-NEGOTIATION-1 phase 1 (default ON since phase 3, DEC-081) ──────
     # A denied capability terminates the step, and approval is whole-plan, so the only recovery
     # today is a human approving an entirely new run — which discards the durable state the
     # original accumulated. Offer exactly one downgrade to a fallback the TOOL declared at
@@ -401,7 +401,7 @@ def agent_execute_step(state: dict, context: dict) -> dict:
                 tool_name=tool_name,
             )
 
-    # ── AUTHORITY-NEGOTIATION-1 phase 2 — the WAIT gate (default-OFF, same flag) ──────────
+    # ── AUTHORITY-NEGOTIATION-1 phase 2 — the WAIT gate (same flag; default ON, DEC-081) ──
     # No variant recovered the denial. A tool that declared `on_denial="wait"` parks the RUN on
     # the durable wait instead of failing it: the accumulated state survives, and an operator
     # decides — `skip` this step or `abort` the run. Never `grant` (§7). On resume the SAME node

@@ -186,7 +186,7 @@ def test_a_granted_variant_runs_instead_and_is_recorded_from_the_worker(tools, d
 
 def test_with_the_flag_off_nothing_here_runs(tools, db_session, monkeypatch):
     pytest.importorskip("nodus.runtime.embedding")
-    monkeypatch.delenv("AINDY_AUTHORITY_NEGOTIATION", raising=False)
+    monkeypatch.setenv("AINDY_AUTHORITY_NEGOTIATION", "0")
     monkeypatch.setattr(
         "AINDY.agents.tool_registry.execute_tool",
         lambda **kw: {"success": False, "result": None, "error": "denied", "failure_class": "permission"},
@@ -601,3 +601,81 @@ def test_fr44_an_ordinary_plan_wait_is_armed_too(db_session, monkeypatch):
     assert str(run.id) in serving.waits, "armed on the serving process before the publish"
     assert serving.waits[str(run.id)]["wait_for_event"] == "invoice.approved"
     assert published == ["invoice.approved"] and reply["waiters_notified"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+# Phase 3 (DEC-081) — default ON, and an undeclared tool pays nothing for it
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+
+def _compiled(tool_names):
+    from AINDY.runtime.agent_plan_compiler import compile_agent_segment
+
+    steps = [{"tool": t, "args": {}, "risk_level": "low", "description": t} for t in tool_names]
+    return compile_agent_segment(steps, base_index=0, workflow_name="agent_plan_seg0")
+
+
+def _count_prechecks(monkeypatch):
+    """Wrap the fixture's `check_tool_capability`. The fixture's `execute_tool` stub never
+    checks, so every call counted here is the WORKER's pre-check."""
+    import AINDY.agents.capability_service as cap
+
+    inner = cap.check_tool_capability
+    calls: list[str] = []
+
+    def _spy(**kw):
+        calls.append(kw["tool_name"])
+        return inner(**kw)
+
+    monkeypatch.setattr(cap, "check_tool_capability", _spy, raising=True)
+    return calls
+
+
+def test_unset_flag_is_on_and_a_declared_tool_negotiates(tools, db_session, monkeypatch):
+    """Liveness for the flip: with the variable UNSET, a denied declared tool is negotiated
+    down to its granted variant, which only happens when the flag reads on."""
+    pytest.importorskip("nodus.runtime.embedding")
+    monkeypatch.delenv("AINDY_AUTHORITY_NEGOTIATION", raising=False)
+    tools["granted"].add(VARIANT_TOOL)
+    result = _run_worker(_compiled_two_steps(), session_factory=MagicMock(return_value=db_session))
+    assert tools["executed"] == [VARIANT_TOOL, OK_TOOL]
+    assert result["authority_negotiation"] == {"succeeded": 1}
+
+
+def test_an_undeclared_tool_is_not_pre_checked(tools, db_session, monkeypatch):
+    """DEC-081: without this, the flip made every `nodus_vm` tool step run
+    `check_tool_capability` twice (the worker's pre-check, then `execute_tool`'s own)."""
+    pytest.importorskip("nodus.runtime.embedding")
+    monkeypatch.delenv("AINDY_AUTHORITY_NEGOTIATION", raising=False)
+    calls = _count_prechecks(monkeypatch)
+    _run_worker(_compiled([OK_TOOL, OK_TOOL]), session_factory=MagicMock(return_value=db_session))
+    assert tools["executed"] == [OK_TOOL, OK_TOOL], "control: both steps ran"
+    assert calls == [], f"an undeclared tool was pre-checked: {calls}"
+
+
+def test_a_declared_tool_is_still_pre_checked(tools, db_session, monkeypatch):
+    """The control for the test above: the spy sees the worker's pre-check when there is one."""
+    pytest.importorskip("nodus.runtime.embedding")
+    monkeypatch.delenv("AINDY_AUTHORITY_NEGOTIATION", raising=False)
+    tools["granted"].add(DENIED_TOOL)
+    calls = _count_prechecks(monkeypatch)
+    _run_worker(_compiled([DENIED_TOOL, OK_TOOL]), session_factory=MagicMock(return_value=db_session))
+    assert calls == [DENIED_TOOL]
+
+
+@pytest.mark.parametrize("variant, on_denial, expected", [
+    ("fallback_tool", "fail", True),    # a variant alone
+    (None, "wait", True),               # a gate alone: must still be pre-checked or it never parks
+    ("fallback_tool", "wait", True),
+    (None, "fail", False),              # neither: nothing to negotiate
+])
+def test_declares_denial_recovery_each_shape(monkeypatch, variant, on_denial, expected):
+    from AINDY.agents import tool_registry as reg
+    from AINDY.agents.authority_negotiation import declares_denial_recovery
+
+    monkeypatch.setattr(reg, "TOOL_REGISTRY", {}, raising=True)
+    reg.register_tool(
+        name="shape_tool", risk="low", description="d", capability="c", required_capability="c",
+        category="t", egress_scope="none", degraded_variant=variant, on_denial=on_denial,
+    )(lambda **kw: {"ok": True})
+    assert declares_denial_recovery("shape_tool") is expected
+    assert declares_denial_recovery("never_registered") is False

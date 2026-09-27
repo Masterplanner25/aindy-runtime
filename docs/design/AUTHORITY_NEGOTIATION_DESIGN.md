@@ -1,14 +1,14 @@
 ---
 title: "Authority Negotiation — Design"
 api_version: "1.0"
-last_verified: "2026-09-20"
+last_verified: "2026-09-26"
 status: current
 owner: "platform-team"
 ---
 
 # Authority negotiation — design
 
-**`AUTHORITY-NEGOTIATION-1`. PHASES 0, 1 AND 2 SHIPPED (0: 2026-09-08 #600; 1: 2026-09-10; 2: 2026-09-15 — the WAIT gate, §5a); phase 3 is evidence, not code.** Read this before building it — §2
+**`AUTHORITY-NEGOTIATION-1`. ALL PHASES SHIPPED (0: 2026-09-08 #600; 1: 2026-09-10; 2: 2026-09-15 — the WAIT gate, §5a; 3: 2026-09-26 — `AINDY_AUTHORITY_NEGOTIATION` defaults ON, DEC-081).** Read this before building it — §2
 overturns the mechanism the entry itself proposes, and §7 is the list of things not to build.
 
 **★ 2026-09-20 — §9 corrects §1's census a second time (FR-38): there is a FIFTH denial site, and it is
@@ -244,7 +244,7 @@ and had nothing to offer, which is the expected steady state until tools start d
 | ~~**0**~~ | ~~`degraded_variant=` on `register_tool`, validated at registration, **consulted by nothing**~~ | **DONE — #600.** One correction to this row: validation had to SPLIT. Local checks are in the decorator; the three cross-tool rules are a STARTUP sweep (`validate_degraded_variants`), because a forward reference is legitimate and the capability *definitions* the subset rule needs load later, from plugin providers. "At registration" was not achievable as written |
 | ~~**1**~~ | ~~The negotiation stage at the two `CAPABILITY_DENIED` sites, gated default-off~~ | **DONE.** Two corrections to this row: it is **one** site, not two (see §1's correction), and the subset rule of §2 is **asked of `check_tool_capability` rather than reimplemented** — a hand-rolled set comparison beside the real one would have omitted the granted-tools test and the agent capabilities that function also enforces |
 | ~~**2**~~ | ~~The WAIT-gate fallback kind~~ | **DONE — 2026-09-15**, §5a. The row's "no new machinery" was half right: the durable wait was reused as is, but **`AGENT_FLOW` had never waited** and its orchestration had to learn that `WAITING` is a park, not a failure; and a failure after a resume had never reached the AgentRun on that backend |
-| **3** | Flip the default once a real tool declares a variant or a gate and a denial has been observed | evidence, not code — zero tools declare either at HEAD |
+| ~~**3**~~ | ~~Flip the default once a real tool declares a variant or a gate and a denial has been observed~~ | **DONE — 2026-09-26, DEC-081.** Evidence: the app's `leadgen.act` declares `on_denial="wait"`; a real denial parked, resumed `skip` and completed on `agent_flow` (FR-38 filing) and on `nodus_vm` (the 09-23 re-run on 2.22.0). One code change came with the flip: the `nodus_vm` worker pre-checks only a tool that DECLARED a recovery, else the flip doubled `check_tool_capability` on every step |
 
 Phase 0 is worth landing alone: it is inert, it makes the vocabulary reviewable, and it is the
 same declare-then-enforce sequence that made `EXEC-ENV-BIND-1` safe to land in pieces.
@@ -364,7 +364,7 @@ the re-driven step's tool call.
 - Not a change to `execute_tool`'s return for an undeclared tool: a tool with neither
   `degraded_variant` nor `on_denial` fails exactly as today.
 - Still behind `AINDY_AUTHORITY_NEGOTIATION`. Phase 3's flip is then a judgment on evidence from
-  both backends — which is the state the filing was trying to reach.
+  both backends — which is the state the filing was trying to reach. *(Flipped 2026-09-26, DEC-081.)*
 
 ### 9.6 Order of work
 

@@ -59,13 +59,37 @@ OUTCOME_CHAIN_REFUSED = "chain_refused"
 
 
 def authority_negotiation_enabled() -> bool:
-    """Phase 1 ships default-OFF; phase 3 flips it on evidence, not on code.
+    """**Default ON since 2026-09-26 (phase 3, DEC-081).** ``AINDY_AUTHORITY_NEGOTIATION=0``
+    (or ``false`` / ``no`` / ``off``) disables. Any other value, blank included, is the default,
+    the same parse `AINDY_SYSCALL_IDEMPOTENCY` took when it flipped (IDEM-11).
+
+    Flipped on evidence from both backends: `agent_flow` parked, resumed ``skip`` from another
+    process and completed (FR-38's filing); `nodus_vm` the same after #734 (the app's 09-23
+    re-run). It changes nothing for a tool that declares neither ``degraded_variant`` nor
+    ``on_denial="wait"``, and it cannot grant authority (§7): ``execute_tool`` re-checks whatever
+    tool is attempted.
 
     ★ The guard is read here and not cached, and it is read BELOW nothing — there is no
     test-mode short-circuit above this decision. Two such short-circuits were found in
     ``FR-15``'s own path within a fortnight, and both made a soak vacuous rather than failing.
     """
-    return os.getenv("AINDY_AUTHORITY_NEGOTIATION", "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("AINDY_AUTHORITY_NEGOTIATION", "").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def declares_denial_recovery(tool_name: str) -> bool:
+    """Whether the tool declared anything negotiation could offer: a ``degraded_variant`` or
+    ``on_denial="wait"``. A tool that declared neither fails a denial exactly as it would with
+    negotiation off, so a caller may skip the pre-check entirely (DEC-081: the `nodus_vm` worker
+    does, so the flip costs an undeclared tool no second capability check)."""
+    try:
+        from AINDY.agents.tool_registry import ON_DENIAL_WAIT, TOOL_REGISTRY
+
+        entry = TOOL_REGISTRY.get(tool_name)
+        if not isinstance(entry, dict):
+            return False
+        return bool(entry.get("degraded_variant")) or entry.get("on_denial") == ON_DENIAL_WAIT
+    except Exception:  # noqa: BLE001 — unknown is "declared nothing": the ordinary denial
+        return False
 
 
 @dataclass(frozen=True)
