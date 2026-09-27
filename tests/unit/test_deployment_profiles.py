@@ -32,9 +32,20 @@ def _ok_dependency(name: str, *, critical: bool = False) -> health_service.Depen
 def _reset_runtime(monkeypatch):
     monkeypatch.delenv("AINDY_DEPLOYMENT_PROFILE", raising=False)
     monkeypatch.delenv("AINDY_EVENT_BUS_ENABLED", raising=False)
+    # TEST-ORDER-RUNTIME-STATE-1: start each test from the pristine state, and give back the
+    # state it found. Resetting to `unknown` on the way out un-shadowed AINDY_DEPLOYMENT_PROFILE
+    # for every later test in the process.
+    import copy
+
+    from AINDY.platform_layer import deployment_contract as dc
+
+    saved = (copy.deepcopy(dc._api_runtime_state), copy.deepcopy(dc._worker_runtime_state))
     reset_runtime_state()
     yield
     reset_runtime_state()
+    for state, prior in zip((dc._api_runtime_state, dc._worker_runtime_state), saved):
+        state.clear()
+        state.update(prior)
 
 
 def test_single_instance_profile_is_inferred_from_thread_mode(monkeypatch):

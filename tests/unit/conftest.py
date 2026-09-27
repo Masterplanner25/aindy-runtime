@@ -147,3 +147,37 @@ def _contextvar_isolation(request):
             "from .set() and .reset() it (or use the paired set_*/reset_* helpers).\n  "
             + "\n  ".join(leaked)
         )
+
+
+# ── Published runtime state isolation (TEST-ORDER-RUNTIME-STATE-1, DEC-082) ────
+#
+# `deployment_contract._api_runtime_state` / `_worker_runtime_state` are process-global dicts
+# that three runtime readers consult BEFORE `AINDY_DEPLOYMENT_PROFILE`. Importing `AINDY.main`
+# publishes `single-instance` before the first test, so a test that sets the env var alone was
+# testing `single-instance` semantics, and a file that reset the state to `unknown` UN-shadowed
+# the env var for every test after it. One test passed only while shadowed.
+#
+# Both dicts are restored after every test, SILENTLY (DEC-082). Unlike a ContextVar, this state
+# is always fully restorable, so a restore alone removes the order dependence; failing the
+# "leaker" would add only attribution, and the leakers are mostly legitimate: every test that
+# boots the app publishes the profile from startup. A test that needs a profile should still
+# publish it through `monkeypatch.setitem(deployment_contract._api_runtime_state, key, value)`.
+
+
+def _published_state_dicts() -> tuple[tuple[str, dict], ...]:
+    module = sys.modules.get("AINDY.platform_layer.deployment_contract")
+    if module is None:
+        return ()
+    return (("api", module._api_runtime_state), ("worker", module._worker_runtime_state))
+
+
+@pytest.fixture(autouse=True)
+def _published_runtime_state_isolation():
+    import copy
+
+    before = {label: copy.deepcopy(state) for label, state in _published_state_dicts()}
+    yield
+    for label, state in _published_state_dicts():
+        if label in before:  # first imported during this test: nothing to restore to
+            state.clear()
+            state.update(before[label])
