@@ -283,7 +283,6 @@ A soak assertion must not be stricter than the contract.
 - **TEST-ORDER-RUNTIME-STATE-1** — P3: the published deployment profile shadows `AINDY_DEPLOYMENT_PROFILE` in unit tests; one file un-shadows it for whatever runs next. Fix: snapshot/restore in conftest.
 - **LINT-FORMAT-1** — P3: never `ruff format`ted (see Commands); if wanted, format + enforce in one PR.
 - **SCOPE-NAMING-1** — P3: `enforce_api_key_scope` gates every caller. Not renamed on purpose — a missed call site on a security dependency fails OPEN.
-- **DEBT-COMPAT-1** — P2: consumers run below the advertised floor and nothing reads `runtime_compatibility.py`. Fix: one comparison where `/api/version` is fetched; warn, never refuse.
 - **INITIATOR-IDENTITY-1** — *(OpenClaw)* initiating identity ≠ authenticated one; an asserted subject may only CONSTRAIN, never a `User` row. Design filed; P0 the day an inbound consumer ships.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s semantic half always returns `[]` (pgvector `ndarray` vs `list` guard). pgvector 0.5.0 fixes it — which is why #390 was HELD: it turns expansion on in the path that exhausted the pool.
@@ -321,7 +320,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - EVENT-OUTBOX-1: **DEC-060** event rides the handler's session · **DEC-061** id stays client-assigned · **DEC-062** a raising handler is rolled back; unit row commits at creation.
 - RECOVERY-GRANULARITY-1: **DEC-063** per-step write at the worker seam · **DEC-064** `agent_steps`, no table · **DEC-065** plan STEP INDEX, never an ordinal · **DEC-066** replay only continued + `success`.
 - **DEC-067** FR-40: args-validation tally rides the worker reply (fifth deferred collection); deferral replaces observation; errors capped `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (32), counts never. **DEC-071** FR-42: the capability-mapping audit row is per RUN; a non-AgentRun scope gets type rows only + `mapping_recorded: false` on the token, outside the HMAC. **DEC-072** FR-15 evidence topology mounts the host docker socket — an instrument, never a profile or operator recipe.
-- FR-46 (#764): **DEC-073** `$from_step` reference · **DEC-074** resolved before `execute_tool` · **DEC-075** unresolved fails; off. **DEC-076** IDEM-14: tool key per STEP. FR-48: **DEC-077** `result_schema`, closed where declared · **DEC-078** no re-plan · **DEC-079** FR-46 flip after FR-48.
+- FR-46 (#764): **DEC-073** `$from_step` reference · **DEC-074** resolved before `execute_tool` · **DEC-075** unresolved fails; off. **DEC-076** IDEM-14: tool key per STEP. FR-48: **DEC-077** `result_schema`, closed where declared · **DEC-078** no re-plan · **DEC-079** FR-46 flip after FR-48. **DEC-080** consumer range checked at plugin load, warn only.
 - FR-38 (§9, #734): **DEC-068** nodus_vm gate = a guest wait from inside `call_tool`; the CHAIN parks mid-segment (the node reports, never parks) · **DEC-069** `skip` = a `skipped` `agent_steps` row replayed on re-drive (widens DEC-066) · **DEC-070** the event and counter come from the worker.
 
 ### Standing rule — not an item
@@ -354,6 +353,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - **NATIVE-DISCOVERY-1 / NATIVE-CI-1** — CLOSED. `cargo build` emits `libmemory_bridge_rs.so`/`.dll`; Python imports neither — rename by hand locally. A `pull_request`-triggered new workflow runs on its own PR; a `push` one does not.
 - **PYPI-PUBLISH-1** — CLOSED. Bump the Dockerfile pin AND changelog in one PR; after the tag, append the `SANDBOX_ESCAPE_AUDIT.md` gate entry. `publish.yml` now `workflow_call`s Boot Smoke (which retries on PyPI CDN lag). Protocol: `docs/governance/RELEASE_CHECKLIST.md`.
 - **FLAKY-1 / CI-MARKER-1 / EXEC-ENV-BIND-1 / COST-GOVERNOR-1 / QUOTA-ACCRUAL-ORPHAN-1** — CLOSED; rules kept above. Cost governor: reserve only for `METERED_METHODS`; planning has no run id, only the tenant window catches a runaway planner; a refusal reaches the route one `__cause__` down. Quota: a unit is reaped by whoever established it; reproduce where the CALLER enters.
+- **DEBT-COMPAT-1** — CLOSED 2026-09-26: `load_plugins` warns on a plugin dist's declared range; reads INSTALLED metadata.
 - **NODUS-SYS-SURFACE-1** — CLOSED: `import "std:sys"` hits nodus's own stub, not the dispatcher; only bare `sys(...)` reaches `dispatch_syscall`; fail-loud guard in `nodus_worker.py`.
 
 ~50 further closed entries are history only or have their rules absorbed above — `TECH_DEBT.md`, or the pre-trim archive for the one-line form. Adding a `SystemEventTypes` value: regenerate `tests/baselines/system_event_contract.json`.

@@ -2851,6 +2851,20 @@ is a surface the app consumes.
 
 ## DEBT-COMPAT-1 — Cross-version compatibility story between runtime and SDK
 
+**Status: CLOSED (2026-09-26) — resolution step 2 shipped (DEC-080); step 3 stays deferred.**
+Nothing fetched `/api/version` (not the SDK, not the app), so the comparison runs in the runtime at
+`load_plugins`: `runtime_compatibility.check_consumer_requirements` maps each plugin module to the
+installed distribution that owns it, compares its declared `aindy-runtime` range with the running
+version, and WARNS on `unsatisfied`, `undeclared` or an unbounded range (the runtime's own modules
+are skipped; a module no distribution owns is `not_installed`, INFO). Never refuses, never raises;
+every warning prints `AINDY.__path__`. Served as `compatibility.consumers` on `/api/version`. 19
+tests incl. real metadata, the real `load_plugins` and the real route; 8/8 mutations bite.
+★ **It reads what pip INSTALLED, not `pyproject.toml`**: on this host the monolith's installed
+metadata says `>=2.9.0` while its source says `>=2.24.0`; a raised floor is seen after the next
+`pip install`. Step 1 (consumer declares) is done for the monolith; Claw, if it loads through a
+manifest, now warns `undeclared`. **Remaining (deferred, trigger unchanged):** step 3, a
+compatibility-window policy + cross-version tests.
+
 **★★ REOPENED 2026-08-18 — P2. The trigger fired, in the only consumer, and nothing surfaced it.**
 
 Provenance: measured against `C:\dev\claw` while checking `C:\codev\openclaw_research\`.

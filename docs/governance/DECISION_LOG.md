@@ -1912,3 +1912,20 @@ FR-46's default flip (`AINDY_PLAN_STEP_REFERENCES` on) waits until FR-48 has shi
 The flip's evidence condition was met (the app's run `19dcf508`), but one of the two evidence
 runs guessed a result path wrong. Default-on without result shapes makes every app's planner
 guess. The app already runs with the flag on, so holding the default costs it nothing.
+
+### DEC-080
+**Status:** `accepted` (2026-09-26 — `DEBT-COMPAT-1`; built at the owner's request)
+
+**Decision**
+The consumer-compatibility comparison runs in the runtime at `load_plugins`, not in a client of
+`/api/version`. It reads the installed metadata of the distribution that owns each plugin
+module, compares its declared `aindy-runtime` range with the running version, and WARNS on
+`unsatisfied`, `undeclared` or an unbounded range. It never refuses a boot. The results are served as
+`compatibility.consumers` on `/api/version`.
+
+**Why**
+The entry's fix was "one comparison where `/api/version` is fetched", but nothing fetches it:
+neither the SDK nor the app does. Both known drifts were in-process consumers (a flagship a
+major behind with no declaration; a dev venv five releases under the app's own range), and
+plugin load is the one place that sees both the running runtime and the consumer's declaration.
+A refusal would turn a patch bump into an outage, which is why the entry said "warn, never refuse".
