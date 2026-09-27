@@ -18,6 +18,9 @@ Design: ``docs/design/FR46_STEP_REFERENCES_DESIGN.md``. Decisions:
   "invalid"``; the tool is never called with the placeholder. Behind
   ``AINDY_PLAN_STEP_REFERENCES`` (default off); when on, the runtime's tool catalog carries
   `PLANNER_REFERENCE_LINE`.
+* **DEC-077 / DEC-078 (FR-48):** when the referenced tool declares a ``result_schema``, the path
+  is also checked against it at plan time (`result_path_error`); a refusal fails the plan, and
+  nothing re-plans.
 """
 from __future__ import annotations
 
@@ -35,8 +38,11 @@ PLANNER_REFERENCE_LINE = (
     'A step\'s argument value may be {"$from_step": N, "path": "a.b"}: the result of tool step N '
     "(0-based, counting tool steps only, earlier than this one), or a field inside it (dot path; "
     "list items by number, e.g. \"results.0.id\"). Use it when a step needs what an earlier step "
-    "found; never write a value a step has not produced yet."
+    "found; never write a value a step has not produced yet. When that tool's line shows "
+    "returns=…, the path must follow that shape."
 )
+
+_SCALAR_TYPES = frozenset({"string", "number", "integer", "boolean", "null"})
 
 #: What a lookup returns for one step: its status and its result.
 StepEntry = dict
@@ -88,24 +94,93 @@ def _walk_references(value: Any, where: str):
             yield from _walk_references(item, f"{where}.{i}")
 
 
+def _is_index(part: str) -> bool:
+    try:
+        int(part)
+    except ValueError:
+        return False
+    return True
+
+
+def _schema_keys(node: dict) -> str:
+    props = node.get("properties")
+    return "{" + ", ".join(props) + "}" if isinstance(props, dict) else "an open object"
+
+
+def result_path_error(schema: Any, path: str) -> Optional[str]:
+    """Why ``path`` cannot exist in a result shaped by ``schema``, or None (FR-48 / DEC-077).
+
+    Walks the path the way `core.result_path.resolve_path` walks a value: a dict key first, then
+    an integer index into a list. A node that declares ``properties`` is closed unless it sets
+    ``additionalProperties`` (true = open, a schema = the shape of every other key). A node that
+    declares no ``properties``, ``items`` or scalar ``type`` says nothing, so everything under it
+    passes: a tool may describe its result as far down as it likes, and no further.
+    """
+    node = schema
+    walked: list[str] = []
+    for part in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        here = ".".join(walked) or "the result"
+        props = node.get("properties")
+        kind = node.get("type")
+        if isinstance(props, dict):
+            if part in props:
+                node = props[part]
+            else:
+                extra = node.get("additionalProperties")
+                if extra is True:
+                    return None
+                if isinstance(extra, dict):
+                    node = extra
+                else:
+                    return f"{here} has no {part!r}; it returns {_schema_keys(node)}"
+        elif "items" in node or kind == "array":
+            if not _is_index(part):
+                return f"{here} is a list; index it by number, not {part!r}"
+            node = node.get("items")
+        elif isinstance(kind, str) and kind in _SCALAR_TYPES:
+            return f"{here} is a {kind}; it has no {part!r}"
+        else:
+            return None
+        walked.append(part)
+    return None
+
+
 def validate_plan_references(plan: Any) -> list[str]:
-    """Every reference in a plan, checked against the plan's own tool-step ordinals (DEC-073).
+    """Every reference in a plan, checked against the plan's own tool-step ordinals (DEC-073)
+    and, when the referenced tool declares a ``result_schema``, against that shape (FR-48,
+    DEC-077).
 
     Returns human-readable errors; empty means valid. WAIT steps take no index, the same way
-    `split_agent_plan` and the verifier count.
+    `split_agent_plan` and the verifier count. A refused plan fails plan generation, so run
+    creation fails; it is not re-planned (DEC-078).
     """
+    from AINDY.agents.tool_registry import tool_result_schema
     from AINDY.runtime.agent_plan_compiler import _is_wait_step
 
     errors: list[str] = []
     steps = (plan or {}).get("steps") if isinstance(plan, dict) else None
-    ordinal = 0
+    tools_by_ordinal: list[str] = []
     for step in steps or []:
         if not isinstance(step, dict) or _is_wait_step(step):
             continue
+        ordinal = len(tools_by_ordinal)
         for where, ref in _walk_references(step.get("args"), "args"):
-            for err in _reference_errors(ref, own_index=ordinal):
-                errors.append(f"step {ordinal} {where}: {err}")
-        ordinal += 1
+            shape = _reference_errors(ref, own_index=ordinal)
+            errors.extend(f"step {ordinal} {where}: {err}" for err in shape)
+            if shape or PATH_KEY not in ref:
+                continue
+            target = int(ref[REFERENCE_KEY])
+            tool = tools_by_ordinal[target]
+            schema = tool_result_schema(tool)
+            reason = result_path_error(schema, ref[PATH_KEY]) if schema else None
+            if reason:
+                errors.append(
+                    f"step {ordinal} {where}: path {ref[PATH_KEY]!r} does not exist in step {target} "
+                    f"({tool})'s result: {reason}"
+                )
+        tools_by_ordinal.append(str(step.get("tool") or ""))
     return errors
 
 

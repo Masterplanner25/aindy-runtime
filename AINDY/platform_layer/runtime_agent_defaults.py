@@ -60,6 +60,7 @@ def get_tools_for_run(_context: dict[str, Any]) -> list[dict[str, Any]]:
             "category": metadata.get("category"),
             "egress_scope": metadata.get("egress_scope"),
             "args_schema": metadata.get("args_schema"),  # FR-33
+            "result_schema": metadata.get("result_schema"),  # FR-48
         }
         for name, metadata in TOOL_REGISTRY.items()
         if isinstance(metadata, dict) and metadata.get("category") != "diagnostic"
