@@ -1,5 +1,11 @@
 # aindy-runtime
 
+[![Runtime CI](https://github.com/Masterplanner25/aindy-runtime/actions/workflows/runtime-ci.yml/badge.svg?branch=main)](https://github.com/Masterplanner25/aindy-runtime/actions/workflows/runtime-ci.yml)
+[![Dependency audit](https://github.com/Masterplanner25/aindy-runtime/actions/workflows/security-audit.yml/badge.svg?branch=main)](https://github.com/Masterplanner25/aindy-runtime/actions/workflows/security-audit.yml)
+[![PyPI](https://img.shields.io/pypi/v/aindy-runtime)](https://pypi.org/project/aindy-runtime/)
+[![Python](https://img.shields.io/pypi/pyversions/aindy-runtime)](https://pypi.org/project/aindy-runtime/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/Masterplanner25/aindy-runtime/blob/main/LICENSE)
+
 **A self-hosted execution substrate for AI systems — the layer beneath your agents,
 workflows and applications, running on your own database.**
 
