@@ -162,6 +162,10 @@ def test_version_route_includes_runtime_surface(runtime_only_client):
     assert "supported_platforms" in payload["runtime"]["plugin_sandbox_platform"]
     runtime_runner_types = {entry["runner_type"] for entry in payload["runtime"]["plugin_hosts"]["available_runners"]}
     assert runtime_runner_types == {"insecure_dev_subprocess", "containerized_oci", "strong_sandbox_vm"}
+    # DEBT-COMPAT-1: `consumers` is whatever the last `load_plugins` checked (test-order state);
+    # its contents are pinned in tests/unit/test_debt_compat1_consumer_range.py.
+    consumers = payload["compatibility"].pop("consumers")
+    assert isinstance(consumers, list)
     assert payload["compatibility"] == {
         "runtime_package": {
             "name": "aindy-runtime",
