@@ -155,6 +155,7 @@ def register_tool(
     degraded_variant: Optional[str] = None,
     on_denial: str = ON_DENIAL_FAIL,
     args_schema: Optional[dict] = None,
+    result_schema: Optional[dict] = None,
 ):
     """Register an agent tool implementation with platform metadata.
 
@@ -169,6 +170,15 @@ def register_tool(
     against ``args`` by `execute_tool` BEFORE dispatch, under `AINDY_TOOL_ARGS_VALIDATION`
     (``warn`` by default: count + log; ``enforce``: refuse the step with `failure_class`
     ``invalid``; ``off``). ``None`` declares nothing and is every tool today.
+
+    result_schema (FR-48, DEC-077): what the tool RETURNS, in the same dialect, nested through
+    ``properties`` and ``items``. A planner contract only: rendered in the catalog as
+    ``returns=…`` and, with FR-46's step references on, checked against every
+    ``{"$from_step": N, "path"}`` that names this tool's step, at plan time. A node that declares
+    ``properties`` is CLOSED (a key it does not list is refused) unless it sets
+    ``additionalProperties``; a node that declares neither is open. The result itself is never
+    validated at run time. ``None`` declares nothing, and a reference to such a tool is checked
+    for form only, as before.
 
     execution_guarantee (MEB-0): "AT_LEAST_ONCE" (default) or "EXACTLY_ONCE". A tool that
     is non-idempotent (send_email, etc.) declares "EXACTLY_ONCE" to opt into the tool-path
@@ -280,6 +290,8 @@ def register_tool(
         )
     if args_schema is not None:
         _check_args_schema_shape(name, args_schema)
+    if result_schema is not None:
+        _check_result_schema_shape(name, result_schema)
 
     def wrapper(fn: Callable) -> Callable:
         TOOL_REGISTRY[name] = {
@@ -296,6 +308,7 @@ def register_tool(
             "degraded_variant": degraded_variant.strip() if degraded_variant else None,
             "on_denial": on_denial,
             "args_schema": dict(args_schema) if args_schema else None,
+            "result_schema": dict(result_schema) if result_schema else None,
         }
         return fn
 
@@ -895,6 +908,40 @@ def _check_args_schema_shape(name: str, schema: Any) -> None:
                 f"register_tool({name!r}): args_schema requires {undeclared} but does not declare "
                 f"them under 'properties' — a required argument the planner is never told about"
             )
+
+
+def _check_result_schema_shape(name: str, schema: Any, where: str = "result_schema") -> None:
+    """Refuse a malformed `result_schema` at REGISTRATION, at every depth the path check walks.
+
+    A malformed nested node would otherwise be read as "declares nothing", i.e. open, and a
+    path check the author meant to have would silently never happen.
+    """
+    if not isinstance(schema, dict):
+        raise ValueError(f"register_tool({name!r}): {where} must be a dict, got {type(schema).__name__}")
+    props = schema.get("properties")
+    if props is not None:
+        if not isinstance(props, dict):
+            raise ValueError(f"register_tool({name!r}): {where}['properties'] must be a dict")
+        for key, sub in props.items():
+            _check_result_schema_shape(name, sub, f"{where}.properties.{key}")
+    req = schema.get("required")
+    if req is not None and not (isinstance(req, list) and all(isinstance(r, str) for r in req)):
+        raise ValueError(f"register_tool({name!r}): {where}['required'] must be a list of field names")
+    items = schema.get("items")
+    if items is not None:
+        _check_result_schema_shape(name, items, f"{where}.items")
+    extra = schema.get("additionalProperties")
+    if extra is not None and not isinstance(extra, (bool, dict)):
+        raise ValueError(f"register_tool({name!r}): {where}['additionalProperties'] must be a bool or a schema")
+    if isinstance(extra, dict):
+        _check_result_schema_shape(name, extra, f"{where}.additionalProperties")
+
+
+def tool_result_schema(tool_name: str) -> Optional[dict]:
+    """The declared result contract of a registered tool, or None (FR-48)."""
+    entry = TOOL_REGISTRY.get(tool_name)
+    schema = entry.get("result_schema") if isinstance(entry, dict) else None
+    return dict(schema) if isinstance(schema, dict) else None
 
 
 def tool_args_schema(tool_name: str) -> Optional[dict]:

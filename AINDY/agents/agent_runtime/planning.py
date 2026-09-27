@@ -191,21 +191,26 @@ def _build_planner_prompt(
 
 
 def _catalog_line(tool: dict) -> str:
-    """One catalog line; the argument contract (FR-33) is rendered when the tool declares one.
+    """One catalog line; the argument contract (FR-33) and the result contract (FR-48) are
+    rendered when the tool declares them.
 
     Read from the tool dict first, then from the registry by name — an app's run-tool provider
     builds its own dicts and may not copy the key, and the contract is the registry's fact.
     """
     import json
 
-    from AINDY.agents.tool_registry import tool_args_schema
+    from AINDY.agents.tool_registry import tool_args_schema, tool_result_schema
 
     line = f"- {tool.get('name')}: {tool.get('description', '')} (risk={tool.get('risk', 'unknown')})"
-    schema = tool.get("args_schema")
-    if not isinstance(schema, dict):
-        schema = tool_args_schema(str(tool.get("name")))
-    if schema:
-        line += " args=" + json.dumps(schema, sort_keys=True, separators=(",", ":"))
+    for key, label, fallback in (
+        ("args_schema", "args", tool_args_schema),
+        ("result_schema", "returns", tool_result_schema),
+    ):
+        schema = tool.get(key)
+        if not isinstance(schema, dict):
+            schema = fallback(str(tool.get("name")))
+        if schema:
+            line += f" {label}=" + json.dumps(schema, sort_keys=True, separators=(",", ":"))
     return line
 
 

@@ -1865,3 +1865,50 @@ safe bet". The at-most-once the gate exists for is about a RETRY; a retry never 
 An in-flight step whose effect completed under the old run-scoped key and re-drives across the
 upgrade does not find that row. On `nodus_vm` the continuation replays from `agent_steps` before
 `execute_tool`, so only an effect whose step row was never recorded is exposed.
+
+### DEC-077
+**Status:** `accepted` (2026-09-26 — `FR-48`; approved by the owner with the build)
+
+**Decision**
+A tool may declare `result_schema=` on `register_tool`, in the `args_schema` dialect, nested
+through `properties`, `items` and `additionalProperties`. It is a PLANNER contract only. It is
+rendered in the catalog as `returns=…` whenever it is declared, and with
+`AINDY_PLAN_STEP_REFERENCES` on, every `{"$from_step": N, "path"}` naming that tool's step is
+checked against it at plan time. A node that declares `properties` is CLOSED (a key it does not
+list is refused) unless it sets `additionalProperties` (`true` = open; a schema = every other
+key's shape). A node that declares no `properties`, `items` or scalar `type` is open. A tool
+that declares nothing gets the DEC-073 form check only. The result is never validated at run
+time.
+
+**Why**
+The point is what the planner knows and a refusal before step 0 runs (the app's `615b67ea`
+guessed `results` for a tool returning `{raw_result}`; the research ran and was paid for before
+the step failed). JSON Schema's own default is open, but under an open default a declared shape
+could never refuse the key the planner guessed, so the check would never fire. An author who
+means "and more" says so with `additionalProperties`. Run-time validation was explicitly not
+asked for and would be a second enforcement layer for a contract whose consumer is the planner.
+
+### DEC-078
+**Status:** `accepted` (2026-09-26 — `FR-48`; the owner: "fail run creation as today")
+
+**Decision**
+A plan refused by the path check fails plan generation exactly like any other invalid
+reference (DEC-073): `_plan_failure` carries the reason and run creation fails. The runtime does
+not send the errors back to the planner for a second attempt.
+
+**Why**
+FR-48's filing assumed a refused plan is "re-planned"; no such loop exists. Building one is a new
+capability with its own cost (a second LLM call per refusal, a retry bound, and a decision about
+what the planner is told). Failing before any step runs already removes the paid-for,
+half-executed run the finding was about.
+
+### DEC-079
+**Status:** `accepted` (2026-09-26 — `FR-46` / `FR-48`; by the owner)
+
+**Decision**
+FR-46's default flip (`AINDY_PLAN_STEP_REFERENCES` on) waits until FR-48 has shipped.
+
+**Why**
+The flip's evidence condition was met (the app's run `19dcf508`), but one of the two evidence
+runs guessed a result path wrong. Default-on without result shapes makes every app's planner
+guess. The app already runs with the flag on, so holding the default costs it nothing.
