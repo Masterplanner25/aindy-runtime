@@ -9168,7 +9168,15 @@ key in each tool dict.
 
 ## FR-48 — the planner is told each tool's arguments but never its result, so a `$from_step` path is a guess; the first FR-46 evidence run guessed wrong 🟡 planner contract (app-filed 2026-09-26, runtime 2.24.0)
 
-**Status: OPEN — filed 2026-09-26.** Verified at source: the catalog line
+**Status: OPEN — BUILT #769 2026-09-26 (DEC-077..079); open until it ships, which releases
+FR-46's flip.** As built: `register_tool(result_schema=)` (nested; malformed refused at any depth)
+is rendered as `returns=…` in the catalog (registry fallback), and `validate_plan_references`
+checks a reference's path against the referenced tool's schema when step references are on
+(`step_references.result_path_error`). A node with `properties` is closed unless
+`additionalProperties`; a node that declares nothing is open; no schema = form check only.
+Refusal fails run creation, no re-plan (DEC-078). 40 cases, 8/8 mutations bite. **What the app
+should do:** declare `result_schema` on each tool whose result a later step may reference (at
+least `research.query`, `search.query`); the #415 prose can stay. Verified at source: the catalog line
 (`agents/agent_runtime/planning.py::_catalog_line`) renders `args=` from `args_schema` (FR-33) and
 nothing about the result; `register_tool` has no place to put one. `validate_plan_references`
 (`agents/step_references.py`) checks that a path is WELL-FORMED, not that it EXISTS, so a wrong
