@@ -410,13 +410,25 @@ def test_container_runner_executes_through_plugin_host(monkeypatch, tmp_path, cl
 
 
 def test_container_runner_unavailable_fails_closed_without_fallback(monkeypatch, tmp_path, clean_plugin_hosts):
+    """The container runner, with no image, refuses: no fallback to a weaker runner.
+
+    TEST-ORDER-RUNTIME-STATE-1: this used to set the runner to `auto` and the profile by env only.
+    The policy reads the PUBLISHED profile first, so it ran under `single-instance` and got the
+    image error. Under its own `distributed-api`, `auto` is refused first, for a different reason.
+    It now names the runner it means and publishes the profile it declares, through
+    `monkeypatch.setitem` so it is given back (the conftest guard fails a test that does not).
+    """
     from AINDY.config import settings
+    from AINDY.platform_layer import deployment_contract as dc
     from AINDY.platform_layer.plugin_host import start_plugin_host
 
-    monkeypatch.setattr(settings, "AINDY_PLUGIN_SANDBOX_RUNNER", "auto")
+    monkeypatch.setattr(settings, "AINDY_PLUGIN_SANDBOX_RUNNER", "containerized_oci")
     monkeypatch.setattr(settings, "EXECUTION_MODE", "distributed")
     monkeypatch.setenv("AINDY_DEPLOYMENT_PROFILE", "distributed-api")
+    monkeypatch.setitem(dc._api_runtime_state, "deployment_profile", "distributed-api")
+    monkeypatch.setitem(dc._api_runtime_state, "deployment_profile_source", "test")
     monkeypatch.setattr(settings, "AINDY_PLUGIN_CONTAINER_IMAGE", "")
+    assert dc.get_api_runtime_state()["deployment_profile"] == "distributed-api"
 
     plugin_dir = tmp_path / "plugins" / "nodes"
     plugin_dir.mkdir(parents=True, exist_ok=True)

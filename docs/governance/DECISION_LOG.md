@@ -1953,3 +1953,20 @@ Without the pre-check narrowing, the flip would have run `check_tool_capability`
 On `nodus_vm` an undeclared tool's denial no longer increments
 `aindy_authority_negotiation_total{outcome="no_variant"}`: it is never offered to negotiation. On
 `agent_flow` it still does, because that backend negotiates only after the denial.
+
+### DEC-082
+**Status:** `accepted` (2026-09-26 — `TEST-ORDER-RUNTIME-STATE-1`; built at the owner's request)
+
+**Decision**
+`tests/unit/conftest.py` restores the published runtime state
+(`deployment_contract._api_runtime_state` and `_worker_runtime_state`) after every unit test,
+**silently**. It does not fail the test that changed it. Tests that need a profile publish it
+through `monkeypatch.setitem`.
+
+**Why**
+The entry preferred failing the leaker, which is the ContextVar guard's shape. Built that way, the
+first census failed a dozen tests across four files, and nearly all of them were legitimate: every
+test that boots the app publishes the profile from startup. The ContextVar guard fails because a
+ContextVar cannot always be restored without the leaker's token. This state is two plain dicts
+and is always fully restorable, so the restore alone removes the order dependence, which was the
+defect. Failing would add only attribution, at the cost of rewriting a dozen correct startup tests.

@@ -12896,7 +12896,19 @@ ambient state it did not itself arrange if nothing before it arranged it.
 
 ## TEST-ORDER-RUNTIME-STATE-1 — the published deployment profile shadows the env var in every unit test, and one test passes only while shadowed
 
-**Status: OPEN (P3 — test fidelity; no production defect).** Filed 2026-09-16 from the
+**Status: CLOSED (2026-09-26) — both parts shipped (DEC-082).** (1) `tests/unit/conftest.py`
+restores `_api_runtime_state` and `_worker_runtime_state` after every unit test, SILENTLY: the
+failing variant was built first and failed a dozen legitimate startup tests (every app boot
+publishes the profile), and this state is always fully restorable, unlike a ContextVar. Control:
+`test_published_state_isolation_guard.py` (a real pytest subprocess; delete the restore and the
+victim fails). `test_deployment_profiles.py`'s fixture now gives back the state it found instead
+of leaving `unknown`. (2) `test_container_runner_unavailable_fails_closed_without_fallback` now
+names `containerized_oci` and publishes the `distributed-api` it declares (`monkeypatch.setitem`),
+asserting the profile it ran under. Mutation: put `auto` back and it fails under its own profile,
+the premise error this entry found. **Still true, and not changed here:** the published state is
+read before the env var in production code (boot publishes from the env, so they agree).
+
+**Filed as OPEN (P3 — test fidelity; no production defect).** Filed 2026-09-16 from the
 `SANDBOX-EVIDENCE-1` PR (#694), whose local subset run turned
 `test_sandbox_runner.py::test_container_runner_unavailable_fails_closed_without_fallback` red
 after `test_deployment_profiles.py`. **★ #694's description got the direction WRONG** — it said
