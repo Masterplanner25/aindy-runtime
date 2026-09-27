@@ -1,7 +1,7 @@
 ---
 title: "Soak Register — flags waiting on evidence from the app's stack"
 api_version: "1.0"
-last_verified: "2026-09-22"
+last_verified: "2026-09-26"
 status: current
 owner: "platform-team"
 ---
@@ -103,13 +103,12 @@ runtime flips a default in the release after the evidence lands, and the row mov
 - **`RETRY-CONTEXT-1` (carry half):** is there a tool of yours that would do better on attempt 2
   if it knew WHY attempt 1 failed? Name it. The runtime will not build the carry without a
   consumer, and it will never fold the failure into `args` (that un-dedups the retry).
-- **`AUTHORITY-NEGOTIATION-1` phase 3:** the `nodus_vm` denial re-run — `APP_HANDOFF_v2.22.0.md`
-  §6 ask 1. With it, the flip is a judgment on both backends. (`AINDY_AUTHORITY_NEGOTIATION` is
-  already on in your container; this is evidence, not a flag.)
+- ~~**`AUTHORITY-NEGOTIATION-1` phase 3**~~ — answered by the app's 09-23 `nodus_vm` re-run;
+  `AINDY_AUTHORITY_NEGOTIATION` defaults ON since 2026-09-26 (DEC-081).
 
 **Already default-on, not a soak ask:** `AINDY_CHILD_CONTEXT_CLAMP` (`AUTHORITY-VALUE-1`, flipped
 with the caller fix), `AINDY_NODUS_WARM_POOL` (`NODUS-WARMPOOL-1`), `AINDY_SYSCALL_IDEMPOTENCY`
-(`IDEM-11`, 2.5.0). If any of these is set to `0` on your stack, that is worth knowing too.
+(`IDEM-11`, 2.5.0), `AINDY_AUTHORITY_NEGOTIATION` (`AUTHORITY-NEGOTIATION-1`, 2026-09-26). If any of these is set to `0` on your stack, that is worth knowing too.
 
 ---
 

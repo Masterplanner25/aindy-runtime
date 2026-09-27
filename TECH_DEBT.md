@@ -12396,6 +12396,15 @@ hand-rolled in a `while` loop, or improvised with `asyncio.create_task`.
 
 ## AUTHORITY-NEGOTIATION-1 — a capability denial has no bounded recovery path
 
+**Status: CLOSED (2026-09-26) — phase 3 shipped: `AINDY_AUTHORITY_NEGOTIATION` defaults ON
+(DEC-081).** Evidence from both backends: `leadgen.act` (`on_denial="wait"`) denied → parked →
+`skip` from another process → completed, on `agent_flow` (FR-38 filing) and `nodus_vm` (09-23
+re-run). Only `0/false/no/off` disable it. ★ With the flip, the `nodus_vm` worker pre-checks only
+a tool that DECLARED a recovery (`declares_denial_recovery`); otherwise every step ran
+`check_tool_capability` twice. Cost accepted: on `nodus_vm` an undeclared denial no longer counts
+`no_variant`. Tests: unset = on with a real negotiated variant on the worker; an undeclared tool is
+not pre-checked (with its control); each declaration shape; 4/4 mutations bite.
+
 **★ 2026-09-20 (#734, FR-38):** the design's census had a FIFTH denial site — `execute_tool`'s own
 chokepoint, the one `nodus_vm` hits — so phases 1–2 were wired on `agent_flow` only. The `nodus_vm`
 half is built (design §9, DEC-068..070). Phase 3 can now be judged on both backends.

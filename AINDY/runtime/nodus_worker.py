@@ -213,11 +213,13 @@ def run_agent_tool(
     # downgrade to a declared variant the token already grants (§4's bound), else — for a tool
     # that declared `on_denial="wait"` — a GATE the closure turns into a guest wait. Rebinding
     # `tool_name` grants nothing: `execute_tool` re-checks the variant at the chokepoint. Under
-    # the flag only; off, a denial fails exactly as it always did.
-    from AINDY.agents.authority_negotiation import authority_negotiation_enabled
+    # the flag only; off, a denial fails exactly as it always did. DEC-081: only a tool that
+    # DECLARED a recovery is pre-checked; for any other, negotiation has nothing to offer, and a
+    # pre-check would be a second `check_tool_capability` on every step for nothing.
+    from AINDY.agents.authority_negotiation import authority_negotiation_enabled, declares_denial_recovery
 
     tool_name = str(tool_name)
-    if authority_negotiation_enabled():
+    if authority_negotiation_enabled() and declares_denial_recovery(tool_name):
         gated = _negotiate_denial(
             session_factory, tool_name=tool_name, tool_args=tool_args, user_id=user_id,
             run_id=run_id, execution_token=execution_token, step_index=step_index,

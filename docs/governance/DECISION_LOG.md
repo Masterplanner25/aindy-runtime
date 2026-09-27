@@ -1929,3 +1929,27 @@ neither the SDK nor the app does. Both known drifts were in-process consumers (a
 major behind with no declaration; a dev venv five releases under the app's own range), and
 plugin load is the one place that sees both the running runtime and the consumer's declaration.
 A refusal would turn a patch bump into an outage, which is why the entry said "warn, never refuse".
+
+### DEC-081
+**Status:** `accepted` (2026-09-26 — `AUTHORITY-NEGOTIATION-1` phase 3; the owner: "yes on AUTHORITY-NEGOTIATION-1")
+
+**Decision**
+`AINDY_AUTHORITY_NEGOTIATION` defaults ON. Only `0` / `false` / `no` / `off` disable it; any other
+value, blank included, is the default (the parse `AINDY_SYSCALL_IDEMPOTENCY` took when it
+flipped, IDEM-11). With the flip, the `nodus_vm` worker pre-checks a tool's capability only when
+the tool DECLARED a recovery (`degraded_variant` or `on_denial="wait"`,
+`declares_denial_recovery`). For any other tool it goes straight to `execute_tool`, whose own
+check produces the ordinary denial.
+
+**Why**
+The phase-3 condition was met on both backends. A real tool (the app's `leadgen.act`,
+`on_denial="wait"`) was denied, parked, resumed `skip` from another process and completed on
+`agent_flow` (FR-38's filing) and on `nodus_vm` (the app's 09-23 re-run). A tool that declares
+nothing behaves exactly as with the flag off, and negotiation cannot grant authority (§7).
+Without the pre-check narrowing, the flip would have run `check_tool_capability` twice on every
+`nodus_vm` tool step (the app's default backend) for tools with nothing to negotiate.
+
+**Accepted cost**
+On `nodus_vm` an undeclared tool's denial no longer increments
+`aindy_authority_negotiation_total{outcome="no_variant"}`: it is never offered to negotiation. On
+`agent_flow` it still does, because that backend negotiates only after the denial.
