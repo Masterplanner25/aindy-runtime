@@ -1,7 +1,7 @@
 ---
 title: "FR-46 — Plan Step References — Design"
 api_version: "1.0"
-last_verified: "2026-09-25"
+last_verified: "2026-09-26"
 status: current
 owner: "platform-team"
 ---
@@ -9,8 +9,10 @@ owner: "platform-team"
 # FR-46: a plan step that takes an earlier step's result
 
 **Status: BUILT 2026-09-25 (#764), default OFF.** Phase 1 of §7 shipped. DEC-073..075 were
-accepted by the owner on 2026-09-25. Phase 2 (the app re-runs its goal with
-`AINDY_PLAN_STEP_REFERENCES=1`) and phase 3 (the flip) remain. As built: the resolver is
+accepted by the owner on 2026-09-25. Phase 2 PASSED 2026-09-26 (the app's re-run of the owner's
+goal on 2.24.0, run `19dcf508…`: the `memory.write` step stored step 0's `raw_result` byte for
+byte). Its first attempt guessed a result path wrong and failed safely, which is FR-48 (the
+planner is never shown a tool's result). Phase 3 (the flip) is held until FR-48 ships. As built: the resolver is
 `agents/step_references.py`, the path grammar is `core/result_path.py` (now shared with the
 verifier), and the seams are `nodus_adapter.agent_execute_step` and
 `nodus_worker.run_agent_tool` (plus its simulate branch).

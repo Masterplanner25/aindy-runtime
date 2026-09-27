@@ -9166,9 +9166,36 @@ key in each tool dict.
 
 ---
 
-## FR-47 — `@aindy/ui-kit` aborted every request at 30 s with no per-call override; agent planning takes longer, so the console reported a failure for a run created seconds later 🔴 open (app-filed 2026-09-26, ui-kit 2.1.0)
+## FR-48 — the planner is told each tool's arguments but never its result, so a `$from_step` path is a guess; the first FR-46 evidence run guessed wrong 🟡 planner contract (app-filed 2026-09-26, runtime 2.24.0)
 
-**Status: OPEN — the ui-kit half is BUILT (aindy-ui-kit #6, stacked on #5; ships in ui-kit 2.1.1).**
+**Status: OPEN — filed 2026-09-26.** Verified at source: the catalog line
+(`agents/agent_runtime/planning.py::_catalog_line`) renders `args=` from `args_schema` (FR-33) and
+nothing about the result; `register_tool` has no place to put one. `validate_plan_references`
+(`agents/step_references.py`) checks that a path is WELL-FORMED, not that it EXISTS, so a wrong
+path passes planning and fails `invalid` at run time, after the steps before it have run.
+**Observed (app, run `615b67ea…`, flag on, the owner's goal):** step 2 `memory.write` took
+`{"$from_step": 0, "path": "results"}`; step 0 was `research.query`, which returns
+`{raw_result}` (`results` is `search.query`'s key). Step 2 failed
+`step 0's result has no 'results'`, which is DEC-075 working, but the research had run and been
+paid for, and three `task.create` steps never ran. The re-run (`19dcf508…`) used `raw_result`
+and passed. App's half (#415): every tool description states its return shape in prose.
+**Ask:** (1) `register_tool(…, result_schema=)` in the `args_schema` dialect, rendered in the
+catalog (`returns=…`); (2) check reference paths against it at plan time; (3) no check for a
+tool that declares none. **Not asked:** validating results at run time.
+**Premise correction:** the ask says a refused plan is "re-planned". It is not: the refusal fails
+plan generation, so run creation fails (`_plan_failure`). The owner chose to keep that
+(2026-09-26); a re-plan-once loop is declined for now.
+**Why it gates FR-46's flip:** half the evidence runs guessed a path; default-on without result
+shapes makes every app's planner guess. The owner holds the flip until this ships.
+
+---
+
+## FR-47 — `@aindy/ui-kit` aborted every request at 30 s with no per-call override; agent planning takes longer, so the console reported a failure for a run created seconds later 🟡 client timeout (app-filed 2026-09-26, ui-kit 2.1.0)
+
+**Status: CLOSED 2026-09-26 — released in ui-kit 2.1.1 (landed by #7; #6 had merged into #5's
+branch), adopted by the app the same day:** `createAgentRun` passes `timeoutMs: 90_000` and
+the #410 poll-on-408 workaround is removed (`RUNTIME_2_24_0_UPGRADE.md` §4). Run creation
+still has no idempotency key; the app words the 408 as "the run may still arrive".
 Verified at source: `request()` and `requestAbsolute()` (`src/api/_core.js`) each armed
 `setTimeout(() => controller.abort(), 30_000)` and mapped ANY `AbortError` to
 `ApiError(408, "…30 seconds.")`, including an abort from the caller's own `signal`. Built:
@@ -9196,8 +9223,11 @@ choice or a future ask. **Closes** when ui-kit 2.1.1 is released and the app ado
 
 ## FR-46 — a plan step's `args` are literals written at planning time; no step can take an earlier step's result, so "research X, then use it" runs its second half blind 🔴 open (app-filed 2026-09-25, runtime 2.22.0)
 
-**Status: OPEN — BUILT #764 2026-09-25, default OFF (`AINDY_PLAN_STEP_REFERENCES`); open for
-the app's evidence run and the flip.** DEC-073..075 were accepted by the owner. As built:
+**Status: OPEN — BUILT #764 2026-09-25, default OFF (`AINDY_PLAN_STEP_REFERENCES`). Evidence
+PASSED 2026-09-26 (app, runtime 2.24.0, run `19dcf508…`, `completed 5/5`): the `memory.write`
+step's recorded `tool_args.content` equals step 0's `result.raw_result` byte for byte (SQL
+equality, 5000 chars). The first attempt (`615b67ea…`) guessed a path wrong and failed safely:
+FR-48. Open for the flip, which the owner holds until FR-48 ships (2026-09-26).** DEC-073..075 were accepted by the owner. As built:
 - `{"$from_step": N, "path"}` is validated at plan time (`generate_plan` and replay).
 - It is resolved before `execute_tool` in both callers: agent_flow from flow-state `step_results`,
   nodus_vm from `agent_steps` rows, and simulation from guest state.
@@ -9257,8 +9287,10 @@ nothing. `authority_gate.run_status` is `resuming` only when a local waiter woke
 rehydration the ask relied on had never run: string ids against the UUID column raised
 `'str' object has no attribute 'hex'`. Ids are normalised now. Tests: five per-process-scheduler
 cases, plus the ROUTE on a real empty `SchedulerEngine` with the real `publish_event`. Four
-mutations each fail their own test. **Remaining:** the app's live two-process re-run on the
-release that ships it.
+mutations each fail their own test. **★ VERIFIED LIVE 2026-09-26** (app, 2.24.0, run
+`3880d88e…`): the api booted before the park, the park was made in a separate `docker exec`,
+the resume went over HTTP → `waiters_notified: 1`, `run_status: "resuming"`, completed at the
+first poll with no restart.
 Verified at source: `agents/runtime_api.py::resume_agent_run_runtime`
 publishes (`publish_event(…, run_id=…)`, `:279`) and returns `waiters_notified` from it, while
 `_decide_authority_gate` has already committed the `skipped` step and answers
