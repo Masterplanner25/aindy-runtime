@@ -244,6 +244,7 @@ def _safe_recall_memory_count(self, ctx) -> int:
             db=db,
             max_tokens=300,
             metadata={"limit": 3},
+            site="pipeline",
         )
         return len(context.items) if context and getattr(context, "items", None) else 0
     except Exception as exc:
@@ -254,5 +255,13 @@ def _safe_recall_memory_count(self, ctx) -> int:
             required=False,
             error=exc,
         )
-        logger.debug("execution.memory_recall_skipped", exc_info=True)
+        # FR-49 — the orchestrator witnesses a failure INSIDE the recall; this branch sees one
+        # before it started (imports, construction, the query). It was DEBUG, so it had no witness.
+        logger.warning("execution.memory_recall_skipped: %s", exc, exc_info=True)
+        try:  # the failure may BE this module not importing; the request must not fail on it
+            from AINDY.platform_layer.metrics import memory_recall_failures_total
+
+            memory_recall_failures_total.labels(site="pipeline", stage="setup").inc()
+        except Exception:  # noqa: BLE001
+            pass
         return 0

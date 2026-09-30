@@ -308,6 +308,7 @@ def _recall_planner_memory(
                 "node_types": ["outcome", "insight", "decision"],
             },
             operation_type="agent_planning",
+            site="agent_planning",
         )
         block = str(getattr(context, "formatted", "") or "")
         ids = list(getattr(context, "ids", []) or [])

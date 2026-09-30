@@ -153,6 +153,19 @@ tool_args_validation_total = Counter(
     registry=REGISTRY,
 )
 
+# FR-49 — a recall failure had one witness, a WARNING line, and a container recreate loses the log.
+# `site` names the caller (`pipeline`, `agent_planning`, … ; `unspecified` for a caller that passes
+# none); `stage` is `recall` (the recall itself failed and returned an empty context),
+# `own_session` (AINDY_MEMORY_RECALL_OWN_SESSION could not open its session and fell back to the
+# caller's; the recall still ran) or `setup` (the pipeline failed before the recall started).
+# Zero across a soak window is the absence signal for flipping AINDY_MEMORY_RECALL_OWN_SESSION.
+memory_recall_failures_total = Counter(
+    "aindy_memory_recall_failures_total",
+    "Memory recalls that failed or degraded, by calling site and stage (recall | own_session | setup).",
+    ["site", "stage"],
+    registry=REGISTRY,
+)
+
 lease_fence_refusals_total = Counter(
     "aindy_lease_fence_refusals_total",
     "Leader-only job writes refused by the background-lease fence (leadership changed hands "

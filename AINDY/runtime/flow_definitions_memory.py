@@ -218,7 +218,7 @@ def memory_recall_node(state, context):
         if state.get("node_type") is None:
             metadata["node_types"] = []
         orchestrator = MemoryOrchestrator(MemoryNodeDAO)
-        context_obj = orchestrator.get_context(user_id=user_id, query=query or "", task_type="analysis", db=db, max_tokens=1200, metadata=metadata)
+        context_obj = orchestrator.get_context(user_id=user_id, query=query or "", task_type="analysis", db=db, max_tokens=1200, metadata=metadata, site="flow_memory")
         results = memory_items_to_dicts(context_obj.items)
         return {"status": "SUCCESS", "output_patch": {"memory_recall_result": {"query": query, "tags": tags, "results": results, "count": len(results), "scoring_version": "v2", "formula": {"semantic": 0.40, "graph": 0.15, "recency": 0.15, "success_rate": 0.20, "usage_frequency": 0.10, "note": "adaptive_weight multiplier applied; tag_score adds up to +0.1"}}}}
     except Exception as e:
@@ -239,7 +239,7 @@ def memory_recall_v3_node(state, context):
         if state.get("node_type") is None:
             metadata["node_types"] = []
         orchestrator = MemoryOrchestrator(MemoryNodeDAO)
-        context_obj = orchestrator.get_context(user_id=user_id, query=query or "", task_type="analysis", db=db, max_tokens=1200, metadata=metadata)
+        context_obj = orchestrator.get_context(user_id=user_id, query=query or "", task_type="analysis", db=db, max_tokens=1200, metadata=metadata, site="flow_memory")
         results = memory_items_to_dicts(context_obj.items)
         formula = {"semantic": 0.40, "graph": 0.15, "recency": 0.15, "success_rate": 0.20, "usage_frequency": 0.10, "note": "adaptive_weight multiplier applied; tag_score adds up to +0.1"}
         if state.get("expand_results") and context_obj.ids:

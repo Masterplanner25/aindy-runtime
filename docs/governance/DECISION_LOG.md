@@ -1970,3 +1970,20 @@ test that boots the app publishes the profile from startup. The ContextVar guard
 ContextVar cannot always be restored without the leaker's token. This state is two plain dicts
 and is always fully restorable, so the restore alone removes the order dependence, which was the
 defect. Failing would add only attribution, at the cost of rewriting a dozen correct startup tests.
+
+### DEC-083
+**Status:** `accepted` (2026-09-30 — `FR-49`; the owner: "build 1 and 2, decline 3, and hold the flip for a counter window")
+
+**Decision**
+A recall failure is COUNTED: `aindy_memory_recall_failures_total{site, stage}` (`recall`,
+`own_session`, `setup`), and the pipeline's pre-recall failure is WARNING. The per-request
+`side_effects` map is NOT persisted into `execution.completed`. `AINDY_MEMORY_RECALL_OWN_SESSION`
+(DB-NODUS-BUDGET-1) is flipped only after one soak window in which this counter reads 0.
+
+**Why**
+The app's soak evidence was real (1,339 recalls, no failure seen), but every failure witness was a
+log line, and its api was recreated about six times in the window. A counter survives that. The
+side-effects map carries almost nothing for recall, because a failure inside the recall is
+caught by the orchestrator and never reaches the pipeline's map. Persisting it per request would
+grow `system_events`, the table FR-18 found at 99.6% of a database. Flipping on log evidence the
+counter could have confirmed would skip the cheap step.

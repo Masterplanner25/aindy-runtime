@@ -115,6 +115,7 @@ class NodusMemoryBridge:
                 db=self.db,
                 max_tokens=800,
                 metadata=metadata,
+                site="nodus_memory",
             )
             results = memory_items_to_dicts(context.items)
             return results[:limit]
@@ -356,6 +357,7 @@ class NodusMemoryBridge:
                 db=self.db,
                 max_tokens=max_tokens,
                 metadata=metadata,
+                site="nodus_memory",
             )
             return {
                 "formatted": context.formatted,

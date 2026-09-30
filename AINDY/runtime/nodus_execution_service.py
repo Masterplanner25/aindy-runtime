@@ -1596,6 +1596,7 @@ def execute_nodus_task_payload(
                 "node_types": [],
                 "limit": 3,
             },
+            site="nodus_execution",
         )
 
         nodus_result = execute_nodus_runtime(
