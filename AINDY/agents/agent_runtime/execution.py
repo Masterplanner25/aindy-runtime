@@ -448,6 +448,7 @@ def _build_execution_memory_context(*, objective: str, plan: dict, user_id: str,
             user_id=user_id,
             query=objective or "agent execution",
             db=db,
+            site="agent_execution",
             max_tokens=900,
             metadata={
                 "tags": [tool.replace(".", "_") for tool in step_tools[:3]],

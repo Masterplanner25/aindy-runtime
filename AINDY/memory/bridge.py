@@ -204,6 +204,7 @@ def recall_memories(
             db=db,
             max_tokens=1200,
             metadata=metadata,
+            site="memory_bridge",
         )
         results = memory_items_to_dicts(context.items)
         return results[:limit]

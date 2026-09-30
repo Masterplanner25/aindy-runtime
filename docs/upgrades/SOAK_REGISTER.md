@@ -1,7 +1,7 @@
 ---
 title: "Soak Register — flags waiting on evidence from the app's stack"
 api_version: "1.0"
-last_verified: "2026-09-26"
+last_verified: "2026-09-30"
 status: current
 owner: "platform-team"
 ---
@@ -43,7 +43,7 @@ runtime flips a default in the release after the evidence lands, and the row mov
 | What it changes | memory recall opens its OWN session instead of riding the caller's; the caller's transaction is never held across the recall's reads (the `RT-MEMTXN-LEAK-1` family) |
 | Already on your stack? | `docker-compose.prod.yml:148` wires it from your `.env` — **confirm the value you run** |
 | Presence signal | recall still returns rows (your agents' `memory.recall` steps succeed) while `SELECT count(*) FROM pg_stat_activity WHERE state = 'idle in transaction'` sampled during a recall-heavy run stays at your baseline — the flag's whole effect is that the CALLER's transaction is no longer held open across the recall |
-| Absence signal | `aindy_db_pool_exhaustion_events_total` does not move for the window; `aindy_db_pool_checkedout` / `aindy_db_pool_overflow` flat at baseline; no `[MemoryOrchestrator] recall failed` in the api log |
+| Absence signal | `aindy_memory_recall_failures_total` (FR-49, from the release after 2.24.0) reads **0** for every `stage` across the window; `aindy_db_pool_exhaustion_events_total` does not move; `aindy_db_pool_checkedout` / `aindy_db_pool_overflow` flat at baseline. (Before the counter: no `[MemoryOrchestrator] recall failed` in the api log, which covers the pipeline's recalls too, but a container recreate loses it.) |
 | Failure looks like | recall returning stale rows the caller had just written and not committed (the entry's one behaviour change: uncommitted writes are no longer visible to recall) |
 | Flips | the default in the next runtime release after 7 days / 200 runs with both signals |
 
@@ -116,7 +116,7 @@ with the caller fix), `AINDY_NODUS_WARM_POOL` (`NODUS-WARMPOOL-1`), `AINDY_SYSCA
 
 | # | Flag | Entry | On your stack since | Evidence received | Default flipped in |
 |---|---|---|---|---|---|
-| 1 | `AINDY_MEMORY_RECALL_OWN_SESSION` | `DB-NODUS-BUDGET-1` | wired; value unconfirmed | — | — |
+| 1 | `AINDY_MEMORY_RECALL_OWN_SESSION` | `DB-NODUS-BUDGET-1` | app soak 09-23→30: 1,339 recalls, 0 failures seen (log only) | — | one window with the FR-49 counter at 0 (DEC-083) |
 | 2 | `AINDY_SYSCALL_IDEMPOTENCY_STRICT` | `FR-27` / `IDEM-11` | — | — | — |
 | 3 | `AINDY_DELEGATION_PRIVATE_MEMORY` | `RTR-4` | — | — | — |
 | 4 | `AINDY_DURABLE_CONTINUATION` (+`_ALL`) | `DUR-1..4` | — | — | — |

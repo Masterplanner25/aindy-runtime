@@ -33,8 +33,10 @@ class MemoryOrchestrator:
         task_type: str | None = None,
         max_tokens: int = 1200,
         metadata: Optional[dict] = None,
+        site: str = "unspecified",
     ) -> MemoryContext:
-        read_db, owns_read_db = self._resolve_read_session(db)
+        """``site`` names the caller for ``aindy_memory_recall_failures_total`` (FR-49)."""
+        read_db, owns_read_db = self._resolve_read_session(db, site=site)
         try:
             operation = operation_type or task_type or "generic"
             request = RecallRequest(query=query, user_id=user_id, task_type=operation, metadata=metadata)
@@ -84,6 +86,7 @@ class MemoryOrchestrator:
 
         except Exception as exc:
             logger.warning("[MemoryOrchestrator] recall failed: %s", exc)
+            count_recall_failure(site, "recall")
             return _empty_context()
         finally:
             if owns_read_db:
@@ -93,7 +96,7 @@ class MemoryOrchestrator:
                     logger.warning("[MemoryOrchestrator] read session close failed: %s", exc)
 
     @staticmethod
-    def _resolve_read_session(db):
+    def _resolve_read_session(db, *, site: str = "unspecified"):
         """Pick the session the (read-only) recall runs on. Returns (session, owns_it).
 
         DB-NODUS-BUDGET-1: recall is read-only, but running it on the caller's session
@@ -132,6 +135,7 @@ class MemoryOrchestrator:
                 "[MemoryOrchestrator] own-session recall unavailable, using caller's: %s",
                 exc,
             )
+            count_recall_failure(site, "own_session")
             return db, False
 
     def _recall_candidates(
@@ -241,3 +245,14 @@ def memory_items_to_dicts(items: Iterable[MemoryItem]) -> List[dict]:
         )
         output.append(base)
     return output
+
+
+def count_recall_failure(site: str, stage: str) -> None:
+    """FR-49 — ``aindy_memory_recall_failures_total{site, stage}``. Never raises: a metrics fault
+    must not turn a degraded recall into a failed request."""
+    try:
+        from AINDY.platform_layer.metrics import memory_recall_failures_total
+
+        memory_recall_failures_total.labels(site=str(site or "unspecified"), stage=stage).inc()
+    except Exception:  # noqa: BLE001
+        pass

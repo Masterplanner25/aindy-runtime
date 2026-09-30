@@ -49,6 +49,7 @@ class ExecutionLoop:
                 task_type=self._get_operation_field(operation, "operation_type", "type", "analysis"),
                 query=self._get_operation_field(operation, "input", "input", ""),
                 db=db,
+                site="memory_loop",
             )
         except Exception as exc:
             logger.warning("[ExecutionLoop] recall failed: %s", exc)
@@ -58,6 +59,7 @@ class ExecutionLoop:
                 query="",
                 db=db,
                 metadata={"node_types": []},
+                site="memory_loop",
             )
 
         result = self._execute(operation, context)

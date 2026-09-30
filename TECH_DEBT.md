@@ -9180,6 +9180,30 @@ key in each tool dict.
 
 ---
 
+## FR-49 — a memory recall failure had one witness, a WARNING line, which a container recreate loses; the pipeline's pre-recall failures were DEBUG 🟡 observability (app-filed 2026-09-30, runtime 2.24.0)
+
+**Status: CLOSED (2026-09-30) — asks 1 and 2 built, ask 3 declined (DEC-083).** Built:
+`aindy_memory_recall_failures_total{site, stage}`. `stage` is `recall` (a failure inside
+`get_context`, which returns an empty context), `own_session` (`AINDY_MEMORY_RECALL_OWN_SESSION`
+could not open its session; the recall still ran on the caller's) or `setup` (the pipeline failed
+before the recall started, now WARNING, was DEBUG). `get_context(site=)` is optional (`unspecified`
+default); all eleven runtime call sites name theirs, pinned by an AST census. 7 tests, 7/7
+mutations bite.
+**★ Premise corrected at source:** the filing said the pipeline's recall "has no failure witness at
+all". It does: the pipeline calls `get_context`, which catches every failure inside the recall and
+logs `[MemoryOrchestrator] recall failed` at WARNING (`orchestrator.py`), including the own-session
+fallback's own WARNING. So soak row 1's absence signal DID cover the 1,332 pipeline recalls. Only
+the pipeline's pre-recall branch (`signals.py`, imports and construction) was DEBUG. The real gap:
+every witness was a log line, and the app's api was recreated ~6 times in the window.
+**Ask 3 declined:** for recall, the per-request `side_effects` map is almost never populated (see
+above), and persisting every request's map into `system_events` grows the busiest table (FR-18).
+**DB-NODUS-BUDGET-1's flip waits for one soak window with this counter at 0 (DEC-083).**
+**Evidence the app filed (soak row 1, 2026-09-23→30):** 1,339 recalls through the flagged path, 0
+`idle in transaction`, 0 pool exhaustion, no `recall failed` in the log that survived, and nine app
+recall sites audited as not depending on seeing their own uncommitted writes.
+
+---
+
 ## FR-48 — the planner is told each tool's arguments but never its result, so a `$from_step` path is a guess; the first FR-46 evidence run guessed wrong 🟡 planner contract (app-filed 2026-09-26, runtime 2.24.0)
 
 **Status: OPEN — BUILT #769 2026-09-26 (DEC-077..079); open until it ships, which releases
