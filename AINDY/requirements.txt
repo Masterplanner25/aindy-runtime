@@ -1,7 +1,7 @@
-annotated-types==0.7.0
+annotated-types==0.8.0
 anyio==4.15.1
 certifi==2026.7.22
-charset-normalizer==3.4.9
+charset-normalizer==3.5.1
 click==8.5.0
 cloudpickle==3.1.2
 colorama==0.4.6
@@ -11,7 +11,7 @@ annotated-doc==0.0.5
 fastapi==0.141.1
 fastapi-cache2==0.2.2
 redis==8.1.0
-greenlet==3.5.5
+greenlet==3.5.6
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
@@ -61,13 +61,13 @@ passlib==1.7.4
 bcrypt==4.0.1
 slowapi==0.1.10
 pytest-cov==7.1.0
-ruff==0.16.7
+ruff==0.16.9
 apscheduler==3.11.3
 tenacity==9.1.4
 tzlocal==5.4.4
 python-json-logger==4.2.0
 prometheus-fastapi-instrumentator==8.1.0
-opentelemetry-api==1.44.0
-opentelemetry-sdk==1.44.0
-opentelemetry-instrumentation-fastapi==0.65b0
-opentelemetry-exporter-otlp-proto-grpc==1.44.0
+opentelemetry-api==1.45.0
+opentelemetry-sdk==1.45.0
+opentelemetry-instrumentation-fastapi==0.66b0
+opentelemetry-exporter-otlp-proto-grpc==1.45.0
