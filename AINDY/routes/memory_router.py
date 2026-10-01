@@ -74,6 +74,13 @@ def _dispatch_memory(name: str, payload: dict, *, db, current_user) -> dict:
         _infer_dispatch_capability,
     )
 
+    # FR-50 — the request models default their optional fields to None, and the syscalls' input
+    # schemas type those fields (`query: string`, `tags: list`, `node_type: string`), so a None
+    # was refused at the door: a query-only or tags-only recall, and a node created without a
+    # node_type, all answered 400. An absent key and a None mean the same to every handler here
+    # (`payload.get(...)`), so the None is dropped rather than sent.
+    payload = {key: value for key, value in payload.items() if value is not None}
+
     user_id = str(current_user["sub"])
     ctx = SyscallContext(
         execution_unit_id="",
