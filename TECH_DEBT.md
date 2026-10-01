@@ -9180,6 +9180,22 @@ key in each tool dict.
 
 ---
 
+## FR-50 — the memory routes forwarded their optional fields as None and the syscall schemas refused them: query-only and tags-only recall, and a node created without a node_type, all answered 400 🔴 defect (app-filed 2026-09-30, runtime 2.24.0)
+
+**Status: CLOSED (2026-09-30).** `routes/memory_router.py::_dispatch_memory` now drops `None` values
+before dispatch. Every handler reads with `payload.get(...)`, so an absent key and a `None` mean the
+same thing to it. The input schemas type the fields (`query: string`, `tags: list`, `node_type:
+string`) and refused the `None` before the handler ran. **★ Wider than filed:** the app hit the
+query-only recall; a tags-only recall failed the same way (`query: None`), and so did
+`POST /memory/nodes` without `node_type`, the create route failing on its own optional field. Since
+ROUTE-EFFECT-BYPASS-1 (2026-08-16) moved these routes onto the dispatcher. The scope test's write
+probe (`{"content": "c"}`) asserted only "not 403", which is why the 400 stayed invisible.
+Tests call the ROUTES with the real dispatcher (DAO stubbed): query-only, tags-only, no
+`node_type`, all-fields control, empty recall still 400, and a dispatch spy that no `None` arrives.
+Removing the fix fails exactly the four defect cases.
+
+---
+
 ## FR-49 — a memory recall failure had one witness, a WARNING line, which a container recreate loses; the pipeline's pre-recall failures were DEBUG 🟡 observability (app-filed 2026-09-30, runtime 2.24.0)
 
 **Status: CLOSED (2026-09-30) — asks 1 and 2 built, ask 3 declined (DEC-083).** Built:
