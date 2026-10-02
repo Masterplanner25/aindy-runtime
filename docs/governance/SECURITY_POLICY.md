@@ -1,6 +1,6 @@
 ---
 title: "Security Policy"
-last_verified: "2026-07-07"
+last_verified: "2026-10-01"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -76,28 +76,13 @@ Accepted findings must be documented here under **Accepted Findings**.
 - **Dependabot:** alert dismissed as `not_used` on 2026-07-07 (alerts #4, #11).
 - **Reopen trigger:** Any addition of ECDSA/ES256 JWT signing or any direct ecdsa import. A fix release from the ecdsa maintainers would also allow removing this exemption.
 
-### PYSEC-2026-97 — nltk filestring() path traversal
-- **Package:** nltk (transitive dep of textstat)
-- **Fix version:** None released
-- **Accepted:** 2026-05-25
-- **Rationale:** Not reachable. nltk is a transitive dependency of textstat; the runtime never imports nltk directly and never calls `nltk.util.filestring()`.
-- **Reopen trigger:** A fix release from the nltk maintainers, or any direct nltk import added to the codebase.
-
-### GHSA-rf74-v2fm-23pw — nltk JSONTaggedDecoder recursion DoS
-- **Package:** nltk (transitive dep of textstat)
-- **Fix version:** None released
-- **Accepted:** 2026-05-25
-- **Rationale:** Not reachable. nltk is a transitive dependency of textstat; the runtime never uses nltk's JSON tag serialization system.
-- **Reopen trigger:** A fix release from the nltk maintainers, or any direct nltk JSON tag usage added to the codebase.
-
-### PYSEC-2026-597 (CVE-2026-12243) — nltk url2pathname() percent-encoded path traversal
-- **Package:** nltk (transitive dep of textstat)
-- **Aliases:** GHSA-p4gq-832x-fm9v (GitHub Dependabot advisory ID)
-- **Fix version:** None released
-- **Accepted:** 2026-07-02
-- **Rationale:** Not reachable. Incomplete-fix follow-up to PYSEC-2026-97: `_UNSAFE_NO_PROTOCOL_RE` in `nltk/data.py` rejects literal `../` but not percent-encoded `..%2f`, which `url2pathname()` decodes after the check. Exploitation requires an attacker-controlled resource name passed to `nltk.data.load()`/`nltk.data.find()`. nltk is a transitive dependency of textstat; the runtime never imports nltk directly and never calls those loaders, so no attacker-controlled path reaches `url2pathname()`.
-- **Dependabot:** alert dismissed as `not_used` on 2026-07-07 (alerts #5, #12).
-- **Reopen trigger:** A fix release from the nltk maintainers, or any direct call to `nltk.data.load()`/`find()` added to the codebase.
+### Closed by absence — the nltk findings (2026-10-01)
+`PYSEC-2026-97`, `GHSA-rf74-v2fm-23pw`, `PYSEC-2026-597` and `PYSEC-2026-3740` were accepted
+(2026-05-25 to 2026-09-02) because nltk arrived only as a transitive dependency of textstat and no
+affected API was reachable. Both pins were removed in 2.25.0 (`PACK-DEBT-6`): nothing in the
+runtime imported either, and the app that did now declares them itself. The exemptions were
+deleted from `security-audit.yml` in the same change. An advisory with no released fix closes this
+way or not at all.
 
 ## Reporting a Vulnerability
 

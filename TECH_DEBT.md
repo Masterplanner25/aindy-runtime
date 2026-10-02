@@ -2798,7 +2798,9 @@ is limited to `starlette.exceptions.HTTPException` — a stable import).
 
 ## PACK-DEBT-6 — `nltk` and `textstat` are runtime dependencies nothing in the runtime uses
 
-**Status:** OPEN — P3 (ownership, not exposure). Filed 2026-09-18 while checking the two high
+**Status: CLOSED (2026-10-01) — step 3 shipped in 2.25.0 (#784).** Both pins dropped from `pyproject.toml` and `AINDY/requirements.txt`; the four nltk `--ignore-vuln` lines deleted from `security-audit.yml`; the three Accepted Findings in `SECURITY_POLICY.md` replaced by a dated closed-by-absence note. The app declares both since its #391; the handoff asks it to confirm `Required-by` names its own package after the rebuild.
+
+**Filed as:** OPEN — P3 (ownership, not exposure). Filed 2026-09-18 while checking the two high
 Dependabot alerts GitHub had printed on every push since 2026-09-02.
 
 **★ Step 1 landed 2026-09-20; step 2 shipped the same day (#733).** The app's `pyproject.toml`

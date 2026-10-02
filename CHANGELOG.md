@@ -4,6 +4,112 @@
 
 _Nothing yet._
 
+## 2.25.0 — 2026-10-01
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.25.0.md`.
+No ui-kit change; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **No migration.** Alembic head stays `0020` and the schema contract stays `2026-09-20`. Nothing
+  under `AINDY/db/models/` changed, so the `Upgrade Path Guard` passes trivially on this release,
+  and its negative control is the half that carries meaning.
+- **Two entries carry an operator-read marker:** authority negotiation is now **on by default**
+  (a tool declaring `on_denial="wait"` now parks its run on a denial instead of failing it), and
+  **`nltk` / `textstat` are no longer installed** with the runtime.
+- No route started enforcing a new scope.
+
+### Changed — authority negotiation is ON by default; a tool that declares `on_denial="wait"` now parks its run on a denial instead of failing it (AUTHORITY-NEGOTIATION-1, DEC-081, #771)
+
+- **Read before upgrading if any of your tools declares `degraded_variant=` or
+  `on_denial="wait"`.** With `AINDY_AUTHORITY_NEGOTIATION` unset, a capability denial on such a
+  tool is now negotiated. The runtime makes one attempt at the declared fallback if the token
+  already grants it. Otherwise the run PARKS on `agent.authority.decision` for an operator's
+  `skip` or `abort`. Before, the step failed. Set `AINDY_AUTHORITY_NEGOTIATION=0` (or
+  `false` / `no` / `off`) to keep the old behaviour. Any other value, blank included, is now on.
+- Why now: the evidence the flip waited for exists on both backends. A real declared tool was
+  denied, parked, resumed with `skip` from another process, and completed on `agent_flow` and on
+  `nodus_vm`. Negotiation cannot grant authority: `execute_tool` re-checks whatever tool is
+  attempted.
+- A tool that declares neither a fallback nor a gate behaves exactly as before. On `nodus_vm` it is
+  no longer pre-checked by the worker at all. Without that change, the flip would have run the
+  capability check twice on every tool step. As a result, on `nodus_vm` an undeclared tool's
+  denial is no longer counted as `aindy_authority_negotiation_total{outcome="no_variant"}`.
+
+### Removed — `nltk` and `textstat` are no longer runtime dependencies (PACK-DEBT-6, #784)
+
+- **Read before upgrading if your code imports `nltk` or `textstat`.** The runtime pinned
+  `nltk==3.10.3` and `textstat==0.7.13` and imported neither. Installing `aindy-runtime` no longer
+  installs them. Declare them in your own `pyproject.toml`. The deprecation was announced in 2.22.0
+  for the first release on or after 2026-10-01, which is this one. **Why:** a consumer was
+  depending on what the runtime *installs* rather than what it *declares*. The app's search
+  service imported both undeclared, and it declares them itself since its #391.
+- The four `pip-audit` exemptions that existed only for nltk (`PYSEC-2026-97`,
+  `GHSA-rf74-v2fm-23pw`, `PYSEC-2026-597`, `PYSEC-2026-3740`) are removed. None had a released
+  fix, so they close by the package's absence.
+
+### Added — tools declare what they return; step-reference paths are checked at plan time (FR-48, DEC-077..079, #769)
+
+- `register_tool(..., result_schema=)`, in the `args_schema` dialect and nested through
+  `properties`, `items` and `additionalProperties`. The planner catalog renders it as `returns=…`.
+  **Why:** the planner was shown every tool's arguments and no tool's result, so a
+  `{"$from_step": N, "path"}` path was a guess. The app's first FR-46 evidence run referenced
+  `results` on a tool returning `{raw_result}`. The path was well-formed, so planning accepted it,
+  and the step failed only after the research before it had run and been paid for.
+- With `AINDY_PLAN_STEP_REFERENCES` on, a reference's path is checked against the referenced
+  tool's `result_schema` at plan time. A node that declares `properties` is closed unless it sets
+  `additionalProperties`; a node that declares nothing is open; a tool with no schema is checked
+  for form only, as before. Results are never validated at run time.
+- A refused plan fails run creation, as before; the runtime does not re-plan (DEC-078).
+- A malformed `result_schema` raises at registration, at any depth.
+- `AINDY_PLAN_STEP_REFERENCES` (FR-46) is still off by default in this release. It was held for this change (DEC-079), so a planner can be shown result shapes before it relies on them.
+
+### Added — the runtime warns at boot when a plugin's declared `aindy-runtime` range excludes it (DEBT-COMPAT-1, DEC-080, #770)
+
+- `load_plugins` now finds the installed distribution that owns each plugin module and compares
+  its declared `aindy-runtime` requirement with the running version. It logs a WARNING when the
+  runtime is outside the range, when the distribution declares no dependency on the runtime, or
+  when the range has no upper bound. **Why:** the runtime published its compatibility policy on
+  `/api/version` and nothing read it. A consumer ran a major behind, under the advertised floor,
+  and a dev environment ran five releases older than the app's own declared range while every
+  suite passed.
+- **Warns, never refuses**, and never raises. The runtime's own modules are skipped. Each warning
+  prints `AINDY.__path__` beside the version.
+- New additive field `compatibility.consumers` on `GET /api/version`, listing each distribution
+  with its declared range and status.
+- The check reads the metadata pip wrote at the last install, not `pyproject.toml`. A raised floor
+  is seen after the next `pip install`.
+
+### Changed — dependency bumps: OpenTelemetry 1.45.0 / 0.66b0, annotated-types, charset-normalizer, greenlet (#781)
+
+- Runtime pins: `opentelemetry-api` / `-sdk` / `-exporter-otlp-proto-grpc` 1.44.0 → 1.45.0 and
+  `opentelemetry-instrumentation-fastapi` 0.65b0 → 0.66b0, moved together because the family is
+  version-locked. Also `annotated-types` 0.7.0 → 0.8.0, `charset-normalizer` 3.4.9 → 3.5.1 and
+  `greenlet` 3.5.5 → 3.5.6. A consumer that pins any OpenTelemetry package itself must move it in
+  step.
+- Build and dev only: `cc` 1.5.1 (native crate), `vite` 8.3.1 (platform UI), `ruff` 0.16.9.
+
+### Added — memory recall failures are counted by caller and stage (FR-49, DEC-083, #782)
+
+- New counter `aindy_memory_recall_failures_total{site, stage}`. `stage="recall"` means the recall
+  failed and returned an empty context. `stage="own_session"` means
+  `AINDY_MEMORY_RECALL_OWN_SESSION` could not open its own session and fell back to the caller's
+  (the recall still ran). `stage="setup"` means the request pipeline failed before the recall
+  started. **Why:** a recall failure's only witness was a WARNING log line, and a container
+  recreate loses it. That made the soak evidence for flipping `AINDY_MEMORY_RECALL_OWN_SESSION`
+  unreadable after the fact.
+- `MemoryOrchestrator.get_context()` takes an optional `site=` so an app's own call sites can label
+  themselves; unlabelled calls count as `site="unspecified"`.
+- The pipeline's pre-recall failure is logged at WARNING (it was DEBUG).
+
+### Fixed — memory routes no longer fail when an optional field is left out (FR-50, #783)
+
+- `POST /memory/recall` with only `query`, or with only `tags`, and `POST /memory/nodes` without
+  `node_type` all answered **400** (`Input validation failed for 'sys.v1.memory.read' / '.write'`).
+  **Why it was wrong:** since these routes moved onto the syscall dispatcher (2026-08-16), they
+  forwarded their optional fields as `null`, and the syscalls' input schemas type those fields
+  (`string` / `list`), so the call was refused before it ran. The routes now leave an unset
+  field out. A recall with neither `query` nor `tags` is still a 400.
+
+
 ## 2.24.0 — 2026-09-26
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.24.0.md`.
