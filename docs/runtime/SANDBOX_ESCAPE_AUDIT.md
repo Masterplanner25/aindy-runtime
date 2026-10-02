@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-09-26"
+last_verified: "2026-10-01"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,41 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 039 — 2026-10-01
+
+**Trigger:** `v2.25.0` release tag (`sandbox-escape-linux.yml`, run `36961040957`).
+**Commit:** `2155d5d` (release PR #784's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:9a725b14f2ae4e1b92ae4c7a8f575c7bf0f451276b5d38c9ec20bb005d0063a8`. **★ NOT the digest
+Entries 037–038 ran on** (`cd04730b8511…`). The upstream tag moved between `v2.24.0` and `v2.25.0`;
+nothing in this repository selects a digest. As at Entry 035, this is recorded rather than hidden:
+the 17 tests measure the boundary against whatever `python:3.11-alpine` resolves to on the day, and
+they pass on the new image. Compare future entries against 039.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 6.49s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `36961040957`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.24.0..v2.25.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Two things in this release sit NEAR the boundary, recorded so nobody reads them as inside it:**
+
+- **Authority negotiation ON by default (#771, DEC-081).** A denied tool that declared a
+  `degraded_variant` gets one attempt at it, and one that declared `on_denial="wait"` parks for an
+  operator. Neither can widen authority: negotiation chooses WHICH tool to attempt, and
+  `execute_tool` runs its own `check_tool_capability` on whatever is attempted. The `nodus_vm`
+  worker now pre-checks only a tool that declared a recovery. Where a tool runs, its isolation
+  branch and its token are unchanged.
+- **`nltk` / `textstat` removed (#784, PACK-DEBT-6).** This shrinks the installed surface: the four
+  nltk advisories accepted as unreachable are closed by the package's absence rather than by an
+  exemption.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning; both were green on `2155d5d` before the
+tag. **PyPI propagation ran in the opposite order to the checklist's warning:** the simple index
+served `2.25.0` while the JSON API still reported `2.24.0`, and the JSON API caught up within
+minutes. Boot Smoke on the published wheel passed on attempt 1.
 
 ## Entry 038 — 2026-09-26
 
