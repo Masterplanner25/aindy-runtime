@@ -287,7 +287,6 @@ A soak assertion must not be stricter than the contract.
 - **DB-NODUS-BUDGET-1** — both fixes shipped; app soak clean (1,339 recalls, log-only). Flip `AINDY_MEMORY_RECALL_OWN_SESSION` after one window with `aindy_memory_recall_failures_total` at 0 (FR-49, DEC-083). Do NOT roll back the caller's session.
 - **LOCKFILE-PLATFORM-1** — a Windows lockfile cannot satisfy Linux `npm ci`; `Platform Lockfile` workflow regenerates. Verify with `npm ci`, never `npm install` + build.
 - **DEP-UPGRADE-DEFERRED-1** — otel packages are version-locked; hand-align and `pip install --dry-run`. react-router 7→8 waits on a ui-kit release.
-- **PACK-DEBT-6** — P3: `nltk` + `textstat` are runtime pins NOTHING here imports; kept because the app's search service imports both UNDECLARED. Four audit ignores + the dismissed Dependabot pair exist only for them. App declares → runtime deprecates with a date → drops both. Never a fifth ignore.
 - **C3** — non-Linux strong sandbox (C2 closed). `C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`.
 - **SYSMAX-1 / -3 / -4** — thread-mode 100-job cap; memory not enforced per EU (guest half shipped #697, `AINDY_NODUS_MAX_MEMORY_MB`); syscall/wall-time caps advisory.
 - **CLI-1 · CLI-SANDBOX-FORMAT-1 · TIER3-10 · DEPLOY-TARGET-1/2 · BILLING-1..5 · LAYER-1..5 · ROUTE-EXTRACT-\* · PACK-DEBT-\* · TENANT-\* · COMPAT-\* · DATA-\* · LOCAL-\*** — deferred; triggers and detail in `TECH_DEBT.md`.
@@ -386,7 +385,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 | Runtime contracts (idempotency, sandbox, connector, SDK, UI, invariants, durable-state ownership) | `docs/runtime/*_CONTRACT.md`, `EXECUTION_INVARIANTS.md`, `SECURITY_MATRIX.md`, `SYSCALL_REFERENCE.md`, `NODUS_DEVELOPER_GUIDE.md` |
 | Design records index (every scope/design doc + status) | `docs/design/README.md` |
 | Comparative research index (8 systems; what is settled) | `docs/governance/COMPARATIVE_RESEARCH_INDEX.md` |
-| Release checklist; upgrades index; latest app handoff | `docs/governance/RELEASE_CHECKLIST.md`; `docs/upgrades/README.md`; `docs/upgrades/APP_HANDOFF_v2.24.0.md` |
+| Release checklist; upgrades index; latest app handoff | `docs/governance/RELEASE_CHECKLIST.md`; `docs/upgrades/README.md`; `docs/upgrades/APP_HANDOFF_v2.25.0.md` |
 | Outbound handoffs to Nodus | `docs/handoffs/README.md` |
 | Route ownership; deployment targets | `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md`; `docs/operations/DEPLOYMENT_TARGETS.md` |
 | Sibling repos | ui-kit `C:\dev\aindy-ui-kit\src\`; apps monolith `C:\dev\aindy-apps-monolith\CLAUDE.md` |
