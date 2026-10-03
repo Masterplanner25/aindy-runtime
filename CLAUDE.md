@@ -284,7 +284,7 @@ A soak assertion must not be stricter than the contract.
 - **INITIATOR-IDENTITY-1** — *(OpenClaw)* initiating identity ≠ authenticated one; an asserted subject may only CONSTRAIN, never a `User` row. Design filed; P0 the day an inbound consumer ships.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s semantic half always returns `[]` (pgvector `ndarray` vs `list` guard). pgvector 0.5.0 fixes it — which is why #390 was HELD: it turns expansion on in the path that exhausted the pool.
-- **DB-NODUS-BUDGET-1** — both fixes shipped; app soak clean (1,339 recalls, log-only). Flip `AINDY_MEMORY_RECALL_OWN_SESSION` after one window with `aindy_memory_recall_failures_total` at 0 (FR-49, DEC-083). Do NOT roll back the caller's session.
+- **DB-NODUS-BUDGET-1** — both fixes shipped; counter window open since 2026-10-02 on 2.25.0, readout ≥ 10-09. Flip `AINDY_MEMORY_RECALL_OWN_SESSION` when `aindy_memory_recall_failures_total` reads 0 (FR-49, DEC-083). Do NOT roll back the caller's session.
 - **LOCKFILE-PLATFORM-1** — a Windows lockfile cannot satisfy Linux `npm ci`; `Platform Lockfile` workflow regenerates. Verify with `npm ci`, never `npm install` + build.
 - **DEP-UPGRADE-DEFERRED-1** — otel packages are version-locked; hand-align and `pip install --dry-run`. react-router 7→8 waits on a ui-kit release.
 - **C3** — non-Linux strong sandbox (C2 closed). `C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`.
