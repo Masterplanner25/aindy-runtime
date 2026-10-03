@@ -1987,3 +1987,17 @@ side-effects map carries almost nothing for recall, because a failure inside the
 caught by the orchestrator and never reaches the pipeline's map. Persisting it per request would
 grow `system_events`, the table FR-18 found at 99.6% of a database. Flipping on log evidence the
 counter could have confirmed would skip the cheap step.
+
+### DEC-084
+**Status:** `accepted` (2026-10-03 — `FR-46` phase 3; the owner: "yes do … FR-46 flip")
+
+**Decision**
+`AINDY_PLAN_STEP_REFERENCES` defaults ON. Only `0` / `false` / `no` / `off` disable it; any other
+value, blank included, is the default (the parse DEC-081 used).
+
+**Why**
+DEC-079 held the flip until FR-48 shipped, because half the evidence runs guessed a result path.
+FR-48 shipped in 2.25.0, and the app declared `result_schema` on every tool a later step may
+reference. The planner now sees each result shape, and a path into a key the tool does not return
+is refused at plan time, before step 0 runs. A plan without references is unaffected: both
+resolution seams are gated on `contains_reference(args)`, an in-memory walk.

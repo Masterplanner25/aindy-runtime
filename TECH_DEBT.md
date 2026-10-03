@@ -9287,7 +9287,13 @@ choice or a future ask. **Closes** when ui-kit 2.1.1 is released and the app ado
 
 ## FR-46 — a plan step's `args` are literals written at planning time; no step can take an earlier step's result, so "research X, then use it" runs its second half blind 🔴 open (app-filed 2026-09-25, runtime 2.22.0)
 
-**Status: OPEN — BUILT #764 2026-09-25, default OFF (`AINDY_PLAN_STEP_REFERENCES`). Evidence
+**Status: CLOSED (2026-10-03) — default ON (DEC-084).** FR-48's plan-time path check shipped in
+2.25.0 and the app declared `result_schema` on all 15 tools a later step may reference
+(`RUNTIME_2_25_0_UPGRADE.md` §3), so the planner sees result shapes before it is invited to
+reference one. Only `0/false/no/off` disable it. Resolution is gated on `contains_reference(args)`
+at both seams, so a step without a reference pays nothing.
+
+**Was: OPEN — BUILT #764 2026-09-25, default OFF (`AINDY_PLAN_STEP_REFERENCES`). Evidence
 PASSED 2026-09-26 (app, runtime 2.24.0, run `19dcf508…`, `completed 5/5`): the `memory.write`
 step's recorded `tool_args.content` equals step 0's `result.raw_result` byte for byte (SQL
 equality, 5000 chars). The first attempt (`615b67ea…`) guessed a path wrong and failed safely:

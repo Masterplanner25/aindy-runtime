@@ -149,7 +149,7 @@ def test_the_catalog_carries_the_line_only_when_on(monkeypatch):
     from AINDY.agents.agent_runtime.planning import _build_planner_prompt
 
     kwargs = dict(system_prompt="base", planner_context={}, tools=[{"name": "t", "description": "d"}])
-    monkeypatch.delenv("AINDY_PLAN_STEP_REFERENCES", raising=False)
+    monkeypatch.setenv("AINDY_PLAN_STEP_REFERENCES", "0")
     assert PLANNER_REFERENCE_LINE not in _build_planner_prompt(**kwargs)
     monkeypatch.setenv("AINDY_PLAN_STEP_REFERENCES", "1")
     assert PLANNER_REFERENCE_LINE in _build_planner_prompt(**kwargs)
@@ -213,7 +213,7 @@ def test_agent_flow_unresolvable_fails_invalid_and_the_tool_never_runs(monkeypat
 
 
 def test_agent_flow_flag_off_is_todays_behaviour(monkeypatch):
-    monkeypatch.delenv("AINDY_PLAN_STEP_REFERENCES", raising=False)
+    monkeypatch.setenv("AINDY_PLAN_STEP_REFERENCES", "0")
     placeholder = {"content": {REF: 0, "path": "raw_result"}}
     _out, called, _db = _drive_agent_flow(
         monkeypatch,
@@ -324,7 +324,7 @@ def test_nodus_vm_unresolvable_fails_the_step_and_the_tool_never_runs(vm, refs_o
 
 
 def test_nodus_vm_flag_off_passes_the_literal(vm, monkeypatch):
-    monkeypatch.delenv("AINDY_PLAN_STEP_REFERENCES", raising=False)
+    monkeypatch.setenv("AINDY_PLAN_STEP_REFERENCES", "0")
     monkeypatch.setenv("AINDY_TOOL_ARGS_VALIDATION", "off")
     ref = {REF: 0, "path": "raw_result"}
     _run_segment(vm, _steps(vm, ref), base_index=0)
@@ -389,7 +389,45 @@ def test_generate_plan_accepts_a_valid_reference(clean_agent_planner_registry, m
 
 
 def test_generate_plan_flag_off_validates_nothing(clean_agent_planner_registry, monkeypatch):  # noqa: F811
-    monkeypatch.delenv("AINDY_PLAN_STEP_REFERENCES", raising=False)
+    monkeypatch.setenv("AINDY_PLAN_STEP_REFERENCES", "0")
     plan, seen = _generate(monkeypatch, _plan_with({REF: 1}))
     assert plan is not None, "flag off must be today's behaviour"
     assert PLANNER_REFERENCE_LINE not in seen["system_prompt"]
+
+
+# ── DEC-084: default ON ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("value, expected", [
+    (None, True), ("", True), ("   ", True), ("maybe", True), ("1", True), ("true", True),
+    ("0", False), ("false", False), ("FALSE", False), ("no", False), (" off ", False),
+])
+def test_only_an_explicit_off_disables(monkeypatch, value, expected):
+    from AINDY.agents.step_references import step_references_enabled
+
+    if value is None:
+        monkeypatch.delenv("AINDY_PLAN_STEP_REFERENCES", raising=False)
+    else:
+        monkeypatch.setenv("AINDY_PLAN_STEP_REFERENCES", value)
+    assert step_references_enabled() is expected
+
+
+def test_unset_the_catalog_teaches_the_form(monkeypatch):
+    from AINDY.agents.agent_runtime.planning import _build_planner_prompt
+
+    monkeypatch.delenv("AINDY_PLAN_STEP_REFERENCES", raising=False)
+    prompt = _build_planner_prompt(system_prompt="base", planner_context={},
+                                   tools=[{"name": "t", "description": "d"}])
+    assert PLANNER_REFERENCE_LINE in prompt
+
+
+def test_unset_generate_plan_checks_references(clean_agent_planner_registry, monkeypatch):  # noqa: F811
+    """Liveness for the flip through the real entry point: with the variable UNSET, a forward
+    reference is refused, which happens only when the flag reads on."""
+    from AINDY.agents.agent_runtime.shared import get_runtime_compat_module
+
+    monkeypatch.delenv("AINDY_PLAN_STEP_REFERENCES", raising=False)
+    plan, seen = _generate(monkeypatch, _plan_with({REF: 1}))
+    assert plan is None
+    assert "invalid step reference" in str(get_runtime_compat_module()._plan_failure.reason)
+    assert PLANNER_REFERENCE_LINE in seen["system_prompt"]
