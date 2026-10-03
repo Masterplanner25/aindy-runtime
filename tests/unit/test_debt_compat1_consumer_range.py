@@ -193,3 +193,65 @@ def test_the_version_route_serves_the_checks(runtime_only_client):
     consumers = response.json()["compatibility"]["consumers"]
     assert consumers and consumers[0]["status"] == "unsatisfied"
     assert consumers[0]["distribution"] == "debtcompat-app"
+
+
+# ── where the metadata came from, and whether another copy shadows it ───────────────────────
+
+
+def _write_dist(root, dirname, requires):
+    info = root / dirname
+    info.mkdir(parents=True)
+    lines = ["Metadata-Version: 2.1", "Name: shadowprobe-app", "Version: 1.0.0"]
+    lines += [f"Requires-Dist: {r}" for r in requires]
+    (info / ("PKG-INFO" if dirname.endswith(".egg-info") else "METADATA")).write_text(
+        "\n".join(lines) + "\n", encoding="utf-8")
+    return info
+
+
+def test_real_metadata_names_its_path_and_a_shadowing_copy(tmp_path, monkeypatch, caplog):
+    """The app's case, rebuilt with REAL importlib.metadata: a stale egg-info earlier on sys.path
+    declares an old range, and the installed dist-info declares the current one. Python reads the
+    first. The record must say which copy it read and that another exists."""
+    stale_root, installed_root = tmp_path / "repo_root", tmp_path / "site_packages"
+    stale = _write_dist(stale_root, "shadowprobe_app.egg-info", ["aindy-runtime>=2.9.0"])
+    installed = _write_dist(installed_root, "shadowprobe_app-1.0.0.dist-info", ["aindy-runtime<3.0,>=2.25.0"])
+    monkeypatch.syspath_prepend(str(installed_root))
+    monkeypatch.syspath_prepend(str(stale_root))  # first on sys.path, like a repo-root cwd
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+
+    [record] = check_consumer_requirements(
+        ["shadowprobe.mod"], runtime_version="2.25.0",
+        packages_distributions=lambda: {"shadowprobe": ["shadowprobe-app"]},
+    )
+    assert record["requirement"] == ">=2.9.0", "control: the stale copy is the one Python reads"
+    assert record["metadata_path"] == str(stale)
+    assert record["shadowed_metadata"] == [str(installed)]
+    [warning] = [r for r in _warnings(caplog) if "other cop" in r.getMessage()]
+    assert str(stale) in warning.getMessage() and str(installed) in warning.getMessage()
+
+
+def test_a_single_copy_reports_its_path_and_no_shadow(tmp_path, monkeypatch, caplog):
+    installed = _write_dist(tmp_path / "sp", "shadowprobe_app-1.0.0.dist-info", ["aindy-runtime<3.0,>=2.25.0"])
+    monkeypatch.syspath_prepend(str(tmp_path / "sp"))
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    [record] = check_consumer_requirements(
+        ["shadowprobe.mod"], runtime_version="2.25.0",
+        packages_distributions=lambda: {"shadowprobe": ["shadowprobe-app"]},
+    )
+    assert record["metadata_path"] == str(installed)
+    assert record["shadowed_metadata"] == []
+    assert record["status"] == "satisfied"
+    assert _warnings(caplog) == []
+
+
+def test_the_unsatisfied_warning_names_the_metadata_path(caplog):
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    check_consumer_requirements(
+        ["myapp.x"], runtime_version="2.6.0",
+        packages_distributions=lambda: {"myapp": ["my-app"]},
+        distribution=lambda name: SimpleNamespace(version="1.0.0", requires=["aindy-runtime>=2.11"],
+                                                  _path="/somewhere/my_app-1.0.0.dist-info"),
+        distributions=lambda: [],
+    )
+    [warning] = _warnings(caplog)
+    assert "/somewhere/my_app-1.0.0.dist-info" in warning.getMessage()

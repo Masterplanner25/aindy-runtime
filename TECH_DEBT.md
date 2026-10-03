@@ -2863,7 +2863,11 @@ every warning prints `AINDY.__path__`. Served as `compatibility.consumers` on `/
 tests incl. real metadata, the real `load_plugins` and the real route; 8/8 mutations bite.
 ★ **It reads what pip INSTALLED, not `pyproject.toml`**: on this host the monolith's installed
 metadata says `>=2.9.0` while its source says `>=2.24.0`; a raised floor is seen after the next
-`pip install`. Step 1 (consumer declares) is done for the monolith; Claw, if it loads through a
+`pip install`. **★ 2026-10-03 — the cause was SHADOWING, not stale pip metadata** (the app's 2.25.0
+adoption, §2): a gitignored `aindy_apps_monolith.egg-info` in the repo root was read before the
+correct `dist-info` whenever Python ran from there. Each record now carries `metadata_path` and
+`shadowed_metadata`, and more than one copy WARNS regardless of status (tested with REAL
+`importlib.metadata` over two on-disk copies; 5/5 mutations bite). Step 1 (consumer declares) is done for the monolith; Claw, if it loads through a
 manifest, now warns `undeclared`. **Remaining (deferred, trigger unchanged):** step 3, a
 compatibility-window policy + cross-version tests.
 

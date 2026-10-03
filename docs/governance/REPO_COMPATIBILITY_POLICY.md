@@ -81,6 +81,13 @@ served as `compatibility.consumers` on `GET /api/version`.
 The check reads the metadata pip wrote at the last install, not `pyproject.toml`. A range raised
 in source without a reinstall is not seen until the next `pip install`.
 
+Each record names the metadata directory it read (`metadata_path`) and any other copies of the same
+distribution's metadata on `sys.path` (`shadowed_metadata`). More than one copy logs a WARNING
+whatever the status, because Python reads the first copy it finds. The case that prompted this was
+a stale `*.egg-info` left in a repo root by an old setuptools install. It shadowed the correct
+installed `dist-info` whenever Python ran from that directory, and the check reported its outdated
+`>=2.9.0` as if it were the installed range.
+
 ## Version Meaning
 
 - runtime package version:
