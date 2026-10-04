@@ -14364,7 +14364,19 @@ supported. Two derivations from two systems, neither of which knew about the oth
 
 ## PERF-BASELINE-1 — no execution-path timing is asserted anywhere, and every flag flip is waiting on it
 
-**Status: OPEN — P3 (was P1). Both counted halves SHIPPED 2026-10-03: per-effect and PER-TURN. Open
+**Status: CLOSED (2026-10-04) — the latency floor shipped; both counted halves shipped 2026-10-03.**
+`tests/integration/test_latency_floor.py`, ON DEMAND only (skipped unless `AINDY_LATENCY_FLOOR=1`;
+the `Latency Floor` workflow is `workflow_dispatch`, never required), on the path being flipped
+(`EXACTLY_ONCE` with the gate on and the real ledger; an agent run on both backends). Medians
+measured locally (Windows, Docker Postgres): **one gated effect 28.8 ms** (floor 250); **one agent
+step 212 ms on `agent_flow`, 352 ms on `nodus_vm`** (per-step = (5-step − 1-step)/4, median of three,
+after a warm-up; floors 1500 / 3000). Each floor sits about 10x above the measurement, so it trips on
+a regression of that size, not on a slow runner. Each has a CONTROL that must trip it: a delay of the
+floor's size injected into the ledger (`_resolve_effect_record`, bound by name in the dispatcher) and
+into the step's tool call (`nodus_adapter.execute_tool`); both trip. Re-measure on CI hardware with
+the workflow before tightening anything; never make it a per-PR gate.
+
+**Was: OPEN — P3 (was P1). Both counted halves SHIPPED 2026-10-03: per-effect and PER-TURN. Open
 only for an order-of-magnitude latency floor on the soak path.**
 
 **Per turn (`test_work_budget.py` §4, real Postgres, both backends):** plans of 1/3/5
