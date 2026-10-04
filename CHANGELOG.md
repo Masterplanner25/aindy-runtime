@@ -4,6 +4,224 @@
 
 _Nothing yet._
 
+## 2.26.0 — 2026-10-04
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.26.0.md`.
+No ui-kit change; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **No migration.** Alembic head stays `0020` and the schema contract stays `2026-09-20`. Nothing
+  under `AINDY/db/models/` changed, so the `Upgrade Path Guard` passes trivially on this release,
+  and its negative control is the half that carries meaning.
+- **Three defaults flip ON:** plan step references (`AINDY_PLAN_STEP_REFERENCES`, FR-46),
+  run-scoped syscall quota (`AINDY_RUN_SCOPED_QUOTA`: a run's syscalls count against one
+  `AINDY_QUOTA_MAX_SYSCALLS`, default 100), and concurrent fan-out (`AINDY_FLOW_FAN_OUT`: each
+  running branch holds its own DB connection). Each is disabled by `0/false/no/off`.
+- **An ambiguous effect is never re-run.** A replay of an `unknown` or `partial` effect returns the
+  recorded outcome; an `unknown` is held until an operator resolves it
+  (`POST /platform/effects/{action_id}/resolve`, admin only), and the TTL job never reaps it.
+- **New admin routes:** `GET /platform/effects/unknown`, `POST /platform/effects/{action_id}/resolve`.
+  No other route started enforcing a new scope.
+
+### Changed — plan step references are ON by default (FR-46, DEC-084, #786)
+
+- **Read before upgrading if your planner or plans could contain `{"$from_step": …}`.** With
+  `AINDY_PLAN_STEP_REFERENCES` unset, three things now happen:
+  - The planner's tool catalog carries one line teaching the reference form.
+  - Every reference is checked at plan time. With a tool's `result_schema` (FR-48), the path must
+    exist in it, or the plan is refused and run creation fails.
+  - A reference that cannot be resolved at run time fails its step `invalid`. The tool is never
+    called with the placeholder.
+
+  A plan with no references is unaffected and pays nothing. Set `AINDY_PLAN_STEP_REFERENCES=0`
+  (or `false` / `no` / `off`) to keep the old behaviour. **Why now:** the flip was held until FR-48
+  shipped (DEC-079), so the planner sees each tool's result shape before it is invited to
+  reference one. The app's evidence run stored an earlier step's result byte for byte, and its
+  failed first attempt is now refused at plan time.
+
+### Changed — an effect whose outcome is unknown or partial is held, never re-run (EFFECT-OUTCOME-UNKNOWN-1, DEC-085..087, DEC-090, #790)
+
+- **Read before upgrading if you retry `EXACTLY_ONCE` syscalls or tools, or use a lenient
+  fan-out join.** On a replay, an effect recorded `unknown` or `partial` now returns its recorded
+  outcome, and the handler does not run again. Before, it was reclaimed and re-run: a retried
+  lenient fan-out (FLOW-PARALLEL-1) re-ran every branch, including the ones that landed. The held
+  envelope carries `status: "unknown"` / `"partial"`, the recorded `outcome` (units and detail),
+  `outcome.held: true`, and for `unknown` also `reconcile_required: true` and
+  `failure_class: "unknown"`. **Why:** re-running an effect whose outcome is unknown can perform
+  it twice, and that duplicate is what the status exists to prevent.
+- New `AINDY.kernel.syscall_outcome.EffectOutcomeUnknown`. Raise it from a syscall handler or a
+  tool when the effect was dispatched but its outcome was not observed (a read timeout after a
+  full write). It is recorded `unknown` on both seams, including from an isolated tool worker.
+  **New outcome emitter:** the dispatcher turns a raised `EffectOutcomeUnknown` into the
+  `_outcome: unknown` claim.
+- New `failure_class: "unknown"`. No retry loop retries it (agent backends, `decide_retry`, the
+  compiled `nodus_vm` loop).
+- An `unknown` outcome skips output-schema validation. Before, a stable syscall recorded it
+  `failed`, which made it reclaimable.
+- The effect-record TTL job never reaps an `unknown` row. Watch the new gauge
+  `aindy_effect_unknown_unresolved`; the cleanup scan logs a WARNING while it is nonzero. An
+  operator settles them with `POST /platform/effects/{action_id}/resolve` (#793).
+
+### Added — `AT_MOST_ONCE`: an effect that is never run twice, and refuses rather than degrade (EFFECT-OUTCOME-UNKNOWN-1, DEC-089, #791)
+
+- **Read before upgrading if you call `register_tool` with an unusual `execution_guarantee`.**
+  `register_tool` now validates it like `register_syscall`. It must be `AT_LEAST_ONCE`,
+  `EXACTLY_ONCE` or `AT_MOST_ONCE` (case-insensitive; `None` still means the default), otherwise
+  registration raises `ValueError`. **Why:** it accepted any string, so a typo like
+  `"EXACTLY ONCE"` silently registered a tool with no effect gate.
+- New guarantee `AT_MOST_ONCE` for syscalls and tools whose counterparty is not transactional. It
+  uses the same effect gate as `EXACTLY_ONCE`, with three differences:
+  - it engages even when `AINDY_SYSCALL_IDEMPOTENCY` / `AINDY_TOOL_IDEMPOTENCY` are off;
+  - it always takes the strict lock;
+  - where `EXACTLY_ONCE` degrades to at-least-once (another call holds the effect, the lock wait
+    times out, or the gate fails), it **refuses** with `failure_class: "transient"`. Nothing was
+    dispatched, so a retry is safe. Watch `aindy_effect_gate_outcomes_total{outcome="refused_at_most_once"}`.
+- New counter `aindy_effect_contract_shortfall_total{guarantee, seam}`: an effect that ended
+  `unknown` under `EXACTLY_ONCE`, a label that promised completion. Under `AT_MOST_ONCE` an
+  `unknown` is a legitimate end and is not counted.
+
+### Changed — the runtime now reports `unknown` where an effect's outcome cannot be observed (EFFECT-OUTCOME-UNKNOWN-1, DEC-088, #792)
+
+- **Read before upgrading if you call `outbound_request` with POST or PATCH.** A request that may
+  already have been processed (a read timeout or dropped connection after it was sent, or a
+  500/502/503/504 response) is **no longer retried** for a non-idempotent method. It raises
+  `EffectOutcomeUnknown`. **Why:** retrying a POST blindly is how one charge becomes two. Pass
+  `idempotent=True` for a request that is safe to repeat (for example one carrying an idempotency
+  key). Failures that never reached the server (connect errors, pool and write timeouts, 408, 429)
+  are still retried for every method, and GET/HEAD/OPTIONS/TRACE/PUT/DELETE retry as before. New
+  helper: `outbound_http.classify_transport_exception`.
+- An isolated tool that declares `EXACTLY_ONCE` or `AT_MOST_ONCE` and whose worker is lost after
+  starting (killed by its time budget or a cancel, crashed, or replied unreadably) is recorded
+  `unknown` and held on retry. Before, it was `transient` and retried, so it could act twice. A
+  worker that failed to start, or a tool with no declared guarantee, behaves as before.
+- `AINDY_MCP_SERVERS` entries accept an optional `"guarantee"`. For a server with an effect
+  guarantee, a call that times out after it was sent is recorded `unknown`. A timeout while
+  connecting, or on a server without one, stays a retryable timeout.
+
+### Changed — a run is the subject of the syscall cap by default (#796)
+
+**Operators: read before upgrading.** `AINDY_RUN_SCOPED_QUOTA` now defaults ON. Only
+`0/false/no/off` turn it off.
+
+- **What changes.** A guest's `sys()` calls and every dispatch made during an agent run now count
+  against that run's `AINDY_QUOTA_MAX_SYSCALLS` (default 100). This holds on both agent backends.
+  Once a run is past the cap, its next dispatch is refused with `RESOURCE_LIMIT_EXCEEDED`.
+- **Why.** Before, each of those dispatches created a one-call unit of its own, so the cap never
+  applied to them (QUOTA-ACCRUAL-ORPHAN-1).
+- **What to do.** If a legitimate run makes more than 100 syscalls, raise
+  `AINDY_QUOTA_MAX_SYSCALLS`. To restore the old per-dispatch accounting, set
+  `AINDY_RUN_SCOPED_QUOTA=0`.
+- **Wall time is not summed per run (DEC-096).** The 300 s `AINDY_QUOTA_CPU_MS` cap is a sum of
+  syscall durations, so applying it per run would refuse long LLM-heavy runs partway through. A run
+  counts calls only.
+
+### Fixed — a Nodus worker's syscalls now reach the run's budget (#796)
+
+- On `nodus_vm`, an agent run's tool calls run in a worker process. That worker charged the Nodus
+  execution's own unit and counted in its own memory, so none of the calls reached the run. A
+  3-step run read 1 syscall on the run. Any guest `sys()` made in a worker had the same problem.
+- Now the parent hands the worker the unit it is charging and its count so far. The worker checks
+  against that running total, and the reply reports what it added (`quota_usage`), which the parent
+  records. With a Redis backend the count is already shared, so the worker binds the same unit and
+  reports nothing.
+
+### Changed — fan-out branches run concurrently by default (#797)
+
+**Operators: read before upgrading.** `AINDY_FLOW_FAN_OUT` now defaults ON. Only
+`0/false/no/off` turn it off.
+
+- **What changes.** The branches of a declared `FanOutEdgeGroup` run at the same time, up to
+  `AINDY_FLOW_FAN_OUT_MAX_WIDTH` (default 4) across the whole process. Each running branch holds
+  its own database connection.
+- **What does not change.** Results: the flag affects timing only. Turned off, a group still runs
+  its branches one at a time, in declaration order, and ends in the same state. A flow that
+  declares no group is unaffected.
+- **The evidence.** The flip rests on a real-Postgres soak (DEC-097), because no flow declares a
+  group yet:
+  - branches overlap on separate connections, and each branch's write commits;
+  - an `any` join past a failed branch reads `partial` and names that branch;
+  - four runs fanning out at once all complete within the width.
+
+### Fixed — the flow runner no longer holds a transaction while its branches run (#797)
+
+- The runner's session sat `idle in transaction` for a whole superstep. The branch pool is
+  shared by the process, so that hold grew with every other run's queued branches.
+- In the soak, one held connection was dropped and the run failed at the barrier with
+  `PendingRollbackError`. The runner now commits before the branches start. It already commits
+  after every node, so this commits the declaring node's work one step earlier.
+
+### Added — the boot-time compatibility check names where it read a consumer's metadata, and warns when another copy shadows it (DEBT-COMPAT-1, #786)
+
+- Each `compatibility.consumers` record on `GET /api/version` now carries `metadata_path` (the
+  `*.dist-info` / `*.egg-info` it read) and `shadowed_metadata` (any other copies of that
+  distribution's metadata on `sys.path`). More than one copy logs a WARNING, whatever the status.
+  **Why:** the app's dev environment reported an outdated range that the reinstall did not fix.
+  The cause was a stale `*.egg-info` in its repo root, which Python read first whenever it ran
+  from that directory, and nothing said which copy had been read.
+
+### Added — reconcile an effect whose outcome is unknown (#793)
+
+- An `unknown` effect is held on replay and never reaped (#790), so until now nothing could ever move
+  it: the only way out was a hand-written UPDATE against `effect_records`, with no record of who did
+  it or why.
+- `GET /platform/effects/unknown` lists the unresolved effects, oldest first, with the detail the
+  emitter recorded. `POST /platform/effects/{action_id}/resolve {"status": "success"|"failed", "note"}`
+  settles one: `success` means it landed, so later calls replay it as an ordinary success; `failed`
+  means it did not, so the slot is freed and a retry runs. Any row that is not `unknown` is refused
+  with 409. The note is required.
+- Each resolution writes an `effect.reconciled` system event (who, to what, the note, the recorded
+  detail) in the same transaction as the change; if the event cannot be written, nothing changes. It is
+  kept under the audit retention class. `aindy_effect_unknown_unresolved` is recounted.
+- Admin only: the `/platform` admin gate, plus the `platform.admin` scope for an API key.
+- EFFECT-OUTCOME-UNKNOWN-1 is CLOSED. The optional agent-run park was not built.
+
+### Fixed — a guest's declared filesystem roots and read-only mode are enforced (#794)
+
+- `clamp_to_floor` narrowed the filesystem MODE but passed the declared ROOTS through untouched.
+  A spec declaring `scoped` with roots `["/"]` would therefore have reached nodus as
+  `allowed_paths=["/"]`, the whole filesystem, under a guest floor whose bound is a per-run scratch
+  directory. Roots now narrow like every other field. Under the guest floor any declared root is
+  dropped. Under a floor that names roots, only declared roots inside one of them are kept, and
+  `..` cannot escape. A dropped root is reported as `visibility.filesystem_roots`. Nothing
+  populates a guest's `env_spec` today, so this was latent.
+- `readonly` was handled exactly like `scoped`, so a guest that declared read-only could write
+  anywhere it could read. It now passes nodus an empty writable set.
+- The isolated tool seam is covered by #795 below.
+
+### Added — an isolated tool's declared filesystem scope is enforced in its worker (#795)
+
+- Before this, a tool declaring `visibility.filesystem = scoped | readonly | none` got only a
+  scratch working directory. `cwd` is a default location, not a boundary, so its worker could
+  still open any path the OS allowed. The declaration was recorded and never applied.
+- The parent now resolves the scope once and sends it to the worker. The worker installs it as a
+  Python audit hook before the plugin stack loads, the same way egress works:
+  - `scoped` reads and writes its roots and scratch root;
+  - `readonly` reads them and writes nothing;
+  - `none` reads no file;
+  - the import path stays readable.
+- The envelope carries `filesystem: {mode, mechanism}`, using the mechanism the worker reported
+  (`audit_hook:worker`, or `none`).
+- This is enforcement for the tool's own Python file I/O, not a kernel boundary. C extensions,
+  `ctypes` and child processes bypass it, and the deployment's assurance does not change.
+- An in-process tool cannot be scoped. `register_tool` now warns when a tool declares a
+  filesystem scope without `isolation`.
+- A `readonly` tool's worker now also starts in the scratch directory, not the server's
+  working directory.
+- It applies only to tools that declare a filesystem scope. No tool in the app declares one.
+
+### Added — an on-demand latency floor (#798)
+
+- **Why.** Nothing in the test suite bounded how long anything takes, so "soak, then flip" had no
+  timing evidence to stand on (PERF-BASELINE-1).
+- **What.** `tests/integration/test_latency_floor.py` measures, on the path the flags flip, the
+  median time of one gated `EXACTLY_ONCE` effect and of one agent step on each backend. Each
+  bound sits about 10x above the local measurement: 28.8 ms per effect; 212 ms per step on
+  `agent_flow` and 352 ms on `nodus_vm`. Each bound has a control that injects a delay of its
+  size and must trip it.
+- **On demand only.** The tests skip unless `AINDY_LATENCY_FLOOR=1`. The new `Latency Floor`
+  workflow runs only when started by hand and is not a required check. A per-PR wall-clock gate
+  on shared CI is the flake this entry was written to avoid.
+
+
 ## 2.25.0 — 2026-10-01
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.25.0.md`.
