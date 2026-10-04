@@ -268,7 +268,6 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — P2 and below
 
-- **PERF-BASELINE-1** — *(Aider)* P3: per-effect AND per-turn budgets SHIPPED (`test_work_budget.py`, real PG): ledger 4 queries/effect; agent step 42 (`agent_flow`) / 55 (`nodus_vm` parent), flat over steps and user history. Open: latency floor only. COUNT WORK, never wall-clock on CI.
 - **IDEM-13** — the TOOL seam's `EXACTLY_ONCE` had no strict mode: FR-27's lock was wired into `syscall_dispatcher` ONLY, so under contention EVERY concurrent caller ran (5 concurrent sends → 5 real messages; 8-way → 8 runs). ★ BUILT 2026-09-23: `AINDY_TOOL_IDEMPOTENCY_STRICT` (wait 60s) → 1 run / 7 replays / 0 degraded. Default OFF; open for the FLIP only.
 - **SANDBOX-EVIDENCE-2** — the strong runner attests `mount_mode`/`network_policy` by reading its own argv; real evidence is the live `/proc` probe, deployment-time. `strong-sandbox-certified` is a deployment claim.
 - **EFFECT-PRECONDITION-1** — *(Aider)* an effect cannot name the world-version it expects. Record the external system's OWN version token; never reimplement.
@@ -349,6 +348,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - **FLAKY-1 / CI-MARKER-1 / EXEC-ENV-BIND-1 / COST-GOVERNOR-1 / QUOTA-ACCRUAL-ORPHAN-1** — CLOSED; rules kept above. Cost governor: reserve only for `METERED_METHODS`; planning has no run id, only the tenant window catches a runaway planner; a refusal reaches the route one `__cause__` down. Quota: a unit is reaped by whoever established it; reproduce where the CALLER enters.
 - **AUTHORITY-NEGOTIATION-1** — CLOSED 2026-09-26 (DEC-081): default ON; it cannot grant authority (`execute_tool` re-checks). Only `0/false/no/off` disable it.
 - **DEBT-COMPAT-1** — CLOSED 2026-09-26: `load_plugins` warns on a plugin dist's declared range; reads INSTALLED metadata.
+- **PERF-BASELINE-1** — CLOSED 2026-10-04. Work budgets per effect/step (`test_work_budget.py`, every PR) + an ON-DEMAND latency floor (`test_latency_floor.py`, `AINDY_LATENCY_FLOOR=1`, ~10x headroom). COUNT WORK; never wall-clock on CI.
 - **FLOW-PARALLEL-1** — CLOSED 2026-10-04: fan-out default ON (DEC-097). Width is process-wide (SYSMAX-5); a lenient join past a failed branch is `partial`; the runner commits before its branches run.
 - **SYSMAX-4** — CLOSED 2026-10-04. A run is the syscall-cap subject; a Nodus worker counts in its own memory, so it charges the parent's unit and reports the delta.
 - **FS-SCOPE-1** — CLOSED 2026-10-04. A declared filesystem scope is enforced in Python on both seams (nodus paths; a worker audit hook), never by the kernel; in-process tools can't be scoped.

@@ -241,11 +241,12 @@ reduced guarantees and a test tier that *asserts* them — bounded work, not inv
 is where it is because no one has needed a lower one, not because a lower one is out of reach.
 
 **The honest boundary between the two categories:** `TOOL-SEAM-ISOLATION-1`, `FS-SCOPE-1`,
-`EFFECT-PARTIAL-1`, `EFFECT-PRECONDITION-1` and `FLOW-PARALLEL-1` are genuine capability gaps —
-something must be designed and built. Everything in the paragraphs above is a deployment
-decision someone else is equally able to make. `PERF-BASELINE-1` sits between them: the flag
-backlog is blocked on evidence, and no instrument currently exists to produce it, which is why
-it is filed P1.
+`EFFECT-PARTIAL-1`, `EFFECT-PRECONDITION-1` and `FLOW-PARALLEL-1` were filed as genuine capability
+gaps — something to design and build — and all but `EFFECT-PRECONDITION-1` are now closed (as of
+2026-10-04). Everything in the paragraphs above is a deployment decision someone else is equally
+able to make. `PERF-BASELINE-1` sat between them: the flag backlog was blocked on evidence no
+instrument could produce. It is closed: work budgets per effect and per agent step run on every PR,
+and an on-demand latency floor (`test_latency_floor.py`) covers time.
 
 ---
 

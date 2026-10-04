@@ -1,0 +1,103 @@
+name: Latency Floor
+
+# PERF-BASELINE-1 — an order-of-magnitude latency floor on the path the flags flip.
+# On demand ONLY: never a tight wall-clock bound on shared CI, and never a required check.
+# Run it from the Actions tab before a flag flip or a release; read the [latency-floor] lines.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latency-floor:
+    name: Latency Floor (PostgreSQL + Redis, on demand)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: aindy_test
+          POSTGRES_PASSWORD: aindy_test
+          POSTGRES_DB: aindy_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      ENV: test
+      PYTHONPATH: .
+      TESTING: "true"
+      TEST_MODE: "true"
+      DATABASE_URL: "postgresql://aindy_test:aindy_test@localhost:5432/aindy_test"
+      AINDY_ALLOW_SQLITE: "false"
+      AINDY_SKIP_MONGO_PING: "true"
+      SKIP_MONGO_PING: "true"
+      MONGO_URL: ""
+      REDIS_URL: "redis://localhost:6379"
+      OPENAI_API_KEY: sk-test-placeholder
+      DEEPSEEK_API_KEY: ds-test-placeholder
+      SECRET_KEY: ci-latency-secret-key
+      PERMISSION_SECRET: ci-latency-permission-secret
+      AINDY_API_KEY: ci-latency-api-key
+      ALLOWED_ORIGINS: "http://localhost:3000"
+      AINDY_BOOT_MODE: runtime-only
+      AINDY_ENFORCE_SCHEMA: "false"
+      AINDY_ASYNC_HEAVY_EXECUTION: "false"
+      AINDY_ENABLE_BACKGROUND_TASKS: "false"
+      AINDY_NODUS_WARM_POOL: "1"
+      AINDY_NODUS_WARM_PREWARM: "1"
+      DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: "60000"
+      AINDY_LATENCY_FLOOR: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime dependencies and optional test packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r AINDY/requirements.txt
+          python -m pip install -e .[test] --no-deps --no-build-isolation
+
+      - name: Bootstrap the schema
+        run: |
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          from AINDY.db.schema_contract import ensure_runtime_schema
+          from tests.helpers.runtime import import_runtime_model_registry
+
+          import_runtime_model_registry()
+          engine = create_engine(os.environ["DATABASE_URL"])
+          with engine.begin() as conn:
+              conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+          report = ensure_runtime_schema(engine, allow_bootstrap=True, allow_reconcile=True)
+          assert report.ok, report.summary()
+          PY
+          python -m alembic stamp 0001
+          python -m alembic upgrade head
+
+      - name: Measure the latency floor
+        run: python -m pytest -c pytest.integration.ini -q -s -p no:cacheprovider tests/integration/test_latency_floor.py
