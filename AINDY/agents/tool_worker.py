@@ -5,9 +5,13 @@ Deliberately the same shape as ``nodus_worker.main`` — the runtime already has
 second framing would be a second thing to get wrong.
 
     request   {"tool_name": str, "args": dict, "user_id": str,
-               "egress": {"mode": "none|scoped|open", "domains": [str]}}   # optional, additive
-    response  {"ok": true,  "result": <json>, "egress_mechanism": str}
-              {"ok": false, "error": str,     "egress_mechanism": str}
+               "egress": {"mode": "none|scoped|open", "domains": [str]},    # optional, additive
+               "filesystem": {"mode": "none|readonly|scoped", "roots": [str], "scratch": str}}
+    response  {"ok": true,  "result": <json>, "egress_mechanism": str, "filesystem_mechanism": str}
+              {"ok": false, "error": str,     "egress_mechanism": str, "filesystem_mechanism": str}
+
+★ **The filesystem decision rides the same way** (FS-SCOPE-1 phase 2): installed process-globally
+as an audit hook before the plugin stack loads, reported back as ``filesystem_mechanism``.
 
 ★ **Authority is NOT re-evaluated here, and that is deliberate.** The parent's ``execute_tool``
 has already checked token, granted tools, capabilities, policy, rate limit, egress and secret
@@ -58,7 +62,13 @@ def run_one(request: dict[str, Any]) -> dict[str, Any]:
     # is in place before the plugin stack loads (a plugin's import-time network call is still
     # this worker's egress) and before the tool function is even resolved.
     mechanism = _install_carried_egress(request.get("egress"))
+    fs_mechanism = _install_carried_filesystem(request.get("filesystem"))
+    reply = _run_resolved(tool_name, args, user_id, mechanism)
+    reply["filesystem_mechanism"] = fs_mechanism
+    return reply
 
+
+def _run_resolved(tool_name: str, args, user_id: str, mechanism: str) -> dict[str, Any]:
     try:
         from AINDY.agents.tool_registry import TOOL_REGISTRY, _ensure_tools_loaded
 
@@ -107,6 +117,27 @@ def run_one(request: dict[str, Any]) -> dict[str, Any]:
         }
 
     return {"ok": True, "result": result, "egress_mechanism": mechanism}
+
+
+def _install_carried_filesystem(raw) -> str:
+    """Enforce the parent's filesystem decision for the rest of this process (FS-SCOPE-1).
+
+    No decision: nothing installed, ``none`` reported. An unreadable one is the same, logged, so
+    the gap shows on the parent's envelope rather than passing as enforced.
+    """
+    from AINDY.platform_layer.fs_guard import (
+        MECHANISM_NONE,
+        FilesystemDecision,
+        install_process_fs_guard,
+    )
+
+    if raw is None:
+        return MECHANISM_NONE
+    decision = FilesystemDecision.from_payload(raw)
+    if decision is None:
+        logger.warning("[ToolWorker] unreadable filesystem decision %r — nothing installed", raw)
+        return MECHANISM_NONE
+    return install_process_fs_guard(decision)
 
 
 def _install_carried_egress(raw) -> str:

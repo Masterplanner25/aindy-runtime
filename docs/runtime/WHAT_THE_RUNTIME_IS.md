@@ -1,7 +1,7 @@
 ---
 title: "What aindy-runtime Is"
 api_version: "1.0"
-last_verified: "2026-08-17"
+last_verified: "2026-10-04"
 status: current
 owner: "platform-team"
 ---
@@ -199,7 +199,8 @@ than overclaiming, and this document holds itself to the same standard.
   what version of what, and how much of it succeeded* with a two-state envelope. Open:
   `EFFECT-PARTIAL-1` (no partial-success state), `EFFECT-PRECONDITION-1` (an effect cannot declare
   the version of the world it expects), `FS-SCOPE-1` (the capability vocabulary is verb-shaped and
-  cannot name a resource). This is the runtime's weakest axis and it was found by holding it
+  cannot name a resource; closed 2026-10-04: a declared filesystem scope is enforced on both
+  seams, in Python rather than by the kernel). This is the runtime's weakest axis and it was found by holding it
   against an external system rather than by internal audit.
 - **Capability enforcement does not reach every surface, but the gap is much smaller than it
   was.** `HTTP-SCOPE-GAP-1`: a census on a booted app counts **91 scope-gated / 12 admin / 21

@@ -13997,7 +13997,7 @@ a default-off gate.
 
 ## FS-SCOPE-1 — the capability vocabulary is verb-shaped; no authority statement can name a path
 
-**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17` (its B1, and
+**Status: CLOSED (2026-10-04)** — phases 1 and 2 below; DEC-092..094. Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17` (its B1, and
 the one it calls "the sharpest verified gap").
 
 **★ STATE 2026-10-04 — read this before the original text below, whose "one hit, a comment"
@@ -14015,7 +14015,26 @@ Latent until something populates the guest's `env_spec`, but the clamp is the gu
 was translated exactly like `scoped`, so a read-only guest could write; it now passes nodus
 `writable_paths=[]`. 10 tests through the real worker and real `read_file`/`write_file`, each refusal
 with a control that the same script succeeds when allowed; 6/6 mutations.
-**Open: phase 2, the tool seam** (an isolated tool's worker can open any path the OS allows).
+**PHASE 2 BUILT 2026-10-04 (the tool seam), mirroring egress (EGRESS-INPROC-1).** The parent
+resolves a `fs_guard.FilesystemDecision` (mode, clamped roots, the worker's scratch root) from the
+tool's effective spec and puts it on the worker request; `tool_worker` installs it process-globally
+as a Python audit hook (`sys.addaudithook`: `open`, which imports also raise, directory listing, and
+the mutating `os`/`shutil` events) before the plugin stack loads; the envelope reports
+`filesystem: {mode, mechanism}` with the mechanism the WORKER returned (`audit_hook:worker`, or
+`none`). `scoped` reads and writes its roots and its scratch root (and `tempfile` points there);
+`readonly` reads them and writes nothing; `none` reads no file. The import path (interpreter
+prefixes + `sys.path`) stays readable, never writable (DEC-094). `readonly` now also gets the scratch
+`cwd` (it ran in the server's working directory). Enforced whenever a tool declares it: no flag
+(DEC-093); no tool in the app declares a filesystem scope today. 14 tests, enforcement in a CHILD
+interpreter through the real `tool_worker.run_one` (a hook cannot be removed), each refusal with a
+same-child control; 11/12 mutations bite locally, the 12th (`realpath` vs `abspath`) is the symlink
+test, which skips on Windows without the privilege and was verified on Linux in Docker.
+**What remains, stated so nobody cites this as more (DEC-092):** the hook is NOT a kernel boundary,
+since C extensions, `ctypes` and child processes never raise the events, and the assurance stays
+`insecure-dev`; the container runner is the boundary and is still unreachable from the tool seam
+(`SANDBOX_CONTRACT.md` §7.2). An IN-PROCESS tool cannot be scoped at all: `register_tool` now warns
+when a tool declares a filesystem scope without `isolation`. `authority.subprocess` at the tool
+seam is still unenforced (the same hook could refuse `subprocess.Popen`; not built).
 
 
 **The gap, measured.** A repo-wide grep for `allowed_paths|path_scope|writable_root|allowed_dirs|

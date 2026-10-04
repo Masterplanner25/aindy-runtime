@@ -251,12 +251,21 @@ def register_tool(
         from AINDY.core.execution_environment import ExecutionEnvironmentSpec
 
         try:
-            ExecutionEnvironmentSpec.from_dict(env_spec)
+            _declared_spec = ExecutionEnvironmentSpec.from_dict(env_spec)
         except Exception as exc:
             raise ValueError(
                 f"register_tool({name!r}): env_spec is not a valid execution environment "
                 f"declaration ({type(exc).__name__}: {exc})"
             ) from exc
+        # FS-SCOPE-1: the filesystem scope is enforced in the isolated worker only. In-process,
+        # the tool shares the server's process, so a declared scope would be recorded and never
+        # applied. Said once, at declaration, rather than passing silently.
+        if not isolation and _declared_spec.visibility.filesystem != "host":
+            logger.warning(
+                "[AgentTool] %s declares filesystem=%s but no isolation; the scope is enforced "
+                "only in an isolated worker, so it does not apply to this tool",
+                name, _declared_spec.visibility.filesystem,
+            )
 
     # AUTHORITY-NEGOTIATION-1 phase 0 — LOCAL validation only; see validate_degraded_variants().
     if degraded_variant is not None:
@@ -493,6 +502,30 @@ def _worker_confinement(tool_name: str):
     return kwargs, scratch
 
 
+def _filesystem_decision(tool_name: str, scratch_root: Optional[str]):
+    """FS-SCOPE-1 phase 2: the tool's filesystem decision, or ``None`` when it bounds nothing.
+
+    The same clamp `_worker_confinement` applies, read for the axis `cwd` alone cannot enforce.
+    An undeclared tool, a `host` declaration, or an unusable spec gets ``None``: the tool floor
+    bounds nothing, and an unusable spec falls back to the floor.
+    """
+    from AINDY.core.execution_environment import (
+        ExecutionEnvironmentSpec,
+        clamp_to_floor,
+        tool_floor,
+    )
+    from AINDY.platform_layer.fs_guard import resolve_filesystem_decision
+
+    raw = (TOOL_REGISTRY.get(tool_name) or {}).get("env_spec")
+    if not raw:
+        return None
+    try:
+        effective, _ = clamp_to_floor(ExecutionEnvironmentSpec.from_dict(raw), tool_floor())
+    except Exception:  # noqa: BLE001 — the floor, never a widening
+        return None
+    return resolve_filesystem_decision(effective, scratch_root)
+
+
 def _tool_network_mode(entry: dict) -> str:
     """The tool's EFFECTIVE `authority.network` — declared spec clamped to the tool floor, which
     is `open`; so an undeclared or unusable spec is `open` and a declaration can only narrow.
@@ -639,7 +672,6 @@ def _run_tool_out_of_process(
     request: dict = {"tool_name": tool_name, "args": args or {}, "user_id": user_id}
     if egress is not None:
         request["egress"] = egress.to_payload()
-    payload = json.dumps(request)
     cmd = [sys.executable, "-m", "AINDY.agents.tool_worker"]
 
     # ── EXEC-ENV-BIND-1 phase 3: the tool seam ASKS ──────────────────────────────
@@ -655,6 +687,12 @@ def _run_tool_out_of_process(
     # below — the same shape the guest path uses, and for the same reason: dropping it early
     # would remove the only directory the worker is permitted to treat as its own, mid-run.
     spawn_kwargs, _scratch = _worker_confinement(tool_name)
+    # FS-SCOPE-1 phase 2: `cwd` is a location, not a boundary. The decision rides the request
+    # and the worker installs it before anything loads (see `fs_guard`).
+    fs_decision = _filesystem_decision(tool_name, _scratch.name if _scratch is not None else None)
+    if fs_decision is not None:
+        request["filesystem"] = fs_decision.to_payload()
+    payload = json.dumps(request)
     try:
         proc = _run_worker_or_kill_on_cancel(
             cmd, payload=payload, tool_name=tool_name, run_id=run_id, spawn_kwargs=spawn_kwargs
@@ -736,6 +774,12 @@ def _run_tool_out_of_process(
         envelope["egress"] = {
             "mode": egress.mode,
             "mechanism": str(response.get("egress_mechanism") or MECHANISM_NONE),
+        }
+    if fs_decision is not None:
+        # The WORKER says what it enforced; a reply without it is reported `none`.
+        envelope["filesystem"] = {
+            "mode": fs_decision.mode,
+            "mechanism": str(response.get("filesystem_mechanism") or "none"),
         }
     return envelope
 
