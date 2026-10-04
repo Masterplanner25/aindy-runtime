@@ -4474,6 +4474,14 @@ row to write it on; and no default value — the ceiling ships unset, a flip is 
 Mutation 4/4 (`tests/unit/test_guest_memory_ceiling.py`).
 
 
+**★ CORRECTION 2026-10-04 (DEC-091) — the resolution direction above does not work in-process.**
+`ru_maxrss` is the PROCESS's peak RSS, and a server process runs many execution units on many
+threads at once. Wired into `check_quota` it cannot attribute memory to a unit; once anything spikes
+it refuses every unit that asks afterwards, including ones that allocated nothing, and it never
+falls (it is a peak). Per-unit memory needs a process or cgroup per unit: the guest half (nodus's
+RSS-growth bound in the worker) and an isolated tool's own process are where it can live. Stays
+deferred on the trigger below.
+
 **Reopen trigger:** First OOM incident in a production deployment, or when `hostile-third-party` deployment profile becomes the active default.
 
 ---
@@ -7598,7 +7606,9 @@ on the grounds that unattended reboot recovery is worth more than a faster failu
 
 ## GUEST-CONFINE-1 — the guest VM runs unconfined; effects on the primary execution path are not mediated
 
-**★ RESIDUAL OPEN 2026-08-17 — the fourth argument was never passed. Read this before citing this
+**★ RESIDUAL CLOSED by EXEC-ENV-BIND-1 phase 2** (`allowed_paths` is now passed explicitly); the
+workflow store under the process cwd remains, see the 2026-09-02 note. Original text:
+**RESIDUAL OPEN 2026-08-17 — the fourth argument was never passed. Read this before citing this
 entry as closed.** The demonstrated escape is closed and stays closed; what follows is a
 *different* bound that this entry's own fix recommendation named and did not deliver.
 
@@ -11512,7 +11522,8 @@ standalone.
 
 ## TOOL-SEAM-ISOLATION-1 — every authority check at the tool seam is advisory with respect to the code that runs next
 
-**Status: OPEN — P0. SCOPED 2026-08-19 → `docs/design/TOOL_SEAM_ISOLATION_SCOPE.md`.**
+**Status: CLOSED (2026-08-19)** — see the closing note below; this line read OPEN — P0 until
+2026-10-04. SCOPED 2026-08-19 → `docs/design/TOOL_SEAM_ISOLATION_SCOPE.md`.
 Filed 2026-08-15 from the Codex comparative audit (G1), verified.
 Third of three convergent isolation findings — see `EXEC-ENV-BIND-1` for the convergence table.
 
@@ -13988,6 +13999,24 @@ a default-off gate.
 
 **Status: OPEN — P1.** Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17` (its B1, and
 the one it calls "the sharpest verified gap").
+
+**★ STATE 2026-10-04 — read this before the original text below, whose "one hit, a comment"
+measurement is stale.** The vocabulary exists: `visibility.filesystem` (`none | readonly | scoped |
+host`) plus `filesystem_roots` on `ExecutionEnvironmentSpec` (EXEC-ENV-BIND-1), beside `egress_scope`
+as this entry asked. Enforcement before today: the GUEST path passes it to nodus as `allowed_paths`;
+the TOOL seam sets `cwd` to a scratch root and nothing more.
+**PHASE 1 BUILT 2026-10-04 (the guest path).** Two holes on the one seam that enforced anything:
+(a) `clamp_to_floor` narrowed the MODE and passed the declared ROOTS through, so `scoped` with roots
+`["/"]` reached nodus as `allowed_paths=["/"]` under a floor whose bound is a scratch dir. Roots now
+narrow like every axis (`_clamp_roots`): a `host` floor bounds nothing; a bounded floor with no roots
+means scratch only, so any declared root is dropped; a floor with roots keeps the declared ones inside
+it (realpath, so `..` cannot escape). A dropped root is reported as `visibility.filesystem_roots`.
+Latent until something populates the guest's `env_spec`, but the clamp is the guard. (b) `readonly`
+was translated exactly like `scoped`, so a read-only guest could write; it now passes nodus
+`writable_paths=[]`. 10 tests through the real worker and real `read_file`/`write_file`, each refusal
+with a control that the same script succeeds when allowed; 6/6 mutations.
+**Open: phase 2, the tool seam** (an isolated tool's worker can open any path the OS allows).
+
 
 **The gap, measured.** A repo-wide grep for `allowed_paths|path_scope|writable_root|allowed_dirs|
 fs_scope` under `AINDY/` returns **one hit, and it is a comment** (`nodus_worker.py:340`).

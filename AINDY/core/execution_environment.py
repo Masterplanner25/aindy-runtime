@@ -476,6 +476,12 @@ def nodus_runtime_kwargs(spec: ExecutionEnvironmentSpec, *, scratch_root: str) -
     memory_bytes = spec.resources.memory_bytes
     if memory_bytes is not None and memory_bytes > 0:
         kwargs["max_memory_mb"] = memory_bytes / 1048576.0
+    # FS-SCOPE-1: `readonly` was treated as `scoped` here, so a guest that declared read-only
+    # could write anywhere it could read. nodus (>= 5.3.0) takes the writable subset separately;
+    # an empty list means nothing is writable. `scoped` passes nothing, so every readable path
+    # stays writable, as before.
+    if spec.visibility.filesystem == FS_READONLY:
+        kwargs["writable_paths"] = []
     return kwargs
 
 
@@ -497,6 +503,47 @@ def _narrower_int(declared: Optional[int], floor: Optional[int]) -> tuple[Option
     return (min(declared, floor), declared > floor)
 
 
+def _canonical_path(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _path_within(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:  # different drives on Windows
+        return False
+
+
+def _clamp_roots(
+    declared_mode: str,
+    declared_roots: tuple[str, ...],
+    floor: ExecutionEnvironmentSpec,
+) -> tuple[tuple[str, ...], bool]:
+    """FS-SCOPE-1: narrow the declared roots to what the floor allows. Returns (roots, widened).
+
+    ★ The mode was clamped and the roots passed through untouched, so a spec that declared
+    ``scoped`` with roots ``["/"]`` got the whole filesystem under the guest floor. Roots are
+    part of the bound, so they narrow like every other axis:
+
+    * a ``host`` floor bounds nothing, so the declared roots stand (the tool floor);
+    * a bounded floor with no roots means "the per-execution scratch root only", so ANY declared
+      root widens it and is dropped;
+    * a bounded floor with roots keeps the declared roots that sit inside one of them.
+
+    A root the floor does not allow is dropped, never shortened to the nearest allowed parent:
+    the caller asked for a specific tree, and handing it a different one is not narrowing.
+    """
+    roots = tuple(r for r in declared_roots if r)
+    if declared_mode in (FS_NONE, FS_HOST) or not roots:
+        # `none` sees nothing and `host` sees everything; neither reads its roots.
+        return roots, False
+    if floor.visibility.filesystem == FS_HOST:
+        return roots, False
+    floor_roots = [_canonical_path(r) for r in floor.visibility.filesystem_roots if r]
+    kept = tuple(r for r in roots if any(_path_within(_canonical_path(r), f) for f in floor_roots))
+    return kept, len(kept) != len(roots)
+
+
 def clamp_to_floor(
     declared: ExecutionEnvironmentSpec,
     floor: Optional[ExecutionEnvironmentSpec] = None,
@@ -514,6 +561,9 @@ def clamp_to_floor(
     fs, w = _narrower(FILESYSTEM_ORDER, declared.visibility.filesystem, floor.visibility.filesystem)
     if w:
         widened.append("visibility.filesystem")
+    fs_roots, w = _clamp_roots(fs, declared.visibility.filesystem_roots, floor)
+    if w:
+        widened.append("visibility.filesystem_roots")
     env_mode, w = _narrower(ENV_ORDER, declared.visibility.env, floor.visibility.env)
     if w:
         widened.append("visibility.env")
@@ -547,7 +597,7 @@ def clamp_to_floor(
 
     effective = replace(
         declared,
-        visibility=replace(declared.visibility, filesystem=fs, env=env_mode),
+        visibility=replace(declared.visibility, filesystem=fs, filesystem_roots=fs_roots, env=env_mode),
         authority=replace(declared.authority, network=net, subprocess=subprocess_allowed),
         resources=Resources(wall_time_ms=wall, memory_bytes=mem, syscalls=sysc, tokens=toks),
         min_assurance=effective_assurance,

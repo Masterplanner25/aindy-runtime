@@ -1,6 +1,6 @@
 ---
 title: "Sandbox Contract"
-last_verified: "2026-09-16"
+last_verified: "2026-10-04"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -324,7 +324,9 @@ recorded reason or an open item with a `TECH_DEBT.md` entry.
   (`TOOL_FLOOR` is permissive; `SECRET_KEY`, `DATABASE_URL` and every provider key are visible to
   an isolated tool by default). `EXEC-ENV-BIND-1` phase 3 made this *declarable*; it did not
   change the default. The floor is deliberately today's behaviour written down.
-- **Filesystem `roots` are enforced on the guest seam only.** At the tool seam, a declared
+- **Filesystem `roots` are enforced on the guest seam only.** There they are clamped to the
+  guest floor (a declared root outside the floor is dropped and reported), and `readonly` passes
+  nodus an empty writable set (FS-SCOPE-1 phase 1). At the tool seam, a declared
   scoped filesystem sets `cwd` to a scratch root and nothing more — a bare subprocess can still
   open any path the OS allows. `cwd` is a default location, not a boundary. Enforcement needs
   the container runner at that seam, not another spawn argument (`FS-SCOPE-1`).
