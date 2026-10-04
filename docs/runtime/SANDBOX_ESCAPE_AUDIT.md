@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-10-01"
+last_verified: "2026-10-04"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,42 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 040 — 2026-10-04
+
+**Trigger:** `v2.26.0` release tag (`sandbox-escape-linux.yml`, run `37231274876`).
+**Commit:** `153e383` (release PR #799's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:d9368b3a5ac59afea7b5d4f2e2aea0941dbf9fdee9c369c5bec00b98244bc929`. **★ NOT Entry 039's
+digest** (`9a725b14f2ae…`): the upstream tag moved again between `v2.25.0` and `v2.26.0`. Nothing in
+this repository selects a digest. The 17 tests measure the boundary against whatever
+`python:3.11-alpine` resolves to on the day, and they pass on the new image. Compare future entries
+against 040.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 5 warnings in 4.47s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `37231274876`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.25.0..v2.26.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Three things in this release sit NEAR the boundary. They are recorded here so nobody reads them as
+inside it:**
+
+- **Filesystem scope at the tool seam (#795, FS-SCOPE-1, DEC-092).** An isolated tool that declares
+  `visibility.filesystem` gets a Python audit hook in its worker, reported as `audit_hook:worker`.
+  This is NOT a kernel boundary: C extensions, `ctypes` and child processes bypass it, and the
+  deployment's assurance is unchanged (`insecure-dev` for that tier). The container runner remains
+  the boundary, and it is still unreachable from the tool seam.
+- **Guest filesystem roots clamped, and `readonly` enforced (#794).** These narrow the guest's
+  nodus-level `allowed_paths` / `writable_paths`. That is the VM's own jail, not the container's.
+- **Fan-out concurrency ON by default (#797).** Branches are threads in the same process, each on
+  its own DB connection. No isolation class changes.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. Both were green on `153e383` before the tag,
+with Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit. Publish: PyPI and the JSON API both
+reported `2.26.0` when checked, Boot Smoke on the published wheel passed on attempt 1, and the
+GitHub release is non-draft.
 
 ## Entry 039 — 2026-10-01
 
