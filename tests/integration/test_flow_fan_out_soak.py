@@ -47,6 +47,8 @@ class _Probe:
         self.live = 0
         self.peak = 0
         self.windows: list[tuple[float, float]] = []
+        self.runner_pid = None
+        self.runner_states: list = []
 
     def enter(self):
         with self.lock:
@@ -75,11 +77,13 @@ def fan_out_flow(engine):
             try:
                 db = context["db"]
                 pid = db.execute(text("SELECT pg_backend_pid()")).scalar()
-                idle = db.execute(text(
-                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
-                    "AND state = 'idle in transaction' AND pid <> pg_backend_pid()")).scalar()
+                # The RUNNER's connection only (its pid recorded by the start node): counting every
+                # connection in the database read another test's open session as the runner's.
+                runner_state = db.execute(text(
+                    "SELECT state FROM pg_stat_activity WHERE pid = :p AND pid <> pg_backend_pid()"),
+                    {"p": probe.runner_pid}).scalar()
                 with probe.lock:
-                    probe.idle_in_txn = max(getattr(probe, "idle_in_txn", 0), int(idle))
+                    probe.runner_states.append(runner_state)
                 db.execute(text("SELECT pg_sleep(:s)"), {"s": _SLEEP_S})
                 db.execute(text("INSERT INTO fan_out_soak (run, branch, pid) VALUES (:r, :b, :p)"),
                            {"r": state["soak_run"], "b": branch, "p": pid})
@@ -91,6 +95,8 @@ def fan_out_flow(engine):
         return _node
 
     def _start(state, context):  # noqa: ANN001
+        # A non-branch node runs on the runner's own session: this is the connection to watch.
+        probe.runner_pid = context["db"].execute(text("SELECT pg_backend_pid()")).scalar()
         return {"status": "SUCCESS", "output_patch": {}}
 
     def _end(state, context):  # noqa: ANN001
@@ -177,7 +183,7 @@ def test_branches_run_concurrently_on_their_own_connections(engine, fan_out_flow
     elapsed = time.monotonic() - t0
     rows = _rows(engine, run)
     print(f"\n[fan-out] all-join, {len(_BRANCHES)} branches x {_SLEEP_S}s: {elapsed:.2f}s, peak {probe.peak}, "
-          f"pids {sorted({p for _, p in rows})}, idle-in-txn seen by a branch {getattr(probe, 'idle_in_txn', 0)}")
+          f"pids {sorted({p for _, p in rows})}, runner pid {probe.runner_pid} seen as {probe.runner_states}")
 
     assert result["status"] == "SUCCESS", result
     state = result.get("state") or {}
@@ -187,9 +193,12 @@ def test_branches_run_concurrently_on_their_own_connections(engine, fan_out_flow
     assert probe.peak == min(width, len(_BRANCHES)) and _overlapping(probe.windows), (
         f"branches did not overlap (peak {probe.peak}): the default is not concurrent"
     )
-    assert getattr(probe, "idle_in_txn", 0) == 0, (
-        "a connection sat `idle in transaction` while the branches ran: the runner held its "
-        "transaction across the superstep (RT-MEMTXN-LEAK-1)"
+    # A branch that drew the runner's released connection from the pool proves the release; a
+    # branch observing it `idle in transaction` proves the runner still held its transaction.
+    assert probe.runner_pid is not None and probe.runner_states, "control: the runner's connection was observed"
+    assert "idle in transaction" not in probe.runner_states or probe.runner_pid in {p for _, p in rows}, (
+        f"the runner's connection (pid {probe.runner_pid}) sat `idle in transaction` while the branches "
+        f"ran: it held its transaction across the superstep (RT-MEMTXN-LEAK-1). Seen: {probe.runner_states}"
     )
 
 
