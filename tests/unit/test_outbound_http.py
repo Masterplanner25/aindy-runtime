@@ -66,6 +66,9 @@ def test_retries_transport_error_then_succeeds():
 
 
 def test_retryable_status_exhausts_and_raises():
+    """A GET (idempotent) is retried on a 503 until exhausted. A POST is NOT any more: a 5xx on a
+    non-idempotent request may have been processed (EFFECT-OUTCOME-UNKNOWN-1 phase 3,
+    `test_effect_unknown_emitters.py`). This used to pin a POST's blind retry."""
     calls = {"n": 0}
 
     def fake_request(method, url, **kwargs):
@@ -75,7 +78,7 @@ def test_retryable_status_exhausts_and_raises():
     with _passthrough(), patch("httpx.request", side_effect=fake_request):
         with pytest.raises(TransientHTTPError):
             outbound_request(
-                "POST", "https://api.example.com/v1",
+                "GET", "https://api.example.com/v1",
                 service_name="ex", capability="outbound.ex",
                 max_retries=1, backoff_base=0,
             )
