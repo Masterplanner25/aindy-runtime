@@ -284,7 +284,7 @@ A soak assertion must not be stricter than the contract.
 - **INITIATOR-IDENTITY-1** — *(OpenClaw)* initiating identity ≠ authenticated one; an asserted subject may only CONSTRAIN, never a `User` row. Design filed; P0 the day an inbound consumer ships.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s semantic half always returns `[]` (pgvector `ndarray` vs `list` guard). pgvector 0.5.0 fixes it — which is why #390 was HELD: it turns expansion on in the path that exhausted the pool.
-- **DB-NODUS-BUDGET-1** — both fixes shipped; app soak clean (1,339 recalls, log-only). Flip `AINDY_MEMORY_RECALL_OWN_SESSION` after one window with `aindy_memory_recall_failures_total` at 0 (FR-49, DEC-083). Do NOT roll back the caller's session.
+- **DB-NODUS-BUDGET-1** — both fixes shipped; counter window open since 2026-10-02 on 2.25.0, readout ≥ 10-09. Flip `AINDY_MEMORY_RECALL_OWN_SESSION` when `aindy_memory_recall_failures_total` reads 0 (FR-49, DEC-083). Do NOT roll back the caller's session.
 - **LOCKFILE-PLATFORM-1** — a Windows lockfile cannot satisfy Linux `npm ci`; `Platform Lockfile` workflow regenerates. Verify with `npm ci`, never `npm install` + build.
 - **DEP-UPGRADE-DEFERRED-1** — otel packages are version-locked; hand-align and `pip install --dry-run`. react-router 7→8 waits on a ui-kit release.
 - **C3** — non-Linux strong sandbox (C2 closed). `C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`.
@@ -293,7 +293,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-51** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half; FR-46 (#764, off; evidence PASSED, flip held for FR-48); FR-48 (built #769; the check runs with FR-46's flag). Closed: FR-43..45, FR-47 (ui-kit 2.1.1).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-51** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half. Closed: FR-43..50 (FR-46 default ON, DEC-084).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
@@ -317,7 +317,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - EVENT-OUTBOX-1: **DEC-060** event rides the handler's session · **DEC-061** id stays client-assigned · **DEC-062** a raising handler is rolled back; unit row commits at creation.
 - RECOVERY-GRANULARITY-1: **DEC-063** per-step write at the worker seam · **DEC-064** `agent_steps`, no table · **DEC-065** plan STEP INDEX, never an ordinal · **DEC-066** replay only continued + `success`.
 - **DEC-067** FR-40: args-validation tally rides the worker reply (fifth deferred collection); deferral replaces observation; errors capped `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (32), counts never. **DEC-071** FR-42: the capability-mapping audit row is per RUN; a non-AgentRun scope gets type rows only + `mapping_recorded: false` on the token, outside the HMAC. **DEC-072** FR-15 evidence topology mounts the host docker socket — an instrument, never a profile or operator recipe.
-- FR-46 (#764): **DEC-073** `$from_step` reference · **DEC-074** resolved before `execute_tool` · **DEC-075** unresolved fails; off. **DEC-076** IDEM-14: tool key per STEP. FR-48: **DEC-077** `result_schema`, closed where declared · **DEC-078** no re-plan · **DEC-079** FR-46 flip after FR-48. **DEC-080** consumer range checked at plugin load, warn only. **DEC-081** authority negotiation default ON; `nodus_vm` pre-checks declared tools only. **DEC-082** unit conftest restores published runtime state, silently. **DEC-083** FR-49: recall failures counted; flip after a counter window.
+- FR-46 (#764): **DEC-073** `$from_step` reference · **DEC-074** resolved before `execute_tool` · **DEC-075** unresolved fails; off. **DEC-076** IDEM-14: tool key per STEP. FR-48: **DEC-077** `result_schema`, closed where declared · **DEC-078** no re-plan · **DEC-079** FR-46 flip after FR-48. **DEC-080** consumer range checked at plugin load, warn only. **DEC-081** authority negotiation default ON; `nodus_vm` pre-checks declared tools only. **DEC-082** unit conftest restores published runtime state, silently. **DEC-083** FR-49: recall failures counted; flip after a counter window. **DEC-084** FR-46 step references default ON.
 - FR-38 (§9, #734): **DEC-068** nodus_vm gate = a guest wait from inside `call_tool`; the CHAIN parks mid-segment (the node reports, never parks) · **DEC-069** `skip` = a `skipped` `agent_steps` row replayed on re-drive (widens DEC-066) · **DEC-070** the event and counter come from the worker.
 
 ### Standing rule — not an item

@@ -2863,7 +2863,11 @@ every warning prints `AINDY.__path__`. Served as `compatibility.consumers` on `/
 tests incl. real metadata, the real `load_plugins` and the real route; 8/8 mutations bite.
 ★ **It reads what pip INSTALLED, not `pyproject.toml`**: on this host the monolith's installed
 metadata says `>=2.9.0` while its source says `>=2.24.0`; a raised floor is seen after the next
-`pip install`. Step 1 (consumer declares) is done for the monolith; Claw, if it loads through a
+`pip install`. **★ 2026-10-03 — the cause was SHADOWING, not stale pip metadata** (the app's 2.25.0
+adoption, §2): a gitignored `aindy_apps_monolith.egg-info` in the repo root was read before the
+correct `dist-info` whenever Python ran from there. Each record now carries `metadata_path` and
+`shadowed_metadata`, and more than one copy WARNS regardless of status (tested with REAL
+`importlib.metadata` over two on-disk copies; 5/5 mutations bite). Step 1 (consumer declares) is done for the monolith; Claw, if it loads through a
 manifest, now warns `undeclared`. **Remaining (deferred, trigger unchanged):** step 3, a
 compatibility-window policy + cross-version tests.
 
@@ -9184,7 +9188,8 @@ key in each tool dict.
 
 ## FR-50 — the memory routes forwarded their optional fields as None and the syscall schemas refused them: query-only and tags-only recall, and a node created without a node_type, all answered 400 🔴 defect (app-filed 2026-09-30, runtime 2.24.0)
 
-**Status: CLOSED (2026-09-30).** `routes/memory_router.py::_dispatch_memory` now drops `None` values
+**Status: CLOSED (2026-09-30).** VERIFIED LIVE by the app 2026-10-02: a query-only
+`POST /apps/memory/recall` answers 200 with the owner's passages. `routes/memory_router.py::_dispatch_memory` now drops `None` values
 before dispatch. Every handler reads with `payload.get(...)`, so an absent key and a `None` mean the
 same thing to it. The input schemas type the fields (`query: string`, `tags: list`, `node_type:
 string`) and refused the `None` before the handler ran. **★ Wider than filed:** the app hit the
@@ -9200,7 +9205,10 @@ Removing the fix fails exactly the four defect cases.
 
 ## FR-49 — a memory recall failure had one witness, a WARNING line, which a container recreate loses; the pipeline's pre-recall failures were DEBUG 🟡 observability (app-filed 2026-09-30, runtime 2.24.0)
 
-**Status: CLOSED (2026-09-30) — asks 1 and 2 built, ask 3 declined (DEC-083).** Built:
+**Status: CLOSED (2026-09-30) — asks 1 and 2 built, ask 3 declined (DEC-083).** ADOPTED 2026-10-02: the
+counter is live on the app's `/metrics/`; six app recall sites pass `site=`. **Soak window for
+the OWN_SESSION flip started 2026-10-02T05:05Z on 2.25.0; readout on/after 2026-10-09.** The
+counter resets on an api recreate, so it must be read before each rebuild. Built:
 `aindy_memory_recall_failures_total{site, stage}`. `stage` is `recall` (a failure inside
 `get_context`, which returns an empty context), `own_session` (`AINDY_MEMORY_RECALL_OWN_SESSION`
 could not open its session; the recall still ran on the caller's) or `setup` (the pipeline failed
@@ -9224,7 +9232,13 @@ recall sites audited as not depending on seeing their own uncommitted writes.
 
 ## FR-48 — the planner is told each tool's arguments but never its result, so a `$from_step` path is a guess; the first FR-46 evidence run guessed wrong 🟡 planner contract (app-filed 2026-09-26, runtime 2.24.0)
 
-**Status: OPEN — BUILT #769 2026-09-26 (DEC-077..079); open until it ships, which releases
+**Status: CLOSED (2026-10-03) — shipped in 2.25.0; ADOPTED by the app 2026-10-02**: `result_schema`
+on all 15 tools a later step may reference (`apps/_shared/tool_results.py`), declaring the REAL keys,
+not the described ones (`search.query` returns `learning_context` and `history_id` beyond its
+description, which a closed schema would otherwise refuse). Its test refuses run `615b67ea`'s plan.
+Released FR-46's flip (DEC-084).
+
+**Was: OPEN — BUILT #769 2026-09-26 (DEC-077..079); open until it ships, which releases
 FR-46's flip.** As built: `register_tool(result_schema=)` (nested; malformed refused at any depth)
 is rendered as `returns=…` in the catalog (registry fallback), and `validate_plan_references`
 checks a reference's path against the referenced tool's schema when step references are on
@@ -9287,7 +9301,13 @@ choice or a future ask. **Closes** when ui-kit 2.1.1 is released and the app ado
 
 ## FR-46 — a plan step's `args` are literals written at planning time; no step can take an earlier step's result, so "research X, then use it" runs its second half blind 🔴 open (app-filed 2026-09-25, runtime 2.22.0)
 
-**Status: OPEN — BUILT #764 2026-09-25, default OFF (`AINDY_PLAN_STEP_REFERENCES`). Evidence
+**Status: CLOSED (2026-10-03) — default ON (DEC-084).** FR-48's plan-time path check shipped in
+2.25.0 and the app declared `result_schema` on all 15 tools a later step may reference
+(`RUNTIME_2_25_0_UPGRADE.md` §3), so the planner sees result shapes before it is invited to
+reference one. Only `0/false/no/off` disable it. Resolution is gated on `contains_reference(args)`
+at both seams, so a step without a reference pays nothing.
+
+**Was: OPEN — BUILT #764 2026-09-25, default OFF (`AINDY_PLAN_STEP_REFERENCES`). Evidence
 PASSED 2026-09-26 (app, runtime 2.24.0, run `19dcf508…`, `completed 5/5`): the `memory.write`
 step's recorded `tool_args.content` equals step 0's `result.raw_result` byte for byte (SQL
 equality, 5000 chars). The first attempt (`615b67ea…`) guessed a path wrong and failed safely:

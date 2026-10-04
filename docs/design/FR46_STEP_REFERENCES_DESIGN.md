@@ -1,7 +1,7 @@
 ---
 title: "FR-46 — Plan Step References — Design"
 api_version: "1.0"
-last_verified: "2026-09-26"
+last_verified: "2026-10-03"
 status: current
 owner: "platform-team"
 ---
@@ -12,7 +12,8 @@ owner: "platform-team"
 accepted by the owner on 2026-09-25. Phase 2 PASSED 2026-09-26 (the app's re-run of the owner's
 goal on 2.24.0, run `19dcf508…`: the `memory.write` step stored step 0's `raw_result` byte for
 byte). Its first attempt guessed a result path wrong and failed safely, which is FR-48 (the
-planner is never shown a tool's result). Phase 3 (the flip) is held until FR-48 ships. As built: the resolver is
+planner is never shown a tool's result). Phase 3 DONE 2026-10-03 (DEC-084): default ON, after FR-48 shipped in
+2.25.0 and the app declared `result_schema` on all 15 referenceable tools. As built: the resolver is
 `agents/step_references.py`, the path grammar is `core/result_path.py` (now shared with the
 verifier), and the seams are `nodus_adapter.agent_execute_step` and
 `nodus_worker.run_agent_tool` (plus its simulate branch).

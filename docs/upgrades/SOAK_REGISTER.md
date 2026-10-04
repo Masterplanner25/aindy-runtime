@@ -1,7 +1,7 @@
 ---
 title: "Soak Register — flags waiting on evidence from the app's stack"
 api_version: "1.0"
-last_verified: "2026-09-30"
+last_verified: "2026-10-03"
 status: current
 owner: "platform-team"
 ---
@@ -116,7 +116,7 @@ with the caller fix), `AINDY_NODUS_WARM_POOL` (`NODUS-WARMPOOL-1`), `AINDY_SYSCA
 
 | # | Flag | Entry | On your stack since | Evidence received | Default flipped in |
 |---|---|---|---|---|---|
-| 1 | `AINDY_MEMORY_RECALL_OWN_SESSION` | `DB-NODUS-BUDGET-1` | app soak 09-23→30: 1,339 recalls, 0 failures seen (log only) | — | one window with the FR-49 counter at 0 (DEC-083) |
+| 1 | `AINDY_MEMORY_RECALL_OWN_SESSION` | `DB-NODUS-BUDGET-1` | app soak 09-23→30: 1,339 recalls, 0 failures seen (log only); **counter window open since 2026-10-02T05:05Z on 2.25.0** | readout ≥ 2026-10-09 (read `/metrics/` before any rebuild: the counter resets) | flip when every `stage` reads 0 (DEC-083) |
 | 2 | `AINDY_SYSCALL_IDEMPOTENCY_STRICT` | `FR-27` / `IDEM-11` | — | — | — |
 | 3 | `AINDY_DELEGATION_PRIVATE_MEMORY` | `RTR-4` | — | — | — |
 | 4 | `AINDY_DURABLE_CONTINUATION` (+`_ALL`) | `DUR-1..4` | — | — | — |

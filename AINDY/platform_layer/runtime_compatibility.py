@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from AINDY._version import __version__ as RUNTIME_PACKAGE_VERSION
 from AINDY.config import settings
@@ -93,6 +93,7 @@ def check_consumer_requirements(
     runtime_version: str = RUNTIME_PACKAGE_VERSION,
     packages_distributions=None,
     distribution=None,
+    distributions=None,
 ) -> list[dict[str, Any]]:
     """DEBT-COMPAT-1 — compare each plugin's declared ``aindy-runtime`` range with this runtime.
 
@@ -107,6 +108,13 @@ def check_consumer_requirements(
     dies on a patch bump. A module no installed distribution owns (run from a source tree that
     was never installed) is reported ``not_installed`` at INFO: nothing was declared to compare.
     Never raises.
+
+    Each record names WHERE the metadata was read (``metadata_path``) and any other copies of the
+    same distribution's metadata on ``sys.path`` (``shadowed_metadata``). The app's dev venv read
+    ``>=2.9.0`` while its source said ``>=2.24.0``. The cause was a stale ``*.egg-info`` in its repo
+    root, which Python found first whenever it ran from there. The record showed the stale range
+    but not which copy it came from (2.25.0 adoption, §2). Shadowing warns whatever the status,
+    because a stale copy can satisfy the range by accident.
     """
     import importlib.metadata as md
 
@@ -114,6 +122,7 @@ def check_consumer_requirements(
 
     packages_distributions = packages_distributions or md.packages_distributions
     distribution = distribution or md.distribution
+    distributions = distributions or md.distributions
 
     results: list[dict[str, Any]] = []
     try:
@@ -143,6 +152,8 @@ def check_consumer_requirements(
             "upper_bound": None,
             "runtime_version": runtime_version,
             "status": "not_installed",
+            "metadata_path": None,
+            "shadowed_metadata": [],
         }
         if dist_name is None:
             results.append(record)
@@ -150,6 +161,8 @@ def check_consumer_requirements(
         try:
             dist = distribution(dist_name)
             record["distribution_version"] = dist.version
+            record["metadata_path"] = _metadata_path(dist)
+            record["shadowed_metadata"] = _other_metadata_copies(dist_name, record["metadata_path"], distributions)
             spec = _declared_runtime_requirement(dist.requires)
             if spec is None:
                 record["status"] = "undeclared"
@@ -170,15 +183,53 @@ def check_consumer_requirements(
     return results
 
 
+def _metadata_path(dist: Any) -> Optional[str]:
+    """The ``*.dist-info`` / ``*.egg-info`` directory a distribution's metadata came from."""
+    path = getattr(dist, "_path", None)  # PathDistribution; the only place the directory is held
+    if path is None:
+        try:
+            path = dist.locate_file("")
+        except Exception:  # noqa: BLE001
+            return None
+    return str(path) if path is not None else None
+
+
+def _other_metadata_copies(dist_name: str, chosen: Optional[str], distributions) -> list[str]:
+    """Every OTHER copy of this distribution's metadata on ``sys.path``. Python uses the first one
+    it finds, so more than one means the range read may not be the one installed."""
+    try:
+        wanted = _canonical(dist_name)
+        paths = []
+        for candidate in distributions():
+            name = (candidate.metadata or {}).get("Name") if hasattr(candidate, "metadata") else None
+            if name and _canonical(name) == wanted:
+                path = _metadata_path(candidate)
+                if path and path != chosen and path not in paths:
+                    paths.append(path)
+        return paths
+    except Exception:  # noqa: BLE001 — a probe; never a boot failure
+        return []
+
+
 def _log_consumer_check(record: dict[str, Any]) -> None:
+    if record.get("shadowed_metadata"):
+        logger.warning(
+            "DEBT-COMPAT-1: %s's metadata was read from %s, but %d other cop%s exist on sys.path (%s). "
+            "Python uses the first it finds, so the declared %s range (%s) may not be the installed one. "
+            "A stale *.egg-info in the working directory is the usual cause.",
+            record["distribution"], record["metadata_path"], len(record["shadowed_metadata"]),
+            "y" if len(record["shadowed_metadata"]) == 1 else "ies",
+            ", ".join(record["shadowed_metadata"]), RUNTIME_PACKAGE_NAME, record.get("requirement"),
+        )
     dist = record["distribution"]
     runtime = f"{record['runtime_version']} (from {_runtime_location()})"
     status = record["status"]
     if status == "unsatisfied":
         logger.warning(
-            "DEBT-COMPAT-1: plugin distribution %s %s declares %s %s, but the running runtime is %s. "
-            "Boot continues; this is a warning, not a refusal.",
-            dist, record["distribution_version"], RUNTIME_PACKAGE_NAME, record["requirement"], runtime,
+            "DEBT-COMPAT-1: plugin distribution %s %s declares %s %s (metadata: %s), but the running "
+            "runtime is %s. Boot continues; this is a warning, not a refusal.",
+            dist, record["distribution_version"], RUNTIME_PACKAGE_NAME, record["requirement"],
+            record.get("metadata_path"), runtime,
         )
     elif status == "undeclared":
         logger.warning(

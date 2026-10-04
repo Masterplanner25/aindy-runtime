@@ -16,7 +16,7 @@ Design: ``docs/design/FR46_STEP_REFERENCES_DESIGN.md``. Decisions:
   ``args_schema`` validation and the recorded ``tool_args`` all see the value.
 * **DEC-075:** a reference that cannot be resolved fails the step with ``failure_class:
   "invalid"``; the tool is never called with the placeholder. Behind
-  ``AINDY_PLAN_STEP_REFERENCES`` (default off); when on, the runtime's tool catalog carries
+  ``AINDY_PLAN_STEP_REFERENCES`` (default ON since DEC-084); when on, the runtime's tool catalog carries
   `PLANNER_REFERENCE_LINE`.
 * **DEC-077 / DEC-078 (FR-48):** when the referenced tool declares a ``result_schema``, the path
   is also checked against it at plan time (`result_path_error`); a refusal fails the plan, and
@@ -50,7 +50,14 @@ Lookup = Callable[[int], Optional[StepEntry]]
 
 
 def step_references_enabled() -> bool:
-    return os.getenv("AINDY_PLAN_STEP_REFERENCES", "").strip().lower() in {"1", "true", "yes", "on"}
+    """**Default ON since 2026-10-03 (DEC-084).** Only ``0`` / ``false`` / ``no`` / ``off`` disable;
+    any other value, blank included, is the default (the parse DEC-081 and IDEM-11 used).
+
+    Held off until FR-48 shipped (DEC-079), so a planner is shown each tool's result shape before
+    it is invited to reference one. Evidence: the app's run ``19dcf508`` stored step 0's result byte
+    for byte. Its first attempt, ``615b67ea``, guessed a path, and FR-48's plan-time check now
+    refuses that plan before step 0 runs."""
+    return os.getenv("AINDY_PLAN_STEP_REFERENCES", "").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _looks_like_reference(value: Any) -> bool:

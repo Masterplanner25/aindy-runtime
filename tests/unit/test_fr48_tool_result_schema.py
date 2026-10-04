@@ -273,6 +273,6 @@ def test_generate_plan_accepts_the_declared_path(clean_agent_planner_registry, m
 
 
 def test_generate_plan_flag_off_checks_nothing(clean_agent_planner_registry, monkeypatch, tools):  # noqa: F811
-    monkeypatch.delenv("AINDY_PLAN_STEP_REFERENCES", raising=False)
+    monkeypatch.setenv("AINDY_PLAN_STEP_REFERENCES", "0")
     plan, _seen = _generate(monkeypatch, _planned(tools, "results"))
     assert plan is not None, "flag off must be today's behaviour"
