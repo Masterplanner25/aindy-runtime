@@ -10,7 +10,9 @@ from one call.
 
 Resilience:
   - **Retry with exponential backoff** on transport errors and retryable statuses
-    (408/429/500/502/503/504), bounded by ``max_retries``.
+    (408/429/500/502/503/504), bounded by ``max_retries``, **except** that a request which may
+    already have been processed is retried only when idempotent; otherwise it raises
+    `EffectOutcomeUnknown` (EFFECT-OUTCOME-UNKNOWN-1 phase 3).
   - **Circuit breaker per service** (``AINDY.kernel.circuit_breaker.CircuitBreaker``): once
     a service trips ``failure_threshold`` consecutive failures the circuit opens and further
     calls fail fast with ``CircuitOpenError`` until the recovery timeout elapses.
@@ -37,6 +39,35 @@ _BREAKERS_LOCK = threading.Lock()
 
 class TransientHTTPError(Exception):
     """A retryable HTTP failure (transport error or a retryable status code)."""
+
+
+class AmbiguousHTTPError(TransientHTTPError):
+    """The request may have been processed: a read failure after it was sent, or a 5xx.
+    Retried only for an idempotent request; otherwise it becomes `EffectOutcomeUnknown`."""
+
+
+#: Methods a server must treat as safe to repeat (RFC 9110 §9.2.2).
+IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE"})
+
+#: Statuses that say the request was NOT processed, so any method may retry.
+_NOT_PROCESSED_STATUS = {408, 429}
+
+
+def classify_transport_exception(exc: BaseException) -> str:
+    """``"not_dispatched"`` or ``"unknown"`` (EFFECT-OUTCOME-UNKNOWN-1 phase 3).
+
+    httpx already separates the phases; catching the base `httpx.HTTPError` threw that away.
+    Connecting (or failing to get a pooled connection) never reached the server. A write timeout
+    means the request was not fully sent, and a server does not act on a partial request. Anything
+    after the request went out (a read timeout, a dropped connection, a protocol error) may have
+    been processed. An unrecognised transport error is treated as `unknown`, the side that never
+    causes a duplicate.
+    """
+    import httpx
+
+    not_dispatched = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.WriteTimeout,
+                      httpx.UnsupportedProtocol, httpx.InvalidURL, httpx.LocalProtocolError)
+    return "not_dispatched" if isinstance(exc, not_dispatched) else "unknown"
 
 
 def _breaker_for(service_name: str) -> CircuitBreaker:
@@ -70,6 +101,7 @@ def outbound_request(
     max_retries: int = 2,
     backoff_base: float = 0.2,
     backoff_cap: float = 5.0,
+    idempotent: bool | None = None,
 ):
     """Issue an authorized, retried, circuit-broken HTTP request; return ``httpx.Response``.
 
@@ -77,12 +109,20 @@ def outbound_request(
     call is denied by policy/rate before it runs, ``CircuitOpenError`` when the service's
     breaker is open, or the last transport error / :class:`TransientHTTPError` when retries
     are exhausted.
+
+    EFFECT-OUTCOME-UNKNOWN-1 phase 3: a request that may already have been processed (a read
+    failure after sending, or a 5xx) is retried only when it is ``idempotent``. That defaults to the
+    method (GET/HEAD/OPTIONS/TRACE/PUT/DELETE), and ``idempotent=True`` declares a POST safe (for
+    example one carrying an idempotency key). Otherwise it raises `EffectOutcomeUnknown` without
+    retrying: retrying a POST blindly is how one becomes two. A failure that never reached the
+    server (connect, pool, write timeout, 408, 429) is retried for every method.
     """
     import httpx
 
     from AINDY.platform_layer.external_call_service import authorized_external_call
 
     breaker = _breaker_for(service_name)
+    retry_ambiguous = idempotent if idempotent is not None else method.upper() in IDEMPOTENT_METHODS
 
     def _send() -> "httpx.Response":
         try:
@@ -96,9 +136,13 @@ def outbound_request(
                 timeout=timeout,
             )
         except httpx.HTTPError as exc:
-            raise TransientHTTPError(f"transport error: {exc}") from exc
-        if resp.status_code in _RETRYABLE_STATUS:
+            if classify_transport_exception(exc) == "not_dispatched":
+                raise TransientHTTPError(f"transport error (not dispatched): {exc}") from exc
+            raise AmbiguousHTTPError(f"transport error after sending: {exc}") from exc
+        if resp.status_code in _NOT_PROCESSED_STATUS:
             raise TransientHTTPError(f"retryable status {resp.status_code}")
+        if resp.status_code in _RETRYABLE_STATUS:
+            raise AmbiguousHTTPError(f"status {resp.status_code}: the server may have processed it")
         return resp
 
     def _operation() -> "httpx.Response":
@@ -107,6 +151,16 @@ def outbound_request(
             try:
                 return breaker.call(_send)
             except TransientHTTPError as exc:
+                if isinstance(exc, AmbiguousHTTPError) and not retry_ambiguous:
+                    from AINDY.kernel.syscall_outcome import EffectOutcomeUnknown
+
+                    logger.warning(
+                        "[outbound_http:%s] %s %s outcome unknown, not retried: %s",
+                        service_name, method.upper(), url, exc,
+                    )
+                    raise EffectOutcomeUnknown(
+                        f"{method.upper()} {url}: {exc}; it may have been processed"
+                    ) from exc
                 if attempt >= max_retries:
                     logger.warning(
                         "[outbound_http:%s] giving up after %d attempt(s): %s",

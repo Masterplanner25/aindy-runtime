@@ -585,8 +585,25 @@ def _kill(proc) -> None:
         pass
 
 
+def _mid_call_outcome(envelope: dict, effectful: bool) -> dict:
+    """DEC-088 — the worker was started and then lost (killed by the budget or a cancel, crashed,
+    or replied unreadably): it may have acted. For a tool that declared an effect guarantee that is
+    an `unknown`, never retried and never re-run. A tool that declared none keeps its class: its
+    author said a repeat is acceptable."""
+    if not effectful:
+        return envelope
+    envelope["failure_class"] = "unknown"
+    envelope["outcome_unknown"] = True
+    envelope["error"] = (
+        f"{envelope.get('error')}; the worker had started, so its effect may or may not have "
+        f"landed (outcome unknown)"
+    )
+    return envelope
+
+
 def _run_tool_out_of_process(
-    tool_name: str, args: dict, user_id: str, *, run_id: Optional[str] = None, egress=None
+    tool_name: str, args: dict, user_id: str, *, run_id: Optional[str] = None, egress=None,
+    effectful: bool = False,
 ) -> dict:
     """Execute a tool in a one-shot worker subprocess (step C2). Returns an execute_tool envelope.
 
@@ -643,16 +660,16 @@ def _run_tool_out_of_process(
             cmd, payload=payload, tool_name=tool_name, run_id=run_id, spawn_kwargs=spawn_kwargs
         )
         if proc is None:
-            return {
+            return _mid_call_outcome({
                 "success": False,
                 "result": None,
                 "error": f"run {run_id} was cancelled; isolated tool {tool_name!r} was killed",
                 "failure_class": "cancelled",
                 "cancelled": True,
-            }
+            }, effectful)
     except subprocess.TimeoutExpired:
         logger.error("[AgentTool] %s worker exceeded %ss", tool_name, _TOOL_WORKER_TIMEOUT_S)
-        return {
+        return _mid_call_outcome({
             "success": False,
             "result": None,
             "error": (
@@ -660,7 +677,7 @@ def _run_tool_out_of_process(
                 f"budget. It was NOT retried in-process — it declared isolation."
             ),
             "failure_class": "transient",
-        }
+        }, effectful)
     except Exception as exc:  # noqa: BLE001 — spawn failure is a refusal, not a fallback
         logger.error("[AgentTool] %s worker could not be started: %s", tool_name, exc)
         return {
@@ -685,22 +702,22 @@ def _run_tool_out_of_process(
             proc.returncode,
             (proc.stderr or "")[-400:],
         )
-        return {
+        return _mid_call_outcome({
             "success": False,
             "result": None,
             "error": f"tool {tool_name!r} isolated worker failed (exit {proc.returncode})",
             "failure_class": "transient",
-        }
+        }, effectful)
 
     try:
         response = json.loads(proc.stdout)
     except (TypeError, ValueError) as exc:
-        return {
+        return _mid_call_outcome({
             "success": False,
             "result": None,
             "error": f"tool {tool_name!r} worker returned an unreadable response: {exc}",
             "failure_class": "transient",
-        }
+        }, effectful)
 
     if not response.get("ok"):
         envelope = {
@@ -1564,24 +1581,26 @@ def execute_tool(
                 _tool_span.set_attribute("aindy.egress.mode", _egress_decision.mode)
             if entry.get("isolation") and _tool_isolation_enforced():
                 _isolated = _run_tool_out_of_process(
-                    tool_name, args or {}, user_id, run_id=run_id, egress=_egress_decision
+                    tool_name, args or {}, user_id, run_id=run_id, egress=_egress_decision,
+                    effectful=_guarantee in GATED_GUARANTEES,  # DEC-088
                 )
                 if _egress_decision is not None:
                     _tool_span.set_attribute(
                         "aindy.egress.mechanism", (_isolated.get("egress") or {}).get("mechanism")
                     )
                 if _idempotent:
+                    _iso_unknown = (not _isolated.get("success")
+                                    and _isolated.get("failure_class") == "unknown")
                     _finalize_tool_effect(
                         db,
                         _action_id,
-                        (
-                            "success" if _isolated.get("success")
-                            else "unknown" if _isolated.get("failure_class") == "unknown"
-                            else "failed"
-                        ),
-                        _isolated.get("result"),
+                        "success" if _isolated.get("success") else "unknown" if _iso_unknown else "failed",
+                        # an unknown records its reason as the detail; a success caches its result
+                        _isolated.get("error") if _iso_unknown else _isolated.get("result"),
                         tool_name,
                     )
+                    if _iso_unknown and _guarantee == "EXACTLY_ONCE":
+                        _count_tool_contract_shortfall()
                 if _isolated.get("success"):
                     _check_tool_return(tool_name, entry, _isolated.get("result"))
                 _tool_span.outcome(_isolated)

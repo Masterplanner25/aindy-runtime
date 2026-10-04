@@ -264,7 +264,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — P1
 
-- **EFFECT-OUTCOME-UNKNOWN-1** — phases 1–2 BUILT: replay HOLDS `unknown`/`partial`; `EffectOutcomeUnknown`; `AT_MOST_ONCE` refuses where `EXACTLY_ONCE` degrades. Open: emitters (killed isolated tool still `transient`), reconciliation.
+- **EFFECT-OUTCOME-UNKNOWN-1** — phases 1–3 BUILT: replay HOLDS `unknown`/`partial`; `AT_MOST_ONCE` never degrades; emitters (killed effectful isolated tool, MCP post-send timeout, `outbound_request`). Open: reconciliation route.
 - **FLOW-PARALLEL-1** — `FanOutEdgeGroup(join=all|any|quorum)`; phases 0–3a shipped, open for phase 4 (default flip on evidence). A lenient join past a failed branch is the first `partial` emitter; width bound is process-wide (SYSMAX-5); a named predicate is in the graph signature. 3b declined (DEC-015). Design: `docs/design/FLOW_PARALLEL_DESIGN.md`.
 - **FS-SCOPE-1** — *(Aider)* path authority exists as `visibility.filesystem {mode, roots}` on `ExecutionEnvironmentSpec`, enforced on the guest path only. **The tool seam sets `cwd`, not a boundary** — enforcement needs the container runner. Never a second vocabulary beside `egress_scope`.
 - **SUBSTRATE-WITNESS-1** — *(Claude Code)* ★★ LIVE CHANNEL 2026-09-22: Claw on **Telegram**, 3 turns → 3 `success` rows; the same `message_key` replayed (`message_id` identical, nothing sent), gate off → duplicate arrives. A refused duplicate a PERSON would have seen. WebChat cannot witness it (it streams; `deliver()` is the non-WebChat branch). Open for the SOAK + concurrency; the gate counter is unreadable from a live Claw. Never a synthetic fixture.

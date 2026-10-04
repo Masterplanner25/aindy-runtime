@@ -14,7 +14,7 @@ owner: "platform-team"
 seams and the TTL job. **Phase 2 BUILT the same day:** `AT_MOST_ONCE` in both registries, always
 strict-locked, refusing wherever `EXACTLY_ONCE` degrades (the ledger now says `DEGRADED`), and the
 shortfall counter; soaked on Postgres, 8-way contention runs the handler once with 0 degrades.
-Phases 3–4 remain. Read `TECH_DEBT.md` § `EFFECT-OUTCOME-UNKNOWN-1` for the original finding and
+**Phase 3 BUILT the same day (the emitters):** an effectful isolated tool's worker lost mid-call (budget or cancel kill, crash, unreadable reply) is `unknown` (DEC-088), a spawn failure stays `transient`; an MCP call that times out after it was sent is `unknown` for a server declared with a `guarantee`; `outbound_http.classify_transport_exception`, and `outbound_request` retries a possibly-processed request (read failure after send, 5xx) only when idempotent, else raises `EffectOutcomeUnknown`. Phase 4 (reconciliation) remains. Read `TECH_DEBT.md` § `EFFECT-OUTCOME-UNKNOWN-1` for the original finding and
 the nodus-side reasoning it cites (`03-outcome-ambiguity.md`, §5.3 phase ladder, §7).
 
 ---

@@ -71,7 +71,7 @@ def _is_enabled() -> bool:
 
 
 def _parse_servers() -> list[dict]:
-    """Parse AINDY_MCP_SERVERS: a JSON array of {name, url, timeout?, risk?}."""
+    """Parse AINDY_MCP_SERVERS: a JSON array of {name, url, timeout?, risk?, guarantee?}."""
     raw = os.getenv("AINDY_MCP_SERVERS", "").strip()
     if not raw:
         return []
@@ -95,21 +95,43 @@ def _parse_servers() -> list[dict]:
 # --- registration -------------------------------------------------------------
 
 
-def _make_tool_fn(server_url: str, remote_name: str, timeout: float):
-    """Build a sync AINDY tool fn that proxies to a remote MCP tool (per-call connect)."""
+def _make_tool_fn(server_url: str, remote_name: str, timeout: float, *, effectful: bool = False):
+    """Build a sync AINDY tool fn that proxies to a remote MCP tool (per-call connect).
+
+    EFFECT-OUTCOME-UNKNOWN-1 phase 3: a timeout AFTER the call was sent is a true unknown (the
+    server may have acted); one during connect is knowably not dispatched. For a server declared
+    with an effect guarantee (``effectful``) the first raises `EffectOutcomeUnknown`, which the
+    tool seam records `unknown` and never re-runs. Otherwise the timeout propagates as before
+    (retryable), because the tool declared that a repeat is acceptable (DEC-088's rule).
+    """
 
     def _fn(args: dict, user_id: str = None, db: Any = None) -> dict:
+        import concurrent.futures
+
         from nodus_mcp_aindy import MCPClientAdapter
+
+        sent = {"call": False}
 
         async def _call() -> dict:
             adapter = MCPClientAdapter(server_url, timeout=timeout)
             await adapter.connect()
             try:
+                sent["call"] = True
                 return await adapter.call_tool(remote_name, args or {})
             finally:
                 await adapter.disconnect()
 
-        return _run_sync(_call(), timeout=timeout + 5.0)
+        try:
+            return _run_sync(_call(), timeout=timeout + 5.0)
+        except (concurrent.futures.TimeoutError, TimeoutError) as exc:
+            if effectful and sent["call"]:
+                from AINDY.kernel.syscall_outcome import EffectOutcomeUnknown
+
+                raise EffectOutcomeUnknown(
+                    f"MCP call {remote_name!r} to {server_url} timed out after it was sent; the "
+                    f"server may have acted"
+                ) from exc
+            raise
 
     return _fn
 
@@ -127,6 +149,10 @@ def discover_and_register(server: dict) -> list[str]:
     url = str(server["url"])
     timeout = float(server.get("timeout", 10.0))
     risk = str(server.get("risk", "high"))
+    # EFFECT-OUTCOME-UNKNOWN-1 phase 3 — an optional per-server guarantee (default AT_LEAST_ONCE).
+    from AINDY.kernel.syscall_registry import GATED_GUARANTEES
+
+    guarantee = str(server.get("guarantee") or "AT_LEAST_ONCE").upper()
     prefix = f"mcp_{name}_"
 
     try:
@@ -146,7 +172,8 @@ def discover_and_register(server: dict) -> list[str]:
             required_capability=MCP_EGRESS_CAPABILITY,
             category="mcp",
             egress_scope=name,
-        )(_make_tool_fn(url, td.name, timeout))
+            execution_guarantee=guarantee,
+        )(_make_tool_fn(url, td.name, timeout, effectful=guarantee in GATED_GUARANTEES))
         registered.append(local_name)
 
     logger.info("[mcp] registered %d tool(s) from server %r", len(registered), name)
