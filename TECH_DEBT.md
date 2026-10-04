@@ -14023,7 +14023,7 @@ a default-off gate.
 
 ## FS-SCOPE-1 — the capability vocabulary is verb-shaped; no authority statement can name a path
 
-**Status: CLOSED (2026-10-04)** — phases 1 and 2 below; DEC-092..094. Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17` (its B1, and
+**Status: CLOSED (2026-10-04)** — phases 1 and 2 below (#794, #795); DEC-092..094 accepted. Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17` (its B1, and
 the one it calls "the sharpest verified gap").
 
 **★ STATE 2026-10-04 — read this before the original text below, whose "one hit, a comment"
