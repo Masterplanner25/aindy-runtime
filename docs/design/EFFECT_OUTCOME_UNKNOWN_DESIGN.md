@@ -11,7 +11,10 @@ owner: "platform-team"
 **Status: PHASE 1 BUILT 2026-10-03.** DEC-085..090 were accepted by the owner the same day. Phase 1
 (never re-run: DEC-085, 086, 087, 090, and the tool seam able to record `unknown`) is in
 `effect_ledger._resolve_existing_row`, `syscall_outcome.EffectOutcomeUnknown` / `HeldOutcome`, both
-seams and the TTL job. Phases 2–4 remain. Read `TECH_DEBT.md` § `EFFECT-OUTCOME-UNKNOWN-1` for the original finding and
+seams and the TTL job. **Phase 2 BUILT the same day:** `AT_MOST_ONCE` in both registries, always
+strict-locked, refusing wherever `EXACTLY_ONCE` degrades (the ledger now says `DEGRADED`), and the
+shortfall counter; soaked on Postgres, 8-way contention runs the handler once with 0 degrades.
+Phases 3–4 remain. Read `TECH_DEBT.md` § `EFFECT-OUTCOME-UNKNOWN-1` for the original finding and
 the nodus-side reasoning it cites (`03-outcome-ambiguity.md`, §5.3 phase ladder, §7).
 
 ---

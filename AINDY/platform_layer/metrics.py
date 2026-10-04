@@ -166,6 +166,15 @@ memory_recall_failures_total = Counter(
     registry=REGISTRY,
 )
 
+# DEC-089 — an effect ended `unknown` under EXACTLY_ONCE, a label that promised completion.
+# (Under AT_MOST_ONCE an unknown is a legitimate end and is not counted.)
+effect_contract_shortfall_total = Counter(
+    "aindy_effect_contract_shortfall_total",
+    "Effects whose outcome ended unknown under a guarantee that promised completion.",
+    ["guarantee", "seam"],
+    registry=REGISTRY,
+)
+
 # DEC-087 — effects whose outcome is UNKNOWN and unreconciled. They are held out of TTL
 # cleanup (reaping one would let a retry re-run it), so this gauge is how they stay visible.
 effect_unknown_unresolved = Gauge(

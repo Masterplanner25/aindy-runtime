@@ -288,6 +288,17 @@ def register_tool(
             f"{list(ON_DENIAL_KINDS)}. A misspelled kind must fail loudly — silently treating it "
             f"as 'fail' would strand a run the author meant to park."
         )
+    from AINDY.kernel.syscall_registry import _VALID_EXECUTION_GUARANTEES
+
+    if execution_guarantee is None:  # has always meant "the default"
+        execution_guarantee = "AT_LEAST_ONCE"
+    if str(execution_guarantee).upper() not in _VALID_EXECUTION_GUARANTEES:
+        # DEC-089 — fail loud: a typo'd guarantee used to mean "no gate" silently.
+        raise ValueError(
+            f"register_tool({name!r}): execution_guarantee must be one of "
+            f"{sorted(_VALID_EXECUTION_GUARANTEES)}, got {execution_guarantee!r}"
+        )
+    execution_guarantee = str(execution_guarantee).upper()
     if args_schema is not None:
         _check_args_schema_shape(name, args_schema)
     if result_schema is not None:
@@ -851,6 +862,16 @@ def _tool_idempotency_strict_wait_seconds() -> float:
     return value if value >= 0 else 60.0
 
 
+def _count_tool_contract_shortfall() -> None:
+    """DEC-089 — an EXACTLY_ONCE tool's effect ended `unknown`."""
+    try:
+        from AINDY.platform_layer.metrics import effect_contract_shortfall_total
+
+        effect_contract_shortfall_total.labels(guarantee="EXACTLY_ONCE", seam="tool").inc()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _finalize_tool_effect(db, action_id: str, status: str, result, tool_name: str) -> None:
     """Finalize an EffectRecord best-effort — a ledger failure must never mask the tool
     outcome. On success, cache a JSON-safe result for replay; on failure, cache nothing
@@ -1195,10 +1216,15 @@ def execute_tool(
 
     _durable = durable_effects_active()
     _guarantee = str(entry.get("execution_guarantee", "AT_LEAST_ONCE")).upper()
+    # DEC-089 — AT_MOST_ONCE engages the gate whatever AINDY_TOOL_IDEMPOTENCY says, and never
+    # degrades: it always takes the strict lock and refuses rather than running a second time.
+    from AINDY.kernel.syscall_registry import AT_MOST_ONCE, GATED_GUARANTEES
+
+    _at_most_once = _guarantee == AT_MOST_ONCE
     _idempotent = (
-        (_guarantee == "EXACTLY_ONCE" or _durable)
+        (_guarantee in GATED_GUARANTEES or _durable)
         and bool(run_id)
-        and (_tool_idempotency_enabled() or _durable)
+        and (_tool_idempotency_enabled() or _durable or _at_most_once)
     )
     _action_id = None
     if _idempotent:
@@ -1347,7 +1373,7 @@ def execute_tool(
     # row and returns "go ahead" (counted `degraded`) — which is every concurrent caller
     # executing, measured as C deliveries for C callers on a real channel.
     _effect_lock = None
-    if _idempotent and _tool_idempotency_strict_enabled():
+    if _idempotent and (_tool_idempotency_strict_enabled() or _at_most_once):
         from AINDY.kernel.effect_ledger import acquire_effect_lock, count_gate_outcome
 
         try:
@@ -1358,6 +1384,15 @@ def execute_tool(
             logger.warning("[AgentTool] %s strict lock failed (%s); proceeding AT_LEAST_ONCE",
                            tool_name, _lock_exc)
             _lock_state, _effect_lock = "error", None
+        if _at_most_once and _lock_state in ("timeout", "error"):
+            # DEC-089 — never degrade: refuse. Nothing was dispatched, so a retry is safe.
+            count_gate_outcome("refused_at_most_once")
+            return {
+                "success": False, "result": None,
+                "error": (f"AT_MOST_ONCE tool {tool_name!r} refused: its effect lock could not be "
+                          f"taken ({_lock_state}); it was not dispatched"),
+                "failure_class": "transient",
+            }
         if _lock_state == "timeout":
             # An honest degrade, and a DIFFERENT signal from contention: the winner is slower
             # than the wait ceiling.
@@ -1376,10 +1411,32 @@ def execute_tool(
                 tenant_id=str(user_id) if user_id else None,
             )
         except Exception as exc:
+            if _at_most_once:
+                # DEC-089 — an unguarded run could be the second one: refuse instead.
+                if _effect_lock is not None:
+                    _effect_lock.release()
+                logger.warning("[AgentTool] %s AT_MOST_ONCE gate failed; refusing: %s", tool_name, exc)
+                return {
+                    "success": False, "result": None,
+                    "error": f"AT_MOST_ONCE tool {tool_name!r} refused: the effect gate failed; not dispatched",
+                    "failure_class": "transient",
+                }
             # A ledger failure must not block the tool — degrade to AT_LEAST_ONCE.
             logger.warning("[AgentTool] %s effect resolve failed; running unguarded: %s", tool_name, exc)
             _already, _cached, _idempotent = False, None, False
         else:
+            from AINDY.kernel.effect_ledger import DEGRADED as _DEGRADED
+
+            if not _already and _cached is _DEGRADED and _at_most_once:
+                # DEC-089 — a live concurrent call holds the slot: refuse, do not run alongside it.
+                if _effect_lock is not None:
+                    _effect_lock.release()
+                return {
+                    "success": False, "result": None,
+                    "error": (f"AT_MOST_ONCE tool {tool_name!r} refused: a concurrent call is "
+                              f"dispatching this effect; not dispatched again"),
+                    "failure_class": "transient",
+                }
             if _already:
                 # the winner already completed: replay, and drop the lock on the way out (this
                 # return is BEFORE the try/finally below, so it must release for itself)
@@ -1554,6 +1611,8 @@ def execute_tool(
             # observe. `failed` would make the slot reclaimable and a retry would re-run it.
             if _class == "unknown":
                 _finalize_tool_effect(db, _action_id, "unknown", str(exc), tool_name)
+                if _guarantee == "EXACTLY_ONCE":
+                    _count_tool_contract_shortfall()
             else:
                 _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
         return {"success": False, "result": None, "error": str(exc), "failure_class": _class}

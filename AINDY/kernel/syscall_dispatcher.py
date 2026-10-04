@@ -138,6 +138,8 @@ _TRACE_ID_CTX: ContextVar[str] = ContextVar("syscall_trace_id", default="")
 _EU_ID_CTX: ContextVar[str] = ContextVar("syscall_eu_id", default="")
 
 
+from AINDY.kernel.effect_ledger import DEGRADED as _DEGRADED
+from AINDY.kernel.syscall_registry import AT_MOST_ONCE, GATED_GUARANTEES
 from AINDY.kernel.syscall_outcome import (
     ENVELOPE_STATUS_ERROR,
     ENVELOPE_STATUS_SUCCESS,
@@ -149,6 +151,16 @@ from AINDY.kernel.syscall_outcome import (
     held_record_payload,
     OUTCOME_KEY,
 )
+
+
+def _count_contract_shortfall(guarantee: str, seam: str) -> None:
+    """DEC-089 — an effect ended `unknown` under a guarantee that promised completion."""
+    try:
+        from AINDY.platform_layer.metrics import effect_contract_shortfall_total
+
+        effect_contract_shortfall_total.labels(guarantee=guarantee, seam=seam).inc()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _count_outcome(name: str, status: str) -> None:
@@ -697,11 +709,14 @@ class SyscallDispatcher:
         # syscall (declaration-free), independent of the per-syscall guarantee + master flag.
         # Reaches in-process dispatches; a nodus subprocess doesn't inherit it (DUR-2b).
         _durable = _durable_effects_active()
+        # DEC-089 — AT_MOST_ONCE cannot be honoured with the gate off, so it engages the gate
+        # whatever the master flag says (as `_durable` does).
+        _at_most_once = _entry_guarantee == AT_MOST_ONCE
         if (
-            (_entry_guarantee == "EXACTLY_ONCE" or _durable)
+            (_entry_guarantee in GATED_GUARANTEES or _durable)
             and _orig_eu_id
             and _gate_scope_engaged(context.execution_unit_id)
-            and (_syscall_idempotency_enabled() or _durable)
+            and (_syscall_idempotency_enabled() or _durable or _at_most_once)
         ):
             from AINDY.core.execution_gate import compute_action_id
             _gate_action_id = compute_action_id(
@@ -715,12 +730,23 @@ class SyscallDispatcher:
                 # FR-27 — strict mode: block on an advisory lock so a concurrent duplicate
                 # replays instead of running the handler. Opt-in, PG-only; a non-PG backend or
                 # flag-off returns immediately and the gate behaves as before.
-                if _syscall_idempotency_strict_enabled():
+                if _syscall_idempotency_strict_enabled() or _at_most_once:
                     from AINDY.kernel.effect_ledger import acquire_effect_lock as _acquire_lock
                     _lock_state, _gate_lock = _acquire_lock(
                         _gate_db, _gate_action_id,
                         wait_seconds=_syscall_idempotency_strict_wait_seconds(),
                     )
+                    if _lock_state == "timeout" and _at_most_once:
+                        # DEC-089 — never degrade: refuse. Nothing was dispatched, so a retry is safe.
+                        _count_gate_outcome("refused_at_most_once")
+                        _gate_db.close()
+                        _gate_db = None
+                        return self._error_envelope(
+                            name, context,
+                            f"AT_MOST_ONCE syscall {name!r} refused: another call holds this "
+                            f"effect's lock; it was not dispatched",
+                            t_start, version=parsed_version, failure_class="transient",
+                        )
                     if _lock_state == "timeout":
                         # The machinery gave up after the wait — an honest degrade, and a
                         # DIFFERENT signal from contention: a handler is slower than the wait.
@@ -739,6 +765,23 @@ class SyscallDispatcher:
                     tenant_id=str(context.user_id) if context.user_id else None,
                 )
             except Exception as _gate_exc:
+                if _at_most_once:
+                    # DEC-089 — an unguarded run could be the second one: refuse instead.
+                    try:
+                        if _gate_db is not None:
+                            _gate_db.rollback()
+                            if _gate_lock is not None:
+                                _gate_lock.release()
+                            _gate_db.close()
+                    except Exception:
+                        pass
+                    _count_gate_outcome("refused_at_most_once")
+                    return self._error_envelope(
+                        name, context,
+                        f"AT_MOST_ONCE syscall {name!r} refused: the effect gate failed "
+                        f"({type(_gate_exc).__name__}); it was not dispatched",
+                        t_start, version=parsed_version, failure_class="transient",
+                    )
                 # A ledger failure must not block the syscall — degrade to AT_LEAST_ONCE.
                 if _gate_db is not None:
                     try:
@@ -770,6 +813,21 @@ class SyscallDispatcher:
                     name, _gate_exc,
                 )
             else:
+                if not _already_done and _cached is _DEGRADED and _at_most_once:
+                    # DEC-089 — a live concurrent call holds the slot. EXACTLY_ONCE degrades here;
+                    # AT_MOST_ONCE refuses (the other call may be dispatching this very effect).
+                    _count_gate_outcome("refused_at_most_once")
+                    if _gate_lock is not None:
+                        _gate_lock.release()
+                        _gate_lock = None
+                    _gate_db.close()
+                    _gate_db = None
+                    return self._error_envelope(
+                        name, context,
+                        f"AT_MOST_ONCE syscall {name!r} refused: a concurrent call is dispatching "
+                        f"this effect; it was not dispatched again",
+                        t_start, version=parsed_version, failure_class="transient",
+                    )
                 if _already_done:
                     if _gate_lock is not None:
                         _gate_lock.release()
@@ -1106,6 +1164,10 @@ class SyscallDispatcher:
         }
         if _outcome.status == ENVELOPE_STATUS_UNKNOWN:
             _envelope["failure_class"] = "unknown"  # DEC-090: nothing retries it
+            if _entry_guarantee == "EXACTLY_ONCE":
+                # DEC-089 — EXACTLY_ONCE promised completion; an unknown is a shortfall against
+                # that label. Under AT_MOST_ONCE it is a legitimate end and is not counted.
+                _count_contract_shortfall("EXACTLY_ONCE", "syscall")
         return _envelope
 
     def _error_envelope(

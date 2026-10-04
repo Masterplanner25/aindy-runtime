@@ -1,6 +1,6 @@
 ---
 title: "Idempotency Contract"
-last_verified: "2026-09-25"
+last_verified: "2026-10-03"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -141,7 +141,9 @@ State transition table:
 | `failed` | subsequent dispatch (non-race) | handler runs; row updated in-place | `_complete_effect_record` sets `status`=success/failed, `completed_at`=now() |
 | `failed` | concurrent-insert race recovery | `pending` (reset) | `status` reset, `completed_at` cleared, `created_at` refreshed; commit |
 | `pending` (stale, > 15 min old) | concurrent-insert race recovery | `pending` (reset) | `created_at` refreshed, `completed_at` cleared; commit |
-| `pending` (fresh, ≤ 15 min old) | concurrent-insert race — live call in flight | `pending` (unchanged) | gate degrades to AT_LEAST_ONCE for this call; warning logged |
+| `pending` (fresh, ≤ 15 min old) | concurrent-insert race — live call in flight | `pending` (unchanged) | gate degrades to AT_LEAST_ONCE for this call; warning logged. **`AT_MOST_ONCE` refuses instead** (the ledger returns `DEGRADED`, DEC-089) |
+| `pending` | handler returns an `unknown` claim, or raises `EffectOutcomeUnknown` | `unknown` | outcome (units, detail) stored beside the data |
+| `unknown` / `partial` | subsequent dispatch | unchanged | **HELD, never re-run** (DEC-085/086): the recorded outcome is returned (`outcome.held`, and for `unknown` `reconcile_required` + `failure_class: "unknown"`); `unknown` is never reaped by TTL (DEC-087) |
 
 ---
 
@@ -252,6 +254,11 @@ Rules:
 |---|---|---|---|
 | `AT_LEAST_ONCE` | Default. Handler may be called multiple times. | No | Yes (always) |
 | `EXACTLY_ONCE` | Handler must execute at most once per `(name, payload, eu_id)`. | Yes | No (cache hit) |
+| `AT_MOST_ONCE` | Never more than once, and **never degrades** (DEC-089): always the strict lock, whatever the STRICT flags say; engages even with `AINDY_SYSCALL_IDEMPOTENCY` / `AINDY_TOOL_IDEMPOTENCY` off. Where `EXACTLY_ONCE` would degrade to at-least-once (a live concurrent call, a lock timeout, a failed gate) it **refuses** with `failure_class: "transient"`: nothing was dispatched, so a retry is safe. An `unknown` outcome is a legitimate end for it. | Yes | No (cache hit, or refused) |
+
+`register_tool` validates the label like `register_syscall` (it accepted any string, so a typo meant
+"no gate" silently). Under `EXACTLY_ONCE` an outcome that ends `unknown` is counted as
+`aindy_effect_contract_shortfall_total{guarantee="EXACTLY_ONCE", seam}`: that label promised completion.
 
 The label is stored in `RetryPolicy.execution_guarantee` (default `"AT_LEAST_ONCE"`) and
 serialised into `ExecutionUnit.extra["retry_policy"]["execution_guarantee"]` by
@@ -307,6 +314,8 @@ handler runs exactly once per `action_id` under any contention width.
 | `degraded_lock_timeout` | waited the full wait, gave up, ran anyway | 0 unless a handler exceeds the wait |
 | `degraded_gate_error` | the gate machinery itself failed | 0 |
 | `reclaimed` | took over a `failed`/stale row | 0 unless a winner failed |
+| `unknown_held` / `partial_held` | a replay found an ambiguous effect and returned it instead of re-running (DEC-085/086) | rare |
+| `refused_at_most_once` | an `AT_MOST_ONCE` call refused where `EXACTLY_ONCE` would have degraded (DEC-089) | 0 unless contention outlasts the lock wait, or the gate fails |
 
 A non-zero `degraded` on PostgreSQL with strict mode on now means **misconfiguration**, not
 contention — the operator signal inverts in a useful direction.
