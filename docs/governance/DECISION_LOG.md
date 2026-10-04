@@ -2055,3 +2055,16 @@ A non-transactional counterparty's honest guarantee is at-most-once with a recor
 
 **Why**
 An ambiguous outcome is the one case where a retry is worst: it may duplicate a landed effect.
+
+### DEC-091
+**Status:** `accepted` (2026-10-04 — `SYSMAX-3`; decided by the owner: "Leave deferred")
+
+**Decision — Per-unit memory for in-process units stays deferred; `ru_maxrss` in `check_quota` is not the fix.**
+`SYSMAX-3`'s recorded resolution (read `getrusage(RUSAGE_SELF).ru_maxrss` in the quota check) is
+not built. The entry is corrected, and stays deferred on its trigger (the first production OOM, or
+`hostile-third-party` becoming the default profile).
+
+**Why**
+`ru_maxrss` is the process's peak, and the server runs many units on many threads. Enforced
+per unit it would refuse innocent units once anything spiked, and never recover. Per-unit memory
+needs a process or a cgroup per unit; the guest worker already has its bound (`AINDY_NODUS_MAX_MEMORY_MB`).
