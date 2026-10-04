@@ -1,6 +1,6 @@
 ---
 title: "Runtime → UI Contract"
-last_verified: "2026-09-25"
+last_verified: "2026-10-03"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -122,6 +122,7 @@ runtime-owned paths a UI kit may target:
 | Coordination nodes | `/platform/nodes`, `/platform/nodes/{name}` | `nodes_router.py` |
 | Nodus operator | `/platform/nodus/run`, `/platform/nodus/scripts`, `/platform/nodus/schedule`, `/platform/nodus/flow` | `nodus_*_router.py` |
 | Queue / dead-letters | `/platform/queue/health`, `/platform/queue/dead-letters`, `/platform/queue/dead-letters/drain`, `/platform/queue/dead-letters/{job_id}`, `/platform/queue/dead-letters/{job_id}/replay` | `queue_router.py` |
+| Effects awaiting reconciliation | `/platform/effects/unknown`, `/platform/effects/{action_id}/resolve` | `effects_router.py` |
 | Admin | `/platform/admin/users`, `/platform/admin/agents` | `admin_router.py` |
 | Webhooks | `/platform/webhooks`, `/platform/webhooks/{subscription_id}` | `webhooks_router.py` |
 | Tenant usage | `/platform/tenants/{tenant_id}/usage` | `platform_ops_router.py` |

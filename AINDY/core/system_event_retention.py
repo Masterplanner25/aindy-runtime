@@ -89,6 +89,7 @@ RUNTIME_RETENTION_SEED: dict[str, str] = {
     "capability.*": RETENTION_AUDIT,
     "auth.*": RETENTION_AUDIT,
     "platform.*": RETENTION_AUDIT,
+    "effect.*": RETENTION_AUDIT,  # an operator's reconciliation of an unknown effect
     "dlq.drained": RETENTION_AUDIT,
     "flow_run.dead_lettered": RETENTION_AUDIT,
     "queue.failure_rate_alert": RETENTION_AUDIT,

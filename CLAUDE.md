@@ -264,7 +264,6 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — P1
 
-- **EFFECT-OUTCOME-UNKNOWN-1** — phases 1–3 BUILT: replay HOLDS `unknown`/`partial`; `AT_MOST_ONCE` never degrades; emitters (killed effectful isolated tool, MCP post-send timeout, `outbound_request`). Open: reconciliation route.
 - **FLOW-PARALLEL-1** — `FanOutEdgeGroup(join=all|any|quorum)`; phases 0–3a shipped, open for phase 4 (default flip on evidence). A lenient join past a failed branch is the first `partial` emitter; width bound is process-wide (SYSMAX-5); a named predicate is in the graph signature. 3b declined (DEC-015). Design: `docs/design/FLOW_PARALLEL_DESIGN.md`.
 - **FS-SCOPE-1** — *(Aider)* path authority exists as `visibility.filesystem {mode, roots}` on `ExecutionEnvironmentSpec`, enforced on the guest path only. **The tool seam sets `cwd`, not a boundary** — enforcement needs the container runner. Never a second vocabulary beside `egress_scope`.
 - **SUBSTRATE-WITNESS-1** — *(Claude Code)* ★★ LIVE CHANNEL 2026-09-22: Claw on **Telegram**, 3 turns → 3 `success` rows; the same `message_key` replayed (`message_id` identical, nothing sent), gate off → duplicate arrives. A refused duplicate a PERSON would have seen. WebChat cannot witness it (it streams; `deliver()` is the non-WebChat branch). Open for the SOAK + concurrency; the gate counter is unreadable from a live Claw. Never a synthetic fixture.
@@ -328,6 +327,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 
 ### Closed — kept as one line because the rule still bites
 
+- **EFFECT-OUTCOME-UNKNOWN-1** — CLOSED 2026-10-03 (#790–#793). Replay HOLDS `unknown`/`partial`, never re-runs; `AT_MOST_ONCE` refuses where `EXACTLY_ONCE` degrades; leaves `unknown` only via `POST /platform/effects/{id}/resolve`.
 - **MCP-SDK-2X-1** — CLOSED 2026-09-20 (#727): `mcp<2` lifted; nodus-mcp 0.1.4 branches per SDK major. A cap on the `[mcp]` extra must be REPEATED in the CI `Install MCP extra` step (it installs directly). Never isolate the MCP tests to go green.
 - **HTTP-SCOPE-GAP-1** — CLOSED 2026-09-17 (DEC-046 accepted, #723). Scope answers the VERB, the row filter answers OWNERSHIP; no `:any` scope. Gotchas: `enforce_api_key_scope` takes ANY-OF alternatives; router-level `dependencies` are invisible to a per-route `dependant` walk; scan routes with `_iter_api_routes`.
 - **CLI-EXEC-SURFACE-1** — CLOSED 2026-09-17 (DEC-047 accepted, #723). The operator half stays HTTP-only; a transport cannot grant authority it lacks; an operator syscall opens three doors at once.
