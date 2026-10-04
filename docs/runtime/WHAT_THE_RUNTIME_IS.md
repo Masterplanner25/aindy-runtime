@@ -206,8 +206,9 @@ than overclaiming, and this document holds itself to the same standard.
   was.** `HTTP-SCOPE-GAP-1`: a census on a booted app counts **91 scope-gated / 12 admin / 21
   public / 2 identity-only of 126 routes**. The remainder is a design question — `execution.read`
   conflates scope with data ownership, and a scope cannot answer *"may I read someone else's"*.
-- **There is no intra-execution parallelism.** `FLOW-PARALLEL-1` — the flow engine advances one
-  node at a time.
+- **Intra-execution parallelism is a declared fan-out only.** `FLOW-PARALLEL-1` (closed
+  2026-10-04): a `FanOutEdgeGroup`'s branches run concurrently by default, bounded process-wide;
+  everything else advances one node at a time.
 - **There is no supported profile below `single-instance`, and it requires PostgreSQL.**
   `EMBEDDED-FLOOR-1`. A consumer shaped like a library in a terminal — no server, no daemon, no
   database — is out of contract. See the note immediately below on what that does and does not

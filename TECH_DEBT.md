@@ -12213,6 +12213,23 @@ enforcement is a failure mode this repository already names — it is the whole 
 
 ## FLOW-PARALLEL-1 — the flow engine has no fan-out, join, or barrier
 
+**Status: CLOSED (2026-10-04) — phase 4 shipped: `AINDY_FLOW_FAN_OUT` defaults ON (DEC-097).**
+The written gate was "one real declaring flow completing under the flag"; no flow in the app or the
+runtime declares a group, and the register forbids declaring one for the soak's sake, so the owner
+chose to flip on a real-Postgres soak instead (`tests/integration/test_flow_fan_out_soak.py`, the
+real runner and dispatcher, branch nodes doing real work on the session the engine hands them):
+4 branches overlap on 4 distinct backend connections, each branch's own write commits, the state
+carries every result; flag off, the same flow runs one branch at a time to the same state; an
+`any` join with a failed branch reads `partial` naming exactly that branch, and a clean one reads
+`success`; 4 runs fanning out at once all complete with at most `width` branches in flight.
+★ **The soak found a defect the fakes could not:** the runner's own session sat `idle in
+transaction` for the whole superstep (measured from a branch via `pg_stat_activity`: 1), and since
+the branch pool is process-wide that hold grows with every other run's queued branches. Under 4
+concurrent runs one such connection was dropped and the run failed on `PendingRollbackError` at the
+barrier. Fixed: `_execute_superstep` commits the runner's session before the branches run
+(RT-MEMTXN-LEAK-1). Measured 0 after; 2/2 mutations bite. Remains: WAIT inside a group stays refused
+(design §5); the first app flow to declare a group is still worth watching.
+
 **★★ PHASE 3a SHIPPED 2026-09-15 — named predicates; 3b (`SwitchCaseEdgeGroup`) DECLINED as
 redundant. Open for phase 4 only (the default flip, on evidence).** Phase 2 shipped 2026-09-13
 (#640) — join policies at the barrier; the FIRST `partial` EMITTER in the runtime.

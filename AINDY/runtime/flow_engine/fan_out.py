@@ -181,12 +181,14 @@ _executor: ThreadPoolExecutor | None = None
 
 
 def fan_out_concurrency_enabled() -> bool:
-    """Phase 1 ships default-OFF; phase 4 flips it on evidence, not on code.
+    """Phase 1 shipped default-OFF; phase 4 flipped it ON on evidence (2026-10-04, DEC-097): the
+    real-Postgres soak in `tests/integration/test_flow_fan_out_soak.py`.
 
-    ★ Opt-IN: anything unrecognised reads as off. An unparseable value must never turn on
-    concurrency, and there is no test-mode short-circuit above this read.
+    ★ Only ``0/false/no/off`` disable it. The flag changes TIMING, never results: off, a declared
+    group still runs, sequentially in declaration order, to the same state. There is no test-mode
+    short-circuit above this read.
     """
-    return os.getenv("AINDY_FLOW_FAN_OUT", "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("AINDY_FLOW_FAN_OUT", "").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def max_fan_out_width() -> int:

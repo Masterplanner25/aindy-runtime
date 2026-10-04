@@ -1,7 +1,7 @@
 ---
 title: "Soak Register — flags waiting on evidence from the app's stack"
 api_version: "1.0"
-last_verified: "2026-10-03"
+last_verified: "2026-10-04"
 status: current
 owner: "platform-team"
 ---
@@ -89,7 +89,11 @@ runtime flips a default in the release after the evidence lands, and the row mov
 | Failure looks like | (a) a plan that cites memory it should not see (tenant leak — report immediately); (c) a run chain that does not stop, or a follow-up run dispatched from a run that was not approved |
 | Flips | each flag's default a release after its own presence signal; (c) never flips before (b) |
 
-### 6. `AINDY_FLOW_FAN_OUT=1` — `FLOW-PARALLEL-1` phase 4 — **status: needs a flow that declares a group; you may have none**
+### 6. `AINDY_FLOW_FAN_OUT=1` — `FLOW-PARALLEL-1` phase 4 — **status: FLIPPED 2026-10-04 on the runtime's own soak (DEC-097)**
+
+The gate below was never meetable (no flow declares a group), so the default flipped on
+`tests/integration/test_flow_fan_out_soak.py` instead. The signals still apply to the first app flow
+that declares one: report it.
 
 | | |
 |---|---|
@@ -123,4 +127,4 @@ with the caller fix), `AINDY_NODUS_WARM_POOL` (`NODUS-WARMPOOL-1`), `AINDY_SYSCA
 | 5a | `AINDY_PLANNER_MEMORY_INJECTION` | `INFINITY-RUNTIME-1` | — | — | — |
 | 5b | `AINDY_ASYNC_JOB_LOOP_CLOSURE` | `INFINITY-RUNTIME-1` | — | — | — |
 | 5c | `AINDY_NEXT_ACTION_ACTING` | `INFINITY-RUNTIME-1` | — | — | — |
-| 6 | `AINDY_FLOW_FAN_OUT` | `FLOW-PARALLEL-1` | — | needs a declaring flow | — |
+| 6 | `AINDY_FLOW_FAN_OUT` | `FLOW-PARALLEL-1` | — | runtime soak (DEC-097) | ON 2026-10-04 |

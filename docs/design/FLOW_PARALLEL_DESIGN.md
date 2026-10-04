@@ -1,7 +1,7 @@
 ---
 title: "Flow Fan-Out and Supersteps — Design"
 api_version: "1.0"
-last_verified: "2026-09-16"
+last_verified: "2026-10-04"
 status: current
 owner: "platform-team"
 ---
@@ -232,7 +232,7 @@ cheapest guard, and it belongs in the same PR as the shape.
 | ~~**1**~~ | ~~`FanOutEdgeGroup`, bounded width, per-branch sessions, `WAIT` refused~~ | **DONE.** Three things this row did not say, decided while building: **(a) the bound is PROCESS-WIDE, not per-run** — runners are created from request handlers, syscall dispatch, rehydration and scheduler recovery, so a per-run width of W allows *runs × W* sessions; one shared pool, sized like the scheduler's lanes. **(b) the flag gates CONCURRENCY, not SEMANTICS** — a group runs its branches in declaration order either way, so flipping it off changes timing and nothing else. **(c) phase 1 requires branches to CONVERGE on one successor, enforced** — the degenerate `all` join, because §8 is right that fan-out without a join is half a primitive and the half needs defined semantics rather than none |
 | ~~**2**~~ | ~~join policies (`all`, `any`, `quorum(k)`) resolved at the barrier, partial outcomes per `EFFECT-PARTIAL-1`~~ | **DONE — #640, 2026-09-13.** Declared ON the group (`join=`, `quorum=`), not as a separate `FanInEdgeGroup` — the barrier already exists, the join is a property of it. `all` keeps phase 1's recorded signature digest; a non-default join is shape and changes it. A lenient join proceeding past a failure is the runtime's **first `partial` emitter**: on the run's state, the completion event, and the `flow.run` envelope. Convergence is required of the SUCCEEDED branches |
 | ~~**3**~~ | ~~Named predicates, then `SwitchCaseEdgeGroup` as a constrained fan-out; closes `FLOW-GRAPH-SIGNATURE-1`'s blind spot~~ | **3a DONE — 2026-09-15**; **3b DECLINED** — see §6a. The blind spot is closed for named edges; the runtime's own flows stay on callables (a migration moves the digest once) |
-| **4** | Flip the default once a real flow declares a group and a superstep has been observed | evidence, not code |
+| ~~**4**~~ | ~~Flip the default once a real flow declares a group and a superstep has been observed~~ | **DONE — 2026-10-04 (DEC-097).** Flipped on the runtime's own real-Postgres soak, since no flow declares a group. The soak also found the runner holding its transaction across the superstep; it now commits first |
 
 **Phase 0 is worth landing alone** and is the honest first step: it puts the widened transaction
 on the live path with a frontier of one, so phase 1 is a small diff against a reviewed seam
