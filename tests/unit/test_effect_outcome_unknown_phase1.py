@@ -32,6 +32,22 @@ pytestmark = pytest.mark.runtime_only
 EU = str(uuid.uuid4())
 
 
+@pytest.fixture(autouse=True)
+def _restore_syscall_registry():
+    """Probe syscalls registered here must not leak into later tests (a census over the global
+    registry would read them; #791 CI caught exactly that)."""
+    from AINDY.kernel import syscall_registry as R
+
+    before = set(R.SYSCALL_REGISTRY.keys())
+    try:
+        yield
+    finally:
+        # Pop only what this test added (the registry guards duplicate writes on __setitem__,
+        # so a clear-and-refill restore is not safe; popping is the pattern used elsewhere).
+        for name in set(R.SYSCALL_REGISTRY.keys()) - before:
+            R.SYSCALL_REGISTRY.pop(name, None)
+
+
 @pytest.fixture
 def ledger(tmp_path, monkeypatch):
     """SessionLocal bound to a private engine, so the gate's own sessions commit for real."""

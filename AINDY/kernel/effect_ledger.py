@@ -206,6 +206,11 @@ def acquire_effect_lock(db, action_id: str, *, wait_seconds: float = 300.0):
         raise
 
 
+#: DEC-089 — the second slot of `(False, DEGRADED)`: a live concurrent call holds this effect's
+#: slot and the gate let this call through AT_LEAST_ONCE. An `AT_MOST_ONCE` caller refuses on it.
+DEGRADED = object()
+
+
 def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session):
     """Decide what to do about an EffectRecord row that already exists.
 
@@ -254,7 +259,9 @@ def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session):
             " degrading to AT_LEAST_ONCE for this call",
             action_id,
         )
-        return False, None
+        # DEC-089 — `DEGRADED` (not None) so an AT_MOST_ONCE caller can REFUSE instead of running.
+        # Callers that ignore the second slot when the first is False are unaffected.
+        return False, DEGRADED
 
     # Stale pending (abandoned) or prior failure: reclaim the slot in-place and
     # re-attribute it to the writer that is reclaiming it (MEB-3b).

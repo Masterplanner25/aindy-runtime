@@ -340,7 +340,9 @@ def test_concurrent_live_pending_skips_gate():
     done, payload = _resolve_effect_record(db, "action-live", "sys.v1.test", {})
 
     assert not done
-    assert payload is None
+    # DEC-089: the degrade path says so (the sentinel), so an AT_MOST_ONCE caller can refuse.
+    from AINDY.kernel.effect_ledger import DEGRADED
+    assert payload is DEGRADED
     db.rollback.assert_called_once()
     assert db.commit.call_count == 1
 

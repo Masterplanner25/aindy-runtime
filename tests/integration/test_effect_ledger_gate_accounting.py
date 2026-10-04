@@ -96,7 +96,10 @@ def test_reading_a_live_pending_row_counts_degraded(monkeypatch, testing_session
         "a live pending row must not be reported as a prior success — the caller would skip "
         "an effect that never actually landed"
     )
-    assert cached is None
+    # DEC-089: the degrade path now says so (`DEGRADED`), so an AT_MOST_ONCE caller can refuse.
+    from AINDY.kernel.effect_ledger import DEGRADED
+
+    assert cached is DEGRADED
     assert seen == ["degraded"], (
         f"the handler is about to run a second time and the gate recorded {seen or 'NOTHING'}. "
         f"An uncounted duplicate is invisible in aindy_effect_gate_outcomes_total, which is the "

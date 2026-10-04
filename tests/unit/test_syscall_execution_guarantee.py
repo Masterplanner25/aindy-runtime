@@ -108,11 +108,16 @@ def test_read_syscalls_are_never_exactly_once():
 
 def test_every_syscall_declares_a_valid_guarantee():
     """No syscall may carry a typo'd or empty guarantee — that silently reads as AT_LEAST_ONCE."""
+    from AINDY.kernel.syscall_registry import _VALID_EXECUTION_GUARANTEES
+
     registry = _registry()
+    # The registry's own vocabulary, not a copy of it: a copy went stale when DEC-089 added
+    # AT_MOST_ONCE. Pinned separately so the set cannot silently grow or shrink.
+    assert _VALID_EXECUTION_GUARANTEES == {"AT_LEAST_ONCE", "EXACTLY_ONCE", "AT_MOST_ONCE"}
     bad = {
         name: _guarantee(entry)
         for name, entry in registry.items()
-        if _guarantee(entry) not in {"AT_LEAST_ONCE", "EXACTLY_ONCE"}
+        if _guarantee(entry) not in _VALID_EXECUTION_GUARANTEES
     }
     assert not bad, f"invalid execution_guarantee values: {bad}"
 

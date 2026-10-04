@@ -1872,7 +1872,13 @@ SYSCALL_REGISTRY["sys.v1.observability.support_metrics"] = SyscallEntry(
 
 
 #: The only two values ``execution_guarantee`` may take. Mirrors ``RetryPolicy``'s contract.
-_VALID_EXECUTION_GUARANTEES: frozenset[str] = frozenset({"AT_LEAST_ONCE", "EXACTLY_ONCE"})
+_VALID_EXECUTION_GUARANTEES: frozenset[str] = frozenset({"AT_LEAST_ONCE", "EXACTLY_ONCE", "AT_MOST_ONCE"})
+
+#: DEC-089 — the guarantees that engage the effect gate. `AT_MOST_ONCE` is gated like `EXACTLY_ONCE`
+#: and differs in two ways: it NEVER degrades (always the strict lock; refuse rather than run a
+#: second time) and an `unknown` outcome is a legitimate end for it, not a shortfall.
+GATED_GUARANTEES: frozenset[str] = frozenset({"EXACTLY_ONCE", "AT_MOST_ONCE"})
+AT_MOST_ONCE = "AT_MOST_ONCE"
 
 
 def register_syscall(
