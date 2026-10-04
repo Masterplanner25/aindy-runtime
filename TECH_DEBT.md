@@ -14269,8 +14269,24 @@ supported. Two derivations from two systems, neither of which knew about the oth
 
 ## PERF-BASELINE-1 — no execution-path timing is asserted anywhere, and every flag flip is waiting on it
 
-**Status: OPEN — P2 (was P1). The counting half SHIPPED 2026-10-03; open for a per-turn budget and an
-order-of-magnitude latency floor on the soak path.** Built, as `WITNESS_AND_BASELINE_SCOPE.md` Part 1
+**Status: OPEN — P3 (was P1). Both counted halves SHIPPED 2026-10-03: per-effect and PER-TURN. Open
+only for an order-of-magnitude latency floor on the soak path.**
+
+**Per turn (`test_work_budget.py` §4, real Postgres, both backends):** plans of 1/3/5
+`runtime.selftest` steps (a tool doing no DB work), each as a FRESH user. **`agent_flow`: 42 queries
+per step; `nodus_vm`: 55 per step on the PARENT side** (its tool calls run in the worker, on that
+process's own engine, and are not counted). Both are constant from step 1 to 5, and repeat exactly.
+**A user's history does not raise a run's cost:** the same 2-step plan six times reads 225, then 168
+×5 (`agent_flow`) and 287, then 230 ×5 (`nodus_vm`). A user's FIRST run costs 57 more on both
+backends. ★ The first measurement ran 1/3/5 in order on ONE user and read as per-step growth (13.5
+then 42): that was the first-run surcharge, not the step index. **Composition, recorded, not
+optimised:** event emission dominates a step. On `agent_flow` it is about 5 `system_events` + 5
+`event_edges` INSERTs per step and the SELECTs those emissions make; the rest is
+`agent_steps`/`flow_runs`/`flow_history`/`agent_runs` bookkeeping. Three injected regressions were
+caught: an extra query per step, per-step work growing with the index, and per-run work growing
+with the user's history.
+
+**Earlier the same day: the counting half (per-effect).** Built, as `WITNESS_AND_BASELINE_SCOPE.md` Part 1
 recommended: `tests/integration/work_counter.py::count_work(engine)` counts SQL statements, pool
 checkouts and connections HELD (with `peak`), on the engine the code really uses, and refuses a
 window that saw no SQL. `tests/integration/test_work_budget.py`, on real Postgres:

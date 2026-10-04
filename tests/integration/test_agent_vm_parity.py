@@ -2,8 +2,8 @@
 RTR-1 — nodus_vm ↔ AGENT_FLOW parity validation against real PostgreSQL.
 
 The opt-in ``nodus_vm`` agent backend runs tool calls inside the nodus_worker
-subprocess; that path only works on Linux + a real DB (the Windows dev box blocks
-the subprocess, and unit tests mock the flow). These integration tests drive the
+subprocess; that path needs a real DB (unit tests mock the flow). It also runs on the
+Windows dev box with the warm pool on (verified 2026-10-03, PERF-BASELINE-1's per-turn budget). These integration tests drive the
 FULL path — real subprocess, real flow engine, real capability token, real
 ``sys.v1.memory.*`` tool execution — against PostgreSQL and assert the two
 backends produce equivalent observable outcomes.
