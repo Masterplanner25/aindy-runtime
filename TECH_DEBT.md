@@ -1604,7 +1604,9 @@ all `settings.` call sites with `get_settings().`; gate log initialization insid
 
 ## EFFECT-OUTCOME-UNKNOWN-1 — the runtime has no word for "dispatched, outcome unobserved"
 
-**Status:** Open — P2. Filed 2026-08-22.
+**Status: OPEN — P1 (was P2). DESIGNED 2026-10-03: `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md`, DEC-085..090 provisional.** Promoted because scoping found that **a replay RE-RUNS an `unknown` or `partial` effect**: `_resolve_existing_row` reclaims every status except `success` and a live `pending`, so the first honest `unknown` would be executed twice. And the clearest in-tree ambiguity, an isolated tool killed mid-call, is `failure_class: "transient"` today, so an `EXACTLY_ONCE` isolated tool can act twice now. Phases: (1) never re-run, hold out of TTL, `failure_class: "unknown"`; (2) `AT_MOST_ONCE`, which never degrades; (3) emitters; (4) reconciliation.
+
+**Filed as:** Open — P2. Filed 2026-08-22.
 
 **Provenance — two design notes, neither of them this repo's:**
 `OneDrive/…/Designs/NOTE_browser_automation_feasibility.md` (written against the `C:\codev`
