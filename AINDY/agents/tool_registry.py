@@ -858,7 +858,13 @@ def _finalize_tool_effect(db, action_id: str, status: str, result, tool_name: st
     from AINDY.kernel.effect_ledger import complete_effect_record
 
     payload = None
-    if status == "success":
+    if status == "unknown":
+        # DEC-085 — store the outcome so a held replay can return it.
+        from AINDY.kernel.syscall_outcome import held_record_payload, unknown as _unknown
+
+        detail = result if isinstance(result, str) else None
+        payload = held_record_payload({"result": None}, _unknown(detail=detail))
+    elif status == "success":
         try:
             import json as _json
 
@@ -1379,6 +1385,22 @@ def execute_tool(
                 # return is BEFORE the try/finally below, so it must release for itself)
                 if _effect_lock is not None:
                     _effect_lock.release()
+                from AINDY.kernel.syscall_outcome import HeldOutcome
+
+                if isinstance(_cached, HeldOutcome):
+                    # DEC-085 / DEC-086 — held, not replayed as a success and not re-run.
+                    return {
+                        "success": False,
+                        "result": None,
+                        "error": (
+                            f"tool {tool_name!r}: this effect's earlier outcome is "
+                            f"{_cached.status}; it is held, not re-run"
+                            + (" (reconciliation required)" if _cached.reconcile_required else "")
+                        ),
+                        "failure_class": "unknown" if _cached.status == "unknown" else "fatal",
+                        "idempotent_replay": True,
+                        "outcome": _cached.envelope_outcome(),
+                    }
                 return {
                     "success": True,
                     "result": (_cached or {}).get("result") if isinstance(_cached, dict) else None,
@@ -1495,7 +1517,11 @@ def execute_tool(
                     _finalize_tool_effect(
                         db,
                         _action_id,
-                        "success" if _isolated.get("success") else "failed",
+                        (
+                            "success" if _isolated.get("success")
+                            else "unknown" if _isolated.get("failure_class") == "unknown"
+                            else "failed"
+                        ),
                         _isolated.get("result"),
                         tool_name,
                     )
@@ -1522,9 +1548,15 @@ def execute_tool(
             return _outcome
     except Exception as exc:
         logger.warning("[AgentTool] %s failed: %s", tool_name, exc)
+        _class = _declared_failure_class(exc)
         if _idempotent:
-            _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
-        return {"success": False, "result": None, "error": str(exc), "failure_class": _declared_failure_class(exc)}
+            # DEC-085 — a tool that raised EffectOutcomeUnknown dispatched an effect it did not
+            # observe. `failed` would make the slot reclaimable and a retry would re-run it.
+            if _class == "unknown":
+                _finalize_tool_effect(db, _action_id, "unknown", str(exc), tool_name)
+            else:
+                _finalize_tool_effect(db, _action_id, "failed", None, tool_name)
+        return {"success": False, "result": None, "error": str(exc), "failure_class": _class}
     finally:
         # IDEM-13 — released after the ledger row reached a terminal status on EVERY exit, so a
         # waiting loser wakes to `success` (replay) rather than to the `pending` row it would

@@ -271,6 +271,10 @@ def test_per_turn_work_is_constant_and_recorded(engine, monkeypatch, _restore_re
     the history confound, not the step index."""
     from tests.integration.test_agent_vm_parity import _committed_user
 
+    # ★ One UNCOUNTED warm-up run first. The worker pool's background pre-warm touches the database
+    # on the same engine, and on the first run it landed inside the 1-step window: that run read
+    # 232 one time and 227 the next, so per-step cost looked like 57.5 then 55.0 (a flake).
+    _turn_queries(engine, backend, _committed_user(), 1, monkeypatch)
     q1, q3, q5 = (_turn_queries(engine, backend, _committed_user(), n, monkeypatch) for n in (1, 3, 5))
     per_step_a, per_step_b = (q3 - q1) / 2, (q5 - q3) / 2
     print(f"[work-budget] {backend}: 1 step {q1} queries, 3 steps {q3}, 5 steps {q5}; "

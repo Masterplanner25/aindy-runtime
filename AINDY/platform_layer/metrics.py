@@ -166,6 +166,14 @@ memory_recall_failures_total = Counter(
     registry=REGISTRY,
 )
 
+# DEC-087 — effects whose outcome is UNKNOWN and unreconciled. They are held out of TTL
+# cleanup (reaping one would let a retry re-run it), so this gauge is how they stay visible.
+effect_unknown_unresolved = Gauge(
+    "aindy_effect_unknown_unresolved",
+    "Effect records with an unknown outcome awaiting reconciliation; never reaped by TTL.",
+    registry=REGISTRY,
+)
+
 lease_fence_refusals_total = Counter(
     "aindy_lease_fence_refusals_total",
     "Leader-only job writes refused by the background-lease fence (leadership changed hands "

@@ -215,6 +215,7 @@ FAILURE_CLASSES: frozenset[str] = frozenset({
     "not_found",     # tool, syscall, route, resource absent
     "invalid",       # caller-side: bad args, schema violation
     "fatal",         # the raising site knows it is terminal
+    "unknown",       # dispatched, outcome unobserved: a retry may DUPLICATE it (DEC-090)
 })
 
 #: The one class a retry may follow. Everything else stops the loop.

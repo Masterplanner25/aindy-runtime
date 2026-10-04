@@ -26,6 +26,7 @@ def _make_db(
     pending: int = 0,
     eligible: int = 0,
     stale_pending: int = 0,
+    unknown: int = 0,
     execute_rowcounts: list[int] | None = None,
 ):
     """Return a MagicMock session pre-configured for the observability queries."""
@@ -35,12 +36,13 @@ def _make_db(
     db = MagicMock()
 
     # db.query(func.count(...)).scalar() → total_count
-    # db.query(func.count(...)).filter(...).scalar() → pending, eligible, stale_pending
+    # db.query(func.count(...)).filter(...).scalar() → pending, eligible, unknown, stale_pending
+    # (`unknown`: DEC-087 counts the held-unknown rows right after `eligible`)
     scalar_chain = db.query.return_value.scalar
     scalar_chain.return_value = total
 
     filter_scalar_chain = db.query.return_value.filter.return_value.scalar
-    filter_scalar_chain.side_effect = [pending, eligible, stale_pending]
+    filter_scalar_chain.side_effect = [pending, eligible, unknown, stale_pending]
 
     # db.execute(...) → result with .rowcount
     execute_results = []

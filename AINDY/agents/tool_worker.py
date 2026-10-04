@@ -81,7 +81,13 @@ def run_one(request: dict[str, Any]) -> dict[str, Any]:
         result = entry["fn"](args=args, user_id=user_id, db=None)
     except Exception as exc:  # noqa: BLE001 — every failure becomes a response
         logger.warning("[ToolWorker] %s raised: %s", tool_name, exc)
-        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "egress_mechanism": mechanism}
+        reply = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "egress_mechanism": mechanism}
+        # DEC-088/090 — carry a class the exception DECLARED (e.g. EffectOutcomeUnknown's
+        # "unknown") so the parent can record the effect honestly rather than `failed`.
+        declared = getattr(exc, "failure_class", None)
+        if isinstance(declared, str):
+            reply["failure_class"] = declared
+        return reply
 
     try:
         json.dumps(result)

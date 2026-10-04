@@ -566,9 +566,30 @@ def _cleanup_expired_effect_records() -> None:
                 EffectRecord.completed_at.isnot(None),
                 EffectRecord.completed_at < cutoff,
                 EffectRecord.status != "pending",
+                EffectRecord.status != "unknown",  # DEC-087: held until reconciled
             )
             .scalar()
         )
+        # DEC-087 — an unresolved `unknown` is never reaped: once its row is gone a retry finds no
+        # slot and runs the effect again. It is rare by construction, so it is counted and warned
+        # about instead of being deleted, and never mistaken for a stuck `pending` handler.
+        unknown_count = (
+            db.query(func.count(EffectRecord.id))
+            .filter(EffectRecord.status == "unknown")
+            .scalar()
+        ) or 0
+        try:
+            from AINDY.platform_layer.metrics import effect_unknown_unresolved
+
+            effect_unknown_unresolved.set(unknown_count)
+        except Exception:  # noqa: BLE001 — observability never breaks cleanup
+            pass
+        if unknown_count:
+            logger.warning(
+                "[effect_record_cleanup] %d effect(s) with an UNKNOWN outcome are held and not"
+                " reaped; each needs reconciliation (EFFECT-OUTCOME-UNKNOWN-1)",
+                unknown_count,
+            )
         logger.info(
             "[effect_record_cleanup] scan: total=%d pending=%d eligible=%d",
             total_count,
@@ -601,6 +622,7 @@ def _cleanup_expired_effect_records() -> None:
                         WHERE completed_at IS NOT NULL
                           AND completed_at < :cutoff
                           AND status != 'pending'
+                          AND status != 'unknown'
                         ORDER BY completed_at
                         LIMIT :batch_size
                     )
