@@ -233,6 +233,16 @@ def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session):
         _count_gate("replayed")
         return True, record.result_payload
 
+    # EFFECT-OUTCOME-UNKNOWN-1 (DEC-085, DEC-086). A `partial` or `unknown` effect is HELD: the
+    # recorded outcome comes back and the handler does not run. Reclaiming it (the fall-through
+    # below) re-ran an effect that may have landed (`unknown`) or did land in part (`partial`):
+    # the duplicate those statuses exist to prevent.
+    from AINDY.kernel.syscall_outcome import HELD_LEDGER_STATUSES, held_outcome_from_record
+
+    if record.status in HELD_LEDGER_STATUSES:
+        _count_gate(f"{record.status}_held")
+        return True, held_outcome_from_record(record.status, record.result_payload)
+
     stale_cutoff = utcnow() - timedelta(seconds=STALE_PENDING_THRESHOLD_SECONDS)
     if record.status == "pending" and record.created_at >= stale_cutoff:
         # A live concurrent call holds the slot; degrade to AT_LEAST_ONCE for this

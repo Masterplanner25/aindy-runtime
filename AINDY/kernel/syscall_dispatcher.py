@@ -141,7 +141,13 @@ _EU_ID_CTX: ContextVar[str] = ContextVar("syscall_eu_id", default="")
 from AINDY.kernel.syscall_outcome import (
     ENVELOPE_STATUS_ERROR,
     ENVELOPE_STATUS_SUCCESS,
+    ENVELOPE_STATUS_UNKNOWN,
     resolve_outcome,
+    EffectOutcomeUnknown,
+    HeldOutcome,
+    HELD_LEDGER_STATUSES,
+    held_record_payload,
+    OUTCOME_KEY,
 )
 
 
@@ -770,6 +776,23 @@ class SyscallDispatcher:
                         _gate_lock = None
                     _gate_db.close()
                     _gate_db = None
+                    if isinstance(_cached, HeldOutcome):
+                        # DEC-085 / DEC-086 — the recorded ambiguity, NOT a replayed success.
+                        _held_env = {
+                            "status": _cached.status,
+                            "data": _cached.data if isinstance(_cached.data, dict) else {},
+                            "outcome": _cached.envelope_outcome(),
+                            "trace_id": context.trace_id,
+                            "execution_unit_id": context.execution_unit_id,
+                            "syscall": name,
+                            "version": parsed_version,
+                            "duration_ms": int((time.monotonic() - t_start) * 1000),
+                            "error": None,
+                            "warning": None,
+                        }
+                        if _cached.status == ENVELOPE_STATUS_UNKNOWN:
+                            _held_env["failure_class"] = "unknown"  # DEC-090
+                        return _held_env
                     return {
                         "status": "success",
                         "data": _cached or {},
@@ -875,6 +898,13 @@ class SyscallDispatcher:
                             raise
             else:
                 data = entry.handler(payload, context)
+        except EffectOutcomeUnknown as exc:
+            # DEC-085..090 — the handler dispatched its effect and did not observe the outcome.
+            # Raising is the same claim as returning `_outcome: unknown(...)` with no data, so it
+            # becomes that claim and takes the ONE outcome path below (ledger, envelope, metric).
+            # ★ Must sit before the broad `except Exception`, which would record it `failed`.
+            logger.warning("[SyscallDispatcher] '%s' outcome unknown: %s", name, exc)
+            data = {OUTCOME_KEY: exc.outcome()}
         except Exception as exc:
             logger.warning(
                 "[SyscallDispatcher] handler error '%s': %s", name, exc, exc_info=True,
@@ -958,7 +988,9 @@ class SyscallDispatcher:
                 failure_class="fatal",
             )
 
-        if entry.output_schema:
+        # An `unknown` outcome has no result to validate, and recording it `failed` here would
+        # make it reclaimable, so a retry would re-run the effect (DEC-085).
+        if entry.output_schema and _outcome.status != ENVELOPE_STATUS_UNKNOWN:
             out_errors = validate_output(entry.output_schema, data)
             if out_errors:
                 detail = "; ".join(out_errors)
@@ -1007,8 +1039,11 @@ class SyscallDispatcher:
             # is deliberately kept identical to the tool path: cache nothing, warn, and let
             # replay return None rather than failing a call whose effect already landed.
             _gate_payload = data
+            if _outcome.ledger_status in HELD_LEDGER_STATUSES:
+                # DEC-085 / DEC-086 — keep the outcome (units, detail) so a held replay returns it.
+                _gate_payload = held_record_payload(data, _outcome.outcome)
             try:
-                _json.dumps(data)
+                _json.dumps(_gate_payload)
             except (TypeError, ValueError):
                 logger.warning(
                     "[SyscallDispatcher] %s EXACTLY_ONCE result is not JSON-serializable; "
@@ -1057,7 +1092,7 @@ class SyscallDispatcher:
         _count_outcome(name, _outcome.status)
 
         # Step 6 â€" return structured result
-        return {
+        _envelope = {
             "status": _outcome.status,
             "data": data,
             "outcome": _outcome.outcome,
@@ -1069,6 +1104,9 @@ class SyscallDispatcher:
             "error": None,
             "warning": deprecation_warning,
         }
+        if _outcome.status == ENVELOPE_STATUS_UNKNOWN:
+            _envelope["failure_class"] = "unknown"  # DEC-090: nothing retries it
+        return _envelope
 
     def _error_envelope(
         self,

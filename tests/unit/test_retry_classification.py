@@ -34,8 +34,11 @@ _TOOL_REGISTRY_PATH = pathlib.Path(retry_policy.__file__).resolve().parents[1] /
 # The classifier
 # ---------------------------------------------------------------------------
 
-def test_failure_classes_are_the_designed_six():
-    assert FAILURE_CLASSES == frozenset({"transient", "cancelled", "permission", "not_found", "invalid", "fatal"})
+def test_failure_classes_are_the_designed_seven():
+    # `unknown` added by DEC-090 (EFFECT-OUTCOME-UNKNOWN-1): dispatched, outcome unobserved; never retried.
+    assert FAILURE_CLASSES == frozenset(
+        {"transient", "cancelled", "permission", "not_found", "invalid", "fatal", "unknown"}
+    )
 
 
 def test_site_class_wins_over_the_substring_table():

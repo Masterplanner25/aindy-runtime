@@ -129,6 +129,69 @@ def unknown(
     }
 
 
+class EffectOutcomeUnknown(Exception):
+    """Raise from a syscall handler or a tool when the effect was DISPATCHED and its outcome was
+    NOT OBSERVED: the read timeout after a full request write, a counterparty that hung up
+    after receiving. (`EFFECT-OUTCOME-UNKNOWN-1`, DEC-085..090.)
+
+    Both seams map it to the ledger status ``unknown`` and the envelope ``failure_class:
+    "unknown"``, which no retry loop retries (DEC-090), and a replay HOLDS it rather than
+    re-running the effect (DEC-085). Raising it is the same claim as returning
+    ``{"_outcome": unknown(...)}`` with no data; the dispatcher turns one into the other.
+
+    ★ A claim about the WORLD. Do not raise it for an exception you did not classify: that is
+    ``failed``, and routing it here makes a knowable failure a permanent ambiguity.
+    """
+
+    #: Read by `_declared_failure_class` (tool seam, in-process and from a worker reply).
+    failure_class = "unknown"
+
+    def __init__(self, detail: Optional[str] = None, *, units: Optional[Sequence[Any]] = None):
+        super().__init__(detail or "effect dispatched; outcome not observed")
+        self.detail = detail
+        self.units = list(units or [])
+
+    def outcome(self) -> dict[str, Any]:
+        return unknown(detail=self.detail, units=self.units)
+
+
+#: Ledger statuses a replay HOLDS instead of re-running (DEC-085, DEC-086).
+HELD_LEDGER_STATUSES = frozenset({"partial", "unknown"})
+
+#: The key a held row's `result_payload` wraps its outcome under. A `success` row is unchanged.
+_HELD_KEY = "__held_outcome__"
+
+
+def held_record_payload(data: Any, outcome: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """What a `partial` / `unknown` row stores: the data AND the outcome (units, detail), so a
+    replay can return what was recorded. The plain data alone loses the per-unit outcome."""
+    return {_HELD_KEY: dict(outcome or {}), "data": data}
+
+
+@dataclass(frozen=True)
+class HeldOutcome:
+    """A replay found a `partial` / `unknown` effect and must not re-run it (DEC-085, DEC-086)."""
+
+    status: str
+    data: Any
+    outcome: Optional[dict[str, Any]]
+
+    @property
+    def reconcile_required(self) -> bool:
+        return self.status == ENVELOPE_STATUS_UNKNOWN
+
+    def envelope_outcome(self) -> dict[str, Any]:
+        return {**(self.outcome or {}), "held": True, "reconcile_required": self.reconcile_required}
+
+
+def held_outcome_from_record(status: str, payload: Any) -> HeldOutcome:
+    """Read a held row. A row written before the wrapper existed (a `partial` from a lenient
+    fan-out) is its plain data with no recorded outcome."""
+    if isinstance(payload, dict) and _HELD_KEY in payload:
+        return HeldOutcome(status, payload.get("data"), payload.get(_HELD_KEY) or None)
+    return HeldOutcome(status, payload, None)
+
+
 def resolve_outcome(data: dict[str, Any]) -> tuple[dict[str, Any], ResolvedOutcome]:
     """Split a handler's return value into ``(payload, outcome)``.
 

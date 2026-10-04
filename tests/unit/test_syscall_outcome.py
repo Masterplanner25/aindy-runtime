@@ -146,6 +146,10 @@ def test_the_marker_is_stripped_even_when_refused():
 _KNOWN_OUTCOME_EMITTERS = {
     "AINDY/kernel/syscall_registry.py",
     "AINDY/runtime/flow_engine/runner_completion.py",
+    # EFFECT-OUTCOME-UNKNOWN-1 phase 1 (DEC-085): a handler that RAISES `EffectOutcomeUnknown`
+    # is turned into the `_outcome: unknown` claim here, so it takes the one outcome path.
+    # In the release notes as required (changelog fragment for this PR).
+    "AINDY/kernel/syscall_dispatcher.py",
 }
 
 

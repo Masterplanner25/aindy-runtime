@@ -2003,7 +2003,7 @@ is refused at plan time, before step 0 runs. A plan without references is unaffe
 resolution seams are gated on `contains_reference(args)`, an in-memory walk.
 
 ### DEC-085
-**Status:** `provisional` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2)
+**Status:** `accepted` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2; accepted by the owner: "accept all and start phase 1")
 
 **Decision — A replay never re-runs an `unknown` effect; it returns the recorded outcome.**
 `_resolve_existing_row` returns the recorded `unknown` outcome (the caller gets the `unknown` envelope again, with `reconcile_required: true`) instead of reclaiming the slot, counted `unknown_held`. The handler does not run.
@@ -2012,7 +2012,7 @@ resolution seams are gated on `contains_reference(args)`, an in-memory walk.
 Today every status except `success` and a live `pending` falls through to reclaim, so the first honest `unknown` would be executed again on the next retry: the duplicate the status exists to prevent. Returning it (rather than failing) tells the caller the true state.
 
 ### DEC-086
-**Status:** `provisional` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2)
+**Status:** `accepted` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2; accepted by the owner: "accept all and start phase 1")
 
 **Decision — `partial` gets the same never-re-run rule.**
 A replay of a `partial` row returns the recorded per-unit outcome, counted `partial_held`.
@@ -2021,7 +2021,7 @@ A replay of a `partial` row returns the recorded per-unit outcome, counted `part
 Re-running a partial effect re-applies the units that landed. This changes a retried lenient fan-out (FLOW-PARALLEL-1), which re-ran every branch, including the ones that landed.
 
 ### DEC-087
-**Status:** `provisional` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2)
+**Status:** `accepted` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2; accepted by the owner: "accept all and start phase 1")
 
 **Decision — An unresolved `unknown` row is excluded from TTL cleanup.**
 The effect-record TTL job also excludes `status == "unknown"` until it is reconciled to `success` or `failed`. Exposed as `aindy_effect_unknown_unresolved`, warned in the scan line when nonzero.
@@ -2030,7 +2030,7 @@ The effect-record TTL job also excludes `status == "unknown"` until it is reconc
 Reaping an unresolved `unknown` lets a later retry find no slot and run the effect again. `unknown` is rare by construction, so the table stays bounded.
 
 ### DEC-088
-**Status:** `provisional` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2)
+**Status:** `accepted` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2; accepted by the owner: "accept all and start phase 1")
 
 **Decision — An isolated tool killed mid-call records `unknown` only if it declares an effect guarantee.**
 A budget- or cancel-killed isolated worker records the effect `unknown`, with `failure_class: "unknown"`, when the tool declares `EXACTLY_ONCE` or `AT_MOST_ONCE`. An `AT_LEAST_ONCE` tool keeps today's `transient` / `cancelled`.
@@ -2039,7 +2039,7 @@ A budget- or cancel-killed isolated worker records the effect `unknown`, with `f
 The kill is the clearest in-tree ambiguity, and today it is `transient` (retried), so an `EXACTLY_ONCE` isolated tool can act twice. A tool that declared repeats acceptable keeps its retry.
 
 ### DEC-089
-**Status:** `provisional` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2)
+**Status:** `accepted` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2; accepted by the owner: "accept all and start phase 1")
 
 **Decision — `AT_MOST_ONCE` joins the guarantee vocabulary now, and never degrades.**
 `AT_MOST_ONCE` is valid on `register_syscall` and `register_tool` and engages the effect gate. Unlike `EXACTLY_ONCE` it always takes the strict advisory lock (whatever the STRICT flags say), and on lock timeout it refuses with `failure_class: "transient"` (knowably not dispatched). `unknown` is a legitimate terminal outcome for it; under `EXACTLY_ONCE` an `unknown` counts as a contract shortfall.
@@ -2048,7 +2048,7 @@ The kill is the clearest in-tree ambiguity, and today it is `transient` (retried
 A non-transactional counterparty's honest guarantee is at-most-once with a recorded outcome. `EXACTLY_ONCE` degrades to at-least-once under contention (IDEM-11), which an at-most-once effect cannot. The owner asked for it now rather than last.
 
 ### DEC-090
-**Status:** `provisional` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2)
+**Status:** `accepted` (2026-10-03 — `EFFECT-OUTCOME-UNKNOWN-1`; `docs/design/EFFECT_OUTCOME_UNKNOWN_DESIGN.md` §2; accepted by the owner: "accept all and start phase 1")
 
 **Decision — `failure_class: "unknown"` exists, and nothing retries it.**
 `FAILURE_CLASSES` gains `"unknown"`, not in `RETRYABLE_CLASSES`. Every retry loop (both agent backends, `decide_retry`, the compiled `nodus_vm` loop) stops on it; `is_retryable_error` reads it from the whole envelope.
