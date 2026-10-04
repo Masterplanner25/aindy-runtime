@@ -380,3 +380,91 @@ def complete_effect_record(db, action_id: str, status: str, result_payload) -> N
         record.result_payload = result_payload if isinstance(result_payload, dict) else None
         record.completed_at = utcnow()
         db.commit()
+
+
+# ── EFFECT-OUTCOME-UNKNOWN-1 phase 4: reconciliation ─────────────────────────────────────────
+
+
+class EffectNotFound(LookupError):
+    """No effect record has this action_id."""
+
+
+class EffectNotReconcilable(ValueError):
+    """The effect is not `unknown`, so there is nothing to reconcile."""
+
+
+#: What an operator may resolve an `unknown` effect to. `success` means "it landed": later calls
+#: replay it. `failed` means "it did not land": the slot is freed and a retry may run it.
+RECONCILE_STATUSES = frozenset({"success", "failed"})
+
+
+def count_unknown_effects(db) -> int:
+    from AINDY.db.models.effect_record import EffectRecord
+    from sqlalchemy import func
+
+    return int(db.query(func.count(EffectRecord.id)).filter(EffectRecord.status == "unknown").scalar() or 0)
+
+
+def list_unknown_effects(db, *, limit: int = 100) -> list[dict]:
+    """Unresolved `unknown` effects, oldest first, with their recorded detail (DEC-087 keeps
+    them out of TTL cleanup, so this list is the operator's worklist)."""
+    from AINDY.db.models.effect_record import EffectRecord
+    from AINDY.kernel.syscall_outcome import held_outcome_from_record
+
+    rows = (
+        db.query(EffectRecord)
+        .filter(EffectRecord.status == "unknown")
+        .order_by(EffectRecord.completed_at.asc(), EffectRecord.created_at.asc())
+        .limit(max(1, min(int(limit), 500)))
+        .all()
+    )
+    out = []
+    for r in rows:
+        held = held_outcome_from_record(r.status, r.result_payload)
+        outcome = held.outcome or {}
+        out.append({
+            "action_id": r.action_id,
+            "action_type": r.action_type,
+            "tenant_id": r.tenant_id,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+            "detail": outcome.get("detail"),
+            "units": outcome.get("units") or [],
+        })
+    return out
+
+
+def reconcile_effect_record(db, action_id: str, status: str, *, commit: bool = True) -> dict:
+    """Resolve an `unknown` effect to `success` or `failed` (EFFECT-OUTCOME-UNKNOWN-1 phase 4).
+
+    Refused for any row that is not `unknown`: a `success` is already settled, a `failed` is
+    already retryable, a `pending` is live, and a `partial` names its units and is not this
+    question. On `success` the held wrapper is replaced by the recorded data, so a later replay
+    returns that data like any other success. ``commit=False`` lets a route put the audit event in
+    the same transaction (EVENT-OUTBOX-1).
+    """
+    from AINDY.db.models.effect_record import EffectRecord
+    from AINDY.kernel.syscall_outcome import held_outcome_from_record
+
+    if status not in RECONCILE_STATUSES:
+        raise ValueError(f"an unknown effect resolves to one of {sorted(RECONCILE_STATUSES)}, not {status!r}")
+    record = db.query(EffectRecord).filter(EffectRecord.action_id == action_id).first()
+    if record is None:
+        raise EffectNotFound(action_id)
+    if record.status != "unknown":
+        raise EffectNotReconcilable(f"effect {action_id!r} is {record.status!r}, not 'unknown'")
+    held = held_outcome_from_record(record.status, record.result_payload)
+    previous_detail = (held.outcome or {}).get("detail")
+    record.status = status
+    record.result_payload = held.data if status == "success" else None
+    record.completed_at = utcnow()
+    if commit:
+        db.commit()
+    return {
+        "action_id": record.action_id,
+        "action_type": record.action_type,
+        "status": status,
+        "previous_status": "unknown",
+        "previous_detail": previous_detail,
+    }
+

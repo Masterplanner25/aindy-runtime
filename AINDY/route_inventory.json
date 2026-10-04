@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "boot_mode": "runtime-only",
-  "route_count": 126,
+  "route_count": 128,
   "routes": [
     {
       "method": "GET",
@@ -460,6 +460,20 @@
       "path": "/platform/db/verify",
       "tags": [
         "Database Verification"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/platform/effects/unknown",
+      "tags": [
+        "Platform"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/platform/effects/{action_id}/resolve",
+      "tags": [
+        "Platform"
       ]
     },
     {

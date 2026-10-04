@@ -36,6 +36,7 @@ from AINDY.routes.platform.platform_ops_router import (
     memory_tree,
     router as platform_ops_router,
 )
+from AINDY.routes.platform.effects_router import router as effects_router
 from AINDY.routes.platform.queue_router import (
     delete_dead_letter,
     drain_dead_letters,
@@ -68,5 +69,6 @@ for child in (
     nodus_schedule_router,
     platform_ops_router,
     queue_router,
+    effects_router,  # EFFECT-OUTCOME-UNKNOWN-1 phase 4
 ):
     router.include_router(child)

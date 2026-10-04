@@ -144,6 +144,7 @@ State transition table:
 | `pending` (fresh, ≤ 15 min old) | concurrent-insert race — live call in flight | `pending` (unchanged) | gate degrades to AT_LEAST_ONCE for this call; warning logged. **`AT_MOST_ONCE` refuses instead** (the ledger returns `DEGRADED`, DEC-089) |
 | `pending` | handler returns an `unknown` claim, or raises `EffectOutcomeUnknown` | `unknown` | outcome (units, detail) stored beside the data |
 | `unknown` / `partial` | subsequent dispatch | unchanged | **HELD, never re-run** (DEC-085/086): the recorded outcome is returned (`outcome.held`, and for `unknown` `reconcile_required` + `failure_class: "unknown"`); `unknown` is never reaped by TTL (DEC-087) |
+| `unknown` | operator `POST /platform/effects/{action_id}/resolve` | `success` or `failed` | `success`: the held wrapper is replaced by the recorded data, later calls replay it; `failed`: the slot is freed and a retry runs. Refused (409) for any other status. Audit event `effect.reconciled` in the same transaction (who, to what, the note) |
 
 ---
 

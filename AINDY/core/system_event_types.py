@@ -2,6 +2,8 @@ from __future__ import annotations
 
 
 class SystemEventTypes:
+    # EFFECT-OUTCOME-UNKNOWN-1 phase 4 — an operator resolved an `unknown` effect (audit).
+    EFFECT_RECONCILED = "effect.reconciled"
     STARTUP_RECOVERY_FAILED = "startup.recovery.failed"
     STARTUP_RECOVERY_COMPLETED = "startup.recovery.completed"
 
