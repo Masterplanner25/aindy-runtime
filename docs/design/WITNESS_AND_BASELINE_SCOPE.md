@@ -64,8 +64,10 @@ really about; the timing half can stay open honestly.
 **★ BUILT 2026-10-03:** `tests/integration/work_counter.py` and `test_work_budget.py`. Recall is 3
 queries whatever the candidate count; no connection is held across the embedding call; and the
 per-effect number now exists: **the effect ledger costs 4 queries per `EXACTLY_ONCE` effect**, flat
-as the ledger fills. All four injected regressions are caught. Open: a per-turn budget and the
-latency floor.
+as the ledger fills. All four injected regressions are caught. **Per turn, the same day:** 42
+queries per agent step on `agent_flow`, 55 on `nodus_vm`'s parent side, constant across steps and
+flat across a user's history (a first-run surcharge of 57). Event emission dominates a step. Open:
+only the latency floor.
 
 ---
 

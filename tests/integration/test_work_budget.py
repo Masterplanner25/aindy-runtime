@@ -215,3 +215,95 @@ RECALL_TAG_QUERY_BUDGET = 3
 GATE_OVERHEAD_BUDGET = 4
 EFFECT_QUERY_BUDGET = 5
 REPLAY_QUERY_BUDGET = 1
+
+
+# ── 4. per turn: what one agent step costs, on both backends ────────────────────────────────
+#
+# The other half of the number PERF-BASELINE-1 asked for. Plans of 1, 3 and 5 `runtime.selftest`
+# steps (a tool that does no DB work of its own, so the count is the RUNTIME's per-step cost) run
+# through the real `execute_agent_run_via_nodus` on each backend, with a committed run and a real
+# capability token (the harness of `test_agent_vm_parity.py`).
+#
+# Per-step cost must be CONSTANT: going from 1 to 3 steps adds exactly what going from 3 to 5 adds.
+# Step N must not cost more than step 1. ★ Scope of the count on `nodus_vm`: the tool calls run in
+# the worker process, on that process's own engine, so this counts the PARENT's per-step work (the
+# segment chain, the run's bookkeeping). `agent_flow` runs in-process and is counted whole.
+
+
+@pytest.fixture
+def _restore_request_context():
+    from AINDY.main import _request_id_ctx
+
+    before = _request_id_ctx.get()
+    try:
+        yield
+    finally:
+        _request_id_ctx.set(before)
+
+
+def _selftest_plan(n: int) -> dict:
+    return {"steps": [
+        {"tool": "runtime.selftest", "args": {"echo": i}, "risk_level": "low", "description": f"s{i}"}
+        for i in range(n)
+    ]}
+
+
+def _turn_queries(engine, backend: str, user_id, n: int, monkeypatch) -> int:
+    from tests.integration.test_agent_vm_parity import _create_executing_run, _execute, _read_run
+
+    plan = _selftest_plan(n)
+    run_id, token = _create_executing_run(user_id, plan)
+    with count_work(engine) as work:
+        _execute(backend, run_id=run_id, plan=plan, token=token, user_id=user_id, monkeypatch=monkeypatch)
+    work.assert_saw_work()
+    run = _read_run(run_id)
+    assert run["status"] == "completed" and run["steps_completed"] == n, (backend, n, run)
+    return work.queries
+
+
+@pytest.mark.parametrize("backend, budget_name", [
+    ("agent_flow", "AGENT_FLOW_STEP_QUERY_BUDGET"),
+    ("nodus_vm", "NODUS_VM_STEP_QUERY_BUDGET"),
+])
+def test_per_turn_work_is_constant_and_recorded(engine, monkeypatch, _restore_request_context, backend, budget_name):
+    """★ Each plan size runs as a FRESH user. On one user the first run carries a one-time
+    surcharge, and running 1, 3, 5 in order on one user read as per-step growth (13.5 then 42):
+    the history confound, not the step index."""
+    from tests.integration.test_agent_vm_parity import _committed_user
+
+    q1, q3, q5 = (_turn_queries(engine, backend, _committed_user(), n, monkeypatch) for n in (1, 3, 5))
+    per_step_a, per_step_b = (q3 - q1) / 2, (q5 - q3) / 2
+    print(f"[work-budget] {backend}: 1 step {q1} queries, 3 steps {q3}, 5 steps {q5}; "
+          f"per step {per_step_a} then {per_step_b}")
+
+    assert per_step_a == per_step_b, (
+        f"{backend}: steps 2-3 cost {per_step_a} queries each but steps 4-5 cost {per_step_b}: per-step "
+        f"work grows with the step index"
+    )
+    assert per_step_a > 0, f"{backend}: a step added no queries; the count is not on the path that runs"
+    assert per_step_a <= globals()[budget_name], (backend, per_step_a, globals()[budget_name])
+
+
+@pytest.mark.parametrize("backend", ["agent_flow", "nodus_vm"])
+def test_a_users_run_does_not_cost_more_as_their_history_grows(engine, monkeypatch, _restore_request_context, backend):
+    """The same 2-step plan, six runs by one user. After the user's first run (a one-time
+    surcharge), a run must cost the same however much history the user has. A cost that scanned
+    the user's past events or memory would grow here."""
+    from tests.integration.test_agent_vm_parity import _committed_user
+
+    user_id = _committed_user()
+    runs = [_turn_queries(engine, backend, user_id, 2, monkeypatch) for _ in range(6)]
+    print(f"[work-budget] {backend}: same user, 2-step plan x6: {runs}")
+    assert runs[0] >= runs[1], f"{backend}: the first run cost less than a later one: {runs}"
+    assert len(set(runs[1:])) == 1, f"{backend}: a run's cost changes as the user's history grows: {runs}"
+
+
+# Per-step budgets on Postgres 15 (see section 4). Composition per step:
+#   agent_flow: ~5 system_events + 5 event_edges INSERTs and the SELECTs those emissions make (28),
+#               plus agent_steps / flow_runs / flow_history / agent_runs writes.
+#   nodus_vm (PARENT side only): more event emission per step, as the parent replays the worker's.
+# Event emission dominates the per-step cost on both backends.
+AGENT_FLOW_STEP_QUERY_BUDGET = 42
+NODUS_VM_STEP_QUERY_BUDGET = 55
+# Also observed: a user's FIRST run costs 57 queries more than its later ones on both backends; the
+# steady-state 2-step run is 168 (agent_flow) / 230 (nodus_vm parent side).

@@ -270,7 +270,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — P2 and below
 
-- **PERF-BASELINE-1** — *(Aider)* P2 now: counting half SHIPPED (`tests/integration/work_counter.py`, `test_work_budget.py`): recall 3 queries flat, no connection held across embedding, effect ledger = 4 queries/effect flat. Open: per-turn budget + latency floor. COUNT WORK, never wall-clock on CI.
+- **PERF-BASELINE-1** — *(Aider)* P3: per-effect AND per-turn budgets SHIPPED (`test_work_budget.py`, real PG): ledger 4 queries/effect; agent step 42 (`agent_flow`) / 55 (`nodus_vm` parent), flat over steps and user history. Open: latency floor only. COUNT WORK, never wall-clock on CI.
 - **IDEM-13** — the TOOL seam's `EXACTLY_ONCE` had no strict mode: FR-27's lock was wired into `syscall_dispatcher` ONLY, so under contention EVERY concurrent caller ran (5 concurrent sends → 5 real messages; 8-way → 8 runs). ★ BUILT 2026-09-23: `AINDY_TOOL_IDEMPOTENCY_STRICT` (wait 60s) → 1 run / 7 replays / 0 degraded. Default OFF; open for the FLIP only.
 - **EFFECT-OUTCOME-UNKNOWN-1** — `unknown` status shipped (#560) for a read timeout after a full write only; nothing emits it; `AT_MOST_ONCE` absent from the guarantee set. A claim about the WORLD — an unclassified exception is still `failed`.
 - **SANDBOX-EVIDENCE-2** — the strong runner attests `mount_mode`/`network_policy` by reading its own argv; real evidence is the live `/proc` probe, deployment-time. `strong-sandbox-certified` is a deployment claim.
