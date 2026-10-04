@@ -2111,3 +2111,12 @@ With it off, each such dispatch minted a one-call unit, so `AINDY_QUOTA_MAX_SYSC
 
 **Why**
 The wall cap is a sum of syscall durations (300 s default), and a real `memory.recall` step takes 30–40 s, so a run-level sum would refuse a long LLM-heavy run mid-way where nothing refuses it today. A run wall budget is a separate decision that needs a measured default.
+
+### DEC-097
+**Status:** `accepted` (2026-10-04 — `FLOW-PARALLEL-1` phase 4; decided by the owner: "Build evidence, then flip")
+
+**Decision — `AINDY_FLOW_FAN_OUT` defaults ON, on the runtime's own real-Postgres soak rather than an app flow.**
+Only `0/false/no/off` disable it. This amends the gate in `FLOW_PARALLEL_DESIGN.md` §8 row 4 and `SOAK_REGISTER.md` item 6 ("one real declaring flow completing under the flag").
+
+**Why**
+No flow in the app or the runtime declares a group, and the register forbids declaring one for the soak's sake, so the written gate could never be met. The flag gates timing, never results. The soak exercised what the fakes could not: concurrent branches on real per-branch connections, committed writes, the process-wide width under concurrent runs, and the `partial` outcome. It also found and fixed the runner holding a transaction across the superstep.

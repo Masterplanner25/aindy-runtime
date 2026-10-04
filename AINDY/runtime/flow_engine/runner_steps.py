@@ -590,6 +590,15 @@ def _execute_superstep(
         return flow_engine_module.execute_node(node, branch_state, branch_context)
 
     input_snapshot = dict(state)
+    # ★ FLOW-PARALLEL-1 phase 4 — end the runner's transaction BEFORE the branches run
+    #   (RT-MEMTXN-LEAK-1: never hold a transaction across slow work). The soak measured it: the
+    #   runner's session sat `idle in transaction` for the whole superstep, and since the branch
+    #   pool is process-wide, that hold grows with every other run's branches queued ahead. Under
+    #   4 concurrent runs one such connection was dropped and the run failed on
+    #   `PendingRollbackError` at the barrier. The runner commits after every node anyway; this
+    #   commits the declaring node's work one step earlier. `run.current_node` is still the
+    #   declaring node, so a crash mid-superstep still re-runs the group (at-least-once, as before).
+    self.db.commit()
     results = run_fan_out_branches(branches, state, context, _execute)
 
     # ★ Refuse WAIT before writing anything. Design §5 option 3, approved 2026-09-08: a

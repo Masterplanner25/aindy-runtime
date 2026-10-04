@@ -161,16 +161,17 @@ def test_a_group_mixed_with_sibling_edges_is_refused():
 # ── The flag: concurrency, not semantics ─────────────────────────────────────
 
 
-def test_the_flag_is_off_by_default(monkeypatch):
+def test_the_flag_is_on_by_default(monkeypatch):
+    """Phase 4 (DEC-097): flipped on the real-Postgres soak, `tests/integration/test_flow_fan_out_soak.py`."""
     monkeypatch.delenv("AINDY_FLOW_FAN_OUT", raising=False)
-    assert fan_out_concurrency_enabled() is False
+    assert fan_out_concurrency_enabled() is True
 
 
 @pytest.mark.parametrize("value,expected", [
-    ("1", True), ("true", True), ("on", True), ("yes", True),
-    ("0", False), ("false", False), ("", False), ("  ", False), ("perhaps", False),
+    ("1", True), ("true", True), ("on", True), ("yes", True), ("", True), ("  ", True),
+    ("0", False), ("false", False), ("no", False), ("off", False), (" OFF ", False),
 ])
-def test_the_flag_is_opt_in(monkeypatch, value, expected):
+def test_only_an_explicit_off_disables_it(monkeypatch, value, expected):
     monkeypatch.setenv("AINDY_FLOW_FAN_OUT", value)
     assert fan_out_concurrency_enabled() is expected
 
