@@ -241,6 +241,8 @@ class NodusRuntimeAdapter:
                     "effect_scope": str(context.effect_scope or ""),
                     # RECOVERY-GRANULARITY-1 — a continued run replays recorded steps.
                     "continuation": bool(context.continuation),
+                    # SYSMAX-4 — the unit the worker's dispatches are charged to, and its usage so far.
+                    "quota": _quota_handoff(context),
                 },
             }
         )
@@ -357,6 +359,8 @@ class NodusRuntimeAdapter:
         _apply_deferred_args_validation(result.get("args_validation"))
         # FR-38 / DEC-070 — negotiation resolutions counted in the worker ride the reply too.
         _apply_deferred_negotiation_tally(result.get("authority_negotiation"))
+        # SYSMAX-4 — the sixth: syscalls the worker dispatched, charged HERE to the run's unit.
+        _apply_deferred_quota(result.get("quota_usage"))
         worker_status = str(result.get("status") or "failure")
         worker_error = result.get("error")
 
@@ -401,6 +405,55 @@ class NodusRuntimeAdapter:
             raw_result=result,
             simulated_effects=simulated_effects,
         )
+
+
+def _quota_handoff(context) -> Optional[dict[str, Any]]:
+    """SYSMAX-4: which unit the worker's dispatches are charged to, and that unit's usage so far.
+
+    ★ The worker is another process. Before this it bound the Nodus execution's own unit and
+    counted in its own memory, so none of a `nodus_vm` run's tool syscalls reached the run's
+    budget: a 3-step run read 1 syscall on the run (the probe that found it, 2026-10-04). The
+    unit is whatever the PARENT is charging now (an agent run binds `run.id`); with no binding,
+    the execution's own unit. With a shared backend the worker reads the count itself, so only
+    the unit is sent. Never fatal: ``None`` leaves the worker on its own unit, as before.
+    """
+    try:
+        from AINDY.kernel.resource_manager import get_resource_manager, run_scoped_quota_enabled
+        from AINDY.kernel.syscall_dispatcher import _EU_ID_CTX
+
+        if not run_scoped_quota_enabled():
+            return None
+        unit = str(_EU_ID_CTX.get() or context.execution_unit_id or "")
+        if not unit:
+            return None
+        rm = get_resource_manager()
+        handoff: dict[str, Any] = {"unit": unit, "shared": rm.has_shared_backend()}
+        if not handoff["shared"]:
+            usage = rm.get_usage(unit) or {}
+            handoff["syscalls"] = int(usage.get("syscall_count") or 0)
+            handoff["limits"] = dict(usage.get("limits") or {})
+        return handoff
+    except Exception:  # noqa: BLE001 — accounting never fails an execution
+        logger.debug("[NodusRuntimeAdapter] quota handoff skipped", exc_info=True)
+        return None
+
+
+def _apply_deferred_quota(usage: Any) -> int:
+    """Charge the worker's syscalls to the unit it was told to charge. Returns the count."""
+    if not isinstance(usage, dict):
+        return 0
+    try:
+        unit = str(usage.get("unit") or "")
+        syscalls = int(usage.get("syscalls") or 0)
+        if not unit or syscalls <= 0:
+            return 0
+        from AINDY.kernel.resource_manager import get_resource_manager
+
+        get_resource_manager().record_syscall(unit, syscalls)
+        return syscalls
+    except Exception:  # noqa: BLE001
+        logger.debug("[NodusRuntimeAdapter] deferred quota skipped", exc_info=True)
+        return 0
 
 
 def _apply_deferred_negotiation_tally(tally: Any) -> int:

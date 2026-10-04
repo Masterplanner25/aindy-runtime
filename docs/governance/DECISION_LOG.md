@@ -2070,7 +2070,7 @@ per unit it would refuse innocent units once anything spiked, and never recover.
 needs a process or a cgroup per unit; the guest worker already has its bound (`AINDY_NODUS_MAX_MEMORY_MB`).
 
 ### DEC-092
-**Status:** `provisional` (2026-10-04 — `FS-SCOPE-1` phase 2; proposed in its PR, awaiting the owner)
+**Status:** `accepted` (2026-10-04 — `FS-SCOPE-1` phase 2, #795; accepted by the owner: "accept DEC-092..094")
 
 **Decision — At the tool seam, a declared filesystem scope is enforced by a Python audit hook in the isolated worker, and reported as `audit_hook:worker`, never as a boundary.**
 The parent resolves the decision; the worker installs it before anything loads, exactly like egress (DEC-048..050). The deployment's assurance does not change.
@@ -2079,7 +2079,7 @@ The parent resolves the decision; the worker installs it before anything loads, 
 The container runner is the boundary and the tool seam cannot reach it. Without the hook, a declared scope was recorded and never applied, which is the failure EXEC-ENV-BIND-1 exists to prevent. The hook covers the tool's own Python file I/O; naming it honestly keeps anyone from citing it as isolation.
 
 ### DEC-093
-**Status:** `provisional` (2026-10-04 — `FS-SCOPE-1` phase 2; proposed in its PR, awaiting the owner)
+**Status:** `accepted` (2026-10-04 — `FS-SCOPE-1` phase 2, #795; accepted by the owner: "accept DEC-092..094")
 
 **Decision — The filesystem scope is enforced whenever a tool declares one; there is no flag.**
 
@@ -2087,9 +2087,27 @@ The container runner is the boundary and the tool seam cannot reach it. Without 
 Declaring the scope is the opt-in. The flags elsewhere (DEC-051) gate behaviour that changes undeclared tools; this changes only a tool that asked for it, and no tool declares one today. A flag would let a declaration be silently unapplied again.
 
 ### DEC-094
-**Status:** `provisional` (2026-10-04 — `FS-SCOPE-1` phase 2; proposed in its PR, awaiting the owner)
+**Status:** `accepted` (2026-10-04 — `FS-SCOPE-1` phase 2, #795; accepted by the owner: "accept DEC-092..094")
 
 **Decision — The import path (interpreter prefixes and `sys.path` at install time) is readable under every scope, never writable.**
 
 **Why**
 The hook is installed before the plugin stack loads and tool functions import lazily, so code must stay readable or nothing runs. In a wheel install that is site-packages; in a source checkout it includes the repo root. Writes there are refused, and bytecode writing is turned off in the worker.
+
+### DEC-095
+**Status:** `accepted` (2026-10-04 — `SYSMAX-4`; decided by the owner: "Soak, then flip")
+
+**Decision — `AINDY_RUN_SCOPED_QUOTA` defaults ON: a run is the subject of the per-execution syscall cap.**
+Only `0/false/no/off` disable it. A guest's `sys()` calls and every dispatch under an agent run accrue on the run (`run.id`) and are checked against its cap, on both agent backends; the Nodus worker charges the unit the parent names and reports what it added.
+
+**Why**
+With it off, each such dispatch minted a one-call unit, so `AINDY_QUOTA_MAX_SYSCALLS` never applied to them (`QUOTA-ACCRUAL-ORPHAN-1`). The soak on real Postgres showed accrual and refusal at the cap on both backends, after fixing the worker half, which had never reached the run.
+
+### DEC-096
+**Status:** `accepted` (2026-10-04 — `SYSMAX-4`; decided by the owner: "Count syscalls only")
+
+**Decision — The run-scoped binding counts syscalls, not their wall time.**
+`bind_execution_unit(..., syscalls_only=True)` at `execute_run` and in the Nodus worker: nested dispatches add to the run's syscall count and record no duration. The wall-time cap stays per dispatch, as before.
+
+**Why**
+The wall cap is a sum of syscall durations (300 s default), and a real `memory.recall` step takes 30–40 s, so a run-level sum would refuse a long LLM-heavy run mid-way where nothing refuses it today. A run wall budget is a separate decision that needs a measured default.
