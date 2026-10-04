@@ -324,12 +324,12 @@ recorded reason or an open item with a `TECH_DEBT.md` entry.
   (`TOOL_FLOOR` is permissive; `SECRET_KEY`, `DATABASE_URL` and every provider key are visible to
   an isolated tool by default). `EXEC-ENV-BIND-1` phase 3 made this *declarable*; it did not
   change the default. The floor is deliberately today's behaviour written down.
-- **Filesystem `roots` are enforced on the guest seam only.** There they are clamped to the
-  guest floor (a declared root outside the floor is dropped and reported), and `readonly` passes
-  nodus an empty writable set (FS-SCOPE-1 phase 1). At the tool seam, a declared
-  scoped filesystem sets `cwd` to a scratch root and nothing more — a bare subprocess can still
-  open any path the OS allows. `cwd` is a default location, not a boundary. Enforcement needs
-  the container runner at that seam, not another spawn argument (`FS-SCOPE-1`).
+- **Filesystem scope is enforced in Python, not by the kernel, at both seams.** Guest: nodus's
+  `allowed_paths`/`writable_paths`, with roots clamped to the guest floor (FS-SCOPE-1 phase 1).
+  Isolated tool worker: a Python audit hook installed from the parent's decision, reported as
+  `audit_hook:worker` (FS-SCOPE-1 phase 2, DEC-092). C extensions, `ctypes` and child processes
+  bypass the hook, and an in-process tool cannot be scoped at all (`register_tool` warns). A
+  kernel boundary needs the container runner at the tool seam.
 - **`strong-sandbox-certified` and `hostile-third-party` are Linux-host-only** (`C3`;
   preparation plan in `../design/C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`).
 - **The container and strong runners are unreachable from inside a container.** The distributed

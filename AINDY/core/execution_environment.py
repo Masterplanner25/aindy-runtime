@@ -422,7 +422,7 @@ def subprocess_confinement(
         }
         kwargs["env"] = env
 
-    if spec.visibility.filesystem in (FS_SCOPED, FS_NONE):
+    if spec.visibility.filesystem in (FS_SCOPED, FS_READONLY, FS_NONE):
         kwargs["cwd"] = scratch_root
 
     wall_ms = spec.resources.wall_time_ms
