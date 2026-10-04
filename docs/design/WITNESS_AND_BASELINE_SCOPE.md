@@ -1,7 +1,7 @@
 ---
 title: "Substrate Witness and Performance Baseline — Scope"
 api_version: "1.0"
-last_verified: "2026-09-21"
+last_verified: "2026-10-03"
 status: current
 owner: "platform-team"
 ---
@@ -60,6 +60,12 @@ having none — it is `DOCS-COVERAGE-CLAIM-1`'s shape with a number attached.
 **Recommended slice, and it is small:** a `query_count` context manager beside `soak_harness`,
 plus assertions on the two paths that already regressed once. That closes the class the entry was
 really about; the timing half can stay open honestly.
+
+**★ BUILT 2026-10-03:** `tests/integration/work_counter.py` and `test_work_budget.py`. Recall is 3
+queries whatever the candidate count; no connection is held across the embedding call; and the
+per-effect number now exists: **the effect ledger costs 4 queries per `EXACTLY_ONCE` effect**, flat
+as the ledger fills. All four injected regressions are caught. Open: a per-turn budget and the
+latency floor.
 
 ---
 

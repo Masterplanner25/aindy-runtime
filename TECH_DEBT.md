@@ -5759,7 +5759,11 @@ locally verified and merged.
 
 ## MEM-RECALL-N1-1 — `recall()` scoring loop issues 3 queries per candidate
 
-**Status:** Open — performance-only. Surfaced 2026-07-19 while verifying RT-MEMTXN-LEAK-1, and
+**Status: CLOSED — fixed in #458 (batched connectivity; the four scoring columns carried on the node
+dict). The ledger said Open until 2026-10-03. Now guarded END TO END by
+`tests/integration/test_work_budget.py`: `recall()` is 3 queries for 2 or 15 candidates.**
+
+**Was:** Open — performance-only. Surfaced 2026-07-19 while verifying RT-MEMTXN-LEAK-1, and
 **explicitly not** the cause of that incident (recorded here so the two are not conflated).
 
 `MemoryNodeDAO.recall()` scores each candidate in a Python loop, and each iteration issues
@@ -5839,6 +5843,9 @@ take deliberately with the load understood, not a side effect of a dependency bu
 subsystem has no dedicated behavioural suite). Any fix should land with one.
 
 **Reopen/resolve:** when `MEM-RECALL-N1-1` is addressed, or when semantic expansion is wanted.
+**★ 2026-10-03: the first trigger has FIRED.** MEM-RECALL-N1-1 was fixed in #458, and recall's
+query count is now guarded (`test_work_budget.py`). The remaining caution is the pool: take
+pgvector 0.5.0 after `AINDY_MEMORY_RECALL_OWN_SESSION` is flipped on the FR-49 counter's evidence.
 Three routes, in the order they were weighed: (1) take the bump behind a default-off flag and
 soak, matching the repo's opt-in pattern; (2) widen `_embedding_is_usable` to accept any
 sequence — note this activates the path on 0.4.2 too, so it is not the *safe* option it looks
@@ -14262,7 +14269,27 @@ supported. Two derivations from two systems, neither of which knew about the oth
 
 ## PERF-BASELINE-1 — no execution-path timing is asserted anywhere, and every flag flip is waiting on it
 
-**Status: OPEN — P1.** Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17`.
+**Status: OPEN — P2 (was P1). The counting half SHIPPED 2026-10-03; open for a per-turn budget and an
+order-of-magnitude latency floor on the soak path.** Built, as `WITNESS_AND_BASELINE_SCOPE.md` Part 1
+recommended: `tests/integration/work_counter.py::count_work(engine)` counts SQL statements, pool
+checkouts and connections HELD (with `peak`), on the engine the code really uses, and refuses a
+window that saw no SQL. `tests/integration/test_work_budget.py`, on real Postgres:
+- **recall**: 3 queries for 2 candidates and for 15 (one `memory_nodes` SELECT, two grouped
+  `memory_links` SELECTs). Budget 3, through the full `recall()`.
+- **no connection held across the query-embedding call** (RT-MEMTXN-LEAK-1 as a HOLD COUNT sampled
+  inside the call, not a call ORDER), with a control that holds one on purpose.
+- **the per-effect number the flag backlog lacked**: an `EXACTLY_ONCE` dispatch is 1 query with the
+  gate off and 5 with it on. **The effect ledger costs 4 queries per effect** (lookup, claim
+  INSERT, read-back, completing UPDATE); a replay is 1. Per-effect work is unchanged from effect #1 to
+  #27, so the gate keys rather than scans.
+
+Four regressions were injected and each was caught: per-candidate connectivity, a DB touch before
+the embedding, one extra ledger query, and a ledger scan. **Still open, honestly:** a per-turn
+(agent step) budget, and a latency floor, which must never be a tight wall-clock bound on shared
+CI. Downgraded to P2 because the blocker it was P1 for (no instrument for "soak then flip")
+is gone.
+
+**Filed as: OPEN — P1.** Filed 2026-08-17. Provenance: `AIDER-PORTABILITY-2026-08-17`.
 
 **Measured.** **Zero latency assertions across `tests/`.** Every `duration_ms` reference is a
 type-or-shape assertion — `test_syscall_dispatch_contract.py:78` asserts
