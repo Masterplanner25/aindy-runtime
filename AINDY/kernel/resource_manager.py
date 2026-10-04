@@ -106,7 +106,8 @@ _GLOBAL_LIMITS = {
 
 def run_scoped_quota_enabled() -> bool:
     """EXEC-ENV-BIND-1 phase 4 — is the RUN the quota subject for guest `sys()` calls and agent
-    execution spans? Default OFF. Read per call (FR-10: never cache an env read at import).
+    execution spans? Default ON since 2026-10-04 (SYSMAX-4, DEC-095); only ``0/false/no/off``
+    disable it. Read per call (FR-10: never cache an env read at import).
 
     ★ What flipping it changes: a guest script's `sys()` calls and every dispatch under an
     agent run's execution span accrue on the RUN's unit and are checked against ITS ceilings —
@@ -116,7 +117,7 @@ def run_scoped_quota_enabled() -> bool:
     `aindy_syscall_unowned_unit_total` on a deployment: it names exactly the callers this
     moves. Accounting only — the idempotency gate keys on the caller's own id and is untouched.
     """
-    return str(os.getenv("AINDY_RUN_SCOPED_QUOTA", "")).strip().lower() in ("1", "true", "yes", "on")
+    return str(os.getenv("AINDY_RUN_SCOPED_QUOTA", "")).strip().lower() not in ("0", "false", "no", "off")
 
 RESOURCE_LIMIT_EXCEEDED = "RESOURCE_LIMIT_EXCEEDED"
 EU_KEY_TTL_SECONDS = 3600
@@ -1453,6 +1454,22 @@ class ResourceManager:
                     "max_tokens_per_tenant_window": MAX_TOKENS_PER_TENANT_WINDOW,
                 },
             }
+
+    def has_shared_backend(self) -> bool:
+        """True when usage lives in a store every process reads (Redis), so a count recorded in
+        a worker process is already visible here. False means this process's memory only."""
+        return self._backend is not None
+
+    def seed_usage(self, eu_id: str, *, syscalls: int = 0) -> None:
+        """SET this process's local view of a unit's syscall count (not add), without touching a shared
+        backend. For a worker process charging a parent's unit: it starts from the parent's
+        total so `check_quota` here refuses at the run's cap, not at a fresh 100 (SYSMAX-4)."""
+        eid = str(eu_id)
+        with self._lock:
+            snap = self._usage.get(eid)
+            if snap is None:
+                snap = self._usage[eid] = UsageSnapshot(eu_id=eid, tenant_id="")
+            snap.syscall_count = max(0, int(syscalls))
 
     def purge_eu(self, eu_id: str) -> None:
         """Remove the UsageSnapshot for *eu_id* from memory.

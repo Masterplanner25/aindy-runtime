@@ -4488,13 +4488,15 @@ deferred on the trigger below.
 
 ## SYSMAX-4 — Per-EU syscall cap (100) and wall-time cap (5min) may be tight for LLM-heavy flows
 
-**Status:** Tracked — advisory
+**Status: CLOSED (2026-10-04)** — the run is the syscall-cap subject by default; see the 2026-10-04
+note at the end of this entry (DEC-095, DEC-096). Was: Tracked — advisory.
 
 **Context:** `MAX_SYSCALLS_PER_EXECUTION = 100` (hard, mid-execution termination on breach) and `MAX_WALL_TIME_MS = 300_000` (5 minutes) are the per-execution-unit caps. A single flow node calling an LLM 3 times, doing 5 memory reads, and writing back results across multiple iterations can approach 100 syscalls non-trivially. A slow model with multiple round trips can exceed 5 minutes.
 
 **Not a bug:** The caps are correct safety defaults for single-process deployments. A multi-node DAG flow bypasses per-EU caps by design (each WAIT/RESUME creates a new EU). The risk is a developer building a complex single-node flow who hits a mid-execution `RESOURCE_LIMIT_EXCEEDED` with no retry path.
 
-**Resolution direction:** Both caps are tunable via env vars (`AINDY_MAX_SYSCALLS_PER_EXECUTION`, `AINDY_MAX_WALL_TIME_MS`). Document the advisory in `NODUS_DEVELOPER_GUIDE.md` §3 ("Design complex flows as multi-node DAGs rather than single nodes with many syscalls"). Raise caps only when a real workload requires it — do not raise speculatively.
+**Resolution direction:** Both caps are tunable via env vars (★ the names here were wrong until
+2026-10-04: the code reads `AINDY_QUOTA_MAX_SYSCALLS` and `AINDY_QUOTA_CPU_MS`). Document the advisory in `NODUS_DEVELOPER_GUIDE.md` §3 ("Design complex flows as multi-node DAGs rather than single nodes with many syscalls"). Raise caps only when a real workload requires it — do not raise speculatively.
 
 **★ 2026-09-13 — the other direction is also true: for some callers the cap does not apply AT
 ALL.** `QUOTA-ACCRUAL-ORPHAN-1` (#632) measured that a dispatch arriving with no execution unit
@@ -4506,6 +4508,30 @@ decided, a `RESOURCE_LIMIT_EXCEEDED` on this cap can only come from a caller tha
 — routes (via the pipeline bridge), MCP calls, and flow nodes under a named run.
 
 **Reopen trigger:** First production `RESOURCE_LIMIT_EXCEEDED` from a legitimate (non-runaway) flow.
+
+**★ 2026-10-04 — FLIPPED, and the soak found the nodus_vm half never worked.** `AINDY_RUN_SCOPED_QUOTA`
+now defaults ON (only `0/false/no/off` disable it; DEC-095). What the soak measured on real Postgres
+(`tests/integration/test_run_scoped_quota.py`), with the run bound exactly as `execute_run` binds it:
+- `agent_flow`: a 3-step `memory.recall` run charged the run 0 syscalls off, 3 on. Correct.
+- `nodus_vm`: 1 off, **1 on**. The tool calls run in the worker PROCESS, which bound the Nodus
+  execution's own unit (not `run.id`) and counted in its own memory, so none of them reached the run;
+  the same was true of every guest `sys()` in a worker. Fixed with the reply pattern (sixth deferred
+  collection): the adapter hands the worker `{unit, shared, syscalls, limits}` (`_quota_handoff`, the
+  unit the parent is charging); without a shared backend the worker seeds its local count (SET, not
+  add — a warm worker serves many runs), checks against the run's running total, and the reply's
+  `quota_usage` is recorded on the run by the parent; with Redis the worker binds the same unit and
+  reports nothing (a delta would double it). Now 1 off, 4 on; a warm worker too.
+- Enforcement, both backends, test mode switched off in parent AND worker: cap 100 → a 5-step run
+  completes; cap 2 → steps 0–2 run and step 3 is refused with `RESOURCE_LIMIT_EXCEEDED` (the check
+  refuses once the count EXCEEDS the cap).
+- ★ **Wall time is NOT run-scoped (DEC-096).** The 300 s "wall" cap is the SUM of syscall durations,
+  and `.env.example` measures a real `memory.recall` step at 30–40 s, so a run-level sum would refuse an
+  8–10-step LLM-heavy run that is refused nowhere today. A run-scoped binding passes
+  `syscalls_only=True` and nested dispatches record their call, not their duration. A run wall
+  budget, if ever wanted, is its own decision with a measured default.
+- Remains: a quota refusal is classified `transient`, so an agent step retries it 3 times before
+  failing; a run's budget never refills, so those retries are wasted (harmless, noisy). 8 unit tests
+  added (11/11 mutations) + 5 integration tests.
 
 ---
 

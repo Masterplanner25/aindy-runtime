@@ -136,6 +136,10 @@ __all__ = [
 # writing a new token.
 _TRACE_ID_CTX: ContextVar[str] = ContextVar("syscall_trace_id", default="")
 _EU_ID_CTX: ContextVar[str] = ContextVar("syscall_eu_id", default="")
+#: SYSMAX-4 (DEC-096) — the bound unit counts syscalls only, not their wall time. Set by a
+#: run-scoped binding: a run's syscall time summed against the 300 s cap would refuse a long
+#: LLM-heavy run mid-way, which per-dispatch accounting never did.
+_SYSCALLS_ONLY_CTX: ContextVar[bool] = ContextVar("syscall_unit_syscalls_only", default=False)
 
 
 from AINDY.kernel.effect_ledger import DEGRADED as _DEGRADED
@@ -192,7 +196,7 @@ _EU_MINTED_KEY = "_eu_minted"
 
 
 @_contextlib.contextmanager
-def bind_execution_unit(eu_id: str, trace_id: str | None = None):
+def bind_execution_unit(eu_id: str, trace_id: str | None = None, *, syscalls_only: bool = False):
     """Make every dispatch inside the block NESTED under `eu_id` — accrue on it, be checked
     against its ceilings — without touching what the caller's own context names.
 
@@ -202,6 +206,9 @@ def bind_execution_unit(eu_id: str, trace_id: str | None = None):
     the id the CALLER's context arrived with (`_orig_eu_id`), which this does not change. Both
     ids are set — a trace with no unit would make nested dispatches inherit `""` as their unit.
     Token-holding; nothing outlives the block.
+
+    ``syscalls_only`` (SYSMAX-4, DEC-096): nested dispatches add to the unit's syscall count but
+    not its wall time. The run-scoped bindings pass it; the wall-time cap stays per dispatch.
     """
     eid = str(eu_id or "")
     if not eid:
@@ -209,9 +216,11 @@ def bind_execution_unit(eu_id: str, trace_id: str | None = None):
         return
     tok_trace = _TRACE_ID_CTX.set(str(trace_id or eid))
     tok_eu = _EU_ID_CTX.set(eid)
+    tok_only = _SYSCALLS_ONLY_CTX.set(bool(syscalls_only))
     try:
         yield
     finally:
+        _SYSCALLS_ONLY_CTX.reset(tok_only)
         _EU_ID_CTX.reset(tok_eu)
         _TRACE_ID_CTX.reset(tok_trace)
 
@@ -1133,7 +1142,8 @@ class SyscallDispatcher:
             duration_so_far = int((time.monotonic() - t_start) * 1000)
             _get_rm().record_usage(
                 context.execution_unit_id,
-                {"syscall_count": 1, "wall_time_ms": duration_so_far},
+                # SYSMAX-4 (DEC-096) — a run-scoped unit counts the call, not its duration.
+                {"syscall_count": 1, "wall_time_ms": 0 if _SYSCALLS_ONLY_CTX.get() else duration_so_far},
             )
         except Exception as _rm_exc:
             logger.debug("[SyscallDispatcher] resource record skipped: %s", _rm_exc)

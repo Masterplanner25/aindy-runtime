@@ -194,35 +194,109 @@ def test_bind_execution_unit_nests_dispatches_and_releases(rm):
         assert sd._EU_ID_CTX.get() == "", "an empty id binds nothing (never a '' unit)"
 
 
-def _run_guest(monkeypatch, execution_unit_id: str):
+def _run_guest(monkeypatch, execution_unit_id: str, *, quota: dict | None = None, calls: int = 1, rm=None):
     pytest.importorskip("nodus.runtime.embedding")
     from AINDY.runtime import nodus_worker
 
-    seen: dict = {}
+    seen: dict = {"units": []}
 
     def _dispatch(name, payload, *, user_id):
-        seen["unit_during_sys"] = sd._EU_ID_CTX.get()
+        unit = sd._EU_ID_CTX.get()
+        seen["unit_during_sys"] = unit
+        seen["units"].append(unit)
+        seen["syscalls_only"] = sd._SYSCALLS_ONLY_CTX.get()
+        if rm is not None and unit:
+            rm.record_syscall(unit)  # what the real dispatcher accrues per call
         return {"status": "success", "data": {}}
 
     monkeypatch.setattr(nodus_worker, "dispatch_worker_syscall", _dispatch)
-    nodus_worker.run_one({
-        "script": 'sys("sys.v1.probe.noop", {})\nset_state("x", 1)\n',
+    context = {"user_id": "guest-u", "execution_unit_id": execution_unit_id, "trace_id": "trace-g"}
+    if quota is not None:
+        context["quota"] = quota
+    seen["reply"] = nodus_worker.run_one({
+        "script": 'sys("sys.v1.probe.noop", {})\n' * calls + 'set_state("x", 1)\n',
         "state": {},
-        "context": {"user_id": "guest-u", "execution_unit_id": execution_unit_id, "trace_id": "trace-g"},
+        "context": context,
     })
     return seen
 
 
-def test_guest_sys_calls_do_not_bind_the_run_unit_by_default(monkeypatch):
+def test_guest_sys_calls_bind_the_run_unit_by_default(monkeypatch):
+    """SYSMAX-4 (DEC-095): the run is the quota subject unless an operator says otherwise."""
     monkeypatch.delenv("AINDY_RUN_SCOPED_QUOTA", raising=False)
-    seen = _run_guest(monkeypatch, "run-guest-off")
-    assert seen.get("unit_during_sys") == "", "flag off: each sys() call is its own (reaped) unit"
-
-
-def test_guest_sys_calls_bind_the_run_unit_when_flagged(monkeypatch):
-    monkeypatch.setenv("AINDY_RUN_SCOPED_QUOTA", "1")
     seen = _run_guest(monkeypatch, "run-guest-on")
     assert seen.get("unit_during_sys") == "run-guest-on"
+
+
+@pytest.mark.parametrize("off", ["0", "false", "no", "off"])
+def test_guest_sys_calls_do_not_bind_the_run_unit_when_disabled(monkeypatch, off):
+    monkeypatch.setenv("AINDY_RUN_SCOPED_QUOTA", off)
+    seen = _run_guest(monkeypatch, "run-guest-off")
+    assert seen.get("unit_during_sys") == "", "disabled: each sys() call is its own (reaped) unit"
+
+
+# ── SYSMAX-4: the worker charges the PARENT's unit and reports what it added ──────────────────
+
+
+def test_the_worker_charges_the_unit_the_parent_names_from_its_running_total(monkeypatch, rm):
+    """★ The worker is another process. Before, it bound the Nodus execution's own unit and
+    counted in its own memory, so a `nodus_vm` run's tool syscalls never reached the run."""
+    monkeypatch.delenv("AINDY_RUN_SCOPED_QUOTA", raising=False)
+    quota = {"unit": "agent-run-1", "shared": False, "syscalls": 40, "limits": {}}
+    seen = _run_guest(monkeypatch, "nodus-exec-eu", quota=quota, calls=3, rm=rm)
+    assert seen["units"] == ["agent-run-1"] * 3, seen["units"]
+    assert seen["syscalls_only"] is True, "the worker charged the run's wall budget (DEC-096)"
+    assert seen["reply"]["quota_usage"] == {"unit": "agent-run-1", "syscalls": 3}, seen["reply"].get("quota_usage")
+    assert rm.get_usage("agent-run-1").get("syscall_count", 0) == 0, (
+        "the seeded snapshot stayed in the worker; a warm worker would carry one per run"
+    )
+
+
+def test_the_worker_refuses_at_the_runs_total_not_a_fresh_cap(monkeypatch, rm, enforcing):
+    """Seeded at 99 of 100, the worker's check refuses after two more calls, not after 101."""
+    monkeypatch.delenv("AINDY_RUN_SCOPED_QUOTA", raising=False)
+    monkeypatch.setattr(rm_mod, "MAX_SYSCALLS_PER_EXECUTION", 100)
+    rm.seed_usage("agent-run-2", syscalls=99)
+    assert rm.check_quota("agent-run-2") == (True, None), "control: 99 of 100 is within the cap"
+    rm.seed_usage("agent-run-2", syscalls=101)
+    ok, reason = rm.check_quota("agent-run-2")
+    assert not ok and "RESOURCE_LIMIT_EXCEEDED" in reason
+    # a warm worker seeds the same unit again on its next execution: SET, never add
+    rm.seed_usage("agent-run-2", syscalls=10)
+    assert rm.check_quota("agent-run-2") == (True, None), "a re-seed added to the old count"
+
+
+def test_with_a_shared_backend_the_worker_neither_seeds_nor_reports(monkeypatch, rm):
+    """Redis already holds the run's count for every process; a reported delta would double it."""
+    monkeypatch.delenv("AINDY_RUN_SCOPED_QUOTA", raising=False)
+    seen = _run_guest(monkeypatch, "nodus-exec-eu", quota={"unit": "agent-run-3", "shared": True}, calls=2)
+    assert seen["units"] == ["agent-run-3"] * 2
+    assert "quota_usage" not in seen["reply"]
+
+
+def test_the_parent_records_the_reported_syscalls_on_the_unit(rm):
+    from AINDY.runtime.nodus_runtime_adapter import _apply_deferred_quota
+
+    assert _apply_deferred_quota({"unit": "agent-run-4", "syscalls": 3}) == 3
+    assert rm.get_usage("agent-run-4")["syscall_count"] == 3
+    assert _apply_deferred_quota(None) == 0 and _apply_deferred_quota({"unit": "", "syscalls": 2}) == 0
+
+
+def test_the_parent_hands_off_the_unit_it_is_charging(monkeypatch, rm):
+    from types import SimpleNamespace
+
+    from AINDY.kernel.syscall_dispatcher import bind_execution_unit
+    from AINDY.runtime.nodus_runtime_adapter import _quota_handoff
+
+    monkeypatch.delenv("AINDY_RUN_SCOPED_QUOTA", raising=False)
+    rm.record_syscall("agent-run-5", 7)
+    ctx = SimpleNamespace(execution_unit_id="nodus-exec-eu")
+    with bind_execution_unit("agent-run-5", "t"):
+        handoff = _quota_handoff(ctx)
+    assert handoff["unit"] == "agent-run-5" and handoff["syscalls"] == 7 and handoff["shared"] is False
+    assert _quota_handoff(ctx)["unit"] == "nodus-exec-eu", "unbound: the execution's own unit"
+    monkeypatch.setenv("AINDY_RUN_SCOPED_QUOTA", "0")
+    assert _quota_handoff(ctx) is None
 
 
 def test_execute_run_binds_the_run_and_declares_its_ceilings_when_flagged(db_session, monkeypatch, rm):
@@ -249,6 +323,7 @@ def test_execute_run_binds_the_run_and_declares_its_ceilings_when_flagged(db_ses
 
     def _fake_execution(**kwargs):
         seen["unit"] = sd._EU_ID_CTX.get()
+        seen["syscalls_only"] = sd._SYSCALLS_ONLY_CTX.get()
         seen["limits"] = rm.declared_limits(str(run.id))
         r = db_session.query(AgentRun).filter(AgentRun.id == run.id).first()
         r.status = "completed"
@@ -265,5 +340,31 @@ def test_execute_run_binds_the_run_and_declares_its_ceilings_when_flagged(db_ses
 
     assert result is not None and result["status"] == "completed"
     assert seen["unit"] == str(run.id), "the run is the quota subject for its execution span"
+    assert seen["syscalls_only"] is True, "the run must count its syscalls, not sum their wall time (DEC-096)"
     assert seen["limits"] == {"syscalls": 11, "tokens": 777}, "the row's ceilings moved onto the accounting key"
     assert sd._EU_ID_CTX.get() == "", "released with the span"
+
+
+@pytest.mark.parametrize("syscalls_only, wall_charged", [(True, False), (False, True)])
+def test_a_run_scoped_binding_counts_the_call_not_its_duration(rm, syscalls_only, wall_charged):
+    """SYSMAX-4 (DEC-096): a run's syscall time summed against the 300 s wall cap would refuse
+    a long LLM-heavy run mid-way. The run counts calls; a request binding still charges time."""
+    import time
+
+    from AINDY.kernel import syscall_registry as R
+
+    name = f"sys.v1.test.slow_{uuid.uuid4().hex[:6]}"
+    R.SYSCALL_REGISTRY[name] = R.SyscallEntry(handler=lambda p, c: time.sleep(0.03) or {"ok": True},
+                                              capability="test.slow")
+    try:
+        d = sd.SyscallDispatcher()
+        d._emit_syscall_event = lambda *a, **k: None
+        ctx = R.SyscallContext(execution_unit_id="", user_id="u", capabilities=["test.slow"], trace_id="")
+        with sd.bind_execution_unit("run-wall", "t", syscalls_only=syscalls_only):
+            assert d.dispatch(name, {}, ctx)["status"] == "success"
+            assert d.dispatch(name, {}, ctx)["status"] == "success"
+    finally:
+        R.SYSCALL_REGISTRY.pop(name, None)
+    usage = rm.get_usage("run-wall")
+    assert usage["syscall_count"] == 2
+    assert (usage["wall_time_ms"] > 0) is wall_charged, usage

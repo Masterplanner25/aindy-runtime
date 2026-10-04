@@ -2093,3 +2093,21 @@ Declaring the scope is the opt-in. The flags elsewhere (DEC-051) gate behaviour 
 
 **Why**
 The hook is installed before the plugin stack loads and tool functions import lazily, so code must stay readable or nothing runs. In a wheel install that is site-packages; in a source checkout it includes the repo root. Writes there are refused, and bytecode writing is turned off in the worker.
+
+### DEC-095
+**Status:** `accepted` (2026-10-04 — `SYSMAX-4`; decided by the owner: "Soak, then flip")
+
+**Decision — `AINDY_RUN_SCOPED_QUOTA` defaults ON: a run is the subject of the per-execution syscall cap.**
+Only `0/false/no/off` disable it. A guest's `sys()` calls and every dispatch under an agent run accrue on the run (`run.id`) and are checked against its cap, on both agent backends; the Nodus worker charges the unit the parent names and reports what it added.
+
+**Why**
+With it off, each such dispatch minted a one-call unit, so `AINDY_QUOTA_MAX_SYSCALLS` never applied to them (`QUOTA-ACCRUAL-ORPHAN-1`). The soak on real Postgres showed accrual and refusal at the cap on both backends, after fixing the worker half, which had never reached the run.
+
+### DEC-096
+**Status:** `accepted` (2026-10-04 — `SYSMAX-4`; decided by the owner: "Count syscalls only")
+
+**Decision — The run-scoped binding counts syscalls, not their wall time.**
+`bind_execution_unit(..., syscalls_only=True)` at `execute_run` and in the Nodus worker: nested dispatches add to the run's syscall count and record no duration. The wall-time cap stays per dispatch, as before.
+
+**Why**
+The wall cap is a sum of syscall durations (300 s default), and a real `memory.recall` step takes 30–40 s, so a run-level sum would refuse a long LLM-heavy run mid-way where nothing refuses it today. A run wall budget is a separate decision that needs a measured default.

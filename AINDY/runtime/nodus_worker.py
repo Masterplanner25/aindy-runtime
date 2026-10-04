@@ -959,10 +959,26 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     # default: it makes the 100-syscall cap real for a long guest script for the first time.
     from AINDY.kernel.resource_manager import run_scoped_quota_enabled
 
-    if run_scoped_quota_enabled() and execution_unit_id:
+    # SYSMAX-4 — charge the unit the PARENT names (an agent run's `run.id`), starting from its
+    # usage so far, so the cap here is the run's cap. Without a shared backend this process's
+    # count is invisible to the parent; the delta rides the reply (`quota_usage`).
+    _quota = ctx.get("quota") if isinstance(ctx.get("quota"), dict) else None
+    _quota_unit = str((_quota or {}).get("unit") or execution_unit_id or "")
+    _quota_local = bool(_quota) and not bool(_quota.get("shared"))
+    _quota_seeded = 0
+    if run_scoped_quota_enabled() and _quota_unit:
         from AINDY.kernel.syscall_dispatcher import bind_execution_unit
 
-        _unit_cm = bind_execution_unit(execution_unit_id, trace_id)
+        if _quota_local:
+            from AINDY.kernel.resource_manager import get_resource_manager
+
+            _rm = get_resource_manager()
+            _quota_seeded = int(_quota.get("syscalls") or 0)
+            _rm.seed_usage(_quota_unit, syscalls=_quota_seeded)
+            _limits = _quota.get("limits") or {}
+            if _limits:
+                _rm.declare_limits(_quota_unit, **{k: _limits.get(k) for k in ("wall_time_ms", "syscalls", "tokens", "memory_bytes")})
+        _unit_cm = bind_execution_unit(_quota_unit, trace_id, syscalls_only=True)
     else:
         _unit_cm = contextlib.nullcontext()
     # FR-35 — the guest's LLM usage is APPENDED to a ledger here and recorded by the parent
@@ -1057,6 +1073,21 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         scratch_dir.cleanup()
     except Exception as exc:  # pragma: no cover - platform-dependent unlink races
         logger.debug("[NodusWorker] scratch cleanup failed (non-fatal): %s", exc)
+
+    # SYSMAX-4 — what this process added to the parent's unit, for the parent to record. Only
+    # syscalls: the wall time of this whole execution is already charged by the parent's own
+    # enclosing call, so adding the guest's call durations would count it twice. The seeded
+    # snapshot is dropped so a warm worker does not carry one per run.
+    if _quota_local and run_scoped_quota_enabled() and _quota_unit:
+        try:
+            from AINDY.kernel.resource_manager import get_resource_manager
+
+            _rm = get_resource_manager()
+            _added = int((_rm.get_usage(_quota_unit) or {}).get("syscall_count") or 0) - _quota_seeded
+            result_payload["quota_usage"] = {"unit": _quota_unit, "syscalls": max(0, _added)}
+            _rm.purge_eu(_quota_unit)
+        except Exception as exc:  # noqa: BLE001 — accounting never fails an execution
+            logger.debug("[NodusWorker] quota delta skipped: %s", exc)
 
     return result_payload
 

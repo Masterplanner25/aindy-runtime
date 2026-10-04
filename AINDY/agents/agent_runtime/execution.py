@@ -274,7 +274,7 @@ def execute_run(run_id: str, user_id: str, db: Session) -> Optional[dict]:
             if run_scoped_quota_enabled():
                 from AINDY.kernel.syscall_dispatcher import bind_execution_unit
 
-                _unit_cm = bind_execution_unit(str(run.id), run.trace_id or get_trace_id())
+                _unit_cm = bind_execution_unit(str(run.id), run.trace_id or get_trace_id(), syscalls_only=True)
             else:
                 _unit_cm = _contextlib.nullcontext()
             # OTEL-GENAI-SEMCONV-1 — `invoke_agent {agent_type}` has exactly the attribution
