@@ -51,7 +51,7 @@ dependencies = [
   "jiter==0.16.0",
   "joblib==1.6.0",
   "alembic==1.19.2",
-  "Mako==1.4.1",
+  "Mako==1.4.3",
   "MarkupSafe==3.0.3",
   "nodus-lang==5.15.0",
   "numpy==2.4.6",
