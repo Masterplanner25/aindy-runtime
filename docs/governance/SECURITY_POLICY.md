@@ -1,6 +1,6 @@
 ---
 title: "Security Policy"
-last_verified: "2026-10-01"
+last_verified: "2026-10-08"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -34,8 +34,8 @@ SHA pins.
 The auth-adjacent dependencies under active monitoring:
 - `bcrypt` — password hashing
 - `passlib` — password verification abstraction
-- `python-jose` — JWT signing and verification
-- Transitives of the above (e.g. `cryptography`, `ecdsa`)
+- `PyJWT` — JWT signing and verification (replaced `python-jose` 2026-10-08)
+- Transitives of the above (e.g. `cryptography`)
 
 ## Response SLA
 
@@ -67,14 +67,23 @@ Accepted findings must be documented here under **Accepted Findings**.
 
 ## Accepted Findings
 
-### CVE-2024-23342 — ecdsa Minerva timing attack
-- **Package:** ecdsa (transitive dep of python-jose)
-- **Aliases:** GHSA-wj6h-64fc-37mp (GitHub Dependabot advisory ID)
-- **Fix version:** None released
-- **Accepted:** 2026-05-25
-- **Rationale:** Not reachable. The runtime uses HS256 (HMAC-SHA256) signing for all JWTs (`ALGORITHM = "HS256"` in `AINDY/services/auth_service.py`). The ecdsa package is pulled in transitively by python-jose but EC key operations are never invoked (python-jose resolves to its `cryptography_backend`, with `cryptography` pinned). A Minerva timing attack requires repeated access to an EC signing oracle, which does not exist in this codebase.
-- **Dependabot:** alert dismissed as `not_used` on 2026-07-07 (alerts #4, #11).
-- **Reopen trigger:** Any addition of ECDSA/ES256 JWT signing or any direct ecdsa import. A fix release from the ecdsa maintainers would also allow removing this exemption.
+None currently.
+
+### Closed by replacement — python-jose and ecdsa (2026-10-08)
+`CVE-2026-85394` / `GHSA-3qf3-8w2g-rqmx` (critical, python-jose <= 3.5.0, no fix released): the
+HMAC algorithm-confusion guard accepts a DER-encoded public key, so a token forged with a
+service's public key verifies when `algorithms` is not pinned — an incomplete fix for
+CVE-2024-33663. The runtime was not exploitable (every verifying decode pins
+`algorithms=["HS256"]`; every key is a symmetric secret), but with no fix release the advisory
+could only be accepted indefinitely, and this was jose's second miss in the same guard. The JWT
+library was replaced with PyJWT instead. Tokens are wire-identical — sessions and emailed links
+minted by jose verify unchanged (`tests/unit/test_jwt_library_migration.py` holds jose-minted
+fixtures).
+
+`CVE-2024-23342` (ecdsa Minerva timing attack, no fix released; accepted 2026-05-25, Dependabot
+alerts #4 and #11 dismissed `not_used` 2026-07-07) closed with it: ecdsa arrived only as a
+dependency of python-jose. `rsa` and `pyasn1` left the install the same way. The exemption was
+deleted from `security-audit.yml` in the same change.
 
 ### Closed by absence — the nltk findings (2026-10-01)
 `PYSEC-2026-97`, `GHSA-rf74-v2fm-23pw`, `PYSEC-2026-597` and `PYSEC-2026-3740` were accepted
