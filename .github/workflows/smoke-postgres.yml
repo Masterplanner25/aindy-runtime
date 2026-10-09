@@ -11,6 +11,10 @@ name: Boot Smoke (PostgreSQL)
 # (green, with a ::notice) instead of failing. See the "Check whether this
 # version is published on PyPI" gate step.
 #
+# The CHECKOUT's source is what boots (`PYTHONPATH: .`): the wheel supplies its
+# dependency set and package data, and a later step installs the checkout's own
+# declared dependencies on top (DEC-098) so a dependency-changing PR can boot.
+#
 # ★★ THE SKIP IS ONLY SAFE BECAUSE SOMETHING ARRANGES THE UN-SKIPPED RUN, and
 # until 2026-09-10 nothing did. This comment used to end "it re-runs for real
 # once the tag publishes" — that was FALSE, and the false half is the dangerous
@@ -156,6 +160,28 @@ jobs:
           done
           echo "::error title=PyPI index lag::aindy-runtime==${VERSION} never became resolvable via the simple index after 10 attempts (~5 min)."
           exit 1
+
+      # DEC-098. `PYTHONPATH: .` boots the CHECKOUT's source, not the wheel's, so the wheel
+      # supplies only its dependency set and package data (the SPA). A PR whose source needs a
+      # dependency the published release lacks failed here until a release shipped — first hit
+      # by #810 (python-jose → PyJWT: `No module named 'jwt'`). This step installs the
+      # checkout's own [project].dependencies on top. On main and at release the two sets are
+      # identical and nothing moves; the diff is logged so a moved pin is visible in the run.
+      - name: Align dependencies with the checkout
+        if: steps.pypi_check.outputs.published == 'true'
+        run: |
+          python -m pip freeze --exclude aindy-runtime | sort > /tmp/deps-wheel.txt
+          python - <<'PY' > /tmp/checkout-deps.txt
+          import tomllib
+          print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]))
+          PY
+          python -m pip install --no-cache-dir -r /tmp/checkout-deps.txt
+          python -m pip freeze --exclude aindy-runtime | sort > /tmp/deps-checkout.txt
+          if diff /tmp/deps-wheel.txt /tmp/deps-checkout.txt; then
+            echo "Checkout dependencies match the published wheel's; nothing moved."
+          else
+            echo "::notice title=Boot Smoke dependencies::this checkout declares dependencies the published wheel does not (diff above)"
+          fi
 
       - name: Enable pgvector extension
         if: steps.pypi_check.outputs.published == 'true'

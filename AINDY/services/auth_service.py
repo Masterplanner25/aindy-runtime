@@ -15,7 +15,8 @@ from datetime import datetime, timedelta, timezone
 import re
 from typing import Optional, TYPE_CHECKING
 
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 from passlib.context import CryptContext
 from fastapi import HTTPException, Security, Depends
 from fastapi.security import (
@@ -227,7 +228,7 @@ def verify_email_token(token: str) -> dict:
     for key in _verify_verification_keys():
         try:
             payload = jwt.decode(token, key, algorithms=[ALGORITHM])
-        except JWTError:
+        except PyJWTError:
             continue
         if payload.get("purpose") != EMAIL_VERIFY_PURPOSE:
             raise generic
@@ -323,7 +324,7 @@ def verify_password_reset_token(token: str) -> dict:
     for key in _reset_verification_keys():
         try:
             payload = jwt.decode(token, key, algorithms=[ALGORITHM])
-        except JWTError:
+        except PyJWTError:
             continue
         if payload.get("purpose") != PASSWORD_RESET_PURPOSE:
             raise generic
@@ -402,7 +403,7 @@ def decode_access_token(token: str) -> dict:
     for key in _key_ring.verify_keys():
         try:
             payload = jwt.decode(token, key, algorithms=[ALGORITHM])
-        except JWTError as exc:
+        except PyJWTError as exc:
             last_exc = exc
             continue
         if payload.get("purpose") != ACCESS_TOKEN_PURPOSE:

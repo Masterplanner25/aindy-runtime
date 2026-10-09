@@ -69,12 +69,11 @@ dependencies = [
   "psycopg2==2.9.13",
   "pydantic==2.13.5",
   "pydantic-settings==2.15.0",
-  "pymongo==4.18.1",
+  "pymongo==4.18.2",
   "pyphen==0.17.2",
   "python-dateutil==2.9.0.post0",
   "python-dotenv==1.2.3",
-  "ecdsa==0.19.2",
-  "python-jose==3.5.0",
+  "PyJWT==2.15.1",
   "cryptography==50.0.1",
   "python-json-logger==4.2.0",
   "redis==8.1.0",
@@ -151,7 +150,7 @@ security = [
   # ensure a downgrade is flagged if the main pin is ever lowered below a known-safe version.
   "bcrypt>=4.0.1",
   "passlib>=1.7.4",
-  "python-jose>=3.5.0",
+  "PyJWT>=2.15.1",
   # setuptools>=83.0.0 clears CVE-2026-59890 / PYSEC-2026-3447 (FileList MANIFEST.in
   # glob matching, packaging-time only). Fix released, so we upgrade rather than ignore;
   # this floor also forces the pip-audit env off the runner's ambient 79.0.1.

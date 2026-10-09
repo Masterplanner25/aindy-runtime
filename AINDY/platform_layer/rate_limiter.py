@@ -20,7 +20,7 @@ The limiter must also be attached to app.state in main.py:
 import os
 
 from fastapi import Request
-from jose import jwt
+import jwt
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -44,12 +44,7 @@ def _identity_key(request: Request) -> str:
             if token:
                 payload = jwt.decode(
                     token,
-                    key="",
-                    options={
-                        "verify_signature": False,
-                        "verify_aud": False,
-                        "verify_exp": False,
-                    },
+                    options={"verify_signature": False},
                 )
                 subject = str(payload.get("sub") or "").strip()
                 if subject:

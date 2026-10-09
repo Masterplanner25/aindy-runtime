@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
-from jose import jwt
+import jwt
 from unittest.mock import MagicMock, patch
 
 from AINDY.services.auth_service import (
@@ -70,7 +70,7 @@ def test_reset_token_is_rejected_by_the_access_path():
 def test_reset_token_does_not_verify_against_the_access_key():
     """Domain separation, checked at the crypto layer rather than via behaviour."""
     token = create_password_reset_token(_User())
-    with pytest.raises(Exception):
+    with pytest.raises(jwt.InvalidSignatureError):
         jwt.decode(token, signing_key(), algorithms=[ALGORITHM])
 
 

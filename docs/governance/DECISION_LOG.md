@@ -1,6 +1,6 @@
 ---
 title: "Decision Log"
-last_verified: "2026-09-16"
+last_verified: "2026-10-08"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -2120,3 +2120,12 @@ Only `0/false/no/off` disable it. This amends the gate in `FLOW_PARALLEL_DESIGN.
 
 **Why**
 No flow in the app or the runtime declares a group, and the register forbids declaring one for the soak's sake, so the written gate could never be met. The flag gates timing, never results. The soak exercised what the fakes could not: concurrent branches on real per-branch connections, committed writes, the process-wide width under concurrent runs, and the `partial` outcome. It also found and fixed the runner holding a transaction across the superstep.
+
+### DEC-098
+**Status:** `accepted` (2026-10-08 — #810, python-jose → PyJWT; decided by the owner: "Align deps in workflow")
+
+**Decision — Boot Smoke installs the checkout's declared `[project].dependencies` on top of the published wheel.**
+The step runs after the wheel install, logs a `pip freeze` diff, and is a no-op whenever the checkout's pins equal the release's (on `main` between dependency changes, and at release through `publish.yml`'s `workflow_call`).
+
+**Why**
+`PYTHONPATH: .` means Boot Smoke boots the checkout's SOURCE, not the wheel's; the wheel contributes only its dependency set and package data. A PR whose source needs a dependency the published release lacks therefore failed a required check that only a release could clear, and a release cannot be cut without merging. #810 hit it first (`No module named 'jwt'`). Declined: a two-step migration (ship both libraries, switch imports after a release) — it keeps pip-audit red, and every PR blocked with it, for a release cycle. What the check still proves at release is unchanged: there the checkout is the tag, so the two dependency sets are the same set.

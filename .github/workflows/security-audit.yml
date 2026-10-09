@@ -43,9 +43,9 @@ jobs:
 
       - name: Run pip-audit
         run: |
-          # CVE-2024-23342: ecdsa Minerva timing attack â€” no fix released. Accepted 2026-05-25;
-          #   not reachable: runtime uses HS256 (HMAC) signing only; ecdsa is a transitive dep of
-          #   python-jose that is never exercised by this codebase.
+          # No accepted findings. CVE-2024-23342 (ecdsa Minerva, no fix) was removed 2026-10-08
+          #   with python-jose itself: jose was the only thing that pulled ecdsa in, and it was
+          #   replaced by PyJWT after CVE-2026-85394 (jose <= 3.5.0, critical, no fix released).
           # The four nltk acceptances (PYSEC-2026-97, GHSA-rf74-v2fm-23pw, PYSEC-2026-597,
           #   PYSEC-2026-3740) were removed 2026-10-01 with the nltk + textstat pins (PACK-DEBT-6,
           #   2.25.0): nothing in the runtime imported either, so the advisories closed by absence.

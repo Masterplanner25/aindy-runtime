@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
-from jose import jwt
+import jwt
 from unittest.mock import MagicMock, patch
 
 from AINDY.services.auth_service import (

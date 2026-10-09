@@ -5,7 +5,7 @@ from fastapi import HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from jose import jwt as _jose_jwt
+import jwt as _jwt
 from sqlalchemy.exc import OperationalError as SAOperationalError
 from sqlalchemy.exc import TimeoutError as SATimeoutError
 from slowapi import _rate_limit_exceeded_handler
@@ -156,11 +156,7 @@ def _extract_user_id_from_request(request: Request):
     if not token:
         return None
     try:
-        payload = _jose_jwt.decode(
-            token,
-            key="",
-            options={"verify_signature": False, "verify_aud": False, "verify_exp": False},
-        )
+        payload = _jwt.decode(token, options={"verify_signature": False})
         sub = str(payload.get("sub") or "").strip()
         if not sub:
             return None
