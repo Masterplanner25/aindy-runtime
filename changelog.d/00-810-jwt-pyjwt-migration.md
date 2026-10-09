@@ -1,4 +1,4 @@
-### Changed — the JWT library is PyJWT; python-jose, ecdsa, rsa and pyasn1 leave the install (#PR)
+### Changed — the JWT library is PyJWT; python-jose, ecdsa, rsa and pyasn1 leave the install (#810)
 
 **Operators: read before upgrading** if any plugin or extension in your deployment imports
 `jose`, `ecdsa`, `rsa` or `pyasn1` without declaring it — the runtime no longer installs them.
