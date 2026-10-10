@@ -9233,6 +9233,38 @@ key in each tool dict.
 
 ---
 
+## FR-52 — DEBT-COMPAT-1's consumer check ran on every `load_plugins()` call, and the registry's getters call that lazily: ~3 s added to every request 🔴 defect, P1 (app-filed 2026-10-07, runtime 2.25.0)
+
+**Status: CLOSED (2026-10-09, #814) — UNRELEASED.** `load_plugins()` ended unconditionally in
+`check_consumer_requirements`, which calls `packages_distributions()` and scans every distribution
+for shadowing copies. The getters (`emit_event`, `get_route_guard`, `get_response_adapter`,
+`get_memory_policy`, … — 14 sites) call `load_plugins()` lazily: **26 times in one warm
+`GET /memory/nodes`**. The app measured p50 3,780 ms as shipped vs 820 ms with the check stubbed
+(their yappi profile: 9.7 s summed in the check across threads, 208,026 `pathlib` parses).
+**Fix:** the check runs when the plugin module set differs from the last one checked
+(`registry._consumer_check_modules`, in both registry-reset dicts). Its answer cannot change while the
+process lives, and a different manifest or profile is still checked. **Why our suites never saw it:**
+runtime-only boot's manifest lists no plugins, so `load_plugins()` returns before the check — the
+cost exists only for a consumer with plugins (the app has 16). The route test therefore selects a
+plugin manifest through `AINDY_PLUGIN_MANIFEST`. Tests: 5 loads → 1 scan; a wider module set →
+checked again; one warm request through the real route → 0 scans (26 before). Always-check and
+never-check mutations each fail them. Asks 1 and 3 built; ask 2 (cache `packages_distributions`)
+unnecessary once the check runs once.
+
+---
+
+## FR-51 — `pymongo==4.18.1` and `python-jose==3.5.0` were exact pins carrying four advisories; pymongo's fix is 4.18.2, python-jose had none 🔴 security (app-filed 2026-10-06, runtime 2.26.0)
+
+**Status: CLOSED (2026-10-08, #810) — UNRELEASED.** Both asks answered: `pymongo==4.18.2`
+(CVE-2026-96747/96748/96749), and python-jose **replaced by PyJWT** (CVE-2026-85394, critical, no
+fix). The app's exposure assessment matched ours: HS256 pinned at every verifying decode, the two
+unverified reads authorise nothing. jose-minted tokens verify unchanged (pinned fixtures). The app's
+four audit ignores come off at the adoption that brings this release. PyJWT carries its `[crypto]`
+extra since #814 — its asymmetric-key guard returns early without `cryptography` (nodus-auth
+def3ef8). Boot Smoke needed DEC-098 to let a dependency-changing PR boot at all.
+
+---
+
 ## FR-50 — the memory routes forwarded their optional fields as None and the syscall schemas refused them: query-only and tags-only recall, and a node created without a node_type, all answered 400 🔴 defect (app-filed 2026-09-30, runtime 2.24.0)
 
 **Status: CLOSED (2026-09-30).** VERIFIED LIVE by the app 2026-10-02: a query-only

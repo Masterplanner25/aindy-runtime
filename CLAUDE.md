@@ -288,7 +288,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-51** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half. Closed: FR-43..50 (FR-46 default ON, DEC-084).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-53** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half. Closed: FR-43..52 (FR-46 default ON, DEC-084; FR-51 #810, FR-52 #814).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
