@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-10-04"
+last_verified: "2026-10-10"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,31 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 041 — 2026-10-10
+
+**Trigger:** `v2.27.0` release tag (`sandbox-escape-linux.yml`, run `38025672648`).
+**Commit:** `d5b1b46` (release PR #815's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:d9368b3a5ac59afea7b5d4f2e2aea0941dbf9fdee9c369c5bec00b98244bc929` — the **same** digest as
+Entry 040; the upstream tag did not move between `v2.26.0` and `v2.27.0`.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.25s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `38025672648`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.26.0..v2.27.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:** the JWT library changed (#810, #814:
+python-jose → `PyJWT[crypto]`; CVE-2026-85394) and `ecdsa` / `rsa` / `pyasn1` left the install. That
+is the authentication path, not isolation; no sandbox control reads a token. FR-52 (#814) changed
+when the plugin-load version check runs, not what loads.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. Both were green on `d5b1b46` before the tag,
+with Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit. Publish: the `production`
+environment gate was approved by the owner; PyPI's JSON API and simple index both reported `2.27.0`,
+Boot Smoke on the published wheel passed on attempt 1, and the GitHub release is non-draft.
 
 ## Entry 040 — 2026-10-04
 
