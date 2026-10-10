@@ -136,6 +136,10 @@ _required_flow_nodes: list[str] = []
 _required_syscalls: list[str] = []
 _symbols: dict[str, Any] = {}
 _loaded_plugins: set[str] = set()
+# FR-52: the plugin module set DEBT-COMPAT-1's consumer check last ran for. The getters call
+# load_plugins() lazily, many times per request, and the check reads every installed
+# distribution's metadata; its answer cannot change while the process lives.
+_consumer_check_modules: frozenset[str] | None = None
 _registered_apps: list[str] = []
 _bootstrap_dependencies: dict[str, list[str]] = {}
 _loaded_extension_records: dict[str, dict[str, Any]] = {}
@@ -2055,7 +2059,7 @@ def load_plugins(
         manifest_path,
         profile=profile,
     )
-    global _active_plugin_profile, _active_plugin_profile_source
+    global _active_plugin_profile, _active_plugin_profile_source, _consumer_check_modules
     active_profile, plugin_entries, extension_entries, explicitly_selected, selection_source = _resolve_plugin_profile_selection(
         manifest_path if manifest_path is not None else path,
         profile=profile,
@@ -2202,11 +2206,15 @@ def load_plugins(
             ", ".join(loaded),
         )
     # DEBT-COMPAT-1 / DEC-080 — compare each plugin distribution's declared aindy-runtime range
-    # with this runtime; warn, never refuse.
-    try:
-        from AINDY.platform_layer.runtime_compatibility import check_consumer_requirements
+    # with this runtime; warn, never refuse. Once per module set (FR-52): unconditionally, it
+    # ran on every lazy load_plugins() call and added ~3 s to every request.
+    module_names = frozenset(entry["module_name"] for entry in plugin_entries)
+    if module_names != _consumer_check_modules:
+        _consumer_check_modules = module_names
+        try:
+            from AINDY.platform_layer.runtime_compatibility import check_consumer_requirements
 
-        check_consumer_requirements(entry["module_name"] for entry in plugin_entries)
-    except Exception as exc:  # noqa: BLE001 — a compatibility probe must never fail a boot
-        logger.debug("DEBT-COMPAT-1 consumer check skipped: %s", exc)
+            check_consumer_requirements(sorted(module_names))
+        except Exception as exc:  # noqa: BLE001 — a compatibility probe must never fail a boot
+            logger.debug("DEBT-COMPAT-1 consumer check skipped: %s", exc)
     return loaded

@@ -175,3 +175,13 @@ def test_error_log_reads_user_from_an_expired_unverifiable_token():
     expired = jwt.encode({**claims, "exp": 1}, "some-other-key-0123456789abcdef0123", algorithm="HS256")
     assert _extract_user_id_from_request(_request(expired)) == uuid.UUID(LEGACY_SUB)
     assert _extract_user_id_from_request(_request("not-a-token")) is None
+
+
+def test_pyjwt_runs_with_its_crypto_backend():
+    """PyJWT's HMAC guard against asymmetric key material opens with `if not has_crypto: return
+    False` — on a plain `pip install PyJWT` its DER branch never runs (found by nodus-auth,
+    def3ef8). The pin is `PyJWT[crypto]`, so the guard does not hang on `cryptography` arriving
+    by some other route."""
+    from jwt.algorithms import has_crypto
+
+    assert has_crypto is True

@@ -98,6 +98,7 @@ _EMPTY_REGISTRY_STATE = {
     "_required_syscalls": [],
     "_symbols": {},
     "_loaded_plugins": set(),
+    "_consumer_check_modules": None,
     "_registered_apps": [],
     "_bootstrap_dependencies": {},
     "_loaded_extension_records": {},
