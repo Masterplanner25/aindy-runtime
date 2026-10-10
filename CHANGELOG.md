@@ -4,6 +4,76 @@
 
 _Nothing yet._
 
+## 2.27.0 — 2026-10-09
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.27.0.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **No migration.** Alembic head stays `0020` and the schema contract stays `2026-09-20`. Nothing
+  under `AINDY/db/models/` changed, so the `Upgrade Path Guard` passes trivially on this release,
+  and its negative control is the half that carries meaning.
+- **python-jose, `ecdsa`, `rsa` and `pyasn1` are no longer installed** (replaced by
+  `PyJWT[crypto]`; CVE-2026-85394). A plugin that imports any of them undeclared breaks. Issued
+  tokens are byte-identical and keep verifying.
+- **Every request with plugins loaded was ~3 s slower since 2.25.0** (FR-52); fixed.
+- No route started enforcing a new scope. No default changed.
+
+### Changed — the JWT library is PyJWT; python-jose, ecdsa, rsa and pyasn1 leave the install (#810)
+
+**Operators: read before upgrading** if any plugin or extension in your deployment imports
+`jose`, `ecdsa`, `rsa` or `pyasn1` without declaring it — the runtime no longer installs them.
+
+- **Why.** `CVE-2026-85394` / `GHSA-3qf3-8w2g-rqmx` (critical, python-jose <= 3.5.0, no fix
+  released): the algorithm-confusion guard accepts a DER-encoded public key as an HMAC secret.
+  The runtime was not exploitable — every verifying decode pins `HS256`, every key is symmetric —
+  but an advisory with no fix can only be accepted forever, and it is jose's second incomplete
+  fix of the same guard. pip-audit (a required check) was red on every PR from the day it landed
+  in OSV.
+- **Tokens are unchanged on the wire.** Header, claim order and signature are byte-identical;
+  sessions, verification links and reset links minted before the upgrade verify after it
+  (pinned by jose-minted fixtures in `tests/unit/test_jwt_library_migration.py`).
+- **`ecdsa`'s accepted finding (CVE-2024-23342) is gone with it** — jose was its only reason to
+  be installed. `security-audit.yml` now carries no exemptions.
+- **`pymongo` 4.18.1 → 4.18.2** in the same change: `CVE-2026-96747/96748/96749` (forced local
+  socket via a `.sock` KMS endpoint, connection redirection via percent-encoded host delimiters,
+  a heap out-of-bounds write in BSON encoding) landed in OSV after jose did, so either fix alone
+  would still have left the required check red.
+
+### Changed — Boot Smoke boots the checkout with the checkout's declared dependencies (#810, DEC-098)
+
+- Boot Smoke runs the checkout's source (`PYTHONPATH: .`) over the published wheel, so the wheel
+  supplied only its dependency set. A PR whose code needed a dependency the release lacked failed
+  this required check, and only a release could clear it. #810 hit it first: replacing
+  python-jose with PyJWT failed with `No module named 'jwt'`.
+- A step now installs the checkout's `[project].dependencies` on top of the wheel and logs the
+  `pip freeze` diff. At release the checkout is the tag, so nothing moves and the check proves
+  what it proved before.
+
+### Changed — dependency bumps: starlette 1.7.0, pyphen 0.18.1, regex, mako, charset-normalizer; ui-kit 2.1.1 (#811)
+
+- Runtime pins: `starlette` 1.6.0 → 1.7.0, `pyphen` 0.17.2 → 0.18.1, `regex` 2026.7.19 →
+  2026.9.29, `mako` 1.4.1 → 1.4.3, `charset-normalizer` 3.5.1 → 3.5.2.
+- Platform UI: `@aindy/ui-kit` 2.1.0 → 2.1.1; `vite` 8.3.1 → 8.3.2 (dev); `source-map-js` 1.2.1 → 1.2.2 (transitive, #812).
+- Native crate (build-time only): `pyo3` 0.29.2 → 0.29.3, `uuid` 1.26.1 → 1.27.0.
+
+### Fixed — every request with plugins loaded paid ~3 s for a version check (`FR-52`, #814)
+
+- DEBT-COMPAT-1's consumer check (2.25.0) ran at the end of every `load_plugins()` call, and the
+  registry's getters call `load_plugins()` lazily, 26 times in one warm `GET /memory/nodes`. Each
+  run read every installed distribution's metadata. The app measured p50 3,780 ms as shipped vs
+  820 ms with the check stubbed out. It now runs once per plugin module set, so a different
+  manifest or profile is still checked. `/api/version` reports the same records.
+- Our own suites never saw it: runtime-only boot loads no plugins, so `load_plugins()` returned
+  before the check. The regression test boots a plugin manifest and counts metadata scans across a
+  warm request through the real route (26 before, 0 after).
+
+### Changed — PyJWT is pinned with its `crypto` extra (#814)
+
+- PyJWT's guard against asymmetric key material under an HMAC algorithm returns early when
+  `cryptography` is absent. The runtime had `cryptography` through a separate pin; the pin is now
+  `PyJWT[crypto]==2.15.1`, so the guard no longer depends on it, and a test asserts it is live.
+
+
 ## 2.26.0 — 2026-10-04
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.26.0.md`.
