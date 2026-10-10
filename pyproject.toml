@@ -73,7 +73,7 @@ dependencies = [
   "pyphen==0.18.1",
   "python-dateutil==2.9.0.post0",
   "python-dotenv==1.2.3",
-  "PyJWT==2.15.1",
+  "PyJWT[crypto]==2.15.1",
   "cryptography==50.0.1",
   "python-json-logger==4.2.0",
   "redis==8.1.0",

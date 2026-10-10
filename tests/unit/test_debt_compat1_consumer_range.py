@@ -255,3 +255,96 @@ def test_the_unsatisfied_warning_names_the_metadata_path(caplog):
     )
     [warning] = _warnings(caplog)
     assert "/somewhere/my_app-1.0.0.dist-info" in warning.getMessage()
+
+
+# ── FR-52: once per module set, never once per call ─────────────────────────────────────────
+# The registry's getters call load_plugins() lazily — 26 times in one warm `GET /memory/nodes` —
+# and the check ended every call reading every installed distribution's metadata: ~3 s on each
+# of the app's requests (p50 3,780 ms as shipped, 820 ms with the check stubbed out).
+
+
+@pytest.fixture
+def counted(plugin_package, monkeypatch):
+    """`packages_distributions` (the expensive half) and `load_plugins`, counted."""
+    import importlib.metadata as md
+
+    from AINDY.platform_layer import registry
+
+    calls = {"scan": 0, "load_plugins": 0}
+    owners = md.packages_distributions  # the fixture's fake
+
+    def scan():
+        calls["scan"] += 1
+        return owners()
+
+    real_load = registry.load_plugins
+
+    def load(*args, **kwargs):
+        calls["load_plugins"] += 1
+        return real_load(*args, **kwargs)
+
+    monkeypatch.setattr(md, "packages_distributions", scan)
+    monkeypatch.setattr(registry, "load_plugins", load)
+    return calls
+
+
+@pytest.fixture
+def empty_registry():
+    from AINDY.platform_layer import registry
+    from tests.unit.test_extension_abi import _REGISTRY_STATE_EMPTY, _copy_registry_value
+
+    snapshot = {name: _copy_registry_value(getattr(registry, name)) for name in _REGISTRY_STATE_EMPTY}
+    for name, value in _REGISTRY_STATE_EMPTY.items():
+        setattr(registry, name, _copy_registry_value(value))
+    try:
+        yield registry
+    finally:
+        for name, value in snapshot.items():
+            setattr(registry, name, value)
+
+
+def test_the_check_runs_once_across_repeated_loads(counted, plugin_package, empty_registry):
+    for _ in range(5):
+        empty_registry.load_plugins(manifest_path=plugin_package)
+    assert counted["load_plugins"] == 5
+    assert counted["scan"] == 1, f"the consumer check ran {counted['scan']} times for one module set"
+    [record] = rc.consumer_requirement_checks()
+    assert record["status"] == "unsatisfied", "running it once must still record its answer"
+
+
+def test_a_different_module_set_is_checked(counted, plugin_package, empty_registry, tmp_path):
+    """Liveness for the latch: it suppresses repeats, not checks."""
+    (plugin_package.parent / "apps" / "debtcompat_other.py").write_text("def bootstrap():\n    pass\n", encoding="utf-8")
+    wider = tmp_path / "wider.json"
+    wider.write_text('{"plugins": ["apps.debtcompat_plugin", "apps.debtcompat_other"]}', encoding="utf-8")
+    try:
+        empty_registry.load_plugins(manifest_path=plugin_package)
+        empty_registry.load_plugins(manifest_path=wider)
+        empty_registry.load_plugins(manifest_path=wider)
+    finally:
+        sys.modules.pop("apps.debtcompat_other", None)
+    assert counted["scan"] == 2
+
+
+def test_a_warm_request_scans_no_metadata(runtime_only_client, db_session, counted, plugin_package, monkeypatch):
+    """The FR's own instrument: count the scans across one warm request, through the real route."""
+    import uuid
+
+    from AINDY.db.models.user import User
+    from AINDY.services.auth_service import create_access_token, hash_password
+
+    user = User(email=f"fr52-{uuid.uuid4().hex[:8]}@aindy.test", username=f"fr52{uuid.uuid4().hex[:8]}",
+                hashed_password=hash_password("fr52-password"), is_active=True)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    headers = {"Authorization": "Bearer " + create_access_token({"sub": str(user.id)}, token_version=0)}
+    monkeypatch.setenv("AINDY_PLUGIN_MANIFEST", str(plugin_package))
+    try:
+        assert runtime_only_client.get("/memory/nodes?limit=1", headers=headers).status_code == 200  # warm
+        counted.update(scan=0, load_plugins=0)
+        assert runtime_only_client.get("/memory/nodes?limit=1", headers=headers).status_code == 200
+    finally:
+        sys.modules.pop("apps.debtcompat_plugin", None)
+    assert counted["load_plugins"] > 0, "liveness: the request must go through the lazy getters"
+    assert counted["scan"] == 0, f"{counted['scan']} metadata scans in one warm request"

@@ -30,6 +30,7 @@ pytestmark = pytest.mark.runtime_only
 
 _REGISTRY_STATE_EMPTY = {
     "_loaded_plugins": set(),
+    "_consumer_check_modules": None,
     "_registered_apps": [],
     "_bootstrap_dependencies": {},
     "_loaded_extension_records": {},
