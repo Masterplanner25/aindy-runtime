@@ -67,7 +67,7 @@ dependencies = [
   "pgvector==0.4.2",
   "prometheus-fastapi-instrumentator==8.1.0",
   "psycopg2==2.9.13",
-  "pydantic==2.13.5",
+  "pydantic==2.14.0",
   "pydantic-settings==2.15.0",
   "pymongo==4.18.2",
   "pyphen==0.18.1",
