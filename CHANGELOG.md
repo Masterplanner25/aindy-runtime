@@ -4,6 +4,71 @@
 
 _Nothing yet._
 
+## 2.28.0 — 2026-10-14
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.28.0.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **No migration.** Alembic head stays `0020` and the schema contract stays `2026-09-20`. Nothing
+  under `AINDY/db/models/` changed, so the `Upgrade Path Guard` passes trivially on this release,
+  and its negative control is the half that carries meaning.
+- **★ A payload `user_id` written outside the runtime is now refused when it names anyone but the
+  caller**: over MCP, from a Nodus script's `sys()`, and on `POST /platform/syscall` (FR-53,
+  DEC-099). Before this, an outside AI over MCP, or a script, could read any user it named through
+  a handler that reads `payload["user_id"]`. A caller that passes its own id, or none, is
+  unaffected.
+- **`aindy-runtime mcp-server` now loads plugins, and a plugin that fails to load stops it**
+  (DEC-101). If you serve runtime tools only and an app plugin is broken, run the MCP process with
+  `AINDY_BOOT_PROFILE=platform-only`.
+- **New counter `aindy_payload_identity_mismatch_total{syscall}`**: in-process dispatch is observed,
+  not refused (DEC-100). Please read it on your `/metrics/`.
+- **OpenTelemetry 1.45.1 fixes quadratic-time parsing of the `tracestate` header.** The runtime
+  always instruments FastAPI, so before this release any client could send that header, before
+  authentication.
+- No route started enforcing a new scope. No default changed.
+
+### Fixed — a payload `user_id` written outside the runtime can no longer choose the user a syscall acts on; `mcp-server` serves app syscalls (#831)
+
+- **Read before upgrading if you run `aindy-runtime mcp-server` or Nodus scripts that call `sys()`.**
+- **Over MCP and from a Nodus script's `sys()`, a payload could name any user.** The dispatcher
+  checked that the caller had an identity but never compared it with a `user_id` in the payload,
+  and app handlers read the payload's. An outside AI over MCP (cross-tenant under multi-tenant SSE),
+  or a Nodus script calling `sys()`, could therefore read whichever user it named. The Nodus seam's
+  `setdefault` kept a script-supplied id on purpose. Now the MCP server, the Nodus `sys()` seam and
+  `POST /platform/syscall` fill an absent `user_id` with the caller's and **refuse** a different one
+  (`TENANT_VIOLATION`, `failure_class: permission`; 403 on the route). A script that passes its own
+  run owner's id is unaffected (FR-53 (b), DEC-099). In-process dispatch is not yet checked
+  (DEC-100).
+- **`mcp-server` never loaded plugins**, so every app syscall in `AINDY_MCP_SERVER_TOOLS` was
+  skipped as "not registered". It now loads the manifest selected as at boot (`AINDY_PLUGIN_MANIFEST`
+  / `AINDY_BOOT_PROFILE`), with plugin output sent to stderr (stdout is the stdio channel). **A
+  plugin that fails to load now stops the server** instead of serving fewer tools than you configured
+  (FR-53 (a), DEC-101). Runtime-only selects an empty manifest, so nothing changes there.
+  **If you serve only runtime tools and an app plugin is broken**, the server that started before
+  this release will not start after it: set `AINDY_BOOT_PROFILE=platform-only` for the MCP process,
+  or, with a legacy flat manifest, leave `AINDY_PLUGIN_MANIFEST` unset.
+- `register_syscall`'s docstring now states that name-inferred grants (MCP, `sys()`) reach only a
+  syscall whose declared capability matches its name (FR-53 (c)).
+
+### Changed — dependency bumps: pydantic 2.14.0, uvicorn 0.54.0, OpenTelemetry 1.45.1, jiter 0.17.0 (#830)
+
+- Runtime pins: `pydantic` 2.13.5 → 2.14.0, `uvicorn` 0.53.0 → 0.54.0, `jiter` 0.16.0 → 0.17.0;
+  OpenTelemetry `api`/`sdk`/`exporter-otlp-proto-grpc` 1.45.0 → 1.45.1 and
+  `instrumentation-fastapi` 0.66b0 → 0.66b1 (moved together).
+- `release` extra: `build` 1.6.0 → 1.6.1.
+- Platform UI (dev): `vite` 8.3.2 → 8.3.4, `@vitejs/plugin-react` 6.1.1 → 6.1.2, `postcss` 8.5.28 → 8.5.29.
+- Native crate (build-time only): `cc` 1.5.1 → 1.7.0, `uuid` 1.27.0 → 1.28.0.
+
+### Added — `aindy_payload_identity_mismatch_total`: the dispatcher counts a payload `user_id` that differs from the caller (#832)
+
+- FR-53 (#831) made the transports with an outside writer (MCP, Nodus `sys()`, `POST /platform/syscall`)
+  refuse a payload `user_id` that is not the caller's. In-process dispatch is still unchecked: refusing
+  there could break an unaudited system-context call made on behalf of another user. The dispatcher
+  now **observes** a mismatch as a WARNING and `aindy_payload_identity_mismatch_total{syscall}`, and
+  the call proceeds unchanged. Zero across a window of real traffic is the evidence for refusing it
+  (`PAYLOAD-IDENTITY-DISPATCH-1`, DEC-100). Non-zero names the syscall to look at.
+
+
 ## 2.27.0 — 2026-10-09
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.27.0.md`.
