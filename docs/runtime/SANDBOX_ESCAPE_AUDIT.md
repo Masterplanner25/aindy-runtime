@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-10-10"
+last_verified: "2026-10-14"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,37 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 042 — 2026-10-14
+
+**Trigger:** `v2.28.0` release tag (`sandbox-escape-linux.yml`, run `38685995797`).
+**Commit:** `ba7ee24` (release PR #834's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:d9368b3a5ac59afea7b5d4f2e2aea0941dbf9fdee9c369c5bec00b98244bc929`. This is the **same** digest as
+Entries 040 and 041; the upstream tag did not move between `v2.27.0` and `v2.28.0`.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.15s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `38685995797`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.27.0..v2.28.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:** FR-53 (#831, DEC-099) changed what
+three transports send to the dispatcher. A payload `user_id` written outside the runtime is
+filled when absent and refused when it names anyone but the caller. The transports are MCP, the Nodus
+`sys()` seam in `nodus_worker.py`, and `POST /platform/syscall`. That is tenant authorisation at
+dispatch, not isolation. The Nodus worker's process boundary, and what the strong runner certifies,
+are unchanged. `mcp-server` now runs `load_plugins()` in its own process (DEC-101), which is the same
+in-process plugin trust the API server's boot already has, not a new sandbox surface.
+#832 adds an observe-only counter in the dispatcher.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. Both passed on `ba7ee24` before the tag,
+along with Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit. Publish (run `38685995717`): the
+`production` environment gate was approved by the owner. PyPI's JSON API and simple index both
+reported `2.28.0` (wheel and sdist). Boot Smoke on the published wheel passed on attempt 1, and the
+GitHub release is non-draft. This is the first publish the app's release-handoff watcher followed
+(A.I.N.D.Y. #471); `publish.yml` was unchanged from `v2.27.0` apart from #830's action pin bumps.
 
 ## Entry 041 — 2026-10-10
 
