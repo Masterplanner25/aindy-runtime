@@ -107,7 +107,10 @@ Claude Desktop config (`claude_desktop_config.json`) points `command`/`args` at 
   `load_plugins()` for the manifest selected exactly as at boot (`AINDY_PLUGIN_MANIFEST` /
   `AINDY_BOOT_PROFILE`), so an app syscall named in `AINDY_MCP_SERVER_TOOLS` is served. Plugin
   output goes to stderr while they load, because stdout is the stdio channel. A plugin that fails
-  to load stops the server (DEC-101). Runtime-only selects an empty manifest.
+  to load stops the server (DEC-101), as it stops the API server's boot. Runtime-only selects an
+  empty manifest. **Serving runtime tools only?** Run the MCP process with
+  `AINDY_BOOT_PROFILE=platform-only` and no plugin loads. With a legacy flat `{"plugins": […]}`
+  manifest, which has no profiles, leave `AINDY_PLUGIN_MANIFEST` unset instead.
 - **A `user_id` argument may only repeat the caller (FR-53 (b), DEC-099).** The outside AI writes
   the tool arguments. A `user_id` among them that differs from the call's identity is refused
   (`TENANT_VIOLATION`, `failure_class: permission`) before dispatch and before an execution unit is

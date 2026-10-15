@@ -15,5 +15,8 @@
   / `AINDY_BOOT_PROFILE`), with plugin output sent to stderr (stdout is the stdio channel). **A
   plugin that fails to load now stops the server** instead of serving fewer tools than you configured
   (FR-53 (a), DEC-101). Runtime-only selects an empty manifest, so nothing changes there.
+  **If you serve only runtime tools and an app plugin is broken**, the server that started before
+  this release will not start after it: set `AINDY_BOOT_PROFILE=platform-only` for the MCP process,
+  or, with a legacy flat manifest, leave `AINDY_PLUGIN_MANIFEST` unset.
 - `register_syscall`'s docstring now states that name-inferred grants (MCP, `sys()`) reach only a
   syscall whose declared capability matches its name (FR-53 (c)).

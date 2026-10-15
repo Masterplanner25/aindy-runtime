@@ -274,3 +274,26 @@ def test_a_plugin_that_fails_to_load_stops_the_server(fr53_plugin, monkeypatch, 
     (tmp_path / "apps" / "fr53_plugin.py").write_text("def bootstrap():\n    raise ImportError('boom')\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="plugin load failed"):
         mcp_server.load_app_syscalls()
+
+
+def test_platform_only_profile_is_the_escape_from_a_broken_plugin(fr53_plugin, monkeypatch, tmp_path):
+    """DEC-101's documented escape: an operator serving runtime tools only, with a broken app
+    plugin, starts the MCP server under `AINDY_BOOT_PROFILE=platform-only`. Control first: the
+    same profile-format manifest without the variable stops the server."""
+    from AINDY.platform_layer import mcp_server
+
+    (tmp_path / "apps" / "fr53_plugin.py").write_text("def bootstrap():\n    raise ImportError('boom')\n", encoding="utf-8")
+    manifest = tmp_path / "profiles.json"
+    manifest.write_text(
+        '{"default_profile": "default-apps", "profiles": {"platform-only": {"plugins": []},'
+        ' "default-apps": {"plugins": ["apps.fr53_plugin"]}}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AINDY_PLUGIN_MANIFEST", str(manifest))
+    monkeypatch.delenv("AINDY_BOOT_PROFILE", raising=False)
+    monkeypatch.delenv("AINDY_PLUGIN_PROFILE", raising=False)
+    with pytest.raises(RuntimeError, match="plugin load failed"):
+        mcp_server.load_app_syscalls()
+
+    monkeypatch.setenv("AINDY_BOOT_PROFILE", "platform-only")
+    assert mcp_server.load_app_syscalls() == []
