@@ -1906,6 +1906,17 @@ def register_syscall(
         name:             Fully-qualified name (must start with ``"sys."``).
         handler:          Callable(payload, context) → dict.
         capability:       Required capability string.
+
+            **FR-53 (c) — callers that grant by NAME reach only a matching capability.**
+            ``dispatch_syscall`` without ``capability=`` — the MCP server, the Nodus ``sys()``
+            seam, extension workers — grants exactly ``_infer_dispatch_capability(name)``:
+            ``<domain>.read`` for a ``get_/list_/read_…`` verb, ``<domain>.write`` for
+            ``create_/update_/write_…``, else the bare action (``sys.v1.work.context`` →
+            ``work.context``). A syscall registered under any other capability (e.g.
+            ``masterplan.read`` for ``sys.v1.work.context``) is refused on those surfaces with
+            ``requires capability …``. That is deliberate least-privilege, not a bug: name the
+            syscall so the inferred capability is the one it declares, or reach it through a
+            caller that grants explicitly.
         description:      Human-readable description.
         input_schema:     Optional input validation schema.
         output_schema:    Optional output validation schema.

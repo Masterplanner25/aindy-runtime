@@ -9233,6 +9233,37 @@ key in each tool dict.
 
 ---
 
+## FR-53 — the MCP server never loaded the app's plugins, and a payload `user_id` written outside the runtime chose the user a syscall acted on 🔴 security, P1 (app-filed 2026-10-14, runtime 2.27.0)
+
+**Status: CLOSED (2026-10-14, #831) — UNRELEASED.** Filed P2 by the app. Raised to P1 here
+because it is `INITIATOR-IDENTITY-1`'s trap (an asserted identity used as the authenticated
+one), which the registry says becomes P0 the day an inbound consumer ships, and an outside AI over
+MCP is one. **(b) — wider than filed:** `dispatch_syscall` authenticates the caller (Step 2b)
+but never compared it with a payload `user_id`, and the app has 55 handler sites that read the
+payload's. Over MCP the outside AI writes the payload. **★ The Nodus `sys()` seam had the same
+hole:** `dispatch_worker_syscall` used `setdefault("user_id", user_id)`, which KEPT a
+script-supplied id, and `test_explicit_user_id_in_payload_is_preserved` pinned that as intended
+(FR-5b, #267). `POST /platform/syscall` was not exposed, because its capability grant admits only the
+runtime's public set, and runtime handlers already apply `_resolve_tenant_user_id`. **Fix
+(DEC-099):** `kernel/payload_identity.py::bind_payload_user_id` fills an absent `user_id` with the
+caller's (input schemas ignore undeclared keys; masterplan handlers require the key). It refuses
+a different one (`TENANT_VIOLATION`, `failure_class: permission`) and never overwrites it. All
+three transports call it before dispatch: the MCP handler (before the per-call unit is claimed),
+the Nodus seam, and the HTTP route (403). The app's only `sys()` script, `reasoning_apply_v1.nd`,
+passes its run owner's id and keeps working. **(a):** `mcp_server.load_app_syscalls()` runs
+`load_plugins()` before the allowlist is resolved, with stdout pointed at stderr at both the
+Python and fd level (stdio is the MCP channel). A plugin that fails to load stops the server
+rather than serving a smaller tool set (DEC-101). **(c):** answered in `register_syscall`'s docstring.
+Name-inferred grants are deliberate least-privilege. The `nodus_*` tool prefix comes from
+nodus-mcp, not this repo. **Remaining (DEC-100):** in-process dispatch is not checked. The ~60 app call
+sites are unaudited, so the dispatcher only counts mismatches first
+(`PAYLOAD-IDENTITY-DISPATCH-1`). Tests (`test_payload_identity_fr53.py`, 13): each refusal beside a
+same-shape control. The route test calls the route. A derived AST census requires each transport
+to bind before it dispatches. A real plugin registers a syscall and writes to stdout both ways.
+Removing each binding, the plugin load, the redirect, or the fd-level half fails them.
+
+---
+
 ## FR-52 — DEBT-COMPAT-1's consumer check ran on every `load_plugins()` call, and the registry's getters call that lazily: ~3 s added to every request 🔴 defect, P1 (app-filed 2026-10-07, runtime 2.25.0)
 
 **Status: CLOSED (2026-10-09, #814) — UNRELEASED.** `load_plugins()` ended unconditionally in

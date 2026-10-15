@@ -38,10 +38,12 @@ is attribution/audit only and not required for the per-session identity mapping.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import logging
 import os
-from typing import Optional
+import sys
+from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +180,24 @@ def build_auth_hook():
     return _auth_hook
 
 
+def _refusal_envelope(syscall_name: str, message: str, failure_class: str) -> dict:
+    """A refusal made before dispatch, in the envelope shape the dispatcher returns, so the
+    MCP client sees one error contract whichever layer refused."""
+    return {
+        "status": "error",
+        "data": {},
+        "outcome": None,
+        "trace_id": "",
+        "execution_unit_id": "",
+        "syscall": syscall_name,
+        "version": (syscall_name.split(".") + ["unknown"])[1],
+        "duration_ms": 0,
+        "error": message,
+        "failure_class": failure_class,
+        "warning": None,
+    }
+
+
 def _make_handler(syscall_name: str, configured_user_id: Optional[str]):
     """A sync MCP tool handler that dispatches one syscall.
 
@@ -186,12 +206,22 @@ def _make_handler(syscall_name: str, configured_user_id: Optional[str]):
     """
 
     def _handler(args: dict) -> dict:
+        from AINDY.kernel.payload_identity import PayloadIdentityViolation, bind_payload_user_id
         from AINDY.kernel.resource_manager import ResourceLimitError, get_resource_manager
         from AINDY.kernel.syscall_dispatcher import dispatch_syscall
 
         user_id = _SESSION_IDENTITY.get() or configured_user_id
         if not user_id:
             raise RuntimeError("no identity resolved for this MCP call")
+        # FR-53 (b) / DEC-099 — the arguments are written by the outside AI, so a `user_id`
+        # among them is an assertion. It may repeat the caller's identity, never choose
+        # another user: handlers that read `payload["user_id"]` would otherwise serve whoever
+        # it names (cross-tenant under multi-tenant SSE). Refused before a unit is claimed.
+        try:
+            payload = bind_payload_user_id(args or {}, user_id, syscall=syscall_name)
+        except PayloadIdentityViolation as exc:
+            logger.warning("[mcp-server] %s refused: %s", syscall_name, exc)
+            return _refusal_envelope(syscall_name, str(exc), "permission")
         # QUOTA-ACCRUAL-ORPHAN-1 — a transport that dispatches on its own has no pipeline
         # to claim an execution unit for it, so it owns one per call: admitted against the
         # identity's concurrency limit, started, and reaped when the call returns. Without
@@ -203,22 +233,11 @@ def _make_handler(syscall_name: str, configured_user_id: Optional[str]):
                 # db=None → the syscall handler opens/closes its own session. Least-privilege
                 # capability is inferred from the syscall name inside dispatch_syscall.
                 return dispatch_syscall(
-                    syscall_name, args or {}, user_id=user_id, execution_unit_id=eu_id
+                    syscall_name, payload, user_id=user_id, execution_unit_id=eu_id
                 )
         except ResourceLimitError as exc:
             logger.warning("[mcp-server] %s refused: %s", syscall_name, exc)
-            return {
-                "status": "error",
-                "data": {},
-                "outcome": None,
-                "trace_id": "",
-                "execution_unit_id": "",
-                "syscall": syscall_name,
-                "version": (syscall_name.split(".") + ["unknown"])[1],
-                "duration_ms": 0,
-                "error": str(exc),
-                "warning": None,
-            }
+            return _refusal_envelope(syscall_name, str(exc), "transient")
 
     return _handler
 
@@ -243,11 +262,60 @@ def build_registry(configured_user_id: Optional[str], allowlist: list[str]):
     return registry
 
 
+@contextlib.contextmanager
+def _stdout_to_stderr() -> Iterator[None]:
+    """Point stdout — Python's and file descriptor 1 — at stderr for the duration.
+
+    Over stdio, stdout IS the MCP channel: one stray line from a plugin's import or bootstrap
+    and the client fails to parse the stream. The fd-level swap catches writes that bypass
+    ``sys.stdout`` (C extensions, subprocesses inheriting the fd).
+    """
+    sys.stdout.flush()
+    try:
+        saved_fd = os.dup(1)
+    except OSError:
+        saved_fd = None
+    try:
+        if saved_fd is not None:
+            os.dup2(2, 1)
+        with contextlib.redirect_stdout(sys.stderr):
+            yield
+    finally:
+        sys.stderr.flush()
+        if saved_fd is not None:
+            os.dup2(saved_fd, 1)
+            os.close(saved_fd)
+
+
+def load_app_syscalls() -> list[str]:
+    """FR-53 (a) — register the selected manifest's syscalls in this process.
+
+    App syscalls are registered by each plugin's ``bootstrap()``, which ``load_plugins()``
+    runs. This process never called it, so it held the runtime's syscalls only and an app
+    syscall named in ``AINDY_MCP_SERVER_TOOLS`` was skipped as "not registered". The manifest
+    is chosen exactly as at boot (``AINDY_PLUGIN_MANIFEST`` / ``AINDY_BOOT_PROFILE``);
+    runtime-only selects an empty one, so nothing changes there.
+
+    A plugin that fails to load stops the server: serving a quietly smaller tool set than the
+    operator configured is the silent-skip this replaces.
+    """
+    from AINDY.platform_layer.registry import load_plugins
+
+    try:
+        with _stdout_to_stderr():
+            loaded = load_plugins()
+    except Exception as exc:
+        raise RuntimeError(f"[mcp-server] plugin load failed: {exc}") from exc
+    logger.info("[mcp-server] loaded %d plugin module(s)", len(loaded or []))
+    return list(loaded or [])
+
+
 def _build_server(*, name: str = "aindy-runtime"):
     """Assemble the NodusServer from config. Returns (server, mode_description)."""
     from nodus_mcp_aindy import NodusServer
 
     multi = multi_tenant_enabled()
+    load_app_syscalls()  # FR-53 (a) — before the allowlist is resolved against the registry
     # In multi-tenant mode the identity is per-session, so a configured fallback is optional.
     configured = os.getenv("AINDY_MCP_SERVER_USER_ID", "").strip() or None
     registry = build_registry(configured, resolve_allowlist())

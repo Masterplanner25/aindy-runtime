@@ -525,9 +525,22 @@ def dispatch_worker_syscall(name: str, payload: Any, *, user_id: str) -> Any:
         from AINDY.db.database import SessionLocal
         from AINDY.kernel.syscall_dispatcher import dispatch_syscall
 
+        from AINDY.kernel.payload_identity import PayloadIdentityViolation, bind_payload_user_id
+
+        # FR-53 (b) / DEC-099 — this was `setdefault("user_id", user_id)`, which kept a
+        # `user_id` the SCRIPT supplied: a guest could name another user to any app syscall
+        # whose handler reads `payload["user_id"]`. Fill when absent, refuse when different.
+        try:
+            call_payload = bind_payload_user_id(payload, user_id, syscall=str(name))
+        except PayloadIdentityViolation as exc:
+            return {
+                "status": "error",
+                "error": str(exc),
+                "failure_class": "permission",
+                "data": None,
+                "syscall": name,
+            }
         _ensure_tools_loaded()
-        call_payload = dict(payload) if isinstance(payload, dict) else {}
-        call_payload.setdefault("user_id", user_id)
         db = SessionLocal()
         try:
             result = dispatch_syscall(name, call_payload, db=db, user_id=user_id)

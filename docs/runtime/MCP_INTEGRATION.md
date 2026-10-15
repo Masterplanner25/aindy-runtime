@@ -1,7 +1,7 @@
 ---
 title: "MCP Integration (client-side)"
 api_version: "1.0"
-last_verified: "2026-09-20"
+last_verified: "2026-10-14"
 status: current
 owner: "platform-team"
 ---
@@ -103,6 +103,21 @@ Claude Desktop config (`claude_desktop_config.json`) points `command`/`args` at 
   capability (least-privilege, SDK-SYSCALL-GRANT-1) and manages its own DB session. The
   allowlist is the gate. Verified end-to-end on Postgres (write → read-back through the tool
   handlers).
+- **App syscalls (FR-53 (a)).** Before it builds its tool registry the server runs
+  `load_plugins()` for the manifest selected exactly as at boot (`AINDY_PLUGIN_MANIFEST` /
+  `AINDY_BOOT_PROFILE`), so an app syscall named in `AINDY_MCP_SERVER_TOOLS` is served. Plugin
+  output goes to stderr while they load, because stdout is the stdio channel. A plugin that fails
+  to load stops the server (DEC-101). Runtime-only selects an empty manifest.
+- **A `user_id` argument may only repeat the caller (FR-53 (b), DEC-099).** The outside AI writes
+  the tool arguments. A `user_id` among them that differs from the call's identity is refused
+  (`TENANT_VIOLATION`, `failure_class: permission`) before dispatch and before an execution unit is
+  claimed. An absent one is filled with the caller's, so handlers that require the key work.
+  This holds for any allowlisted syscall, including app handlers that read `payload["user_id"]`.
+- **Capability is inferred from the syscall's name.** A tool is granted exactly
+  `_infer_dispatch_capability(name)` (`sys.v1.work.context` → `work.context`). A syscall
+  registered under a different capability is refused with `requires capability …`. That is
+  deliberate least-privilege (`register_syscall`'s docstring). Tools appear as `nodus_<domain>_<action>`; that prefix comes from
+  `nodus-mcp`'s `syscall_entry_to_tool`.
 
 ### SSE transport + per-session multi-tenant (MEB-3a)
 

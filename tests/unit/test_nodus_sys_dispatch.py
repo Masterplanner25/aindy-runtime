@@ -45,17 +45,37 @@ def test_ensures_plugins_loaded_before_dispatch(monkeypatch):
     assert res["data"]["payload"] == {"x": 1, "user_id": "u1"}  # user_id threaded in
 
 
-def test_explicit_user_id_in_payload_is_preserved(monkeypatch):
-    seen: dict = {}
+def _recording_dispatch(monkeypatch) -> list[dict]:
+    calls: list[dict] = []
     monkeypatch.setattr("AINDY.agents.tool_registry._ensure_tools_loaded", lambda: None)
     monkeypatch.setattr(
         "AINDY.kernel.syscall_dispatcher.dispatch_syscall",
-        lambda name, payload, *, db=None, user_id=None: seen.update(payload) or {"status": "success"},
+        lambda name, payload, *, db=None, user_id=None: calls.append(dict(payload))
+        or {"status": "success"},
     )
     monkeypatch.setattr("AINDY.db.database.SessionLocal", lambda: _FakeDB())
+    return calls
 
-    dispatch_worker_syscall("sys.v1.x.y", {"user_id": "explicit"}, user_id="ctx")
-    assert seen["user_id"] == "explicit"  # setdefault must not clobber an explicit id
+
+def test_explicit_user_id_matching_the_caller_passes_through(monkeypatch):
+    # Liveness control for the refusal below: the same shape, the caller's own id, dispatches.
+    # (The app's reasoning_apply_v1.nd passes its run owner's id exactly like this.)
+    calls = _recording_dispatch(monkeypatch)
+    res = dispatch_worker_syscall("sys.v1.x.y", {"user_id": "ctx"}, user_id="ctx")
+    assert res == {"status": "success"}
+    assert calls == [{"user_id": "ctx"}]
+
+
+def test_explicit_user_id_naming_another_user_is_refused(monkeypatch):
+    # FR-53 (b): this seam used `setdefault`, which KEPT a script-supplied user_id — and this
+    # test used to pin that ("setdefault must not clobber an explicit id"). A guest script
+    # could name another user to any app syscall that reads payload["user_id"].
+    calls = _recording_dispatch(monkeypatch)
+    res = dispatch_worker_syscall("sys.v1.x.y", {"user_id": "someone-else"}, user_id="ctx")
+    assert res["status"] == "error"
+    assert res["failure_class"] == "permission"
+    assert "TENANT_VIOLATION" in res["error"]
+    assert calls == []  # never dispatched
 
 
 def test_non_dict_payload_becomes_empty(monkeypatch):
