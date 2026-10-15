@@ -74,7 +74,8 @@ def test_registered_handler_dispatches_as_configured_identity():
     # Dispatched the syscall as the configured identity.
     args, kwargs = m.call_args
     assert args[0] == "sys.v1.memory.read"
-    assert args[1] == {"path": "/memory/x/**"}
+    # FR-53 (b): the caller's identity is filled in when the arguments carry none.
+    assert args[1] == {"path": "/memory/x/**", "user_id": "user-xyz"}
     assert kwargs["user_id"] == "user-xyz"
 
 

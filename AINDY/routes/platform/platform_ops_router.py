@@ -231,10 +231,18 @@ def dispatch_syscall(request: Request, body: SyscallDispatchRequest, current_use
     def handler(ctx):
         from AINDY.kernel.syscall_dispatcher import get_dispatcher, make_syscall_ctx_from_tool
 
+        from AINDY.kernel.payload_identity import PayloadIdentityViolation, bind_payload_user_id
+
         user_id = str(current_user.get("user_id") or current_user.get("sub") or "")
         capabilities = _resolve_dispatch_capabilities(body.name, current_user)
+        # FR-53 (b) / DEC-099 — the client writes this payload; its `user_id` may repeat the
+        # caller's identity, never choose another user.
+        try:
+            payload = bind_payload_user_id(body.payload, user_id, syscall=body.name)
+        except PayloadIdentityViolation as exc:
+            raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
         syscall_ctx = make_syscall_ctx_from_tool(user_id=user_id, capabilities=capabilities)
-        result = get_dispatcher().dispatch(body.name, body.payload, syscall_ctx)
+        result = get_dispatcher().dispatch(body.name, payload, syscall_ctx)
         # EFFECT-PARTIAL-1 — `!= "success"`, never `== "error"`. A `partial` or `unknown`
         # envelope falling through to the success path would report a half-applied effect
         # as fully applied: the lie that vocabulary exists to prevent.

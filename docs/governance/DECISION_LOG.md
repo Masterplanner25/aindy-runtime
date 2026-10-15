@@ -1,6 +1,6 @@
 ---
 title: "Decision Log"
-last_verified: "2026-10-08"
+last_verified: "2026-10-14"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -2129,3 +2129,30 @@ The step runs after the wheel install, logs a `pip freeze` diff, and is a no-op 
 
 **Why**
 `PYTHONPATH: .` means Boot Smoke boots the checkout's SOURCE, not the wheel's; the wheel contributes only its dependency set and package data. A PR whose source needs a dependency the published release lacks therefore failed a required check that only a release could clear, and a release cannot be cut without merging. #810 hit it first (`No module named 'jwt'`). Declined: a two-step migration (ship both libraries, switch imports after a release) — it keeps pip-audit red, and every PR blocked with it, for a release cycle. What the check still proves at release is unchanged: there the checkout is the tag, so the two dependency sets are the same set.
+
+### DEC-099
+**Status:** `accepted` (2026-10-14 — `FR-53` (b), #831; decided by the owner: "go with C")
+
+**Decision — Each transport that dispatches an outside-written payload binds its `user_id` to the authenticated caller before dispatch: filled when absent, refused when different, never overwritten.**
+`kernel/payload_identity.py::bind_payload_user_id`, called by the MCP tool handler, the Nodus `sys()` seam and `POST /platform/syscall`. A refusal is `TENANT_VIOLATION` with `failure_class: permission` (403 on the route). An AST census requires every listed transport to bind before it dispatches.
+
+**Why**
+The dispatcher authenticates the caller but never compared it with a payload `user_id`, and app handlers read the payload's. Over MCP the outside AI writes it, and a Nodus script writes it in `sys()`, so the assertion selected whose data a handler served. That is `INITIATOR-IDENTITY-1`'s prohibition: an asserted subject may constrain, never select. Refuse, not overwrite: a silent rewrite would let a wrong assumption in the caller run against a different user than the one it named. Fill when absent: app handlers require the key, and input schemas ignore undeclared ones. Declined for now: refusing in the dispatcher for every caller (DEC-100).
+
+### DEC-100
+**Status:** `accepted` (2026-10-14 — `FR-53` (b); decided by the owner: "go with C")
+
+**Decision — The dispatcher-wide rule is built count-first: the dispatcher OBSERVES a payload `user_id` that differs from the context, as a counter and a warning, and refuses only after a window reads zero.**
+Tracked as `PAYLOAD-IDENTITY-DISPATCH-1`; the flip is its own change with its own decision.
+
+**Why**
+Refusing in the dispatcher covers every present and future transport, but the app has ~60 in-process dispatch sites that nobody has audited for a system-context call made on behalf of another user. Refusing there blind could break a working path that has no outside writer. This is the same count-then-flip method as DEC-083.
+
+### DEC-101
+**Status:** `provisional` (2026-10-14 — `FR-53` (a), #831; built this way, awaiting the owner's acceptance)
+
+**Decision — `aindy-runtime mcp-server` loads the selected plugin manifest before it builds its tool registry, and a plugin that fails to load stops the server.**
+The manifest is chosen exactly as at boot (`AINDY_PLUGIN_MANIFEST` / `AINDY_BOOT_PROFILE`). Stdout points at stderr for the load at both the Python and file-descriptor level, because stdout is the stdio MCP channel.
+
+**Why**
+The process held only the runtime's syscalls, so every app syscall in the allowlist was skipped with a warning. Continuing past a failed plugin would bring that silent skip back in another form. Declined: loading lazily on the first tool call, because the allowlist is resolved against the registry once, at start.
