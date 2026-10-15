@@ -263,6 +263,32 @@ def _count_gate_outcome(outcome: str) -> None:
         pass
 
 
+def _observe_payload_identity(name: str, payload: Any, context: SyscallContext) -> None:
+    """FR-53 / DEC-100 — count a payload ``user_id`` that differs from the caller; never refuse.
+
+    The transports with an outside writer already refuse before dispatch (DEC-099,
+    ``kernel.payload_identity.bind_payload_user_id``), so a mismatch seen here comes from
+    in-process code. Refusing it waits on this counter reading zero across a window
+    (``PAYLOAD-IDENTITY-DISPATCH-1``). Observability only: nothing here may change whether the
+    syscall runs.
+    """
+    try:
+        from AINDY.kernel.payload_identity import payload_user_id_mismatch
+
+        if not payload_user_id_mismatch(payload, context.user_id):
+            return
+        logger.warning(
+            "[SyscallDispatcher] payload user_id differs from the caller for %r "
+            "(observed, not refused — PAYLOAD-IDENTITY-DISPATCH-1)",
+            name,
+        )
+        from AINDY.platform_layer.metrics import payload_identity_mismatch_total
+
+        payload_identity_mismatch_total.labels(syscall=name).inc()
+    except Exception:  # pragma: no cover - observability must never break dispatch
+        pass
+
+
 def _gate_scope_engaged(value: Any) -> bool:
     """True when a run scope should engage the idempotency gate: a bare UUID, or a
     prefixed run id whose tail (after the last ``_`` or ``:``) is a UUID — e.g.
@@ -640,6 +666,7 @@ class SyscallDispatcher:
                 version=parsed_version,
                 failure_class="permission",
             )
+        _observe_payload_identity(name, payload, context)
         metadata_error = _validate_runtime_owned_call_metadata(context)
         if metadata_error:
             return self._error_envelope(
