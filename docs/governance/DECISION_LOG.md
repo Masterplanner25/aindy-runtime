@@ -2149,10 +2149,10 @@ Tracked as `PAYLOAD-IDENTITY-DISPATCH-1`; the flip is its own change with its ow
 Refusing in the dispatcher covers every present and future transport, but the app has ~60 in-process dispatch sites that nobody has audited for a system-context call made on behalf of another user. Refusing there blind could break a working path that has no outside writer. This is the same count-then-flip method as DEC-083.
 
 ### DEC-101
-**Status:** `provisional` (2026-10-14 — `FR-53` (a), #831; built this way, awaiting the owner's acceptance)
+**Status:** `accepted` (2026-10-14 — `FR-53` (a), #831; decided by the owner: "go with A" over warn-and-continue and stop-only-if-an-allowlisted-syscall-is-missing)
 
 **Decision — `aindy-runtime mcp-server` loads the selected plugin manifest before it builds its tool registry, and a plugin that fails to load stops the server.**
 The manifest is chosen exactly as at boot (`AINDY_PLUGIN_MANIFEST` / `AINDY_BOOT_PROFILE`). Stdout points at stderr for the load at both the Python and file-descriptor level, because stdout is the stdio MCP channel.
 
 **Why**
-The process held only the runtime's syscalls, so every app syscall in the allowlist was skipped with a warning. Continuing past a failed plugin would bring that silent skip back in another form. Declined: loading lazily on the first tool call, because the allowlist is resolved against the registry once, at start.
+The process held only the runtime's syscalls, so every app syscall in the allowlist was skipped with a warning. Continuing past a failed plugin would bring that silent skip back in another form. Declined: loading lazily on the first tool call, because the allowlist is resolved against the registry once, at start. Also declined: warn-and-continue, which is that silent skip again, and stopping only when an allowlisted syscall is missing, which would decide against a half-loaded registry because `load_plugins()` fails the whole profile. Stopping matches the API server's own boot. **The escape for an operator who serves runtime tools only** (the case this breaks on upgrade, when a plugin is broken): `AINDY_BOOT_PROFILE=platform-only` for the MCP process, or, with a legacy flat `{"plugins": […]}` manifest, which ignores profiles, leave `AINDY_PLUGIN_MANIFEST` unset.
