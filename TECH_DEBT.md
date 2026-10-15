@@ -16340,6 +16340,29 @@ the same reach problem), `SYSMAX-1/-3/-4` (the existing per-EU caps, some adviso
 
 ---
 
+## PAYLOAD-IDENTITY-DISPATCH-1 — the dispatcher counts a payload `user_id` that differs from the caller, but does not refuse it
+
+**Status: OPEN — P2 (filed 2026-10-14, #832; DEC-100).** FR-53 (#831, DEC-099) made the three
+transports with an outside writer refuse a payload `user_id` that is not the caller's: the MCP
+server, the Nodus `sys()` seam and `POST /platform/syscall`. In-process dispatch is still unchecked.
+The app has ~60 dispatch sites and 55 handler sites that read `payload["user_id"]`. Nobody has
+audited them for a system-context call made on behalf of another user, which a dispatcher-wide
+refusal would break. **Built (#832):** `syscall_dispatcher._observe_payload_identity` runs after
+Step 2b. On a mismatch it logs a WARNING and increments
+`aindy_payload_identity_mismatch_total{syscall}`, and the call proceeds unchanged. It is
+best-effort: a metrics failure cannot change whether the syscall runs. A mismatch from a transport never
+reaches it, since those refuse first, so every count is in-process code. **To close:** read the
+counter on the app's `/metrics/` across a window of real traffic, once the app has adopted the
+release that carries it. Zero → make the dispatcher refuse (`TENANT_VIOLATION`, `permission`) with a
+`00-` fragment and its own decision. Non-zero → each `syscall` label names a call site to fix or a
+legitimate on-behalf case to design for (`INITIATOR-IDENTITY-1`'s `subject`, never a payload key).
+Tests (`test_payload_identity_dispatch_counter.py`, 3, real dispatcher with a registered probe
+syscall): a mismatch is counted and the handler runs; matching and absent ids are not counted (control);
+a broken counter does not change the outcome. Removing the observation, or turning it into a
+refusal, fails them.
+
+---
+
 ## INITIATOR-IDENTITY-1 — the identity that initiates work is not the identity the runtime authenticates
 
 **Status: OPEN — P2 today, P0 the day an inbound-driven consumer ships.** Filed 2026-08-18.
@@ -16347,6 +16370,12 @@ Provenance: `OPENCLAW_ON_AINDY_RUNTIME_AUDIT.md` (`C:\codev\openclaw_research\`)
 performed to fill the one folder in the comparative corpus that had no runtime-facing document.
 **It is the only finding in twelve folders that required an inbound-event-driven comparand to
 produce.**
+
+**2026-10-14 — FR-53 closed one instance of this entry's trap (#831, DEC-099).** A payload
+`user_id` selected the user that app handlers served. Over MCP the outside AI wrote it, and in
+`sys()` the Nodus script did. The transports now refuse it. The MCP consumer that found it acts AS
+the authenticated owner (per-session JWT), not on behalf of peers, so it does not trigger this
+entry's P0 and needs no `subject`. In-process dispatch: `PAYLOAD-IDENTITY-DISPATCH-1`.
 
 **★ DESIGN FILED 2026-09-17 → `docs/design/INITIATOR_IDENTITY_DESIGN.md` (four decisions pending).**
 `SyscallContext.subject` — asserted, transport-set, never a `User` row. ★ Correction to this entry's own table:

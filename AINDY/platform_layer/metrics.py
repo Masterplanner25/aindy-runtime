@@ -166,6 +166,17 @@ memory_recall_failures_total = Counter(
     registry=REGISTRY,
 )
 
+# FR-53 / DEC-100 — PAYLOAD-IDENTITY-DISPATCH-1: a dispatch whose payload `user_id` names someone
+# other than the context's caller. OBSERVED only: the transports that carry outside-written
+# payloads already refuse it before dispatch (DEC-099), so what lands here is in-process code.
+# Zero across a soak window is the evidence for making the dispatcher refuse it too.
+payload_identity_mismatch_total = Counter(
+    "aindy_payload_identity_mismatch_total",
+    "Dispatches whose payload user_id differed from the authenticated caller (observed, not refused).",
+    ["syscall"],
+    registry=REGISTRY,
+)
+
 # DEC-089 — an effect ended `unknown` under EXACTLY_ONCE, a label that promised completion.
 # (Under AT_MOST_ONCE an unknown is a legitimate end and is not counted.)
 effect_contract_shortfall_total = Counter(
