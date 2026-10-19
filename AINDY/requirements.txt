@@ -21,7 +21,7 @@ jiter==0.17.0
 joblib==1.6.0
 alembic==1.20.0
 Mako==1.4.3
-MarkupSafe==3.0.3
+MarkupSafe==3.0.4
 maturin
 numpy==2.4.6
 nodus-lang==5.15.0
