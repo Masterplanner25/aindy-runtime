@@ -4,6 +4,38 @@
 
 _Nothing yet._
 
+## 2.28.1 — 2026-10-22
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.28.1.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ Security: rebuild your image.** `certifi` 2026.7.22 trusted CA roots whose intermediates have
+  compromised keys (PYSEC-2026-4320). The fix is the dependency, so it reaches a deployment only
+  when the image is rebuilt on this release.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+- **`certifi` is now a lower bound (`>=2026.10.19`)**, the one exception to exact pins (DEC-102). A
+  constraint of yours on certifi no longer conflicts with the runtime's.
+- No behaviour, route, scope or default changed.
+
+### Fixed — `certifi` pinned to a bundle with compromised CA roots (PYSEC-2026-4320, FR-54, #846)
+
+- `certifi==2026.7.22` bundled "emSign ECC Root CA - G3", whose eMudhra intermediates have
+  compromised (revoked) keys, so every outbound HTTPS call trusted certificates anyone holding one
+  could issue. Now `certifi>=2026.10.19`.
+- **A lower bound, not a pin (DEC-102):** an exact pin meant a downstream constraint could not take
+  a fixed CA bundle until the runtime released. Future certifi releases install without one.
+- **Operators: rebuild your image.** The advisory asks for a rebuild of every image that vendors
+  certifi; a container keeps the bundle it was built with.
+
+### Changed — dependency batch of 2026-10-19 (#845)
+
+- Runtime pins: `pydantic` 2.14.0 → 2.14.1, `alembic` 1.19.2 → 1.20.0, `pendulum` 3.2.0 → 3.3.0,
+  `MarkupSafe` 3.0.3 → 3.0.4, `tzdata` 2026.3 → 2026.5 (`pyproject.toml` and `AINDY/requirements.txt`).
+- Native crate (build-time only): `pyo3` 0.29.3 → 0.30.1, `cc` 1.7.0 → 1.8.0.
+- Platform UI: `react` / `react-dom` 19.3.0 → 19.3.1, `postcss` 8.5.29 → 8.5.30 (dev).
+- None of these is a security fix (that is #846 above).
+
+
 ## 2.28.0 — 2026-10-14
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.28.0.md`.
