@@ -2156,3 +2156,12 @@ The manifest is chosen exactly as at boot (`AINDY_PLUGIN_MANIFEST` / `AINDY_BOOT
 
 **Why**
 The process held only the runtime's syscalls, so every app syscall in the allowlist was skipped with a warning. Continuing past a failed plugin would bring that silent skip back in another form. Declined: loading lazily on the first tool call, because the allowlist is resolved against the registry once, at start. Also declined: warn-and-continue, which is that silent skip again, and stopping only when an allowlisted syscall is missing, which would decide against a half-loaded registry because `load_plugins()` fails the whole profile. Stopping matches the API server's own boot. **The escape for an operator who serves runtime tools only** (the case this breaks on upgrade, when a plugin is broken): `AINDY_BOOT_PROFILE=platform-only` for the MCP process, or, with a legacy flat `{"plugins": […]}` manifest, which ignores profiles, leave `AINDY_PLUGIN_MANIFEST` unset.
+
+### DEC-102
+**Status:** `accepted` (2026-10-22 — `FR-54`; decided by the owner: "Range >=2026.10.19" over an exact `==2026.10.19`)
+
+**Decision — `certifi` is declared as a lower bound (`certifi>=2026.10.19`), not an exact pin, in both `pyproject.toml` and `AINDY/requirements.txt`. It is the one exception to the tree's exact-pin rule (`packaging>=24.0` predates the rule).**
+The bound moves up only when an advisory names a floor. Raising it is a normal dependency change.
+
+**Why**
+A CA bundle is the one dependency whose newest release is the safest by construction: its releases remove trust, they don't add API. PYSEC-2026-4320 (emSign roots with compromised intermediates) showed what the exact pin cost. The fix was on PyPI, but an app with a constraint on `certifi` could not install it alongside `aindy-runtime==2.28.0` until the runtime cut a release. With a lower bound the app (or an operator's image rebuild) takes the next bundle without waiting on us. Declined: `==2026.10.19`. It keeps the rule uniform, but the next CA revocation would again need a runtime release before anyone downstream could adopt it. What a range gives up: CI and the wheel can resolve different certifi versions over time. That is acceptable for a data-only package, and `test_dependency_pin_agreement.py` still requires both files to declare the same spec.

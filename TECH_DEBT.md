@@ -9233,6 +9233,23 @@ key in each tool dict.
 
 ---
 
+## FR-54 — `certifi==2026.7.22` was pinned exactly and carried PYSEC-2026-4320 (emSign roots with compromised intermediates) 🔴 security, P1 (app-filed 2026-10-22, runtime 2.28.0)
+
+**Status: CLOSED (2026-10-22) — ships in 2.28.1.** Filed by the app (their register, `## FR-54`;
+fix PR A.I.N.D.Y. #482). certifi before 2026.10.18 bundles "emSign ECC Root CA - G3"; eight
+eMudhra intermediates chaining to it have compromised, revoked keys, so whoever holds one can
+issue certificates for any hostname that requests/httpx will trust. 2026.10.18 dropped every
+emSign root; 2026.10.19 restored the unaffected ones (OSV: `fixed 2026.10.19`). Exposure: every
+outbound HTTPS call (LLM providers, GitHub), and an attack needs a key plus an on-path position.
+**Why it was ours:** the exact pin meant the app could not take the fixed bundle until a runtime
+release, and its audit has to ignore the advisory until then. **Not caught here:** pip-audit last
+ran at 2026-10-20 03:32Z, before the advisory reached OSV, and Dependabot had raised no alert, so
+the first signal was the app. **Fix (DEC-102):** `certifi>=2026.10.19` in `pyproject.toml` and
+`AINDY/requirements.txt`, a range on purpose. **Remaining:** images that vendor certifi must be
+rebuilt (the advisory says so); the app's adoption of 2.28.1 lifts their ignore.
+
+---
+
 ## FR-53 — the MCP server never loaded the app's plugins, and a payload `user_id` written outside the runtime chose the user a syscall acted on 🔴 security, P1 (app-filed 2026-10-14, runtime 2.27.0)
 
 **Status: CLOSED (2026-10-14, #831) — UNRELEASED.** Filed P2 by the app. Raised to P1 here
