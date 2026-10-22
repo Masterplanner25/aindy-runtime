@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-10-14"
+last_verified: "2026-10-22"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,38 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 043 — 2026-10-22
+
+**Trigger:** `v2.28.1` release tag (`sandbox-escape-linux.yml`, run `39831833474`).
+**Commit:** `1ee1660` (release PR #847's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:5fb4bc53dd0180955e31e5245b648bbb24a4ac4ab03a1de81513642325220bcd`. **★ NOT the digest
+Entries 040–042 ran on** (`d9368b3a5ac5…`): the upstream tag moved between `v2.28.0` and
+`v2.28.1` (`Downloaded newer image`). Nothing in this repository selects a digest. The 17 tests
+measure the boundary against whatever `python:3.11-alpine` resolves to on the day, and they pass on
+the new image. Compare future entries against 043. (`docker-compose.fr15-evidence.yml` keeps its
+own pin on purpose and is not chased.)
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 7.62s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `39831833474`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.28.0..v2.28.1` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:** `certifi` moved from `==2026.7.22`
+to `>=2026.10.19` (FR-54, #846, DEC-102; PYSEC-2026-4320, emSign roots with compromised
+intermediates). That is the trust store for OUTBOUND TLS, not isolation; no sandbox control reads
+it. The rest is dependency bumps (#845), including `pyo3` 0.30.1 for the native memory crate,
+which is a build-time scorer and not part of the plugin boundary.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. Both passed on `1ee1660` before the tag,
+along with Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit. Publish (run `39831833603`): the
+`production` environment gate was approved by the owner. PyPI's JSON API and simple index both
+reported `2.28.1` (wheel and sdist; `requires_dist` names `certifi>=2026.10.19`). Boot Smoke on the
+published wheel passed on attempt 1, and the GitHub release is non-draft. `publish.yml` was
+unchanged from `v2.28.0`.
 
 ## Entry 042 — 2026-10-14
 
