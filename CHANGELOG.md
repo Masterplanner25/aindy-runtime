@@ -4,6 +4,56 @@
 
 _Nothing yet._
 
+## 2.28.2 — 2026-10-27
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.28.2.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ Security: rebuild your image.** Two advisories published 2026-10-27 hit 2.28.1's pins:
+  `pymongo` 4.18.2 (CVE-2026-106435, BSON decoder out-of-bounds read) and `dnspython` 2.8.0
+  (CVE-2026-114605, DNS name decompression CPU exhaustion). Both are high and availability-only.
+  Runtime exposure to the first is nil in practice. The second matters only with a
+  `mongodb+srv://` `MONGO_URL` whose DNS answers an attacker can influence. A pip-audit over a
+  2.28.1 install flags both; this release clears them.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+- `python-dateutil` moves to 3.0.0 (major). The runtime does not reach the changed `dateutil.tz`
+  surface. If your own code uses `dateutil.tz`, read the handoff.
+- No runtime behaviour, route, scope or default changed.
+
+### Fixed — `pymongo` 4.18.2 → 4.18.3 for CVE-2026-106435 / GHSA-98qm-wvgf-w4cf (#862)
+
+- The C extension's BSON decoder could read past the end of an `mmap` / array buffer on a
+  truncated Regex element and kill the process with SIGSEGV (high, availability only). Published
+  2026-10-27; it turned the required `pip-audit (OSV)` check red on every PR.
+- **Runtime exposure: nil in practice.** Nothing in `AINDY/` calls `bson.decode*` or decodes from
+  `mmap`, and the advisory states the driver's own transport is not affected. Taken anyway because
+  a downstream pip-audit flags it on every install of 2.28.1. 4.18.3 is the patch release; the
+  4.19.0 minor was deliberately not taken here.
+
+### Changed — dependency batch of 2026-10-26 (#860)
+
+- **★ `dnspython` 2.8.0 → 2.9.0 is a security fix: CVE-2026-114605 / GHSA-45c3-73f7-pv4m** (high).
+  A crafted DNS message makes `dns.name.from_wire_parser()` burn excessive CPU during name
+  decompression. The runtime does not import `dns` itself; it reaches it through `pymongo`, which
+  resolves `mongodb+srv://` URLs over DNS. Exposed only when `MONGO_URL` is an SRV URL **and** an
+  attacker can answer that lookup. The advisory was published 2026-10-27, after #860 merged, so
+  #860's own notes called the batch "not a security fix". That was wrong.
+- `python-dateutil` 2.9.0.post0 → 3.0.0 (major). Nothing in `AINDY/` imports `dateutil`; it arrives
+  through `pendulum`, which uses only `dateutil.parser` as a parsing fallback. 3.0's breaking changes
+  are all in `dateutil.tz` (a rewritten `tzfile`, PEP 495 offsets for nonexistent times, `TZPATHS`
+  removed, relative `gettz` keys refused, `dateutil.zoneinfo` deprecated), which the runtime does not
+  reach. It now depends on `tzdata`, which the runtime already pins.
+- Runtime pins: `alembic` 1.20.0 → 1.20.1 (autogenerate fixes only). `ruff` 0.16.9 → 0.17.2 (lint
+  only).
+- Native crate (build-time only): `cc` 1.8.0 → 1.10.0, `uuid` 1.28.0 → 1.29.0.
+- Platform UI (dev): `vite` 8.3.4 → 8.3.5, `postcss` 8.5.30 → 8.5.31.
+- CI: `actions/setup-python` 7.0.0 → 7.1.0, `pypa/gh-action-pypi-publish` 1.14.2 → 1.14.3 (pinned
+  SHAs only; no job renamed).
+- `openai` 2.46.0 → 3.37.0 (#855) is NOT in this batch: openai 3 moved from `httpx` to `httpx2`, so
+  `respx` stopped intercepting and the LLM contract tests reached the real API (401). Deferred
+  under DEP-UPGRADE-DEFERRED-1.
+
+
 ## 2.28.1 — 2026-10-22
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.28.1.md`.
