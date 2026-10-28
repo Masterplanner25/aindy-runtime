@@ -5175,7 +5175,7 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, UI major unit)
 
-**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); the UI major unit
+**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); `openai` 3.x added 2026-10-27; the UI major unit
 remains, now blocked on `LOCKFILE-PLATFORM-1`. Dependency maintenance; each is a deliberate
 upgrade, not a drop-in bump. Surfaced during the 2026-07-18 dependabot triage.
 
@@ -5344,8 +5344,30 @@ must be run with `--no-cache-dir`: a stale local pip index cache reported *"Coul
 version that satisfies pydantic==2.13.5"* for a version that had been on PyPI for some time,
 which reads exactly like a genuine resolution failure.
 
+- **`openai` 2.x → 3.x — deferred 2026-10-27 (#855 closed, `@dependabot ignore this major
+  version`).** Dependabot's 2.46.0 → 3.37.0 failed Runtime Contracts: three tests in
+  `test_contract_llm_openai.py` / `test_contract_llm_deepseek.py` reached the **real**
+  api.openai.com and api.deepseek.com and got 401 for the fixture key. Cause: openai 3 moved
+  its transport from `httpx` to a separate package, **`httpx2`** (`Requires-Dist: httpx2<3,>=2.12.0`),
+  and `respx` patches `httpx` only, so the cassettes stopped intercepting. (No real key leaked:
+  the tests pass `sk-test-contract` explicitly. But a contract test that silently falls through
+  to the network is a green-check hazard: it went red here only because the fixture key is fake.)
+
+  **Retries are NOT broken by it (checked in the 3.37.0 wheel).** openai 3 still wraps transport
+  failures in `APITimeoutError` / `APIConnectionError` (`openai/_base_client.py:1200`, `:1217`),
+  and `_is_retryable` in `openai_client.py` / `deepseek_client.py` matches those by type NAME.
+  Only the `_RETRYABLE = (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError)`
+  fallback goes dead. Delete it or retarget it to `httpx2` during the migration; it is not urgent.
+
+  **The migration, in order:** (1) read the openai 3.0 release notes. Not yet done, and they
+  decide the size; (2) move the contract tests off `respx`. `httpx2` exports a `MockTransport`,
+  so injecting `http_client=httpx2.Client(transport=…)` into the SDK is one route, but the tests
+  must still assert the request wire shape; (3) resolve the `_RETRYABLE` fallback; (4) accept a
+  second HTTP stack, since `httpx` stays (FastAPI `TestClient`, other callers). No security alert
+  drives this; the ignore covers 3.x only, so 2.x bumps keep arriving.
+
 **Reopen/resolve:** when the OTel line is bumped as a group. The UI unit is done; the
-`pydantic` train is grouped.
+`pydantic` train is grouped. The `openai` 3.x half resolves when the migration above lands.
 
 ---
 
