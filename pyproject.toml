@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=83.0.0", "wheel"]
+requires = ["setuptools>=84.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -154,7 +154,9 @@ security = [
   # setuptools>=83.0.0 clears CVE-2026-59890 / PYSEC-2026-3447 (FileList MANIFEST.in
   # glob matching, packaging-time only). Fix released, so we upgrade rather than ignore;
   # this floor also forces the pip-audit env off the runner's ambient 79.0.1.
-  "setuptools>=83.0.0",
+  # >=84.1.0 clears GHSA-xmj3-9gf7-h52w (Windows path escape via a wheel's
+  # namespace_packages.txt in the legacy wheel-install path).
+  "setuptools>=84.1.0",
 ]
 
 [project.scripts]
