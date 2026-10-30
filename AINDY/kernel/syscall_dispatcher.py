@@ -263,30 +263,69 @@ def _count_gate_outcome(outcome: str) -> None:
         pass
 
 
-def _observe_payload_identity(name: str, payload: Any, context: SyscallContext) -> None:
-    """FR-53 / DEC-100 — count a payload ``user_id`` that differs from the caller; never refuse.
+PAYLOAD_IDENTITY_DISPATCH_ENV = "AINDY_PAYLOAD_IDENTITY_DISPATCH"
+
+
+def _payload_identity_mode() -> str:
+    """DEC-103 — ``refuse`` (default) or ``observe``.
+
+    Only ``observe`` turns refusal off: it restores the DEC-100 count-only behaviour for an
+    operator whose in-process code hits a path the soak windows never exercised. Any other value,
+    including a typo, refuses.
+    """
+    raw = os.getenv(PAYLOAD_IDENTITY_DISPATCH_ENV, "").strip().lower()
+    return "observe" if raw == "observe" else "refuse"
+
+
+def _check_payload_identity(name: str, payload: Any, context: SyscallContext) -> Optional[str]:
+    """FR-53 / DEC-103 — refuse a payload ``user_id`` that differs from the caller.
 
     The transports with an outside writer already refuse before dispatch (DEC-099,
     ``kernel.payload_identity.bind_payload_user_id``), so a mismatch seen here comes from
-    in-process code. Refusing it waits on this counter reading zero across a window
-    (``PAYLOAD-IDENTITY-DISPATCH-1``). Observability only: nothing here may change whether the
-    syscall runs.
+    in-process code. DEC-100 counted it first; ``aindy_payload_identity_mismatch_total`` read 0
+    over 2,289 app dispatches in two windows (``PAYLOAD-IDENTITY-DISPATCH-1``), so the dispatcher
+    now refuses too. ``AINDY_PAYLOAD_IDENTITY_DISPATCH=observe`` restores count-only.
+
+    Returns the refusal message, or ``None`` to proceed. The counter and the warning fire in
+    both modes and are best-effort: a metrics failure never changes the decision. A comparison
+    that raises refuses (fails closed) in ``refuse`` mode.
     """
+    mode = _payload_identity_mode()
     try:
         from AINDY.kernel.payload_identity import payload_user_id_mismatch
 
-        if not payload_user_id_mismatch(payload, context.user_id):
-            return
+        mismatch = payload_user_id_mismatch(payload, context.user_id)
+    except Exception as exc:
+        if mode == "observe":
+            return None
         logger.warning(
-            "[SyscallDispatcher] payload user_id differs from the caller for %r "
-            "(observed, not refused — PAYLOAD-IDENTITY-DISPATCH-1)",
-            name,
+            "[SyscallDispatcher] payload user_id for %r could not be compared; refused: %s",
+            name, exc,
         )
+        return (
+            f"TENANT_VIOLATION: payload user_id for {name!r} could not be checked against the "
+            f"authenticated caller"
+        )
+    if not mismatch:
+        return None
+    logger.warning(
+        "[SyscallDispatcher] payload user_id differs from the caller for %r (%s — "
+        "PAYLOAD-IDENTITY-DISPATCH-1)",
+        name,
+        "observed, not refused" if mode == "observe" else "refused",
+    )
+    try:
         from AINDY.platform_layer.metrics import payload_identity_mismatch_total
 
         payload_identity_mismatch_total.labels(syscall=name).inc()
-    except Exception:  # pragma: no cover - observability must never break dispatch
+    except Exception:  # pragma: no cover - observability must never change the decision
         pass
+    if mode == "observe":
+        return None
+    return (
+        f"TENANT_VIOLATION: payload user_id for {name!r} does not match the authenticated "
+        f"caller; a payload may not choose the user it acts on"
+    )
 
 
 def _gate_scope_engaged(value: Any) -> bool:
@@ -666,7 +705,15 @@ class SyscallDispatcher:
                 version=parsed_version,
                 failure_class="permission",
             )
-        _observe_payload_identity(name, payload, context)
+        identity_error = _check_payload_identity(name, payload, context)
+        if identity_error:
+            return self._error_envelope(
+                name, context,
+                identity_error,
+                t_start,
+                version=parsed_version,
+                failure_class="permission",
+            )
         metadata_error = _validate_runtime_owned_call_metadata(context)
         if metadata_error:
             return self._error_envelope(

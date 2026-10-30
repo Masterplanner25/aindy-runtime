@@ -166,13 +166,14 @@ memory_recall_failures_total = Counter(
     registry=REGISTRY,
 )
 
-# FR-53 / DEC-100 — PAYLOAD-IDENTITY-DISPATCH-1: a dispatch whose payload `user_id` names someone
-# other than the context's caller. OBSERVED only: the transports that carry outside-written
-# payloads already refuse it before dispatch (DEC-099), so what lands here is in-process code.
-# Zero across a soak window is the evidence for making the dispatcher refuse it too.
+# FR-53 / DEC-100 / DEC-103 — PAYLOAD-IDENTITY-DISPATCH-1: a dispatch whose payload `user_id` names
+# someone other than the context's caller. The transports that carry outside-written payloads
+# refuse it before dispatch (DEC-099), so what lands here is in-process code. Counted first (it
+# read 0 over 2,289 app dispatches); the dispatcher now REFUSES it, and still counts each one.
+# `AINDY_PAYLOAD_IDENTITY_DISPATCH=observe` restores count-only.
 payload_identity_mismatch_total = Counter(
     "aindy_payload_identity_mismatch_total",
-    "Dispatches whose payload user_id differed from the authenticated caller (observed, not refused).",
+    "Dispatches whose payload user_id differed from the authenticated caller (refused unless AINDY_PAYLOAD_IDENTITY_DISPATCH=observe).",
     ["syscall"],
     registry=REGISTRY,
 )

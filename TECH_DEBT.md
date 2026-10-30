@@ -16381,7 +16381,18 @@ the same reach problem), `SYSMAX-1/-3/-4` (the existing per-EU caps, some adviso
 
 ## PAYLOAD-IDENTITY-DISPATCH-1 — the dispatcher counts a payload `user_id` that differs from the caller, but does not refuse it
 
-**Status: OPEN — P2 (filed 2026-10-14, #832; DEC-100).** FR-53 (#831, DEC-099) made the three
+**Status: CLOSED (2026-10-29, #866; DEC-103).** The dispatcher now REFUSES the mismatch for every 
+caller (`TENANT_VIOLATION`, `permission`), right after Step 2b, and still counts it. 
+`AINDY_PAYLOAD_IDENTITY_DISPATCH=observe` restores count-only; any other value refuses. Evidence: 
+0 over 2,289 app dispatches (window 1: 0 / 1,496; window 3: 0 / 793, read 2026-10-30 02:25Z; 
+window 2 lost), plus the app's check of all 93 in-process sites: exactly one breaks, 
+`apps/tasks/flows/tasks_flows.py:218` `watcher_signals_list_node` (its `user_id` is a FILTER for 
+`sys.v1.watcher.query`, operator-only via the flow runner; the app fixes it before adopting). 
+Tests: `test_payload_identity_dispatch_counter.py` (11; mutation-checked three ways). 
+**Remains:** a legitimate on-behalf call still has no form; it must be `INITIATOR-IDENTITY-1`'s 
+`subject`, never a payload key or the flag.
+
+*Original status:* OPEN — P2 (filed 2026-10-14, #832; DEC-100). FR-53 (#831, DEC-099) made the three
 transports with an outside writer refuse a payload `user_id` that is not the caller's: the MCP
 server, the Nodus `sys()` seam and `POST /platform/syscall`. In-process dispatch is still unchecked.
 The app has ~60 dispatch sites and 55 handler sites that read `payload["user_id"]`. Nobody has
