@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-10-27"
+last_verified: "2026-10-29"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,38 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 045 — 2026-10-29
+
+**Trigger:** `v2.29.0` release tag (`sandbox-escape-linux.yml`, run `40999308738`).
+**Commit:** `d4a3557` (release PR #867's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:09d17d5e4c16d0a7a1eea690bcb7c6ab8616b211f8421e429e97c1bef5bd0ed2`. **★ The digest MOVED
+a third release in a row** (`Downloaded newer image`): Entry 044 ran on `79440cc1dfa8…`. Nothing in
+this repository selects a digest, and the 17 tests pass on the new image. Compare future entries
+against 045.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 7.76s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `40999308738`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.28.2..v2.29.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty
+(all four paths exist at both tags).
+
+**Near the boundary, recorded so nobody reads it as inside:** the behaviour change of this release
+is in the kernel, not the sandbox. `syscall_dispatcher._check_payload_identity` (#866, DEC-103) now
+refuses a payload `user_id` that is not the caller's. That is a tenant-identity rule on dispatch,
+and no sandbox control reads it. `setuptools` 84.1.0 (#865) fixes two Windows-only path escapes in
+setuptools' own legacy install and archive code, which neither the runtime nor the sandbox runner
+calls.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. Both passed on `d4a3557` before the tag,
+along with Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit. Publish (run `40999308751`):
+the `production` environment gate was approved by the owner. PyPI's JSON API and simple index both
+reported `2.29.0` (wheel + sdist; `requires_dist` names `setuptools>=84.1.0` under the `security`
+extra). Boot Smoke on the published wheel installed on attempt 1, and the GitHub release is
+non-draft (03:52Z). `publish.yml` is unchanged from `v2.28.2`.
 
 ## Entry 044 — 2026-10-27
 
