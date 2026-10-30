@@ -24,7 +24,8 @@ that names anyone but the caller (#866, DEC-103), where until now it only counte
 >
 > # on the NEW container
 > docker exec <api-container> python -c "import AINDY, AINDY._version as v, setuptools; print(v.__version__, list(AINDY.__path__), setuptools.__version__)"
-> # expect: 2.29.0 ['/usr/local/lib/python3.11/site-packages/AINDY'] 84.1.0
+> # expect: 2.29.0 ['/usr/local/lib/python3.11/site-packages/AINDY'] and setuptools >= 84.1.0
+> # ONLY if you install the `security` extra; see the correction in §2.
 > ```
 
 ---
@@ -76,8 +77,20 @@ state. That is the case the change exists to stop.
 | GHSA-xmj3-9gf7-h52w | low | **None.** On Windows, a crafted wheel's `namespace_packages.txt` could place an `__init__.py` outside the egg directory through the legacy `setup_requires` install path. The runtime never takes it, and the image is Linux. |
 | GHSA-grgh-hr87-3jpw | (no global record yet; from the 84.1.0 release notes) | **None.** On Windows, `setuptools.archive_util` could extract a member outside the target directory. The runtime never calls it. |
 
-Your `constraints.txt` pins only `aindy-runtime`, so setuptools arrives through us. Do not add
-ignores for either.
+> **Correction (2026-10-29, after publication; reported by the app).** As first written, this
+> section said setuptools "arrives through us". It does not. `aindy-runtime` declares
+> `setuptools>=84.1.0` only under its **`security` extra**. `AINDY/requirements.txt`'s exact
+> `==84.1.0` is CI's lock file, not something a wheel install reads. A plain `pip install
+> aindy-runtime` (or `aindy-runtime[mcp]`) keeps whatever setuptools the base image ships. The
+> app's 2.28.2 container showed **79.0.1**, which also predates the CVE-2026-59890 floor (83.0.0).
+> The runtime's own `Dockerfile` installs plain `aindy-runtime==2.29.0`, so it is affected too.
+>
+> To get the fixed setuptools, install **`aindy-runtime[security]`** (the app now installs
+> `[mcp,security]`). It is a lower bound, so you get the newest release (84.2.1 on 2026-10-29),
+> not exactly 84.1.0. The in-container check above expects `>= 84.1.0`. Exposure is unchanged
+> either way: none on Linux. This is about what a scanner of your image reports.
+
+Do not add ignores for either; take the `security` extra instead.
 
 `publish.yml` job names and the `production` gate are unchanged, so your release watcher is
 unaffected.
