@@ -10,8 +10,9 @@ payload's ``user_id`` is an ASSERTION, and an assertion may only constrain, neve
 to runtime handlers).
 
 Each transport that dispatches an outside-written payload calls :func:`bind_payload_user_id`
-before dispatch (DEC-099). The dispatcher itself only OBSERVES a mismatch for now (DEC-100) —
-the ~60 in-process app call sites have not been audited, so refusing there waits on a counter.
+before dispatch (DEC-099). The dispatcher refuses the same mismatch for in-process callers
+(DEC-103), after counting it first read zero (DEC-100); ``AINDY_PAYLOAD_IDENTITY_DISPATCH=observe``
+restores count-only there.
 """
 from __future__ import annotations
 
