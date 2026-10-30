@@ -1,6 +1,6 @@
 ---
 title: "Runtime Release Checklist"
-last_verified: "2026-09-26"
+last_verified: "2026-10-28"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -381,6 +381,24 @@ deployment that introduces TLS termination.
   `password123` and 5.0.4 printed `nil` on our own import path, which is what made the severity
   a fact rather than a reading. Pin it with a test that fails on the old version — the guard for
   this one is mutation-tested at 2/11.
+
+- [ ] **★ No open Dependabot alert is left unexamined at the tag commit.**
+
+  ```bash
+  gh api "repos/Masterplanner25/aindy-runtime/dependabot/alerts?state=open" \
+    --jq '.[] | "\(.number) \(.dependency.package.name) \(.security_advisory.ghsa_id) \(.security_advisory.severity) fix=\(.security_vulnerability.first_patched_version.identifier)"'
+  ```
+
+  Expect `[]`. For each row: fix it in this release, or write down why not (severity,
+  exposure) in the release PR. Run it on the day you tag, not the day you start the release.
+  (On Git Bash, a leading `/` in the `gh api` path gets rewritten into a Windows path.)
+
+  **Why this is separate from `pip-audit`:** the two read different advisory feeds, and either
+  one can see an advisory before the other. 2.28.2 was tagged on 2026-10-27 with `pip-audit`
+  green while Dependabot alert #27 (setuptools GHSA-xmj3-9gf7-h52w, opened 07:26Z that morning)
+  sat open. It was found the next day, while writing the session handoff (#865). The opposite
+  case is also why the release-notes step above exists. dnspython 2.9.0's CVE was published
+  after the bump had merged, so neither feed ever showed it against `main`.
 
 - [ ] Compatibility window stated for `aindy-sdk` and `aindy-ui-kit`
 - [ ] TECH_DEBT.md updated for any newly closed or opened entries
