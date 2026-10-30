@@ -61,6 +61,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # /install/lib/python3.11/... →  /usr/local/lib/python3.11/... (importable)
 COPY --from=builder /install /usr/local
 
+# The base image ships setuptools 79.0.1, below the `security` extra's floor (CVE-2026-59890,
+# GHSA-xmj3-9gf7-h52w). Upgrade it HERE, in this stage: installing a newer one in the builder and
+# copying it over leaves both dist-infos, and `pip list` (and a scanner) still reports 79.0.1.
+# Not `aindy-runtime[security]`: that extra also installs pip-audit. Keep this floor equal to
+# the `security` extra's in pyproject.toml.
+RUN pip install --no-cache-dir --upgrade "setuptools>=84.1.0"
+
 # Non-root user for the runtime process. UID/GID 1000 is the conventional
 # first non-system user; mount-point ownership on the host should match
 # if operators bind-mount config/data volumes.
