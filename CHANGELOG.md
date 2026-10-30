@@ -4,6 +4,63 @@
 
 _Nothing yet._
 
+## 2.29.0 — 2026-10-29
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.29.0.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ Behaviour change: the dispatcher refuses a payload `user_id` that is not the caller's.**
+  In-process code that dispatches a syscall with a non-empty payload `user_id` naming another
+  user now gets `TENANT_VIOLATION` (`failure_class: permission`), and the handler does not run.
+  Before upgrading, read `aindy_payload_identity_mismatch_total{syscall}` on your current
+  release. Any non-zero label is a call site that 2.29.0 refuses. Fix it, or set
+  `AINDY_PAYLOAD_IDENTITY_DISPATCH=observe` for the rollout and remove it once fixed.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+- `setuptools` 84.1.0 clears two low-severity, Windows-only advisories; there is no runtime exposure.
+- No route, scope or schema change. The new env var is opt-out only.
+
+### Changed — the dispatcher refuses a payload `user_id` that names anyone but the caller (`PAYLOAD-IDENTITY-DISPATCH-1`, DEC-103, #866)
+
+- **Operators: read before upgrading.** An in-process `dispatch()` whose payload carries a
+  non-empty `user_id` different from the context's caller now returns `TENANT_VIOLATION` with
+  `failure_class: permission`, and the handler does not run. Until now the dispatcher only counted
+  it (DEC-100). The three transports with an outside writer (MCP, the Nodus `sys()` seam,
+  `POST /platform/syscall`) already refused it (DEC-099). This closes the same hole for every
+  other caller, including code nobody has written yet.
+- **Why it was wrong:** handlers read `payload["user_id"]` to decide whose data to serve, and
+  the dispatcher authenticated the caller without comparing the two. So any in-process code that
+  built a payload from untrusted state could act as another user.
+- **Evidence for the flip:** `aindy_payload_identity_mismatch_total` read 0 over 2,289 app
+  dispatches across two windows, and the app checked all 93 of its in-process dispatch sites. One
+  passes `user_id` as a *filter*: `watcher_signals_list_node`, operator-only. It would be refused
+  under this release; the app fixed it before adopting (A.I.N.D.Y. #506).
+- **Escape hatch:** `AINDY_PAYLOAD_IDENTITY_DISPATCH=observe` restores count-only. Only that exact
+  value (case-insensitive) disables refusal; any other value refuses. The counter keeps counting
+  in both modes, so its `{syscall}` label names the call site either way. If you need the escape
+  hatch, read the counter, fix the caller, then remove the setting. A legitimate on-behalf call
+  has no supported form yet (`INITIATOR-IDENTITY-1`).
+- Absent, `None` or empty `user_id` keys are unaffected. So is a `user_id` equal to the caller's
+  in any UUID spelling.
+
+### Fixed — `setuptools` 84.0.0 → 84.1.0 for GHSA-xmj3-9gf7-h52w (#865)
+
+- **Low severity, no runtime exposure.** On Windows, a crafted wheel's
+  `.dist-info/namespace_packages.txt` could make setuptools' legacy wheel-install path create an
+  `__init__.py` outside the target egg directory (the attacker picks the path, not the content).
+  The runtime never takes that path, and its images are Linux. The pin was still a known-vulnerable
+  version in the lock file.
+- 84.1.0 also fixes **GHSA-grgh-hr87-3jpw** (found in its release notes at release time; no global
+  advisory record yet). On Windows, `setuptools.archive_util` could extract an archive member with a
+  backslash, drive or UNC name outside the target directory. The runtime never calls
+  `archive_util`, so no exposure here either.
+- The exact pin in `AINDY/requirements.txt`, the `[build-system]` requirement and the CVE floor in
+  `pyproject.toml` all move to 84.1.0, so a later downgrade gets caught.
+- **Why it was missed:** Dependabot opened alert #27 on 2026-10-27 07:26Z, about eight hours before
+  2.28.2 was tagged. pip-audit stayed green, and the release checklist reads pip-audit and the
+  release notes, not the Dependabot alert list. Reading the open alerts at the tag commit is now
+  a `RELEASE_CHECKLIST.md` step.
+
+
 ## 2.28.2 — 2026-10-27
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.28.2.md`.
