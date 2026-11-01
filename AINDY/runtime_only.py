@@ -400,6 +400,49 @@ def _prune_cascade_debris(*, yes: bool, batch_size: int) -> NoReturn:
     raise SystemExit(0)
 
 
+def _settle_embedding_logs(*, yes: bool, batch_size: int) -> NoReturn:
+    """Close embedding job rows stranded `pending` before FR-56 (one-time, operator-run).
+
+    Before the fix, an embedding job submitted while the scheduler ran was recorded and
+    never executed; the sweep embedded the node anyway. Those rows count against the async
+    admission caps. Settles only a never-started row whose node is already embedded, as
+    `success` with `result.superseded_by`. Dry-run unless --yes. Requires DATABASE_URL.
+    """
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print("error: DATABASE_URL is not set.", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.memory.embedding_jobs import settle_superseded_embedding_logs
+    except Exception as exc:
+        print(f"error: could not import the embedding layer: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+    db = SessionLocal()
+    try:
+        report = settle_superseded_embedding_logs(db, dry_run=not yes, batch_size=batch_size)
+    except Exception as exc:
+        print(f"error: settling embedding job rows failed: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    finally:
+        db.close()
+
+    left = (
+        f"left alone: {report['node_pending']} whose node is still pending, "
+        f"{report['node_missing']} whose node is gone."
+    )
+    if not report["settled"]:
+        print(f"ok: no stranded embedding job rows to settle ({report['examined']} examined; {left})")
+        raise SystemExit(0)
+    if not yes:
+        print(f"dry-run: {report['settled']} row(s) would become success; {left} Re-run with --yes.")
+        raise SystemExit(0)
+    print(f"ok: settled {report['settled']} row(s) as success (superseded by the sweep); {left}")
+    raise SystemExit(0)
+
+
 def _reembed_memory(*, yes: bool, no_drain: bool, dry_run: bool) -> NoReturn:
     """Re-embed all memory nodes with the configured provider (ECOGAP-3 Phase 1).
 
@@ -879,6 +922,22 @@ def main() -> None:
     prune_parser.add_argument("--yes", action="store_true", default=False, help="Perform the delete (without this the command only reports).")
     prune_parser.add_argument("--batch-size", type=int, default=500, help="Rows deleted per committed batch (default 500).")
 
+    settle_parser = memory_sub.add_parser(
+        "settle-embedding-logs",
+        help="Close embedding job rows stranded 'pending' before FR-56.",
+        description=(
+            "One-time cleanup for deployments that ran a version before FR-56, where an "
+            "embedding job submitted while the scheduler ran was recorded 'pending' and "
+            "never executed (the sweep embedded the node anyway). Those rows count against "
+            "the async admission caps. Settles only a never-started "
+            "memory.generate_embedding row whose node is already embedded, as 'success' "
+            "with result.superseded_by. Reports without changing anything unless --yes. "
+            "Requires DATABASE_URL."
+        ),
+    )
+    settle_parser.add_argument("--yes", action="store_true", default=False, help="Settle the rows (without this the command only reports).")
+    settle_parser.add_argument("--batch-size", type=int, default=500, help="Rows examined per committed batch (default 500).")
+
     auth_parser = subparsers.add_parser(
         "auth",
         help="Auth management commands.",
@@ -926,6 +985,11 @@ def main() -> None:
             )
         elif args.memory_command == "prune-cascade-debris":
             _prune_cascade_debris(
+                yes=getattr(args, "yes", False),
+                batch_size=getattr(args, "batch_size", 500),
+            )
+        elif args.memory_command == "settle-embedding-logs":
+            _settle_embedding_logs(
                 yes=getattr(args, "yes", False),
                 batch_size=getattr(args, "batch_size", 500),
             )
