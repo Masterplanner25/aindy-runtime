@@ -9255,6 +9255,30 @@ key in each tool dict.
 
 ---
 
+## FR-56 — embedding jobs submitted while the scheduler ran were recorded `pending` and never run, holding admission slots 🟡 P2 (app-filed 2026-11-01, runtime 2.29.0)
+
+**Status: CLOSED (2026-11-01) — #871, DEC-104; unreleased.** Filed by the app (their register,
+`## FR-56`, apps-monolith PR #518). FR-55 is also the app's (guest Nodus waits, filed 2026-10-22).
+`enqueue_embedding` was the only caller passing `execute_inline_in_test_mode=False`, and
+`_submit_async_job_inner` answered it on the queued path with `return log_id`, after the JobLog
+row was committed `pending` and before the semaphore and executor. Present since the repo was
+extracted (0d5d382). Only submissions made before the scheduler started (runner disabled, so
+inline) finished, which is why the app's successes came in bursts at boot. The one-minute sweep
+calls `process_embedding_job` directly, so every node was embedded and nothing looked wrong. Live
+on 2026-11-01: 2,387 rows `pending`, `started_at` NULL, `attempt_count` 0; all 3,548 nodes
+complete; no `success` row since 2026-10-15. **Why P2:** `_active_job_statuses()` includes
+`pending`, so these rows count against `AINDY_ASYNC_MAX_CONCURRENT_PER_USER` / `_GLOBAL`. At the
+boot warning's recommended per-user cap of 2, every async job for the app's owner (1,696 rows)
+would be refused. Both caps are unset there, so nothing was refused.
+**Fix (DEC-104):** the sweep owns embedding on the instance that runs it (no job row); without a
+scheduler in the process the job is still submitted and closes its own row; the early return is
+gone; the sweep closes an open row for each node it embeds; `aindy-runtime memory
+settle-embedding-logs` settles stranded rows as `success` with `result.superseded_by`, only when
+an operator runs it. **Remaining:** the app runs the command after upgrading (dry-run first).
+Execution units of the stranded rows are walked to `completed` by the same command.
+
+---
+
 ## FR-54 — `certifi==2026.7.22` was pinned exactly and carried PYSEC-2026-4320 (emSign roots with compromised intermediates) 🔴 security, P1 (app-filed 2026-10-22, runtime 2.28.0)
 
 **Status: CLOSED (2026-10-22) — ships in 2.28.1.** Filed by the app (their register, `## FR-54`;

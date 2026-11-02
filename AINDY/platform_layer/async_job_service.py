@@ -626,8 +626,9 @@ def _submit_async_job_inner(
                         _e,
                     )
             return log_id
-        if not execute_inline_in_test_mode:
-            return log_id
+        # FR-56 — an `if not execute_inline_in_test_mode: return log_id` stood here, so a
+        # caller that only opted out of the SQLite inline fallback had its job recorded
+        # `pending` and never run. The flag governs that fallback (above) and nothing else.
         sem = _get_semaphore()
         if not sem.acquire(blocking=False):
             log = db.query(JobLog).filter(JobLog.id == log_id).first()

@@ -1,6 +1,6 @@
 ---
 title: "Decision Log"
-last_verified: "2026-10-14"
+last_verified: "2026-11-01"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -2175,3 +2175,12 @@ The check sits right after Step 2b (the caller must have a user id), before the 
 **Why**
 DEC-100 made the refusal wait on the counter. It read 0 over 2,289 app dispatches: window 1 (0 / 1,496, 10-15 → 10-22) and window 3 (0 / 793, 10-22 → 10-30, on 2.28.1). Window 2 was lost to a container recreate. The owner chose to wait for window 3 rather than flip on window 1 alone. A counter sees only the paths that ran, so the app also checked all 93 in-process dispatch sites. Exactly one would be refused: `watcher_signals_list_node` passes `user_id` to `sys.v1.watcher.query` as a FILTER, it is reachable only by an operator through the generic flow runner, and the app is fixing it on its side. One class is refused on purpose: a flow whose whole state is its payload, started through `/platform` with another user's id in that state.
 The flag exists because the windows only covered traffic that actually ran. An operator whose code hits a path nobody exercised gets the old behaviour back without a downgrade, and the counter shows which syscall. Declined: no flag. It is simpler, but a rare broken path would then need a runtime release to unblock. Also declined: a flag that defaults to `observe`, which would be DEC-100 again with no end date. The refusal message matches the transports' (DEC-099), so a caller reads one rule wherever it is refused.
+
+### DEC-104
+**Status:** `accepted` (2026-11-01 — FR-56, #871; decided by the owner: "yes build it the sweep-owns way")
+
+**Decision — The one-minute sweep owns memory embedding on the instance that runs it. `enqueue_embedding` submits no job there; the sweep closes any open embedding job row for a node it embeds; rows already stranded are settled only by an operator command.**
+Where no scheduler runs in the process (a follower, or before boot finishes), `enqueue_embedding` still submits the job, which runs inline or on the distributed queue and closes its own row. The `return log_id` that stranded queued jobs for `execute_inline_in_test_mode=False` is removed: that flag governs the SQLite inline fallback and nothing else. `aindy-runtime memory settle-embedding-logs` (dry-run unless `--yes`) turns a never-started `memory.generate_embedding` row whose node is embedded into `success` with `result.superseded_by: memory.embedding_sweep`, and walks its unit `pending → executing → completed`.
+
+**Why**
+The app found 2,387 embedding rows `pending` with no `started_at` while every node was embedded: the sweep had done all the work and the jobs never ran. `pending` counts against the async admission caps, so the boot warning's recommended per-user cap of 2 would have refused every async job for a user with 1,696 such rows. Declined: removing the early return alone and keeping the job. It is the smaller change, but the queued job and the sweep would then both embed the same node, paying the provider twice. Declined: settling stranded rows from the sweep on every tick. That would change rows in an operator's database on upgrade without being asked; the command makes it their call. `success` rather than a new `superseded` status, because a new status is a vocabulary every reader of `job_logs` would have to learn, and `result.superseded_by` already says who did the work.
