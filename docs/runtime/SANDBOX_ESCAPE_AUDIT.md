@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-10-29"
+last_verified: "2026-11-02"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,38 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 046 — 2026-11-02
+
+**Trigger:** `v2.29.1` release tag (`sandbox-escape-linux.yml`, run `41382681561`).
+**Commit:** `c767c9f` (release PR #872's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:09d17d5e4c16d0a7a1eea690bcb7c6ab8616b211f8421e429e97c1bef5bd0ed2`, **the same as Entry 045**.
+The log's `Downloaded newer image` line is a fresh runner pulling the tag, not a moved digest.
+After three releases in a row with a new digest, this one is unchanged.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 7.45s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `41382681561`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.29.0..v2.29.1` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- FR-56 (#871, DEC-104) changes how memory embedding jobs are submitted and adds the operator CLI
+  `memory settle-embedding-logs`. It touches async job rows, not isolation.
+- #870 upgrades setuptools in the runtime's own `Dockerfile`, which is not the sandbox image.
+- #869 is a documentation correction.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. Both passed on `c767c9f` before the tag,
+along with Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `41382681552`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API and simple index both reported `2.29.1` (wheel + sdist).
+- Boot Smoke on the published wheel installed on attempt 1.
+- The GitHub release is non-draft (03:39Z).
+- `publish.yml` is unchanged from `v2.29.0`.
 
 ## Entry 045 — 2026-10-29
 
