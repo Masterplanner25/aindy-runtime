@@ -4,6 +4,74 @@
 
 _Nothing yet._
 
+## 2.29.1 — 2026-11-02
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.29.1.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ Run one command after upgrading** if any deployment ran an earlier release with the
+  scheduler on: `aindy-runtime memory settle-embedding-logs` (reports only), then `--yes`.
+  Embedding job rows stranded `pending` count against the async admission caps until settled.
+  Keep `AINDY_ASYNC_MAX_CONCURRENT_PER_USER` / `_GLOBAL` unset until it has run.
+- **Rebuild your image** to take setuptools ≥ 84.1.0 in the runtime's own `Dockerfile`. A
+  plain or `[mcp]` install keeps the base image's setuptools; `[security]` takes the floor.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+- No route, scope, schema, env var or dependency-pin change. One new CLI subcommand.
+
+### Fixed — embedding jobs were recorded `pending` and never run, holding async admission slots (#871)
+
+- A memory embedding job submitted while the scheduler ran was written to `job_logs` as
+  `pending` and never executed. `enqueue_embedding` passed `execute_inline_in_test_mode=False`,
+  and the submit path returned on that flag before the executor. The one-minute sweep embedded
+  every node anyway, so memory was complete, but the rows never closed. One live stack had
+  2,387 of them, the newest `success` two weeks old.
+- Those rows count against `AINDY_ASYNC_MAX_CONCURRENT_PER_USER` and
+  `AINDY_ASYNC_MAX_CONCURRENT_GLOBAL`. With either cap set below the stranded count, every async
+  job for the affected user (or every user) is refused with a 429.
+- Now (DEC-104, FR-56): on the instance running the scheduler the sweep owns embedding and no
+  job row is written. Elsewhere the job is still submitted and closes its own row. The early
+  return is gone, and the sweep closes any open row for a node it embeds.
+
+**Operator action after upgrading:** rows already stranded stay `pending` until you settle them.
+
+```bash
+aindy-runtime memory settle-embedding-logs          # reports only
+aindy-runtime memory settle-embedding-logs --yes    # settles them
+```
+
+It settles only a never-started `memory.generate_embedding` row whose node is already embedded,
+as `success` with `result.superseded_by: memory.embedding_sweep`, in committed batches. Rows
+whose node is still pending or deleted are left alone and counted. Leave the async caps unset
+until it has run.
+
+### Fixed — 2.29.0's notes said setuptools 84.1.0 reaches every install; it reaches only `[security]` (#869)
+
+- **Correction to the published 2.29.0 entry (2026-10-29).** The operator note "`setuptools` 84.1.0
+  clears two low-severity, Windows-only advisories" holds only for installs that take the
+  `security` extra. `pyproject.toml` declares `setuptools>=84.1.0` there and nowhere else, and the
+  exact `==84.1.0` in `AINDY/requirements.txt` is CI's lock file. A plain `aindy-runtime` install
+  (the runtime's own `Dockerfile` included) keeps the base image's setuptools. The app's container
+  showed 79.0.1, which also predates the CVE-2026-59890 floor. Install `aindy-runtime[security]`
+  to take it. Runtime exposure is unchanged (none on Linux); only what an image scanner reports
+  differs. `APP_HANDOFF_v2.29.0.md` §2 carries the same dated correction. Reported by the app
+  while it prepared its adoption.
+
+### Fixed — the runtime image kept the base image's setuptools 79.0.1 (#870)
+
+- The `Dockerfile` installs plain `aindy-runtime`, and setuptools's floor lives only in the
+  `security` extra. So the image carried whatever setuptools `python:3.11-slim` ships (79.0.1 today), below the
+  CVE-2026-59890 floor (83.0.0) and GHSA-xmj3-9gf7-h52w's (84.1.0). There was no runtime exposure:
+  the runtime never imports setuptools, and both bugs are in install-time code. It is what a
+  scanner of the image reports.
+- The runtime stage now runs `pip install --upgrade "setuptools>=84.1.0"` after copying the
+  builder's packages in. Installing it in the builder instead does not work. Copying `/install` over
+  `/usr/local` leaves `setuptools-79.0.1.dist-info` beside the new one, and `pip list` still reports
+  79.0.1 (checked in a throwaway two-stage build). `aindy-runtime[security]` was declined because
+  that extra also installs `pip-audit` into the production image.
+- This takes effect from the next image build. The floor is duplicated from `pyproject.toml`'s
+  `security` extra; keep them equal.
+
+
 ## 2.29.0 — 2026-10-29
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.29.0.md`.
