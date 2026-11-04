@@ -2235,3 +2235,11 @@ The delete cascades and cannot be undone, so it must not destroy what others bui
 
 **Why**
 AGENT-HARDEN-6 designed the Verifier to roll back, but that was never observed: the engine found nothing to reverse. Fixing the link would have turned on automatic deletion of memory on any failed check, with nobody looking, on every deployment at once. Capabilities ship default-off until evidence. The cost is that a failed run keeps its memory until someone calls undo, which is recoverable, where a wrong automatic delete is not.
+
+### DEC-111
+**Status:** `accepted` (2026-11-04 — `UNDO-COMPENSATORS-1`; decided by the owner: "yes but wait until a failed run needs one")
+
+**Decision — `sys.v1.agent.undo` gets no HTTP route for now. It stays reachable only from in-process code or an operator's `AINDY_MCP_SERVER_TOOLS`. The trigger to revisit is a real `VERIFY_FAILED` run whose effects someone needs reversed.**
+
+**Why**
+A route is a new way to delete data, and it needs its own scope and design. Nothing asks for one yet: as of 2026-11-04 the app has no undo caller and no plan declaring `expects`, so no run of its can fail verification. The cost is that an operator reading a `VERIFY_FAILED` report cannot act on it over HTTP, which leaves DEC-110's explicit undo reachable only through code or MCP until the trigger fires.
