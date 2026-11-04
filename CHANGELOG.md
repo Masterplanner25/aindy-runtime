@@ -4,6 +4,41 @@
 
 _Nothing yet._
 
+## 2.31.0 — 2026-11-04
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.0.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ `sys.v1.agent.undo` now really reverses effects, which deletes memory nodes** (DEC-108, DEC-109).
+  It was a no-op until now. It has no HTTP route, so this reaches you only if your own in-process code
+  calls it, or you exposed it through `AINDY_MCP_SERVER_TOOLS`.
+- **A failed verification changes nothing by default** (DEC-110). The Verifier lists what it could
+  reverse. `AINDY_VERIFY_FAILED_AUTO_UNDO=1` makes it delete; leave it off (`SOAK_REGISTER.md` row 8).
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+- No route, scope, schema or dependency-pin change. One new env var, default off.
+
+### Fixed — `sys.v1.agent.undo` now finds and reverses real effects, so it can delete memory (#891)
+
+It has been a no-op since it shipped. It now deletes the memory nodes a run wrote.
+
+- Undo selected effects by `EffectRecord.execution_id`, and nothing wrote that column, so it returned an empty summary for every run and no compensator, first-party or consumer, ever ran. The tests seeded the column by hand. The ledger now links each effect to its execution unit (DEC-108). No schema change.
+- Consumer `compensate=` hooks are now reachable. They run in a savepoint on undo's session, and `context` carries that session and the owner. A hook must flush, and never commit or roll back.
+- `sys.v1.memory.write` now has a compensator. It deletes the node, and refuses if the node changed or has edit history, a link or a trace membership (DEC-109).
+- Effects recorded before this release stay invisible to undo unless they re-run. Effects with no ledger row, including default Nodus guest memory writes, are not seen; an empty summary does not mean the run had no effects.
+- Each effect the gate reserves costs one more query.
+
+### Changed — the Verifier reports what it could reverse instead of claiming to roll back (#891)
+
+- On `VERIFY_FAILED` the agent event now lists `reversible`, and nothing is changed. The rollback it described never did anything, and fixing undo would have made it delete memory automatically. `AINDY_VERIFY_FAILED_AUTO_UNDO=1` opts in (DEC-110).
+
+### Fixed — `Upgrade Path Guard` failed on a PR pushed just after a release (#889)
+
+- The guard reads the newest version from PyPI's JSON API and installs it through the simple index,
+  which can lag for minutes after a publish. In that window it failed with `No matching distribution
+  found` before any schema step, so a red guard said nothing about the upgrade path.
+- It now retries the install up to 10 times, 30 s apart, and still fails if the version never resolves.
+
+
 ## 2.30.0 — 2026-11-04
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.30.0.md`.

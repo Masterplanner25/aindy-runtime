@@ -223,6 +223,9 @@ and records the effect as `failed`, which stays retryable.
 the node's content, tags or type changed, or it has edit history, a link in either direction, or a
 trace membership. Reads and feedback do not block it. Its causal edges are deleted with it (DEC-109).
 
+**Who can call undo.** It has no HTTP route and is off `POST /platform/syscall`, so only in-process code
+can reach it, or an MCP server an operator configured with `AINDY_MCP_SERVER_TOOLS` to expose it.
+
 **What undo can see.** Undo finds an effect only if the ledger linked it to the run's unit (DEC-108):
 
 | Effect | Undo sees it? |
