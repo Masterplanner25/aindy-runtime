@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-11-02"
+last_verified: "2026-11-03"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,37 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 047 — 2026-11-03
+
+**Trigger:** `v2.29.2` release tag (`sandbox-escape-linux.yml`, run `41774750576`).
+**Commit:** `ec1e40d` (release PR #883's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:09d17d5e4c16d0a7a1eea690bcb7c6ab8616b211f8421e429e97c1bef5bd0ed2`, **the same as Entry 046**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 7.08s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `41774750576`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.29.1..v2.29.2` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #882 (DEC-105) has the stale-log cleanup close the execution unit and fire `job_log.written`. It
+  touches async job rows and an app event, not isolation.
+- #881 moves dependency pins in the runtime's own install, including `pydantic` 2.14.2 for
+  GHSA-qpmf-fgh3-ff25 and GHSA-3r8g-cqwr-jr29, which are validation bypasses, not sandbox controls.
+  The sandbox image is the alpine digest above, not this install.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. Both passed on `ec1e40d` before the tag,
+along with Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `41774750851`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API and simple index both reported `2.29.2` (wheel + sdist).
+- Boot Smoke on the published wheel installed on attempt 1.
+- The GitHub release is non-draft (04:49Z on 2026-11-04).
+- `publish.yml` is unchanged from `v2.29.1`.
 
 ## Entry 046 — 2026-11-02
 
