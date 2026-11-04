@@ -406,8 +406,8 @@ FR-3 > FR-1 > FR-2 > FR-4; corrected runtime picture: the only fully net-new ite
 **FR-1/FR-3/FR-4 shipped in v1.8.0; FR-2 pre-existing.** A fifth item (**FR-5**) surfaced
 2026-07-18 (native workflows couldn't reach app callables) — verified real; see below.
 A sixth (**FR-6**, self-service password management) surfaced 2026-07-31 — verified real;
-item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) are the open remainder,
-blocked on a token-delivery channel (FR-1). **FR-7** (memory recall defects) shipped in
+item 1 (change-password) shipped 2026-07-31, items 2+3 (forgot/reset) shipped in 2.0.0 (#337, #338;
+corrected 2026-11-04, this line had kept calling them open). **FR-7** (memory recall defects) shipped in
 v2.0.0. **FR-8, FR-9 and FR-10 arrived 2026-08-03 and shipped 2026-08-05 — see below; all
 three are 2.0.0 upgrade-path defects, so they gate a 2.0.1.** **FR-11/12/13 filed 2026-08-06** (callback timeout budget; no agent-registration surface; `agents` has no metadata column) — all verified against source, none built. **FR-14/15/16 filed 2026-08-15/16** (their own sections below; 16 closed in 2.3.0, 15 (b)+(c) shipped, 14 half closed). **FR-17** (async-job `execution.*` eaten by the contract gate, #518) and **FR-18** (a full health snapshot persisted per liveness probe — 99.6% of one database, #517) arrived 2026-08-22 and were fixed the same day; both have their own sections. **FR-19/20/21/22 arrived 2026-08-22** and were fixed the same day — 19's runtime half (#521), 20 (#520), 21 (#522), 22 (route inventory); each has its own section. **FR-24** (`nltk` CVE) shipped in 2.7.0 unfiled. **FR-23/25/26/27 filed 2026-09-11** — 23 had sat a month in their document while this line said "next available: FR-23"; 25 (a)+(c) shipped the same day (#620); 23, 25 (b), 26, 27 open, each with its own section below. **FR-28** (#628), **FR-29** (#670, `WAIT-DETECT-SHAPE-1`) and **FR-30** (#673, `EU-FINALIZE-UNCOMMITTED-1` — filed from their 2.15.0 verification) shipped 2026-09-12/14/15. Next available: **FR-31**.
 
@@ -1092,7 +1092,7 @@ restore admin access. Runtime-owned by construction: `/auth/*` is in the app's
 `RUNTIME_OWNED_PREFIXES`, and there is no `register_*` hook that lets an app add an auth route.
 
 The app filed this as three sliceable items. Item 1 has no delivery dependency and shipped
-alone; items 2+3 are one unit and are the open remainder.
+alone; items 2+3 are one unit. **Corrected 2026-11-04: they shipped in 2.0.0 (#337, #338), so FR-6 is closed.**
 
 **Item 1 — `POST /auth/password/change`. ✅ SHIPPED 2026-07-31.** Authenticated, Bearer-JWT
 only (a platform API key has no password to rotate — the same guard `logout` applies).
@@ -9271,8 +9271,10 @@ app's `JOB-LOG-MIRROR-STALE-1`, and the drift is what misdirected FR-56. The cle
 test. **Fix:** the unit is finalized in the same commit; the event fires per row after it.
 `test_stale_cleanup_closes_unit.py`, on the private engine, mutation-tested.
 The app's count came back 2,387, so `aindy-runtime jobs settle-stale-units` was built (#886,
-DEC-107). **Remaining:** the app runs it (dry run, then `--yes`, the owner's call). Not run on a live
-stack.
+DEC-107). The app ran it on 2026-11-04 on real Postgres (A.I.N.D.Y. #536): dry run 2,387, then `--yes`
+with the owner's OK settled 2,387 in about 6 s; its query reads 0 and the job rows are unchanged.
+**Remaining:** nothing has yet shown a stale row reaching `automation_logs` live (#882's event); the
+app checks the first time one occurs.
 
 ---
 
