@@ -1,7 +1,7 @@
 ---
 title: "Soak Register — flags waiting on evidence from the app's stack"
 api_version: "1.0"
-last_verified: "2026-10-04"
+last_verified: "2026-11-04"
 status: current
 owner: "platform-team"
 ---
@@ -114,6 +114,19 @@ that declares one: report it.
 with the caller fix), `AINDY_NODUS_WARM_POOL` (`NODUS-WARMPOOL-1`), `AINDY_SYSCALL_IDEMPOTENCY`
 (`IDEM-11`, 2.5.0), `AINDY_AUTHORITY_NEGOTIATION` (`AUTHORITY-NEGOTIATION-1`, 2026-09-26). If any of these is set to `0` on your stack, that is worth knowing too.
 
+### 8. `AINDY_VERIFY_FAILED_AUTO_UNDO=1` — `UNDO-COMPENSATORS-1` (DEC-110) — **status: never on anywhere; read the reports first**
+
+Listed last because it deletes data. Unlike the rows above, the first half of this soak needs no flag:
+from the release that carries #891, the Verifier reports what it could reverse with the flag off.
+
+| | |
+|---|---|
+| What it changes | when a run fails post-condition verification, the Verifier reverses the effects it reports, which hard-deletes the memory nodes the run wrote. Off, it changes nothing and `sys.v1.agent.undo` does the same on request |
+| Presence signal | a `VERIFY_FAILED` agent event whose payload has a non-empty `reversible`. Only a plan step that declares `expects` can fail verification, so if no plan of yours declares one, the honest report is "no declaring plan" and this row waits. Do not declare one for the soak's sake |
+| Absence signal | for each reported run, a person reads the listed effects and confirms they would have wanted those nodes deleted. Any node they would have kept is the failure. Evidence is the run ids and that count |
+| Failure looks like | a failed check on a useful run, where the memory it wrote was still worth keeping. Report it as an FR: that is the case against ever flipping this |
+| Flips | never automatically. The flag goes on for a window only after the reports read clean, and the default changes only by a new owner decision, because a wrong delete cannot be undone |
+
 ---
 
 ## Status table (the runtime keeps this current)
@@ -128,3 +141,4 @@ with the caller fix), `AINDY_NODUS_WARM_POOL` (`NODUS-WARMPOOL-1`), `AINDY_SYSCA
 | 5b | `AINDY_ASYNC_JOB_LOOP_CLOSURE` | `INFINITY-RUNTIME-1` | — | — | — |
 | 5c | `AINDY_NEXT_ACTION_ACTING` | `INFINITY-RUNTIME-1` | — | — | — |
 | 6 | `AINDY_FLOW_FAN_OUT` | `FLOW-PARALLEL-1` | — | runtime soak (DEC-097) | ON 2026-10-04 |
+| 8 | `AINDY_VERIFY_FAILED_AUTO_UNDO` | `UNDO-COMPENSATORS-1` | — | — | — |
