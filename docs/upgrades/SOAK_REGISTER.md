@@ -120,7 +120,7 @@ with the caller fix), `AINDY_NODUS_WARM_POOL` (`NODUS-WARMPOOL-1`), `AINDY_SYSCA
 
 | # | Flag | Entry | On your stack since | Evidence received | Default flipped in |
 |---|---|---|---|---|---|
-| 1 | `AINDY_MEMORY_RECALL_OWN_SESSION` | `DB-NODUS-BUDGET-1` | app, on since 2026-09-23 | counter window 10-02→10-09 (split across one recreate): 0 at every `stage`, 405 recalls, no pool exhaustion; no agent ran in it | next release (DEC-106) |
+| 1 | `AINDY_MEMORY_RECALL_OWN_SESSION` | `DB-NODUS-BUDGET-1` | app, on since 2026-09-23 | counter window 10-02→10-09 (split across one recreate): 0 at every `stage`, 405 recalls, no pool exhaustion; no agent ran in it | 2.30.0 (DEC-106) |
 | 2 | `AINDY_SYSCALL_IDEMPOTENCY_STRICT` | `FR-27` / `IDEM-11` | — | — | — |
 | 3 | `AINDY_DELEGATION_PRIVATE_MEMORY` | `RTR-4` | — | — | — |
 | 4 | `AINDY_DURABLE_CONTINUATION` (+`_ALL`) | `DUR-1..4` | — | — | — |
