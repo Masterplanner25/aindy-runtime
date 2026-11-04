@@ -27,7 +27,7 @@ pytest -m sandbox_escape -v                 # needs Docker (Linux containers), n
 pytest -c pytest.integration.ini -v         # needs live Postgres + Redis
 docker compose -f docker-compose.test.yml up -d
 ruff check AINDY tests --config AINDY/ruff.toml   # exactly what CI's Runtime Lint runs
-# Do NOT run `ruff format` — the tree was never formatted; 457/559 files would change (LINT-FORMAT-1)
+# Do NOT run `ruff format` — the tree was never formatted; 601/709 files would change (LINT-FORMAT-1)
 python scripts/check_schema_version.py      # regenerate schema baseline after any model change
 aindy-runtime serve                         # needs DATABASE_URL + SECRET_KEY
 docker compose --profile full --profile monitoring up -d
@@ -201,7 +201,8 @@ and re-fetch, never a db handle.
 - The shared `db_session` / `runtime_only_app` fixture puts app and test on ONE connection in ONE
   transaction: **a flush reads as a commit** (variant 15) — and the app's `rollback()` erases the
   test's own rows. A durability assertion, or a route that answers 4xx/5xx, runs on the private engine
-  (`tests/fixtures/db.py::build_private_engine`) with a liveness control first.
+  (`tests/fixtures/db.py::build_private_engine`) with a liveness control first. Under `StaticPool`,
+  closing ANY other session rolls that transaction back (own-session recall hits this).
 - `ResourceManager.can_execute` is `(True, None)` under `settings.is_testing` (a pydantic property —
   patch it on the class); test-mode short-circuits above the real decision make the real path
   unreachable while green (`async_heavy_execution_enabled`, `get_queue` — put the guard BELOW the
@@ -280,14 +281,14 @@ A soak assertion must not be stricter than the contract.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s semantic half always returns `[]` (pgvector `ndarray` vs `list` guard). pgvector 0.5.0 fixes it — which is why #390 was HELD: it turns expansion on in the path that exhausted the pool.
 - **LOCKFILE-PLATFORM-1** — a Windows lockfile cannot satisfy Linux `npm ci`; `Platform Lockfile` workflow regenerates. Verify with `npm ci`, never `npm install` + build.
-- **DEP-UPGRADE-DEFERRED-1** — otel packages are version-locked; hand-align and `pip install --dry-run`. react-router 7→8 waits on a ui-kit release.
+- **DEP-UPGRADE-DEFERRED-1** — otel packages are version-locked; hand-align and `pip install --dry-run`. react-router 7→8 waits on a ui-kit release. openai 3.x: `httpx2` breaks the `respx` contract tests.
 - **C3** — non-Linux strong sandbox (C2 closed). `C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`.
 - **SYSMAX-3** — per-EU memory deferred: `ru_maxrss` is a process peak, never per unit (DEC-091; guest half `AINDY_NODUS_MAX_MEMORY_MB`).
 - **CLI-1 · CLI-SANDBOX-FORMAT-1 · TIER3-10 · DEPLOY-TARGET-1/2 · BILLING-1..5 · LAYER-1..5 · ROUTE-EXTRACT-\* · PACK-DEBT-\* · TENANT-\* · COMPAT-\* · DATA-\* · LOCAL-\*** — deferred; see `TECH_DEBT.md`.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-57** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half. Closed: FR-43..54, FR-56.
+- **APP-FR-\*** — app-side feature requests. **Next: FR-57** (the app numbers ahead of this ledger — read its register before numbering). Open: FR-14 recurrence half, FR-55. Closed: FR-43..54, FR-56.
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
@@ -325,7 +326,6 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - **EFFECT-OUTCOME-UNKNOWN-1** — CLOSED 2026-10-03 (#790–#793). Replay HOLDS `unknown`/`partial`, never re-runs; `AT_MOST_ONCE` refuses where `EXACTLY_ONCE` degrades; leaves `unknown` only via `POST /platform/effects/{id}/resolve`.
 - **MCP-SDK-2X-1** — CLOSED 2026-09-20 (#727): `mcp<2` lifted; nodus-mcp 0.1.4 branches per SDK major. A cap on the `[mcp]` extra must be REPEATED in the CI `Install MCP extra` step (it installs directly). Never isolate the MCP tests to go green.
 - **HTTP-SCOPE-GAP-1** — CLOSED 2026-09-17 (DEC-046 accepted, #723). Scope answers the VERB, the row filter answers OWNERSHIP; no `:any` scope. `enforce_api_key_scope` takes ANY-OF alternatives.
-- **CLI-EXEC-SURFACE-1** — CLOSED 2026-09-17 (DEC-047 accepted, #723). The operator half stays HTTP-only; a transport cannot grant authority it lacks; an operator syscall opens three doors at once.
 - **RECOVERY-GRANULARITY-1** — CLOSED 2026-09-17 (#722; DEC-063..066). The worker seam writes `agent_steps` per step as it completes, keyed on the plan's STEP INDEX (third `call_tool` arg, arity (2,3)); a CONTINUED run replays a `success` row (`replayed: True`). ★ nodus absorbs a step's `throw` — the worker reply reads `success`; the parent reads failure from the step results.
 - **EVENT-OUTBOX-1** — CLOSED 2026-09-17 (#721; DEC-060..062). In a pipeline a queued event rides the handler's session and its next commit. ★ The pipeline now ROLLS BACK the request session when the HANDLER raises (the failure emit used to commit its pending writes); the unit row commits at creation. Test a 4xx route on the private engine.
 - **AUTHORITY-LIFETIME-1** — CLOSED 2026-09-17 (#720; DEC-056..059). A token for a run in a TERMINAL status is refused at `check_tool_capability` (before the HMAC) and the dispatcher's agent gate — CANCEL-REACH-1's read widened (`run_terminal_status`), sticky once terminal, fail-OPEN. `waiting` KEEPS authority; the token stays stateless.
