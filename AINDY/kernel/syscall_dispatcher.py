@@ -6,13 +6,21 @@ All sys.v{N}.{domain}.{action} calls route through dispatch(). The dispatcher:
   1. Parses version and action from the syscall name.
   2. Validates the syscall name exists in the registry.
   3. Enforces the required capability against the caller's SyscallContext.
-  4. Validates input payload against the entry's input_schema (if present).
-  5. Checks tenant isolation and resource quota.
-  6. Executes the registered handler.
-  7. Validates output against output_schema (non-fatal â€" logs warning only).
-  8. Emits deprecation warning if the syscall is marked deprecated.
-  9. Wraps the result in the standard response envelope.
- 10. Emits a SYSCALL_EXECUTED SystemEvent (non-fatal, swallowed on failure).
+  4. Checks caller identity: a non-empty user_id, a payload user_id that matches it, and
+     extension-call tenant metadata. Row-level ownership is the handler's job.
+  5. Checks the resource quota.
+  6. Validates the payload against the entry's input_schema (required fields and top-level
+     types only; see kernel/syscall_versioning.py::validate_payload).
+  7. Sets a deprecation warning if the syscall is marked deprecated.
+  8. Runs the idempotency gate when it engages (may replay or refuse without running the handler).
+  9. Refuses if the current run has already ended.
+ 10. Executes the registered handler.
+ 11. Validates output against output_schema: an error envelope for a stable syscall, a logged
+     warning for an experimental one.
+ 12. Records usage and emits a SYSCALL_EXECUTED SystemEvent (both non-fatal).
+ 13. Wraps the result in the standard response envelope.
+
+docs/runtime/SYSCALL_SYSTEM.md is the full contract.
 
 Standard response envelope
 --------------------------
@@ -28,18 +36,20 @@ All calls return::
         "version":           str,       # parsed ABI version (e.g. "v1")
         "duration_ms":       int,
         "error":             str | None,
-        "warning":           str | None # set when syscall is deprecated
+        "warning":           str | None, # set when syscall is deprecated
+        "failure_class":     str,       # on error and unknown envelopes only
     }
 
 ``status`` gained ``partial`` and ``unknown`` in `EFFECT-PARTIAL-1`. **A consumer must treat
 any unrecognised status as *not success* and reconcile** — a batched effect that half-applied is
-neither of the two original values, and forcing it into one is either a lie or a waste. Nothing
-emits the new values until a handler opts in via `AINDY.kernel.syscall_outcome`; see that module
-for why widening the set was safe to land.
+neither of the two original values, and forcing it into one is either a lie or a waste. A handler
+opts in via `AINDY.kernel.syscall_outcome`; see that module for why widening the set was safe to
+land.
 
 The dispatcher never raises for transient or expected errors — every such path
 returns the envelope. The one exception is SyscallContractViolation, which is
-raised when an EXACTLY_ONCE handler returns a non-dict value. This is a
+raised when a handler returns a non-dict value while the idempotency gate is engaged
+for the call (with no gate engaged, the same mistake is a `fatal` error envelope). This is a
 programming error and callers must not catch it silently.
 
 Usage
@@ -510,7 +520,7 @@ class SyscallDispatcher:
     ) -> dict[str, Any]:
         """Execute a syscall and return the standard response envelope.
 
-        This method never raises. All errors â€" unknown syscall, permission
+        Raises only SyscallContractViolation (see the module docstring). All other errorsâ€" unknown syscall, permission
         denial, handler failure â€" are captured in the returned envelope.
 
         Trace propagation

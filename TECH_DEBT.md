@@ -14375,6 +14375,30 @@ structured to put in it. **Build them together if either is built.**
 
 ---
 
+## UNDO-COMPENSATORS-1 — undo and the Verifier's rollback have nothing to reverse on a bare runtime
+
+**Status: OPEN — P3, deferred.** Filed 2026-11-04, while checking the README's claims against the
+code. The engine itself works and is tested; this entry is about what it has to act on.
+
+**The gap.** `AGENT-HARDEN-3` shipped the mechanism and said in passing, inside its CLOSED entry,
+that "no built-in syscall ships a compensator yet". That is still true, and nothing open tracked it.
+A census of the 23 entries in `SYSCALL_REGISTRY` finds `reversible` False on all of them, and
+`compensate=` appears nowhere in `aindy-apps-monolith`. So:
+
+- `sys.v1.agent.undo` reports every recorded effect as `irreversible`, unless a consumer registers
+  a syscall with `compensate=`.
+- The `AGENT-HARDEN-6` Verifier's rollback on `VERIFY_FAILED` calls the same engine, so it surfaces
+  those effects and reverses none of them.
+
+**Why it matters.** The behaviour is honest at runtime, since every effect is surfaced rather than
+skipped. The risk was in the description: `README.md` said undo could "walk back a run's recorded
+side effects", which reads as a capability a bare install has. The README and
+`docs/runtime/SYSCALL_SYSTEM.md` §5 now state the limit.
+
+**To close.** Ship a first-party compensator where the reversal is safe, or record a decision that
+compensators stay consumer-owned. `AGENT-HARDEN-3` names `memory.write` → delete as the obvious
+first candidate. A compensator receives the effect's recorded outcome, not its original input.
+
 ## EFFECT-PRECONDITION-1 — an effect cannot declare the version of the world it expects
 
 **Status: OPEN — P2, deliberately deferred.** Filed 2026-08-17. Provenance:

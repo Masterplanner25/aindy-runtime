@@ -1,6 +1,6 @@
 ---
 title: "Syscall System"
-last_verified: "2026-09-16"
+last_verified: "2026-11-04"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -29,7 +29,7 @@ A.I.N.D.Y. syscalls are the single gated interface between Nodus scripts and hos
 
 ## 1. Overview
 
-**All execution in A.I.N.D.Y. routes through SyscallDispatcher.** Both Nodus scripts (via the `sys()` global) and host-layer entry points (routes, agents, schedulers) use the same syscall interface. Entry-point functions like `run_flow()` and `execute_intent()` are syscall proxies — thin wrappers that build a `SyscallContext` and call `get_dispatcher().dispatch(...)`.
+**`SyscallDispatcher.dispatch()` is the single entry point for syscalls.** Both Nodus scripts (via the `sys()` global) and host-layer entry points (routes, agents, schedulers) use the same syscall interface. Entry-point functions like `run_flow()` and `execute_intent()` are syscall proxies — thin wrappers that build a `SyscallContext` and call `get_dispatcher().dispatch(...)`. Not every effect in the runtime is a syscall; see [What does not go through the dispatcher](#what-does-not-go-through-the-dispatcher).
 
 ```
 Route / Agent / CLI / Scheduler
@@ -58,9 +58,17 @@ SyscallDispatcher.dispatch()
 Standard response envelope
 ```
 
-The dispatcher **never raises**. Every code path returns the envelope.
+The dispatcher returns the envelope on every path but one. It raises `SyscallContractViolation` when a handler returns a non-dict while the idempotency gate is engaged for the call. With no gate engaged, the same mistake is a `fatal` error envelope. This is a programming error, and code with a broad `except Exception` above `dispatch()` needs an explicit `except SyscallContractViolation: raise` before it.
 
-**Anonymous / system calls (`user_id=None`):** The dispatcher enforces tenant identity, so calls with no `user_id` skip the syscall layer and invoke the `_*_direct()` implementation directly. This preserves system-internal and test-harness execution paths. Logged at DEBUG.
+### What does not go through the dispatcher
+
+These paths get none of the dispatcher's checks. The list records known cases and is not a census of every route.
+
+| Path | What it does instead |
+|---|---|
+| Anonymous / system calls (`user_id=None`) to the proxies | The dispatcher requires a `user_id`, so these invoke the `_*_direct()` implementation directly. This preserves system-internal and test-harness execution paths. |
+| Agent approval (`approve_run()` → `execute_run`) | An atomic compare-and-swap, then execution on a daemon thread. It gets no `EffectRecord` idempotency from the dispatcher. |
+| `POST /memory/nodes/search` | Calls `MemoryNodeDAO.find_similar` directly, scoped by the route to the authenticated user. |
 
 ---
 
@@ -101,18 +109,26 @@ All calls return the same shape:
 **★ `status` gained `partial` and `unknown` (`EFFECT-PARTIAL-1`).** A batched effect where some
 units applied and some did not is neither `success` nor `error` — forcing it into one is a lie or
 a waste. **A consumer must treat any status that is not `success` as not-success and reconcile;
-never branch on `== "error"`.** `outcome` carries the per-unit detail (`None` otherwise). Nothing
-emits the new values yet: a handler opts in via `AINDY.kernel.syscall_outcome`.
+never branch on `== "error"`.** `outcome` carries the per-unit detail (`None` otherwise).
+
+A handler opts in via `AINDY.kernel.syscall_outcome`, by returning a `partial(...)` or `unknown(...)`
+claim or raising `EffectOutcomeUnknown`. Both values are live: `sys.v1.flow.run` reports `partial`
+when a run completes past failed fan-out branches, and `outbound_http` and `mcp_client` raise
+`EffectOutcomeUnknown`.
+
+**A replayed `success` differs slightly:** when the idempotency gate replays a completed effect,
+the envelope has no `outcome` key and `warning` is always `null`, even for a deprecated syscall.
 
 - `version` — always present; the parsed ABI version string.
 - `warning` — set when the syscall is deprecated; null otherwise.
-- `failure_class` — **error envelopes only** (`RETRY-CLASSIFY-1`, 2026-09-16): one of
-  `transient | cancelled | permission | not_found | invalid | fatal`, declared by the path
-  that refused (unknown syscall → `not_found`, capability/tenant → `permission`, input
-  validation → `invalid`, quota → `transient`, cancelled run → `cancelled`, contract
-  violation → `fatal`); a handler's own exception is classified by the fallback table
-  (a tripped circuit breaker is `transient`). Absent on success. Only `transient` may be
-  retried — see `RETRY_POLICY.md`.
+- `failure_class` — **`error` and `unknown` envelopes only** (`RETRY-CLASSIFY-1`, 2026-09-16). On
+  an error, one of `transient | cancelled | permission | not_found | invalid | fatal`, declared
+  by the path that refused (unknown syscall → `not_found`, capability/tenant/ended run →
+  `permission`, malformed extension metadata or input validation → `invalid`, quota or a refused
+  `AT_MOST_ONCE` → `transient`, cancelled run → `cancelled`, contract violation → `fatal`); a
+  handler's own exception is classified by the fallback table (a tripped circuit breaker is
+  `transient`). An `unknown` envelope carries `failure_class: unknown` (DEC-090). Absent on
+  `success` and `partial`. Only `transient` may be retried — see `RETRY_POLICY.md`.
 - `error` — set on failure; null on success.
 - `data` — handler output on success; `{}` on error.
 
@@ -129,17 +145,50 @@ Steps executed in order for every call:
 | 2 | Resolve version; optional fallback (`SYSCALL_VERSION_FALLBACK`) | error if unresolvable |
 | 3 | Look up entry in `SYSCALL_REGISTRY` | error if not found |
 | 4 | Enforce exact capability membership from `SyscallContext.capabilities` | error if denied |
-| 5 | Enforce non-empty `user_id` (tenant isolation) | error if absent |
-| 6 | Resource quota check via `ResourceManager` | error if over quota; quota backend failures fail open only in development/test and fail closed otherwise |
-| 7 | Input validation against `entry.input_schema` | error if invalid |
-| 8 | Deprecation check — set `warning` in envelope | non-fatal, continues |
-| 9 | Execute handler | error if handler raises |
-| 10 | Output validation against `entry.output_schema` | error for stable syscalls; warning-only for experimental syscalls |
-| 11 | Record syscall usage in `ResourceManager` | non-fatal |
-| 12 | Emit `SYSCALL_EXECUTED` system event | non-fatal |
-| 13 | Return success envelope; reset ContextVar tokens | — |
+| 5 | Enforce non-empty `user_id` | error if absent |
+| 6 | Compare any payload `user_id` with the caller (DEC-103) | error on mismatch, unless `AINDY_PAYLOAD_IDENTITY_DISPATCH=observe` (count only) |
+| 7 | Check extension-call tenant metadata | error if missing or a different tenant |
+| 8 | Resource quota check via `ResourceManager` | error if over quota; quota backend failures fail open only in development/test and fail closed otherwise |
+| 9 | Input validation against `entry.input_schema` | error if invalid |
+| 10 | Deprecation check — set `warning` in envelope | non-fatal, continues |
+| 11 | Idempotency gate, when it engages | may replay a recorded result or refuse without running the handler |
+| 12 | Refuse if the current run is in a terminal status (DEC-056) | error if ended; an unreadable status counts as not ended (fails open) |
+| 13 | Execute handler | error if handler raises; `EffectOutcomeUnknown` becomes an `unknown` envelope |
+| 14 | Check handler output type; resolve any outcome claim | see [Output Validation](#output-validation) |
+| 15 | Output validation against `entry.output_schema` | error for stable syscalls; warning-only for experimental syscalls; skipped for `unknown` |
+| 16 | Complete the effect record, if the gate engaged | non-fatal; a ledger failure degrades to `AT_LEAST_ONCE` |
+| 17 | Record syscall usage in `ResourceManager` | non-fatal |
+| 18 | Emit `SYSCALL_EXECUTED` system event | non-fatal |
+| 19 | Return the envelope; reset ContextVar tokens | — |
 
 Step 0 is the trace propagation gate — see §12 for detail.
+
+### The idempotency gate
+
+The gate engages only when all of these hold:
+
+- the syscall declares `EXACTLY_ONCE` or `AT_MOST_ONCE`, or a continued run has durable effects active;
+- the caller named an execution unit, and that unit's id is a usable scope (`_gate_scope_engaged`);
+- `AINDY_SYSCALL_IDEMPOTENCY` is on, durable effects are active, or the syscall declares `AT_MOST_ONCE`.
+
+A declared guarantee alone therefore proves nothing about a given call. If gate machinery fails or
+a concurrent call holds the slot, `EXACTLY_ONCE` degrades to `AT_LEAST_ONCE` and `AT_MOST_ONCE`
+refuses. See [`IDEMPOTENCY_CONTRACT.md`](./IDEMPOTENCY_CONTRACT.md).
+
+### Tenant identity: what the dispatcher does and does not enforce
+
+Steps 5–7 establish **who is calling**. They do not establish **which rows the caller may touch**.
+
+| Enforced by | Guarantee |
+|---|---|
+| Dispatcher | The call has an authenticated `user_id`. |
+| Dispatcher | A payload cannot name a different `user_id`, unless an operator sets the `observe` opt-out. |
+| Dispatcher | An extension call's tenant metadata matches the caller. |
+| Each handler | Queries are filtered to `context.user_id`, and memory paths stay under the tenant's root. The dispatcher cannot check this. |
+
+A new handler that forgets to filter by `context.user_id` passes every dispatcher check. The tenant
+is also the user: `tenant_id` is set from `user_id`, so this is not multi-user-per-organisation
+isolation.
 
 ---
 
@@ -154,13 +203,19 @@ class SyscallEntry:
     handler:        Callable[[dict, SyscallContext], dict]
     capability:     str          # required capability name
     description:    str
-    input_schema:   dict | None  # JSON schema for input validation
-    output_schema:  dict | None  # JSON schema for output validation
-    stable:         bool         # False = experimental
+    input_schema:   dict | None  # lightweight schema, NOT JSON Schema (§7)
+    output_schema:  dict | None  # lightweight schema, NOT JSON Schema (§7)
+    stable:         bool         # False = experimental; defaults to True
     deprecated:     bool
     deprecated_since: str | None # e.g. "v2"
     replacement:    str | None   # e.g. "sys.v2.memory.read"
+    compensate:     Callable | None  # undo hook; None = the effect is irreversible
+    execution_guarantee: str     # defaults to "AT_LEAST_ONCE"
 ```
+
+**`compensate` is opt-in.** No syscall in the runtime's own registry declares one, so on a bare
+runtime `sys.v1.agent.undo` reports every recorded effect as `irreversible`. Reversal happens only
+for syscalls a consumer registers with `compensate=`.
 
 ### VersionedSyscallRegistry
 
@@ -262,7 +317,31 @@ schema = {
 }
 ```
 
-Supported types: `string`, `integer`, `float`, `boolean`, `list`, `dict`.
+| Accepted type names | Python check |
+|---|---|
+| `string`, `str` | `str` |
+| `int`, `integer` | `int` |
+| `float`, `number` | `float` |
+| `bool`, `boolean` | `bool` |
+| `list`, `array` | `list` |
+| `dict`, `object` | `dict` |
+
+### What the validator checks
+
+**This is not JSON Schema.** `validate_payload` reads only `required` and each property's `type`, at the top level.
+
+| Input | Result | Why |
+|---|---|---|
+| Key not listed in `properties` | Accepted | Unknown keys are not checked. `additionalProperties` is ignored. |
+| Wrong type inside a nested object | Accepted | Only top-level fields are checked. |
+| Value outside an `enum` | Accepted | `enum` and other constraint keywords are ignored. |
+| A `type` name not in the table | Accepted | The check is skipped silently, so a typo disables it. |
+| `True` in an `int` field | Accepted | `bool` is a subclass of `int`. |
+| `1` in a `float` or `number` field | **Rejected** | `int` is not a `float`. |
+| `None` in an optional field with a `type` | **Rejected** | Absent is allowed, but an explicit `None` fails the type check. |
+| `None` in a required field | **Rejected** | Treated as missing. |
+
+A handler that needs more than this has to validate its own payload.
 
 ### Input Validation (fatal)
 
@@ -274,11 +353,15 @@ Called after the handler.
 
 - Stable syscall schema mismatch → error envelope returned.
 - Experimental syscall schema mismatch → warning logged, result still returned.
-- Handler return type mismatch → error envelope returned regardless of stability.
+- Handler return type mismatch → refused regardless of stability.
 
 The handler return contract is stricter than schema validation: handlers must
-return a plain `dict`. A non-dict return is treated as a syscall handler
-contract violation and becomes an error envelope.
+return a plain `dict`. A non-dict return is a syscall handler contract violation. It raises
+`SyscallContractViolation` when the idempotency gate is engaged for the call, and otherwise
+becomes a `fatal` error envelope.
+
+Validation runs after any outcome claim is resolved, so a handler's reserved outcome key is never
+seen by its schema. An `unknown` outcome skips output validation, because it has no result to check.
 
 ---
 
@@ -318,24 +401,33 @@ ctx = child_context(parent_context, capabilities=["memory.read"])
 
 Core syscalls registered in `kernel/syscall_registry.py`; domain handlers registered at startup via `register_all_domain_handlers()` in `kernel/syscall_handlers.py`.
 
-| Syscall | Capability | Description |
-|---------|-----------|-------------|
-| `sys.v1.memory.read` | `memory.read` | Recall memory nodes by query/tags/path |
-| `sys.v1.memory.write` | `memory.write` | Persist a new memory node with optional path |
-| `sys.v1.memory.search` | `memory.read` | Semantic similarity search |
-| `sys.v1.memory.list` | `memory.read` | List nodes at a MAS path (one level) |
-| `sys.v1.memory.tree` | `memory.read` | Hierarchical tree from a MAS path |
-| `sys.v1.memory.trace` | `memory.read` | Causal chain from a node path |
-| `sys.v1.flow.run` | `flow.run` | Execute a registered Nodus flow |
-| `sys.v1.flow.execute_intent` | `flow.execute` | Intent-based flow execution — selects strategy, compiles plan, runs flow |
-| `sys.v1.nodus.execute` | `nodus.execute` | Run a Nodus script via the standard `NODUS_SCRIPT_FLOW` pipeline |
-| `sys.v1.job.submit` | `job.submit` | Submit an async job via `AsyncJobService` (wraps `submit_async_job()`) |
-| `sys.v1.agent.execute` | `agent.execute` | Execute an agent run via `execute_run()` (external agent wrapper) |
-| `sys.v1.agent.count_runs` | `agent.read` | Count AgentRun rows for a user, optionally filtered by status |
-| `sys.v1.agent.list_recent_runs` | `agent.read` | Recent AgentRun rows as serialized dicts |
-| `sys.v1.agent.ensure_initial_run` | `agent.write` | Find or create the signup sentinel AgentRun |
-| `sys.v1.event.emit` | `event.emit` | Emit a system event |
-| `sys.v2.memory.read` | `memory.read` | v2 evolution — adds `filters` dict (memory_type, node_type, min_impact) |
+The runtime's own registry holds these 23 entries. Read `GET /platform/syscalls` for what a running deployment has, including anything plugins add. Every entry declares an input schema; `event.emit` and `flow.run` declare no output schema.
+
+| Syscall | Capability | Stable | Guarantee | Description |
+|---------|-----------|--------|-----------|-------------|
+| `sys.v1.memory.read` | `memory.read` | yes | at-least-once | Recall memory nodes by query/tags/path |
+| `sys.v1.memory.write` | `memory.write` | yes | exactly-once | Persist a new memory node with optional path |
+| `sys.v1.memory.link` | `memory.link` | no | exactly-once | Link two memory nodes owned by the caller |
+| `sys.v1.memory.delete` | `memory.delete` | yes | at-least-once | Hard-delete a memory node owned by the caller |
+| `sys.v1.memory.search` | `memory.read` | yes | at-least-once | Semantic similarity search |
+| `sys.v1.memory.list` | `memory.read` | no | at-least-once | List nodes at a MAS path (one level) |
+| `sys.v1.memory.tree` | `memory.read` | no | at-least-once | Hierarchical tree from a MAS path |
+| `sys.v1.memory.trace` | `memory.read` | no | at-least-once | Causal chain from a node path |
+| `sys.v1.flow.run` | `flow.run` | yes | exactly-once | Execute a registered Nodus flow |
+| `sys.v1.flow.execute_intent` | `flow.execute` | yes | exactly-once | Intent-based flow execution — selects strategy, compiles plan, runs flow |
+| `sys.v1.nodus.execute` | `nodus.execute` | yes | exactly-once | Run a Nodus script via the standard `NODUS_SCRIPT_FLOW` pipeline |
+| `sys.v1.job.submit` | `job.submit` | yes | exactly-once | Submit an async job via `AsyncJobService` (wraps `submit_async_job()`) |
+| `sys.v1.agent.execute` | `agent.execute` | yes | at-least-once | Execute an agent run via `execute_run()` (external agent wrapper) |
+| `sys.v1.agent.count_runs` | `agent.read` | no | at-least-once | Count AgentRun rows for a user, optionally filtered by status |
+| `sys.v1.agent.list_recent_runs` | `agent.read` | no | at-least-once | Recent AgentRun rows as serialized dicts |
+| `sys.v1.agent.ensure_initial_run` | `agent.write` | no | at-least-once | Find or create the signup sentinel AgentRun |
+| `sys.v1.agent.cancel` | `agent.cancel` | yes | at-least-once | Cooperatively cancel a non-terminal AgentRun |
+| `sys.v1.agent.undo` | `agent.undo` | yes | exactly-once | Reverse a completed AgentRun's reversible effects; surface irreversible ones |
+| `sys.v1.agent.simulate` | `agent.simulate` | yes | at-least-once | Dry-run an AgentRun with tools shadowed; persists the report |
+| `sys.v1.event.emit` | `event.emit` | yes | exactly-once | Emit a system event |
+| `sys.v1.execution.get` | `execution.read` | yes | at-least-once | Status and resource metrics for an execution unit |
+| `sys.v1.observability.support_metrics` | `execution.read` | yes | at-least-once | Support-layer observability metrics |
+| `sys.v2.memory.read` | `memory.read` | no | at-least-once | v2 evolution — adds `filters` dict (memory_type, node_type, min_impact) |
 
 Domain handlers registered at startup via `register_all_domain_handlers()` in `kernel/syscall_handlers.py`. Execution entry-point handlers (`flow.execute_intent`, `nodus.execute`, `job.submit`, `agent.execute`) and runtime-owned helper syscalls are registered directly in `kernel/syscall_registry.py` alongside `flow.run`.
 
@@ -522,7 +614,7 @@ Response:
             }
         }
     },
-    "total_count": 13
+    "total_count": <number of syscalls returned>
 }
 ```
 
