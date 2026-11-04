@@ -14378,8 +14378,13 @@ structured to put in it. **Build them together if either is built.**
 
 ## UNDO-COMPENSATORS-1 — undo never finds a real effect, so it and the Verifier's rollback do nothing
 
-**Status: CLOSED (2026-11-04)** — #891; DEC-108..110 accepted. Filed the same day, while checking
-the README's claims against the code.
+**Status: CLOSED (2026-11-04)** — #891; DEC-108..110 accepted; ships in 2.31.0. Filed the same day,
+while checking the README's claims against the code.
+
+**★ Found at the release: undo has no HTTP door.** It is off `_DISPATCH_CAPABILITY_SCOPES` and no route
+calls it, so only in-process code or an operator's `AINDY_MCP_SERVER_TOOLS` can reach it. DEC-110 leans
+on an explicit undo, so an operator reading a `VERIFY_FAILED` report has no way to act on it over HTTP.
+Not built: a route is a new delete surface and needs a scope, so it is the owner's call.
 
 **What shipped.** The ledger links each effect to its execution unit (DEC-108), `sys.v1.memory.write`
 has a compensator that refuses a node something was built on (DEC-109), and the Verifier reports
