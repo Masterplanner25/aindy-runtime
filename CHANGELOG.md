@@ -4,6 +4,63 @@
 
 _Nothing yet._
 
+## 2.29.2 — 2026-11-03
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.29.2.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **Rebuild your image** to take `pydantic` 2.14.2, which fixes two medium validation bypasses. We
+  found neither's conditions in our code or the app's; check your own models if you use
+  `extra='allow'`.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+- No route, scope, env var or schema change. Pins moved: pydantic, openai, pymongo, OpenTelemetry,
+  pytest.
+
+### Security — `pydantic` 2.14.2 fixes two validation bypasses; our code meets neither's conditions (#881)
+
+- `pydantic` 2.14.1 → 2.14.2 fixes GHSA-qpmf-fgh3-ff25 (medium: extra-data keys unvalidated in JSON
+  mode, for a model with `extra='allow'` and a key type on `__pydantic_extra__`) and
+  GHSA-3r8g-cqwr-jr29 (medium: an aliased `TypedDict` or dataclass field overwritten by an unvalidated
+  value, when extra data is allowed).
+- **Exposure: none found in our code or the app's.** Neither repo has `extra='allow'`,
+  `__pydantic_extra__`, `extra_items` or `pydantic.dataclasses`, and the runtime declares no alias
+  and never calls `model_validate_json`. This searched our own source, not every third-party
+  package that uses pydantic.
+- 2.14.2 also changes JSON-mode validation: a key matching only an unused alias or field name is now
+  extra data, so `extra='forbid'` refuses it. The runtime's `forbid` models declare no aliases and
+  are not validated in JSON mode, so nothing changes here.
+
+### Changed — dependency batch of 2026-11-02 (#881)
+
+- Runtime pins (`pyproject.toml` and `AINDY/requirements.txt`): `openai` 2.46.0 → 2.54.0 (openai 3
+  remains deferred under DEP-UPGRADE-DEFERRED-1; 2.52.0 honours `Retry-After` delays up to two
+  minutes, so a rate-limited call can wait longer), `pymongo` 4.18.3 → 4.19.0 (drops Python 3.9/3.10;
+  this package requires >= 3.11), `pytest` 9.1.1 → 9.2.0 (test only).
+- OpenTelemetry: `opentelemetry-api`/`-sdk`/`-exporter-otlp-proto-grpc` 1.45.1 → 1.45.2,
+  `opentelemetry-instrumentation-fastapi` 0.66b1 → 0.66b2, moved together. ★ The 1.45.2 SDK enforces
+  a default cardinality limit of 2000 per metric instrument; attribute sets past it are folded into
+  one `otel.metric.overflow` series. This reaches only the GenAI `gen_ai.client.*` MeterProvider
+  (DEC-037); the `aindy_*` Prometheus metrics are a separate registry. It also caps an incoming
+  `traceparent` header at 512 characters.
+- Platform UI: `react-router-dom` 7.18.4 → 7.18.5, `postcss` 8.5.31 → 8.5.32 (dev).
+
+### Fixed — the stale-log cleanup left the execution unit `pending` and the app's mirror behind (#882)
+
+- `_cleanup_stale_logs` failed a job row that sat `pending` for an hour and did nothing else. Its
+  execution unit stayed `pending` forever, for any job type, and `job_log.written` never fired, so
+  an app mirroring `job_logs` kept showing the row as `pending`.
+- Now (DEC-105) the unit goes `failed` in the same commit, and the event fires per row after it.
+  Units stranded before this release are not changed.
+
+### Changed — correction (2026-11-03) to 2.29.1's FR-56 entry (#882)
+
+- The 2.29.1 entry says stranded embedding rows hold admission slots, citing 2,387 rows on one
+  stack. It was wrong. Those rows were `pending` only in the app's mirror; in `job_logs` the stale
+  cleanup had failed each one an hour or two after creation, so a row held a slot only for that
+  window, and `memory settle-embedding-logs` found 0. The bug and its fix stand.
+- `memory settle-embedding-logs` does not take `failed` rows (DEC-105).
+
+
 ## 2.29.1 — 2026-11-02
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.29.1.md`.

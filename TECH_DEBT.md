@@ -9257,7 +9257,7 @@ key in each tool dict.
 
 ## JOB-STALE-CLEANUP-1 — the stale-log cleanup failed the job row and left everything else 🟡 P3 (found 2026-11-03 from the app's 2.29.1 adoption)
 
-**Status: CLOSED (2026-11-03) — #882, DEC-105; unreleased.** `_cleanup_stale_logs` set `failed` on a
+**Status: CLOSED (2026-11-03) — #882, DEC-105; ships in 2.29.2.** `_cleanup_stale_logs` set `failed` on a
 JobLog row `pending` for over an hour and nothing else. Its execution unit stayed `pending` forever
 (any job type; `observability_router.py` reports counts by unit status), and `job_log.written`
 never fired, so the app's `automation_logs` mirror stayed `pending`. That is the runtime half of the
@@ -9277,7 +9277,7 @@ or two after creation, so the caps never counted them; on 2.29.0 a row held a sl
 window, and the app's settle dry run found 0. We repeated the figure without reading our own cleanup.
 The bug and the fix stand. See JOB-STALE-CLEANUP-1 and DEC-105.
 
-**Status: CLOSED (2026-11-01) — #871, DEC-104; unreleased.** Filed by the app (their register,
+**Status: CLOSED (2026-11-01) — #871, DEC-104; shipped in 2.29.1.** Filed by the app (their register,
 `## FR-56`, apps-monolith PR #518). FR-55 is also the app's (guest Nodus waits, filed 2026-10-22).
 `enqueue_embedding` was the only caller passing `execute_inline_in_test_mode=False`, and
 `_submit_async_job_inner` answered it on the queued path with `return log_id`, after the JobLog
