@@ -48,6 +48,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+STALE_JOB_ERROR = "Stale: never started within 1 hour of creation"
+STALE_UNITS_BATCH_SIZE = 500
+
 
 def _job_log_model():
     return JobLog
@@ -1083,6 +1086,61 @@ def _ensure_root_execution_event_id(db, trace_id: str) -> str | None:
         },
     )
     return str(created_id) if created_id else None
+
+
+def settle_stale_job_units(
+    db,
+    *,
+    dry_run: bool = False,
+    batch_size: int = STALE_UNITS_BATCH_SIZE,
+) -> dict[str, Any]:
+    """Fail the execution units `_cleanup_stale_logs` left `pending` before DEC-105 (one-time).
+
+    A unit qualifies only when it is a `job_log` unit still ``pending`` whose JobLog row is
+    ``failed`` with exactly the stale cleanup's message. The row already says the job never
+    started, so the unit goes ``failed`` to match; the row is not touched. ``dry_run`` reports
+    and changes nothing.
+    """
+    from AINDY.core.execution_unit_service import ExecutionUnitService
+    from AINDY.db.models.execution_unit import ExecutionUnit
+
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    report = {"examined": 0, "settled": 0, "not_moved": 0, "dry_run": dry_run}
+    query = (
+        db.query(ExecutionUnit.id)
+        .join(JobLog, ExecutionUnit.source_id == JobLog.id)
+        .filter(
+            ExecutionUnit.source_type == "job_log",
+            ExecutionUnit.status == "pending",
+            JobLog.status == "failed",
+            JobLog.error_message == STALE_JOB_ERROR,
+        )
+        .order_by(ExecutionUnit.id.asc())
+    )
+
+    # Keyset pages on the primary key: a settled unit leaves the predicate, an unmoved one stays,
+    # so an OFFSET would skip units and re-reading from the start would loop.
+    units = ExecutionUnitService(db)
+    last_id = None
+    while True:
+        page = query if last_id is None else query.filter(ExecutionUnit.id > last_id)
+        unit_ids = [row[0] for row in page.limit(batch_size).all()]
+        if not unit_ids:
+            break
+        last_id = unit_ids[-1]
+        for unit_id in unit_ids:
+            report["examined"] += 1
+            if dry_run or units.update_status(unit_id, "failed"):
+                report["settled"] += 1
+            else:
+                report["not_moved"] += 1
+        if not dry_run:
+            db.commit()  # release the connection between batches
+        if len(unit_ids) < batch_size:
+            break
+
+    return report
 
 
 def _emit_job_log_written(log_id: str) -> None:
