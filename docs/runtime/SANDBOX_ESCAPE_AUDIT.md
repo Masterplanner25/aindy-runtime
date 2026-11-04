@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-11-03"
+last_verified: "2026-11-04"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1744,6 +1744,37 @@ inside it:**
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
 
 ---
+
+## Entry 048 — 2026-11-04
+
+**Trigger:** `v2.30.0` release tag (`sandbox-escape-linux.yml`, run `41783230461`).
+**Commit:** `7590efa` (release PR #887's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:09d17d5e4c16d0a7a1eea690bcb7c6ab8616b211f8421e429e97c1bef5bd0ed2`, **the same as Entry 047**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 7.24s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `41783230461`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.29.2..v2.30.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #885 (DEC-106) makes memory recall use its own session by default. It changes which database session
+  a read runs on, not isolation.
+- #886 (DEC-107) adds the operator CLI `jobs settle-stale-units`. It touches execution unit rows.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. Both passed on `7590efa` before the tag,
+along with Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `41783230737`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API and simple index both reported `2.30.0` (wheel + sdist). The simple index lagged the
+  JSON API by about a minute after publish.
+- Boot Smoke on the published wheel installed on **attempt 2**. Attempt 1 hit that lag (`No matching
+  distribution found`, JSON API 200), and the job's retry waited 30 s, as designed.
+- The GitHub release is non-draft (06:26Z).
+- `publish.yml` is unchanged from `v2.29.2`.
 
 ## Entry 047 — 2026-11-03
 
