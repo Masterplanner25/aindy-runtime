@@ -411,6 +411,6 @@ deployment that introduces TLS termination.
   passed on re-run). It is a **required** check, so this red-lines unrelated PRs until re-run.
   Confirm propagation with `curl -s https://pypi.org/simple/aindy-runtime/ | grep <version>`
   before assuming it is anything else.
-  `Upgrade Path Guard` reads the same two endpoints. It waits out the lag itself since #PRNUM, so a job
+  `Upgrade Path Guard` reads the same two endpoints. It waits out the lag itself since #889, so a job
   that reports `PyPI index lag` and then passes is the lag, not an upgrade problem.
 - [ ] Dockerfile builder stage version pin bumped to match new release (`pip install "aindy-runtime==X.Y.Z"` in Stage 1)
