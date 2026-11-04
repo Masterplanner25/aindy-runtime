@@ -14398,7 +14398,7 @@ returned an empty summary, and the compensator ran 0 times. So:
 
 **What linking alone will not fix:**
 
-1. **Scope.** The tool seam's `tool_context` dispatch passes a run id as the unit, where undo wants
+1. **Scope.** `make_syscall_ctx_from_tool` passes a run id as the unit, where undo wants
    `eu.id`, so the writer needs the EU-by-source lookup the IDEM-10 note names. `invoke_tool_syscall`
    passes no run id at all.
 2. **Action type.** The tool seam and the deferred Nodus path record `memory.write`. Compensators
