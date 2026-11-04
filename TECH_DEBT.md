@@ -9269,7 +9269,7 @@ never fired, so the app's `automation_logs` mirror stayed `pending`. That is the
 app's `JOB-LOG-MIRROR-STALE-1`, and the drift is what misdirected FR-56. The cleanup had no direct
 test. **Fix:** the unit is finalized in the same commit; the event fires per row after it.
 `test_stale_cleanup_closes_unit.py`, on the private engine, mutation-tested.
-The app's count came back 2,387, so `aindy-runtime jobs settle-stale-units` was built (PR_NUMBER,
+The app's count came back 2,387, so `aindy-runtime jobs settle-stale-units` was built (#886,
 DEC-107). **Remaining:** the app runs it (dry run, then `--yes`, the owner's call). Not run on a live
 stack.
 
