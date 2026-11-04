@@ -241,6 +241,7 @@ def register() -> None:
             required_capability="write_memory",
             category="memory",
             egress_scope="internal",
+            effect_syscall="sys.v1.memory.write",
         )(memory_write)
     if "runtime.selftest" not in TOOL_REGISTRY:
         register_tool(

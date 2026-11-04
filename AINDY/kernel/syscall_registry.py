@@ -524,6 +524,80 @@ def _handle_memory_delete(payload: dict, context: SyscallContext) -> dict:
     return result
 
 
+def _memory_write_reversal_refusal(db: Any, node_id: str, recorded: dict, current: dict) -> str | None:
+    """Why a written node must not be deleted, or ``None`` when it may be (DEC-109).
+
+    The delete cascades, so it is refused when anything has been built on the node. Reads and
+    feedback do not refuse: they change counters, not the node. Causal edges do not refuse either:
+    they record where the node came from, and they go with it.
+    """
+    import uuid as _uuid
+
+    from AINDY.db.models.memory_node_history import MemoryNodeHistory
+    from AINDY.db.models.memory_trace_node import MemoryTraceNode
+    from AINDY.memory.memory_persistence import MemoryLinkModel
+
+    for key in ("content", "tags", "node_type"):
+        if recorded.get(key) != current.get(key):
+            return f"its {key} changed after the write"
+    node_uuid = _uuid.UUID(str(node_id))
+    if db.query(MemoryNodeHistory.id).filter(MemoryNodeHistory.node_id == node_uuid).first():
+        return "it has been edited since the write"
+    linked = (
+        db.query(MemoryLinkModel.id)
+        .filter(
+            (MemoryLinkModel.source_node_id == node_uuid)
+            | (MemoryLinkModel.target_node_id == node_uuid)
+        )
+        .first()
+    )
+    if linked:
+        return "another node links to it or from it"
+    if db.query(MemoryTraceNode.id).filter(MemoryTraceNode.node_id == node_uuid).first():
+        return "it belongs to a memory trace"
+    return None
+
+
+def _compensate_memory_write(effect: dict, context: SyscallContext) -> dict:
+    """Reverse ``sys.v1.memory.write`` by deleting the node it wrote (UNDO-COMPENSATORS-1, DEC-109).
+
+    Raising records the effect as ``failed``, which stays retryable, and leaves the node in place.
+    A node that is already gone counts as reversed. The delete is scoped to the caller, so another
+    tenant's node reads as gone and is never touched.
+    """
+    from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
+
+    result = effect.get("result_payload")
+    recorded = result.get("node") if isinstance(result, dict) else None
+    node_id = recorded.get("id") if isinstance(recorded, dict) else None
+    if not node_id:
+        raise ValueError("the effect record holds no node id to reverse")
+    user_id = str(getattr(context, "user_id", "") or "")
+    if not user_id:
+        raise ValueError("reversing a memory write requires the owner's tenant context")
+
+    db, owns_session = _acquire_handler_db(context)
+    try:
+        dao = MemoryNodeDAO(db)
+        current = dao.get_by_id(str(node_id), user_id=user_id)
+        if current is None:
+            receipt = {"node_id": str(node_id), "deleted": False}
+        else:
+            refusal = _memory_write_reversal_refusal(db, str(node_id), recorded, current)
+            if refusal:
+                raise ValueError(f"memory node {node_id} was not deleted: {refusal}")
+            receipt = {"node_id": str(node_id), "deleted": bool(dao.delete_by_id(str(node_id), user_id=user_id))}
+    except Exception:
+        # A caller-owned session belongs to `undo_run_effects`, whose savepoint unwinds this. A
+        # rollback here would also discard the audit rows of the effects already processed.
+        if owns_session:
+            _finish_handler_write(db, owns_session=True, success=False)
+        raise
+    if owns_session:
+        _finish_handler_write(db, owns_session=True, success=True)
+    return receipt
+
+
 def _handle_memory_search(payload: dict, context: SyscallContext) -> dict:
     """sys.v1.memory.search — semantic search over the user's memory nodes.
 
@@ -1473,6 +1547,7 @@ SYSCALL_REGISTRY["sys.v1.memory.write"] = SyscallEntry(
     # JSON-safe (MemoryNodeDAO._node_to_dict stringifies ids/timestamps), so the gate can
     # cache it as JSONB for replay.
     execution_guarantee="EXACTLY_ONCE",
+    compensate=_compensate_memory_write,  # DEC-109
 )
 SYSCALL_REGISTRY["sys.v1.memory.link"] = SyscallEntry(
     handler=_handle_memory_link,

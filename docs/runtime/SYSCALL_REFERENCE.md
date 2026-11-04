@@ -452,6 +452,8 @@ append-only `effect_reversals` audit log. Undo ≠ replay: `replay` re-does a ru
 
 Re-entrant (IDEM-12, 2026-09-16): an effect that already carries a `reversed` audit row is skipped and listed under `already_reversed` — a second undo never re-invokes a compensator, gate on or off. `irreversible` and `failed` rows do not suppress a retry.
 
+**An empty summary does not mean the run had no effects.** Undo sees only effects the ledger linked to the run, and it reverses a memory write only if nothing was built on the node. See [`SYSCALL_SYSTEM.md` §5](./SYSCALL_SYSTEM.md#5-registry) for what it can see, what `sys.v1.memory.write`'s compensator refuses, and how to write one.
+
 ---
 
 ### `sys.v1.agent.simulate`

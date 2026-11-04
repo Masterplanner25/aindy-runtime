@@ -48,7 +48,7 @@ via a built-in platform UI and a REST API backed by the `aindy-sdk`.
 - **MCP interop** — call external MCP tools from agent runs, and expose runtime syscalls to external MCP clients via `aindy-runtime mcp-server` (opt-in, `[mcp]` extra)
 - **Nodus script execution** — embedded execution service for the Nodus DSL (`.nodus` / `.nd`), with memory builtins and WAIT/RESUME propagation back into the flow engine
 - **Distributed operation** — Redis-backed distributed job queue, lease-based leadership election for background schedulers, and orphan-run recovery watchdogs
-- **Effect compensation** — `sys.v1.agent.simulate` gives zero-side-effect rehearsal against virtual tools. `sys.v1.agent.undo` and its append-only reversal log exist, but undo does not yet find a run's real effects, so it reverses nothing today (`UNDO-COMPENSATORS-1` in `TECH_DEBT.md`)
+- **Effect compensation** — `sys.v1.agent.undo` reverses a run's recorded effects where a compensator exists and reports the rest as irreversible, with every attempt in an append-only reversal log. Memory writes are reversible unless something was built on the node; other effects need a consumer-registered `compensate=`, and effects with no ledger row, including default Nodus guest memory writes, are not seen. `sys.v1.agent.simulate` adds zero-side-effect rehearsal against virtual tools
 - **Sandbox certification** — Docker-backed extension sandbox with an escape-test suite, posture reporting (`aindy-runtime sandbox`), and an append-only audit log
 - **Webhooks** — subscription CRUD on the platform API for pushing runtime events to external endpoints
 - **Federated memory recall** — cross-agent recall via `POST /memory/federated/recall`, dispatched through the syscall contract

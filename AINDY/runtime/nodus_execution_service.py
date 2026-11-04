@@ -1101,8 +1101,8 @@ def _execute_agent_segment_chain(
         # Verifier stage (AGENT-HARDEN-6): on a fully-run plan, check declared
         # per-step post-conditions (`expects`) before marking the run complete.
         # Plans with no `expects` verify vacuously (checked == 0) — no behavior
-        # change. Failure marks the run 'verify_failed' and rolls back reversible
-        # effects via the AGENT-HARDEN-3 compensators.
+        # change. Failure marks the run 'verify_failed' and reports what could be
+        # reversed; it reverses it only under AINDY_VERIFY_FAILED_AUTO_UNDO (DEC-110).
         verdict = None
         if completed_ok:
             from AINDY.core.verifier import extract_post_conditions, verify_post_conditions
@@ -1128,13 +1128,19 @@ def _execute_agent_segment_chain(
                 )
             db.commit()
             _sync_agent_eu_status(db, run_id, "verify_failed")
-            # Roll back reversible effects (best-effort — the run stays verify_failed
-            # even if undo hits a snag; irreversible effects are surfaced by undo).
+            # Report what could be reversed, and reverse it only if the operator opted in
+            # (DEC-110). Best-effort — the run stays verify_failed even if this hits a snag.
             undo_summary: dict[str, Any] = {}
             try:
-                from AINDY.core.effect_compensation import undo_run_effects
+                from AINDY.core.effect_compensation import (
+                    undo_run_effects,
+                    verify_failed_auto_undo_enabled,
+                )
 
-                undo_summary = undo_run_effects(str(run_id), db=db, context=None)
+                undo_summary = undo_run_effects(
+                    str(run_id), db=db, context=None,
+                    report_only=not verify_failed_auto_undo_enabled(),
+                )
             except Exception as exc:
                 logger.warning(
                     "[NodusExecutionService] undo after verify_failed for %s failed: %s",
@@ -1147,6 +1153,7 @@ def _execute_agent_segment_chain(
                     "failures": verdict["failures"],
                     "checked": verdict["checked"],
                     "reversed": undo_summary.get("reversed", []),
+                    "reversible": undo_summary.get("reversible", []),
                     "irreversible": undo_summary.get("irreversible", []),
                 },
                 required=False,

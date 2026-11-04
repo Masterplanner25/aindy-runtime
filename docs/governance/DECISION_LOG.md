@@ -2211,3 +2211,27 @@ DEC-083's condition was met on 2026-10-09: on the app's stack `aindy_memory_reca
 
 **Why**
 DEC-105 held this command until the app's count came back, and said it earns its place only if that count is large. It came back 2,387: every row the old cleanup failed on that stack, created 07-22 to 11-01. They hold no slot, but they stay `pending` forever and `observability_router.py` reports units by status. `failed` rather than `completed` because the job row says the job never ran, unlike DEC-104's settle, where the sweep did the work. The predicate is the exact message rather than any `failed` row, so a unit in some other inconsistent state is left to be noticed, not swept up. Under a new `jobs` group rather than `memory`, because the cleanup strands any job type. As in DEC-104, changing an operator's rows is their call, so nothing runs on upgrade.
+
+### DEC-108
+**Status:** `accepted` (2026-11-04 — `UNDO-COMPENSATORS-1`, #891; decided by the owner: "we'll ship the first part compensator", which needs this first)
+
+**Decision — The effect ledger sets `EffectRecord.execution_id` when it reserves a row. The ambient run from `execute_tool` wins, then the LLM attribution span, then the caller's scope, which may name the unit or the run. A failed lookup leaves the row unlinked and never stops the effect. A tool that only wraps a syscall declares `effect_syscall`, and its own row stays unlinked. No schema change.**
+
+**Why**
+Undo selects on a column nothing wrote, so it returned an empty summary for every run. The default agent write dispatches under a freshly minted unit id, so its scope cannot name the run, and the attribution span does not reach a Nodus worker subprocess; `execute_tool` always knows its `run_id` in both places. This extends the ledger's existing ambient attribution rather than adding a context field. An unlinked wrapper row avoids showing undo one write twice, once reversible and once irreversible. The link costs one query per reserved effect, recorded in `test_work_budget.py`; a replay costs nothing extra. Attribution must not be able to cost a caller its effect, which is why the lookup cannot raise.
+
+### DEC-109
+**Status:** `accepted` (2026-11-04 — `UNDO-COMPENSATORS-1`, #891; decided by the owner: "yes go with your recommendation")
+
+**Decision — `sys.v1.memory.write`'s compensator hard-deletes the node it wrote, and refuses by raising (`failed`, retryable, node kept) if its content, tags or type changed, or it has edit history, a link in either direction, or a trace membership. Reads and feedback do not refuse. Causal edges cascade. A node already gone counts as reversed. Compensators run in a savepoint on undo's session.**
+
+**Why**
+The delete cascades and cannot be undone, so it must not destroy what others built on the node. Usage and feedback only move counters, and a recalled node would otherwise become undeletable almost at once. A causal edge records where the node came from, so it goes with it. Refusing rather than skipping keeps the effect visible and retryable under IDEM-12. The savepoint exists because a statement error would otherwise poison the Postgres transaction and lose every other effect's audit row. `sys.v1.memory.delete`'s lack of a compensator stands: it is a hard delete with nothing to restore from.
+
+### DEC-110
+**Status:** `accepted` (2026-11-04 — `UNDO-COMPENSATORS-1`, #891; decided by the owner: "yes go with your recommendation")
+
+**Decision — On `VERIFY_FAILED` the Verifier reports `reversible` and `irreversible` on the agent event and changes nothing. `AINDY_VERIFY_FAILED_AUTO_UNDO` (default off) makes it reverse them. An explicit `sys.v1.agent.undo` works regardless.**
+
+**Why**
+AGENT-HARDEN-6 designed the Verifier to roll back, but that was never observed: the engine found nothing to reverse. Fixing the link would have turned on automatic deletion of memory on any failed check, with nobody looking, on every deployment at once. Capabilities ship default-off until evidence. The cost is that a failed run keeps its memory until someone calls undo, which is recoverable, where a wrong automatic delete is not.

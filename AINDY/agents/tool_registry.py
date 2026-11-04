@@ -156,8 +156,12 @@ def register_tool(
     on_denial: str = ON_DENIAL_FAIL,
     args_schema: Optional[dict] = None,
     result_schema: Optional[dict] = None,
+    effect_syscall: Optional[str] = None,
 ):
     """Register an agent tool implementation with platform metadata.
+
+    effect_syscall (DEC-108): the syscall whose ledger row records this tool's effect, for a tool
+    that only wraps one. The tool's own row then stays unlinked, so undo sees one effect once.
 
     args_schema (FR-33): the tool's ARGUMENT CONTRACT — a JSON-Schema-shaped object
     (``{"type": "object", "properties": {...}, "required": [...]}``) in the dispatcher's own
@@ -329,6 +333,7 @@ def register_tool(
             "on_denial": on_denial,
             "args_schema": dict(args_schema) if args_schema else None,
             "result_schema": dict(result_schema) if result_schema else None,
+            "effect_syscall": effect_syscall,
         }
         return fn
 
@@ -1222,7 +1227,29 @@ def execute_tool(
     ``step_index`` is the plan's tool-step index when the caller is an agent backend. It scopes
     the idempotency key to ONE step of the run (IDEM-14, DEC-076). Callers with no step (syscalls,
     MCP, extensions, direct calls) omit it and keep the run scope.
+
+    Effects written while the tool runs are attributed to ``run_id`` (DEC-108), which is what lets
+    ``sys.v1.agent.undo`` find them.
     """
+    from AINDY.kernel.effect_ledger import effect_run_scope
+
+    with effect_run_scope(run_id):
+        return _execute_tool_for_run(
+            tool_name, args, user_id, db,
+            run_id=run_id, execution_token=execution_token, step_index=step_index,
+        )
+
+
+def _execute_tool_for_run(
+    tool_name: str,
+    args: dict,
+    user_id: str,
+    db,
+    run_id: str = None,
+    execution_token: dict = None,
+    step_index: int | None = None,
+) -> dict:
+    """The body of ``execute_tool``, inside the run's effect attribution."""
     _ensure_tools_loaded()
     entry = TOOL_REGISTRY.get(tool_name)
     if not entry:
@@ -1463,14 +1490,19 @@ def execute_tool(
                 "AT_LEAST_ONCE", tool_name, _tool_idempotency_strict_wait_seconds(),
             )
     if _idempotent:
-        from AINDY.kernel.effect_ledger import resolve_effect_record
+        import contextlib
 
+        from AINDY.kernel.effect_ledger import resolve_effect_record, unlinked_effect_scope
+
+        # DEC-108 — a tool that wraps a syscall records its effect on the syscall's row.
+        _link_scope = unlinked_effect_scope() if entry.get("effect_syscall") else contextlib.nullcontext()
         try:
-            _already, _cached = resolve_effect_record(
-                db, _action_id, tool_name, args or {},
-                # MEB-3b — attribute the effect to the caller (tenant_id == user_id).
-                tenant_id=str(user_id) if user_id else None,
-            )
+            with _link_scope:
+                _already, _cached = resolve_effect_record(
+                    db, _action_id, tool_name, args or {},
+                    # MEB-3b — attribute the effect to the caller (tenant_id == user_id).
+                    tenant_id=str(user_id) if user_id else None,
+                )
         except Exception as exc:
             if _at_most_once:
                 # DEC-089 — an unguarded run could be the second one: refuse instead.

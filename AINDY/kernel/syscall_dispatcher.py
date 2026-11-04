@@ -856,6 +856,8 @@ class SyscallDispatcher:
                     # ambiently from the effect-attribution contextvar (e.g. a multi-tenant
                     # MCP session set in the auth_hook).
                     tenant_id=str(context.user_id) if context.user_id else None,
+                    # DEC-108 — links the row to its unit so `sys.v1.agent.undo` can find it.
+                    execution_ref=str(context.execution_unit_id),
                 )
             except Exception as _gate_exc:
                 if _at_most_once:
