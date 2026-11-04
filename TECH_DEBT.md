@@ -1283,7 +1283,7 @@ legacy-hash rejection, tamper detection, rotation grace, KeyRing-down fallback);
 ### AGENT-HARDEN-3 — Reversible actions / compensating-undo log
 
 **Status:** CLOSED (2026-07-05). Compensating-undo engine + audit log shipped.
-★ Corrected 2026-11-04: the engine never finds a production effect. See `UNDO-COMPENSATORS-1`.
+★ Corrected 2026-11-04: until `UNDO-COMPENSATORS-1` (#891) the engine never found a production effect.
 
 `SyscallEntry` gains an optional `compensate` hook (+ `reversible` property);
 `register_syscall(..., compensate=...)` passes it through. New append-only
@@ -14378,9 +14378,23 @@ structured to put in it. **Build them together if either is built.**
 
 ## UNDO-COMPENSATORS-1 — undo never finds a real effect, so it and the Verifier's rollback do nothing
 
-**Status: OPEN — P2.** Filed 2026-11-04, while checking the README's claims against the code. The
-owner chose to ship a first-party compensator (2026-11-04); design pending, because a compensator
-alone would never run.
+**Status: CLOSED (2026-11-04)** — #891; DEC-108..110 accepted. Filed the same day, while checking
+the README's claims against the code.
+
+**What shipped.** The ledger links each effect to its execution unit (DEC-108), `sys.v1.memory.write`
+has a compensator that refuses a node something was built on (DEC-109), and the Verifier reports
+what it could reverse, reversing only under `AINDY_VERIFY_FAILED_AUTO_UNDO` (DEC-110). Suite:
+`test_undo_finds_real_effects.py` (mutation-checked) and `test_undo_real_effects_pg.py`, neither of
+which writes `execution_id`.
+
+**What remains, deliberately:** an `AT_LEAST_ONCE` effect has no ledger row, and neither does a
+default Nodus guest memory write, so undo cannot see them. Deferred guest writes under
+`AINDY_MEMORY_IDEMPOTENCY` are surfaced as `irreversible`, because their rows hold no node id;
+immediate ones stay unlinked in the worker. `sys.v1.memory.link` has no compensator, so a run that
+links its own node gets `failed` for that node. Rows recorded before #891 stay invisible unless their
+effect re-runs. The default-off flag flips only on evidence that automatic deletion is safe.
+
+**The original finding, as filed:**
 
 **The gap, measured.** `undo_run_effects` selects `EffectRecord.execution_id == eu.id`. The only
 production writer, `effect_ledger.resolve_effect_record`, never sets `execution_id`. Probe through

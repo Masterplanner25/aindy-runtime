@@ -574,8 +574,9 @@ def test_vm_run_verify_fail_marks_verify_failed_and_undoes(session, monkeypatch,
     import AINDY.core.effect_compensation as ec
     monkeypatch.setattr(
         ec, "undo_run_effects",
-        lambda run_id, **kw: undo_calls.append(run_id) or {"reversed": [], "irreversible": [], "failed": []},
+        lambda run_id, **kw: undo_calls.append((run_id, kw["report_only"])) or {"reversed": [], "irreversible": [], "failed": []},
     )
+    monkeypatch.delenv(ec.VERIFY_FAILED_AUTO_UNDO_ENV, raising=False)
 
     result = svc.execute_agent_run_via_workflow(
         run_id=str(run.id), plan=plan, user_id=str(run.user_id), db=session,
@@ -586,8 +587,35 @@ def test_vm_run_verify_fail_marks_verify_failed_and_undoes(session, monkeypatch,
     assert run.status == "verify_failed"
     assert run.result["verify"]["failures"]  # the failing condition is recorded
     assert run.error_message and "verification failed" in run.error_message
-    assert undo_calls == [str(run.id)]  # rollback invoked for this run
+    assert undo_calls == [(str(run.id), True)]  # DEC-110: reports what it could reverse, by default
     assert "VERIFY_FAILED" in events
+
+
+def test_vm_run_verify_fail_reverses_only_when_the_operator_opts_in(session, monkeypatch, _mock_side_effects):
+    run = _make_run(session)
+    plan = {"steps": [
+        {"tool": "search", "args": {}, "risk_level": "low",
+         "expects": {"field": "i", "op": "eq", "value": 99}},
+    ]}
+    run.plan = plan
+    session.commit()
+    _events_capture(monkeypatch)
+    monkeypatch.setattr(svc, "run_nodus_script_via_flow", _segment_aware_flow)
+
+    undo_calls = []
+    import AINDY.core.effect_compensation as ec
+    monkeypatch.setattr(
+        ec, "undo_run_effects",
+        lambda run_id, **kw: undo_calls.append(kw["report_only"]) or {"reversed": [], "irreversible": [], "failed": []},
+    )
+    monkeypatch.setenv(ec.VERIFY_FAILED_AUTO_UNDO_ENV, "1")
+
+    svc.execute_agent_run_via_workflow(
+        run_id=str(run.id), plan=plan, user_id=str(run.user_id), db=session,
+        execution_token={"token_hash": "h", "granted_tools": ["search"]},
+    )
+
+    assert undo_calls == [False]
 
 
 def test_vm_run_no_expects_verifies_vacuously(session, monkeypatch, _mock_side_effects):

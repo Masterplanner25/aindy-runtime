@@ -128,7 +128,8 @@ class AgentRunStatus(str, Enum):
 
     VERIFY_FAILED (AGENT-HARDEN-6): a run whose plan ran to completion but whose
     declared post-conditions did not hold. The Verifier stage marks it terminal
-    and rolls back its reversible effects (AGENT-HARDEN-3 compensators).
+    and reports its reversible effects; it reverses them only when an operator
+    sets AINDY_VERIFY_FAILED_AUTO_UNDO (DEC-110).
     """
 
     PENDING_APPROVAL = "pending_approval"

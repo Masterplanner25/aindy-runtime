@@ -209,11 +209,11 @@ def test_per_effect_work_does_not_grow_as_the_ledger_fills(engine, monkeypatch):
 # grouped `memory_links` SELECTs (MEM-RECALL-N1-1's batched connectivity).
 RECALL_TAG_QUERY_BUDGET = 3
 # One EXACTLY_ONCE dispatch. Gate off: 1 query (the `syscall.executed` system_events INSERT). Gate on:
-# 5, so the effect ledger costs 4 per effect: an `effect_records` lookup, the claim INSERT, a
-# read-back SELECT and the completing UPDATE. A replay is 1 `effect_records` SELECT and emits no
-# `syscall.executed` event.
-GATE_OVERHEAD_BUDGET = 4
-EFFECT_QUERY_BUDGET = 5
+# 6, so the effect ledger costs 5 per effect: an `effect_records` lookup, the `execution_units` lookup
+# that links the row to its unit (DEC-108), the claim INSERT, a read-back SELECT and the completing
+# UPDATE. A replay is 1 `effect_records` SELECT and emits no `syscall.executed` event.
+GATE_OVERHEAD_BUDGET = 5
+EFFECT_QUERY_BUDGET = 6
 REPLAY_QUERY_BUDGET = 1
 
 

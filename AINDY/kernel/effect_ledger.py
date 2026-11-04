@@ -23,6 +23,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import uuid
 from datetime import timedelta
 from typing import Any, Optional
 
@@ -97,6 +98,83 @@ def durable_effects_scope():
 def durable_effects_active() -> bool:
     """True inside a ``durable_effects_scope()`` — the run wants declaration-free at-most-once."""
     return _durable_effects.get()
+
+
+# UNDO-COMPENSATORS-1 / DEC-108 — the run an effect belongs to. `undo_run_effects` selects on
+# `EffectRecord.execution_id`, and an agent tool's inner syscall dispatches under a freshly minted
+# unit, so its scope cannot name the run. `execute_tool` always knows its `run_id`, including inside
+# a Nodus worker subprocess, where the LLM attribution span is absent. Attribution only, like the
+# tenant and session above: never part of the action_id dedup hash.
+_UNLINKED = object()
+_effect_run: contextvars.ContextVar[Any] = contextvars.ContextVar("aindy_effect_run", default=None)
+
+
+@contextlib.contextmanager
+def effect_run_scope(run_id: Any):
+    """Attribute effects written in this context to ``run_id``. A no-op when there is no run."""
+    if not run_id:
+        yield
+        return
+    token = _effect_run.set(str(run_id))
+    try:
+        yield
+    finally:
+        _effect_run.reset(token)
+
+
+@contextlib.contextmanager
+def unlinked_effect_scope():
+    """Leave effects written in this context unlinked from any execution unit.
+
+    For a wrapper's own ledger row when the effect it wraps records itself: linking both would
+    show undo one effect twice, once as reversible and once as irreversible.
+    """
+    token = _effect_run.set(_UNLINKED)
+    try:
+        yield
+    finally:
+        _effect_run.reset(token)
+
+
+def _linked_execution_id(db, execution_ref: Optional[str]) -> Optional[uuid.UUID]:
+    """The ``execution_units.id`` an effect belongs to, or ``None``. Never raises.
+
+    The ambient run wins, then the LLM attribution span, then the caller's scope. A scope may be
+    the unit's own id or a run id, so one query matches either. Only a row that exists is returned,
+    so the foreign key cannot fail, and a text or UUID comparison cannot poison the transaction.
+    """
+    ambient = _effect_run.get()
+    if ambient is _UNLINKED:
+        return None
+    try:
+        from sqlalchemy import or_
+
+        from AINDY.db.models.execution_unit import ExecutionUnit
+        from AINDY.kernel.cancellation import current_run_id
+
+        ref = ambient or current_run_id() or execution_ref
+        if not ref:
+            return None
+        ref = str(ref)
+        matches = [
+            (ExecutionUnit.source_type.in_(("agent_run", "flow_run")))
+            & (ExecutionUnit.source_id == ref)
+        ]
+        try:
+            matches.append(ExecutionUnit.id == uuid.UUID(ref))
+        except ValueError:
+            pass
+        row = (
+            db.query(ExecutionUnit.id)
+            .filter(or_(*matches))
+            .order_by(ExecutionUnit.created_at.desc())
+            .first()
+        )
+        linked = row[0] if row else None
+        return linked if isinstance(linked, uuid.UUID) else None
+    except Exception as exc:
+        logger.warning("[effect_ledger] could not link effect to its execution unit: %s", exc)
+        return None
 
 
 def _count_gate(outcome: str) -> None:
@@ -211,7 +289,7 @@ def acquire_effect_lock(db, action_id: str, *, wait_seconds: float = 300.0):
 DEGRADED = object()
 
 
-def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session):
+def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session, execution_ref=None):
     """Decide what to do about an EffectRecord row that already exists.
 
     ★ Extracted 2026-08-22 because this decision existed in only ONE of the two places that
@@ -270,6 +348,9 @@ def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session):
     record.created_at = utcnow()
     record.tenant_id = eff_tenant
     record.session_id = eff_session
+    if record.execution_id is None:
+        # DEC-108 — a row written before the link existed gains it when its effect re-runs.
+        record.execution_id = _linked_execution_id(db, execution_ref)
     db.commit()
     _count_gate("reclaimed")
     return False, None
@@ -283,8 +364,12 @@ def resolve_effect_record(
     *,
     tenant_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    execution_ref: Optional[str] = None,
 ) -> tuple[bool, Any]:
     """Claim or replay an effect slot. Returns ``(already_succeeded, cached_result)``.
+
+    ``execution_ref`` is the caller's scope (an execution unit id or a run id), used to link the
+    row to its execution unit when no ambient run names one (DEC-108). It is never hashed.
 
     ``(True, cached)`` — this ``action_id`` already completed successfully; the caller
     must NOT re-execute and should return ``cached``.
@@ -305,18 +390,20 @@ def resolve_effect_record(
     if record is not None:
         # ★ Every existing-row outcome goes through the shared decision — including the
         # non-success ones, which used to fall through to `return False, None` uncounted.
-        return _resolve_existing_row(db, record, action_id, eff_tenant, eff_session)
+        return _resolve_existing_row(db, record, action_id, eff_tenant, eff_session, execution_ref)
     if record is None:
         payload_bytes = json.dumps(
             dict(payload or {}), sort_keys=True, separators=(",", ":")
         ).encode()
         input_hash = hashlib.sha256(payload_bytes).hexdigest()
+        execution_id = _linked_execution_id(db, execution_ref)
         try:
             db.add(
                 EffectRecord(
                     action_id=action_id,
                     action_type=action_type,
                     input_hash=input_hash,
+                    execution_id=execution_id,
                     status="pending",
                     tenant_id=eff_tenant,
                     session_id=eff_session,
@@ -336,7 +423,7 @@ def resolve_effect_record(
             )
             if record is None:
                 raise
-            return _resolve_existing_row(db, record, action_id, eff_tenant, eff_session)
+            return _resolve_existing_row(db, record, action_id, eff_tenant, eff_session, execution_ref)
     return False, None
 
 

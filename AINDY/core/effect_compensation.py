@@ -23,6 +23,7 @@ post-conditions fail. Replay (``agent_runtime/replay.py``) *re-does*; this *undo
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
@@ -30,6 +31,40 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 REVERSAL_STATUSES = ("reversed", "irreversible", "failed")
+
+# Undo's own ledger row is linked to the run it reverses, but it is not one of that run's effects.
+_UNDO_SYSCALL = "sys.v1.agent.undo"
+
+VERIFY_FAILED_AUTO_UNDO_ENV = "AINDY_VERIFY_FAILED_AUTO_UNDO"
+
+
+def verify_failed_auto_undo_enabled() -> bool:
+    """DEC-110 — may the Verifier reverse effects by itself? **Default OFF.**
+
+    A failed check would otherwise delete data with nobody looking, so the Verifier reports what
+    it could reverse and an explicit ``sys.v1.agent.undo`` does the reversing.
+    """
+    return os.getenv(VERIFY_FAILED_AUTO_UNDO_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _compensation_context(context: Any, *, db: Session, eu: Any, record: Any, run_id: str):
+    """The context a compensator runs under: undo's own session, and the effect's owner.
+
+    The Verifier calls with no context, and a compensator needs both. It gets a copy, because the
+    session is added for this call and the caller's metadata is not ours to change.
+    """
+    from AINDY.kernel.syscall_registry import SyscallContext
+
+    metadata = dict(getattr(context, "metadata", None) or {})
+    metadata["_db"] = db
+    user_id = getattr(context, "user_id", None) or record.tenant_id or eu.user_id
+    return SyscallContext(
+        execution_unit_id=str(eu.id),
+        user_id=str(user_id or ""),
+        capabilities=list(getattr(context, "capabilities", None) or []),
+        trace_id=str(getattr(context, "trace_id", None) or run_id),
+        metadata=metadata,
+    )
 
 
 def _lookup_compensator(action_type: str):
@@ -97,8 +132,12 @@ def undo_run_effects(
     db: Session,
     context: Any = None,
     source_type: str = "agent_run",
+    report_only: bool = False,
 ) -> dict:
     """Reverse a run's reversible effects; surface irreversible ones.
+
+    With ``report_only`` nothing changes: no compensator runs, no audit row is written, and the
+    summary gains ``reversible``, the effects an explicit undo would attempt (DEC-110).
 
     Resolves the run's ``ExecutionUnit`` (by ``source_type``/``run_id``), walks its
     successful ``EffectRecord``s newest-first, and for each invokes the syscall's
@@ -121,6 +160,8 @@ def undo_run_effects(
         "irreversible": [],
         "failed": [],
     }
+    if report_only:
+        summary["reversible"] = []
 
     eu = ExecutionUnitService(db).get_by_source(source_type, str(run_id))
     if eu is None:
@@ -132,6 +173,7 @@ def undo_run_effects(
         .filter(
             EffectRecord.execution_id == eu.id,
             EffectRecord.status == "success",
+            EffectRecord.action_type != _UNDO_SYSCALL,
         )
         .order_by(EffectRecord.created_at.desc(), EffectRecord.id.desc())
         .all()
@@ -147,6 +189,9 @@ def undo_run_effects(
             summary["already_reversed"].append(rec.action_type)
             continue
         compensator, _entry = _lookup_compensator(rec.action_type)
+        if report_only:
+            summary["reversible" if compensator is not None else "irreversible"].append(rec.action_type)
+            continue
         effect = {
             "effect_record_id": str(rec.id),
             "action_type": rec.action_type,
@@ -167,7 +212,12 @@ def undo_run_effects(
             continue
 
         try:
-            receipt = compensator(effect, context)
+            # A savepoint, so a compensator that fails part-way leaves nothing behind and the
+            # session stays usable for its audit row and for every other effect.
+            with db.begin_nested():
+                receipt = compensator(
+                    effect, _compensation_context(context, db=db, eu=eu, record=rec, run_id=str(run_id))
+                )
             _record_reversal(
                 db, effect_record=rec, run_id=run_id, execution_id=eu.id,
                 status="reversed",
@@ -185,6 +235,8 @@ def undo_run_effects(
             )
             summary["failed"].append({"action_type": rec.action_type, "error": str(exc)})
 
+    if report_only:
+        return summary
     # Durable: the audit log and compensator side effects must survive session close.
     db.commit()
     return summary

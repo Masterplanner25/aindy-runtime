@@ -213,11 +213,32 @@ class SyscallEntry:
     execution_guarantee: str     # defaults to "AT_LEAST_ONCE"
 ```
 
-**`sys.v1.agent.undo` does not currently reverse real effects (`UNDO-COMPENSATORS-1`).** It selects
-effects by `EffectRecord.execution_id`, and nothing in production sets that column, so a run's
-effects are never found: undo returns an empty summary, not a list of `irreversible` effects. A
-consumer's `compensate=` hook is not reached either. Separately, no syscall in the runtime's own
-registry declares a compensator yet.
+**`compensate` and `sys.v1.agent.undo`.** Only `sys.v1.memory.write` declares a compensator in the
+runtime's own registry; a consumer adds others with `compensate=`. It receives `(effect, context)`,
+where `context.metadata["_db"]` is undo's own session and `context.user_id` is the owner. It must
+flush and never commit or roll back; undo runs it in a savepoint, so raising undoes its partial work
+and records the effect as `failed`, which stays retryable.
+
+`sys.v1.memory.write`'s compensator deletes the node it wrote, and refuses (`failed`, node kept) if
+the node's content, tags or type changed, or it has edit history, a link in either direction, or a
+trace membership. Reads and feedback do not block it. Its causal edges are deleted with it (DEC-109).
+
+**What undo can see.** Undo finds an effect only if the ledger linked it to the run's unit (DEC-108):
+
+| Effect | Undo sees it? |
+|---|---|
+| A gated syscall, or the default `memory.write` agent tool | Yes |
+| Any other tool, when the tool gate is on and it declares `EXACTLY_ONCE` | Yes, as `irreversible` |
+| An `AT_LEAST_ONCE` tool or syscall (no ledger row) | **No** |
+| Nodus guest memory writes, by default (no ledger row) | **No** |
+| Nodus guest memory writes under `AINDY_MEMORY_IDEMPOTENCY` or a durable re-drive | Deferred writes as `irreversible`; immediate ones **no** |
+| Effects recorded before the link shipped, or pruned by the effect TTL | **No** |
+
+An empty summary therefore means undo found nothing to act on, not that the run had no effects.
+
+**The Verifier reports and does not reverse (DEC-110).** On `VERIFY_FAILED` it lists `reversible` and
+`irreversible` on the `VERIFY_FAILED` agent event. Set `AINDY_VERIFY_FAILED_AUTO_UNDO=1` to have it
+reverse them; otherwise call `sys.v1.agent.undo`.
 
 ### VersionedSyscallRegistry
 
