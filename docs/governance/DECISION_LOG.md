@@ -2195,3 +2195,11 @@ The unit goes through `finalize_for_run_status`, so a unit already terminal keep
 
 **Why**
 The cleanup failed job rows without closing the unit or firing the event, so its unit stayed `pending` forever and the app's mirror of `job_logs` stayed `pending` too. That drift is what misdirected FR-56 (DEC-104's correction). The app asked whether the settle command should also turn its 2,387 `failed` embedding rows into `success`, since the sweep did that work. Declined: "never started" is true of those jobs, the rows hold no admission slot, and the only gain is a cleaner history on one stack, paid for by rewriting failure records. Also declined: closing old units from the upgrade or the cleanup itself. As in DEC-104, changing an operator's existing rows is their call; a command waits on the app's count, because it only earns its place if that count is large.
+
+### DEC-106
+**Status:** `accepted` (2026-11-03 — `DB-NODUS-BUDGET-1`, PR_NUMBER; decided by the owner: "flip it now")
+
+**Decision — `AINDY_MEMORY_RECALL_OWN_SESSION` defaults ON. Only `0` / `false` / `no` / `off` disable it; any other value, blank included, is the default (the parse DEC-081 used). No further soak window.**
+
+**Why**
+DEC-083's condition was met on 2026-10-09: on the app's stack `aindy_memory_recall_failures_total` read zero at every site and stage from 10-02 to 10-09, over 405 recalls through the flagged path, with no pool exhaustion (the app's `RUNTIME_2_25_0_UPGRADE.md`). That also meets `SOAK_REGISTER.md` row 1's 7 days / 200 runs. The caveat stands: no agent ran in that window. The app has run the flag on since 2026-09-23, so this default changes nothing on its stack, and the week of counters the 11-02 plan gave this flip could not have observed anything there. Declined: that window, for that reason. The flip gets its own release anyway, because for any other deployment it does change behaviour: recall no longer sees the caller's uncommitted writes, and each recall takes a second pooled connection for the read. The one-default-at-a-time rule still holds for pgvector 0.5.0 and IDEM-13, which do change the app's stack; their readout has no fresh window from this flip to wait for, only a release to land after.

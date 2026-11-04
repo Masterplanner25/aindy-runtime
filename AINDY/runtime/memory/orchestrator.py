@@ -113,17 +113,17 @@ class MemoryOrchestrator:
         transaction, we never start one: the read gets its own short-lived session and
         returns the connection immediately.
 
-        Opt-in (`AINDY_MEMORY_RECALL_OWN_SESSION`, default off) because this is a core
-        read path — a caller relying on seeing its own uncommitted writes through recall
-        would change behaviour. Any failure to obtain a session falls back to the caller's,
-        so this can never make recall unavailable.
+        Default ON (DEC-106); only `AINDY_MEMORY_RECALL_OWN_SESSION` = `0` / `false` / `no` /
+        `off` disables it. Recall does not see the caller's uncommitted writes. Any failure to
+        obtain a session falls back to the caller's, so this can never make recall unavailable.
         """
         import os
 
-        if os.getenv("AINDY_MEMORY_RECALL_OWN_SESSION", "").strip().lower() not in {
-            "1",
-            "true",
-            "yes",
+        if os.getenv("AINDY_MEMORY_RECALL_OWN_SESSION", "").strip().lower() in {
+            "0",
+            "false",
+            "no",
+            "off",
         }:
             return db, False
         try:

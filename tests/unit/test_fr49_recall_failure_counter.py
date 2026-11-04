@@ -50,7 +50,7 @@ def _recall(orch, site="test_site"):
 
 
 def test_a_failing_recall_is_counted_and_returns_an_empty_context(monkeypatch):
-    monkeypatch.delenv("AINDY_MEMORY_RECALL_OWN_SESSION", raising=False)
+    monkeypatch.setenv("AINDY_MEMORY_RECALL_OWN_SESSION", "false")
     orch = _orchestrator()
     monkeypatch.setattr(orch, "_recall_candidates", MagicMock(side_effect=RuntimeError("pool exhausted")))
     before = _count("test_site", "recall")
@@ -61,7 +61,7 @@ def test_a_failing_recall_is_counted_and_returns_an_empty_context(monkeypatch):
 
 def test_a_successful_recall_counts_nothing(monkeypatch):
     """The control: the counter is not incremented on the ordinary path."""
-    monkeypatch.delenv("AINDY_MEMORY_RECALL_OWN_SESSION", raising=False)
+    monkeypatch.setenv("AINDY_MEMORY_RECALL_OWN_SESSION", "false")
     orch = _orchestrator()
     monkeypatch.setattr(orch, "_recall_candidates", MagicMock(return_value=[]))
     before = {stage: _count("test_site", stage) for stage in ("recall", "own_session")}
@@ -82,7 +82,7 @@ def test_the_own_session_fallback_is_counted_and_the_recall_still_runs(monkeypat
 
 
 def test_a_caller_that_names_no_site_counts_as_unspecified(monkeypatch):
-    monkeypatch.delenv("AINDY_MEMORY_RECALL_OWN_SESSION", raising=False)
+    monkeypatch.setenv("AINDY_MEMORY_RECALL_OWN_SESSION", "false")
     orch = _orchestrator()
     monkeypatch.setattr(orch, "_recall_candidates", MagicMock(side_effect=RuntimeError("x")))
     before = _count("unspecified", "recall")
