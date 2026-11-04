@@ -5623,7 +5623,7 @@ until the upstream release lands.
 
 ## DB-NODUS-BUDGET-1 — nodus wall-clock budget (45s) outlives the DB idle cap (30s)
 
-**Status: CLOSED (2026-11-03) — #885, DEC-106.** `AINDY_MEMORY_RECALL_OWN_SESSION` defaults ON
+**Status: CLOSED (2026-11-03) — #885, DEC-106; ships in 2.30.0.** `AINDY_MEMORY_RECALL_OWN_SESSION` defaults ON
 (only `0`/`false`/`no`/`off` disable it) on the 10-02→10-09 counter window: 0 at every stage, 405
 recalls, on the app's stack, which has run it on since 09-23. Remaining: nothing here. Next in the
 agreed order is pgvector 0.5.0 (MEM-EXPAND-DEAD-1). The text below is the record as written.

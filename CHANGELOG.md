@@ -4,6 +4,47 @@
 
 _Nothing yet._
 
+## 2.30.0 — 2026-11-04
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.30.0.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ A default changes: memory recall uses its own session** (DEC-106). Recall no longer sees the
+  caller's uncommitted writes, and each recall takes a second pooled connection for the read. If you
+  already set `AINDY_MEMORY_RECALL_OWN_SESSION=true`, nothing changes. To keep the old behaviour, set it
+  to `false`. **A blank value used to mean off and now means on.**
+- **One optional command**, if you ran an earlier release with the scheduler on:
+  `aindy-runtime jobs settle-stale-units` (reports only), then `--yes`. It closes execution units the
+  stale cleanup left `pending` before 2.29.2.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+- No route, scope, schema or dependency-pin change. One new CLI group, `jobs`.
+
+### Changed — memory recall uses its own session by default (#885)
+
+- `AINDY_MEMORY_RECALL_OWN_SESSION` defaults ON (DEC-106). Recall ran on the caller's session, which
+  left it inside a transaction that the flow runner then held across node execution. Recall now takes
+  its own short-lived session.
+- ★ **What changes:** recall no longer sees the caller's uncommitted writes, and each recall takes a
+  second pooled connection for the length of the read. If your pool is tight, watch
+  `aindy_db_pool_checkedout` and `aindy_memory_recall_failures_total` after upgrading.
+- Only `0` / `false` / `no` / `off` disable it. A blank value used to mean off and now means on.
+- The evidence is one stack's: the counter read 0 at every stage from 2026-10-02 to 10-09, over 405
+  recalls, with no pool exhaustion. No agent ran in that window.
+
+### Added — `aindy-runtime jobs settle-stale-units` closes units the stale cleanup stranded (#886)
+
+- Before 2.29.2, the stale-log cleanup failed a job row and left its execution unit `pending` forever.
+  One stack had 2,387. They hold no admission slot, but they skew unit counts by status.
+- The command moves only a `job_log` unit still `pending` whose row is `failed` with the cleanup's own
+  message, to `failed` (DEC-107). The job row is not changed. It reports only unless given `--yes`, and
+  nothing runs on upgrade.
+
+```bash
+aindy-runtime jobs settle-stale-units        # reports only
+aindy-runtime jobs settle-stale-units --yes  # settles
+```
+
+
 ## 2.29.2 — 2026-11-03
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.29.2.md`.
