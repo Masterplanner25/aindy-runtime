@@ -26,6 +26,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import update as sqla_update
+from sqlalchemy.orm import sessionmaker
 
 from AINDY.db.models import AgentRun
 from AINDY.platform_layer import registry
@@ -82,8 +83,36 @@ def _approving_evaluator(_payload: dict) -> dict:
 # Shape 1: sequential double-approve — second call returns without executing
 # ---------------------------------------------------------------------------
 
+@pytest.fixture
+def private_session_factory(runtime_only_app, monkeypatch, tmp_path):
+    """App and test on their own connections (`build_private_engine`).
+
+    On the shared SQLite fixture every session is one raw connection under `StaticPool`, so
+    closing the pipeline's own-session recall (DEC-106) resets it and rolls back the outer
+    transaction, erasing the run between the two approves. That is the fixture, not the route.
+    """
+    from AINDY.db.database import get_db
+    from tests.fixtures.client import _patch_session_aliases
+    from tests.fixtures.db import build_private_engine
+
+    engine = build_private_engine(tmp_path / "approve_idempotency.db")
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    _patch_session_aliases(monkeypatch, factory, engine)
+
+    def _get_private_db():
+        db = factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    runtime_only_app.dependency_overrides[get_db] = _get_private_db
+    yield factory
+    engine.dispose()
+
+
 def test_sequential_double_approve_executes_once(
-    runtime_only_app, runtime_only_client, mock_db, monkeypatch
+    runtime_only_app, runtime_only_client, private_session_factory, monkeypatch
 ):
     """Second approve on an already-approved run must not call execute_run a second time.
 
@@ -95,8 +124,8 @@ def test_sequential_double_approve_executes_once(
     runtime_only_app.dependency_overrides[get_current_user] = lambda: user
     monkeypatch.setitem(registry._trigger_evaluators, "user", _approving_evaluator)
 
-    run = _make_pending_run(mock_db, user_id=uuid.UUID(uid))
-    run_id = str(run.id)
+    with private_session_factory() as seed:
+        run_id = str(_make_pending_run(seed, user_id=uuid.UUID(uid)).id)
 
     execute_calls: list[str] = []
     execute_event = threading.Event()
