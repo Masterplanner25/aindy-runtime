@@ -102,7 +102,25 @@ jobs:
           set -euo pipefail
           python -m venv /tmp/prev
           /tmp/prev/bin/pip install --quiet --upgrade pip
-          /tmp/prev/bin/pip install --quiet "aindy-runtime==${{ steps.prev.outputs.previous }}"
+          # The version above comes from PyPI's JSON API and pip resolves against the simple index,
+          # which can lag it by minutes after a publish. A PR pushed in that window failed here
+          # before any schema step (#888), so wait as Boot Smoke does. Never skip: a version that
+          # stays unresolvable must still fail this required check.
+          VERSION="${{ steps.prev.outputs.previous }}"
+          installed=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if /tmp/prev/bin/pip install --quiet --no-cache-dir "aindy-runtime==${VERSION}"; then
+              echo "installed aindy-runtime==${VERSION} on attempt ${attempt}"
+              installed=true
+              break
+            fi
+            echo "::warning title=PyPI index lag::pip cannot install aindy-runtime==${VERSION} (attempt ${attempt}/10); waiting 30s."
+            sleep 30
+          done
+          if [ "$installed" != "true" ]; then
+            echo "::error title=PyPI index lag::aindy-runtime==${VERSION} could not be installed after 10 attempts."
+            exit 1
+          fi
           # This is the state a real deployment is in before an upgrade: a database built by
           # the release it is currently running.
           /tmp/prev/bin/aindy-runtime bootstrap-schema
