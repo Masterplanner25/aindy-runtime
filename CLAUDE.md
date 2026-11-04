@@ -283,7 +283,7 @@ A soak assertion must not be stricter than the contract.
 - **DEP-UPGRADE-DEFERRED-1** — otel packages are version-locked; hand-align and `pip install --dry-run`. react-router 7→8 waits on a ui-kit release.
 - **C3** — non-Linux strong sandbox (C2 closed). `C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`.
 - **SYSMAX-3** — per-EU memory deferred: `ru_maxrss` is a process peak, never per unit (DEC-091; guest half `AINDY_NODUS_MAX_MEMORY_MB`).
-- **CLI-1 · CLI-SANDBOX-FORMAT-1 · TIER3-10 · DEPLOY-TARGET-1/2 · BILLING-1..5 · LAYER-1..5 · ROUTE-EXTRACT-\* · PACK-DEBT-\* · TENANT-\* · COMPAT-\* · DATA-\* · LOCAL-\*** — deferred; triggers and detail in `TECH_DEBT.md`.
+- **CLI-1 · CLI-SANDBOX-FORMAT-1 · TIER3-10 · DEPLOY-TARGET-1/2 · BILLING-1..5 · LAYER-1..5 · ROUTE-EXTRACT-\* · PACK-DEBT-\* · TENANT-\* · COMPAT-\* · DATA-\* · LOCAL-\*** — deferred · **UNDO-COMPENSATORS-1** — open: `TECH_DEBT.md`.
 
 ### Open — programs and multi-item prefixes
 
