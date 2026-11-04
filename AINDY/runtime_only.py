@@ -445,6 +445,47 @@ def _settle_embedding_logs(*, yes: bool, batch_size: int) -> NoReturn:
     raise SystemExit(0)
 
 
+def _settle_stale_job_units(*, yes: bool, batch_size: int) -> NoReturn:
+    """Fail execution units left `pending` by the stale cleanup before DEC-105 (one-time, operator-run).
+
+    Before 2.29.2, `_cleanup_stale_logs` failed a job row and left its unit `pending` forever.
+    Moves only a `job_log` unit still `pending` whose row is `failed` with the cleanup's own
+    message. The job row is not changed. Dry-run unless --yes. Requires DATABASE_URL.
+    """
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print("error: DATABASE_URL is not set.", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.platform_layer.async_job_service import settle_stale_job_units
+    except Exception as exc:
+        print(f"error: could not import the job layer: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+    db = SessionLocal()
+    try:
+        report = settle_stale_job_units(db, dry_run=not yes, batch_size=batch_size)
+    except Exception as exc:
+        print(f"error: settling stale job units failed: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    finally:
+        db.close()
+
+    if not report["examined"]:
+        print("ok: no stale job units to settle.")
+        raise SystemExit(0)
+    if not yes:
+        print(f"dry-run: {report['settled']} unit(s) would become failed. Re-run with --yes.")
+        raise SystemExit(0)
+    if report["not_moved"]:
+        print(f"error: settled {report['settled']} unit(s); {report['not_moved']} did not move.", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"ok: settled {report['settled']} unit(s) as failed.")
+    raise SystemExit(0)
+
+
 def _reembed_memory(*, yes: bool, no_drain: bool, dry_run: bool) -> NoReturn:
     """Re-embed all memory nodes with the configured provider (ECOGAP-3 Phase 1).
 
@@ -941,6 +982,26 @@ def main() -> None:
     settle_parser.add_argument("--yes", action="store_true", default=False, help="Settle the rows (without this the command only reports).")
     settle_parser.add_argument("--batch-size", type=int, default=500, help="Rows examined per committed batch (default 500).")
 
+    jobs_parser = subparsers.add_parser(
+        "jobs",
+        help="Async job maintenance.",
+        description="Async job maintenance commands. Requires DATABASE_URL.",
+    )
+    jobs_sub = jobs_parser.add_subparsers(dest="jobs_command")
+    stale_units_parser = jobs_sub.add_parser(
+        "settle-stale-units",
+        help="Fail execution units the stale cleanup left 'pending' before 2.29.2.",
+        description=(
+            "One-time cleanup for deployments that ran a version before 2.29.2, where the "
+            "stale-log cleanup failed a job row and left its execution unit 'pending' forever. "
+            "Moves only a job_log unit still 'pending' whose row is 'failed' with the cleanup's "
+            "own message. The job row is not changed. Reports without changing anything "
+            "unless --yes. Requires DATABASE_URL."
+        ),
+    )
+    stale_units_parser.add_argument("--yes", action="store_true", default=False, help="Settle the units (without this the command only reports).")
+    stale_units_parser.add_argument("--batch-size", type=int, default=500, help="Units examined per committed batch (default 500).")
+
     auth_parser = subparsers.add_parser(
         "auth",
         help="Auth management commands.",
@@ -998,6 +1059,15 @@ def main() -> None:
             )
         else:
             memory_parser.print_help()
+            raise SystemExit(0)
+    elif args.command == "jobs":
+        if args.jobs_command == "settle-stale-units":
+            _settle_stale_job_units(
+                yes=getattr(args, "yes", False),
+                batch_size=getattr(args, "batch_size", 500),
+            )
+        else:
+            jobs_parser.print_help()
             raise SystemExit(0)
     elif args.command == "auth":
         if args.auth_command == "promote-admin":

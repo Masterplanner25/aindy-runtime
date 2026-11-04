@@ -518,7 +518,7 @@ def _cleanup_stale_logs() -> None:
     try:
         from AINDY.core.execution_unit_service import ExecutionUnitService
         from AINDY.db.database import SessionLocal
-        from AINDY.platform_layer.async_job_service import _emit_job_log_written
+        from AINDY.platform_layer.async_job_service import STALE_JOB_ERROR, _emit_job_log_written
         from datetime import timedelta
 
         db = SessionLocal()
@@ -535,7 +535,7 @@ def _cleanup_stale_logs() -> None:
         stale_ids = []
         for log in stale:
             log.status = "failed"
-            log.error_message = "Stale: never started within 1 hour of creation"
+            log.error_message = STALE_JOB_ERROR
             stale_ids.append(log.id)
             unit = units.get_by_source("job_log", log.id)
             if unit is not None:
