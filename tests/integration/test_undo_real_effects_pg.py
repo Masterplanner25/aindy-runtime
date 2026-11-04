@@ -135,10 +135,18 @@ def test_the_delete_cascades_to_the_nodes_causal_edges(world, testing_session_fa
     """DEC-109 lets an edge go with its node, so the cascade it relies on has to be real."""
     from AINDY.core.effect_compensation import undo_run_effects
     from AINDY.db.models.event_edge import EventEdge
+    from AINDY.db.models.system_event import SystemEvent
 
     db = world["session"]
     node_id = _write_in_run(world, "has a causal edge")
-    edge = EventEdge(target_memory_node_id=uuid.UUID(node_id), relationship_type="caused_by")
+    source_event = SystemEvent(type="test.undo.cause", user_id=uuid.UUID(world["user_id"]), payload={})
+    db.add(source_event)
+    db.flush()
+    edge = EventEdge(
+        source_event_id=source_event.id,
+        target_memory_node_id=uuid.UUID(node_id),
+        relationship_type="caused_by",
+    )
     db.add(edge)
     db.commit()
     edge_id = edge.id
