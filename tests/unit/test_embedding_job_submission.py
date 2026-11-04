@@ -3,9 +3,10 @@
 ``enqueue_embedding`` was the only caller passing ``execute_inline_in_test_mode=False``, and
 ``_submit_async_job_inner`` answered that flag on the queued path with ``return log_id`` —
 after the JobLog row was committed ``pending``, before the semaphore and the executor. The
-sweep embedded every node anyway, so nothing looked wrong, but the rows never closed and
-``_active_job_statuses()`` counts ``pending`` against the admission caps: 2,387 on one live
-stack, 1,696 for a single user, against a recommended per-user cap of 2.
+sweep embedded every node anyway, so nothing looked wrong, but the row never ran and
+``_active_job_statuses()`` counts ``pending`` against the admission caps until the stale
+cleanup fails it, an hour or two later (corrected 2026-11-03, DEC-105: the 2,387 rows first
+reported were the app's mirror; in ``job_logs`` they were already ``failed``).
 
 The fix makes the sweep own embedding on the instance that runs it (no job row at all), lets
 a job that IS submitted reach the executor, has the sweep close any open row for a node it

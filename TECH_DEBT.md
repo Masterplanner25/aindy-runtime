@@ -9255,7 +9255,27 @@ key in each tool dict.
 
 ---
 
+## JOB-STALE-CLEANUP-1 — the stale-log cleanup failed the job row and left everything else 🟡 P3 (found 2026-11-03 from the app's 2.29.1 adoption)
+
+**Status: CLOSED (2026-11-03) — #882, DEC-105; unreleased.** `_cleanup_stale_logs` set `failed` on a
+JobLog row `pending` for over an hour and nothing else. Its execution unit stayed `pending` forever
+(any job type; `observability_router.py` reports counts by unit status), and `job_log.written`
+never fired, so the app's `automation_logs` mirror stayed `pending`. That is the runtime half of the
+app's `JOB-LOG-MIRROR-STALE-1`, and the drift is what misdirected FR-56. The cleanup had no direct
+test. **Fix:** the unit is finalized in the same commit; the event fires per row after it.
+`test_stale_cleanup_closes_unit.py`, on the private engine, mutation-tested.
+**Remaining:** units stranded before the fix stay `pending`. The 2.29.1 handoff's correction asks the
+app for the count; a closing command is built only if it is large. Not run against a live stack.
+
+---
+
 ## FR-56 — embedding jobs submitted while the scheduler ran were recorded `pending` and never run, holding admission slots 🟡 P2 (app-filed 2026-11-01, runtime 2.29.0)
+
+**Correction (2026-11-03, reported by the app): the P2 reason below is wrong.** The 2,387 rows were
+`pending` only in the app's mirror. In `job_logs`, `_cleanup_stale_logs` had failed each one an hour
+or two after creation, so the caps never counted them; on 2.29.0 a row held a slot only for that
+window, and the app's settle dry run found 0. We repeated the figure without reading our own cleanup.
+The bug and the fix stand. See JOB-STALE-CLEANUP-1 and DEC-105.
 
 **Status: CLOSED (2026-11-01) — #871, DEC-104; unreleased.** Filed by the app (their register,
 `## FR-56`, apps-monolith PR #518). FR-55 is also the app's (guest Nodus waits, filed 2026-10-22).

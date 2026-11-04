@@ -1,12 +1,41 @@
 ---
 title: "App Handoff — Runtime v2.29.1"
 api_version: "1.0"
-last_verified: "2026-11-02"
+last_verified: "2026-11-03"
 status: current
 owner: "platform-team"
 ---
 
 # App handoff: runtime v2.29.1
+
+> **Correction (2026-11-03, after publication; reported by the app).** This handoff told you to
+> expect about 2,387 rows to settle, and said those rows held admission slots. Both were wrong. The
+> 2,387 were `pending` only in your `automation_logs`. In `job_logs` our `_cleanup_stale_logs` had
+> already failed each one, an hour or two after creation, which is why your dry run found 0. A row
+> held a slot only for that window. Read every claim below about stranded rows and the caps with
+> that in mind. The cap of 2 you set is safe for embedding: a refused embedding submission is caught
+> and logged in `MemoryNodeDAO`, and the sweep still embeds the node.
+>
+> **Your question (your `RUNTIME_2_29_1_UPGRADE.md` §4): no.** `memory settle-embedding-logs` will
+> not take the `failed` rows. "Never started" is true of those jobs, they hold no slot, and a
+> rewrite to `success` loses the record (DEC-105). Leave them as they are.
+>
+> **What we fixed instead (#882, in the next release, not in 2.29.1):** the cleanup now closes the
+> row's execution unit and fires `job_log.written`, so your handler re-syncs the mirror. That covers
+> the drift half of your `JOB-LOG-MIRROR-STALE-1`.
+>
+> **One ask:** the old cleanup never closed those units, so yours are probably still `pending`.
+> Please report this count. We will build a command to close them only if it is large.
+>
+> ```sql
+> SELECT count(*) FROM execution_units eu
+> JOIN job_logs j ON eu.source_id = j.id
+> WHERE eu.source_type = 'job_log' AND eu.status = 'pending' AND j.status = 'failed';
+> ```
+>
+> **Your "no new row" check:** a process with no scheduler, such as a scheduled callback's, still
+> writes a `memory.generate_embedding` row, then runs it inline and closes it. "No row left `pending`
+> past a few minutes" is the test that means something.
 
 Bump the `constraints.txt` pin to `==2.29.1` (your contract test moves the floor with it), then
 **rebuild the image**. No ui-kit release: `@aindy/ui-kit` 2.1.1 stays current.

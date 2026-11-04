@@ -514,9 +514,11 @@ def _scheduler_wait_tick() -> None:
 
 
 def _cleanup_stale_logs() -> None:
-    """Clean up JobLog entries stuck in 'pending' for > 1 hour."""
+    """Fail JobLog entries stuck in 'pending' for > 1 hour, and their execution units (DEC-105)."""
     try:
+        from AINDY.core.execution_unit_service import ExecutionUnitService
         from AINDY.db.database import SessionLocal
+        from AINDY.platform_layer.async_job_service import _emit_job_log_written
         from datetime import timedelta
 
         db = SessionLocal()
@@ -529,11 +531,20 @@ def _cleanup_stale_logs() -> None:
             )
             .all()
         )
+        units = ExecutionUnitService(db)
+        stale_ids = []
         for log in stale:
             log.status = "failed"
             log.error_message = "Stale: never started within 1 hour of creation"
+            stale_ids.append(log.id)
+            unit = units.get_by_source("job_log", log.id)
+            if unit is not None:
+                units.finalize_for_run_status(unit.id, "failed")
         db.commit()
         db.close()
+        # After the commit: a handler reads the row from its own session.
+        for log_id in stale_ids:
+            _emit_job_log_written(log_id)
         if stale:
             logger.info("Cleaned up %d stale automation logs", len(stale))
     except Exception as exc:

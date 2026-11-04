@@ -49,10 +49,11 @@ def enqueue_embedding(
     # (`process_pending_embeddings`) owns embedding: every node is written with
     # `embedding_pending=True`, so the sweep finds it without a job. Submitting one here
     # used to record a `pending` JobLog that nothing ran (`async_job_service` returned before
-    # the executor for `execute_inline_in_test_mode=False`), and those rows count against the
-    # async admission caps — 2,387 on one live stack. With no scheduler running here (a
-    # follower, or before boot finishes) the sweep is not running in this process, so the job
-    # is still submitted; it runs inline, or on the distributed queue, and closes its own row.
+    # the executor for `execute_inline_in_test_mode=False`). It held an admission slot until the
+    # stale cleanup failed it, an hour or two later, for work the sweep did. With no scheduler
+    # running here (a follower, or before boot finishes) the sweep is not running in this
+    # process, so the job is still submitted; it runs inline, or on the distributed queue, and
+    # closes its own row.
     if _is_background_runner_active():
         logger.debug("[EmbeddingJobs] memory=%s left to the embedding sweep", memory_id)
         return memory_id
