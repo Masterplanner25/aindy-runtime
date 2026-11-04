@@ -1283,6 +1283,7 @@ legacy-hash rejection, tamper detection, rotation grace, KeyRing-down fallback);
 ### AGENT-HARDEN-3 — Reversible actions / compensating-undo log
 
 **Status:** CLOSED (2026-07-05). Compensating-undo engine + audit log shipped.
+★ Corrected 2026-11-04: the engine never finds a production effect. See `UNDO-COMPENSATORS-1`.
 
 `SyscallEntry` gains an optional `compensate` hook (+ `reversible` property);
 `register_syscall(..., compensate=...)` passes it through. New append-only
@@ -14375,29 +14376,45 @@ structured to put in it. **Build them together if either is built.**
 
 ---
 
-## UNDO-COMPENSATORS-1 — undo and the Verifier's rollback have nothing to reverse on a bare runtime
+## UNDO-COMPENSATORS-1 — undo never finds a real effect, so it and the Verifier's rollback do nothing
 
-**Status: OPEN — P3, deferred.** Filed 2026-11-04, while checking the README's claims against the
-code. The engine itself works and is tested; this entry is about what it has to act on.
+**Status: OPEN — P2.** Filed 2026-11-04, while checking the README's claims against the code. The
+owner chose to ship a first-party compensator (2026-11-04); design pending, because a compensator
+alone would never run.
 
-**The gap.** `AGENT-HARDEN-3` shipped the mechanism and said in passing, inside its CLOSED entry,
-that "no built-in syscall ships a compensator yet". That is still true, and nothing open tracked it.
-A census of the 23 entries in `SYSCALL_REGISTRY` finds `reversible` False on all of them, and
-`compensate=` appears nowhere in `aindy-apps-monolith`. So:
+**The gap, measured.** `undo_run_effects` selects `EffectRecord.execution_id == eu.id`. The only
+production writer, `effect_ledger.resolve_effect_record`, never sets `execution_id`. Probe through
+the real dispatcher, best case (an `EXACTLY_ONCE` syscall with a compensator, scoped to the unit's
+own id): the handler ran once, the second call replayed, the row read `execution_id=None`, undo
+returned an empty summary, and the compensator ran 0 times. So:
 
-- `sys.v1.agent.undo` reports every recorded effect as `irreversible`, unless a consumer registers
-  a syscall with `compensate=`.
-- The `AGENT-HARDEN-6` Verifier's rollback on `VERIFY_FAILED` calls the same engine, so it surfaces
-  those effects and reverses none of them.
+- `sys.v1.agent.undo` returns empty for every run, and consumer `compensate=` hooks are unreachable.
+  It does not report effects as `irreversible`, because it never sees them.
+- The `AGENT-HARDEN-6` Verifier's rollback on `VERIFY_FAILED` calls the same engine, so it is a no-op.
 
-**Why it matters.** The behaviour is honest at runtime, since every effect is surfaced rather than
-skipped. The risk was in the description: `README.md` said undo could "walk back a run's recorded
-side effects", which reads as a capability a bare install has. The README and
-`docs/runtime/SYSCALL_SYSTEM.md` §5 now state the limit.
+**Why every test stayed green.** `test_effect_compensation.py` seeds `execution_id` by hand, and
+`test_agent_vm_execution.py` replaces `undo_run_effects` with a stub. Nothing drives gate → undo.
+`populate execution_id on the writer` was listed as a follow-up under IDEM-10 and never done.
 
-**To close.** Ship a first-party compensator where the reversal is safe, or record a decision that
-compensators stay consumer-owned. `AGENT-HARDEN-3` names `memory.write` → delete as the obvious
-first candidate. A compensator receives the effect's recorded outcome, not its original input.
+**What linking alone will not fix:**
+
+1. **Scope.** The tool seam's `tool_context` dispatch passes a run id as the unit, where undo wants
+   `eu.id`, so the writer needs the EU-by-source lookup the IDEM-10 note names. `invoke_tool_syscall`
+   passes no run id at all.
+2. **Action type.** The tool seam and the deferred Nodus path record `memory.write`. Compensators
+   are looked up in `SYSCALL_REGISTRY`, which holds `sys.v1.memory.write`, so those rows would read
+   `irreversible` even with a compensator declared.
+3. **Coverage.** Nodus deferred writes create a ledger row only under `AINDY_MEMORY_IDEMPOTENCY` or
+   durable continuation, and those rows hold no node id. A run's memory writes can be invisible to undo.
+4. **Compensator inputs.** The hook gets `(effect, context)` with no session and no tenant, and the
+   Verifier passes `context=None`.
+5. **Safety of the first compensator.** `memory.write` → hard delete cascades to history, trace
+   memberships, causal edges and links, and may destroy work other runs built on that node.
+6. **Policy.** Once linked, the Verifier would delete memory automatically on `VERIFY_FAILED`, a
+   behaviour no deployment has ever seen. That needs its own decision and a default.
+
+**To close.** Undo finds a real effect through the real gate, proven by a test that does not seed
+`execution_id`, and at least one first-party compensator reverses it.
 
 ## EFFECT-PRECONDITION-1 — an effect cannot declare the version of the world it expects
 

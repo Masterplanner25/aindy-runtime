@@ -213,9 +213,11 @@ class SyscallEntry:
     execution_guarantee: str     # defaults to "AT_LEAST_ONCE"
 ```
 
-**`compensate` is opt-in.** No syscall in the runtime's own registry declares one, so on a bare
-runtime `sys.v1.agent.undo` reports every recorded effect as `irreversible`. Reversal happens only
-for syscalls a consumer registers with `compensate=`.
+**`sys.v1.agent.undo` does not currently reverse real effects (`UNDO-COMPENSATORS-1`).** It selects
+effects by `EffectRecord.execution_id`, and nothing in production sets that column, so a run's
+effects are never found: undo returns an empty summary, not a list of `irreversible` effects. A
+consumer's `compensate=` hook is not reached either. Separately, no syscall in the runtime's own
+registry declares a compensator yet.
 
 ### VersionedSyscallRegistry
 
