@@ -1745,6 +1745,38 @@ inside it:**
 
 ---
 
+## Entry 049 — 2026-11-04
+
+**Trigger:** `v2.31.0` release tag (`sandbox-escape-linux.yml`, run `41884879519`).
+**Commit:** `4f6400f` (release PR #893's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:09d17d5e4c16d0a7a1eea690bcb7c6ab8616b211f8421e429e97c1bef5bd0ed2`, **the same as Entry 048**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.83s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `41884879519`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.30.0..v2.31.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #891 (DEC-108..110) makes `sys.v1.agent.undo` reverse real effects. The effect ledger now links each
+  row to its execution unit, `execute_tool` binds the run around a tool call, and
+  `sys.v1.memory.write` gains a compensator that deletes the node it wrote. None of it changes
+  isolation, and the compensator runs in the API process under undo's session, not in a sandbox.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. Both passed on `4f6400f` before the tag,
+along with Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `41884879873`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API and simple index both reported `2.31.0` (wheel + sdist), and the simple index lagged
+  the JSON API.
+- Boot Smoke on the published wheel installed on **attempt 3**. Attempts 1 and 2 hit that lag (`No
+  matching distribution found`, JSON API 200), and the job's retry waited 30 s each time, as designed.
+- The GitHub release is non-draft (18:20Z).
+- `publish.yml` is unchanged from `v2.30.0`.
+
 ## Entry 048 — 2026-11-04
 
 **Trigger:** `v2.30.0` release tag (`sandbox-escape-linux.yml`, run `41783230461`).
