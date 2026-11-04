@@ -36,7 +36,7 @@ runtime flips a default in the release after the evidence lands, and the row mov
 
 ## The order, and each row
 
-### 1. `AINDY_MEMORY_RECALL_OWN_SESSION` — `DB-NODUS-BUDGET-1` — **status: wired, value unconfirmed**
+### 1. `AINDY_MEMORY_RECALL_OWN_SESSION` — `DB-NODUS-BUDGET-1` — **status: default ON (DEC-106); the row is closed**
 
 | | |
 |---|---|
@@ -120,7 +120,7 @@ with the caller fix), `AINDY_NODUS_WARM_POOL` (`NODUS-WARMPOOL-1`), `AINDY_SYSCA
 
 | # | Flag | Entry | On your stack since | Evidence received | Default flipped in |
 |---|---|---|---|---|---|
-| 1 | `AINDY_MEMORY_RECALL_OWN_SESSION` | `DB-NODUS-BUDGET-1` | app soak 09-23→30: 1,339 recalls, 0 failures seen (log only); **counter window open since 2026-10-02T05:05Z on 2.25.0** | readout ≥ 2026-10-09 (read `/metrics/` before any rebuild: the counter resets) | flip when every `stage` reads 0 (DEC-083) |
+| 1 | `AINDY_MEMORY_RECALL_OWN_SESSION` | `DB-NODUS-BUDGET-1` | app, on since 2026-09-23 | counter window 10-02→10-09 (split across one recreate): 0 at every `stage`, 405 recalls, no pool exhaustion; no agent ran in it | next release (DEC-106) |
 | 2 | `AINDY_SYSCALL_IDEMPOTENCY_STRICT` | `FR-27` / `IDEM-11` | — | — | — |
 | 3 | `AINDY_DELEGATION_PRIVATE_MEMORY` | `RTR-4` | — | — | — |
 | 4 | `AINDY_DURABLE_CONTINUATION` (+`_ALL`) | `DUR-1..4` | — | — | — |

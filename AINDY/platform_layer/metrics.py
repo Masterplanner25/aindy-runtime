@@ -158,7 +158,7 @@ tool_args_validation_total = Counter(
 # none); `stage` is `recall` (the recall itself failed and returned an empty context),
 # `own_session` (AINDY_MEMORY_RECALL_OWN_SESSION could not open its session and fell back to the
 # caller's; the recall still ran) or `setup` (the pipeline failed before the recall started).
-# Zero across a soak window is the absence signal for flipping AINDY_MEMORY_RECALL_OWN_SESSION.
+# Zero across a soak window was the absence signal for flipping AINDY_MEMORY_RECALL_OWN_SESSION (DEC-083, DEC-106).
 memory_recall_failures_total = Counter(
     "aindy_memory_recall_failures_total",
     "Memory recalls that failed or degraded, by calling site and stage (recall | own_session | setup).",
