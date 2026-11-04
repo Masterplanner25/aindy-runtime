@@ -404,8 +404,10 @@ def _settle_embedding_logs(*, yes: bool, batch_size: int) -> NoReturn:
     """Close embedding job rows stranded `pending` before FR-56 (one-time, operator-run).
 
     Before the fix, an embedding job submitted while the scheduler ran was recorded and
-    never executed; the sweep embedded the node anyway. Those rows count against the async
-    admission caps. Settles only a never-started row whose node is already embedded, as
+    never executed; the sweep embedded the node anyway. Such a row counts against the async
+    admission caps until `_cleanup_stale_logs` fails it, an hour or two after creation, and this
+    never takes a `failed` row (DEC-105), so it finds only rows younger than that. Settles only
+    a never-started row whose node is already embedded, as
     `success` with `result.superseded_by`. Dry-run unless --yes. Requires DATABASE_URL.
     """
     from AINDY.config import settings
@@ -928,8 +930,9 @@ def main() -> None:
         description=(
             "One-time cleanup for deployments that ran a version before FR-56, where an "
             "embedding job submitted while the scheduler ran was recorded 'pending' and "
-            "never executed (the sweep embedded the node anyway). Those rows count against "
-            "the async admission caps. Settles only a never-started "
+            "never executed (the sweep embedded the node anyway). Such a row counts against "
+            "the async admission caps until the hourly stale cleanup fails it, and a failed "
+            "row is not settled, so expect to find few or none. Settles only a never-started "
             "memory.generate_embedding row whose node is already embedded, as 'success' "
             "with result.superseded_by. Reports without changing anything unless --yes. "
             "Requires DATABASE_URL."
