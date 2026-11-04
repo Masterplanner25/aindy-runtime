@@ -14386,7 +14386,7 @@ while checking the README's claims against the code.
 **★ Found at the release: undo has no HTTP door.** It is off `_DISPATCH_CAPABILITY_SCOPES` and no route
 calls it, so only in-process code or an operator's `AINDY_MCP_SERVER_TOOLS` can reach it. DEC-110 leans
 on an explicit undo, so an operator reading a `VERIFY_FAILED` report has no way to act on it over HTTP.
-Not built: a route is a new delete surface and needs a scope, so it is the owner's call.
+Not built, by decision (DEC-111): a route waits until a failed run actually needs reversing.
 
 **What shipped.** The ledger links each effect to its execution unit (DEC-108), `sys.v1.memory.write`
 has a compensator that refuses a node something was built on (DEC-109), and the Verifier reports
