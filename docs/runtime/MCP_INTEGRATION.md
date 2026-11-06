@@ -1,7 +1,7 @@
 ---
 title: "MCP Integration (client-side)"
 api_version: "1.0"
-last_verified: "2026-10-14"
+last_verified: "2026-11-06"
 status: current
 owner: "platform-team"
 ---
@@ -116,11 +116,13 @@ Claude Desktop config (`claude_desktop_config.json`) points `command`/`args` at 
   (`TENANT_VIOLATION`, `failure_class: permission`) before dispatch and before an execution unit is
   claimed. An absent one is filled with the caller's, so handlers that require the key work.
   This holds for any allowlisted syscall, including app handlers that read `payload["user_id"]`.
-- **Capability is inferred from the syscall's name.** A tool is granted exactly
-  `_infer_dispatch_capability(name)` (`sys.v1.work.context` → `work.context`). A syscall
-  registered under a different capability is refused with `requires capability …`. That is
-  deliberate least-privilege (`register_syscall`'s docstring). Tools appear as `nodus_<domain>_<action>`; that prefix comes from
-  `nodus-mcp`'s `syscall_entry_to_tool`.
+- **A tool is granted the capability its syscall declares, and nothing else (DEC-112).** The
+  allowlist decides what is exposed, so naming a syscall in `AINDY_MCP_SERVER_TOOLS` is enough
+  to make it callable, whatever its capability is called. Before DEC-112 the grant was inferred
+  from the name, which refused `memory.search`, `memory.tree`, `memory.trace` and
+  `memory.delete`. Other callers of `dispatch_syscall` without `capability=` still infer it
+  (`register_syscall`'s docstring). Tools appear as `nodus_<domain>_<action>`; that prefix comes
+  from `nodus-mcp`'s `syscall_entry_to_tool`.
 
 ### SSE transport + per-session multi-tenant (MEB-3a)
 

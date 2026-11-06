@@ -198,11 +198,15 @@ def _refusal_envelope(syscall_name: str, message: str, failure_class: str) -> di
     }
 
 
-def _make_handler(syscall_name: str, configured_user_id: Optional[str]):
+def _make_handler(syscall_name: str, configured_user_id: Optional[str], capability: str):
     """A sync MCP tool handler that dispatches one syscall.
 
     Dispatches as the per-session identity when one was resolved (multi-tenant SSE), else
     as the single configured identity (stdio / non-multi-tenant SSE).
+
+    ``capability`` is the one the syscall declares (DEC-112). Left to inference from the name,
+    ``sys.v1.memory.search`` was granted ``memory.search`` and refused, because it declares
+    ``memory.read``.
     """
 
     def _handler(args: dict) -> dict:
@@ -230,10 +234,13 @@ def _make_handler(syscall_name: str, configured_user_id: Optional[str]):
         # envelope shape the dispatcher uses, so the MCP client sees one error contract.
         try:
             with get_resource_manager().owned_execution(str(user_id)) as eu_id:
-                # db=None → the syscall handler opens/closes its own session. Least-privilege
-                # capability is inferred from the syscall name inside dispatch_syscall.
+                # db=None → the syscall handler opens/closes its own session.
                 return dispatch_syscall(
-                    syscall_name, payload, user_id=user_id, execution_unit_id=eu_id
+                    syscall_name,
+                    payload,
+                    user_id=user_id,
+                    capability=capability,
+                    execution_unit_id=eu_id,
                 )
         except ResourceLimitError as exc:
             logger.warning("[mcp-server] %s refused: %s", syscall_name, exc)
@@ -255,7 +262,9 @@ def build_registry(configured_user_id: Optional[str], allowlist: list[str]):
             logger.warning("[mcp-server] allowlisted syscall %r is not registered; skipping", name)
             continue
         registry.register(
-            syscall_entry_to_tool(name, entry, handler=_make_handler(name, configured_user_id))
+            syscall_entry_to_tool(
+                name, entry, handler=_make_handler(name, configured_user_id, entry.capability)
+            )
         )
         exposed.append(name)
     logger.info("[mcp-server] exposing %d syscall(s): %s", len(exposed), ", ".join(exposed) or "(none)")

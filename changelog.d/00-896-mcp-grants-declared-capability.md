@@ -1,0 +1,6 @@
+### Fixed — MCP tools get the capability their syscall declares; three default tools were always refused (`MCP-GRANT-1`, DEC-112, #896)
+
+- **Read before upgrading if you run `aindy-runtime mcp-server` with writes on or a custom allowlist.** With `AINDY_MCP_SERVER_ALLOW_WRITES`, `sys.v1.memory.delete` now really hard-deletes; until now it was refused on every call. Any other syscall named in `AINDY_MCP_SERVER_TOOLS` whose capability differs from its name also starts working, including app syscalls. Check that list. A server on the read-only default gains only the three reads below.
+- `sys.v1.memory.search`, `.tree` and `.trace` were refused on every MCP call. The server inferred the grant from the name (`memory.search`), and they declare `memory.read`. They were in its own default list, and the test mocked the dispatcher, so it never reached the check.
+- Each tool still holds exactly one capability, and the allowlist still decides what is exposed. Other callers of `dispatch_syscall` without `capability=` (the Nodus `sys()` seam, extension workers) still infer it from the name.
+- `memory.tree` and wildcard `memory.list` work now but may return little: nodes written by memory capture have no stored path (`MEM-PATH-NULL-1`, open). `memory.read` with a query or tags does not need one.
