@@ -102,7 +102,9 @@ def _drive(name: str, eu_id: str, payload: dict) -> object:
     from AINDY.kernel import syscall_dispatcher as D
     from AINDY.kernel import syscall_registry as R
 
-    caller_id = str(uuid.uuid4())
+    # One user per execution unit, as in production. A fresh user per call on a shared unit is the
+    # cross-tenant collision the ledger refuses (DEC-118), so a replay would never happen.
+    caller_id = str(uuid.uuid5(uuid.NAMESPACE_URL, eu_id))
 
     def _one(_i: int):
         dispatcher = D.SyscallDispatcher()

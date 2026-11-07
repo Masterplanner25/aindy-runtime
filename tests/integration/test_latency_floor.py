@@ -71,7 +71,9 @@ def _effect_median_ms(monkeypatch) -> float:
     name, runs = _register_probe()
     eu = str(uuid.uuid4())
     dispatcher = D.SyscallDispatcher()
-    ctx = R.SyscallContext(execution_unit_id=eu, user_id=str(uuid.uuid4()), capabilities=["test.budget"],
+    # One user per execution unit, as in production. A fresh user per call on a shared unit is the
+    # cross-tenant collision the ledger refuses (DEC-118), so a replay would never happen.
+    ctx = R.SyscallContext(execution_unit_id=eu, user_id=str(uuid.uuid5(uuid.NAMESPACE_URL, eu)), capabilities=["test.budget"],
                            trace_id="latency")
     samples = []
     try:
