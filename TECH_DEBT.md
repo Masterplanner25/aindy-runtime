@@ -17141,7 +17141,7 @@ work is a build, not another audit.
 
 ## MCP-GRANT-1 — three of the five default MCP tools were refused on every call
 
-**Status: CLOSED (2026-11-06)** — DEC-112; unreleased until the next tag. Found by a session using the
+**Status: CLOSED (2026-11-06)** — DEC-112; ships in 2.31.1. Found by a session using the
 app's MCP server from the Nodus repo.
 
 **What was wrong.** `_make_handler` called `dispatch_syscall` without `capability=`, so the grant was
