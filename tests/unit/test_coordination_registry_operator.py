@@ -76,13 +76,10 @@ def test_an_api_key_without_platform_admin_is_refused(runtime_only_client, signe
 def test_every_route_that_touches_the_registry_is_gated(runtime_only_app):
     """Derived from the router's source, so a new registry route can't arrive without the gate."""
     import ast
+    import importlib
     import inspect
 
-    from AINDY.routes import coordination_router as module_router
-    import sys
-
-    source = inspect.getsource(sys.modules["AINDY.routes.coordination_router"])
-    del module_router
+    source = inspect.getsource(importlib.import_module("AINDY.routes.coordination_router"))
     touching = {}
     for node in ast.parse(source).body:
         if not isinstance(node, ast.FunctionDef):
@@ -125,16 +122,16 @@ def test_the_graph_leaves_the_registry_out_when_asked(db_session):
 def test_the_graph_route_passes_the_callers_authority(
     is_admin, expected, runtime_only_client, signed_in, mock_db, monkeypatch
 ):
-    from AINDY.routes import coordination_router  # noqa: F401
-    import sys
+    import importlib
 
+    router_module = importlib.import_module("AINDY.routes.coordination_router")
     seen = {}
 
     def spy(db, *, user_id=None, include_registry=True, **_):
         seen["include_registry"] = include_registry
         return {"nodes": [], "edges": []}
 
-    monkeypatch.setattr(sys.modules["AINDY.routes.coordination_router"], "coordination_graph", spy)
+    monkeypatch.setattr(router_module, "coordination_graph", spy)
     signed_in(_principal(is_admin=is_admin))
 
     assert runtime_only_client.get("/coordination/graph").status_code == 200

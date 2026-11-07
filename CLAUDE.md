@@ -9,8 +9,7 @@ pointers, never the narrative. Companions:
 - **`docs/governance/TRUSTING_A_GREEN_CHECK.md`** — the 15-variant catalogue of checks that looked
   green and were not, plus the vendored-shim and test-mode-short-circuit rules. **Read before citing
   CI as evidence.**
-- **`TECH_DEBT.md`** — the full record behind every registry id below (1 MB; consistently 2–5×
-  longer than the line here). `docs/governance/DECISION_LOG.md` — the `DEC-NNN` record.
+- **`TECH_DEBT.md`** — the full record behind every registry id below (1 MB). `docs/governance/DECISION_LOG.md` — the `DEC-NNN` record.
 - **`docs/archive/CLAUDE_md_2026-09-16_pre_trim.md`** — this file before it was trimmed from
   153 KB (2026-09-16). Every rule below that reads terse had a paragraph of evidence there.
 - **`CODEX.md`** is a pointer here, not a copy — do not reintroduce content there.
