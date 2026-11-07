@@ -2259,3 +2259,11 @@ Inference refused `memory.search`, `memory.tree` and `memory.trace`, three of th
 
 **Why**
 Each of these trusted a value the caller can write, past the point where the caller was authenticated. The token check sits at the seam, not as a list of refused state keys, because more than one route reaches that seam and a list has to be kept complete. Expiry is left out because a crash re-drive can replay its own recorded steps on an expired token, and `execute_tool` still checks expiry before any tool runs. No user at all stays unfiltered on those reads, because that is trusted in-process code.
+
+### DEC-114
+**Status:** `accepted` (2026-11-07 — decided by the owner: "yes")
+
+**Decision — The agent registry's routes need an operator: `GET /agents`, `GET /agents/status`, `POST /agents/register`, heartbeat and deregister. `GET /graph` stays open, and shows a non-operator only the agents in their own events. The runtime's own self-registration and delegation ranking are unchanged. No owner column.**
+
+**Why**
+`agent_registry` has no owner, so any signed-in user could read every agent's `current_state`, change any agent, or add one that delegation would rank. An owner column means a migration and a design for agents shared between tenants, for a feature with no users: on the app's stack on 2026-11-07 the table held only the built-in local agent, none of 49 agent runs had been delegated, and `request_metrics` shows only one or two calls per route out of about 463,000 requests. No app client, ui-kit or SDK code calls these routes. The cost is that a non-admin caller now gets 403, which includes the app's `scripts/smoke_autonomy.py` if run with a non-admin login. An owner column can still be added if a real need appears.

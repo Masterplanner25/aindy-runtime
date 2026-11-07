@@ -45,15 +45,17 @@ def as_session(runtime_only_app):
 
 
 # One probe per gate. The assertion is always 403-or-not, never that the handler succeeds.
-_AGENT = ("GET", "/coordination/agents", None)
-_AGENT_WRITE = ("POST", "/coordination/agents/register", {"agent_id": "a1", "role": "worker"})
+# The registry routes also need an operator (DEC-114, test_coordination_registry_operator.py), and
+# that gate would answer 403 whatever the scope. These two are gated on scope alone.
+_AGENT = ("GET", "/coordination/graph", None)
+_AGENT_INBOX = ("GET", "/coordination/messages/inbox", None)
 _RUNS = ("GET", "/coordination/runs", None)
 _SHARED_MEMORY = ("GET", "/coordination/memory/shared", None)
 _MY_AGENTS = ("GET", "/platform/agents", None)
 _CREATE_AGENT = ("POST", "/platform/agents", {"name": "Helper"})
 
-_ALL = [_AGENT, _AGENT_WRITE, _RUNS, _SHARED_MEMORY, _MY_AGENTS, _CREATE_AGENT]
-_IDS = ["coord-read", "coord-register", "coord-runs", "shared-memory", "my-agents", "create-agent"]
+_ALL = [_AGENT, _AGENT_INBOX, _RUNS, _SHARED_MEMORY, _MY_AGENTS, _CREATE_AGENT]
+_IDS = ["coord-graph", "coord-inbox", "coord-runs", "shared-memory", "my-agents", "create-agent"]
 
 
 def _call(client, probe):
@@ -87,7 +89,7 @@ def test_a_scopeless_session_is_refused(probe, runtime_only_client, as_session, 
     "probe, attr",
     [
         (_AGENT, "AGENT_RUN"),
-        (_AGENT_WRITE, "AGENT_RUN"),
+        (_AGENT_INBOX, "AGENT_RUN"),
         (_RUNS, "EXECUTION_READ"),
         (_SHARED_MEMORY, "MEMORY_READ"),
         (_MY_AGENTS, "AGENT_RUN"),
@@ -157,25 +159,25 @@ def test_agent_authority_does_not_confer_memory_reads(
     )
 
 
-def test_memory_authority_does_not_confer_agent_registration(
+def test_memory_authority_does_not_confer_agent_authority(
     runtime_only_client, as_session, mock_db
 ):
     """And the converse, or the split above is one-directional theatre."""
     as_session(_scopes().MEMORY_READ, _scopes().MEMORY_WRITE)
 
-    response = _call(runtime_only_client, _AGENT_WRITE)
+    response = _call(runtime_only_client, _AGENT_INBOX)
 
     assert response.status_code == 403, (
-        "a memory-scoped caller registered a coordination agent"
+        "a memory-scoped caller reached a coordination route"
     )
 
 
-def test_execution_read_does_not_confer_agent_registration(
+def test_execution_read_does_not_confer_agent_authority(
     runtime_only_client, as_session, mock_db
 ):
     as_session(_scopes().EXECUTION_READ)
 
-    response = _call(runtime_only_client, _AGENT_WRITE)
+    response = _call(runtime_only_client, _AGENT_INBOX)
 
     assert response.status_code == 403, response.text[:300]
 
