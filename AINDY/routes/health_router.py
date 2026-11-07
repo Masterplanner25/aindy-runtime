@@ -4,8 +4,9 @@ import uuid as _uuid
 from asyncio import TimeoutError as AsyncTimeoutError
 from asyncio import gather, to_thread, wait_for
 from datetime import datetime, timezone
+from typing import Optional
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
 
@@ -18,6 +19,7 @@ from AINDY.platform_layer.domain_health import domain_health_registry
 from AINDY.platform_layer.deployment_contract import redis_required, worker_required
 from AINDY.platform_layer.registry import get_degraded_domains
 from AINDY.platform_layer.rate_limiter import limiter
+from AINDY.services.auth_service import get_optional_user
 
 router = APIRouter(tags=["Health"])
 logger = logging.getLogger(__name__)
@@ -417,13 +419,15 @@ def _domain_health_payload() -> tuple[int, dict]:
 async def report_client_error(
     request: Request,
     payload: dict = Body(default={}),
+    session: Optional[dict] = Depends(get_optional_user),
 ):
     """
     Receive a frontend error report and write it as a SystemEvent.
     Returns 204 (no content) - the client does not need a response body.
     Failure responses use explicit _http_status passthrough.
     Authentication is optional: unauthenticated reports are accepted so
-    errors during login/boot can be captured.
+    errors during login/boot can be captured. The report's owner comes from the session only,
+    never from the body, because anyone can post here.
     """
     db = SessionLocal()
     try:
@@ -432,7 +436,7 @@ async def report_client_error(
                 queue_system_event(
                     db=db,
                     event_type="client.error.reported",
-                    user_id=payload.get("user_id"),
+                    user_id=session.get("sub") if session else None,
                     trace_id=payload.get("trace_id") or str(_uuid.uuid4()),
                     source="frontend",
                     payload={
@@ -469,6 +473,7 @@ async def report_client_error(
 async def report_client_vitals(
     request: Request,
     payload: dict = Body(default={}),
+    session: Optional[dict] = Depends(get_optional_user),
 ):
     """
     Receive Web Vitals measurements from the frontend.
@@ -482,7 +487,7 @@ async def report_client_vitals(
                 queue_system_event(
                     db=db,
                     event_type="client.vitals.reported",
-                    user_id=payload.get("user_id"),
+                    user_id=session.get("sub") if session else None,
                     trace_id=payload.get("session_id") or str(_uuid.uuid4()),
                     source="frontend",
                     payload={

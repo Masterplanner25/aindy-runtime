@@ -64,6 +64,39 @@ _registry_lock = threading.Lock()
 _NODUS_WORKFLOWS: dict[str, dict[str, Any]] = {}
 
 
+class NodusWorkflowOwnerError(Exception):
+    """The name belongs to someone else, and this caller may not replace it."""
+
+
+def _refuse_another_owner(
+    name: str, existing: dict[str, Any] | None, acting_user: str | None, db: Session | None
+) -> None:
+    """Refuse when the name is taken by anyone but `acting_user`. A workflow with no creator
+    came from a plugin or an earlier version, so nobody passes this: an operator, who doesn't
+    enforce it, is the one who can replace it.
+
+    The table is read too, because the in-memory registry is per process. An unreadable table
+    is a refusal.
+    """
+    if existing is not None and existing.get("created_by") != acting_user:
+        raise NodusWorkflowOwnerError(name)
+    if db is None:
+        return
+    from AINDY.db.models.nodus_workflow import NodusWorkflow
+
+    try:
+        row = (
+            db.query(NodusWorkflow.created_by)
+            .filter(NodusWorkflow.name == name, NodusWorkflow.is_active.is_(True))
+            .first()
+        )
+    except Exception as exc:
+        db.rollback()
+        raise NodusWorkflowOwnerError(name) from exc
+    if row is not None and row[0] != acting_user:
+        raise NodusWorkflowOwnerError(name)
+
+
 def _content_hash(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
@@ -105,12 +138,17 @@ def register_nodus_workflow(
     allow_legacy_missing_provenance: bool = False,
     overwrite: bool = False,
     db: Session | None = None,
+    created_by: str | None = None,
+    enforce_owner: bool = False,
 ) -> dict[str, Any]:
     """Validate, compile, and register a Nodus workflow at runtime.
 
     Thread-safe. If *db* is provided the ``.nd`` source is also persisted to the
     ``nodus_workflows`` table so the registration survives a restart. Pass
     ``db=None`` from the boot loader (it re-registers from already-persisted rows).
+
+    ``enforce_owner`` is for a caller acting for a user: it refuses a name someone else holds
+    (``NodusWorkflowOwnerError``). Replacing a workflow keeps its original creator.
     """
     validate_nodus_workflow(name, source, kind)
     owner_class = validate_extension_owner_class(owner_class)
@@ -142,6 +180,9 @@ def register_nodus_workflow(
             raise ValueError(
                 f"nodus workflow {name!r} already exists; set overwrite=true to replace"
             )
+        existing = _NODUS_WORKFLOWS.get(name)
+        if enforce_owner:
+            _refuse_another_owner(name, existing, created_by, db)
 
         # Validate (parse the workflow / extract its DAG) before recording
         # metadata so a parse failure leaves the registry unchanged.
@@ -158,7 +199,7 @@ def register_nodus_workflow(
             "abi_stability": extension_surface_stability(SURFACE_FLOW),
             "capabilities": list(capabilities),
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "created_by": None,
+            "created_by": existing.get("created_by") if existing else created_by,
             "dynamic": True,
             "owner_class": owner_class,
             "trust_class": "source-nodus-workflow",
@@ -182,6 +223,7 @@ def register_nodus_workflow(
             provenance=resolved_provenance,
             overwrite=overwrite,
             db=db,
+            created_by=created_by,
         )
 
     logger.info(
@@ -214,6 +256,8 @@ def _persist_workflow(
     try:
         existing = db.query(NodusWorkflow).filter(NodusWorkflow.name == name).first()
         if existing:
+            if not existing.is_active:
+                existing.created_by = str(created_by) if created_by else None
             existing.source = source
             existing.kind = kind
             existing.version = version
@@ -323,6 +367,7 @@ def rehydrate_nodus_workflows(db: Session) -> int:
                 allow_legacy_missing_provenance=True,
                 overwrite=True,
                 db=None,  # already persisted; do not re-write
+                created_by=row.created_by,
             )
             count += 1
         except Exception as exc:

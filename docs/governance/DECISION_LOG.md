@@ -2275,3 +2275,13 @@ Each of these trusted a value the caller can write, past the point where the cal
 
 **Why**
 The app is the deployment we know has several users, so publishing first would have pointed at a stack that was still exposed. It went live on 2.31.3 at 08:14:02Z on 2026-11-07. The repository is public, so a record of an open finding is itself a disclosure.
+
+### DEC-116
+**Status:** `accepted` (2026-11-07 — the owner asked for the fix: "Proceed with the unfixed audit findings". This shape is Claude Code's, reviewed in #907)
+
+**Decision — Webhook delivery, script names and workflow names answer to an owner. A subscription receives its creator's events unless the creator is an admin at delivery, or it has no creator. A script or workflow name can be replaced by whoever registered it, or by an operator. Something with no recorded owner can only be replaced by an operator. No schema change.**
+
+**Why**
+These are shared registries reached with a scope that says nothing about other users: `webhook.manage` and `flow.execute`. Reading `is_admin` at delivery, cached for 60 seconds, means existing subscriptions need no migration and a demotion takes effect without touching them. A column would have been more explicit, but it costs a schema step for a fact the user row already holds. The workflow check reads the table as well as memory because the registry is per process, and an unreadable table is a refusal. `nodus_workflows.created_by` already existed and was never written, so older rows have no owner and fall to operators, which is the safe side for workflows a plugin registered.
+
+**Not decided here:** `/watcher/signals` trusts a shared key to name the user. That needs a design for per-user watcher keys, and it stays open until the owner picks one.

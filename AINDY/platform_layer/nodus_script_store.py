@@ -9,6 +9,10 @@ _NODUS_SCRIPT_REGISTRY: dict[str, dict[str, Any]] = {}
 _SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts" / "nodus"
 
 
+class NodusScriptOwnerError(Exception):
+    """The name belongs to someone else, and this caller may not replace it."""
+
+
 def get_script_record(name: str) -> dict[str, Any] | None:
     with _script_lock:
         record = _NODUS_SCRIPT_REGISTRY.get(name)
@@ -52,7 +56,15 @@ def store_script(
     description: str | None,
     uploaded_at: str | None,
     uploaded_by: str | None,
+    enforce_owner: bool = False,
 ) -> dict[str, Any]:
+    """Store a script. With `enforce_owner`, only its uploader may replace an existing one.
+
+    A script restored from disk has no recorded uploader, so nobody passes that check: an
+    operator, who doesn't enforce it, is the one who can replace it.
+    """
+    if enforce_owner:
+        load_script_source(name)  # a file on disk is a registered name too
     meta = {
         "name": name,
         "content": content,
@@ -62,13 +74,19 @@ def store_script(
         "uploaded_by": uploaded_by,
     }
     with _script_lock:
+        existing = _NODUS_SCRIPT_REGISTRY.get(name)
+        if enforce_owner and existing and existing.get("uploaded_by") != uploaded_by:
+            raise NodusScriptOwnerError(name)
         _NODUS_SCRIPT_REGISTRY[name] = meta
     return dict(meta)
 
 
 def script_exists(name: str) -> bool:
+    """Registered here or on disk. After a restart the registry starts empty."""
     with _script_lock:
-        return name in _NODUS_SCRIPT_REGISTRY
+        if name in _NODUS_SCRIPT_REGISTRY:
+            return True
+    return load_script_source(name) is not None
 
 
 def list_script_metadata(*, include_disk: bool = True) -> list[dict[str, Any]]:
