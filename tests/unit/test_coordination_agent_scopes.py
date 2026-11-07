@@ -9,9 +9,9 @@ agent CRUD were reachable by anyone who could authenticate.
 `require_platform_admin_access`. That is deliberate — FR-12b exists so an ordinary user can own
 an agent — but it left the five routes with no authority check at all.
 
-★ The sharpest test here is `test_the_only_identity_only_routes_left_are_the_self_service_two`.
+★ The sharpest test here is `test_the_only_identity_only_routes_left_are_self_service`.
 It turns the entry's closing claim into something executable: after this change the whole
-application has exactly two routes gated on identity alone, and both act only on the caller's
+application has only a named few routes gated on identity alone, and all act only on the caller's
 own account, where a scope answers nothing.
 """
 from __future__ import annotations
@@ -273,15 +273,16 @@ def test_the_gates_used_are_the_four_intended_ones(runtime_only_app):
     }, f"unexpected gate set: {sorted(seen)}"
 
 
-def test_the_only_identity_only_routes_left_are_the_self_service_two(runtime_only_app):
+def test_the_only_identity_only_routes_left_are_self_service(runtime_only_app):
     """★ The entry's closing claim, made executable.
 
-    Two routes remain gated on identity alone, and both act **only on the caller's own
-    account** — logging yourself out and changing your own password. A scope cannot answer
-    "may you do this to yourself"; it would be a permission nobody could ever be denied.
+    The routes still gated on identity alone act **only on the caller's own account** —
+    logging yourself out, changing your own password, and managing your own watcher keys
+    (DEC-117). A scope cannot answer "may you do this to yourself"; it would be a permission
+    nobody could ever be denied.
 
     Written as an equality rather than a count so that adding an ungated route fails here, and
-    so that gating one of these two also fails here — the second is a decision someone should
+    so that gating one of these also fails here — the second is a decision someone should
     have to make on purpose, not something that happens while tidying.
     """
     identity_only = set()
@@ -297,4 +298,7 @@ def test_the_only_identity_only_routes_left_are_the_self_service_two(runtime_onl
     assert identity_only == {
         "POST /auth/logout",
         "POST /auth/password/change",
+        "POST /watcher/keys",
+        "GET /watcher/keys",
+        "DELETE /watcher/keys/{key_id}",
     }, f"identity-only routes changed: {sorted(identity_only)}"
