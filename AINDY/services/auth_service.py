@@ -667,8 +667,14 @@ def enforce_api_key_scope(scope: str, *alternatives: str):
     return _check
 
 
-def _resolve_platform_key_as_user(raw_key: str, db: Session) -> dict:
-    """Validate a platform API key and return a user dict compatible with get_current_user."""
+def _resolve_platform_key_as_user(
+    raw_key: str, db: Session, *, allow_watcher_only: bool = False
+) -> dict:
+    """Validate a platform API key and return a user dict compatible with get_current_user.
+
+    A key holding only `watcher.signals` is refused here unless the caller opts in, so every
+    route and transport that resolves a key is covered without knowing about it (DEC-117).
+    """
     import hashlib
     import json as _json
     from sqlalchemy import text as _text
@@ -701,6 +707,15 @@ def _resolve_platform_key_as_user(raw_key: str, db: Session) -> dict:
             scopes = []
     else:
         scopes = []
+
+    if not allow_watcher_only:
+        from AINDY.auth.api_key_auth import is_watcher_only
+
+        if is_watcher_only(scopes):
+            raise HTTPException(
+                status_code=403,
+                detail="This key only works on the watcher routes",
+            )
 
     return {
         "sub": str(record.user_id),

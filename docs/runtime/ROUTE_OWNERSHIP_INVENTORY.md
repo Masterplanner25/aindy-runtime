@@ -90,10 +90,11 @@ runtime state (scheduler, circuit breakers, queue, syscall registry) in ways tha
 make extraction impractical without a formal service layer.
 
 ### `watcher_router.py`
-Endpoints: `POST /watcher/signals`, `GET /watcher/signals`
+Endpoints: `POST /watcher/signals`, `GET /watcher/signals`, and `POST`, `GET`, `DELETE /watcher/keys`
 
-Receives activity signals from the headless Watcher process. Uses API key auth
-(`X-API-Key`). Delegates to `run_flow("watcher_signals_receive")` — the business
+Receives activity signals from the headless Watcher process. `/signals` takes a user's own key
+(`X-Platform-Key`, which acts only for its owner) or the deployment's shared key (`X-API-Key`,
+for services). `/keys` takes a signed-in session (DEC-117). Delegates to `run_flow("watcher_signals_receive")` — the business
 logic is in the flow, not the router.
 
 ### `observability_router.py`

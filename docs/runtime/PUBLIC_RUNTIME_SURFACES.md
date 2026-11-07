@@ -115,8 +115,9 @@ direct HTTP reliance.
   operators who need sandbox status without parsing the full `/health` blob.
   Also the backing source for the `aindy-runtime sandbox` CLI subcommand.
 - `POST /watcher/signals` / `GET /watcher/signals`
-  Watcher signal ingestion and query. Signal emission uses API key auth
-  (headless client process). Mounted in `ROOT_ROUTERS` at `/watcher`.
+  Watcher signal ingestion and query. A user's watcher sends its own key from
+  `POST /watcher/keys` in `X-Platform-Key`; a service sends the shared key in
+  `X-API-Key`, which can name any user (DEC-117). Mounted in `ROOT_ROUTERS` at `/watcher`.
   The watcher client process ships in `aindy-sdk` as `aindy_sdk.watcher`.
 - `/platform/flows*`
   Dynamic flow management remains experimental.

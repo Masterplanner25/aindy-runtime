@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "boot_mode": "runtime-only",
-  "route_count": 128,
+  "route_count": 131,
   "routes": [
     {
       "method": "GET",
@@ -859,6 +859,27 @@
       "path": "/ready",
       "tags": [
         "Health"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/watcher/keys",
+      "tags": [
+        "Watcher"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/watcher/keys",
+      "tags": [
+        "Watcher"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/watcher/keys/{key_id}",
+      "tags": [
+        "Watcher"
       ]
     },
     {

@@ -13,6 +13,7 @@ class Scopes:
     EVENT_EMIT      = "event.emit"
     WEBHOOK_MANAGE  = "webhook.manage"
     PLATFORM_ADMIN  = "platform.admin"
+    WATCHER_SIGNALS = "watcher.signals"
 
     ALL: list[str] = [
         FLOW_READ,
@@ -25,6 +26,7 @@ class Scopes:
         EVENT_EMIT,
         WEBHOOK_MANAGE,
         PLATFORM_ADMIN,
+        WATCHER_SIGNALS,
     ]
 
     #: HTTP-SCOPE-GAP-1 — the scopes a JWT *session* carries, derived from the user row.
@@ -56,6 +58,15 @@ class Scopes:
     #: Deliberately in NEITHER derived set: `memory.delete` (nothing in the client issues a
     #: DELETE against memory) and `event.emit` (nothing in the client emits directly). An API
     #: key can still be granted them explicitly; a browser session cannot inherit them.
+
+
+def is_watcher_only(scopes) -> bool:
+    """A key holding nothing but `watcher.signals`, which any user can mint for themselves.
+
+    Such a key works on the watcher routes and nowhere else (DEC-117). It lives on a user's
+    machine, and many routes would otherwise accept a key as a full session.
+    """
+    return set(scopes or []) == {Scopes.WATCHER_SIGNALS}
 
 
 #: Module-level alias so `grantable_scopes` reads without a forward reference to the class body.
