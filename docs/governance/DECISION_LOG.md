@@ -2267,3 +2267,11 @@ Each of these trusted a value the caller can write, past the point where the cal
 
 **Why**
 `agent_registry` has no owner, so any signed-in user could read every agent's `current_state`, change any agent, or add one that delegation would rank. An owner column means a migration and a design for agents shared between tenants, for a feature with no users: on the app's stack on 2026-11-07 the table held only the built-in local agent, none of 49 agent runs had been delegated, and `request_metrics` shows only one or two calls per route out of about 463,000 requests. No app client, ui-kit or SDK code calls these routes. The cost is that a non-admin caller now gets 403, which includes the app's `scripts/smoke_autonomy.py` if run with a non-admin login. An owner column can still be added if a real need appears.
+
+### DEC-115
+**Status:** `accepted` (2026-11-07 — decided by the owner: "wait until app adopts", then "yes High, request a CVE, go ahead add the security.md - turn on the private reporting if you can")
+
+**Decision — The advisory for the 2.31.2 and 2.31.3 tenant fixes (`GHSA-6r8r-pjjp-hpcv`) goes out after the app has adopted 2.31.3, rated High (CVSS 8.1), with a CVE. Reports come in through GitHub's private vulnerability reporting. Findings the audit made that aren't fixed stay out of public records until they ship.**
+
+**Why**
+The app is the deployment we know has several users, so publishing first would have pointed at a stack that was still exposed. It went live on 2.31.3 at 08:14:02Z on 2026-11-07. The repository is public, so a record of an open finding is itself a disclosure.

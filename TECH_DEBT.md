@@ -17200,3 +17200,45 @@ caller's own chain is still followed, and the caller's own ancestor wins beside 
 
 **Remaining.** The other `MemoryNodeDAO` reads, and handlers generally, have not been audited one by one. This
 gap was found by accident, so assume it isn't the only one. The tenant audit is offered, not built.
+
+## IDENTITY-BINDING-1 — a script could name the user it acted as
+
+**Status: CLOSED (2026-11-07)** — #900, DEC-113; ships in 2.31.2. Advisory `GHSA-6r8r-pjjp-hpcv`. Found by the
+tenant audit that followed `MEM-TRACE-SCOPE-1`.
+
+**What was wrong.** Each of these trusted a value the caller can write, past the point where the caller was
+authenticated:
+- A `user_id` inside the part of a payload a syscall forwards (`job.submit`, `flow.run`, `flow.execute_intent`,
+  `nodus.execute`). DEC-103 compared only the top level of the payload.
+- A recorded agent step, read by run id in the Nodus worker's replay path.
+- An execution unit, found by a task name the caller chose.
+- A user id that isn't a valid UUID, which got no owner filter on some memory reads. We found no tenant route to
+  such an identity.
+
+**Exposure, as far as we know.** Reproduced with real scripts in the real VM and seeded rows. Not driven end to
+end over HTTP. Live deployments' history was not audited for past use.
+
+**What shipped.** `forwarded_user_id_mismatch` refuses at the dispatcher and in `bind_payload_user_id`.
+`token_binds_run` ties a capability token to its run and user, and the adapter drops claims that don't belong to
+the caller. `_unit_belongs_to_another_user` and `_user_scoped_source_id` keep units apart. `_owner_only_scope`
+returns nothing for an unparseable user. Tests: `test_identity_binding.py`.
+
+**Remaining.** `AINDY_PAYLOAD_IDENTITY_DISPATCH=observe` still turns the dispatcher's refusal into a count. This
+entry covers what has shipped. The audit's other findings aren't recorded here until they are fixed.
+
+## COORD-REGISTRY-1 — any signed-in user could change the shared agent registry
+
+**Status: CLOSED (2026-11-07)** — #903, DEC-114; ships in 2.31.3. Advisory `GHSA-6r8r-pjjp-hpcv`. Found by the same
+audit.
+
+**What was wrong.** `agent_registry` has no owner column, and its routes checked only for a signed-in user. Any user
+could read every agent's `current_state`, which can hold run ids, change or delete any agent, or add one. From
+reading the code, not tested: a registered agent could be ranked for delegation of other users' runs.
+
+**Exposure, measured on the app's stack.** Read-only, on 2026-11-07: 1 row (the built-in local agent), 4 users, 0 of
+49 agent runs delegated.
+
+**What shipped.** Five `/apps/coordination/agents*` routes need an operator (`require_admin_principal`). `/graph` stays
+open and shows a non-operator no registry rows. Tests: `test_coordination_registry_operator.py`.
+
+**Remaining.** An owner column, if a tenant ever needs its own agents. That needs a migration and a design.
