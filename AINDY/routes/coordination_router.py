@@ -308,10 +308,9 @@ def get_coordination_run_children(
 
         user_id = normalize_uuid(current_user["sub"])
         parent = db.query(AgentRun).filter(AgentRun.id == normalize_uuid(parent_run_id)).first()
-        if parent is None:
+        # Someone else's run answers exactly like a missing one (DEC-118).
+        if parent is None or parent.user_id != user_id:
             raise HTTPException(status_code=404, detail=f"Parent run {parent_run_id} not found")
-        if parent.user_id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized to view this run")
         return [
             run_to_dict(run)
             for run in (

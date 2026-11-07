@@ -2295,3 +2295,14 @@ These are shared registries reached with a scope that says nothing about other u
 The SDK's watcher runs on the user's machine and needed `AINDY_API_KEY`, a server secret that can name any user. Ordinary users couldn't get a key of their own, because `/platform/keys` sits behind the operator gate. Opening that route wasn't an option: the `/platform` gate admits any key, and many routes accept a key as a full session, so a key any user can mint and leave on a laptop has to be confined. The refusal sits in the resolver so every route and transport is covered without knowing about it, and only the watcher routes opt out. Keys are managed from a session so a stolen key can't mint its replacement.
 
 **Declined:** making `X-API-Key` read a platform key too. The existing client would have worked with no release, but one header would then mean two kinds of authority.
+
+### DEC-118
+**Status:** `accepted` (2026-11-07 — the owner asked for the fix: "Proceed with the 2 low severitty audit items". This shape is Claude Code's, reviewed in #912)
+
+**Decision — (1) Someone else's agent run answers exactly like a missing one: 404, same detail, at `_get_owned_run`, the run-events lookup and `/coordination/runs/{id}/children`. (2) The effect ledger refuses a slot whose recorded tenant differs from the caller's (`EffectTenantMismatch`, counted `tenant_mismatch`). It does so before any outcome, including the reclaim that re-attributes a failed row. A row or caller with no tenant keeps today's behaviour. The action id is unchanged.**
+
+**Why**
+(1) A 403 beside a 404 told a caller which run ids are real. Run ids are UUIDs, so it was an oracle and not a way in, and the fix costs nothing.
+(2) The action id hashes the action, input and scope, never the tenant. Every scope that reaches it has been owner-bound since 2.31.2, so no cross-tenant collision is known, and this is defence in depth. If one ever happened, the ledger would hand one tenant another's cached result, or reclaim their failed row. Every call site already treats a ledger exception as "run without the gate", or refuses under `AT_MOST_ONCE`, and none of them completes the other row afterwards. So an exception is safe everywhere without touching the call sites.
+
+**Declined:** putting the tenant into the action id. It's the more complete fix, but every id would change across the upgrade, and a continuation that crosses it would re-run an effect its own ledger row had already recorded.

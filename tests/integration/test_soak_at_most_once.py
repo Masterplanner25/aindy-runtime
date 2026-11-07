@@ -58,7 +58,9 @@ def _drive(name: str, eu_id: str):
     def _one(_i: int):
         d = D.SyscallDispatcher()  # one per worker: a shared one would measure its own lock
         d._emit_syscall_event = lambda *a, **k: None
-        ctx = R.SyscallContext(execution_unit_id=eu_id, user_id=str(uuid.uuid4()),
+        # One user per execution unit, as in production. A fresh user per call on a shared unit is the
+        # cross-tenant collision the ledger refuses (DEC-118), so a replay would never happen.
+        ctx = R.SyscallContext(execution_unit_id=eu_id, user_id=str(uuid.uuid5(uuid.NAMESPACE_URL, eu_id)),
                                capabilities=["test.amo"], trace_id="amo-soak")
         with patch.object(D, "_get_rm", lambda: _OkRm()):
             return d.dispatch(name, {"x": 1}, ctx)

@@ -158,7 +158,9 @@ def _dispatch_counted(engine, name: str, eu_id: str, payload: dict) -> int:
     from AINDY.kernel import syscall_registry as R
 
     dispatcher = D.SyscallDispatcher()
-    ctx = R.SyscallContext(execution_unit_id=eu_id, user_id=str(uuid.uuid4()),
+    # One user per execution unit, as in production. A fresh user per call on a shared unit is the
+    # cross-tenant collision the ledger refuses (DEC-118), so a replay would never happen.
+    ctx = R.SyscallContext(execution_unit_id=eu_id, user_id=str(uuid.uuid5(uuid.NAMESPACE_URL, eu_id)),
                            capabilities=["test.budget"], trace_id="budget")
     with patch.object(D, "_get_rm", lambda: _OkRm()), count_work(engine) as work:
         envelope = dispatcher.dispatch(name, payload, ctx)
