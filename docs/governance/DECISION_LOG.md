@@ -2285,3 +2285,13 @@ The app is the deployment we know has several users, so publishing first would h
 These are shared registries reached with a scope that says nothing about other users: `webhook.manage` and `flow.execute`. Reading `is_admin` at delivery, cached for 60 seconds, means existing subscriptions need no migration and a demotion takes effect without touching them. A column would have been more explicit, but it costs a schema step for a fact the user row already holds. The workflow check reads the table as well as memory because the registry is per process, and an unreadable table is a refusal. `nodus_workflows.created_by` already existed and was never written, so older rows have no owner and fall to operators, which is the safe side for workflows a plugin registered.
 
 **Not decided here:** `/watcher/signals` trusts a shared key to name the user. That needs a design for per-user watcher keys, and it stays open until the owner picks one.
+
+### DEC-117
+**Status:** `accepted` (2026-11-07 — the owner chose per-user keys: "per-user keys". This shape is Claude Code's, reviewed in #908)
+
+**Decision — A watcher on a user's machine uses that user's own key. Any signed-in user can mint one at `/watcher/keys`, with the fixed scope `watcher.signals`. The signals belong to the key's owner. A key holding only that scope is refused everywhere except the watcher routes, at `_resolve_platform_key_as_user`. The shared `X-API-Key` stays, as a service credential.**
+
+**Why**
+The SDK's watcher runs on the user's machine and needed `AINDY_API_KEY`, a server secret that can name any user. Ordinary users couldn't get a key of their own, because `/platform/keys` sits behind the operator gate. Opening that route wasn't an option: the `/platform` gate admits any key, and many routes accept a key as a full session, so a key any user can mint and leave on a laptop has to be confined. The refusal sits in the resolver so every route and transport is covered without knowing about it, and only the watcher routes opt out. Keys are managed from a session so a stolen key can't mint its replacement.
+
+**Declined:** making `X-API-Key` read a platform key too. The existing client would have worked with no release, but one header would then mean two kinds of authority.

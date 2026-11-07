@@ -62,8 +62,8 @@ The watcher client (`aindy_sdk/watcher/signal_emitter.py`) calls:
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
-| `POST` | `/watcher/signals` | `X-API-Key` header | Batched signal ingestion |
-| `GET` | `/watcher/signals` | `X-API-Key` header | Paginated signal query |
+| `POST` | `/watcher/signals` | `X-Platform-Key` (a user's own key) or `X-API-Key` (a service) | Batched signal ingestion |
+| `GET` | `/watcher/signals` | `X-Platform-Key` (a user's own key) or `X-API-Key` (a service) | Paginated signal query |
 
 **Stability: stable.** These paths must not change without a major version bump.
 The watcher client hardcodes these paths.
