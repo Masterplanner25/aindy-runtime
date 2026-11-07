@@ -180,6 +180,7 @@ curl -s -X POST http://localhost:8000/platform/keys \
 | `event.emit` | Emit events through the syscall contract |
 | `webhook.manage` | Manage webhook subscriptions |
 | `platform.admin` | Full platform administration |
+| `watcher.signals` | Post and read your own watcher signals. Any signed-in user can mint a key holding only this scope at `POST /watcher/keys`, and such a key works nowhere else |
 
 > **Registration returns `202` and no token.** It does not log you in. If an email
 > channel is configured it sends a verification link. This is deliberate: a response
