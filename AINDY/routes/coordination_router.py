@@ -26,7 +26,12 @@ from AINDY.agents.agent_runtime.presentation import run_to_dict
 from AINDY.db.models.agent_registry import AgentRegistry
 from AINDY.memory.memory_persistence import MemoryNodeModel
 from AINDY.auth.api_key_auth import Scopes
-from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
+from AINDY.services.auth_service import (
+    enforce_api_key_scope,
+    get_current_user,
+    is_operator_principal,
+    require_admin_principal,
+)
 from AINDY.utils.uuid_utils import normalize_uuid
 from AINDY.routes.path_params import UUIDPath
 
@@ -51,6 +56,11 @@ _REQUIRE_EXECUTION_READ = Depends(enforce_api_key_scope(Scopes.EXECUTION_READ))
 _REQUIRE_MEMORY_READ = Depends(
     enforce_api_key_scope(Scopes.MEMORY_READ, Scopes.MEMORY_WRITE)
 )
+
+# The agent registry has no owner column: one list, shared by every tenant, which delegation
+# ranks over and which holds each agent's `current_state`. So reading or changing it is an
+# operator's act (DEC-114).
+_REQUIRE_OPERATOR = Depends(require_admin_principal)
 
 
 router = APIRouter(prefix="/coordination", tags=["Coordination"])
@@ -92,6 +102,7 @@ def get_agents(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     _scope: None = _REQUIRE_AGENT,
+    _operator: dict = _REQUIRE_OPERATOR,
 ):
     return execute_with_pipeline_sync(
         request=request,
@@ -109,6 +120,7 @@ def get_agents_status(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     _scope: None = _REQUIRE_AGENT,
+    _operator: dict = _REQUIRE_OPERATOR,
 ):
     return execute_with_pipeline_sync(
         request=request,
@@ -130,7 +142,11 @@ def get_coordination_graph(
     return execute_with_pipeline_sync(
         request=request,
         route_name="coordination.graph.get",
-        handler=lambda ctx: coordination_graph(db, user_id=current_user["sub"]),
+        handler=lambda ctx: coordination_graph(
+            db,
+            user_id=current_user["sub"],
+            include_registry=is_operator_principal(current_user),
+        ),
         user_id=str(current_user["sub"]),
         metadata={"db": db},
     )
@@ -144,6 +160,7 @@ def register_agent(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     _scope: None = _REQUIRE_AGENT,
+    _operator: dict = _REQUIRE_OPERATOR,
 ):
     return execute_with_pipeline_sync(
         request=request,
@@ -171,6 +188,7 @@ def heartbeat_agent(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     _scope: None = _REQUIRE_AGENT,
+    _operator: dict = _REQUIRE_OPERATOR,
 ):
     heartbeat = body or AgentHeartbeatRequest()
 
@@ -216,6 +234,7 @@ def deregister_agent(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
     _scope: None = _REQUIRE_AGENT,
+    _operator: dict = _REQUIRE_OPERATOR,
 ):
     def handler(ctx):
         if str(agent_id) == LOCAL_AGENT_ID:

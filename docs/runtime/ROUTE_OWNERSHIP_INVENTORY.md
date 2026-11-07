@@ -191,6 +191,8 @@ Endpoints (unchanged): `POST /apps/memory/traces`, `GET /apps/memory/traces`,
 `POST /apps/memory/traces/{id}/append`
 
 ### `coordination_router.py`
+**The agent registry routes (`/agents`, `/agents/status`, `/agents/register`, heartbeat, deregister) need an operator (DEC-114).** `GET /graph` shows a non-operator only their own events.
+
 Endpoints: `GET /apps/coordination/agents`, `GET /apps/coordination/agents/status`,
 `GET /apps/coordination/graph`, `POST /apps/coordination/agents/register`,
 `POST /apps/coordination/agents/{id}/heartbeat`,

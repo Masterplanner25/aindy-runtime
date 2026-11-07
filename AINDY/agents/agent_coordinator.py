@@ -174,7 +174,17 @@ def decide_execution_mode(
     return {"mode": "delegate", "selected_agent": best, "candidates": ranked[:3]}
 
 
-def coordination_graph(db, *, user_id: str | None = None, limit: int = 100) -> dict[str, Any]:
+def coordination_graph(
+    db,
+    *,
+    user_id: str | None = None,
+    limit: int = 100,
+    include_registry: bool = True,
+) -> dict[str, Any]:
+    """Agent nodes and edges from ``user_id``'s events, plus the registry when asked for.
+
+    The registry is every tenant's, so a caller who isn't an operator gets only their own events.
+    """
     query = (
         db.query(SystemEvent)
         .filter(SystemEvent.agent_id.isnot(None))
@@ -204,7 +214,8 @@ def coordination_graph(db, *, user_id: str | None = None, limit: int = 100) -> d
                     "timestamp": row.timestamp.isoformat() if row.timestamp else None,
                 }
             )
-    for agent in list_agents(db, include_stale=True):
+    registry = list_agents(db, include_stale=True) if include_registry else []
+    for agent in registry:
         nodes[str(agent["agent_id"])] = {
             "id": str(agent["agent_id"]),
             "health_status": agent["health_status"],
