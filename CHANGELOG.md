@@ -4,6 +4,23 @@
 
 _Nothing yet._
 
+## 2.31.3 — 2026-11-07
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.3.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ A security fix. Upgrade promptly if more than one user can sign in.** A later advisory will carry the details.
+- **★ Five `/apps/coordination/agents*` routes now answer 403 to non-operators.** Details below.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+- No scope, env-var, schema or dependency-pin change.
+
+### Changed — the agent registry's routes now need an operator (DEC-114, #903)
+
+- **Read before upgrading if anything calls `/apps/coordination/agents*` with a non-admin login.** `GET /agents`, `GET /agents/status`, `POST /agents/register`, `POST /agents/{id}/heartbeat` and `DELETE /agents/{id}` now answer 403 unless the caller is an admin session or holds a `platform.admin` key.
+- The registry has no owner, so any signed-in user could read every agent's state, change any agent, or add one that delegation would rank.
+- `GET /coordination/graph` stays open. A non-operator now sees only the agents in their own events.
+- The other coordination routes are unchanged, and so are the runtime's own self-registration and delegation ranking.
+
 ## 2.31.2 — 2026-11-07
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.2.md`.
