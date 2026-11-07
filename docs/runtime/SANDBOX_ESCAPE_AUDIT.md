@@ -1745,6 +1745,35 @@ inside it:**
 
 ---
 
+## Entry 053 — 2026-11-07
+
+**Trigger:** `v2.31.4` release tag (`sandbox-escape-linux.yml`, run `42415276493`).
+**Commit:** `9973b26` (release PR #909's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 052**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 8.04s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `42415276493`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.31.3..v2.31.4` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #907 (DEC-116) puts owners on webhook delivery and on shared script and workflow names. #908 (DEC-117) adds per-user watcher
+  keys, confined to the watcher routes. Both are HTTP authority, and this gate does not test them.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. It passed on `9973b26` before the tag, along with
+Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `42415276617`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API and simple index both reported `2.31.4` (wheel + sdist). The simple index lagged at first.
+- Boot Smoke on the published wheel installed on **attempt 2**, after `pip` could not yet resolve the version on attempt 1. This is
+  the known CDN lag, which the retry exists for.
+- The GitHub release is non-draft (21:26Z).
+- `publish.yml` is unchanged from `v2.31.3`.
+
 ## Entry 052 — 2026-11-07
 
 **Trigger:** `v2.31.3` release tag (`sandbox-escape-linux.yml`, run `42352332668`).
