@@ -10,6 +10,11 @@ Subscription matching:
   "execution.*"           â€” prefix wildcard (any event starting with "execution.")
   "*"                     â€” global wildcard (every event)
 
+Tenancy:
+  A subscription receives events belonging to the user who created it. It receives every
+  tenant's, and events with no tenant, only if that user is an operator now, or if it has no
+  creator (a manifest or bootstrap subscription, which only the deployment can add).
+
 Delivery:
   - Dispatched in a background daemon thread â€” never blocks the event path.
   - Up to 3 attempts with exponential back-off: 1 s â†’ 2 s â†’ 4 s.
@@ -78,6 +83,8 @@ _webhook_lock = threading.Lock()
 
 # subscription_id â†’ metadata dict
 _SUBSCRIPTIONS: dict[str, dict[str, Any]] = {}
+_OPERATOR_CACHE_TTL_SECONDS = 60.0
+_operator_cache: dict[str, tuple[float, bool]] = {}
 
 _INTERNAL_HANDLERS: dict[str, list[Callable[[dict[str, Any]], Any]]] = {}
 
@@ -524,6 +531,47 @@ def _public_meta(meta: dict[str, Any]) -> dict[str, Any]:
 # Delivery
 # ---------------------------------------------------------------------------
 
+def _creator_is_operator(created_by: str) -> bool:
+    """Is this subscription's creator an admin now? Fails closed, and a failure isn't cached.
+
+    Read here rather than stored on the row, so a demotion takes effect on its own and existing
+    subscriptions need no migration. A `platform.admin` key can only be minted by an admin
+    session, so its owner's row answers for it too.
+    """
+    now = time.monotonic()
+    cached = _operator_cache.get(created_by)
+    if cached is not None and now - cached[0] < _OPERATOR_CACHE_TTL_SECONDS:
+        return cached[1]
+    try:
+        owner_id = uuid.UUID(created_by)
+    except (TypeError, ValueError):
+        return False
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.db.models.user import User
+
+        db = SessionLocal()
+        try:
+            row = db.query(User.is_admin).filter(User.id == owner_id).first()
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("webhook owner lookup failed, delivering nothing extra: %s", exc)
+        return False
+    is_operator = bool(row and row[0])
+    _operator_cache[created_by] = (now, is_operator)
+    return is_operator
+
+
+def _subscription_may_receive(sub: dict[str, Any], event_user_id: str | None) -> bool:
+    created_by = sub.get("created_by")
+    if created_by is None:
+        return True
+    if event_user_id is not None and str(event_user_id) == str(created_by):
+        return True
+    return _creator_is_operator(str(created_by))
+
+
 def _build_request_body(
     *,
     event_type: str,
@@ -653,6 +701,7 @@ def dispatch_webhooks(
     matches = [
         sub for sub in list(_SUBSCRIPTIONS.values())
         if _matches(sub["event_type"], event_type)
+        and _subscription_may_receive(sub, user_id)
     ]
     if not matches:
         return 0

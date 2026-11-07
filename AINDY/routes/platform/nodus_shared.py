@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from AINDY.db.database import get_db
 from AINDY.platform_layer.nodus_script_store import (
+    NodusScriptOwnerError,
     _NODUS_SCRIPT_REGISTRY,
     _SCRIPTS_DIR,
     _script_lock,
@@ -96,6 +97,7 @@ def save_nodus_script(
     description: str | None,
     uploaded_at: str | None,
     uploaded_by: str | None,
+    enforce_owner: bool = False,
 ) -> dict[str, Any]:
     return store_script(
         name=name,
@@ -103,6 +105,7 @@ def save_nodus_script(
         description=description,
         uploaded_at=uploaded_at,
         uploaded_by=uploaded_by,
+        enforce_owner=enforce_owner,
     )
 
 

@@ -1,6 +1,6 @@
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from AINDY.core.execution_helper import execute_with_pipeline_sync
@@ -12,7 +12,11 @@ from AINDY.routes.platform.nodus_shared import (
 )
 from AINDY.routes.platform.schemas import NodusFlowRequest
 from AINDY.auth.api_key_auth import Scopes
-from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
+from AINDY.services.auth_service import (
+    enforce_api_key_scope,
+    get_current_user,
+    is_operator_principal,
+)
 
 router = APIRouter()
 
@@ -43,6 +47,7 @@ def compile_and_run_nodus_flow(request: Request, body: NodusFlowRequest, db: Ses
         # retired).
         from AINDY.runtime.nodus_flow_compiler import compile_nodus_flow
         from AINDY.runtime.nodus_workflow_registry import (
+            NodusWorkflowOwnerError,
             register_nodus_workflow,
             run_nodus_workflow,
         )
@@ -66,14 +71,25 @@ def compile_and_run_nodus_flow(request: Request, body: NodusFlowRequest, db: Ses
 
         # Running requires the workflow to be registered; register on demand.
         if body.register or body.run:
-            register_nodus_workflow(
-                body.flow_name,
-                body.script,
-                kind="flow-graph",
-                allow_legacy_missing_provenance=True,
-                overwrite=True,
-                db=effective_db,
-            )
+            try:
+                register_nodus_workflow(
+                    body.flow_name,
+                    body.script,
+                    kind="flow-graph",
+                    allow_legacy_missing_provenance=True,
+                    overwrite=True,
+                    db=effective_db,
+                    created_by=user_id,
+                    enforce_owner=not is_operator_principal(current_user),
+                )
+            except NodusWorkflowOwnerError:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "workflow_not_owned",
+                        "message": f"Workflow {body.flow_name!r} belongs to another user. Choose another name.",
+                    },
+                )
             response["registered"] = True
 
         if body.run:

@@ -8,6 +8,7 @@ from AINDY.core.execution_helper import execute_with_pipeline_sync
 from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.routes.platform.nodus_shared import (
+    NodusScriptOwnerError,
     _NODUS_SCRIPT_REGISTRY,
     _SCRIPTS_DIR,
     _format_nodus_response,
@@ -21,7 +22,11 @@ from AINDY.routes.platform.nodus_shared import (
 )
 from AINDY.routes.platform.schemas import NodusRunRequest, NodusScriptUpload
 from AINDY.auth.api_key_auth import Scopes
-from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
+from AINDY.services.auth_service import (
+    enforce_api_key_scope,
+    get_current_user,
+    is_operator_principal,
+)
 
 router = APIRouter()
 
@@ -128,19 +133,29 @@ def upload_nodus_script(request: Request, body: NodusScriptUpload, current_user:
                 },
             )
 
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            meta = save_nodus_script(
+                name=body.name,
+                content=body.content,
+                description=body.description,
+                uploaded_at=now,
+                uploaded_by=user_id,
+                enforce_owner=not is_operator_principal(current_user),
+            )
+        except NodusScriptOwnerError:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "script_not_owned",
+                    "message": f"Script {body.name!r} belongs to another user. Choose another name.",
+                },
+            )
         try:
             _SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
             (_SCRIPTS_DIR / f"{body.name}.nodus").write_text(body.content, encoding="utf-8")
         except OSError:
             pass
-        now = datetime.now(timezone.utc).isoformat()
-        meta = save_nodus_script(
-            name=body.name,
-            content=body.content,
-            description=body.description,
-            uploaded_at=now,
-            uploaded_by=user_id,
-        )
         return {
             "name": meta["name"],
             "description": meta["description"],
