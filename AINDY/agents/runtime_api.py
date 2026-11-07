@@ -44,10 +44,10 @@ def _normalize_run_id(run_id: str) -> Any:
 def _get_owned_run(*, db, user_id, run_id: str) -> AgentRun:
     normalized_run_id = _normalize_run_id(run_id)
     run = db.query(AgentRun).filter(AgentRun.id == normalized_run_id).first()
-    if not run:
+    # Someone else's run answers exactly like a missing one, so the response never says
+    # which run ids exist (DEC-118).
+    if not run or run.user_id != user_id:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Not authorized")
     return run
 
 
@@ -474,15 +474,12 @@ def list_agent_run_steps_runtime(*, db, user_id, run_id: str) -> list[dict[str, 
 
 
 def list_agent_run_events_runtime(*, db, user_id, run_id: str) -> dict[str, Any]:
-    normalized_run_id = _normalize_run_id(run_id)
+    _normalize_run_id(run_id)
     result = get_run_events(run_id=run_id, user_id=user_id, db=db)
     if result is not None:
         return result
-
-    run = db.query(AgentRun).filter(AgentRun.id == normalized_run_id).first()
-    if not run:
-        raise HTTPException(status_code=404, detail="Run not found")
-    raise HTTPException(status_code=403, detail="Not authorized")
+    # Missing or someone else's: the same answer either way (DEC-118).
+    raise HTTPException(status_code=404, detail="Run not found")
 
 
 def list_agent_tools_runtime() -> list[dict[str, Any]]:

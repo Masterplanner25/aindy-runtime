@@ -289,6 +289,24 @@ def acquire_effect_lock(db, action_id: str, *, wait_seconds: float = 300.0):
 DEGRADED = object()
 
 
+class EffectTenantMismatch(Exception):
+    """An existing slot was recorded for another tenant (DEC-118).
+
+    The action id hashes the action, input and scope, never the tenant, and every scope that
+    reaches the ledger is owner-bound. So this is a scoping bug somewhere upstream. Every caller
+    already treats a ledger exception as "run without the gate", or refuses under
+    `AT_MOST_ONCE`, and none of them completes the other tenant's row afterwards.
+    """
+
+
+def _tenants_differ(recorded, caller) -> bool:
+    """Both known and different. A row written before attribution existed has no tenant, and
+    refusing it would break replay for its own owner."""
+    if not recorded or not caller:
+        return False
+    return str(recorded).strip().lower() != str(caller).strip().lower()
+
+
 def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session, execution_ref=None):
     """Decide what to do about an EffectRecord row that already exists.
 
@@ -312,6 +330,14 @@ def _resolve_existing_row(db, record, action_id, eff_tenant, eff_session, execut
     message it was written to fire: *"look for a THIRD path to AT_LEAST_ONCE that nothing
     counts."*
     """
+    # DEC-118 — before any outcome, including the reclaim below, which re-attributes the row.
+    if _tenants_differ(record.tenant_id, eff_tenant):
+        _count_gate("tenant_mismatch")
+        logger.warning(
+            "[EffectLedger] slot %s belongs to another tenant; refused (DEC-118)", action_id
+        )
+        raise EffectTenantMismatch(action_id)
+
     if record.status == "success":
         _count_gate("replayed")
         return True, record.result_payload

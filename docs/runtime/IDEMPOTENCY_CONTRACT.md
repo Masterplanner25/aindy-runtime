@@ -317,6 +317,7 @@ handler runs exactly once per `action_id` under any contention width.
 | `reclaimed` | took over a `failed`/stale row | 0 unless a winner failed |
 | `unknown_held` / `partial_held` | a replay found an ambiguous effect and returned it instead of re-running (DEC-085/086) | rare |
 | `refused_at_most_once` | an `AT_MOST_ONCE` call refused where `EXACTLY_ONCE` would have degraded (DEC-089) | 0 unless contention outlasts the lock wait, or the gate fails |
+| `tenant_mismatch` | an existing slot was recorded for another tenant, so it was refused: no replay, no reclaim (DEC-118). The caller then runs without the gate, or refuses under `AT_MOST_ONCE`, so `degraded_gate_error` or `refused_at_most_once` moves too | **0, always.** Anything else is a scoping bug: investigate |
 
 A non-zero `degraded` on PostgreSQL with strict mode on now means **misconfiguration**, not
 contention — the operator signal inverts in a useful direction.
