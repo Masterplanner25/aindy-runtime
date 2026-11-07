@@ -1819,6 +1819,7 @@ class MemoryNodeDAO:
         origin = self.get_by_path(path, user_id=user_id)
         if origin is None:
             return []
+        owner = parse_user_id(user_id)
 
         chain: List[dict] = [origin]
         seen = {origin["id"]}
@@ -1829,11 +1830,14 @@ class MemoryNodeDAO:
             if not source_event_id:
                 break
             # Find a node whose root_event_id matches the current node's source_event_id
-            node = (
-                self.db.query(MemoryNodeModel)
-                .filter(MemoryNodeModel.root_event_id == uuid.UUID(str(source_event_id)))
-                .first()
+            # MEM-TRACE-SCOPE-1 — every hop is scoped like the first lookup. An event id can be
+            # shared, and this used to return whichever user's node matched it.
+            query = self.db.query(MemoryNodeModel).filter(
+                MemoryNodeModel.root_event_id == uuid.UUID(str(source_event_id))
             )
+            node = apply_memory_owner_scope(
+                query, owner_user_id=owner, shared_fallback=False
+            ).first()
             if node is None or str(node.id) in seen:
                 break
             d = enrich_node_with_path(self._node_to_dict(node))
