@@ -1745,6 +1745,34 @@ inside it:**
 
 ---
 
+## Entry 052 — 2026-11-07
+
+**Trigger:** `v2.31.3` release tag (`sandbox-escape-linux.yml`, run `42352332668`).
+**Commit:** `0bd7e61` (release PR #904's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 051**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.63s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `42352332668`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.31.2..v2.31.3` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #903 (DEC-114) puts an operator gate on the agent registry's routes. That is HTTP authority, and this gate does not
+  test it.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. It passed on `0bd7e61` before the tag, along with
+Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `42352332695`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API and simple index both reported `2.31.3` (wheel + sdist).
+- Boot Smoke on the published wheel installed on **attempt 1**.
+- The GitHub release is non-draft (07:46Z).
+- `publish.yml` is unchanged from `v2.31.2`.
+
 ## Entry 051 — 2026-11-06
 
 **Trigger:** `v2.31.2` release tag (`sandbox-escape-linux.yml`, run `42347398478`).
