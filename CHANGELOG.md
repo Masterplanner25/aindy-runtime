@@ -4,6 +4,32 @@
 
 _Nothing yet._
 
+## 2.31.1 — 2026-11-06
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.1.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ On an MCP server with `AINDY_MCP_SERVER_ALLOW_WRITES`, `sys.v1.memory.delete` now really hard-deletes**
+  (DEC-112). Every call used to be refused. Any syscall named in `AINDY_MCP_SERVER_TOOLS` also becomes callable,
+  whatever its capability is called, so check that list. A read-only default server gains only three reads.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+- **★ If you have more than one user: `memory.trace` could return another user's node** (`MEM-TRACE-SCOPE-1`).
+  Fixed here. The entry below has a query that shows whether it could ever have fired on your stack.
+- No route, scope, env-var, schema or dependency-pin change.
+
+### Fixed — `causal_trace` could return another user's memory node (`MEM-TRACE-SCOPE-1`, #897)
+
+- **Read before upgrading if your deployment has more than one user.** `sys.v1.memory.trace` and `GET /platform/memory/trace` scoped their first lookup to the caller, and every hop after it to nobody. A node whose `source_event_id` matched another user's `root_event_id` returned that user's node, content included. Each hop is now scoped the same way as the first.
+- We reproduced this with seeded rows. We have not seen it happen, and found no way for a caller to set those ids through `sys.v1.memory.write`, but we have not audited every writer. To see whether it ever could have fired, run: `SELECT count(*) FROM memory_nodes a JOIN memory_nodes b ON a.source_event_id = b.root_event_id AND a.user_id <> b.user_id;`
+- A chain now stops at the first event with no node of the caller's, so a trace may be shorter than before. Only chains that crossed users change.
+
+### Fixed — MCP tools get the capability their syscall declares; three default tools were always refused (`MCP-GRANT-1`, DEC-112, #896)
+
+- **Read before upgrading if you run `aindy-runtime mcp-server` with writes on or a custom allowlist.** With `AINDY_MCP_SERVER_ALLOW_WRITES`, `sys.v1.memory.delete` now really hard-deletes; until now it was refused on every call. Any other syscall named in `AINDY_MCP_SERVER_TOOLS` whose capability differs from its name also starts working, including app syscalls. Check that list. A server on the read-only default gains only the three reads below.
+- `sys.v1.memory.search`, `.tree` and `.trace` were refused on every MCP call. The server inferred the grant from the name (`memory.search`), and they declare `memory.read`. They were in its own default list, and the test mocked the dispatcher, so it never reached the check.
+- Each tool still holds exactly one capability, and the allowlist still decides what is exposed. Other callers of `dispatch_syscall` without `capability=` (the Nodus `sys()` seam, extension workers) still infer it from the name.
+- `memory.tree` and wildcard `memory.list` work now but may return little: nodes written by memory capture have no stored path (`MEM-PATH-NULL-1`, open). `memory.read` with a query or tags does not need one.
+
 ## 2.31.0 — 2026-11-04
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.0.md`.
