@@ -24,6 +24,12 @@ from AINDY.agents import tool_registry as tr
 
 pytestmark = pytest.mark.runtime_only
 
+@pytest.fixture(autouse=True)
+def _tokens_here_are_stand_ins(monkeypatch):
+    """These tests pass a stand-in token and are not about whose run it is. Real tokens, and
+    refusals of fake ones, are covered in test_identity_binding.py."""
+    monkeypatch.setattr("AINDY.agents.capability_service.token_binds_run", lambda *a, **k: True)
+
 RUN = "00000000-0000-0000-0000-00000000aaaa"
 
 

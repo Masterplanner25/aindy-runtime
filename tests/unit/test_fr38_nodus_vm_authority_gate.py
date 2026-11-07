@@ -27,6 +27,12 @@ import pytest
 
 pytestmark = pytest.mark.runtime_only
 
+@pytest.fixture(autouse=True)
+def _tokens_here_are_stand_ins(monkeypatch):
+    """These tests pass a stand-in token and are not about whose run it is. Real tokens, and
+    refusals of fake ones, are covered in test_identity_binding.py."""
+    monkeypatch.setattr("AINDY.agents.capability_service.token_binds_run", lambda *a, **k: True)
+
 DENIED_TOOL = "vmgate_send_invoice"
 VARIANT_TOOL = "vmgate_queue_invoice"
 OK_TOOL = "vmgate_lookup"

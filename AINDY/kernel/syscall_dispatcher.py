@@ -302,9 +302,14 @@ def _check_payload_identity(name: str, payload: Any, context: SyscallContext) ->
     """
     mode = _payload_identity_mode()
     try:
-        from AINDY.kernel.payload_identity import payload_user_id_mismatch
+        from AINDY.kernel.payload_identity import (
+            forwarded_user_id_mismatch,
+            payload_user_id_mismatch,
+        )
 
-        mismatch = payload_user_id_mismatch(payload, context.user_id)
+        mismatch = payload_user_id_mismatch(payload, context.user_id) or forwarded_user_id_mismatch(
+            name, payload, context.user_id
+        )
     except Exception as exc:
         if mode == "observe":
             return None
