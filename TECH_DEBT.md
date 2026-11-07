@@ -17178,3 +17178,25 @@ query or tags, which do not need a path.
 
 **Before building:** count null paths on a real stack. The choice is generating a path in `save`, a
 backfill, or both. A backfill changes an operator's rows, so it would be operator-run, as in DEC-104.
+
+## MEM-TRACE-SCOPE-1 — `causal_trace` scoped its first lookup to the caller and no hop after it
+
+**Status: CLOSED (2026-11-06)** — #897; ships in 2.31.1. Found while writing that release's handoff, which
+said all three newly reachable handlers filter by the caller. Reading `trace` to confirm that showed it didn't.
+
+**What was wrong.** The hop queried `MemoryNodeModel` by `root_event_id` with no owner scope, so a shared
+event id returned whichever user's node matched, with its content. Reached by `sys.v1.memory.trace`,
+`GET /platform/memory/trace` and, through `memory_runtime.trace_memory_chain`, by any caller of that helper.
+`validate_tenant_path` on the route checks the starting path only. It predates MCP-GRANT-1, which added MCP
+as a way in.
+
+**Exposure, as far as we know.** Reproduced with seeded rows, not observed. It needs two users' nodes sharing
+an event. `sys.v1.memory.write` doesn't accept those ids, and every other writer is unaudited. Its existing
+tests didn't cover it: no test called `causal_trace` before this one.
+
+**What shipped.** Each hop goes through `apply_memory_owner_scope`, as `get_by_path` does.
+`test_causal_trace_owner_scope.py` drives the real dispatcher and handler: a cross-user hop is refused, the
+caller's own chain is still followed, and the caller's own ancestor wins beside another user's.
+
+**Remaining.** The other `MemoryNodeDAO` reads, and handlers generally, have not been audited one by one. This
+gap was found by accident, so assume it isn't the only one. The tenant audit is offered, not built.
