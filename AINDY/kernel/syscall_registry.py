@@ -1983,8 +1983,9 @@ def register_syscall(
         capability:       Required capability string.
 
             **FR-53 (c) — callers that grant by NAME reach only a matching capability.**
-            ``dispatch_syscall`` without ``capability=`` — the MCP server, the Nodus ``sys()``
-            seam, extension workers — grants exactly ``_infer_dispatch_capability(name)``:
+            ``dispatch_syscall`` without ``capability=`` — the Nodus ``sys()`` seam, extension
+            workers, but not the MCP server, which grants what a syscall declares (DEC-112) —
+            grants exactly ``_infer_dispatch_capability(name)``:
             ``<domain>.read`` for a ``get_/list_/read_…`` verb, ``<domain>.write`` for
             ``create_/update_/write_…``, else the bare action (``sys.v1.work.context`` →
             ``work.context``). A syscall registered under any other capability (e.g.

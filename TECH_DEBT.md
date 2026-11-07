@@ -9345,7 +9345,7 @@ the Nodus seam, and the HTTP route (403). The app's only `sys()` script, `reason
 passes its run owner's id and keeps working. **(a):** `mcp_server.load_app_syscalls()` runs
 `load_plugins()` before the allowlist is resolved, with stdout pointed at stderr at both the
 Python and fd level (stdio is the MCP channel). A plugin that fails to load stops the server
-rather than serving a smaller tool set (DEC-101). **(c):** answered in `register_syscall`'s docstring.
+rather than serving a smaller tool set (DEC-101). **(c):** answered in `register_syscall`'s docstring (for MCP, reversed by DEC-112; see MCP-GRANT-1).
 Name-inferred grants are deliberate least-privilege. The `nodus_*` tool prefix comes from
 nodus-mcp, not this repo. **Remaining (DEC-100):** in-process dispatch is not checked. The ~60 app call
 sites are unaudited, so the dispatcher only counts mismatches first
@@ -17138,3 +17138,43 @@ nothing about its orchestration bears on us. **It was audited for one subsystem*
 discovery**, a peer on a specific axis returns implementations of filed entries, not new ones.
 **That is the signal that comparative research has done its job** — and the reason the next unit of
 work is a build, not another audit.
+
+## MCP-GRANT-1 — three of the five default MCP tools were refused on every call
+
+**Status: CLOSED (2026-11-06)** — DEC-112; unreleased until the next tag. Found by a session using the
+app's MCP server from the Nodus repo.
+
+**What was wrong.** `_make_handler` called `dispatch_syscall` without `capability=`, so the grant was
+inferred from the name. `sys.v1.memory.search`, `.tree` and `.trace` declare `memory.read` and were
+granted `memory.search`, `.tree` and `.trace`. `sys.v1.memory.delete` (writes on),
+`sys.v1.flow.execute_intent` and `sys.v1.observability.support_metrics` (if named) failed the same way.
+`mcp_server.py` listed the first three as its safe default and said each syscall got its own capability.
+
+**Why nothing caught it.** `test_mcp_server.py` mocks `dispatch_syscall`, and its handler test uses only
+`memory.read`, the name that happens to match. FR-53 (c) then read the refusal as deliberate.
+
+**What shipped.** `build_registry` passes `entry.capability` to the handler. `dispatch_syscall` is
+unchanged, so the Nodus and worker seams still infer. `test_mcp_grants_declared_capability.py` runs the
+real dispatcher over every registered syscall, with a control showing the inferred grant still refused.
+Dropping the fix fails exactly the six syscalls above and both real-handler tests.
+
+**Remaining.** Real `memory.search` is tested with `recall` stubbed, because it needs embeddings. Paths:
+MEM-PATH-NULL-1.
+
+## MEM-PATH-NULL-1 — most memory nodes have no stored path, so path tools cannot see them
+
+**Status: OPEN — P3** (filed 2026-11-06). Not observed in a full count: a session sampled 10 nodes on the
+app's stack, all `path: null`. The cause below is from reading the code.
+
+`MemoryNodeDAO.save` stores whatever `path` it is given and generates none. `memory_capture_engine.py`
+and `nodus/runtime/memory_bridge.py` pass none, and the app's direct `dao.save` calls need checking one by
+one. `sys.v1.memory.write` does generate one, through `path_from_write_payload`. `walk_path` filters on the
+stored column, so `memory.tree` and a wildcard `memory.list` cannot find a null-path node, and
+`derive_legacy_path` only fills in the path of a node already returned. Reachable by `memory.read` with a
+query or tags, which do not need a path.
+
+**A bare `/memory` is an exact lookup** and always finds nothing
+(`test_a_bare_memory_root_is_an_exact_lookup_and_finds_nothing`). Test with `/memory/{user}/**`.
+
+**Before building:** count null paths on a real stack. The choice is generating a path in `save`, a
+backfill, or both. A backfill changes an operator's rows, so it would be operator-run, as in DEC-104.

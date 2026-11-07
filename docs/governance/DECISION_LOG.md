@@ -2243,3 +2243,11 @@ AGENT-HARDEN-6 designed the Verifier to roll back, but that was never observed: 
 
 **Why**
 A route is a new way to delete data, and it needs its own scope and design. Nothing asks for one yet: as of 2026-11-04 the app has no undo caller and no plan declaring `expects`, so no run of its can fail verification. The cost is that an operator reading a `VERIFY_FAILED` report cannot act on it over HTTP, which leaves DEC-110's explicit undo reachable only through code or MCP until the trigger fires.
+
+### DEC-112
+**Status:** `accepted` (2026-11-06 — `MCP-GRANT-1`; decided by the owner: "yes open the PR")
+
+**Decision — The MCP server grants each tool the capability its syscall declares, and nothing else. The allowlist decides what is exposed. Inference from the name stays for every other caller of `dispatch_syscall` without `capability=`. This reverses the FR-53 (c) answer for MCP only.**
+
+**Why**
+Inference refused `memory.search`, `memory.tree` and `memory.trace`, three of the five tools the server exposes by default, and `memory.delete` when writes are on. FR-53 (c) called that deliberate least-privilege and told authors to choose names that match, but the runtime's own syscalls do not, and renaming stable syscalls breaks callers. The grant is still one capability, and it is one the operator's allowlist already chose to expose, so inference added refusals and no protection. Widening `_infer_dispatch_capability` was rejected: it would not fix `memory.delete`, and it would change the Nodus and worker seams, where a guest writes the syscall name, so the name rule does gate something. The cost is that `memory.delete` now really deletes on a server with `AINDY_MCP_SERVER_ALLOW_WRITES`, and any mismatched syscall an operator named in `AINDY_MCP_SERVER_TOOLS` starts working. Both are what those settings say they do.
