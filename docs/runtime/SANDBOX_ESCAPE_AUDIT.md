@@ -1745,6 +1745,34 @@ inside it:**
 
 ---
 
+## Entry 051 — 2026-11-06
+
+**Trigger:** `v2.31.2` release tag (`sandbox-escape-linux.yml`, run `42347398478`).
+**Commit:** `1dfdc7a` (release PR #901's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 050**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 8.02s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `42347398478`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.31.1..v2.31.2` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #900 (DEC-113) changes what the Nodus worker's tool seam accepts and what a flow node takes from state. That is
+  identity, not containment, and this gate does not test it.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. It passed on `1dfdc7a` before the tag, along with
+Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `42347398526`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API reported `2.31.2` (wheel + sdist). The simple index lagged it for a local check minutes later.
+- Boot Smoke on the published wheel installed on **attempt 1**.
+- The GitHub release is non-draft (06:36Z on 2026-11-07).
+- `publish.yml` is unchanged from `v2.31.1`.
+
 ## Entry 050 — 2026-11-06
 
 **Trigger:** `v2.31.1` release tag (`sandbox-escape-linux.yml`, run `42339269780`).
