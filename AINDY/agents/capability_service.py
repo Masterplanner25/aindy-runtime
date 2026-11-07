@@ -729,8 +729,10 @@ def token_binds_run(token: Optional[dict], run_id: str, user_id: str) -> bool:
                 issued_at=str(token.get("issued_at")),
                 expires_at=str(token.get("expires_at")),
                 approval_mode=token.get("approval_mode"),
-                granted_tools=_normalize_tool_list(token.get("granted_tools")),
-                allowed_capabilities=_normalize_capability_list(token.get("allowed_capabilities")),
+                # The lists as issued, not normalized. Normalizing keeps only names this process
+                # has registered, and a Nodus worker has registered none when this runs.
+                granted_tools=list(token.get("granted_tools") or []),
+                allowed_capabilities=list(token.get("allowed_capabilities") or []),
             )
         )
     except Exception as exc:

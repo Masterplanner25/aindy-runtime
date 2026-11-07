@@ -185,10 +185,9 @@ def _token(run_id, user_id, *, expired=False):
         "issued_at": issued,
         "expires_at": expires,
         "approval_mode": "auto",
-        # Mint and verify both drop names the registries don't hold, so a made-up tool would not
-        # survive into the hash. These tests are about whose run it is, not what it may do.
-        "granted_tools": [],
-        "allowed_capabilities": [],
+        # Names this process has not registered, as a Nodus worker hasn't when the seam checks.
+        "granted_tools": ["not.registered.here"],
+        "allowed_capabilities": ["not_registered_here"],
     }
     return {
         **fields,
@@ -261,6 +260,7 @@ def test_a_tampered_token_is_not_bound():
     assert token_binds_run(token, run_id, CALLER) is True
 
     assert token_binds_run({**token, "approval_mode": "manual"}, run_id, CALLER) is False
+    assert token_binds_run({**token, "granted_tools": ["more"]}, run_id, CALLER) is False
     assert token_binds_run({**token, "expires_at": "2099-01-01T00:00:00+00:00"}, run_id, CALLER) is False
     assert token_binds_run({**token, "user_id": OTHER}, run_id, OTHER) is False
     assert token_binds_run(token, run_id, OTHER) is False
