@@ -4,6 +4,34 @@
 
 _Nothing yet._
 
+## 2.31.4 — 2026-11-07
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.4.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ A security release. Upgrade promptly if more than one user can sign in.** A later advisory will carry the details.
+- **★ A webhook subscription made with a non-admin key stops receiving other users' events, and events with no user.** Details below.
+- **★ Replacing a script or workflow someone else registered now answers 403.** Something with no recorded owner can only be replaced by an operator.
+- **★ Per-user watcher keys.** Don't install `AINDY_API_KEY` on a user's machine: it can act for any user.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+
+### Changed — webhooks, shared script names and shared workflow names now have owners (#907)
+
+- **Webhooks:** a subscription now receives only the events of the user who created it. An admin's subscription still receives every tenant's, and so does one with no creator, such as a manifest's. It was wrong that delivery looked at the event type alone. **Check after upgrading:** a subscription created through a non-admin key stops receiving other users' events, and events with no user.
+- **`POST /platform/nodus/upload`:** `overwrite` now replaces only your own script, otherwise 403 `script_not_owned`. An operator can still replace any. A script found only on disk now counts as existing, where it used to read as free after a restart. It has no recorded uploader, so only an operator can replace it.
+- **`POST /platform/nodus/flow`:** registering a name that someone else holds now answers 403 `workflow_not_owned`. It always replaced the workflow before. A workflow with no creator, such as a plugin's or one registered before this release, can only be replaced by an operator. New registrations record their creator, and that survives a restart.
+
+### Fixed — `/client/error` and `/client/vitals` attribute a report to its session (#907)
+
+- These routes accept reports with no authentication, and they used the `user_id` in the body as the event's owner. The owner now comes from a valid session, and a report without one has no owner. Reports with a missing or bad token are still accepted, so errors during login are still captured.
+
+### Added — per-user watcher keys (#908)
+
+- `POST /watcher/keys` lets a signed-in user mint a key with the new `watcher.signals` scope, and `GET` and `DELETE /watcher/keys` list and revoke their own. It takes a session, so one key can't mint another.
+- `/watcher/signals` now accepts that key in `X-Platform-Key`. The signals belong to the key's owner, and naming another user answers 403 `TENANT_VIOLATION`.
+- A key holding only `watcher.signals` works on the watcher routes and nowhere else, because it lives on a user's machine and any user can mint one. It is refused everywhere a platform key is resolved, including MCP.
+- **Action for operators:** `X-API-Key` still works and can still name any user, so it stays a service credential. If a user's machine holds the deployment's `AINDY_API_KEY` for the watcher, give that user a key from `/watcher/keys` and rotate the shared one. The client needs the matching `aindy-sdk` release to send the new header.
+
 ## 2.31.3 — 2026-11-07
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.3.md`.
