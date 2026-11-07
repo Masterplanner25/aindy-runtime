@@ -12,7 +12,7 @@ import logging
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import or_
+from sqlalchemy import false, or_
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -47,6 +47,19 @@ class _CandidateScoringView:
         self.usage_count = int(candidate.get("usage_count") or 0)
         # Neutral prior when absent, matching the old `node_obj.weight or 1.0`.
         self.weight = float(candidate.get("weight") or 1.0)
+
+
+def _owner_only_scope(query, user_id):
+    """Restrict ``query`` to ``user_id``'s nodes, for reads with no shared-pool fallback.
+
+    No user at all means trusted in-process code, and stays unfiltered. A user that does not parse
+    is a caller whose identity we can't resolve, and sees nothing: leaving it unfiltered would hand
+    it every tenant's rows.
+    """
+    owner = parse_user_id(user_id)
+    if owner is None and user_id not in (None, ""):
+        return query.filter(false())
+    return apply_memory_owner_scope(query, owner_user_id=owner, shared_fallback=False)
 
 
 class MemoryNodeDAO:
@@ -116,7 +129,7 @@ class MemoryNodeDAO:
             return None
         query = self.db.query(MemoryNodeModel).filter(MemoryNodeModel.id == node_uuid)
         owner_user_id = parse_user_id(user_id)
-        query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=False)
+        query = _owner_only_scope(query, user_id)
         node = query.first()
         if node is None:
             return None
@@ -588,7 +601,7 @@ class MemoryNodeDAO:
                 seen_ids = {d["id"] for d in linked}
                 query = self.db.query(MemoryNodeModel).filter(MemoryNodeModel.id.in_(source_ids))
                 owner_user_id = parse_user_id(user_id)
-                query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=False)
+                query = _owner_only_scope(query, user_id)
                 if limit:
                     query = query.limit(limit)
                 nodes = query.all()
@@ -1524,7 +1537,7 @@ class MemoryNodeDAO:
         if user_id not in (None, "") and owner_user_id is None:
             raise ValueError("invalid user_id")
         query = self.db.query(MemoryNodeModel.id).filter(MemoryNodeModel.id.in_([sid, tid]))
-        query = apply_memory_owner_scope(query, owner_user_id=owner_user_id, shared_fallback=False)
+        query = _owner_only_scope(query, user_id)
         count = query.count()
         if count != 2:
             raise ValueError("source and/or target node does not exist")
@@ -1721,7 +1734,7 @@ class MemoryNodeDAO:
 
         query = self.db.query(MemoryNodeModel).filter(MemoryNodeModel.path == path)
         owner = parse_user_id(user_id)
-        query = apply_memory_owner_scope(query, owner_user_id=owner, shared_fallback=False)
+        query = _owner_only_scope(query, user_id)
         node = query.first()
         if node is None:
             return None
@@ -1736,7 +1749,7 @@ class MemoryNodeDAO:
             MemoryNodeModel.parent_path == parent_path
         )
         owner = parse_user_id(user_id)
-        query = apply_memory_owner_scope(query, owner_user_id=owner, shared_fallback=False)
+        query = _owner_only_scope(query, user_id)
         rows = query.limit(limit).all()
         return [enrich_node_with_path(self._node_to_dict(n)) for n in rows]
 
@@ -1749,7 +1762,7 @@ class MemoryNodeDAO:
             MemoryNodeModel.path.like(f"{safe_prefix}%")
         )
         owner = parse_user_id(user_id)
-        query = apply_memory_owner_scope(query, owner_user_id=owner, shared_fallback=False)
+        query = _owner_only_scope(query, user_id)
         rows = query.limit(limit).all()
         return [enrich_node_with_path(self._node_to_dict(n)) for n in rows]
 
@@ -1790,7 +1803,7 @@ class MemoryNodeDAO:
             # No path filter — fall through to tag/query filter below
             base_q = self.db.query(MemoryNodeModel)
             owner = parse_user_id(user_id)
-            base_q = apply_memory_owner_scope(base_q, owner_user_id=owner, shared_fallback=False)
+            base_q = _owner_only_scope(base_q, user_id)
             candidates = [enrich_node_with_path(self._node_to_dict(n)) for n in base_q.limit(limit * 4).all()]
 
         # Filter by tags
@@ -1835,9 +1848,7 @@ class MemoryNodeDAO:
             query = self.db.query(MemoryNodeModel).filter(
                 MemoryNodeModel.root_event_id == uuid.UUID(str(source_event_id))
             )
-            node = apply_memory_owner_scope(
-                query, owner_user_id=owner, shared_fallback=False
-            ).first()
+            node = _owner_only_scope(query, user_id).first()
             if node is None or str(node.id) in seen:
                 break
             d = enrich_node_with_path(self._node_to_dict(node))

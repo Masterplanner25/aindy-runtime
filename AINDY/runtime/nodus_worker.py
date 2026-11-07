@@ -163,6 +163,17 @@ def run_agent_tool(
             # RETRY-CLASSIFY-1 — structural; the guest loop must not re-attempt it
             "failure_class": "permission",
         }
+    # Everything below reads or writes `agent_steps` by `run_id`, which that table does not tie
+    # to a user. The token is what ties them, so it is checked before any of it.
+    from AINDY.agents.capability_service import token_binds_run
+
+    if not token_binds_run(execution_token, run_id, user_id):
+        return {
+            "success": False,
+            "result": None,
+            "error": "the capability token does not belong to this run",
+            "failure_class": "permission",
+        }
     tool_args = dict(args) if isinstance(args, dict) else {}
 
     if session_factory is None:

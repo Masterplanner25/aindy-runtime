@@ -2251,3 +2251,11 @@ A route is a new way to delete data, and it needs its own scope and design. Noth
 
 **Why**
 Inference refused `memory.search`, `memory.tree` and `memory.trace`, three of the five tools the server exposes by default, and `memory.delete` when writes are on. FR-53 (c) called that deliberate least-privilege and told authors to choose names that match, but the runtime's own syscalls do not, and renaming stable syscalls breaks callers. The grant is still one capability, and it is one the operator's allowlist already chose to expose, so inference added refusals and no protection. Widening `_infer_dispatch_capability` was rejected: it would not fix `memory.delete`, and it would change the Nodus and worker seams, where a guest writes the syscall name, so the name rule does gate something. The cost is that `memory.delete` now really deletes on a server with `AINDY_MCP_SERVER_ALLOW_WRITES`, and any mismatched syscall an operator named in `AINDY_MCP_SERVER_TOOLS` starts working. Both are what those settings say they do.
+
+### DEC-113
+**Status:** `accepted` (2026-11-07 — decided by the owner: "yes start on the 2.31.2 fix")
+
+**Decision — Identity comes from authentication at every step of a call. A `user_id` in the part of a payload that a syscall forwards (`job.submit`, `flow.run`, `flow.execute_intent`, `nodus.execute`) is held to DEC-103's rule, and transports refuse it even under `observe`. The Nodus tool seam needs a token bound to the run and user, checked without expiry. A flow node uses an `agent_run_id` from state only if the caller owns that run. A unit source id from `memory.nodus` carries the user. An identity that doesn't parse sees nothing on owner-only memory reads.**
+
+**Why**
+Each of these trusted a value the caller can write, past the point where the caller was authenticated. The token check sits at the seam, not as a list of refused state keys, because more than one route reaches that seam and a list has to be kept complete. Expiry is left out because a crash re-drive can replay its own recorded steps on an expired token, and `execute_tool` still checks expiry before any tool runs. No user at all stays unfiltered on those reads, because that is trusted in-process code.

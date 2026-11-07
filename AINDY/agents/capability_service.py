@@ -704,6 +704,42 @@ def validate_token(token: Optional[dict], run_id: str, user_id: str) -> dict:
         return {"ok": False, "error": "token validation failed", "granted_tools": [], "allowed_capabilities": []}
 
 
+def token_binds_run(token: Optional[dict], run_id: str, user_id: str) -> bool:
+    """True when ``token`` was issued for this run and this user and has not been altered.
+
+    Expiry is not checked. This answers whose run a token belongs to, which a crash re-drive
+    still needs to know when replaying recorded steps on a token that has since expired.
+    ``execute_tool`` checks expiry before any tool runs. Never raises.
+    """
+    try:
+        if not isinstance(token, dict):
+            return False
+        if str(token.get("run_id", "")) != str(run_id) or str(token.get("user_id", "")) != str(user_id):
+            return False
+        token_hash = token.get("token_hash")
+        execution_token = str(token.get("execution_token", ""))
+        if token_hash is None or not execution_token:
+            return False
+        return bool(
+            _token_hash_matches(
+                token_hash,
+                run_id=str(run_id),
+                user_id=str(user_id),
+                execution_token=execution_token,
+                issued_at=str(token.get("issued_at")),
+                expires_at=str(token.get("expires_at")),
+                approval_mode=token.get("approval_mode"),
+                # The lists as issued, not normalized. Normalizing keeps only names this process
+                # has registered, and a Nodus worker has registered none when this runs.
+                granted_tools=list(token.get("granted_tools") or []),
+                allowed_capabilities=list(token.get("allowed_capabilities") or []),
+            )
+        )
+    except Exception as exc:
+        logger.warning("[CapabilityService] token_binds_run failed: %s", exc)
+        return False
+
+
 def check_execution_capability(
     token: Optional[dict],
     run_id: str,

@@ -291,6 +291,15 @@ def _declare_resource_limits(eu, env_columns: dict[str, Any], user_id: str) -> N
         logger.debug("[ExecutionGate] resource limit declaration skipped", exc_info=True)
 
 
+def _unit_belongs_to_another_user(eu, user_id) -> bool:
+    """True when both sides have a user and they differ. A unit with no owner is not anyone's."""
+    from AINDY.platform_layer.user_ids import parse_user_id
+
+    owner = parse_user_id(getattr(eu, "user_id", None))
+    caller = parse_user_id(user_id)
+    return owner is not None and caller is not None and owner != caller
+
+
 def require_execution_unit(
     *,
     db: Session,
@@ -363,6 +372,11 @@ def require_execution_unit(
 
         eus = ExecutionUnitService(db)
         eu = eus.get_by_source(source_type, source_id)
+        if eu is not None and _unit_belongs_to_another_user(eu, user_id):
+            logger.warning(
+                "[EU] source %s/%s belongs to another user; not reusing it", source_type, source_id
+            )
+            return None
         if eu is None:
             eu = eus.create(
                 eu_type=eu_type,

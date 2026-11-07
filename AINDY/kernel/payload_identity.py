@@ -20,6 +20,16 @@ from typing import Any
 
 PAYLOAD_USER_KEY = "user_id"
 
+#: Syscalls that hand part of their payload on to code that runs later: a job handler, or a flow
+#: node reading state. The same caller writes that part as the rest of the payload, so its
+#: `user_id` is held to the same rule. Only the named key is checked, one level down.
+FORWARDED_PAYLOAD_KEYS = {
+    "sys.v1.job.submit": "payload",
+    "sys.v1.flow.run": "initial_state",
+    "sys.v1.flow.execute_intent": "intent_data",
+    "sys.v1.nodus.execute": "input_payload",
+}
+
 
 class PayloadIdentityViolation(PermissionError):
     """A payload named a user other than the authenticated caller."""
@@ -48,6 +58,14 @@ def payload_user_id_mismatch(payload: Any, user_id: Any) -> bool:
     return _normalize(requested) != _normalize(user_id)
 
 
+def forwarded_user_id_mismatch(syscall: str, payload: Any, user_id: Any) -> bool:
+    """True when the part of ``payload`` that ``syscall`` forwards names another user."""
+    key = FORWARDED_PAYLOAD_KEYS.get(syscall)
+    if key is None or not isinstance(payload, dict):
+        return False
+    return payload_user_id_mismatch(payload.get(key), user_id)
+
+
 def bind_payload_user_id(payload: Any, user_id: Any, *, syscall: str = "") -> dict[str, Any]:
     """Return a copy of ``payload`` whose ``user_id`` is the caller's.
 
@@ -57,10 +75,10 @@ def bind_payload_user_id(payload: Any, user_id: Any, *, syscall: str = "") -> di
     silently overwritten, so the caller learns its assertion was wrong.
     """
     bound = dict(payload) if isinstance(payload, dict) else {}
-    if payload_user_id_mismatch(bound, user_id):
+    if payload_user_id_mismatch(bound, user_id) or forwarded_user_id_mismatch(syscall, bound, user_id):
         target = f" for {syscall!r}" if syscall else ""
         raise PayloadIdentityViolation(
-            f"TENANT_VIOLATION: payload user_id {bound.get(PAYLOAD_USER_KEY)!r}{target} does not "
+            f"TENANT_VIOLATION: a payload user_id{target} does not "
             f"match the authenticated caller; a payload may not choose the user it acts on"
         )
     if bound.get(PAYLOAD_USER_KEY) in (None, ""):

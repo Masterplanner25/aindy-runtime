@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sys
+import hashlib
 import logging
 from typing import Any, Optional
 
@@ -1540,6 +1541,14 @@ def execute_nodus_runtime(
     return adapter.run_file(file_path, execution_context)
 
 
+def _user_scoped_source_id(user_id: str, name: str) -> str:
+    """A unit source id only this user can reach, within the column's 128 characters."""
+    scoped = f"{user_id}:{name}"
+    if len(scoped) <= 128:
+        return scoped
+    return f"{user_id}:{hashlib.sha256(name.encode()).hexdigest()}"
+
+
 def execute_nodus_task_payload(
     *,
     task_name: str,
@@ -1554,7 +1563,10 @@ def execute_nodus_task_payload(
 ) -> dict[str, Any]:
     normalized_user_id = str(require_user_id(user_id))
     operation_name = task_name
-    eu_id = execution_id or f"memory.nodus.{task_name}"
+    # The task name and `execution_id` are the caller's, so the source key carries the user.
+    eu_id = _user_scoped_source_id(
+        normalized_user_id, execution_id or f"memory.nodus.{task_name}"
+    )
 
     # Gate: ensure a DB-backed ExecutionUnit exists BEFORE the VM starts so the
     # run is always recoverable even if the process dies mid-execution.

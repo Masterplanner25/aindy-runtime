@@ -72,6 +72,34 @@ MAX_STEP_RETRIES = 3  # kept for reference; retry gate now reads RetryPolicy
 from AINDY.core.retry_policy import classify_failure, decide_retry, resolve_retry_policy as _resolve_retry_policy  # noqa: E402
 
 
+def _agent_run_belongs_to(db, agent_run_id, user_id, token) -> bool:
+    """Whether ``agent_run_id`` from flow state is this user's. Fails closed.
+
+    A token bound to the run answers it with no query, which is the agent path. Without one,
+    only the row can say.
+    """
+    try:
+        if isinstance(token, dict):
+            from AINDY.agents.capability_service import token_binds_run
+
+            return token_binds_run(token, str(agent_run_id), str(user_id))
+        from AINDY.db.models import AgentRun
+        from AINDY.platform_layer.user_ids import parse_user_id
+
+        owner = parse_user_id(user_id)
+        if owner is None:
+            return False
+        return (
+            db.query(AgentRun.id)
+            .filter(AgentRun.id == _db_run_id(agent_run_id), AgentRun.user_id == owner)
+            .first()
+            is not None
+        )
+    except Exception as exc:
+        logger.warning("[nodus.execute] could not check the agent run's owner: %s", exc)
+        return False
+
+
 def _db_run_id(run_id):
     parsed = parse_user_id(run_id)
     return parsed if parsed is not None else run_id
@@ -1046,6 +1074,14 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
     # RECOVERY-GRANULARITY-1 — set by the crash re-drive via extra_initial_state; the worker
     # replays this segment's recorded `success` steps.
     _continuation = bool(state.get("__continuation"))
+    # Flow state can be written by the caller. A run named in it is used only if this user owns it.
+    if state.get("agent_run_id") and not _agent_run_belongs_to(
+        db, state.get("agent_run_id"), user_id, _execution_token
+    ):
+        logger.warning("[nodus.execute] ignoring agent run state the caller does not own")
+        _execution_token = None
+        _agent_run_id = str(run_id or "")
+        _continuation = False
 
     # ── Execute via NodusRuntimeAdapter ──────────────────────────────────────
     nodus_result = execute_nodus_runtime(
