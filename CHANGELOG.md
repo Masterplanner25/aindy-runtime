@@ -4,6 +4,39 @@
 
 _Nothing yet._
 
+## 2.34.0 — 2026-11-08
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.34.0.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ Run `aindy-runtime events backfill-call-users` once (dry-run, then `--yes`).** Outbound-call events written before this release have no user, so a per-user trace graph drops them and every edge through them. It fills only traces that belong to one user.
+- **`memory backfill-paths --yes` now works** (it failed on its first write in 2.31.6–2.33.0). If you couldn't run it, run it now.
+- **A failing runtime syscall handler no longer rolls back the session its caller passed in** (DEC-124); it rolls back only its own work.
+- **No migration.** Alembic head stays `0021`, schema contract `2026-11-08`.
+
+### Fixed — `memory backfill-paths --yes` failed on its first write; a refused user key came out of `chat_completion` as a plain `LLMCallError` (FR-62, FR-63, #930)
+
+- **FR-62: every database CLI command now loads the model registry first.** A fresh `aindy-runtime` process had not imported `users` or `system_events`, so the first flush of a memory node failed resolving its foreign keys (`could not find table 'users'`), and nothing was written. The dry run only counts, which is why it worked. The fix covers all seven commands that reach the database, not just the reported one; `bootstrap-schema` already loaded the registry. The test now runs the command in a new interpreter, which is the only way to see it.
+- **FR-62: a writing backfill run reports `would_fill`** as what it found to do. It was set to 0 after writing, which read as "nothing was found".
+- **FR-63: `ProviderKeyRejected` and `ProviderKeyRequired` pass through `chat_completion` and `chat_completion_deepseek` as themselves.** Both helpers unwrap any `LLMCallError` that has a cause, for older callers that catch the provider's own exception; that unwrapped the rejection into the inner call error and left the two causes pointing at each other. Other errors unwrap as before. A refused key is still never retried.
+
+### Fixed — outbound-call events record whose call they were, and old ones can take their trace's user (FR-61, DEC-123, #931)
+
+- **New `external.call.*` events name the caller.** Only the agent planner passed a user to `perform_external_call`, so the embedding job's model calls, and any call site that passed none, were written with no user. FR-60's per-user trace graph drops such events and every edge through them: on the app's largest trace, 583 edges unscoped became 291 scoped, because the embedding call was the hub. An event now takes the call site's `user_id`, else one attributed with `external_calls_attributed_to(...)`, else the current request's caller. The embedding job attributes its call to the node's owner, read before its pre-call commit so no transaction stays open through the call.
+- **New one-time command: `aindy-runtime events backfill-call-users`** (dry-run unless `--yes`). It gives old outbound-call events their trace's user, **only in a trace whose other events all belong to one user**; a trace with no user or with two is left alone. FR-60's rule is unchanged.
+- **`count_key_source(provider, source)`** is the public name for counting whose key paid when a call site resolves a key itself (`resolve_provider_key`). `_count_key_source` stays as an alias, because the app's FR-59 phase 3 imports it.
+
+### Fixed — a flow node that runs out of retries fails the run with its last error, not only a count (FR-64, #932)
+
+- A node that kept answering `RETRY` failed its run with `Node <name> failed after N retries` and nothing else, so a handler's message never reached the route. The app's Genesis node maps a syscall error to `RETRY`; a missing provider key's "Add it in Settings" became a generic 500. The run's `result.error` now ends with the node's last error: `Node <name> failed after N retries: <error>`. A `RETRY` with no error keeps the old message.
+- FR-64's other report, the run "disappearing", does not happen on a real session: the runner commits the `FlowRun` when it starts, and a handler that rolls back the caller's session cannot remove it. It reproduces only where the app's and the test's sessions share one outer transaction, so the runner's commit is not a commit. Measured on PostgreSQL both ways.
+
+### Fixed — a runtime syscall handler that fails no longer rolls back its caller's session (DEC-124, FR-64, #933)
+
+- When a write handler (`memory.write`, `memory.link`, `memory.delete`, `event.emit`, `agent.ensure_initial_run`) ran on a session its caller passed in (`metadata["_db"]`, as flow nodes and the memory routes do) and failed, it rolled back the caller's whole session. That discarded whatever the caller had not committed yet, against the handler's own contract. Under a test fixture that holds the app's and the test's sessions in one outer transaction it also erased the caller's `FlowRun`, which is how FR-64 was found.
+- Now the handler puts its work in a savepoint and rolls back only that. Success is unchanged.
+- **Still rolls back everything:** an app handler that calls `rollback()` on the session itself, and `MemoryNodeDAO.save()` on a database error. A savepoint can't stop a session-level rollback.
+
 ## 2.33.0 — 2026-11-08
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.33.0.md`.
