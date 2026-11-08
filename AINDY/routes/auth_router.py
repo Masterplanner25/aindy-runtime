@@ -45,6 +45,13 @@ emit_system_event = queue_system_event
 initialize_signup_state = None
 
 
+def registration_open() -> bool:
+    """FR-57 — `AINDY_REGISTRATION`. Only `open` opens it; any other value fails closed."""
+    from AINDY.config import settings
+
+    return str(getattr(settings, "AINDY_REGISTRATION", "open") or "open").strip().lower() == "open"
+
+
 @router.post("/register", status_code=202)
 @limiter.limit("10/minute")
 def register(
@@ -66,6 +73,12 @@ def register(
     def handler(ctx):
         from AINDY.db.models.user import User
         from AINDY.services.auth_service import hash_password
+
+        if not registration_open():
+            # FR-57 — closed. Same answer as every other path, after the same hashing cost,
+            # with nothing created and nothing sent, so it reveals nothing about any address.
+            hash_password(body.password or "")
+            return {"status": "verification_sent"}
 
         email = (body.email or "").strip()
 

@@ -2316,3 +2316,13 @@ The SDK's watcher runs on the user's machine and needed `AINDY_API_KEY`, a serve
 The path tools filter on the stored column, so 1,371 of the app's 1,397 nodes were invisible to them while every reader showed them a path. Storing that same path changes nothing a caller has seen. Giving new writes `memory.write`'s `general` form instead would show one path today and store another, and the backfill would have to choose between them.
 
 **Declined:** naming the namespace something other than `_legacy` for new nodes. The name reads oddly for a node written today, but changing it would move every path already shown. A rename can come later as its own decision. Writers that know their namespace should pass a path, as `memory.write` does.
+
+### DEC-120
+**Status:** `accepted` (2026-11-08 — the owner approved building FR-57, FR-58 and FR-60: "yes". These shapes are Claude Code's, reviewed in #918)
+
+**Decision — (1) FR-57: `AINDY_REGISTRATION` is `open` (default) or `closed`. Closed returns the same 202 and body, after the same hashing cost, and creates and sends nothing, including no notice to an existing address. Any other value counts as `closed`; empty means unset. Invite tokens, the request's optional second step, are not built. (2) FR-58: `/db` needs an operator (`require_admin_principal`) instead of the shared key, on the router, so every mount of it is covered. (3) FR-60: the trace helpers take an optional `user_id`, keeping only that user's events and memory nodes and the edges whose both ends remain; depth is counted inside that graph. The execution-graph route passes the caller to any helper that accepts it.**
+
+**Why**
+(1) The enumeration fix (FR-6 Phase C) depends on one answer for every request, so closing must not add a second. Failing closed on a typo is the safe side for a switch whose purpose is to keep strangers out. (2) The schema is operator diagnostics, and the app mounts this router at its root behind nothing else. (3) Nothing today puts two users' events in one trace, so the parameter is defence in depth, and optional so the app's own helpers keep working until they adopt it.
+
+**Not decided here:** invite-only registration, and FR-59 (per-user provider keys), which gets a design for the owner's sign-off first.

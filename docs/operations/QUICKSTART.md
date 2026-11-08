@@ -164,6 +164,9 @@ endpoint cannot be used to find out which emails have accounts. If an email chan
 it also sends a verification link. Verification is not required to log in unless you set
 `AINDY_REQUIRE_VERIFIED_LOGIN=true`.
 
+To stop new sign-ups, set `AINDY_REGISTRATION=closed`. Register then answers exactly as before,
+but creates no account and sends nothing. Existing accounts, login and password reset are unchanged.
+
 Alternatively, set `AINDY_BOOTSTRAP_ADMIN_EMAIL=admin@example.com` in `AINDY/.env` and restart.
 That only grants admin to an account that already exists. The runtime never makes the first
 registered user an admin.
