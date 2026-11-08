@@ -225,6 +225,48 @@ def _get_planner_backend(name: str):
     return backend
 
 
+def _planner_client(user_id, db):
+    """FR-59 (DEC-121) — the planner pays with the run's user's own key when it has one.
+
+    Server mode, an operator without a key and a call with no user keep exactly today's client,
+    ``get_openai_client()`` from this module. A non-operator without a key in ``per_user`` mode
+    gets ``ProviderKeyRequired``, so the run fails with a message instead of spending the
+    operator's key.
+    """
+    from AINDY.platform_layer.llm_client import _count_key_source, user_key_client
+    from AINDY.platform_layer.provider_keys import resolve_provider_key
+
+    resolved = resolve_provider_key("openai", None if user_id is None else str(user_id), db=db)
+    _count_key_source("openai", resolved.source)
+    if resolved.source != "user":
+        return get_openai_client(), "server"
+    return user_key_client("openai", resolved), "user"
+
+
+def _planner_chat(*, system_prompt, objective, user_id, metadata, db):
+    client, key_source = _planner_client(user_id, db)
+    return perform_external_call(
+        service_name="openai",
+        db=db,
+        user_id=user_id,
+        endpoint="chat.completions.create",
+        model=settings.AINDY_AGENT_PLANNER_MODEL,
+        method="openai.chat",
+        extra={**dict(metadata or {}), "key_source": key_source},
+        operation=lambda: chat_completion(
+            client,
+            model=settings.AINDY_AGENT_PLANNER_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Objective: {objective}"},
+            ],
+            temperature=settings.AINDY_AGENT_PLANNER_TEMPERATURE,
+            response_format={"type": "json_object"},
+            timeout=settings.OPENAI_CHAT_TIMEOUT_SECONDS,
+        ),
+    )
+
+
 def _invoke_planner_backend(
     *,
     backend_name: str,
@@ -238,25 +280,8 @@ def _invoke_planner_backend(
 ) -> dict:
     backend = _get_planner_backend(backend_name)
     runtime_api = PlannerRuntimeApi(
-        openai_chat_completion=lambda *, system_prompt, objective, user_id, metadata: perform_external_call(
-            service_name="openai",
-            db=db,
-            user_id=user_id,
-            endpoint="chat.completions.create",
-            model=settings.AINDY_AGENT_PLANNER_MODEL,
-            method="openai.chat",
-            extra=dict(metadata or {}),
-            operation=lambda: chat_completion(
-                get_openai_client(),
-                model=settings.AINDY_AGENT_PLANNER_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Objective: {objective}"},
-                ],
-                temperature=settings.AINDY_AGENT_PLANNER_TEMPERATURE,
-                response_format={"type": "json_object"},
-                timeout=settings.OPENAI_CHAT_TIMEOUT_SECONDS,
-            ),
+        openai_chat_completion=lambda *, system_prompt, objective, user_id, metadata: _planner_chat(
+            system_prompt=system_prompt, objective=objective, user_id=user_id, metadata=metadata, db=db
         )
     )
     plan = backend(

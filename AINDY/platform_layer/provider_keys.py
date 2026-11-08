@@ -60,7 +60,13 @@ class ProviderKeyRequired(ProviderKeyError):
         self.provider = provider
 
 
-class ProviderKeyRejected(ProviderKeyError):
+def _llm_call_error():
+    from AINDY.platform_layer.llm_client import LLMCallError
+
+    return LLMCallError
+
+
+class ProviderKeyRejected(ProviderKeyError, _llm_call_error()):
     """The provider refused the caller's own key. Never retried on the server's key."""
 
     def __init__(self, provider: str, key_hint: str = "") -> None:
@@ -80,6 +86,7 @@ class ResolvedKey:
     value: Optional[str]
     source: str  # "user" or "server"
     fingerprint: Optional[str]
+    key_hint: str = ""
 
     def __repr__(self) -> str:  # never print the key
         return f"ResolvedKey(provider={self.provider!r}, source={self.source!r}, fingerprint={self.fingerprint!r})"
@@ -335,7 +342,9 @@ def resolve_provider_key(provider: str, user_id: Optional[str] = None, *, db=Non
         )
         if row is not None:
             value = open_sealed(row.ciphertext, key_version=row.key_version, user_id=str(user_id), provider=provider)
-            return ResolvedKey(provider=provider, value=value, source="user", fingerprint=_fingerprint(value))
+            return ResolvedKey(
+                provider=provider, value=value, source="user", fingerprint=_fingerprint(value), key_hint=row.key_hint
+            )
         if _is_operator(db, str(user_id)):
             return _server_key(provider)
         raise ProviderKeyRequired(provider)

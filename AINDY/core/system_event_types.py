@@ -4,6 +4,9 @@ from __future__ import annotations
 class SystemEventTypes:
     # EFFECT-OUTCOME-UNKNOWN-1 phase 4 — an operator resolved an `unknown` effect (audit).
     EFFECT_RECONCILED = "effect.reconciled"
+    # FR-59 (DEC-121) — a user set or deleted their own provider key. Provider and hint only.
+    PROVIDER_KEY_SET = "provider_key.set"
+    PROVIDER_KEY_DELETED = "provider_key.deleted"
     STARTUP_RECOVERY_FAILED = "startup.recovery.failed"
     STARTUP_RECOVERY_COMPLETED = "startup.recovery.completed"
 

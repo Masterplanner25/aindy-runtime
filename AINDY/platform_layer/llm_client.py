@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+from collections import OrderedDict
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from AINDY.kernel.circuit_breaker import CircuitBreaker, CircuitOpenError
@@ -263,6 +265,129 @@ class FallbackLLMClient:
 
     def is_available(self) -> bool:
         return any(client.is_available() for client in self._clients)
+
+
+# ── FR-59 phase 2 (DEC-121): a client and breaker per user key ─────────────────────────────
+#
+# The server's key keeps today's process singleton and breaker per provider. A user's own key
+# gets its own client and its own breaker: a revoked user key opening the shared breaker would
+# cut off the operator and every other user. Cached by (provider, key fingerprint), never the
+# key, in a bounded LRU.
+
+_USER_CLIENT_CACHE_MAX = 256
+_user_clients: "OrderedDict[tuple[str, str], LLMClient]" = OrderedDict()
+_user_clients_lock = threading.Lock()
+
+
+def _raw_client_for_key(provider: str, api_key: str) -> LLMClient:
+    if provider == "openai":
+        from AINDY.platform_layer.openai_client import OpenAILLMClient
+
+        return OpenAILLMClient(api_key=api_key)
+    if provider == "deepseek":
+        from AINDY.platform_layer.deepseek_client import DeepSeekLLMClient
+
+        return DeepSeekLLMClient(api_key=api_key)
+    if provider == "anthropic":
+        from AINDY.platform_layer.anthropic_client import AnthropicLLMClient
+
+        return AnthropicLLMClient(api_key=api_key)
+    if provider == "azure_openai":
+        from AINDY.platform_layer.azure_openai_client import AzureOpenAILLMClient
+
+        return AzureOpenAILLMClient(api_key=api_key)
+    raise ValueError(f"The runtime has no model client for {provider!r}; resolve its key with resolve_provider_key.")
+
+
+def _is_auth_failure(exc: BaseException) -> bool:
+    """The provider refused the key: a 401 anywhere in the cause chain, or an SDK auth error."""
+    seen = 0
+    current: BaseException | None = exc
+    while current is not None and seen < 8:
+        if getattr(current, "status_code", None) == 401:
+            return True
+        if type(current).__name__ == "AuthenticationError":
+            return True
+        current = current.__cause__ or current.__context__
+        seen += 1
+    return False
+
+
+class UserKeyLLMClient(CircuitBreakerLLMClient):
+    """A client paying with a user's own key. A refusal of the key becomes
+    ``ProviderKeyRejected`` and is never retried on the server's key."""
+
+    key_source = "user"
+
+    def __init__(self, client: LLMClient, *, provider: str, fingerprint: str, key_hint: str) -> None:
+        super().__init__(
+            client,
+            provider=provider,
+            breaker=CircuitBreaker(name=f"{provider}:user:{fingerprint}", failure_threshold=5, recovery_timeout_secs=60),
+        )
+        self._key_hint = key_hint
+
+    def _guarded_call(self, func, *args, **kwargs):
+        try:
+            return super()._guarded_call(func, *args, **kwargs)
+        except Exception as exc:
+            if _is_auth_failure(exc):
+                from AINDY.platform_layer.provider_keys import ProviderKeyRejected
+
+                raise ProviderKeyRejected(self._provider, self._key_hint) from exc
+            raise
+
+
+def client_key_source(client: Any) -> str:
+    """``user`` for a client paying with a user's key, else ``server``."""
+    return getattr(client, "key_source", "server")
+
+
+def _count_key_source(provider: str, source: str) -> None:
+    try:
+        from AINDY.platform_layer.metrics import llm_key_source_total
+
+        llm_key_source_total.labels(provider=provider, key_source=source).inc()
+    except Exception:  # pragma: no cover - metrics never change a call
+        pass
+
+
+def user_key_client(provider: str, resolved: Any) -> LLMClient:
+    """The cached client for a resolved user key."""
+    cache_key = (provider, str(resolved.fingerprint))
+    with _user_clients_lock:
+        client = _user_clients.get(cache_key)
+        if client is not None:
+            _user_clients.move_to_end(cache_key)
+            return client
+    client = UserKeyLLMClient(
+        _raw_client_for_key(provider, resolved.value),
+        provider=provider,
+        fingerprint=str(resolved.fingerprint),
+        key_hint=getattr(resolved, "key_hint", ""),
+    )
+    with _user_clients_lock:
+        _user_clients[cache_key] = client
+        _user_clients.move_to_end(cache_key)
+        while len(_user_clients) > _USER_CLIENT_CACHE_MAX:
+            _user_clients.popitem(last=False)
+    return client
+
+
+def get_llm_client_for_user(provider: str, user_id: str | None, *, db=None) -> LLMClient:
+    """The client whose key should pay for this user's call (FR-59).
+
+    In ``server`` mode, for an operator without a key, or for a call with no user, this is
+    exactly ``get_llm_client(provider)``. With the user's own key it is that key's client.
+    A non-operator without a key in ``per_user`` mode gets ``ProviderKeyRequired``.
+    """
+    from AINDY.platform_layer.provider_keys import resolve_provider_key
+
+    resolved = resolve_provider_key(provider, user_id, db=db)
+    _count_key_source(resolved.provider, resolved.source)
+    if resolved.source != "user":
+        return get_llm_client(resolved.provider)
+    return user_key_client(resolved.provider, resolved)
 
 
 def get_llm_client(provider: str = "openai") -> LLMClient:
