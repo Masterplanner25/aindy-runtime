@@ -1745,6 +1745,36 @@ inside it:**
 
 ---
 
+## Entry 055 — 2026-11-08
+
+**Trigger:** `v2.31.6` release tag (`sandbox-escape-linux.yml`, run `42441712293`).
+**Commit:** `6743bd4` (release PR #919's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 054**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 9.53s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `42441712293`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.31.5..v2.31.6` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #917 (DEC-119) stores memory paths at save and adds an operator backfill. #918 (DEC-120) adds `AINDY_REGISTRATION`, puts
+  `/db/verify` behind an operator and scopes the trace helpers. None of it is tested here.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. It passed on `6743bd4` before the tag, along with
+Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `42441712241`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API and simple index both reported `2.31.6` (wheel + sdist).
+- Boot Smoke on the published wheel installed on **attempt 2**, the known CDN lag the retry exists for.
+- The GitHub release is non-draft (03:20Z on 2026-11-08).
+- `publish.yml` is unchanged from `v2.31.5`.
+- The published wheel was read: version 2.31.6, with the backfill module and command, path storage at save, the
+  registration switch, the operator check on `/db` and the trace scoping.
+
 ## Entry 054 — 2026-11-08
 
 **Trigger:** `v2.31.5` release tag (`sandbox-escape-linux.yml`, run `42429430463`).
