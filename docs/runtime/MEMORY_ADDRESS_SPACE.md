@@ -1,6 +1,6 @@
 ---
 title: "Memory Address Space (MAS)"
-last_verified: "2026-08-15"
+last_verified: "2026-11-08"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -113,11 +113,13 @@ parent_path_of(path)  # /memory/user-abc/auth/decision/4f9a... → /memory/user-
 
 ## 4. Legacy Compatibility
 
-Nodes created before MAS (no `path` column) are never backfilled. Instead, a stable derived path is computed on-the-fly:
+A node saved without a path is shown at a stable derived path:
 
 ```python
 derive_legacy_path(node_dict) -> "/memory/{user_id}/_legacy/{memory_type}/{node_id}"
 ```
+
+**Since 2.31.6 that path is also stored (MEM-PATH-NULL-1, DEC-119).** `MemoryNodeDAO.save` stores it for a node written without a path and with an owner, and `aindy-runtime memory backfill-paths` stores it on older rows. Before that it was only computed, so `memory.tree` and a wildcard `memory.list`, which filter on the stored column, could not find these nodes. On the app's stack that was 1,371 of 1,397. A node with no owner still has no stored path.
 
 `enrich_node_with_path(node_dict)` adds the derived path to any node dict that is missing one. This means all nodes, old and new, present a consistent path interface to callers.
 
@@ -222,9 +224,10 @@ Rules (in priority order), **corrected 2026-08-13** against
 
 > **The old rule 4 was wrong in a way worth calling out.** It said the fallback namespace is
 > **`_legacy`**. It is **`general`**. `LEGACY_NAMESPACE` is used only by `derive_legacy_path`
-> (§4) to synthesise a read-side path for pre-MAS rows — nothing ever *writes* into `_legacy`.
-> Anyone who read this section and went looking for un-namespaced writes under
-> `/memory/{tenant}/_legacy/**` would find nothing; they are under `/memory/{tenant}/general/**`.
+> (§4) for nodes saved without a path. Since 2.31.6 those paths are stored too, so `/memory/{tenant}/_legacy/**` does
+> find them. `sys.v1.memory.write` never writes there: it always builds a path, under `general` by default.
+> So an un-namespaced `memory.write` is under `/memory/{tenant}/general/**`, while a node some other writer saved without a
+> path is under `/memory/{tenant}/_legacy/**`.
 
 There is no separate rule for "only namespace set" — rule 2 covers it, because each field falls
 back independently.

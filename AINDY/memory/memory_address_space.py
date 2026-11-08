@@ -30,13 +30,13 @@ Hybrid query
         "limit": 10
     }
 
-Backward compatibility
-----------------------
-Legacy MemoryNodes that predate MAS have path == NULL.  Their canonical
-address is DERIVED on-the-fly using derive_legacy_path(node) — no DB
-backfill is required.  derive_legacy_path returns a stable path based on
-user_id + memory_type + node_id so legacy nodes are addressable but are
-not stored back to DB.
+Nodes saved without a path
+--------------------------
+A node written without a path is shown at derive_legacy_path(node):
+/memory/{user_id}/_legacy/{memory_type}/{node_id}. Since MEM-PATH-NULL-1 (DEC-119)
+that path is also STORED: MemoryNodeDAO.save stores it for an owned node, and
+`aindy-runtime memory backfill-paths` stores it on older rows, because the path
+tools filter on the stored column. A node with no owner has no stored path.
 """
 from __future__ import annotations
 
@@ -210,6 +210,22 @@ def derive_legacy_path(node_dict: dict) -> str:
     memory_type = node_dict.get("memory_type") or node_dict.get("node_type") or "insight"
     node_id = node_dict.get("id") or str(uuid.uuid4())
     return build_path(user_id, LEGACY_NAMESPACE, memory_type, node_id)
+
+
+def stored_path_fields(*, user_id: str, memory_type: str | None, node_id: str) -> dict[str, str]:
+    """The address a node with no path has always been shown at, as the columns to store.
+
+    MEM-PATH-NULL-1 (DEC-119): ``MemoryNodeDAO.save`` stores this for a node written without a
+    path, and the backfill stores it for older rows. It is exactly ``derive_legacy_path``, so
+    storing it changes no path a caller has already seen.
+    """
+    path = derive_legacy_path({"user_id": user_id, "memory_type": memory_type, "id": node_id})
+    return {
+        "path": path,
+        "namespace": LEGACY_NAMESPACE,
+        "addr_type": memory_type or "insight",
+        "parent_path": parent_path_of(path),
+    }
 
 
 def parent_path_of(path: str) -> str:
