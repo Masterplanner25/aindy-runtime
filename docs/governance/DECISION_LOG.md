@@ -2350,3 +2350,11 @@ Measured on PostgreSQL in the design's §1: on 0.4.2 the similar half returned `
 
 **Why**
 The app found its largest traces cut apart: the embedding call was the hub, and it had no user, so FR-60's scoping dropped it and every edge through it. Declined: letting a scoped graph keep userless events that share a trace with the caller's (it would loosen FR-60's rule for every read, permanently), and fixing only new events (the app's existing traces would stay broken). A trace with two users, or none, is left alone because the call's owner is not known there.
+
+### DEC-124
+**Status:** `accepted` (2026-11-08 — the owner: "we'll go with your recommendation", for FR-64's open half)
+
+**Decision — a runtime write handler on a caller-owned session (`metadata["_db"]`) puts its work in a savepoint (`_begin_handler_write`) and, on failure, rolls back to it; it no longer rolls back the caller's session. Runtime handlers only: `memory.write`, `memory.link`, `memory.delete`, `event.emit`, `agent.ensure_initial_run`. A savepoint the handler's DAO already closed by committing is skipped.**
+
+**Why**
+`_acquire_handler_db`'s contract says a handler must not roll back a caller's session, but `_finish_handler_write` did. On a real session that discarded what the caller had not committed (the flow runner's queued events, a route's earlier writes); under a test fixture sharing one outer transaction it erased the caller's `FlowRun`, which is how the app saw FR-64. Not covered, and recorded: an app handler that calls `rollback()` on the session itself, and `MemoryNodeDAO.save()`'s own `rollback()` on a database error, both still roll back everything (a savepoint can't stop a session-level rollback). `memory.write` and `memory.link` still commit a caller's session through their DAO, as routes rely on; unchanged.
