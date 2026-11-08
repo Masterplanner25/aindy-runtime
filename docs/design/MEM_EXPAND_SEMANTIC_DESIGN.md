@@ -8,9 +8,11 @@ owner: "platform-team"
 
 # MEM-EXPAND-DEAD-1 — turning on the semantic half of memory expansion — design
 
-**PROPOSAL, 2026-11-08: the decisions in §7 are the owner's.** It is a proposal under `AGENT_WORKING_RULES.md` §8
-because it changes what a memory read returns. It also takes a dependency bump that Dependabot offered in August
-(#390), which we held on purpose. Owning entry: `TECH_DEBT.md` `MEM-EXPAND-DEAD-1`.
+**ACCEPTED 2026-11-08 (DEC-122): the owner took every recommendation in §7. Phase 1 built in #927: pgvector 0.5.1, the
+switch (off), the floor, the count removal and batched fetch, `tests/integration/test_memory_expand_semantic.py` and a
+work budget (measured 2 queries for one node, 4 for three).** Originally a proposal under `AGENT_WORKING_RULES.md` §8,
+because it changes what a memory read returns. It also takes a dependency bump that Dependabot offered in August (#390),
+which we held on purpose. Owning entry: `TECH_DEBT.md` `MEM-EXPAND-DEAD-1`.
 
 ## 1. The problem, measured
 

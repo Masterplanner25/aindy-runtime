@@ -2334,3 +2334,11 @@ The path tools filter on the stored column, so 1,371 of the app's 1,397 nodes we
 
 **Why**
 Recorded in the design's §8, one recommendation per question. D4 is the one with product weight: putting embeddings on a user's key would take semantic recall away from a user without one, which the app has not asked for; it can be revisited with the `key_source` data phase 2 adds to the token meter.
+
+### DEC-122
+**Status:** `accepted` (2026-11-08 — the owner: "yes on the decisions", for `docs/design/MEM_EXPAND_SEMANTIC_DESIGN.md` §7)
+
+**Decision — MEM-EXPAND-DEAD-1 is built in two releases. D1: take pgvector 0.5.1. D2: the semantic half of `expand()` is behind `AINDY_MEMORY_EXPAND_SIMILAR`, off in the release that takes the bump and turned on in the next by its own decision. D3: expansion gets a floor, `AINDY_MEMORY_EXPAND_MIN_SIMILARITY`, default 0.75. D4: `find_similar()` drops its two `count()`s and `expand()` fetches its nodes in one query, so the similar half costs 1 + n queries. D5: `_embedding_is_usable()` is not widened.**
+
+**Why**
+Measured on PostgreSQL in the design's §1: on 0.4.2 the similar half returned `[]` on every call; on 0.5.1 it works, and with no floor it also returned an unrelated node. DEC-106's one-default-per-release rule names this bump, so the dependency and the switch ship separately. An app soak would observe nothing, because the app calls neither expansion path; the evidence for the flip is the PostgreSQL suite and the work budget. The floor is a starting value, not a measured one: every neighbour carries its `similarity`, so a readout can move it without code.

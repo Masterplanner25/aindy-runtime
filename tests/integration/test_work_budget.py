@@ -83,6 +83,53 @@ def test_recall_query_count_does_not_grow_with_candidates(engine, db_session, te
     assert many_q <= RECALL_TAG_QUERY_BUDGET, (many_q, RECALL_TAG_QUERY_BUDGET)
 
 
+# ── 1b. expand(): the similar half costs 1 + n (MEM-EXPAND-DEAD-1, DEC-122) ──────────────────
+
+
+def _expand_queries(engine, session, user_id, ids) -> tuple[int, int]:
+    from AINDY.db.dao.memory_node_dao import MemoryNodeDAO
+
+    with count_work(engine) as work:
+        out = MemoryNodeDAO(session).expand(ids, user_id=str(user_id), include_linked=False, limit_per_node=2)
+    work.assert_saw_work()
+    return work.queries, sum(len(v["similar"]) for v in out["expansion_map"].values())
+
+
+def test_expand_similar_costs_one_fetch_plus_one_query_per_node(engine, db_session, test_user, monkeypatch):
+    """Before DEC-122 D4 each node cost four: its own fetch, two count()s that fed only a debug
+    line, and the vector query. Now one fetch for all of them and one vector query each."""
+    from AINDY.memory.embedding_providers import resolve_embedding_column_dimensions
+    from AINDY.memory.memory_persistence import MemoryNodeModel
+
+    monkeypatch.setenv("AINDY_MEMORY_EXPAND_SIMILAR", "true")
+    monkeypatch.setenv("AINDY_MEMORY_EXPAND_MIN_SIMILARITY", "0")
+    dims = resolve_embedding_column_dimensions()
+    ids = []
+    for i in range(3):
+        # each expanded node gets its own near partner, so every expansion has a neighbour
+        # outside the expanded set and the control below can't pass or fail on a tie
+        for partner in (False, True):
+            v = [0.0] * dims
+            v[i] = 1.0
+            if partner:
+                v[i + 10] = 0.2
+            node = MemoryNodeModel(content=f"n{i}{'p' if partner else ''}", tags=[], node_type="insight",
+                                   memory_type="insight", user_id=test_user.id, embedding=v,
+                                   embedding_pending=False, embedding_status="complete")
+            db_session.add(node)
+            db_session.flush()
+            if not partner:
+                ids.append(str(node.id))
+
+    one_q, one_found = _expand_queries(engine, db_session, test_user.id, ids[:1])
+    three_q, three_found = _expand_queries(engine, db_session, test_user.id, ids[:3])
+    print(f"[work-budget] expand(similar): {one_q} queries for 1 node, {three_q} for 3")
+
+    assert one_found >= 1 and three_found >= 3, ("control: the vector query ran and found neighbours", one_found, three_found)
+    assert one_q == 1 + 1, one_q
+    assert three_q == 1 + 3, (three_q, "a per-node fetch or count() is back")
+
+
 # ── 2. recall: no connection held across the embedding call ─────────────────────────────────
 
 

@@ -62,6 +62,41 @@ def _owner_only_scope(query, user_id):
     return apply_memory_owner_scope(query, owner_user_id=owner, shared_fallback=False)
 
 
+# MEM-EXPAND-DEAD-1 (DEC-122): the semantic half of expand(). It returned [] on every call while
+# pgvector read embeddings back as an ndarray; on pgvector 0.5.x it works, so it is switched.
+_EXPAND_SIMILAR_DEFAULT_MIN = 0.75
+
+
+def expand_similar_enabled() -> bool:
+    """``AINDY_MEMORY_EXPAND_SIMILAR``: default OFF; ``1`` / ``true`` / ``yes`` / ``on`` enable it."""
+    import os
+
+    return os.getenv("AINDY_MEMORY_EXPAND_SIMILAR", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def expand_min_similarity() -> float:
+    """``AINDY_MEMORY_EXPAND_MIN_SIMILARITY``: the floor for an expansion neighbour, in
+    ``find_similar``'s scale (``1 - distance / 2``, so an unrelated pair scores 0.5). Default 0.75.
+    A value that does not parse, or falls outside [0, 1], uses the default."""
+    import os
+
+    raw = os.getenv("AINDY_MEMORY_EXPAND_MIN_SIMILARITY", "").strip()
+    if not raw:
+        return _EXPAND_SIMILAR_DEFAULT_MIN
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    if not 0.0 <= value <= 1.0:
+        logger.warning(
+            "[MemoryNodeDAO] AINDY_MEMORY_EXPAND_MIN_SIMILARITY=%r is not in [0, 1]; using %s",
+            raw,
+            _EXPAND_SIMILAR_DEFAULT_MIN,
+        )
+        return _EXPAND_SIMILAR_DEFAULT_MIN
+    return value
+
+
 class MemoryNodeDAO:
     """Canonical DAO for memory_nodes and memory_links tables."""
 
@@ -136,6 +171,26 @@ class MemoryNodeDAO:
         if owner_user_id and node.user_id != owner_user_id:
             return None
         return node
+
+    def _get_models_by_ids(self, node_ids: list[str], user_id: str = None) -> dict[str, MemoryNodeModel]:
+        """``_get_model_by_id`` for many ids in one query, keyed by the id string as given."""
+        wanted: dict[uuid.UUID, str] = {}
+        for node_id in node_ids:
+            try:
+                wanted[uuid.UUID(str(node_id))] = node_id
+            except ValueError:
+                continue
+        if not wanted:
+            return {}
+        query = self.db.query(MemoryNodeModel).filter(MemoryNodeModel.id.in_(list(wanted)))
+        owner_user_id = parse_user_id(user_id)
+        query = _owner_only_scope(query, user_id)
+        found = {}
+        for node in query.all():
+            if owner_user_id and node.user_id != owner_user_id:
+                continue
+            found[wanted[node.id]] = node
+        return found
 
     def _strength_value(self, strength) -> float:
         if strength is None:
@@ -481,24 +536,13 @@ class MemoryNodeDAO:
             logger.debug("[MemoryNodeDAO] semantic recall skipped: unusable query embedding")
             return []
 
-        base_query = self._embedded_query(user_id=user_id, node_type=node_type)
-        rows_before_filter = int(base_query.count())
-        embedded_query = base_query.filter(
+        # MEM-EXPAND-DEAD-1 (DEC-122 D4): no count() here. Two of them fed only a debug line and
+        # an early return the vector query makes anyway (it returns no rows), at two queries a call.
+        embedded_query = self._embedded_query(user_id=user_id, node_type=node_type).filter(
             MemoryNodeModel.embedding.isnot(None),
             MemoryNodeModel.embedding_pending.is_(False),
             MemoryNodeModel.embedding_status == "complete",
         )
-        rows_after_filter = int(embedded_query.count())
-        logger.debug(
-            "[MemoryNodeDAO] semantic candidates before_filter=%s after_embedding_filter=%s user_id=%s node_type=%s",
-            rows_before_filter,
-            rows_after_filter,
-            user_id,
-            node_type,
-        )
-
-        if rows_after_filter == 0:
-            return []
 
         try:
             if self._is_postgres():
@@ -546,7 +590,8 @@ class MemoryNodeDAO:
         scored = []
         embedded_rows = embedded_query.all()
         for node in embedded_rows:
-            embedding = list(getattr(node, "embedding", None) or [])
+            stored = getattr(node, "embedding", None)
+            embedding = list(stored) if stored is not None else []
             if not self._embedding_is_usable(embedding):
                 continue
             similarity = cosine_similarity(query_embedding, embedding)
@@ -1492,6 +1537,12 @@ class MemoryNodeDAO:
         all_nodes = {}
         expansion_map = {}
 
+        # MEM-EXPAND-DEAD-1 (DEC-122): the similar half is switched (off by default) and floored,
+        # and its nodes are fetched in one query, so it costs 1 + n queries.
+        include_similar = bool(include_similar) and expand_similar_enabled()
+        min_similarity = expand_min_similarity() if include_similar else 0.0
+        models = self._get_models_by_ids(node_ids, user_id=user_id) if include_similar else {}
+
         for node_id in node_ids:
             expansion_map[node_id] = {"linked": [], "similar": []}
 
@@ -1509,12 +1560,13 @@ class MemoryNodeDAO:
                         expansion_map[node_id]["linked"].append(nid)
 
             if include_similar:
-                node = self._get_model_by_id(node_id, user_id=user_id)
+                node = models.get(node_id)
                 if node and node.embedding is not None and not getattr(node, "embedding_pending", True):
                     similar = self.find_similar(
-                        query_embedding=node.embedding,
+                        query_embedding=list(node.embedding),
                         limit=limit_per_node + 1,
                         user_id=user_id,
+                        min_similarity=min_similarity,
                     )
                     for s in similar:
                         sid = s["id"]
