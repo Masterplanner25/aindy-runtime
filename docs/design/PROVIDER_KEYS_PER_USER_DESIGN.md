@@ -8,8 +8,10 @@ owner: "platform-team"
 
 # FR-59 — whose key pays for a model call — design
 
-**PROPOSED 2026-11-08, not built.** A proposal under `AGENT_WORKING_RULES.md` §8: it changes how a credential is
-resolved, stores user secrets, and needs a schema step. §8 below lists the decisions the owner makes before any code.
+**ACCEPTED 2026-11-08 (DEC-121): the owner took every recommendation in §8 (D1 build now, D2 a dedicated master key
+through `secret_broker`, D3 no check on set, D4 embeddings stay on the server's key, D5 the server's key for a call with
+no user, D6 all five providers). Not built yet; phase 1 is next.** Originally a proposal under `AGENT_WORKING_RULES.md`
+§8: it changes how a credential is resolved, stores user secrets, and needs a schema step.
 
 ## 1. The problem, measured in this repo
 
