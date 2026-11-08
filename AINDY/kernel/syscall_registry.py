@@ -83,7 +83,8 @@ def _acquire_handler_db(context: SyscallContext) -> tuple[Any, bool]:
 
     Contract:
     - If ``context.metadata["_db"]`` is present, the caller owns that session.
-      Handlers may use it but must not close it and must not commit/rollback it.
+      Handlers may use it but must not close it and must not commit/rollback it; a write
+      handler puts its work in a savepoint (``_begin_handler_write``, DEC-124).
     - Otherwise the handler opens ``SessionLocal()`` and owns cleanup.
     """
     external_db = context.metadata.get("_db")
@@ -95,12 +96,34 @@ def _acquire_handler_db(context: SyscallContext) -> tuple[Any, bool]:
     return SessionLocal(), True
 
 
-def _finish_handler_write(db: Any, *, owns_session: bool, success: bool) -> None:
+def _begin_handler_write(db: Any, *, owns_session: bool) -> Any:
+    """A savepoint around a write handler's work on a caller-owned session (DEC-124).
+
+    On failure ``_finish_handler_write`` rolls back to it, so only the handler's own work is
+    undone. Rolling back the caller's session instead discarded whatever the caller had not
+    committed yet (the flow runner's queued node event, a route's earlier writes) and, under a
+    test fixture sharing one outer transaction, the caller's ``FlowRun`` itself (FR-64).
+    ``None`` for a session the handler owns, or when no savepoint can be opened.
+    """
+    if owns_session:
+        return None
+    try:
+        return db.begin_nested()
+    except Exception:
+        logger.debug("[syscall_registry] could not open a savepoint on the caller's session", exc_info=True)
+        return None
+
+
+def _finish_handler_write(db: Any, *, owns_session: bool, success: bool, savepoint: Any = None) -> None:
     """Finalize DB state for write-capable handlers.
 
     Caller-owned sessions keep transaction ownership outside the syscall
     boundary: handlers only ``flush()`` on success and never close.
     Handler-owned sessions commit/rollback and close locally.
+
+    DEC-124: with the ``savepoint`` from ``_begin_handler_write``, a failure rolls back to it and
+    leaves the caller's own work alone. A savepoint the handler's DAO already closed (a DAO that
+    commits) is skipped: that work is committed, there is nothing of the handler's left to undo.
     """
     if owns_session:
         try:
@@ -110,6 +133,26 @@ def _finish_handler_write(db: Any, *, owns_session: bool, success: bool) -> None
                 db.rollback()
         finally:
             db.close()
+        return
+
+    if savepoint is not None:
+        try:
+            if getattr(savepoint, "is_active", False):
+                if success:
+                    savepoint.commit()
+                else:
+                    savepoint.rollback()
+        except Exception:
+            logger.debug("[syscall_registry] closing the handler savepoint failed", exc_info=True)
+            if not success:
+                # The handler is already raising; never mask that. Fall back to the old behaviour.
+                try:
+                    db.rollback()
+                except Exception:
+                    logger.debug("[syscall_registry] rollback on external DB session failed", exc_info=True)
+                return
+        if success:
+            db.flush()
         return
 
     if success:
@@ -413,6 +456,7 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
     parent_path = parent_path_of(full_path)
 
     db, owns_session = _acquire_handler_db(context)
+    savepoint = _begin_handler_write(db, owns_session=owns_session)  # DEC-124
     try:
         dao = MemoryNodeDAO(db)
         node = dao.save(
@@ -437,9 +481,9 @@ def _handle_memory_write(payload: dict, context: SyscallContext) -> dict:
         )
         result = {"node": node, "path": full_path}
     except Exception:
-        _finish_handler_write(db, owns_session=owns_session, success=False)
+        _finish_handler_write(db, owns_session=owns_session, success=False, savepoint=savepoint)
         raise
-    _finish_handler_write(db, owns_session=owns_session, success=True)
+    _finish_handler_write(db, owns_session=owns_session, success=True, savepoint=savepoint)
     return result
 
 
@@ -476,6 +520,7 @@ def _handle_memory_link(payload: dict, context: SyscallContext) -> dict:
     user_id = str(context.user_id or "")
 
     db, owns_session = _acquire_handler_db(context)
+    savepoint = _begin_handler_write(db, owns_session=owns_session)  # DEC-124
     try:
         dao = MemoryNodeDAO(db)
         # Tenant-scoped existence check before the write. `create_link` also rejects a missing
@@ -489,9 +534,9 @@ def _handle_memory_link(payload: dict, context: SyscallContext) -> dict:
         link = dao.create_link(source_id, target_id, link_type, weight, user_id=user_id)
         result = {"link": link}
     except Exception:
-        _finish_handler_write(db, owns_session=owns_session, success=False)
+        _finish_handler_write(db, owns_session=owns_session, success=False, savepoint=savepoint)
         raise
-    _finish_handler_write(db, owns_session=owns_session, success=True)
+    _finish_handler_write(db, owns_session=owns_session, success=True, savepoint=savepoint)
     return result
 
 
@@ -513,14 +558,15 @@ def _handle_memory_delete(payload: dict, context: SyscallContext) -> dict:
         raise ValueError("sys.v1.memory.delete requires 'node_id'")
 
     db, owns_session = _acquire_handler_db(context)
+    savepoint = _begin_handler_write(db, owns_session=owns_session)  # DEC-124
     try:
         dao = MemoryNodeDAO(db)
         deleted = dao.delete_by_id(str(node_id), user_id=context.user_id)
         result = {"deleted": bool(deleted), "node_id": str(node_id)}
     except Exception:
-        _finish_handler_write(db, owns_session=owns_session, success=False)
+        _finish_handler_write(db, owns_session=owns_session, success=False, savepoint=savepoint)
         raise
-    _finish_handler_write(db, owns_session=owns_session, success=True)
+    _finish_handler_write(db, owns_session=owns_session, success=True, savepoint=savepoint)
     return result
 
 
@@ -816,6 +862,7 @@ def _handle_event_emit(payload: dict, context: SyscallContext) -> dict:
             source = f"extension:{extension_name}"
 
     db, owns_session = _acquire_handler_db(context)
+    savepoint = _begin_handler_write(db, owns_session=owns_session)  # DEC-124
     try:
         event_id = emit_system_event(
             db=db,
@@ -830,9 +877,9 @@ def _handle_event_emit(payload: dict, context: SyscallContext) -> dict:
         )
         result = {"event_id": str(event_id) if event_id else None}
     except Exception:
-        _finish_handler_write(db, owns_session=owns_session, success=False)
+        _finish_handler_write(db, owns_session=owns_session, success=False, savepoint=savepoint)
         raise
-    _finish_handler_write(db, owns_session=owns_session, success=True)
+    _finish_handler_write(db, owns_session=owns_session, success=True, savepoint=savepoint)
     return result
 
 
@@ -1068,6 +1115,7 @@ def _handle_agent_ensure_initial_run(payload: dict, context: SyscallContext) -> 
     from AINDY.db.models import AgentRun
 
     db, owns_session = _acquire_handler_db(context)
+    savepoint = _begin_handler_write(db, owns_session=owns_session)  # DEC-124
     try:
         normalized_user_id = _resolve_tenant_user_id(context, payload)
         if normalized_user_id is None:
@@ -1092,11 +1140,11 @@ def _handle_agent_ensure_initial_run(payload: dict, context: SyscallContext) -> 
             steps_total=0,
         )
         db.add(run)
-        _finish_handler_write(db, owns_session=owns_session, success=True)
+        _finish_handler_write(db, owns_session=owns_session, success=True, savepoint=savepoint)
         db.refresh(run)
         return {"run_id": str(run.id), "created": True}
     except Exception:
-        _finish_handler_write(db, owns_session=owns_session, success=False)
+        _finish_handler_write(db, owns_session=owns_session, success=False, savepoint=savepoint)
         raise
 
 
