@@ -10,7 +10,9 @@ owner: "platform-team"
 
 **ACCEPTED 2026-11-08 (DEC-121): the owner took every recommendation in §8 (D1 build now, D2 a dedicated master key
 through `secret_broker`, D3 no check on set, D4 embeddings stay on the server's key, D5 the server's key for a call with
-no user, D6 all five providers). Not built yet; phase 1 is next.** Originally a proposal under `AGENT_WORKING_RULES.md`
+no user, D6 all five providers). Phase 1 built in #922: the store, the routes, the resolver and the rotate
+command, inert under the default `server`. One change from §4: the `provider_key.set` / `.deleted` system events are
+not in phase 1, because a new event type means a vocabulary and baseline change; they come with phase 2.** Originally a proposal under `AGENT_WORKING_RULES.md`
 §8: it changes how a credential is resolved, stores user secrets, and needs a schema step.
 
 ## 1. The problem, measured in this repo

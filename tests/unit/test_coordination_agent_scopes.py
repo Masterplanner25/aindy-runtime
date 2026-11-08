@@ -278,7 +278,7 @@ def test_the_only_identity_only_routes_left_are_self_service(runtime_only_app):
 
     The routes still gated on identity alone act **only on the caller's own account** —
     logging yourself out, changing your own password, and managing your own watcher keys
-    (DEC-117). A scope cannot answer "may you do this to yourself"; it would be a permission
+    (DEC-117) and provider keys (DEC-121). A scope cannot answer "may you do this to yourself"; it would be a permission
     nobody could ever be denied.
 
     Written as an equality rather than a count so that adding an ungated route fails here, and
@@ -301,4 +301,7 @@ def test_the_only_identity_only_routes_left_are_self_service(runtime_only_app):
         "POST /watcher/keys",
         "GET /watcher/keys",
         "DELETE /watcher/keys/{key_id}",
+        "GET /auth/provider-keys",
+        "PUT /auth/provider-keys/{provider}",
+        "DELETE /auth/provider-keys/{provider}",
     }, f"identity-only routes changed: {sorted(identity_only)}"

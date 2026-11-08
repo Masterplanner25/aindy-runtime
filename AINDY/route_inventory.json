@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "boot_mode": "runtime-only",
-  "route_count": 131,
+  "route_count": 134,
   "routes": [
     {
       "method": "GET",
@@ -300,6 +300,27 @@
       "path": "/auth/password/reset",
       "tags": [
         "auth"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/auth/provider-keys",
+      "tags": [
+        "Provider keys"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/auth/provider-keys/{provider}",
+      "tags": [
+        "Provider keys"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/auth/provider-keys/{provider}",
+      "tags": [
+        "Provider keys"
       ]
     },
     {
