@@ -12,7 +12,12 @@ owner: "platform-team"
 through `secret_broker`, D3 no check on set, D4 embeddings stay on the server's key, D5 the server's key for a call with
 no user, D6 all five providers). Phase 1 built in #922: the store, the routes, the resolver and the rotate
 command, inert under the default `server`. One change from §4: the `provider_key.set` / `.deleted` system events are
-not in phase 1, because a new event type means a vocabulary and baseline change; they come with phase 2.** Originally a proposal under `AGENT_WORKING_RULES.md`
+not in phase 1, because a new event type means a vocabulary and baseline change; they come with phase 2. Phase 2
+built in #923: a client and breaker per user key (`get_llm_client_for_user`, `UserKeyLLMClient`), the planner paying
+with the run's user's key, `ProviderKeyRejected` on a 401, the `provider_key.set` / `.deleted` events (retention
+class audit), and whose key paid as a new counter, `aindy_llm_key_source_total{provider,key_source}`, plus
+`key_source` on the planner's external-call events. A counter rather than a label on `aindy_llm_tokens_total`, so no
+existing series changes. Guest Nodus model calls go through app syscalls, so routing them is the app's phase 3.** Originally a proposal under `AGENT_WORKING_RULES.md`
 §8: it changes how a credential is resolved, stores user secrets, and needs a schema step.
 
 ## 1. The problem, measured in this repo

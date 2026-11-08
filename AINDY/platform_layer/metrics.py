@@ -325,6 +325,14 @@ llm_usage_unreadable_total = Counter(
 # Four values, bounded: `run` (an agent run's execution span), `unit` (an execution unit was
 # bound — a request, a bound worker job), `tenant` (only the tenant is known — planning, which
 # runs before the AgentRun row exists), `none`.
+llm_key_source_total = Counter(
+    "aindy_llm_key_source_total",
+    "Model calls by whose key paid: user (the caller's own, FR-59) or server. Counted when a "
+    "call site resolves its client, so a call that then fails is still counted.",
+    ["provider", "key_source"],
+    registry=REGISTRY,
+)
+
 llm_calls_total = Counter(
     "aindy_llm_calls_total",
     "LLM calls by the identity the meter could attribute them to: run | unit | tenant | none. "

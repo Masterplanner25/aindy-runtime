@@ -14,6 +14,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from AINDY.core.execution_helper import execute_with_pipeline_sync
+from AINDY.core.execution_signal_helper import queue_system_event
+from AINDY.core.system_event_types import SystemEventTypes
 from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.services.auth_service import get_current_user, is_api_key_principal
@@ -47,6 +49,14 @@ def _run(request: Request, route_name: str, handler, *, db: Session, user_id: st
         data = dict(data)
         data.pop("execution_envelope", None)
     return data
+
+
+def _audit(db, event_type: str, user_id: str, provider: str, key_hint) -> None:
+    """The audit record: provider and hint, never the key."""
+    payload = {"provider": provider}
+    if key_hint:
+        payload["key_hint"] = key_hint
+    queue_system_event(db=db, event_type=event_type, user_id=user_id, payload=payload, required=False)
 
 
 def _bad_request(exc: Exception) -> HTTPException:
@@ -85,7 +95,9 @@ def set_provider_key(
         if not isinstance(raw_key, str):
             raise HTTPException(status_code=422, detail={"error": "invalid_provider_key", "message": "Send {\"key\": \"...\"}."})
         try:
-            return set_user_provider_key(db, user_id, provider, raw_key)
+            stored = set_user_provider_key(db, user_id, provider, raw_key)
+            _audit(db, SystemEventTypes.PROVIDER_KEY_SET, user_id, stored["provider"], stored["key_hint"])
+            return stored
         except ValueError as exc:
             raise _bad_request(exc) from None
         except ProviderKeyConfigError:
@@ -110,6 +122,7 @@ def delete_provider_key(
         try:
             if not delete_user_provider_key(db, user_id, provider):
                 raise HTTPException(status_code=404, detail=f"No {provider} key is set.")
+            _audit(db, SystemEventTypes.PROVIDER_KEY_DELETED, user_id, provider.strip().lower(), None)
         except ValueError as exc:
             raise _bad_request(exc) from None
         return None
