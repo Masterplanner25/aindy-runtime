@@ -199,6 +199,7 @@ def test_the_backfill_leaves_ownerless_and_already_pathed_rows_alone(factory):
 
     paths = _paths(factory)
     assert report["filled"] == 1
+    assert report["would_fill"] == 1, "FR-62: a writing run still says what it found to do"
     assert report["skipped_no_owner"] == 1
     assert paths[kept["id"]] == f"/memory/{USER}/notes/idea/x1"
     assert paths[ownerless["id"]] is None
