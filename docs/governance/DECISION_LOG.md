@@ -2342,3 +2342,11 @@ Recorded in the design's §8, one recommendation per question. D4 is the one wit
 
 **Why**
 Measured on PostgreSQL in the design's §1: on 0.4.2 the similar half returned `[]` on every call; on 0.5.1 it works, and with no floor it also returned an unrelated node. DEC-106's one-default-per-release rule names this bump, so the dependency and the switch ship separately. An app soak would observe nothing, because the app calls neither expansion path; the evidence for the flip is the PostgreSQL suite and the work budget. The floor is a starting value, not a measured one: every neighbour carries its `similarity`, so a readout can move it without code.
+
+### DEC-123
+**Status:** `accepted` (2026-11-08 — the owner, for FR-61's existing rows: "A one-time backfill command")
+
+**Decision — FR-61: an outbound call's `external.call.*` events record the user whose call it was: the call site's own `user_id`, else one attributed with `external_calls_attributed_to(...)` (the embedding job attributes the node's owner), else the current request's caller from its execution context. Events written before this get their trace's user from a one-time, operator-run command, `aindy-runtime events backfill-call-users`, only in a trace whose other events all belong to one user. FR-60's per-user graph rule is unchanged.**
+
+**Why**
+The app found its largest traces cut apart: the embedding call was the hub, and it had no user, so FR-60's scoping dropped it and every edge through it. Declined: letting a scoped graph keep userless events that share a trace with the caller's (it would loosen FR-60's rule for every read, permanently), and fixing only new events (the app's existing traces would stay broken). A trace with two users, or none, is left alone because the call's owner is not known there.
