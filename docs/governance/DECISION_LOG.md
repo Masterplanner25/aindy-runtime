@@ -2306,3 +2306,13 @@ The SDK's watcher runs on the user's machine and needed `AINDY_API_KEY`, a serve
 (2) The action id hashes the action, input and scope, never the tenant. Every scope that reaches it has been owner-bound since 2.31.2, so no cross-tenant collision is known, and this is defence in depth. If one ever happened, the ledger would hand one tenant another's cached result, or reclaim their failed row. Every call site already treats a ledger exception as "run without the gate", or refuses under `AT_MOST_ONCE`, and none of them completes the other row afterwards. So an exception is safe everywhere without touching the call sites.
 
 **Declined:** putting the tenant into the action id. It's the more complete fix, but every id would change across the upgrade, and a continuation that crosses it would re-run an effect its own ledger row had already recorded.
+
+### DEC-119
+**Status:** `accepted` (2026-11-08 — the owner asked for the fix: "proceed with MEM-PATH-NULL-1". This shape is Claude Code's, reviewed in #917)
+
+**Decision — A memory node saved without a path stores the path every reader already showed for it, `derive_legacy_path`: `/memory/{user}/_legacy/{memory_type}/{id}`. `MemoryNodeDAO.save` does this for an owned node, and `aindy-runtime memory backfill-paths` does it for older rows, operator-run and dry-run unless `--yes`, as DEC-104 settled. A node with no owner gets none.**
+
+**Why**
+The path tools filter on the stored column, so 1,371 of the app's 1,397 nodes were invisible to them while every reader showed them a path. Storing that same path changes nothing a caller has seen. Giving new writes `memory.write`'s `general` form instead would show one path today and store another, and the backfill would have to choose between them.
+
+**Declined:** naming the namespace something other than `_legacy` for new nodes. The name reads oddly for a node written today, but changing it would move every path already shown. A rename can come later as its own decision. Writers that know their namespace should pass a path, as `memory.write` does.

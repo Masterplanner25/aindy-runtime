@@ -17163,8 +17163,12 @@ MEM-PATH-NULL-1.
 
 ## MEM-PATH-NULL-1 — most memory nodes have no stored path, so path tools cannot see them
 
-**Status: OPEN — P3** (filed 2026-11-06). Not observed in a full count: a session sampled 10 nodes on the
-app's stack, all `path: null`. The cause below is from reading the code.
+**Status: CLOSED (2026-11-08)** — #917, DEC-119; ships in 2.31.6. The app counted it on 2026-11-07: 26 of the owner's
+1,397 nodes had a path. `save` now stores the derived path for an owned node written without one, and
+`aindy-runtime memory backfill-paths` (dry-run unless `--yes`) stores it on older rows. It is the same path readers were
+already shown, so nothing changes for a caller except that the path tools find the node. Tests:
+`test_memory_path_null.py`. **Remaining:** a node with no owner still has no stored path, and the backfill is
+operator-run. The cause, as filed:
 
 `MemoryNodeDAO.save` stores whatever `path` it is given and generates none. `memory_capture_engine.py`
 and `nodus/runtime/memory_bridge.py` pass none, and the app's direct `dao.save` calls need checking one by

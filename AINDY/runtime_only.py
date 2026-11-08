@@ -445,6 +445,48 @@ def _settle_embedding_logs(*, yes: bool, batch_size: int) -> NoReturn:
     raise SystemExit(0)
 
 
+def _backfill_memory_paths(*, yes: bool, batch_size: int) -> NoReturn:
+    """Store a path on memory nodes saved without one (MEM-PATH-NULL-1, DEC-119; operator-run).
+
+    Fills exactly the path readers were already shown, so no path changes; the path tools
+    (`memory.tree`, a wildcard `memory.list`) can then find these nodes. Nodes with no owner are
+    left alone. Dry-run unless --yes. Requires DATABASE_URL.
+    """
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print("error: DATABASE_URL is not set.", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.memory.memory_path_backfill import backfill_memory_paths
+    except Exception as exc:
+        print(f"error: could not import the memory layer: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+    db = SessionLocal()
+    try:
+        report = backfill_memory_paths(db, dry_run=not yes, batch_size=batch_size)
+    except Exception as exc:
+        print(f"error: backfilling memory paths failed: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    finally:
+        db.close()
+
+    skipped = f"left alone: {report['skipped_no_owner']} with no owner."
+    if not yes:
+        if not report["would_fill"]:
+            print(f"ok: no memory nodes need a path ({skipped})")
+            raise SystemExit(0)
+        print(f"dry-run: {report['would_fill']} node(s) would get a stored path; {skipped} Re-run with --yes.")
+        raise SystemExit(0)
+    if report["not_filled"]:
+        print(f"error: stored a path on {report['filled']} node(s); {report['not_filled']} still have none. {skipped}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"ok: stored a path on {report['filled']} node(s) in {report['batches']} batch(es); {skipped}")
+    raise SystemExit(0)
+
+
 def _settle_stale_job_units(*, yes: bool, batch_size: int) -> NoReturn:
     """Fail execution units left `pending` by the stale cleanup before DEC-105 (one-time, operator-run).
 
@@ -982,6 +1024,21 @@ def main() -> None:
     settle_parser.add_argument("--yes", action="store_true", default=False, help="Settle the rows (without this the command only reports).")
     settle_parser.add_argument("--batch-size", type=int, default=500, help="Rows examined per committed batch (default 500).")
 
+    backfill_paths_parser = memory_sub.add_parser(
+        "backfill-paths",
+        help="Store a path on memory nodes saved without one (MEM-PATH-NULL-1).",
+        description=(
+            "One-time fill for deployments that ran a version before 2.31.6, where most memory "
+            "nodes were saved without a path and so could not be found by memory.tree or a "
+            "wildcard memory.list. Stores exactly the path readers were already shown "
+            "(/memory/{user}/_legacy/{memory_type}/{id}), so no path changes. Nodes with no owner "
+            "are left alone. Commits per batch. Reports without changing anything unless --yes. "
+            "Requires DATABASE_URL."
+        ),
+    )
+    backfill_paths_parser.add_argument("--yes", action="store_true", default=False, help="Store the paths (without this, only report).")
+    backfill_paths_parser.add_argument("--batch-size", type=int, default=500, help="Rows per committed batch.")
+
     jobs_parser = subparsers.add_parser(
         "jobs",
         help="Async job maintenance.",
@@ -1054,6 +1111,11 @@ def main() -> None:
             )
         elif args.memory_command == "settle-embedding-logs":
             _settle_embedding_logs(
+                yes=getattr(args, "yes", False),
+                batch_size=getattr(args, "batch_size", 500),
+            )
+        elif args.memory_command == "backfill-paths":
+            _backfill_memory_paths(
                 yes=getattr(args, "yes", False),
                 batch_size=getattr(args, "batch_size", 500),
             )

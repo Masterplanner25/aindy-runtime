@@ -239,7 +239,25 @@ class MemoryNodeDAO:
         if trace_id and not node_extra.get("trace_id"):
             node_extra["trace_id"] = trace_id
 
+        # MEM-PATH-NULL-1 (DEC-119) — a node saved without a path stores the one every reader
+        # already showed for it, so the path tools can find it. The id is chosen here because
+        # the path ends with it. A node with no owner has no tenant to address it under.
+        node_id = uuid.uuid4()
+        resolved_memory_type = self._normalize_memory_type(memory_type, node_type)
+        owner = parse_user_id(user_id)
+        if path is None and owner is not None:
+            from AINDY.memory.memory_address_space import stored_path_fields
+
+            fields = stored_path_fields(
+                user_id=str(owner), memory_type=resolved_memory_type, node_id=str(node_id)
+            )
+            path = fields["path"]
+            namespace = namespace or fields["namespace"]
+            addr_type = addr_type or fields["addr_type"]
+            parent_path = parent_path or fields["parent_path"]
+
         db_node = MemoryNodeModel(
+            id=node_id,
             content=content,
             tags=tags or [],
             node_type=node_type,
@@ -252,7 +270,7 @@ class MemoryNodeDAO:
             root_event_id=(uuid.UUID(str(root_event_id)) if root_event_id else None),
             causal_depth=max(0, int(causal_depth or 0)),
             impact_score=max(0.0, float(impact_score or 0.0)),
-            memory_type=self._normalize_memory_type(memory_type, node_type),
+            memory_type=resolved_memory_type,
             embedding_pending=True,
             embedding_status="pending",
             extra=node_extra,
