@@ -1745,6 +1745,39 @@ inside it:**
 
 ---
 
+## Entry 056 — 2026-11-08
+
+**Trigger:** `v2.32.0` release tag (`sandbox-escape-linux.yml`, run `42454229858`).
+**Commit:** `bd30a7d` (release PR #924's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 055**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.15s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `42454229858`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.31.6..v2.32.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #922 (DEC-121) adds an encrypted per-user provider key store and its routes. #923 lets a user's own key pay for the
+  runtime's model calls, through a client and circuit breaker per key. Both are default off (`AINDY_PROVIDER_KEYS=server`)
+  and are about who pays an outbound provider, not isolation. A sandboxed plugin can't reach the store, and this gate
+  does not test it.
+
+**Schema:** ★ Alembic `0020` → `0021` (one new table, `user_provider_keys`), contract `2026-09-20` → `2026-11-08`. This is the
+first migration since Entry 036, so the `Upgrade Path Guard` did real work: on a database built by 2.31.6,
+`bootstrap-schema` exited 3, `--reconcile` stamped `0020` → `0021`, and a re-run was clean. It passed on `bd30a7d` before the
+tag, along with its negative control, Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `42454229873`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API and simple index both reported `2.32.0` (wheel + sdist).
+- Boot Smoke on the published wheel installed on **attempt 2**, the known CDN lag the retry exists for.
+- The GitHub release is non-draft (06:24Z on 2026-11-08).
+- `publish.yml` is unchanged from `v2.31.6`.
+- The published wheel was read: version 2.32.0, head constant `0021`, contract `2026-11-08`, the key store, its model and
+  router, and the per-key clients in `llm_client`. As always, `alembic/` is not in the wheel.
+
 ## Entry 055 — 2026-11-08
 
 **Trigger:** `v2.31.6` release tag (`sandbox-escape-linux.yml`, run `42441712293`).
