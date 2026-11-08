@@ -152,6 +152,12 @@ class DeepSeekLLMClient(LLMClient):
 def _legacy_raise(exc: BaseException) -> None:
     if isinstance(exc, LLMCircuitOpenError):
         raise exc
+    # FR-63: a user's own key refused (or missing) is the caller's answer, not a wrapper to unwrap.
+    # Unwrapping it handed back the inner call error, and left the two causes pointing at each other.
+    from AINDY.platform_layer.provider_keys import ProviderKeyError
+
+    if isinstance(exc, ProviderKeyError):
+        raise exc
     if isinstance(exc, LLMCallError) and exc.__cause__ is not None:
         raise exc.__cause__ from exc
     raise exc

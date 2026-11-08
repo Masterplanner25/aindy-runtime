@@ -165,6 +165,7 @@ def _promote_admin(email: str) -> NoReturn:
         raise SystemExit(1)
 
     try:
+        _load_model_registry()
         from AINDY.db.database import SessionLocal
         from AINDY.db.models.user import User
     except Exception as exc:
@@ -364,6 +365,7 @@ def _prune_cascade_debris(*, yes: bool, batch_size: int) -> NoReturn:
         raise SystemExit(1)
 
     try:
+        _load_model_registry()
         from AINDY.memory.cascade_cleanup import prune_cascade_debris
     except Exception as exc:
         print(f"error: could not import cleanup layer: {exc}", file=sys.stderr)
@@ -416,6 +418,7 @@ def _settle_embedding_logs(*, yes: bool, batch_size: int) -> NoReturn:
         raise SystemExit(1)
 
     try:
+        _load_model_registry()
         from AINDY.db.database import SessionLocal
         from AINDY.memory.embedding_jobs import settle_superseded_embedding_logs
     except Exception as exc:
@@ -445,6 +448,18 @@ def _settle_embedding_logs(*, yes: bool, batch_size: int) -> NoReturn:
     raise SystemExit(0)
 
 
+def _load_model_registry() -> None:
+    """Import every runtime model before a command opens a session (FR-62).
+
+    A flush resolves each foreign key against the table it names, so writing a ``MemoryNodeModel``
+    needs ``users`` and ``system_events`` in the metadata. The API process imports them at boot; a
+    CLI command does not, and ``memory backfill-paths --yes`` failed on its first write while its dry
+    run, which only counts, worked.
+    """
+    import AINDY.db.model_registry  # noqa: F401
+    import AINDY.memory.memory_persistence  # noqa: F401
+
+
 def _backfill_memory_paths(*, yes: bool, batch_size: int) -> NoReturn:
     """Store a path on memory nodes saved without one (MEM-PATH-NULL-1, DEC-119; operator-run).
 
@@ -458,6 +473,7 @@ def _backfill_memory_paths(*, yes: bool, batch_size: int) -> NoReturn:
         raise SystemExit(1)
 
     try:
+        _load_model_registry()
         from AINDY.db.database import SessionLocal
         from AINDY.memory.memory_path_backfill import backfill_memory_paths
     except Exception as exc:
@@ -494,6 +510,7 @@ def _rotate_provider_keys(*, yes: bool) -> NoReturn:
         print("error: DATABASE_URL is not set.", file=sys.stderr)
         raise SystemExit(1)
     try:
+        _load_model_registry()
         from AINDY.db.database import SessionLocal
         from AINDY.platform_layer.provider_keys import ProviderKeyConfigError, rotate_master_key
     except Exception as exc:
@@ -528,6 +545,7 @@ def _settle_stale_job_units(*, yes: bool, batch_size: int) -> NoReturn:
         raise SystemExit(1)
 
     try:
+        _load_model_registry()
         from AINDY.db.database import SessionLocal
         from AINDY.platform_layer.async_job_service import settle_stale_job_units
     except Exception as exc:
@@ -570,6 +588,7 @@ def _reembed_memory(*, yes: bool, no_drain: bool, dry_run: bool) -> NoReturn:
         raise SystemExit(1)
 
     try:
+        _load_model_registry()
         from AINDY.memory.embedding_migration import reembed_all_memory_nodes
         from AINDY.memory.embedding_providers import (
             EmbeddingProviderError,

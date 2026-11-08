@@ -71,5 +71,5 @@ def backfill_memory_paths(
     remaining = db.query(MemoryNodeModel.id).filter(needs_path, owned).count()
     report["filled"] = report["would_fill"] - remaining
     report["not_filled"] = remaining
-    report["would_fill"] = 0
+    # would_fill stays what the run found to do (FR-62: zeroing it read as "nothing was found")
     return report
