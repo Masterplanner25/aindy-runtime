@@ -4,6 +4,31 @@
 
 _Nothing yet._
 
+## 2.32.0 — 2026-11-08
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.32.0.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ Schema step: Alembic `0021` adds `user_provider_keys`** (contract `2026-11-08`). On an existing database `bootstrap-schema` exits 3 until run once with `--reconcile`, which adds the table and stamps `0021`, as CI observed upgrading from 2.31.6.
+- **★ Users can store their own provider keys** (FR-59, DEC-121), encrypted and write-only. **Off by default:** with `AINDY_PROVIDER_KEYS` unset, every call still pays with the server's keys.
+- `AINDY_PROVIDER_KEYS=per_user` needs a master key (`AINDY_SECRET_PROVIDER_KEY_ENCRYPTION_KEYS`), or startup refuses.
+
+### Added — per-user provider keys, phase 1: the encrypted store, its routes and the resolver (FR-59, #922)
+
+- **Schema step: Alembic `0021` adds `user_provider_keys`** (schema contract `2026-11-08`). An upgraded stack takes the bootstrap-schema exit-3 path once. On a blank database the migration skips the table and `create_all` builds it.
+- **`GET`, `PUT` and `DELETE /auth/provider-keys/{provider}`:** a signed-in user sets, replaces, deletes and lists their own keys for `openai`, `anthropic`, `deepseek`, `azure_openai` and `perplexity`. A list shows the last four characters, never the key, and no route returns a stored key. Session only: an API key gets 403.
+- **Encrypted with AES-GCM, bound to the user and the provider.** The master key is the secret `provider_key_encryption_keys` (`AINDY_SECRET_PROVIDER_KEY_ENCRYPTION_KEYS` in the env backend). It's a comma-separated list where the first key seals and every key opens; `aindy-runtime provider-keys rotate` re-seals stored keys with the first. It is never derived from `SECRET_KEY`.
+- **Nothing pays with a stored key yet.** `AINDY_PROVIDER_KEYS` defaults to `server`, and no model call resolves through the store until phase 2. With `per_user` set and no master key, startup refuses.
+- **Action for operators:** none for upgrading. To prepare for `per_user`, set a master key first. Without one, `PUT` answers 503 and stores nothing.
+
+### Added — per-user provider keys, phase 2: a user's own key pays for the planner (FR-59, #923)
+
+- **`get_llm_client_for_user(provider, user_id)`** returns the client whose key should pay. With the server's key it is exactly today's client. With a user's own key it is a separate client with **its own circuit breaker**, so a user's revoked key can't open the breaker everyone else shares. Clients are cached by key fingerprint, never the key, in a bounded cache.
+- **The agent planner pays with the run's user's own key** in `per_user` mode. A non-operator without a key gets `ProviderKeyRequired`, and the run fails with that message instead of spending the operator's key. In `server` mode the planner is unchanged.
+- **A key the provider refuses (401) raises `ProviderKeyRejected`**, a subclass of `LLMCallError`, naming the provider and the last four characters. It is never retried on the server's key.
+- **Whose key paid:** a new counter, `aindy_llm_key_source_total{provider,key_source}`, plus `key_source` on the planner's `external.call.*` events. No existing metric's labels change.
+- **Audit:** `provider_key.set` and `provider_key.deleted` system events carry the provider and hint, never the key, and are retained as audit.
+
 ## 2.31.6 — 2026-11-08
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.6.md`.
