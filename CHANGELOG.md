@@ -4,6 +4,36 @@
 
 _Nothing yet._
 
+## 2.31.6 — 2026-11-08
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.6.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ Run `aindy-runtime memory backfill-paths` once (dry-run, then `--yes`).** Older memory nodes have no stored path, so the path tools can't see them.
+- **★ `GET /db/verify` now needs an operator.** A caller with only the shared `AINDY_API_KEY` gets 401.
+- **New setting `AINDY_REGISTRATION`:** `closed` stops new accounts. The default is `open`.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+
+### Fixed — memory nodes saved without a path can be found by path (#917)
+
+- **Most memory nodes had no stored path, so `memory.tree`, a wildcard `memory.list` and `walk_path` could not find them.** Those filter on the stored column, while every reader was shown a path derived on the fly. On the app's stack 1,371 of 1,397 nodes were affected. `MemoryNodeDAO.save` now stores that same derived path, `/memory/{user}/_legacy/{memory_type}/{id}`, for an owned node written without one. Nothing a caller has seen changes, except that the path tools now find the node. A node with no owner still has no stored path.
+
+### Added — `aindy-runtime memory backfill-paths` (#917)
+
+- **Action for operators:** run `aindy-runtime memory backfill-paths` once after upgrading. Without `--yes` it only reports how many nodes would get a path. With `--yes` it stores the same derived path on older rows, committing per batch (`--batch-size`, default 500). Running it again finds nothing to do.
+
+### Added — registration can be closed: `AINDY_REGISTRATION` (FR-57, #918)
+
+- **`AINDY_REGISTRATION=closed`** stops `POST /auth/register` from creating accounts. It answers exactly as an open register does, with the same 202 and body after the same hashing cost, and creates and sends nothing, so it reveals nothing about which addresses have accounts. `open` is the default. Any other value counts as `closed`, and an empty value means the default. Existing accounts, login and password reset are unchanged. Invite-only registration isn't built.
+
+### Changed — `GET /db/verify` needs an operator (FR-58, #918)
+
+- **Action for operators:** the whole database schema used to be readable with only the shared `AINDY_API_KEY`. It now needs an admin session or a `platform.admin` key, and a shared-key-only caller gets 401. The check is on the router, so it also covers an app that mounts it at its root.
+
+### Added — trace helpers can be scoped to one user (FR-60, #918)
+
+- `build_trace_graph`, `detect_root_event`, `detect_terminal_events` and `calculate_trace_span` take an optional `user_id`. With it, they keep only that user's events and memory nodes, and the edges whose both ends remain. `/observability/execution_graph` passes the caller to every helper that accepts it, so the app's own helpers still work until they add the parameter. Nothing today puts two users' events in one trace, so this is defence in depth.
+
 ## 2.31.5 — 2026-11-07
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.5.md`.
