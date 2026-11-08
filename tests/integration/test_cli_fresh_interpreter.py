@@ -67,3 +67,38 @@ def test_backfill_paths_writes_from_a_fresh_interpreter(pg_url):
             c.execute(text("DELETE FROM memory_nodes WHERE id = :i"), {"i": node_id})
             c.execute(text("DELETE FROM users WHERE id = :i"), {"i": user_id})
         engine.dispose()
+
+
+def test_backfill_call_users_writes_from_a_fresh_interpreter(pg_url):
+    """FR-61's one-time command, run as the operator runs it."""
+    from AINDY.db.models.user import User
+
+    engine = create_engine(pg_url)
+    trace = f"fr61-{uuid.uuid4().hex[:10]}"
+    with Session(engine) as s:
+        user = User(email=f"cli-{uuid.uuid4().hex[:8]}@aindy.test", username=f"cli-{uuid.uuid4().hex[:8]}",
+                    hashed_password="x", is_active=True)
+        s.add(user)
+        s.commit()
+        user_id = user.id
+    with engine.begin() as c:
+        for kind, owner in (("flow.started", user_id), ("external.call.completed", None)):
+            c.execute(
+                text("INSERT INTO system_events (id, type, user_id, trace_id, payload, timestamp) "
+                     "VALUES (:id, :t, :u, :tr, '{}', now())"),
+                {"id": uuid.uuid4(), "t": kind, "u": owner, "tr": trace},
+            )
+    try:
+        done = _run(pg_url, "events", "backfill-call-users", "--yes")
+        assert done.returncode == 0, done.stderr[-2000:]
+        with engine.connect() as c:
+            owner = c.execute(
+                text("SELECT user_id FROM system_events WHERE trace_id = :tr AND type = 'external.call.completed'"),
+                {"tr": trace},
+            ).scalar_one()
+        assert owner == user_id, done.stdout
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM system_events WHERE trace_id = :tr"), {"tr": trace})
+            c.execute(text("DELETE FROM users WHERE id = :i"), {"i": user_id})
+        engine.dispose()

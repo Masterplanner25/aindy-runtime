@@ -532,6 +532,47 @@ def _rotate_provider_keys(*, yes: bool) -> NoReturn:
     raise SystemExit(1 if report["unreadable"] else 0)
 
 
+def _backfill_call_users(*, yes: bool, batch_size: int) -> NoReturn:
+    """Give old outbound-call events the user of their trace, where it has only one (FR-61, DEC-123).
+
+    One-time, operator-run. Dry-run unless --yes. Requires DATABASE_URL.
+    """
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print("error: DATABASE_URL is not set.", file=sys.stderr)
+        raise SystemExit(1)
+
+    try:
+        _load_model_registry()
+        from AINDY.core.external_call_user_backfill import backfill_external_call_users
+        from AINDY.db.database import SessionLocal
+    except Exception as exc:
+        print(f"error: could not import the event layer: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+
+    db = SessionLocal()
+    try:
+        report = backfill_external_call_users(db, dry_run=not yes, batch_size=batch_size)
+    except Exception as exc:
+        print(f"error: backfilling call users failed: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    finally:
+        db.close()
+
+    skipped = (
+        f"left alone: {report['skipped_no_user_traces']} trace(s) with no user, "
+        f"{report['skipped_shared_traces']} with more than one."
+    )
+    if not report["would_fill"]:
+        print(f"ok: no outbound-call events to fill ({report['traces_examined']} trace(s) examined; {skipped})")
+        raise SystemExit(0)
+    if not yes:
+        print(f"dry-run: {report['would_fill']} event(s) would get their trace's user; {skipped} Re-run with --yes.")
+        raise SystemExit(0)
+    print(f"ok: gave {report['filled']} event(s) their trace's user in {report['batches']} batch(es); {skipped}")
+    raise SystemExit(0)
+
+
 def _settle_stale_job_units(*, yes: bool, batch_size: int) -> NoReturn:
     """Fail execution units left `pending` by the stale cleanup before DEC-105 (one-time, operator-run).
 
@@ -1123,6 +1164,25 @@ def main() -> None:
     stale_units_parser.add_argument("--yes", action="store_true", default=False, help="Settle the units (without this the command only reports).")
     stale_units_parser.add_argument("--batch-size", type=int, default=500, help="Units examined per committed batch (default 500).")
 
+    events_parser = subparsers.add_parser(
+        "events",
+        help="System event maintenance.",
+        description="System event maintenance commands. Requires DATABASE_URL.",
+    )
+    events_sub = events_parser.add_subparsers(dest="events_command")
+    call_users_parser = events_sub.add_parser(
+        "backfill-call-users",
+        help="Give old outbound-call events the user of their trace (FR-61).",
+        description=(
+            "One-time fill for external.call.* events written with no user before FR-61. Each "
+            "takes the user of its trace, only when every other event in that trace belongs to "
+            "one user; a trace with no user or with several is left alone. Reports without "
+            "changing anything unless --yes. Requires DATABASE_URL."
+        ),
+    )
+    call_users_parser.add_argument("--yes", action="store_true", default=False, help="Fill the events (without this the command only reports).")
+    call_users_parser.add_argument("--batch-size", type=int, default=500, help="Traces examined per committed batch (default 500).")
+
     auth_parser = subparsers.add_parser(
         "auth",
         help="Auth management commands.",
@@ -1194,6 +1254,15 @@ def main() -> None:
             )
         else:
             jobs_parser.print_help()
+            raise SystemExit(0)
+    elif args.command == "events":
+        if getattr(args, "events_command", None) == "backfill-call-users":
+            _backfill_call_users(
+                yes=getattr(args, "yes", False),
+                batch_size=getattr(args, "batch_size", 500),
+            )
+        else:
+            events_parser.print_help()
             raise SystemExit(0)
     elif args.command == "provider-keys":
         if getattr(args, "provider_keys_command", None) == "rotate":

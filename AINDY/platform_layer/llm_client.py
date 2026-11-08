@@ -343,13 +343,20 @@ def client_key_source(client: Any) -> str:
     return getattr(client, "key_source", "server")
 
 
-def _count_key_source(provider: str, source: str) -> None:
+def count_key_source(provider: str, source: str) -> None:
+    """Count one call in ``aindy_llm_key_source_total``. Public for call sites that resolve a key
+    themselves (``resolve_provider_key``) and make a raw HTTP call with it."""
     try:
         from AINDY.platform_layer.metrics import llm_key_source_total
 
         llm_key_source_total.labels(provider=provider, key_source=source).inc()
     except Exception:  # pragma: no cover - metrics never change a call
         pass
+
+
+# The app imported the private name before the public one existed (FR-59 phase 3); kept so that
+# import keeps working.
+_count_key_source = count_key_source
 
 
 def user_key_client(provider: str, resolved: Any) -> LLMClient:

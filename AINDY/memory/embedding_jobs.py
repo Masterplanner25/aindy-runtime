@@ -128,6 +128,9 @@ def process_embedding_job(payload: dict[str, Any], db):
     # session is the job's own (not request-shared), and the EMBEDDING_STARTED event should be
     # durable regardless, so committing here is correct as well as necessary.
     node_content = memory_node.content
+    # FR-61: read the owner with the content, before the commit expires the row; reading it after
+    # would re-open a transaction for the length of the embedding call (RT-MEMTXN-LEAK-1).
+    node_owner = memory_node.user_id
     try:
         db.commit()
     except Exception as exc:  # never fail the job on pool hygiene
@@ -136,7 +139,10 @@ def process_embedding_job(payload: dict[str, Any], db):
         )
 
     try:
-        embedding = generate_embedding(node_content)
+        from AINDY.platform_layer.external_call_service import external_calls_attributed_to
+
+        with external_calls_attributed_to(node_owner):  # FR-61: the model call is the owner's
+            embedding = generate_embedding(node_content)
         if not embedding or not any(float(value) != 0.0 for value in embedding):
             raise RuntimeError("Embedding generation returned an empty or zero vector")
 

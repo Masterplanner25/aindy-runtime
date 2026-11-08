@@ -3,12 +3,44 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from typing import Any, Callable
+from contextvars import ContextVar
+from typing import Any, Callable, Iterator
 
 from AINDY.core.system_event_service import emit_error_event, emit_system_event
 from AINDY.platform_layer.trace_context import get_current_trace_id
 
 logger = logging.getLogger(__name__)
+
+# FR-61 (DEC-123): whose call an outbound call is, when the call site has no user of its own to
+# pass. The embedding job sets it to the node's owner; a request pipeline needs nothing, because
+# its execution context already names the caller.
+_attributed_user: ContextVar[str | None] = ContextVar("external_call_attributed_user", default=None)
+
+
+@contextlib.contextmanager
+def external_calls_attributed_to(user_id: Any) -> Iterator[None]:
+    """Attribute the ``external.call.*`` events of calls made inside to ``user_id``."""
+    token = _attributed_user.set(None if user_id is None else str(user_id))
+    try:
+        yield
+    finally:
+        _attributed_user.reset(token)
+
+
+def _calling_user(user_id: Any) -> Any:
+    """The user an outbound call's events record: the call site's own, else an attribution, else
+    the current request's caller. ``None`` when there is none: a call no user made."""
+    if user_id:
+        return user_id
+    attributed = _attributed_user.get()
+    if attributed:
+        return attributed
+    try:
+        from AINDY.platform_layer.trace_context import get_current_execution_context
+
+        return getattr(get_current_execution_context(), "user_id", None) or None
+    except Exception:  # pragma: no cover - attribution never fails a call
+        return None
 
 
 class OutboundCallDenied(Exception):
@@ -63,6 +95,7 @@ def perform_external_call(
 ):
     from AINDY.db.database import SessionLocal
 
+    user_id = _calling_user(user_id)
     owned_db = db is None
     active_db = db or SessionLocal()
     trace_id = get_current_trace_id()
