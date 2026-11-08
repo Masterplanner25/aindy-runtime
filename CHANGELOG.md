@@ -4,6 +4,30 @@
 
 _Nothing yet._
 
+## 2.31.5 — 2026-11-07
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.5.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current.
+
+- **★ A security release. nodus-lang 5.15.1** closes a path traversal a guest script could reach. Keep `NODUS_RUN_STATE_ROOT` set on every process that runs Nodus.
+- **★ Someone else's agent run now answers 404, not 403.** A test asserting 403 there needs to expect 404.
+- **Watch `aindy_effect_gate_outcomes_total{outcome="tenant_mismatch"}`.** It should always read 0.
+- **No migration.** Alembic head stays `0020`, schema contract `2026-09-20`.
+
+### Fixed — nodus-lang 5.15.1, a security release (#913)
+
+- **A guest script could read or delete a `.json` file outside Nodus's run-state directory.** `resume_workflow(id)` built the file path from the id without validating it, so an id like `../x` escaped the directory. Nodus's run-state code doesn't go through the guest's `allowed_paths`, and `resume_workflow` is in the always-allowed orchestration group, so any user who can run a Nodus script could reach it here. That's from reading Nodus's notes and our configuration; it wasn't reproduced. 5.15.1 validates every run-state id, and an invalid one reads as "not found".
+- **Operators:** set `NODUS_RUN_STATE_ROOT` to a directory of its own, as `docker-compose.yml` does. Without it the state root is `.nodus` under the server's working directory, which puts other files within reach of any future bug like this one.
+- Bumped at all three sites: `pyproject.toml`, `AINDY/requirements.txt`, and the CI `Install MCP extra` step. `nodus-mcp` is unchanged (`>=0.1.4`; 0.1.5 is current).
+
+### Changed — someone else's agent run answers like a missing one (#912)
+
+- `GET /coordination/runs/{id}/children` and the runtime's agent-run lookups (`get_agent_run_runtime`, `list_agent_run_steps_runtime`, `list_agent_run_events_runtime`) answered **403** for a run that exists but isn't yours and **404** for one that doesn't exist, so the difference revealed which run ids are real. Both now answer **404** with the same detail. An app route built on these, such as `GET /apps/agent/runs/{id}`, changes the same way.
+
+### Fixed — the effect ledger checks a slot's tenant (#912)
+
+- The ledger's key never included the tenant, so if two tenants' scopes ever collided, one would be handed the other's cached result. No such collision is known, because every scope has been owner-bound since 2.31.2. The ledger now refuses a slot recorded for another tenant, and the caller runs without the gate or refuses under `AT_MOST_ONCE`, as it does for any ledger failure. It's counted as `aindy_effect_gate_outcomes_total{outcome="tenant_mismatch"}`, which should always read 0. Rows with no recorded tenant behave as before.
+
 ## 2.31.4 — 2026-11-07
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.31.4.md`.
