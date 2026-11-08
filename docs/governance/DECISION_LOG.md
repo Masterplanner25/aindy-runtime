@@ -2326,3 +2326,11 @@ The path tools filter on the stored column, so 1,371 of the app's 1,397 nodes we
 (1) The enumeration fix (FR-6 Phase C) depends on one answer for every request, so closing must not add a second. Failing closed on a typo is the safe side for a switch whose purpose is to keep strangers out. (2) The schema is operator diagnostics, and the app mounts this router at its root behind nothing else. (3) Nothing today puts two users' events in one trace, so the parameter is defence in depth, and optional so the app's own helpers keep working until they adopt it.
 
 **Not decided here:** invite-only registration, and FR-59 (per-user provider keys), which gets a design for the owner's sign-off first.
+
+### DEC-121
+**Status:** `accepted` (2026-11-08 — the owner: "go with your recommendations on D1-D6", for `docs/design/PROVIDER_KEYS_PER_USER_DESIGN.md`)
+
+**Decision — FR-59 is built, in the design's four phases, default off (`AINDY_PROVIDER_KEYS=server`). D1: build now, schema step included. D2: the master key is its own secret, `provider_key_encryption_keys`, fetched through `secret_broker` and never derived from `SECRET_KEY`. D3: a key is not checked against its provider when set; the first failing call raises `ProviderKeyRejected`. D4: embeddings stay on the server's key for now. D5: a call with no user resolves to the server's key. D6: the store accepts `openai`, `anthropic`, `deepseek`, `azure_openai` and `perplexity`, and resolution is generic over the name.**
+
+**Why**
+Recorded in the design's §8, one recommendation per question. D4 is the one with product weight: putting embeddings on a user's key would take semantic recall away from a user without one, which the app has not asked for; it can be revisited with the `key_source` data phase 2 adds to the token meter.
