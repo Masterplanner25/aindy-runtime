@@ -71,17 +71,22 @@ def link_event_to_memory(
     )
 
 
-def get_trace_graph(db, trace_id: str) -> dict[str, list[dict[str, Any]]]:
-    return build_trace_graph(db, trace_id)
+def get_trace_graph(db, trace_id: str, user_id: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    return build_trace_graph(db, trace_id, user_id=user_id)
 
 
-def build_trace_graph(db, trace_id: str) -> dict[str, list[dict[str, Any]]]:
-    events = (
-        db.query(SystemEvent)
-        .filter(SystemEvent.trace_id == trace_id)
-        .order_by(SystemEvent.timestamp.asc())
-        .all()
-    )
+def build_trace_graph(db, trace_id: str, user_id: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    """The events of a trace, the memory nodes they reached, and the edges between them.
+
+    FR-60 — with ``user_id``, only that user's events and memory nodes, and only edges whose both
+    ends are kept. Nothing today puts two users' events in one trace; this makes the graph not
+    depend on that.
+    """
+    owner = uuid.UUID(str(user_id)) if user_id else None
+    events_query = db.query(SystemEvent).filter(SystemEvent.trace_id == trace_id)
+    if owner is not None:
+        events_query = events_query.filter(SystemEvent.user_id == owner)
+    events = events_query.order_by(SystemEvent.timestamp.asc()).all()
     if not events:
         return {"nodes": [], "edges": []}
 
@@ -107,16 +112,18 @@ def build_trace_graph(db, trace_id: str) -> dict[str, list[dict[str, Any]]]:
     )
     memory_nodes = []
     if memory_node_ids:
-        memory_nodes = (
-            db.query(MemoryNodeModel)
-            .filter(MemoryNodeModel.id.in_(memory_node_ids))
-            .all()
-        )
-    return {
-        "nodes": [_serialize_event(row) for row in events]
-        + [_serialize_memory_node(row) for row in memory_nodes],
-        "edges": [_serialize_edge(row, resolved_memory_targets.get(row.id)) for row in edges],
-    }
+        memory_query = db.query(MemoryNodeModel).filter(MemoryNodeModel.id.in_(memory_node_ids))
+        if owner is not None:
+            memory_query = memory_query.filter(MemoryNodeModel.user_id == owner)
+        memory_nodes = memory_query.all()
+    nodes = [_serialize_event(row) for row in events] + [_serialize_memory_node(row) for row in memory_nodes]
+    serialized_edges = [_serialize_edge(row, resolved_memory_targets.get(row.id)) for row in edges]
+    if owner is not None:
+        kept = {node["id"] for node in nodes}
+        serialized_edges = [
+            edge for edge in serialized_edges if edge.get("source") in kept and edge.get("target") in kept
+        ]
+    return {"nodes": nodes, "edges": serialized_edges}
 
 
 def get_downstream_effects(db, event_id: str | uuid.UUID) -> list[dict[str, Any]]:
@@ -148,8 +155,8 @@ def get_upstream_relationships(db, event_id: str | uuid.UUID) -> list[dict[str, 
     return [_serialize_edge(row, resolved_memory_targets.get(row.id)) for row in edges]
 
 
-def detect_root_event(db, trace_id: str) -> dict[str, Any] | None:
-    graph = build_trace_graph(db, trace_id)
+def detect_root_event(db, trace_id: str, user_id: str | None = None) -> dict[str, Any] | None:
+    graph = build_trace_graph(db, trace_id, user_id=user_id)
     if not graph["nodes"]:
         return None
     target_ids = {edge["target"] for edge in graph["edges"]}
@@ -159,8 +166,8 @@ def detect_root_event(db, trace_id: str) -> dict[str, Any] | None:
     return graph["nodes"][0]
 
 
-def detect_terminal_events(db, trace_id: str) -> list[dict[str, Any]]:
-    graph = build_trace_graph(db, trace_id)
+def detect_terminal_events(db, trace_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
+    graph = build_trace_graph(db, trace_id, user_id=user_id)
     if not graph["nodes"]:
         return []
     source_ids = {edge["source"] for edge in graph["edges"]}
@@ -186,15 +193,40 @@ def calculate_depth(db, event_id: str | uuid.UUID) -> int:
     return max_depth
 
 
-def calculate_trace_span(db, trace_id: str) -> dict[str, int]:
-    graph = build_trace_graph(db, trace_id)
-    root = detect_root_event(db, trace_id)
+def calculate_trace_span(db, trace_id: str, user_id: str | None = None) -> dict[str, int]:
+    graph = build_trace_graph(db, trace_id, user_id=user_id)
+    root = detect_root_event(db, trace_id, user_id=user_id)
+    if root is None:
+        depth = 0
+    elif user_id is None:
+        depth = calculate_depth(db, root["id"])
+    else:
+        depth = _depth_within(graph, root["id"])  # FR-60: never walk another user's edges
     return {
         "node_count": len(graph["nodes"]),
         "edge_count": len(graph["edges"]),
-        "depth": calculate_depth(db, root["id"]) if root else 0,
-        "terminal_count": len(detect_terminal_events(db, trace_id)),
+        "depth": depth,
+        "terminal_count": len(detect_terminal_events(db, trace_id, user_id=user_id)),
     }
+
+
+def _depth_within(graph: dict[str, list[dict[str, Any]]], root_id: str) -> int:
+    """``calculate_depth`` over an already-scoped graph's own edges."""
+    children: dict[str, list[str]] = {}
+    for edge in graph["edges"]:
+        children.setdefault(str(edge.get("source")), []).append(str(edge.get("target")))
+    visited: set[str] = set()
+    queue: deque[tuple[str, int]] = deque([(str(root_id), 0)])
+    max_depth = 0
+    while queue:
+        current, depth = queue.popleft()
+        if current in visited:
+            continue
+        visited.add(current)
+        max_depth = max(max_depth, depth)
+        for target in children.get(current, []):
+            queue.append((target, depth + 1))
+    return max_depth
 
 
 def _serialize_event(row: SystemEvent) -> dict[str, Any]:

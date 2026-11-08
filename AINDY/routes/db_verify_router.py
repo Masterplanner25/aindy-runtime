@@ -3,11 +3,14 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import inspect
 from AINDY.core.execution_helper import execute_with_pipeline_sync
 from AINDY.db.database import engine
-from AINDY.services.auth_service import verify_api_key
+from AINDY.services.auth_service import require_admin_principal
 from AINDY.platform_layer.rate_limiter import limiter
 
 
-router = APIRouter(prefix="/db", tags=["Database Verification"], dependencies=[Depends(verify_api_key)])
+# FR-58 — the whole schema is operator diagnostics, so it needs an operator: an admin session or a
+# `platform.admin` key, as DEC-114 did for the agent registry. The shared service key alone used to
+# be enough, and the app mounts this router at the root behind nothing else.
+router = APIRouter(prefix="/db", tags=["Database Verification"], dependencies=[Depends(require_admin_principal)])
 
 
 def _execute_db_verify(request: Request, route_name: str, handler):

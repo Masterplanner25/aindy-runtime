@@ -213,6 +213,11 @@ class Settings(BaseSettings):
     # verified.
     AINDY_REQUIRE_VERIFIED_LOGIN: bool = False
 
+    # FR-57 — whether `POST /auth/register` creates accounts. `open` (default) or `closed`.
+    # Closed answers exactly as open does and creates and sends nothing, so it discloses nothing
+    # about which addresses have accounts. Any other value is treated as `closed`.
+    AINDY_REGISTRATION: str = "open"
+
     STRIPE_SECRET_KEY: str | None = None
     STRIPE_WEBHOOK_SECRET: str | None = None
 

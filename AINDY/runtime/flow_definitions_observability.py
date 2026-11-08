@@ -146,6 +146,18 @@ def observability_requests_node(state, context):
     except Exception as e:
         return {"status": "FAILURE", "error": str(e)}
 
+def _call_with_user(fn, db, trace_id, user_id):
+    """FR-60 — pass `user_id` only to a helper that accepts it."""
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        params = {}
+    accepts = "user_id" in params or any(p.kind is p.VAR_KEYWORD for p in params.values())
+    return fn(db, trace_id, user_id=user_id) if accepts else fn(db, trace_id)
+
+
 def observability_rippletrace_node(state, context):
     try:
         import uuid as _uuid
@@ -185,6 +197,17 @@ def observability_rippletrace_node(state, context):
         if event_count == 0:
             result = {"trace_id": trace_id, "nodes": [], "edges": [], "root_event": None, "terminal_events": [], "ripple_span": {"node_count": 0, "edge_count": 0, "depth": 0, "terminal_count": 0}}
         else:
+            # FR-60 — hand the caller to every helper that takes it. The app's own versions may not
+            # yet, so a helper without a `user_id` parameter is called as before.
+            def _scoped(fn):
+                return lambda _db, _tid: _call_with_user(fn, _db, _tid, str(user_id))
+
+            _build_trace_graph, _detect_root_event, _detect_terminal_events, _calculate_ripple_span = (
+                _scoped(_build_trace_graph),
+                _scoped(_detect_root_event),
+                _scoped(_detect_terminal_events),
+                _scoped(_calculate_ripple_span),
+            )
             graph = _build_trace_graph(db, trace_id)
             result = {"trace_id": trace_id, "nodes": graph["nodes"], "edges": graph["edges"], "root_event": _detect_root_event(db, trace_id), "terminal_events": _detect_terminal_events(db, trace_id), "ripple_span": _calculate_ripple_span(db, trace_id), "insights": _generate_trace_insights(db, trace_id)}
         return {"status": "SUCCESS", "output_patch": {"observability_rippletrace_result": result}}
