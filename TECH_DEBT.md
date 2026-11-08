@@ -17242,3 +17242,76 @@ reading the code, not tested: a registered agent could be ranked for delegation 
 open and shows a non-operator no registry rows. Tests: `test_coordination_registry_operator.py`.
 
 **Remaining.** An owner column, if a tenant ever needs its own agents. That needs a migration and a design.
+
+## WEBHOOK-TENANT-1 — webhook delivery ignored the tenant
+
+**Status: CLOSED (2026-11-07)** — #907, DEC-116; ships in 2.31.4. Advisory `GHSA-vhq7-326w-ggch`. Found by the tenant audit.
+
+**What was wrong.** Delivery matched a subscription on event type alone. A key with `webhook.manage` could subscribe to `*`
+and receive every tenant's events, and events with no tenant.
+
+**What shipped.** A subscription receives its creator's events. It receives every tenant's only if its creator is an admin
+at delivery, or if it has no creator (a manifest's). `is_admin` is read at delivery, cached for 60 seconds, and a failed read
+delivers nothing extra. Tests: `test_webhook_tenant_delivery.py`.
+
+## SHARED-NAME-OWNER-1 — shared script and workflow names had no owner
+
+**Status: CLOSED (2026-11-07)** — #907, DEC-116; ships in 2.31.4. Advisory `GHSA-vhq7-326w-ggch`.
+
+**What was wrong.** With `flow.execute`, `POST /platform/nodus/upload` replaced another user's script given `overwrite`, and
+`POST /platform/nodus/flow` always replaced a registered workflow, including a plugin's, persistently. Whoever ran it by name
+then ran the replacement as themselves. After a restart, a script that existed only on disk read as free.
+
+**What shipped.** A name can be replaced only by whoever registered it, or by an operator (403 `script_not_owned` /
+`workflow_not_owned`). The workflow check reads the table as well as memory, because the registry is per process. A file on
+disk counts as existing. Things with no recorded owner fall to operators. Tests: `test_shared_name_owners.py`.
+
+**Remaining.** After a restart a script restored from disk has no recorded uploader, so only an operator can replace it,
+including for whoever first uploaded it.
+
+## CLIENT-EVENT-OWNER-1 — `/client/*` took a report's owner from its body
+
+**Status: CLOSED (2026-11-07)** — #907; ships in 2.31.4. Advisory `GHSA-vhq7-326w-ggch`.
+
+**What was wrong.** `/client/error` and `/client/vitals` accept reports with no authentication and used the body's `user_id`
+as the event's owner, so anyone could put an event on another user's record, and into their webhook stream.
+
+**What shipped.** The owner comes from a valid session. A report with no token, or a bad one, is accepted with no owner.
+Tests: `test_client_event_attribution.py`.
+
+## WATCHER-SHARED-KEY-1 — the watcher needed the deployment's shared key
+
+**Status: CLOSED (2026-11-07)** — #908, DEC-117; ships in 2.31.4, with `aindy-sdk` 1.1.0.
+
+**What was wrong.** The SDK's watcher runs on a user's machine and needed `AINDY_API_KEY`, a server secret that can name any
+user on `/watcher/signals` and reaches the other shared-key routes.
+
+**What shipped.** `/watcher/keys` lets a signed-in user mint their own `watcher.signals` key. `/watcher/signals` binds the
+signals to the key's owner. A key holding only that scope is refused everywhere else, at `_resolve_platform_key_as_user`.
+The SDK sends it as `X-Platform-Key` from `AINDY_WATCHER_KEY`. Tests: `test_watcher_user_keys.py` and its Postgres twin.
+
+**Remaining.** `X-API-Key` still names any user, by design. It belongs on servers only.
+
+## RUN-EXISTENCE-ORACLE-1 — another user's run answered 403, a missing one 404
+
+**Status: CLOSED (2026-11-07)** — #912, DEC-118; ships in 2.31.5.
+
+**What was wrong.** `_get_owned_run`, the run-events lookup and `/coordination/runs/{id}/children` told a caller which run
+ids exist. Run ids are UUIDs, so this was an oracle, not a way in.
+
+**What shipped.** Both answer 404 with the same detail. Tests: `test_low_severity_audit_items.py`.
+
+## EFFECT-LEDGER-TENANT-1 — the effect ledger never checked a slot's tenant
+
+**Status: CLOSED (2026-11-07)** — #912, DEC-118; ships in 2.31.5. Defence in depth: no collision is known.
+
+**What was wrong.** The action id hashes action, input and scope, never the tenant. A cross-tenant collision would have
+replayed one tenant's cached result to another, or reclaimed their failed row. Every scope has been owner-bound since
+2.31.2.
+
+**What shipped.** `_resolve_existing_row` raises `EffectTenantMismatch` when both tenants are known and differ, before replay
+or reclaim, counted `tenant_mismatch` (should always read 0). Every call site already treats a ledger exception as "run
+without the gate" or refuses under `AT_MOST_ONCE`. The action id is unchanged.
+
+**Remaining.** Four integration tests used a random user per call on a shared unit and had to be corrected. Any future test
+or caller that does the same will see refusals, which is the point.
