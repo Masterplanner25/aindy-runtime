@@ -1745,6 +1745,37 @@ inside it:**
 
 ---
 
+## Entry 058 — 2026-11-08
+
+**Trigger:** `v2.34.0` release tag (`sandbox-escape-linux.yml`, run `42520421244`).
+**Commit:** `a89d102` (release PR #934's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 057**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 7.72s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `42520421244`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.33.0..v2.34.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #933 (DEC-124) changes how a runtime syscall handler finishes a caller's database session: a savepoint, not a rollback.
+  #931 (DEC-123) records a user on outbound-call events. #930 and #932 fix a CLI import and a flow error message. None
+  of it is isolation, and this gate does not test it.
+
+**Schema:** no migration (Alembic `0021`, contract `2026-11-08`), so the `Upgrade Path Guard` passed trivially and its
+negative control carried the meaning. It passed on `a89d102` before the tag, along with Runtime CI, Boot Smoke
+(PostgreSQL) and the auth CVE audit.
+
+**Publish (run `42520421241`):**
+- The owner approved the `production` environment gate.
+- PyPI's version JSON reported `2.34.0` (wheel + sdist), and `pip` resolved it through the simple index.
+- Boot Smoke on the published wheel installed on **attempt 1**.
+- The GitHub release is non-draft (20:39Z on 2026-11-08).
+- `publish.yml` is unchanged from `v2.33.0`.
+- The published wheel was read: version 2.34.0, with `events backfill-call-users` and its module, the model loader in
+  all eight database commands, the handler savepoint, the retry message, call attribution, and `count_key_source`.
+
 ## Entry 057 — 2026-11-08
 
 **Trigger:** `v2.33.0` release tag (`sandbox-escape-linux.yml`, run `42506061811`).
