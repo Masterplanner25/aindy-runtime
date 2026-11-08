@@ -1745,6 +1745,37 @@ inside it:**
 
 ---
 
+## Entry 057 — 2026-11-08
+
+**Trigger:** `v2.33.0` release tag (`sandbox-escape-linux.yml`, run `42506061811`).
+**Commit:** `4ba9c8a` (release PR #928's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 056**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 9.32s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `42506061811`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.32.0..v2.33.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #927 (DEC-122) moves `pgvector` 0.4.2 → 0.5.1 and puts memory expansion's similar half behind
+  `AINDY_MEMORY_EXPAND_SIMILAR` (off). That is the runtime's own install and a memory read, not the sandbox image or
+  isolation, and this gate does not test it.
+
+**Schema:** no migration (Alembic `0021`, contract `2026-11-08`), so the `Upgrade Path Guard` passed trivially and its
+negative control carried the meaning. It passed on `4ba9c8a` before the tag, along with Runtime CI, Boot Smoke
+(PostgreSQL) and the auth CVE audit.
+
+**Publish (run `42506061874`):**
+- The owner approved the `production` environment gate.
+- PyPI's version JSON and simple index both reported `2.33.0` (wheel + sdist). The project JSON lagged when first checked.
+- Boot Smoke on the published wheel installed on **attempt 2**, the known CDN lag the retry exists for.
+- The GitHub release is non-draft (17:45Z on 2026-11-08).
+- `publish.yml` is unchanged from `v2.32.0`.
+- The published wheel was read: version 2.33.0, it requires `pgvector==0.5.1`, and it holds the switch, the floor, the
+  batched fetch, and `find_similar()` without its two counts.
+
 ## Entry 056 — 2026-11-08
 
 **Trigger:** `v2.32.0` release tag (`sandbox-escape-linux.yml`, run `42454229858`).
