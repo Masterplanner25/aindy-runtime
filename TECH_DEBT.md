@@ -5863,7 +5863,13 @@ scan counter, so the true query count is roughly triple that).
 
 ## MEM-EXPAND-DEAD-1 — `expand()`'s semantic half is a silent no-op; pgvector 0.5.0 would switch it on
 
-**Status:** Open — behavioural, latent. Found 2026-08-14 while reviewing dependabot #390
+**Status:** Open — **built, switched off** (2026-11-08, #927, DEC-122). pgvector is 0.5.1 and the semantic half of
+`expand()` sits behind `AINDY_MEMORY_EXPAND_SIMILAR` (default off) with a floor,
+`AINDY_MEMORY_EXPAND_MIN_SIMILARITY` (0.75). Its first behaviour suite is
+`tests/integration/test_memory_expand_semantic.py`, and `test_work_budget.py` holds it to 1 + n queries. **Closes with
+the flip in the next release.** Design: `docs/design/MEM_EXPAND_SEMANTIC_DESIGN.md`. The record below is as written.
+
+**Earlier status:** Open — behavioural, latent. Found 2026-08-14 while reviewing dependabot #390
 (`pgvector 0.4.2 → 0.5.0`). The bump is **held** on this entry; #390 closed, not merged.
 
 **A type mismatch, not a logic error.** pgvector 0.4.2's SQLAlchemy column returns
