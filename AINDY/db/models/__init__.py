@@ -24,6 +24,7 @@ from .event_edge import EventEdge
 from .job_log import JobLog
 from .nodus_scheduled_job import NodusScheduledJob
 from .api_key import PlatformAPIKey
+from .user_provider_key import UserProviderKey
 from .dynamic_flow import DynamicFlow
 from .dynamic_node import DynamicNode
 from .waiting_flow_run import WaitingFlowRun
@@ -63,6 +64,7 @@ __all__ = [
     "JobLog",
     "NodusScheduledJob",
     "PlatformAPIKey",
+    "UserProviderKey",
     "DynamicFlow",
     "DynamicNode",
     "WaitingFlowRun",

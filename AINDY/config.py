@@ -218,6 +218,11 @@ class Settings(BaseSettings):
     # about which addresses have accounts. Any other value is treated as `closed`.
     AINDY_REGISTRATION: str = "open"
 
+    # FR-59 (DEC-121) — whose key pays for a model call. `server` (default): the server's keys,
+    # as always. `per_user`: a user's own key from /auth/provider-keys, the server's only for an
+    # operator. `per_user` needs the secret `provider_key_encryption_keys` or startup refuses.
+    AINDY_PROVIDER_KEYS: str = "server"
+
     STRIPE_SECRET_KEY: str | None = None
     STRIPE_WEBHOOK_SECRET: str | None = None
 

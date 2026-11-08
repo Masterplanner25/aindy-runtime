@@ -487,6 +487,34 @@ def _backfill_memory_paths(*, yes: bool, batch_size: int) -> NoReturn:
     raise SystemExit(0)
 
 
+def _rotate_provider_keys(*, yes: bool) -> NoReturn:
+    """Re-seal stored provider keys with the first master key (FR-59, DEC-121). Dry-run unless --yes."""
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print("error: DATABASE_URL is not set.", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        from AINDY.db.database import SessionLocal
+        from AINDY.platform_layer.provider_keys import ProviderKeyConfigError, rotate_master_key
+    except Exception as exc:
+        print(f"error: could not import the provider key layer: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    db = SessionLocal()
+    try:
+        report = rotate_master_key(db, dry_run=not yes)
+    except ProviderKeyConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+    finally:
+        db.close()
+    unreadable = f" {report['unreadable']} could not be opened with the configured keys." if report["unreadable"] else ""
+    if not yes:
+        print(f"dry-run: {report['would_reseal']} key(s) would be re-sealed; {report['current']} already current.{unreadable} Re-run with --yes.")
+        raise SystemExit(0)
+    print(f"ok: re-sealed {report['resealed']} key(s); {report['current']} already current.{unreadable}")
+    raise SystemExit(1 if report["unreadable"] else 0)
+
+
 def _settle_stale_job_units(*, yes: bool, batch_size: int) -> NoReturn:
     """Fail execution units left `pending` by the stale cleanup before DEC-105 (one-time, operator-run).
 
@@ -1039,6 +1067,23 @@ def main() -> None:
     backfill_paths_parser.add_argument("--yes", action="store_true", default=False, help="Store the paths (without this, only report).")
     backfill_paths_parser.add_argument("--batch-size", type=int, default=500, help="Rows per committed batch.")
 
+    provider_keys_parser = subparsers.add_parser(
+        "provider-keys",
+        help="Per-user provider key maintenance (FR-59).",
+        description="Per-user provider key maintenance. Requires DATABASE_URL.",
+    )
+    provider_keys_sub = provider_keys_parser.add_subparsers(dest="provider_keys_command")
+    rotate_parser = provider_keys_sub.add_parser(
+        "rotate",
+        help="Re-seal stored keys with the first master key.",
+        description=(
+            "After putting a new key first in the provider_key_encryption_keys secret, re-seal every "
+            "stored key with it, then the old key can be dropped. Reports without changing anything "
+            "unless --yes. Requires DATABASE_URL."
+        ),
+    )
+    rotate_parser.add_argument("--yes", action="store_true", default=False, help="Re-seal (without this, only report).")
+
     jobs_parser = subparsers.add_parser(
         "jobs",
         help="Async job maintenance.",
@@ -1131,6 +1176,11 @@ def main() -> None:
         else:
             jobs_parser.print_help()
             raise SystemExit(0)
+    elif args.command == "provider-keys":
+        if getattr(args, "provider_keys_command", None) == "rotate":
+            _rotate_provider_keys(yes=getattr(args, "yes", False))
+        provider_keys_parser.print_help()
+        raise SystemExit(0)
     elif args.command == "auth":
         if args.auth_command == "promote-admin":
             _promote_admin(args.email)

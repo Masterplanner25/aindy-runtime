@@ -842,6 +842,10 @@ def _validate_startup_config() -> None:
     )
     # SECRET_KEY guard Ã¢â‚¬â€ reject insecure placeholder outside local dev/test
     _enforce_external_python_override_policy()
+    # FR-59 (DEC-121): per-user provider keys need their master key, or nothing is stored safely.
+    from AINDY.platform_layer.provider_keys import check_startup as _check_provider_keys
+
+    _check_provider_keys()
     _placeholder = "dev-secret-change-in-production"
     if settings.SECRET_KEY == _placeholder:
         if settings.requires_redis:
