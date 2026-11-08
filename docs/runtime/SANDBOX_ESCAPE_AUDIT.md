@@ -1745,6 +1745,36 @@ inside it:**
 
 ---
 
+## Entry 054 — 2026-11-08
+
+**Trigger:** `v2.31.5` release tag (`sandbox-escape-linux.yml`, run `42429430463`).
+**Commit:** `671202a` (release PR #914's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 053**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 9.81s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `42429430463`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.31.4..v2.31.5` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #913 picks up nodus-lang 5.15.1, which validates run-state ids so a guest's `resume_workflow` can't traverse out of the
+  state directory. That is the Nodus guest VM, not the OCI sandbox this gate certifies, and this gate does not test it.
+- #912 (DEC-118) changes HTTP answers and the effect ledger. Neither is tested here.
+
+**Schema:** no migration (Alembic `0020`, contract `2026-09-20`), so the `Upgrade Path Guard` passed
+trivially and its negative control carried the meaning. It passed on `671202a` before the tag, along with
+Runtime CI, Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `42429430472`):**
+- The owner approved the `production` environment gate.
+- PyPI's JSON API reported `2.31.5` (wheel + sdist). The simple index lagged when first checked.
+- Boot Smoke on the published wheel installed on **attempt 1**.
+- The GitHub release is non-draft (00:26Z on 2026-11-08).
+- `publish.yml` is unchanged from `v2.31.4`.
+- The published wheel was read: version 2.31.5, it requires `nodus-lang==5.15.1`, and it holds both #912 changes.
+
 ## Entry 053 — 2026-11-07
 
 **Trigger:** `v2.31.4` release tag (`sandbox-escape-linux.yml`, run `42415276493`).
