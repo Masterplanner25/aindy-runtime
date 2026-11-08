@@ -90,8 +90,12 @@ def test_a_widening_exits_3_stamps_nothing_and_reconcile_widens_then_stamps(fres
     assert _run(reconcile=True) == 0
     out = capsys.readouterr().out
     assert _source_width(fresh_pg) == 128
-    assert _version(fresh_pg) == "0020"
-    assert "from revision 0019 to 0020" in out
+    # The reconcile stamps the CURRENT head, which moves with every migration. A literal here
+    # broke the first time it did (0021, FR-59); the widening this test is about is 0020's.
+    from AINDY.db.alembic_head import RUNTIME_ALEMBIC_HEAD_REVISION
+
+    assert _version(fresh_pg) == RUNTIME_ALEMBIC_HEAD_REVISION
+    assert f"from revision 0019 to {RUNTIME_ALEMBIC_HEAD_REVISION}" in out
 
     assert _run(reconcile=False) == 0, "stable on re-run: the reconcile stuck"
 
