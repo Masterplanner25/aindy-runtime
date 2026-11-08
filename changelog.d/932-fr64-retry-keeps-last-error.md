@@ -1,0 +1,4 @@
+### Fixed — a flow node that runs out of retries fails the run with its last error, not only a count (FR-64, #932)
+
+- A node that kept answering `RETRY` failed its run with `Node <name> failed after N retries` and nothing else, so a handler's message never reached the route. The app's Genesis node maps a syscall error to `RETRY`; a missing provider key's "Add it in Settings" became a generic 500. The run's `result.error` now ends with the node's last error: `Node <name> failed after N retries: <error>`. A `RETRY` with no error keeps the old message.
+- FR-64's other report, the run "disappearing", does not happen on a real session: the runner commits the `FlowRun` when it starts, and a handler that rolls back the caller's session cannot remove it. It reproduces only where the app's and the test's sessions share one outer transaction, so the runner's commit is not a commit. Measured on PostgreSQL both ways.

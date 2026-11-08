@@ -421,8 +421,14 @@ def _handle_node_status(
         if _should_retry:
             logger.warning("Node %s retrying (attempt %d)", current_node, attempts)
             return "retry"
+        # FR-64: keep the node's last error. Without it a handler's message (the app's "add your
+        # key in Settings") reached the route as "failed after N retries", with nothing to act on.
+        last_error = result.get("error") if isinstance(result, dict) else None
+        message = f"Node {current_node} failed after {attempts} retries"
+        if last_error:
+            message = f"{message}: {last_error}"
         return self._fail_execution(
-            f"Node {current_node} failed after {attempts} retries",
+            message,
             failed_node=current_node,
             parent_event_id=str(node_started_event_id) if node_started_event_id else None,
         )
