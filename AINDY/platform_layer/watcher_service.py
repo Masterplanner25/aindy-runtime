@@ -7,14 +7,11 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-_VALID_SIGNAL_TYPES = {
-    "app_focus",
-    "app_switch",
-    "session_started",
-    "session_ended",
-    "distraction_detected",
-    "idle_detected",
-}
+from AINDY.watcher.constants import VALID_SIGNAL_TYPES
+
+# The one vocabulary the ingest route validates against. This module kept its own list, which
+# had drifted: filtering by `focus_achieved` answered 422 for a type the route stores (FR-65).
+_VALID_SIGNAL_TYPES = VALID_SIGNAL_TYPES
 
 logger = logging.getLogger(__name__)
 
