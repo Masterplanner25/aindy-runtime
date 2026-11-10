@@ -1,5 +1,5 @@
 {
-  "hash": "13a5420b8db3089f",
+  "hash": "30c7a817df35643b",
   "types": [
     "AINDY.core.system_event_types",
     "WAIT_TIMEOUT",
@@ -31,6 +31,8 @@
     "flow.node.started",
     "flow.waiting",
     "masterplan.goal_state.changed",
+    "mcp_grant.created",
+    "mcp_grant.revoked",
     "memory.write",
     "next_action.chosen",
     "next_action.dispatched",

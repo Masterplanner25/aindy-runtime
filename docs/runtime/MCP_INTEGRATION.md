@@ -1,7 +1,7 @@
 ---
 title: "MCP Integration (client-side)"
 api_version: "1.0"
-last_verified: "2026-11-09"
+last_verified: "2026-11-10"
 status: current
 owner: "platform-team"
 ---
@@ -215,7 +215,20 @@ Then add `https://mcp.example.com/mcp` as a connector. The client finds everythi
   - A password change, a disabled account, or ending the grant stops its tokens, within
     seconds.
 - **Users see and end their connections** at `GET` / `DELETE /auth/mcp-grants`, from a signed-in
-  session only.
+  session only. The platform console's **Connected Apps** panel drives these routes for whoever is
+  signed in; an app's own users need the app's UI to call them.
+- **Every grant is audited** as a system event, source `mcp.oauth`:
+  - `mcp_grant.created` on consent: `grant_id`, `client_id`, `scopes`, `redirect_host`.
+  - `mcp_grant.revoked` when one ends, with `reason`:
+    - `user`: ended from `/auth/mcp-grants`, in the same commit;
+    - `client`: the client called `/revoke`;
+    - `superseded`: the user consented to the same client again;
+    - `refresh_replay`: a rotated refresh token was reused;
+    - `account_changed`: a refresh after a password change or a disabled account.
+  - Never a code, a token or a secret. Outside the route, the event is written after the
+    change commits, so a failed audit write never undoes a revocation.
+  - A grant that just expires, or a password change before the next refresh, records nothing
+    until something touches the grant.
 - **Registration (D4):**
   - Open by default, with caps: `AINDY_MCP_OAUTH_MAX_CLIENTS` (500) and
     `AINDY_MCP_OAUTH_REGISTRATIONS_PER_HOUR` (30).

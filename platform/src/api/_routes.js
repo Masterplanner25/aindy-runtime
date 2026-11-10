@@ -37,4 +37,10 @@ export const RUNTIME_ROUTES = Object.freeze({
     DEAD_LETTER_REPLAY: (jobId) => `/platform/queue/dead-letters/${encodeURIComponent(jobId)}/replay`,
     DEAD_LETTER_DELETE: (jobId) => `/platform/queue/dead-letters/${encodeURIComponent(jobId)}`,
   }),
+  // FR-66 — the signed-in user's own connected MCP apps (OAuth grants). Not a /platform
+  // route: it is per-user, session-only, and answers for whoever is signed in.
+  MCP_GRANTS: Object.freeze({
+    LIST: "/auth/mcp-grants",
+    REVOKE: (grantId) => `/auth/mcp-grants/${encodeURIComponent(grantId)}`,
+  }),
 });

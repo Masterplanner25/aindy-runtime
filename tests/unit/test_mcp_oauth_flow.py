@@ -463,3 +463,99 @@ def test_secrets_are_never_stored_in_the_clear(server, factory):
         assert tokens["refresh_token"] not in dump and tokens["code"] not in dump
     finally:
         db.close()
+
+
+# -- the audit record: one event per grant made and per grant ended, with why --------------------
+
+
+def _grant_events(factory) -> list[tuple[str, dict]]:
+    from AINDY.db.models.system_event import SystemEvent
+
+    db = factory()
+    try:
+        rows = (db.query(SystemEvent).filter(SystemEvent.type.like("mcp_grant.%"))
+                .order_by(SystemEvent.timestamp).all())
+        return [(r.type, dict(r.payload or {})) for r in rows]
+    finally:
+        db.close()
+
+
+def _revocations(factory) -> list[str]:
+    return [p["reason"] for t, p in _grant_events(factory) if t == "mcp_grant.revoked"]
+
+
+def test_consent_records_the_grant_and_nothing_secret(server, factory):
+    tokens = _authorized(server)
+    claims = _claims(tokens["access_token"])
+
+    events = _grant_events(factory)
+    assert [t for t, _ in events] == ["mcp_grant.created"]
+    payload = events[0][1]
+    assert payload == {
+        "grant_id": claims["gid"], "client_id": tokens["client"]["client_id"],
+        "scopes": ["memory.read"], "redirect_host": "127.0.0.1:9",
+    }
+    dump = repr(events)
+    for secret in (tokens["code"], tokens["refresh_token"], tokens["access_token"], tokens["verifier"]):
+        assert secret not in dump
+
+
+def test_consenting_again_records_the_earlier_grant_as_superseded(server, factory):
+    client = _register(server)
+    for _ in range(2):
+        _, challenge = _pkce()
+        auth = _authorize(server, client["client_id"], challenge)
+        done, _ = _consent(server, auth.headers["location"])
+        assert done.status_code == 302, done.text
+
+    events = _grant_events(factory)
+    assert [t for t, _ in events] == ["mcp_grant.created", "mcp_grant.revoked", "mcp_grant.created"]
+    assert events[1][1]["reason"] == "superseded"
+    assert events[1][1]["grant_id"] == events[0][1]["grant_id"] != events[2][1]["grant_id"]
+
+
+def test_a_replayed_refresh_is_recorded_as_the_reason(server, factory):
+    tokens = _authorized(server)
+    client_id = tokens["client"]["client_id"]
+    assert _token(server, grant_type="refresh_token", refresh_token=tokens["refresh_token"],
+                  client_id=client_id).status_code == 200
+    assert _revocations(factory) == []  # control: a rotation ends nothing
+
+    _token(server, grant_type="refresh_token", refresh_token=tokens["refresh_token"], client_id=client_id)
+    assert _revocations(factory) == ["refresh_replay"]
+
+
+def test_a_password_change_is_recorded_when_the_refresh_is_refused(server, factory):
+    from AINDY.db.models.user import User
+
+    tokens = _authorized(server)
+    db = factory()
+    user = db.get(User, ALICE)
+    user.token_version = (user.token_version or 0) + 1
+    db.commit()
+    db.close()
+
+    assert _token(server, grant_type="refresh_token", refresh_token=tokens["refresh_token"],
+                  client_id=tokens["client"]["client_id"]).status_code == 400
+    assert _revocations(factory) == ["account_changed"]
+
+
+def test_a_client_revoking_is_recorded(server, factory):
+    from AINDY.platform_layer import mcp_oauth
+
+    by_access = _authorized(server)
+    assert mcp_oauth.revoke_grant_id(_claims(by_access["access_token"])["gid"]) is True
+    by_refresh = _authorized(server)
+    with _http() as c:
+        revoked = c.post(f"{server}/revoke", data={
+            "token": by_refresh["refresh_token"], "token_type_hint": "refresh_token",
+            "client_id": by_refresh["client"]["client_id"],
+            # mcp 1.x declares `client_secret: str | None` with no default, so even a public
+            # client must send the field; empty is what one would send.
+            "client_secret": "",
+        })
+    assert revoked.status_code == 200, revoked.text
+
+    assert _revocations(factory) == ["client", "client"]
+    assert mcp_oauth.revoke_grant_id(_claims(by_access["access_token"])["gid"]) is False  # already ended
+    assert _revocations(factory) == ["client", "client"]  # ending it twice records it once

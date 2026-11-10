@@ -354,8 +354,42 @@ def store_client(client_info, *, operator: bool = False) -> None:
         db.close()
 
 
+#: Why a grant ended — the `reason` on `mcp_grant.revoked`.
+REVOKE_REASONS = ("user", "client", "superseded", "refresh_replay", "account_changed")
+
+
+def _grant_event_payload(grant, reason: Optional[str] = None) -> dict:
+    payload = {"grant_id": str(grant.id), "client_id": grant.client_id, "scopes": (grant.scopes or "").split()}
+    if reason is not None:
+        assert reason in REVOKE_REASONS, reason
+        payload["reason"] = reason
+    return payload
+
+
+def _audit(db, event_type: str, user_id, payload: dict) -> None:
+    """Write the audit row on ``db`` AFTER its change committed. Best effort: a failed audit
+    write is logged, never undoes a revocation or a consent (emit rolls back only its own row)."""
+    from AINDY.core.system_event_service import emit_system_event
+
+    try:
+        emit_system_event(
+            db=db, event_type=event_type, user_id=str(user_id), source="mcp.oauth",
+            payload=payload, required=False, skip_memory_capture=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[mcp-oauth] could not write %s for grant %s: %s", event_type, payload.get("grant_id"), exc)
+
+
+def _revoked(db, grants, reason: str) -> None:
+    from AINDY.core.system_event_types import SystemEventTypes
+
+    for grant in grants:
+        _audit(db, SystemEventTypes.MCP_GRANT_REVOKED, grant.user_id, _grant_event_payload(grant, reason))
+
+
 def create_grant_with_code(*, user_id: str, pending: dict, scopes: list[str]) -> str:
     """A new grant for (user, client) holding a fresh code; an earlier live grant is revoked."""
+    from AINDY.core.system_event_types import SystemEventTypes
     from AINDY.db.models.mcp_oauth import McpOAuthGrant
     from AINDY.db.models.user import User
 
@@ -372,7 +406,8 @@ def create_grant_with_code(*, user_id: str, pending: dict, scopes: list[str]) ->
         for grant in earlier:
             grant.revoked_at = now
             _forget_grant(str(grant.id))
-        db.add(McpOAuthGrant(
+        made = McpOAuthGrant(
+            id=uuid.uuid4(),
             user_id=uuid.UUID(user_id),
             client_id=pending["cid"],
             scopes=" ".join(scopes),
@@ -384,8 +419,13 @@ def create_grant_with_code(*, user_id: str, pending: dict, scopes: list[str]) ->
             code_redirect_explicit=bool(pending.get("rx", True)),
             code_expires_at=now + timedelta(seconds=CODE_TTL_S),
             created_at=now,
-        ))
+        )
+        db.add(made)
         db.commit()
+        _revoked(db, earlier, "superseded")
+        created = _grant_event_payload(made)
+        created["redirect_host"] = urlparse(str(pending["ru"])).netloc
+        _audit(db, SystemEventTypes.MCP_GRANT_CREATED, user_id, created)
         return code
     except Exception:
         db.rollback()
@@ -498,6 +538,7 @@ def load_refresh(client_id: str, token: str):
                 replayed.revoked_at = _now()
                 _forget_grant(str(replayed.id))
                 db.commit()
+                _revoked(db, [replayed], "refresh_replay")
             return None
         if grant.client_id != client_id or grant.revoked_at is not None:
             return None
@@ -523,6 +564,7 @@ def exchange_refresh(cfg: OAuthConfig, client_id: str, token: str, scopes: list[
             grant.revoked_at = _now()
             _forget_grant(str(grant.id))
             db.commit()
+            _revoked(db, [grant], "account_changed")
             raise TokenError("invalid_grant", "the account changed since consent")
         return _issue(cfg, db, grant, scopes, consume={"refresh_token_hash": digest})
     finally:
@@ -583,6 +625,7 @@ def revoke_grant_id(grant_id: str) -> bool:
             return False
         grant.revoked_at = _now()
         db.commit()
+        _revoked(db, [grant], "client")
         return True
     finally:
         _forget_grant(grant_id)
@@ -597,6 +640,7 @@ def revoke_by_refresh(token: str) -> None:
             grant.revoked_at = _now()
             _forget_grant(str(grant.id))
             db.commit()
+            _revoked(db, [grant], "client")
     finally:
         db.close()
 
@@ -642,8 +686,23 @@ def revoke_user_grant(db, user_id: str, grant_id: str) -> bool:
     grant = db.get(McpOAuthGrant, gid)
     if grant is None or str(grant.user_id) != str(uuid.UUID(user_id)) or grant.revoked_at is not None:
         return False
+    from AINDY.platform_layer.trace_context import is_pipeline_active
+    from AINDY.core.execution_signal_helper import queue_system_event
+    from AINDY.core.system_event_types import SystemEventTypes
+
     grant.revoked_at = _now()
-    db.commit()
+    if is_pipeline_active():
+        # In the route's pipeline the audit row rides this same commit (DEC-060): the
+        # revocation and its record land together. A failed add never rolls the session back.
+        queue_system_event(
+            db=db, event_type=SystemEventTypes.MCP_GRANT_REVOKED, user_id=str(grant.user_id),
+            source="mcp.oauth", payload=_grant_event_payload(grant, "user"), required=False,
+        )
+        db.commit()
+    else:
+        # Outside one, an emit that fails rolls the session back, so commit the revocation first.
+        db.commit()
+        _revoked(db, [grant], "user")
     _forget_grant(str(gid))
     return True
 
