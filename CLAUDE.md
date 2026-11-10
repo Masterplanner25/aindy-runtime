@@ -42,18 +42,6 @@ different claims: `git tag --contains <commit>` before telling anyone a fix ship
 
 Orientation only — the tagged per-file inventory is `docs/runtime/RUNTIME_MODULE_MAP.md`.
 
-| `AINDY/` | Holds |
-|---|---|
-| `kernel/` | SyscallDispatcher/Registry, EventBus, SchedulerEngine, CircuitBreaker, ResourceManager, TenantContext |
-| `platform_layer/` | LLM clients, metrics, OTel, rate limiter, extension ABI + sandbox runner, scheduler_service |
-| `core/` | ExecutionPipeline middleware, RetryPolicy, DistributedQueue, SystemEventService, ResumeWatchdog |
-| `runtime/` | Flow engine (DAG executor), Nodus script execution, memory loop |
-| `agents/` | Agent runtime, planner backends, tool registry, AgentCoordinator, AutonomousController |
-| `memory/` | MemoryNode persistence, MemoryAddressSpace, embedding pipeline, scoring; optional Rust scorer |
-| `db/` | SQLAlchemy models, Alembic env, DAO layer, schema contract |
-| `routes/` | FastAPI routers — auth, flows, agents, memory, platform/* |
-| `worker/`, `nodus/` | Background workers; Nodus stdlib (`memory.nd`) + runtime adapter |
-
 - **Pipeline:** every route runs inside `ExecutionPipeline` (`core/execution_pipeline/pipeline.py`):
   ContextVars, claim/release an `ExecutionUnit`, metrics, memory-signal capture, `SystemEvent`s.
   Handlers reach the kernel only via `SyscallDispatcher.dispatch()`.
@@ -145,18 +133,10 @@ issues it) → promote. `_bootstrap_admin_email()` is startup Phase 5.5, idempot
 
 - `_SPAStaticFiles` (`AINDY/routing.py`) falls back to `index.html` only when the path does NOT
   start with `assets/` — `/platform/assets/missing.js` must 404, never 200+HTML.
-- `PlatformGuard` (`platform/src/PlatformApp.tsx`): `/login` stays outside the guard; redirect via
-  `<Navigate to="/login" replace />` (never `window.location`); authenticated-but-not-admin renders
-  `<NotAdmin />` (a `<Navigate>` there loops). `VITE_APP_BASE_URL` is removed — do not reintroduce
-  it as a redirect target. `VITE_API_BASE_URL` defaults to `""` (relative); vite `server.proxy`
-  covers local dev.
+- `PlatformGuard` rules and the ui-kit build loop: `platform/CLAUDE.md` (loads under `platform/`).
 - **Docker installs the SPA prebuilt from the PyPI wheel** (`platform/dist/**` is package data);
   there is no node stage. A UI change reaches no container until a release is cut AND the Dockerfile
   pin bumped. Verify UI work with `npm run dev`; the container shows the last *released* UI.
-- ui-kit: source `C:\dev\aindy-ui-kit\src\`, npm `@aindy/ui-kit`; the installed copy is a compiled
-  bundle. Loop: build ui-kit → copy `dist/*` into `platform/node_modules/@aindy/ui-kit/dist/` →
-  `npm run build` in `platform/` → restart `api`. `bootIdentity`, `loginUser`, `registerUser` must
-  all `.then(unwrapEnvelope)` or the post-login redirect misfires.
 
 ## Import hazards
 
@@ -287,7 +267,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-65** (check the app's register first). Open: FR-14 recurrence half, FR-55, FR-59. Closed: FR-43..54, FR-56..58, FR-60..64.
+- **APP-FR-\*** — app-side feature requests. **Next: FR-67** (check the app's register AND its open PRs first). Open: FR-14 recurrence half, FR-55, FR-65 (SDK half), FR-66 (design #948; D3 = DEC-125, nodus-mcp handoff). Closed: FR-43..54, FR-56..64.
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
@@ -311,7 +291,7 @@ DEC-001..009 are the founding principles. From DEC-010 on, one line per id
 - EVENT-OUTBOX-1: **DEC-060** event rides the handler's session · **DEC-061** id stays client-assigned · **DEC-062** a raising handler is rolled back; unit row commits at creation.
 - RECOVERY-GRANULARITY-1: **DEC-063** per-step write at the worker seam · **DEC-064** `agent_steps`, no table · **DEC-065** plan STEP INDEX, never an ordinal · **DEC-066** replay only continued + `success`.
 - **DEC-067** FR-40: args-validation tally rides the worker reply (fifth deferred collection); deferral replaces observation; errors capped `AINDY_TOOL_ARGS_VALIDATION_LEDGER_MAX` (32), counts never. **DEC-071** FR-42: the capability-mapping audit row is per RUN; a non-AgentRun scope gets type rows only + `mapping_recorded: false` on the token, outside the HMAC. **DEC-072** FR-15 evidence topology mounts the host docker socket — an instrument, never a profile or operator recipe.
-- FR-46 (#764): **DEC-073** `$from_step` reference · **DEC-074** resolved before `execute_tool` · **DEC-075** unresolved fails; off. **DEC-076** IDEM-14: tool key per STEP. FR-48: **DEC-077** `result_schema`, closed where declared · **DEC-078** no re-plan · **DEC-079** FR-46 flip after FR-48. **DEC-080** consumer range checked at plugin load, warn only. **DEC-081** authority negotiation default ON; `nodus_vm` pre-checks declared tools only. **DEC-082** unit conftest restores published runtime state, silently. **DEC-083** FR-49: recall failures counted; flip after a counter window. **DEC-084** FR-46 step references default ON. EFFECT-OUTCOME-UNKNOWN-1: **DEC-085** replay holds `unknown` · **DEC-086** and `partial` · **DEC-087** `unknown` out of TTL · **DEC-088** killed isolated tool → `unknown` · **DEC-089** `AT_MOST_ONCE`, never degrades · **DEC-090** `failure_class: unknown`, never retried. **DEC-091** SYSMAX-3: no `ru_maxrss` quota; deferred. FS-SCOPE-1: **DEC-092** tool-seam scope = audit hook, never a boundary · **DEC-093** no flag · **DEC-094** import path readable. SYSMAX-4: **DEC-095** run-scoped quota ON · **DEC-096** syscalls only, not wall time. **DEC-097** fan-out ON on the runtime soak. **DEC-098** Boot Smoke installs the checkout's declared deps over the wheel (#810). FR-53: **DEC-099** transports bind payload `user_id` (fill/refuse) · **DEC-100** dispatcher counts first · **DEC-101** mcp-server loads plugins, fails loud. **DEC-102** FR-54: `certifi` is a lower bound, never a pin. **DEC-103** the dispatcher refuses a payload `user_id` ≠ caller; `…=observe` opt-out. **DEC-104** FR-56: the sweep owns embedding; stranded rows settled by command. **DEC-105** stale cleanup closes the unit; rows stay `failed`. **DEC-106** `AINDY_MEMORY_RECALL_OWN_SESSION` default ON; no further window. **DEC-107** `jobs settle-stale-units`. UNDO-COMPENSATORS-1: **DEC-108** ledger links effect · **DEC-109** write → delete, refused if built on · **DEC-110** Verifier only reports · **DEC-111** no undo route yet. **DEC-112** MCP grants the declared capability. **DEC-113** identity binding. **DEC-114** registry: operator-only. **DEC-115** advisory after adoption. **DEC-116** name/webhook owners. **DEC-117** watcher keys. **DEC-118** run 404; ledger tenant. **DEC-119** paths stored. **DEC-120** FR-57/58/60. **DEC-121** FR-59 D1-D6. **DEC-122** expand switch. **DEC-123** FR-61 call users. **DEC-124** handler savepoint.
+- FR-46 (#764): **DEC-073** `$from_step` reference · **DEC-074** resolved before `execute_tool` · **DEC-075** unresolved fails; off. **DEC-076** IDEM-14: tool key per STEP. FR-48: **DEC-077** `result_schema`, closed where declared · **DEC-078** no re-plan · **DEC-079** FR-46 flip after FR-48. **DEC-080** consumer range checked at plugin load, warn only. **DEC-081** authority negotiation default ON; `nodus_vm` pre-checks declared tools only. **DEC-082** unit conftest restores published runtime state, silently. **DEC-083** FR-49: recall failures counted; flip after a counter window. **DEC-084** FR-46 step references default ON. EFFECT-OUTCOME-UNKNOWN-1: **DEC-085** replay holds `unknown` · **DEC-086** and `partial` · **DEC-087** `unknown` out of TTL · **DEC-088** killed isolated tool → `unknown` · **DEC-089** `AT_MOST_ONCE`, never degrades · **DEC-090** `failure_class: unknown`, never retried. **DEC-091** SYSMAX-3: no `ru_maxrss` quota; deferred. FS-SCOPE-1: **DEC-092** tool-seam scope = audit hook, never a boundary · **DEC-093** no flag · **DEC-094** import path readable. SYSMAX-4: **DEC-095** run-scoped quota ON · **DEC-096** syscalls only, not wall time. **DEC-097** fan-out ON on the runtime soak. **DEC-098** Boot Smoke installs the checkout's declared deps over the wheel (#810). FR-53: **DEC-099** transports bind payload `user_id` (fill/refuse) · **DEC-100** dispatcher counts first · **DEC-101** mcp-server loads plugins, fails loud. **DEC-102** FR-54: `certifi` is a lower bound, never a pin. **DEC-103** the dispatcher refuses a payload `user_id` ≠ caller; `…=observe` opt-out. **DEC-104** FR-56: the sweep owns embedding; stranded rows settled by command. **DEC-105** stale cleanup closes the unit; rows stay `failed`. **DEC-106** `AINDY_MEMORY_RECALL_OWN_SESSION` default ON; no further window. **DEC-107** `jobs settle-stale-units`. UNDO-COMPENSATORS-1: **DEC-108** ledger links effect · **DEC-109** write → delete, refused if built on · **DEC-110** Verifier only reports · **DEC-111** no undo route yet. **DEC-112** MCP grants the declared capability. **DEC-113** identity binding. **DEC-114** registry: operator-only. **DEC-115** advisory after adoption. **DEC-116** name/webhook owners. **DEC-117** watcher keys. **DEC-118** run 404; ledger tenant. **DEC-119** paths stored. **DEC-120** FR-57/58/60. **DEC-121** FR-59 D1-D6. **DEC-122** expand switch. **DEC-123** FR-61 call users. **DEC-124** handler savepoint. **DEC-125** FR-66 transport in nodus-mcp.
 - FR-38 (§9, #734): **DEC-068** nodus_vm gate = a guest wait from inside `call_tool`; the CHAIN parks mid-segment (the node reports, never parks) · **DEC-069** `skip` = a `skipped` `agent_steps` row replayed on re-drive (widens DEC-066) · **DEC-070** the event and counter come from the worker.
 
 ### Standing rule — not an item
