@@ -192,6 +192,10 @@ jobs:
       # The crate is built in this job (see the build step below), so a skipped native
       # test here means something broke — fail instead of silently losing the coverage.
       AINDY_REQUIRE_NATIVE_BRIDGE: "1"
+      # The same for the MCP stack: eight test files `importorskip` it, so an install or import
+      # failure would skip them all while the job stays green. This job installs the extra, so
+      # `test_mcp_stack_required.py` fails instead (FR-66 phase 1).
+      AINDY_REQUIRE_MCP: "1"
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -227,7 +231,8 @@ jobs:
         # `nodus-lang>=4.0.0`, so reordering these steps, or adding `--upgrade`, would
         # silently resolve to whatever is newest on PyPI while the wheel pins something
         # else. Bump this line with the other two.
-        run: python -m pip install "nodus-lang==5.15.1" "nodus-mcp>=0.1.4" "mcp>=1.0.0"
+        # nodus-mcp >=0.1.6: `streamable_http_app()` for --transport http (FR-66, DEC-125).
+        run: python -m pip install "nodus-lang==5.15.1" "nodus-mcp>=0.1.6" "mcp>=1.0.0"
 
       # ── Native scorer: build it HERE so its tests actually execute ──────────────
       #

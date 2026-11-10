@@ -2366,3 +2366,19 @@ The app found its largest traces cut apart: the embedding call was the hub, and 
 
 **Why**
 nodus-mcp already owns the SDK-major branching and the per-call header context the runtime's `auth_hook` reads. A runtime-side copy would reach into `NodusServer._server`, a private attribute, and would have to repeat the branching for every SDK major. Declined: building it in the runtime now (kept as the fallback if nodus-mcp can't ship it), and mounting a nodus-mcp app inside a runtime app (Starlette does not run a mounted app's lifespan, so the session manager would never start). D1, D2 and D4–D7 of the design are not decided by this entry.
+
+### DEC-126
+**Status:** `accepted` (2026-11-09 — the owner: "fold it into FR-66's phase 1")
+
+**Decision — an MCP call made with a platform key is held to the key's scopes, on every transport (SSE and streamable HTTP; stdio has no per-call credential). The rule is `POST /platform/syscall`'s, read from one shared map, `auth/api_key_auth.py::DISPATCH_CAPABILITY_SCOPES`, through `key_scopes_authorize`: the key must hold a scope that authorizes the tool's declared capability, or `platform.admin`. A capability the map does not list is refused to any key without `platform.admin`. A session JWT is not scope-gated, as on that route, and the single configured identity is unchanged. The refusal is `failure_class: permission`, before payload binding and before an execution unit is claimed. The hook clears the identity and scopes before it resolves a call, so one call's credential never reaches the next.**
+
+**Why**
+The multi-tenant hook resolved a platform key to its owner only, and each tool then ran with the capability its syscall declares (DEC-112), so the key's scopes decided nothing. The same key got two answers to one authority question from two doors. One map, not a copy, so they can't drift apart. Declined: gating session JWTs here (`POST /platform/syscall` doesn't, and a session already holds the user's authority), and allowing unmapped capabilities to any key (no scope names them, so there is nothing to check against; fail closed). Folded into FR-66 phase 1, because phase 1 is where per-call credentials meet a new transport, and phase 2's OAuth tokens carry scopes held to the same rule.
+
+### DEC-127
+**Status:** `provisional` (2026-11-09 — chosen while building FR-66 phase 1; awaiting the owner)
+
+**Decision — `mcp-server --transport http` checks `Host` and `Origin` and fails closed. It binds `127.0.0.1` by default, where only loopback names are accepted. On any other bind it refuses to start unless `AINDY_MCP_SERVER_ALLOWED_HOSTS` lists the public host name(s); `AINDY_MCP_SERVER_ALLOWED_ORIGINS` lists browser origins, and a request with no `Origin` passes. SSE keeps its historical `0.0.0.0` default and no check.**
+
+**Why**
+nodus-mcp 0.1.6's `streamable_http_app()` passes `security_settings` through, and with none it checks nothing (its own `run()` protects only a loopback bind). Behind a proxy the public name is not known to the process, so the only safe default without it is to refuse. Declined: starting unchecked with a warning (a log line is not a control), and changing SSE's defaults in the same PR (a behaviour change for existing deployments, not asked for).

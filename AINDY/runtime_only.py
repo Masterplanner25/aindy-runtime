@@ -680,14 +680,24 @@ def _reembed_memory(*, yes: bool, no_drain: bool, dry_run: bool) -> NoReturn:
         raise SystemExit(2)
 
 
-def _run_mcp_server(transport: str, host: str = "0.0.0.0", port: int = 8080) -> NoReturn:
+#: Default bind per transport. SSE keeps its historical 0.0.0.0; streamable HTTP binds loopback,
+#: because exposure is the operator's choice (FR-66 design §4) and a non-loopback bind must name
+#: its public host for the Host check (DEC-127).
+_MCP_DEFAULT_HOST = {"sse": "0.0.0.0", "http": "127.0.0.1"}
+
+
+def _run_mcp_server(
+    transport: str, host: str | None = None, port: int = 8080, path: str = "/mcp"
+) -> NoReturn:
     """Serve AINDY syscalls as an MCP server (ECOGAP-4 / G4b, server-side).
 
     stdio: a standalone process an MCP client (e.g. Claude Desktop) spawns, acting as the
     single configured AINDY_MCP_SERVER_USER_ID. sse: a remote HTTP server; with
     AINDY_MCP_SERVER_MULTI_TENANT=true each session's bearer/platform-key header resolves to
-    a real user and calls dispatch as that identity (MEB-3a). Requires DATABASE_URL.
+    a real user and calls dispatch as that identity (MEB-3a). http: streamable HTTP at
+    ``path`` (FR-66), with the same identity modes as sse. Requires DATABASE_URL.
     """
+    host = host or _MCP_DEFAULT_HOST.get(transport, "127.0.0.1")
     from AINDY.config import settings
     if not settings.DATABASE_URL:
         print(
@@ -710,6 +720,8 @@ def _run_mcp_server(transport: str, host: str = "0.0.0.0", port: int = 8080) -> 
     try:
         if transport == "sse":
             mcp_server.serve_sse(host=host, port=port)  # blocks
+        elif transport == "http":
+            mcp_server.serve_http(host=host, port=port, path=path)  # blocks
         else:
             mcp_server.serve_stdio()  # blocks until the MCP client disconnects
     except RuntimeError as exc:
@@ -1035,26 +1047,37 @@ def main() -> None:
         help="Serve AINDY syscalls as an MCP server for external MCP clients (Claude Desktop, etc.).",
         description=(
             "Expose an allowlist of AINDY syscalls as MCP tools, as a standalone process an "
-            "MCP client spawns (stdio) or connects to (SSE). Over stdio, every call runs as the "
-            "single configured identity AINDY_MCP_SERVER_USER_ID. Over SSE with "
-            "AINDY_MCP_SERVER_MULTI_TENANT=true, each session's Authorization: Bearer / "
-            "X-Platform-Key header resolves to a real user and calls dispatch as that identity "
-            "(MEB-3a). Read-only tools by default; set AINDY_MCP_SERVER_ALLOW_WRITES=true to "
+            "MCP client spawns (stdio) or connects to (SSE, or streamable HTTP at /mcp). Over "
+            "stdio, every call runs as the single configured identity AINDY_MCP_SERVER_USER_ID. "
+            "Over SSE or HTTP with AINDY_MCP_SERVER_MULTI_TENANT=true, each call's Authorization: "
+            "Bearer / X-Platform-Key header resolves to a real user and calls dispatch as that "
+            "identity (MEB-3a); a platform key is held to its scopes (DEC-126). Read-only tools by default; set AINDY_MCP_SERVER_ALLOW_WRITES=true to "
             "expose writes, or AINDY_MCP_SERVER_TOOLS to override the allowlist. Requires "
             "DATABASE_URL and the [mcp] extra (pip install 'aindy-runtime[mcp]')."
         ),
     )
     mcp_server_parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio", "sse", "http"],
         default="stdio",
-        help="MCP transport: stdio (local single-operator) or sse (remote / multi-tenant).",
+        help=(
+            "MCP transport: stdio (local single-operator), sse (remote / multi-tenant), or http "
+            "(streamable HTTP, what ChatGPT and claude.ai connect to; needs nodus-mcp>=0.1.6)."
+        ),
     )
     mcp_server_parser.add_argument(
-        "--host", default="0.0.0.0", help="SSE bind host (default 0.0.0.0). Ignored for stdio.",
+        "--host",
+        default=None,
+        help=(
+            "Bind host. Default 0.0.0.0 for sse, 127.0.0.1 for http. Any non-loopback http bind "
+            "needs AINDY_MCP_SERVER_ALLOWED_HOSTS. Ignored for stdio."
+        ),
     )
     mcp_server_parser.add_argument(
-        "--port", type=int, default=8080, help="SSE bind port (default 8080). Ignored for stdio.",
+        "--port", type=int, default=8080, help="Bind port (default 8080). Ignored for stdio.",
+    )
+    mcp_server_parser.add_argument(
+        "--path", default="/mcp", help="The streamable HTTP endpoint (default /mcp). http only.",
     )
 
     memory_parser = subparsers.add_parser(
@@ -1218,8 +1241,9 @@ def main() -> None:
     elif args.command == "mcp-server":
         _run_mcp_server(
             transport=getattr(args, "transport", "stdio"),
-            host=getattr(args, "host", "0.0.0.0"),
+            host=getattr(args, "host", None),
             port=getattr(args, "port", 8080),
+            path=getattr(args, "path", "/mcp"),
         )
     elif args.command == "memory":
         if args.memory_command == "reembed":
