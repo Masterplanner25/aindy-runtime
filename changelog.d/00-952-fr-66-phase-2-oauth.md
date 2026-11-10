@@ -1,4 +1,4 @@
-### Added — OAuth for the MCP endpoint, so ChatGPT and claude.ai can add the server (FR-66 phase 2, DEC-129, #PR)
+### Added — OAuth for the MCP endpoint, so ChatGPT and claude.ai can add the server (FR-66 phase 2, DEC-129, #952)
 
 - **Schema step: Alembic `0022`** adds `mcp_oauth_clients` and `mcp_oauth_grants`. Schema contract `2026-11-09`.
   Nothing reads them until `AINDY_MCP_OAUTH` is on.
