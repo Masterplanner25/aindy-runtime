@@ -23,6 +23,8 @@ const AdminUsersPanel = lazy(() => import("./components/platform/AdminUsersPanel
 // (`/platform/webhooks*`, `/platform/queue/dead-letters*`) that this console did not expose.
 const WebhooksPanel = lazy(() => import("./components/platform/WebhooksPanel"));
 const DeadLetterQueuePanel = lazy(() => import("./components/platform/DeadLetterQueuePanel"));
+// FR-66 — the signed-in user's connected MCP apps (`/auth/mcp-grants`).
+const ConnectedAppsPanel = lazy(() => import("./components/platform/ConnectedAppsPanel"));
 
 function platformRoute(name: string, element: ReactNode) {
   return (
@@ -54,6 +56,7 @@ function PlatformRoutes() {
           <Route path="/users" element={platformRoute("Users", <AdminUsersPanel />)} />
           <Route path="/webhooks" element={platformRoute("Webhooks", <WebhooksPanel />)} />
           <Route path="/dead-letters" element={platformRoute("Dead-Letter Queue", <DeadLetterQueuePanel />)} />
+          <Route path="/connected-apps" element={platformRoute("Connected Apps", <ConnectedAppsPanel />)} />
           {FEATURE_FLAGS.RIPPLETRACE_VIEWER && (
             <Route path="/trace" element={platformRoute("Trace", <RippleTraceViewer />)} />
           )}

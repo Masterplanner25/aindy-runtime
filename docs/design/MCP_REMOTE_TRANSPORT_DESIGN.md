@@ -1,7 +1,7 @@
 ---
 title: "MCP Remote Transport and OAuth (FR-66) — Design"
 api_version: "1.0"
-last_verified: "2026-11-09"
+last_verified: "2026-11-10"
 status: current
 owner: "platform-team"
 ---
@@ -11,7 +11,7 @@ owner: "platform-team"
 **Status (2026-11-09).** Every decision is made, each as recommended: D3 = DEC-125 (the transport is in nodus-mcp), D5 = DEC-128 (with a declared `read_only`), and D1, D2, D4, D6, D7 = DEC-129.
 
 - **Phase 1 is built (#951)** on nodus-mcp 0.1.6: `--transport http`, platform keys held to their scopes on every transport (DEC-126), a fail-closed `Host` check (DEC-127), and writes refused without `ALLOW_WRITES` (DEC-128).
-- **Phase 2 (OAuth) is built.** Its build-time choices are DEC-130, provisional: exact-capability scopes for OAuth grants only, a missing `resource` accepted (a foreign one refused), client secrets sealed under derived keys, and `/mcp` accepting only MCP tokens when OAuth is on.
+- **Phase 2 (OAuth) is built.** Its build-time choices are DEC-130 (accepted 2026-11-10): exact-capability scopes for OAuth grants only, a missing `resource` accepted (a foreign one refused), client secrets sealed under derived keys, and `/mcp` accepting only MCP tokens when OAuth is on.
 - **FR-66 stays open** until D7's two real connectors work.
 
 Originally a proposal under
@@ -163,7 +163,8 @@ handlers. The user signs in with their A.I.N.D.Y. account; there is no third-par
   refreshed token would mint a new key row every hour, the user's key list would fill with them, and a key is accepted
   by every HTTP route, which is wider than the MCP endpoint.
 - **Connected apps.** `GET /mcp-grants` and `DELETE /mcp-grants/{id}` on the main API, scoped to the caller, so a user
-  can see and end every grant. A SPA card is later UI work.
+  can see and end every grant. **Built:** the platform console's Connected Apps panel drives them, and every grant
+  made or ended writes an audit event (`mcp_grant.created` / `mcp_grant.revoked` with its reason).
 - **A password change ends every grant**: `token_version` moves, so the next call and the next refresh are refused.
 
 ## 7. Tool policy, enforced by the server
@@ -218,7 +219,7 @@ The second check applies to **every** identity that carries scopes, on every tra
 | 0 | nodus-mcp `streamable_http_app()` in 0.1.6 (`docs/handoffs/NODUS_HANDOFF_mcp_streamable_http.md`), or the fallback | — |
 | 1 | `--transport http` with header identity; scope enforcement on every transport (§7.2, DEC-126); the `Host` check (DEC-127); D5 (DEC-128). **Built 2026-11-09 (#951)** | Claude Code and any client that can send a header |
 | 2 | OAuth: Alembic `0022`, DCR, authorize with login and consent, token, refresh, revoke, metadata; connected-apps routes. Off by default | ChatGPT and claude.ai, once exposed |
-| 3 | Evidence (D7) on the app's stack; any fixes it finds; a SPA card for connected apps | — |
+| 3 | Evidence (D7) on the app's stack; any fixes it finds. (The SPA card and grant audit events were built ahead of it, 2026-11-10.) | — |
 
 Phases 1 and 2 are separate releases, so the schema step travels alone.
 

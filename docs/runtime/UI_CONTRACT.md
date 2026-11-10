@@ -1,6 +1,6 @@
 ---
 title: "Runtime → UI Contract"
-last_verified: "2026-10-03"
+last_verified: "2026-11-10"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -125,6 +125,7 @@ runtime-owned paths a UI kit may target:
 | Effects awaiting reconciliation | `/platform/effects/unknown`, `/platform/effects/{action_id}/resolve` | `effects_router.py` |
 | Admin | `/platform/admin/users`, `/platform/admin/agents` | `admin_router.py` |
 | Webhooks | `/platform/webhooks`, `/platform/webhooks/{subscription_id}` | `webhooks_router.py` |
+| Connected MCP apps (FR-66; the signed-in user's own, not an admin view) | `/auth/mcp-grants`, `/auth/mcp-grants/{grant_id}` | `mcp_grants_router.py` |
 | Tenant usage | `/platform/tenants/{tenant_id}/usage` | `platform_ops_router.py` |
 
 **FR-21 — where these two groups' paths currently live.** The operator console's Webhooks

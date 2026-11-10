@@ -89,6 +89,7 @@ RUNTIME_RETENTION_SEED: dict[str, str] = {
     "capability.*": RETENTION_AUDIT,
     "auth.*": RETENTION_AUDIT,
     "provider_key.*": RETENTION_AUDIT,  # FR-59: a user set or removed their own key
+    "mcp_grant.*": RETENTION_AUDIT,  # FR-66: an MCP OAuth grant made or ended, and why
     "platform.*": RETENTION_AUDIT,
     "effect.*": RETENTION_AUDIT,  # an operator's reconciliation of an unknown effect
     "dlq.drained": RETENTION_AUDIT,

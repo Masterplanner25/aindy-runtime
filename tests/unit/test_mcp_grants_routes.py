@@ -165,3 +165,25 @@ def test_an_api_key_cannot_see_or_end_grants(client, users, db_session_factory):
     assert client.get("/auth/mcp-grants", headers=key).status_code == 403
     assert client.delete(f"/auth/mcp-grants/{gid}", headers=key).status_code == 403
     assert client.get("/auth/mcp-grants").status_code == 401
+
+
+def test_ending_a_grant_records_it_in_the_same_commit(client, users, db_session_factory):
+    from AINDY.db.models.system_event import SystemEvent
+
+    gid = _grant(ALICE)
+
+    def revoked():
+        db = db_session_factory()
+        try:
+            return [dict(r.payload) for r in db.query(SystemEvent).filter(SystemEvent.type == "mcp_grant.revoked")]
+        finally:
+            db.close()
+
+    assert revoked() == []  # control
+    assert client.delete(f"/auth/mcp-grants/{gid}", headers=_bearer(ALICE)).status_code == 204
+    [payload] = revoked()
+    assert payload["grant_id"] == gid and payload["reason"] == "user"
+    assert payload["scopes"] == ["memory.read"]
+
+    assert client.delete(f"/auth/mcp-grants/{gid}", headers=_bearer(ALICE)).status_code == 404
+    assert len(revoked()) == 1  # a refused end records nothing

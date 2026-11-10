@@ -46,13 +46,14 @@ def _normalise(path: str) -> str:
 
 
 def _declared_spa_paths() -> set[str]:
-    """Every `/platform/...` path the SPA's RUNTIME_ROUTES block will request."""
+    """Every path the SPA's RUNTIME_ROUTES block will request: `/platform/...`, and the
+    per-user `/auth/...` routes a panel drives (FR-66's connected apps)."""
     source = _ROUTES_JS.read_text(encoding="utf-8")
     start = source.index("export const RUNTIME_ROUTES")
     block = source[start:]
     # Both quoted literals and backtick templates, since the parameterised routes are
     # written as template functions.
-    literals = re.findall(r"[\"'`](/platform/[^\"'`]*)[\"'`]", block)
+    literals = re.findall(r"[\"'`](/(?:platform|auth)/[^\"'`]*)[\"'`]", block)
     assert literals, "RUNTIME_ROUTES declares no /platform paths — did the block move?"
     return {_normalise(path) for path in literals}
 
@@ -94,6 +95,7 @@ class TestTheSpaPointsAtRealRoutes:
         declared = _declared_spa_paths()
         assert any(path.startswith("/platform/webhooks") for path in declared)
         assert any(path.startswith("/platform/queue/dead-letters") for path in declared)
+        assert "/auth/mcp-grants" in declared
 
     def test_a_path_that_does_not_exist_is_absent(self, runtime_only_app):
         """Liveness control for the instrument — it must be able to say "not served"."""
@@ -117,6 +119,8 @@ class TestTheSpaPointsAtRealRoutes:
             ("POST", "/platform/queue/dead-letters/drain"),
             ("POST", "/platform/queue/dead-letters/*/replay"),
             ("DELETE", "/platform/queue/dead-letters/*"),
+            ("GET", "/auth/mcp-grants"),
+            ("DELETE", "/auth/mcp-grants/*"),
         ):
             assert method in served.get(path, set()), (
                 f"{method} {path} is not served; that panel action would fail"
@@ -128,14 +132,15 @@ class TestThePanelsAreReachable:
 
     @pytest.mark.parametrize(
         ("route_path", "component"),
-        [("/webhooks", "WebhooksPanel"), ("/dead-letters", "DeadLetterQueuePanel")],
+        [("/webhooks", "WebhooksPanel"), ("/dead-letters", "DeadLetterQueuePanel"),
+         ("/connected-apps", "ConnectedAppsPanel")],
     )
     def test_the_route_is_declared(self, route_path, component):
         source = _APP_TSX.read_text(encoding="utf-8")
         assert f'path="{route_path}"' in source
         assert f"import(\"./components/platform/{component}\")" in source
 
-    @pytest.mark.parametrize("route_path", ["/webhooks", "/dead-letters"])
+    @pytest.mark.parametrize("route_path", ["/webhooks", "/dead-letters", "/connected-apps"])
     def test_the_shell_offers_a_nav_entry(self, route_path):
         source = _SHELL_TSX.read_text(encoding="utf-8")
         assert f'to: "{route_path}"' in source, (

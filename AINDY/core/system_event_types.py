@@ -7,6 +7,10 @@ class SystemEventTypes:
     # FR-59 (DEC-121) — a user set or deleted their own provider key. Provider and hint only.
     PROVIDER_KEY_SET = "provider_key.set"
     PROVIDER_KEY_DELETED = "provider_key.deleted"
+    # FR-66 — an MCP OAuth grant was made (consent) or ended, with why it ended. Ids, client,
+    # scopes and reason only; never a code, a token or a secret.
+    MCP_GRANT_CREATED = "mcp_grant.created"
+    MCP_GRANT_REVOKED = "mcp_grant.revoked"
     STARTUP_RECOVERY_FAILED = "startup.recovery.failed"
     STARTUP_RECOVERY_COMPLETED = "startup.recovery.completed"
 

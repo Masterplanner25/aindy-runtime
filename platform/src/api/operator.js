@@ -134,3 +134,16 @@ export function drainDeadLetters() {
     unwrapEnvelope,
   );
 }
+
+// ── Connected MCP apps (FR-66) ───────────────────────────────────────────────
+// The signed-in user's own OAuth grants to the MCP endpoint (ChatGPT, claude.ai, …). A bare
+// body like the webhook routes; ending one stops every token issued under it.
+
+export function getMcpGrants() {
+  return authRequest(RUNTIME_ROUTES.MCP_GRANTS.LIST, { method: "GET" }).then(unwrapEnvelope);
+}
+
+export function revokeMcpGrant(grantId) {
+  // 204, no body — nothing to unwrap.
+  return authRequest(RUNTIME_ROUTES.MCP_GRANTS.REVOKE(grantId), { method: "DELETE" });
+}
