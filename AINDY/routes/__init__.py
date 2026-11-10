@@ -23,6 +23,7 @@ from AINDY.routes.platform.admin_router import router as admin_router
 from AINDY.routes.platform_router import router as platform_router
 from AINDY.routes.watcher_router import router as watcher_router
 from AINDY.routes.provider_keys_router import router as provider_keys_router
+from AINDY.routes.mcp_grants_router import router as mcp_grants_router
 
 
 ROOT_ROUTERS = [
@@ -30,6 +31,7 @@ ROOT_ROUTERS = [
     auth_router,
     watcher_router,   # API-key authenticated; client targets /watcher/signals
     provider_keys_router,  # FR-59: a user's own provider keys, session-only
+    mcp_grants_router,  # FR-66 phase 2: a user's connected MCP apps, session-only
 ]
 
 LEGACY_ROOT_ROUTERS = []

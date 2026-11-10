@@ -304,4 +304,6 @@ def test_the_only_identity_only_routes_left_are_self_service(runtime_only_app):
         "GET /auth/provider-keys",
         "PUT /auth/provider-keys/{provider}",
         "DELETE /auth/provider-keys/{provider}",
+        "GET /auth/mcp-grants",
+        "DELETE /auth/mcp-grants/{grant_id}",
     }, f"identity-only routes changed: {sorted(identity_only)}"

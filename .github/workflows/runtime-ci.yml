@@ -426,6 +426,9 @@ jobs:
           python -m pip install -r AINDY/requirements.txt
           python -m pip install -e .[test] --no-deps --no-build-isolation
           python -m pip install fakeredis
+          # FR-66 phase 2: `mcp-oauth register-client` is tested from a fresh interpreter here.
+          # Same specs as Runtime Contracts' MCP step; bump them together (NODUS-UPGRADE-1).
+          python -m pip install "nodus-lang==5.15.1" "nodus-mcp>=0.1.6" "mcp>=1.0.0"
 
       - name: Verify schema bootstrap on PostgreSQL
         run: |

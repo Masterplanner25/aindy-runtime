@@ -25,6 +25,7 @@ from .job_log import JobLog
 from .nodus_scheduled_job import NodusScheduledJob
 from .api_key import PlatformAPIKey
 from .user_provider_key import UserProviderKey
+from .mcp_oauth import McpOAuthClient, McpOAuthGrant
 from .dynamic_flow import DynamicFlow
 from .dynamic_node import DynamicNode
 from .waiting_flow_run import WaitingFlowRun
@@ -65,6 +66,8 @@ __all__ = [
     "NodusScheduledJob",
     "PlatformAPIKey",
     "UserProviderKey",
+    "McpOAuthClient",
+    "McpOAuthGrant",
     "DynamicFlow",
     "DynamicNode",
     "WaitingFlowRun",
