@@ -500,6 +500,15 @@ class SyscallContractViolation(Exception):
 # docs/design/MEDIATED_EFFECT_BOUNDARY_PROGRAM.md.
 
 
+def _exception_failure_class(exc: BaseException) -> Optional[str]:
+    """The failure class a handler's exception declares as its ``failure_class`` attribute, if
+    it is one of ``FAILURE_CLASSES``; ``None`` leaves the decision to the fallback table."""
+    from AINDY.core.retry_policy import FAILURE_CLASSES
+
+    declared = getattr(exc, "failure_class", None)
+    return declared if isinstance(declared, str) and declared in FAILURE_CLASSES else None
+
+
 def _classified_failure_class(name: str, message: str, declared: Optional[str]) -> str:
     """Resolve a refusal's failure class and count the classification (RETRY-CLASSIFY-1)."""
     from AINDY.core.retry_policy import FAILURE_CLASS_KEY, classify_failure, record_retry_classification
@@ -1080,9 +1089,13 @@ class SyscallDispatcher:
                 message = f"HTTP_503:{message}"
             return self._error_envelope(
                 name, context, message, t_start, version=parsed_version, already_logged=True,
-                # a tripped breaker is the one handler failure the dispatcher KNOWS is transient;
-                # any other handler exception is left to the fallback table (declared=None)
-                failure_class="transient" if isinstance(exc, CircuitOpenError) else None,
+                # A tripped breaker is the one handler failure the dispatcher KNOWS is transient.
+                # Otherwise the class the exception DECLARED wins (the convention the tool seam
+                # already honours, RETRY-CLASSIFY-1); an undeclared one is left to the fallback
+                # table, which defaults to `transient`.
+                failure_class=(
+                    "transient" if isinstance(exc, CircuitOpenError) else _exception_failure_class(exc)
+                ),
             )
 
         # Step 3b — output type check.
