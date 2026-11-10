@@ -146,7 +146,10 @@ def test_auth_hook_sets_session_identity_and_handler_uses_it():
     attr_token = effect_ledger.set_effect_attribution(tenant_id=None, session_id=None)
     try:
         hook = mcp_server.build_auth_hook()
-        with patch.object(mcp_server, "_resolve_session_identity", return_value="tenant-7"):
+        with patch.object(
+            mcp_server, "_resolve_session_principal",
+            return_value=mcp_server.SessionPrincipal("tenant-7", None),
+        ):
             hook("sys.v1.memory.read", {}, {"headers": {"authorization": "Bearer t"}})
         assert mcp_server._SESSION_IDENTITY.get() == "tenant-7"
 
@@ -186,7 +189,10 @@ def test_auth_hook_sets_effect_attribution(monkeypatch):
     sess = _Sess()
     try:
         hook = mcp_server.build_auth_hook()
-        with patch.object(mcp_server, "_resolve_session_identity", return_value="tenant-9"):
+        with patch.object(
+            mcp_server, "_resolve_session_principal",
+            return_value=mcp_server.SessionPrincipal("tenant-9", None),
+        ):
             hook("sys.v1.memory.read", {}, {"headers": {"authorization": "Bearer t"}, "session": sess})
         assert effect_ledger.current_effect_attribution() == ("tenant-9", f"mcp:{id(sess)}")
     finally:

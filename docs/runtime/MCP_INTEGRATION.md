@@ -1,7 +1,7 @@
 ---
 title: "MCP Integration (client-side)"
 api_version: "1.0"
-last_verified: "2026-11-06"
+last_verified: "2026-11-09"
 status: current
 owner: "platform-team"
 ---
@@ -98,6 +98,9 @@ Claude Desktop config (`claude_desktop_config.json`) points `command`/`args` at 
 - **Read-only by default.** Exposes `memory.read/search/list/tree/trace`. Set
   `AINDY_MCP_SERVER_ALLOW_WRITES=true` to also expose `memory.write`, `memory.delete`,
   `flow.run`, `event.emit`. `AINDY_MCP_SERVER_TOOLS` overrides the allowlist explicitly.
+- **An explicit list cannot bring in a write without that flag (DEC-128).** A syscall counts as
+  a read only when it is registered with `read_only=True`; the server refuses to start naming
+  any other. An app syscall that reads must declare it: `register_syscall(..., read_only=True)`.
 - **How it dispatches.** Each exposed syscall becomes an MCP tool whose handler calls
   `dispatch_syscall(name, args, user_id=<identity>)` — which grants the syscall its own
   capability (least-privilege, SDK-SYSCALL-GRANT-1) and manages its own DB session. The
@@ -139,12 +142,46 @@ aindy-runtime mcp-server --transport sse --host 0.0.0.0 --port 8080
   runtime's existing auth surface (`decode_access_token` / platform-key — no new mechanism), and
   every call dispatches as *that* identity. The syscall dispatcher then enforces per-syscall
   capability + tenant isolation for that user.
+- **A platform key is held to its scopes (DEC-126).** The tool's declared capability must be
+  one the key's scopes authorize, by the same map `POST /platform/syscall` uses
+  (`auth/api_key_auth.py::DISPATCH_CAPABILITY_SCOPES`): `memory.read` with `memory.read` or
+  `memory.write`, and so on. `platform.admin` authorizes everything, and a capability the map
+  does not list needs it. Otherwise the call is refused with `failure_class: permission`
+  before dispatch. A session JWT is not scope-gated, as on that route. A watcher-only key is
+  refused outright (DEC-117).
 - **Fail-closed.** A call whose headers resolve to no valid identity is denied. Writes still
   require `AINDY_MCP_SERVER_ALLOW_WRITES=true`.
-- **stdio stays single-identity.** Multi-tenant is meaningful only over SSE (stdio carries no
-  per-request headers); the server refuses to start stdio with the flag on. Without the flag, SSE
-  runs as the single configured `AINDY_MCP_SERVER_USER_ID`.
+- **stdio stays single-identity.** Multi-tenant is meaningful only over SSE or HTTP (stdio
+  carries no per-request headers); the server refuses to start stdio with the flag on. Without
+  the flag, SSE and HTTP run as the single configured `AINDY_MCP_SERVER_USER_ID`.
 - **Requires `nodus-mcp>=0.1.2`** (SSE `/messages/` mount + `auth_hook` header context).
+
+### Streamable HTTP (FR-66 phase 1)
+
+The transport ChatGPT and claude.ai connect to: one endpoint, `/mcp` by default. It needs
+`nodus-mcp>=0.1.6` (`NodusServer.streamable_http_app()`, DEC-125).
+
+```bash
+AINDY_MCP_SERVER_MULTI_TENANT=true \
+DATABASE_URL=postgresql://... \
+aindy-runtime mcp-server --transport http --port 8080            # binds 127.0.0.1
+
+# Behind your own HTTPS proxy, name the public host:
+AINDY_MCP_SERVER_ALLOWED_HOSTS=mcp.example.com \
+aindy-runtime mcp-server --transport http --host 0.0.0.0 --port 8080
+```
+
+- **Identity and scopes are SSE's**: the same headers, the same per-call resolution, the same
+  scope rule. Stateless: no sticky sessions needed behind a proxy.
+- **The `Host` and `Origin` check fails closed (DEC-127).** On a loopback bind only loopback
+  names are accepted. On any other bind the server refuses to start unless
+  `AINDY_MCP_SERVER_ALLOWED_HOSTS` lists the host name(s) clients use (`name`, `name:port`, or
+  `name:*`). A wrong `Host` gets 421. A browser `Origin` must be in
+  `AINDY_MCP_SERVER_ALLOWED_ORIGINS` (403 otherwise); a request with no `Origin`, which is what
+  a server-side client sends, passes.
+- **Not yet usable from ChatGPT or claude.ai.** Their connectors can't send a header, so they
+  need OAuth: FR-66 phase 2 (`../design/MCP_REMOTE_TRANSPORT_DESIGN.md`). A client that can send
+  a header (Claude Code, the SDKs) can use this now.
 
 **Deferred (MEB-3b):** tenant/session attribution columns on `EffectRecord` (records *which*
 session produced each effect — the program's only schema-contract bump) and an optional

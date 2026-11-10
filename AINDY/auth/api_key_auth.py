@@ -73,6 +73,34 @@ def is_watcher_only(scopes) -> bool:
 PLATFORM_ADMIN_SCOPE = Scopes.PLATFORM_ADMIN
 
 
+#: Which key scopes authorize a syscall CAPABILITY, for the doors that dispatch a syscall by
+#: name on an API key's behalf: `POST /platform/syscall` and the MCP server. One map, so the same
+#: key gets one answer from both (DEC-126). Read is `read OR write`; a write grant implies read.
+DISPATCH_CAPABILITY_SCOPES: dict[str, frozenset[str]] = {
+    "memory.read":    frozenset({Scopes.MEMORY_READ, Scopes.MEMORY_WRITE}),
+    "memory.search":  frozenset({Scopes.MEMORY_READ, Scopes.MEMORY_WRITE}),
+    "memory.write":   frozenset({Scopes.MEMORY_WRITE}),
+    "memory.delete":  frozenset({Scopes.MEMORY_DELETE}),
+    "execution.read": frozenset({Scopes.EXECUTION_READ}),
+    "flow.run":       frozenset({Scopes.FLOW_EXECUTE}),
+    "event.emit":     frozenset({Scopes.EVENT_EMIT}),
+}
+
+
+def key_scopes_authorize(capability: str | None, scopes) -> bool:
+    """Whether an API key holding ``scopes`` may call a syscall that declares ``capability``.
+
+    ``platform.admin`` authorizes everything. Otherwise the capability must be in
+    `DISPATCH_CAPABILITY_SCOPES` and the key must hold one of its authorizing scopes. A capability
+    outside the map is refused: no key scope names it, so only ``platform.admin`` reaches it.
+    """
+    held = set(scopes or [])
+    if PLATFORM_ADMIN_SCOPE in held:
+        return True
+    authorizing = DISPATCH_CAPABILITY_SCOPES.get(capability or "")
+    return bool(authorizing and authorizing & held)
+
+
 def grantable_scopes(current_user: dict) -> set[str]:
     """What scopes this caller may put on a **new** API key (`KEY-SCOPE-ESCALATION-1`).
 

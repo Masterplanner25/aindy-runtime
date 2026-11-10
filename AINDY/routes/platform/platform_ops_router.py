@@ -8,7 +8,7 @@ from AINDY.core.execution_helper import execute_with_pipeline_sync
 from AINDY.db.database import get_db
 from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.routes.platform.schemas import SyscallDispatchRequest
-from AINDY.auth.api_key_auth import Scopes
+from AINDY.auth.api_key_auth import DISPATCH_CAPABILITY_SCOPES, Scopes, key_scopes_authorize
 from AINDY.services.auth_service import enforce_api_key_scope, get_current_user
 
 router = APIRouter()
@@ -62,15 +62,9 @@ def _execute_platform_ops(request: Request, route_name: str, handler, *, db: Ses
 # least-privilege: a dispatch is authorized for exactly the requested syscall's
 # own required capability, nothing more (the dispatcher enforces a single
 # capability per syscall).
-_DISPATCH_CAPABILITY_SCOPES: dict[str, set[str]] = {
-    "memory.read":    {Scopes.MEMORY_READ, Scopes.MEMORY_WRITE},
-    "memory.search":  {Scopes.MEMORY_READ, Scopes.MEMORY_WRITE},
-    "memory.write":   {Scopes.MEMORY_WRITE},
-    "memory.delete":  {Scopes.MEMORY_DELETE},
-    "execution.read": {Scopes.EXECUTION_READ},
-    "flow.run":       {Scopes.FLOW_EXECUTE},
-    "event.emit":     {Scopes.EVENT_EMIT},
-}
+# The map now lives in `auth/api_key_auth.py`: one map for every door that dispatches a syscall
+# on a key's behalf (this route and the MCP server, DEC-126).
+_DISPATCH_CAPABILITY_SCOPES = DISPATCH_CAPABILITY_SCOPES
 
 
 def _resolve_dispatch_capabilities(syscall_name: str, current_user: dict) -> list[str]:
@@ -93,8 +87,7 @@ def _resolve_dispatch_capabilities(syscall_name: str, current_user: dict) -> lis
         # Unknown syscall, or valid but off the public dispatch surface.
         return []
     if current_user.get("auth_type") == "api_key":
-        scopes = set(current_user.get("api_key_scopes") or [])
-        if Scopes.PLATFORM_ADMIN not in scopes and not (authorizing & scopes):
+        if not key_scopes_authorize(required_cap, current_user.get("api_key_scopes")):
             raise HTTPException(
                 status_code=403,
                 detail=(

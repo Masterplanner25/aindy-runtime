@@ -8,7 +8,7 @@ owner: "platform-team"
 
 # FR-66 — an MCP server that ChatGPT and claude.ai can add — design
 
-**PROPOSED 2026-11-09. D3 ACCEPTED 2026-11-09 (DEC-125): the transport goes in nodus-mcp, asked for in `docs/handoffs/NODUS_HANDOFF_mcp_streamable_http.md`. D1, D2 and D4–D7 still await the owner. Nothing is built.** A proposal under
+**PROPOSED 2026-11-09. D3 ACCEPTED 2026-11-09 (DEC-125): the transport goes in nodus-mcp, asked for in `docs/handoffs/NODUS_HANDOFF_mcp_streamable_http.md`. **ALL DECIDED 2026-11-09**, each as recommended: D5 = DEC-128 (with a declared `read_only`), D1/D2/D4/D6/D7 = DEC-129. **Phase 1 built 2026-11-09 (#951)** on nodus-mcp 0.1.6: `--transport http`, platform keys held to their scopes on every transport (DEC-126), a fail-closed `Host` check (DEC-127), and writes refused without `ALLOW_WRITES` (DEC-128). Phase 2 (OAuth) is next.** A proposal under
 `AGENT_WORKING_RULES.md` §8: it adds an internet-facing authentication surface, stores new credentials, and needs a
 schema step.
 
@@ -169,8 +169,9 @@ Every call over HTTP must pass three checks, in order:
    (`memory.read`, …). The consent page offers the capabilities of the allowlisted tools, nothing more. DEC-112 stays
    true: the tool receives its declared capability; the token decides only whether the call may happen.
 3. **A write needs the write switch.**
-   - **Recommended (D5): `AINDY_MCP_SERVER_TOOLS` can no longer bring in a write syscall unless
-     `AINDY_MCP_SERVER_ALLOW_WRITES=true`.**
+   - **Accepted (D5, DEC-128): `AINDY_MCP_SERVER_TOOLS` can no longer bring in a write syscall unless
+     `AINDY_MCP_SERVER_ALLOW_WRITES=true`.** A syscall is a read only when it declares `read_only=True`;
+     undeclared counts as a write.
    - The server refuses to start, naming the write, so the app's launcher check becomes the server's.
    - This changes the existing stdio and SSE behaviour too, so it gets its own changelog entry.
    - Even with writes on, a write scope is never pre-ticked on the consent page.
@@ -209,7 +210,7 @@ The second check applies to **every** identity that carries scopes, on every tra
 | Phase | What | Usable by |
 |---|---|---|
 | 0 | nodus-mcp `streamable_http_app()` in 0.1.6 (`docs/handoffs/NODUS_HANDOFF_mcp_streamable_http.md`), or the fallback | — |
-| 1 | `--transport http` with header identity; scope enforcement on every transport (§7.2); D5 | Claude Code and any client that can send a header |
+| 1 | `--transport http` with header identity; scope enforcement on every transport (§7.2, DEC-126); the `Host` check (DEC-127); D5 (DEC-128). **Built 2026-11-09 (#951)** | Claude Code and any client that can send a header |
 | 2 | OAuth: Alembic `0022`, DCR, authorize with login and consent, token, refresh, revoke, metadata; connected-apps routes. Off by default | ChatGPT and claude.ai, once exposed |
 | 3 | Evidence (D7) on the app's stack; any fixes it finds; a SPA card for connected apps | — |
 
