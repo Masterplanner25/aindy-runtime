@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "boot_mode": "runtime-only",
-  "route_count": 134,
+  "route_count": 136,
   "routes": [
     {
       "method": "GET",
@@ -279,6 +279,20 @@
       "path": "/auth/logout",
       "tags": [
         "auth"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/auth/mcp-grants",
+      "tags": [
+        "MCP connected apps"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/auth/mcp-grants/{grant_id}",
+      "tags": [
+        "MCP connected apps"
       ]
     },
     {

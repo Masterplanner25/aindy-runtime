@@ -179,9 +179,54 @@ aindy-runtime mcp-server --transport http --host 0.0.0.0 --port 8080
   `name:*`). A wrong `Host` gets 421. A browser `Origin` must be in
   `AINDY_MCP_SERVER_ALLOWED_ORIGINS` (403 otherwise); a request with no `Origin`, which is what
   a server-side client sends, passes.
-- **Not yet usable from ChatGPT or claude.ai.** Their connectors can't send a header, so they
-  need OAuth: FR-66 phase 2 (`../design/MCP_REMOTE_TRANSPORT_DESIGN.md`). A client that can send
-  a header (Claude Code, the SDKs) can use this now.
+- **ChatGPT and claude.ai need OAuth** (below): their connectors can't send a header. A client
+  that can (Claude Code, the SDKs) uses the headers above.
+
+### OAuth for `/mcp` (FR-66 phase 2, DEC-129, DEC-130)
+
+So ChatGPT and claude.ai can add the server by URL. Off by default; needs Alembic `0022`.
+
+```bash
+AINDY_MCP_OAUTH=on \
+AINDY_MCP_PUBLIC_URL=https://mcp.example.com \
+DATABASE_URL=postgresql://... \
+aindy-runtime mcp-server --transport http --host 0.0.0.0 --port 8080   # behind your HTTPS proxy
+```
+
+Then add `https://mcp.example.com/mcp` as a connector. The client finds everything from the
+`401` it gets first.
+
+- **The runtime is its own authorization server, for `/mcp` only.** It serves `/authorize`,
+  `/token`, `/register`, `/revoke`, `/.well-known/oauth-authorization-server`,
+  `/.well-known/oauth-protected-resource/mcp`, and a sign-in and consent page at `/oauth/consent`.
+- **The consent page:**
+  - Users sign in with their existing account; it never creates one.
+  - The page shows the address the user will be sent back to, because a client's name is
+    whatever it registered.
+  - Read scopes are pre-ticked; a write scope is offered only when the server exposes writes
+    (DEC-128), and is never pre-ticked.
+- **With OAuth on, `/mcp` accepts only its own access tokens.** A session JWT or a platform key
+  sent to `/mcp` gets `401`, and an MCP token is never a session token anywhere else.
+- **Tokens and grants:**
+  - An access token lasts 1 hour and is held to its scopes like a key (DEC-126). A scope can also
+    be a tool's own capability name when no scope names it, as for an app's `work.context`
+    (DEC-130, OAuth grants only).
+  - A refresh token lasts 30 days and rotates on every use; replaying an old one ends the grant.
+  - A password change, a disabled account, or ending the grant stops its tokens, within
+    seconds.
+- **Users see and end their connections** at `GET` / `DELETE /auth/mcp-grants`, from a signed-in
+  session only.
+- **Registration (D4):**
+  - Open by default, with caps: `AINDY_MCP_OAUTH_MAX_CLIENTS` (500) and
+    `AINDY_MCP_OAUTH_REGISTRATIONS_PER_HOUR` (30).
+  - Redirect URIs must be https, or http to a loopback host.
+  - Clients that never got a grant are pruned after 30 days.
+  - `AINDY_MCP_OAUTH_CLIENTS=closed` turns self-registration off; register clients with
+    `aindy-runtime mcp-oauth register-client --name … --redirect-uri …`.
+- **Nothing secret is stored in the clear.** Codes and refresh tokens are stored as hashes.
+  A client secret is sealed with keys derived from the signing keys, so after a signing-key
+  rotation's grace window a confidential client must register again.
+- **The `Host` check** allows the public URL's host when `AINDY_MCP_SERVER_ALLOWED_HOSTS` is unset.
 
 **Deferred (MEB-3b):** tenant/session attribution columns on `EffectRecord` (records *which*
 session produced each effect — the program's only schema-contract bump) and an optional

@@ -8,7 +8,13 @@ owner: "platform-team"
 
 # FR-66 — an MCP server that ChatGPT and claude.ai can add — design
 
-**PROPOSED 2026-11-09. D3 ACCEPTED 2026-11-09 (DEC-125): the transport goes in nodus-mcp, asked for in `docs/handoffs/NODUS_HANDOFF_mcp_streamable_http.md`. **ALL DECIDED 2026-11-09**, each as recommended: D5 = DEC-128 (with a declared `read_only`), D1/D2/D4/D6/D7 = DEC-129. **Phase 1 built 2026-11-09 (#951)** on nodus-mcp 0.1.6: `--transport http`, platform keys held to their scopes on every transport (DEC-126), a fail-closed `Host` check (DEC-127), and writes refused without `ALLOW_WRITES` (DEC-128). Phase 2 (OAuth) is next.** A proposal under
+**Status (2026-11-09).** Every decision is made, each as recommended: D3 = DEC-125 (the transport is in nodus-mcp), D5 = DEC-128 (with a declared `read_only`), and D1, D2, D4, D6, D7 = DEC-129.
+
+- **Phase 1 is built (#951)** on nodus-mcp 0.1.6: `--transport http`, platform keys held to their scopes on every transport (DEC-126), a fail-closed `Host` check (DEC-127), and writes refused without `ALLOW_WRITES` (DEC-128).
+- **Phase 2 (OAuth) is built.** Its build-time choices are DEC-130, provisional: exact-capability scopes for OAuth grants only, a missing `resource` accepted (a foreign one refused), client secrets sealed under derived keys, and `/mcp` accepting only MCP tokens when OAuth is on.
+- **FR-66 stays open** until D7's two real connectors work.
+
+Originally a proposal under
 `AGENT_WORKING_RULES.md` §8: it adds an internet-facing authentication surface, stores new credentials, and needs a
 schema step.
 

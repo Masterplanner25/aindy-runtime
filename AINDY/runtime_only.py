@@ -680,6 +680,32 @@ def _reembed_memory(*, yes: bool, no_drain: bool, dry_run: bool) -> NoReturn:
         raise SystemExit(2)
 
 
+def _mcp_oauth_register_client(name: str, redirect_uris: list[str], public: bool) -> NoReturn:
+    """Register an OAuth client for the MCP endpoint by hand (FR-66 phase 2, D4's closed mode).
+
+    Prints the client id, and for a confidential client its secret, once: it is stored sealed and
+    never shown again. Requires DATABASE_URL and the [mcp] extra.
+    """
+    import json
+
+    from AINDY.config import settings
+    if not settings.DATABASE_URL:
+        print("error: DATABASE_URL is not set.", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        from AINDY.platform_layer.mcp_oauth import register_client_cli
+    except Exception as exc:
+        print(f"error: MCP support is unavailable. pip install 'aindy-runtime[mcp]'\n  detail: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        made = register_client_cli(name=name, redirect_uris=redirect_uris, public=public)
+    except Exception as exc:
+        print(f"error: {getattr(exc, 'error_description', None) or exc}", file=sys.stderr)
+        raise SystemExit(1)
+    print(json.dumps(made, indent=2))
+    raise SystemExit(0)
+
+
 #: Default bind per transport. SSE keeps its historical 0.0.0.0; streamable HTTP binds loopback,
 #: because exposure is the operator's choice (FR-66 design §4) and a non-loopback bind must name
 #: its public host for the Host check (DEC-127).
@@ -1080,6 +1106,29 @@ def main() -> None:
         "--path", default="/mcp", help="The streamable HTTP endpoint (default /mcp). http only.",
     )
 
+    mcp_oauth_parser = subparsers.add_parser(
+        "mcp-oauth",
+        help="OAuth for the MCP endpoint (FR-66): operator commands.",
+        description="Operator commands for the MCP server's OAuth layer (AINDY_MCP_OAUTH).",
+    )
+    mcp_oauth_sub = mcp_oauth_parser.add_subparsers(dest="mcp_oauth_command")
+    register_client_parser = mcp_oauth_sub.add_parser(
+        "register-client",
+        help="Register a client by hand (for AINDY_MCP_OAUTH_CLIENTS=closed).",
+        description=(
+            "Register an OAuth client for the MCP endpoint without dynamic registration. Prints the "
+            "client id and, unless --public, a client secret shown once."
+        ),
+    )
+    register_client_parser.add_argument("--name", required=True, help="The name the consent page shows.")
+    register_client_parser.add_argument(
+        "--redirect-uri", action="append", required=True, dest="redirect_uris",
+        help="An allowed redirect URI (https, or http to a loopback host). Repeat for more.",
+    )
+    register_client_parser.add_argument(
+        "--public", action="store_true", help="A public client (PKCE only, no secret).",
+    )
+
     memory_parser = subparsers.add_parser(
         "memory",
         help="Memory management commands.",
@@ -1245,6 +1294,11 @@ def main() -> None:
             port=getattr(args, "port", 8080),
             path=getattr(args, "path", "/mcp"),
         )
+    elif args.command == "mcp-oauth":
+        if getattr(args, "mcp_oauth_command", None) == "register-client":
+            _mcp_oauth_register_client(args.name, args.redirect_uris, args.public)
+        mcp_oauth_parser.print_help()
+        raise SystemExit(2)
     elif args.command == "memory":
         if args.memory_command == "reembed":
             _reembed_memory(

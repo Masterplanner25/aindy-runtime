@@ -87,15 +87,22 @@ DISPATCH_CAPABILITY_SCOPES: dict[str, frozenset[str]] = {
 }
 
 
-def key_scopes_authorize(capability: str | None, scopes) -> bool:
+def key_scopes_authorize(capability: str | None, scopes, *, exact_capability: bool = False) -> bool:
     """Whether an API key holding ``scopes`` may call a syscall that declares ``capability``.
 
     ``platform.admin`` authorizes everything. Otherwise the capability must be in
-    `DISPATCH_CAPABILITY_SCOPES` and the key must hold one of its authorizing scopes. A capability
-    outside the map is refused: no key scope names it, so only ``platform.admin`` reaches it.
+    `DISPATCH_CAPABILITY_SCOPES` and the key must hold one of its authorizing scopes.
+
+    ``exact_capability=True`` also accepts a scope that names the capability exactly (DEC-130).
+    Only an MCP OAuth grant passes it: its consent page offers a tool's own capability name when no
+    scope names it (an app's ``work.context``). Platform keys never do. One key scope,
+    ``flow.execute``, equals an unmapped capability (``sys.v1.flow.execute_intent``), and the rule
+    would have widened what such a key reaches.
     """
     held = set(scopes or [])
     if PLATFORM_ADMIN_SCOPE in held:
+        return True
+    if exact_capability and capability and capability in held:
         return True
     authorizing = DISPATCH_CAPABILITY_SCOPES.get(capability or "")
     return bool(authorizing and authorizing & held)

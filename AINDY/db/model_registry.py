@@ -21,6 +21,7 @@ import AINDY.db.models.agent_registry  # noqa: F401
 import AINDY.db.models.agent_run  # noqa: F401
 import AINDY.db.models.api_key  # noqa: F401
 import AINDY.db.models.user_provider_key  # noqa: F401
+import AINDY.db.models.mcp_oauth  # noqa: F401
 import AINDY.db.models.background_task_lease  # noqa: F401
 import AINDY.db.models.capability  # noqa: F401
 import AINDY.db.models.dynamic_flow  # noqa: F401

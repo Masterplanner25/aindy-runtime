@@ -102,3 +102,34 @@ def test_backfill_call_users_writes_from_a_fresh_interpreter(pg_url):
             c.execute(text("DELETE FROM system_events WHERE trace_id = :tr"), {"tr": trace})
             c.execute(text("DELETE FROM users WHERE id = :i"), {"i": user_id})
         engine.dispose()
+
+
+def test_mcp_oauth_register_client_writes_from_a_fresh_interpreter(pg_url):
+    """FR-66 phase 2: the closed-registration path, run as an operator runs it. The integration
+    job installs the [mcp] specs, so a missing import fails here rather than skipping."""
+    import json
+
+    import mcp  # noqa: F401  — fail, don't skip: this job installs it
+
+    engine = create_engine(pg_url)
+    made = _run(pg_url, "mcp-oauth", "register-client", "--name", "Fresh CLI client",
+                "--redirect-uri", "https://connector.example/cb")
+    assert made.returncode == 0, made.stderr[-2000:]
+    out = json.loads(made.stdout)
+    try:
+        assert out["client_secret"], "a confidential client gets a secret, shown once"
+        with engine.connect() as c:
+            row = c.execute(
+                text("SELECT client_info, client_secret_ciphertext FROM mcp_oauth_clients WHERE client_id = :i"),
+                {"i": out["client_id"]},
+            ).one()
+        assert "Fresh CLI client" in row[0]
+        assert out["client_secret"] not in row[0] + (row[1] or "")  # stored sealed
+
+        refused = _run(pg_url, "mcp-oauth", "register-client", "--name", "x", "--redirect-uri", "http://evil.example/cb")
+        assert refused.returncode == 1
+        assert "redirect" in refused.stderr
+    finally:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM mcp_oauth_clients WHERE client_id = :i"), {"i": out["client_id"]})
+        engine.dispose()

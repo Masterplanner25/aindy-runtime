@@ -68,6 +68,10 @@ _SESSION_IDENTITY: contextvars.ContextVar[Optional[str]] = contextvars.ContextVa
 _SESSION_SCOPES: contextvars.ContextVar[Optional[frozenset]] = contextvars.ContextVar(
     "aindy_mcp_session_scopes", default=None
 )
+# True for an MCP OAuth grant only (DEC-130); keys keep the map-only rule.
+_SESSION_EXACT_CAPABILITY: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "aindy_mcp_session_exact_capability", default=False
+)
 
 # Read-only syscalls (memory.read capability) — the safe default exposure.
 READ_ONLY_SYSCALLS = (
@@ -126,6 +130,8 @@ class SessionPrincipal(NamedTuple):
 
     user_id: str
     scopes: Optional[frozenset]
+    # An MCP OAuth grant: a scope naming the tool's capability exactly also authorizes it (DEC-130).
+    exact_capability: bool = False
 
 
 def refuse_unflagged_writes(allowlist: list[str]) -> None:
@@ -160,6 +166,14 @@ def _resolve_session_principal(context: dict) -> Optional[SessionPrincipal]:
     but invalid, so the caller can deny fail-closed. One database read resolves both the user
     and, for a platform key, its scopes.
     """
+    # FR-66 phase 2 — an MCP access token the bearer middleware already verified (it put the
+    # SDK's AuthenticatedUser on the request scope; nodus-mcp passes it as context["user"]). It
+    # is held to its scopes like a platform key (DEC-126). Read from the request's own scope,
+    # never a contextvar, which is stale on mcp 1.x in stateful mode (nodus-mcp 0.1.6).
+    verified = getattr((context or {}).get("user"), "access_token", None)
+    if verified is not None and getattr(verified, "subject", None):
+        return SessionPrincipal(str(verified.subject), frozenset(verified.scopes or ()), exact_capability=True)
+
     raw = (context or {}).get("headers") or {}
     headers = {str(k).lower(): v for k, v in raw.items()}
     auth = str(headers.get("authorization", "") or "")
@@ -222,6 +236,7 @@ def build_auth_hook():
         # Cleared first, so a refused call can never run on a previous call's identity or scopes.
         _SESSION_IDENTITY.set(None)
         _SESSION_SCOPES.set(None)
+        _SESSION_EXACT_CAPABILITY.set(False)
         try:
             principal = _resolve_session_principal(context)
         except Exception as exc:
@@ -234,6 +249,7 @@ def build_auth_hook():
         identity = principal.user_id
         _SESSION_IDENTITY.set(identity)
         _SESSION_SCOPES.set(principal.scopes)
+        _SESSION_EXACT_CAPABILITY.set(principal.exact_capability)
         # MEB-3b — attribute effects written under this call to the tenant (resolved
         # identity) + session. tenant_id is also set at the dispatcher gate from the
         # SyscallContext, but setting it here covers any effect-boundary write reached in
@@ -287,7 +303,9 @@ def _make_handler(syscall_name: str, configured_user_id: Optional[str], capabili
         # DEC-126 — a platform key is held to its scopes on every transport, with the map
         # `POST /platform/syscall` uses. Refused before a unit is claimed.
         scopes = _SESSION_SCOPES.get()
-        if scopes is not None and not key_scopes_authorize(capability, scopes):
+        if scopes is not None and not key_scopes_authorize(
+            capability, scopes, exact_capability=_SESSION_EXACT_CAPABILITY.get()
+        ):
             logger.warning(
                 "[mcp-server] %s refused: the key's scopes %s do not authorize %r",
                 syscall_name, sorted(scopes), capability,
@@ -400,11 +418,15 @@ def load_app_syscalls() -> list[str]:
     return list(loaded or [])
 
 
-def _build_server(*, name: str = "aindy-runtime"):
-    """Assemble the NodusServer from config. Returns (server, mode_description)."""
+def _build_server(*, name: str = "aindy-runtime", per_call_identity: Optional[bool] = None):
+    """Assemble the NodusServer from config. Returns (server, mode_description).
+
+    ``per_call_identity`` defaults to the multi-tenant flag; streamable HTTP with OAuth on passes
+    True, because every call there carries its own token.
+    """
     from nodus_mcp_aindy import NodusServer
 
-    multi = multi_tenant_enabled()
+    multi = multi_tenant_enabled() if per_call_identity is None else per_call_identity
     load_app_syscalls()  # FR-53 (a) — before the allowlist is resolved against the registry
     # In multi-tenant mode the identity is per-session, so a configured fallback is optional.
     configured = os.getenv("AINDY_MCP_SERVER_USER_ID", "").strip() or None
@@ -429,6 +451,7 @@ def serve_stdio() -> None:
             "stdio carries no per-request headers. Use --transport sse or http, or unset the "
             "flag for stdio."
         )
+    _refuse_oauth_off_http("stdio")
     resolve_identity()  # stdio requires the single configured identity — fail early if unset
     server, mode = _build_server()
     logger.info("[mcp-server] stdio, %s", mode)
@@ -439,6 +462,7 @@ def serve_sse(host: str = "0.0.0.0", port: int = 8080) -> None:
     """Serve MCP over SSE/HTTP (blocks). Supports per-session multi-tenant identity."""
     import uvicorn
 
+    _refuse_oauth_off_http("sse")
     if not multi_tenant_enabled():
         # Non-multi-tenant SSE still needs a single identity to act as.
         resolve_identity()
@@ -454,6 +478,15 @@ def _csv_env(name: str) -> list[str]:
     return [item.strip() for item in os.getenv(name, "").split(",") if item.strip()]
 
 
+def _refuse_oauth_off_http(transport: str) -> None:
+    from AINDY.platform_layer.mcp_oauth import oauth_enabled
+
+    if oauth_enabled():
+        raise RuntimeError(
+            f"AINDY_MCP_OAUTH applies to --transport http only; unset it to serve {transport}."
+        )
+
+
 def http_security_settings(host: str):
     """The ``Host``/``Origin`` check for the streamable HTTP app (DEC-127). Fails closed.
 
@@ -466,8 +499,12 @@ def http_security_settings(host: str):
     """
     from mcp.server.transport_security import TransportSecuritySettings
 
+    from AINDY.platform_layer.mcp_oauth import oauth_enabled, public_host
+
     hosts = _csv_env("AINDY_MCP_SERVER_ALLOWED_HOSTS")
     origins = _csv_env("AINDY_MCP_SERVER_ALLOWED_ORIGINS")
+    if not hosts and oauth_enabled():
+        hosts = [public_host()]  # with OAuth on, the public URL names the host
     if hosts:
         return TransportSecuritySettings(
             enable_dns_rebinding_protection=True, allowed_hosts=hosts, allowed_origins=origins
@@ -493,16 +530,30 @@ def http_security_settings(host: str):
 def build_http_app(host: str = "127.0.0.1", path: str = "/mcp"):
     """Build the streamable HTTP app (FR-66 phase 1): the MCP endpoint at ``path``, stateless,
     with the ``Host``/``Origin`` check for ``host``. Returns (app, mode_description)."""
-    if not multi_tenant_enabled():
+    from AINDY.platform_layer import mcp_oauth
+
+    oauth = mcp_oauth.oauth_enabled()
+    if oauth:
+        mcp_oauth.public_url()  # fail early on a missing or plain-http public URL
+    elif not multi_tenant_enabled():
         resolve_identity()  # a single identity to act as, as for SSE
     security = http_security_settings(host)  # before the build: refuse early
-    server, mode = _build_server()
+    server, mode = _build_server(per_call_identity=True if oauth else None)
     if not hasattr(server, "streamable_http_app"):
         raise RuntimeError(
             "--transport http needs nodus-mcp>=0.1.6 (NodusServer.streamable_http_app). "
             "Upgrade: pip install -U 'aindy-runtime[mcp]'"
         )
-    app = server.streamable_http_app(path=path, stateless=True, security_settings=security)
+    routes: list = []
+    middleware: list = []
+    if oauth:
+        # FR-66 phase 2 (DEC-129): this server is its own authorization server, for `path` only.
+        cfg = mcp_oauth.build_config(path, resolve_allowlist())
+        routes, middleware = mcp_oauth.http_routes_and_middleware(cfg)
+        mode = f"OAuth (issuer {cfg.issuer}, scopes {list(cfg.offered_scopes)})"
+    app = server.streamable_http_app(
+        path=path, stateless=True, security_settings=security, routes=routes, middleware=middleware
+    )
     return app, mode
 
 
