@@ -1,4 +1,4 @@
-### Fixed — a bad memory path is refused as `invalid`, not `transient` (FR-66 side note, #PR)
+### Fixed — a bad memory path is refused as `invalid`, not `transient` (FR-66 side note, #947)
 
 - A memory read, list, tree or search with a path outside `/memory` (`/`, say) was refused correctly, but the
   envelope said `failure_class: "transient"`, so an MCP client was told to retry a call that can never succeed.
@@ -8,7 +8,7 @@
   so every existing `except ValueError` still catches it and `GET /platform/memory` still answers 400. An
   exception that declares nothing is classified as before.
 
-### Fixed — `GET /watcher/signals` filters by the types `POST /watcher/signals` stores (FR-65, #PR)
+### Fixed — `GET /watcher/signals` filters by the types `POST /watcher/signals` stores (FR-65, #947)
 
 - The query service kept its own signal-type list, which had drifted: filtering by `focus_achieved`,
   `context_switch` or `heartbeat` answered 422, while `app_focus`, `app_switch` and `idle_detected`, which the
