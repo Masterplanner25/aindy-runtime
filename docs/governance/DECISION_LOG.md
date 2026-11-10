@@ -2358,3 +2358,11 @@ The app found its largest traces cut apart: the embedding call was the hub, and 
 
 **Why**
 `_acquire_handler_db`'s contract says a handler must not roll back a caller's session, but `_finish_handler_write` did. On a real session that discarded what the caller had not committed (the flow runner's queued events, a route's earlier writes); under a test fixture sharing one outer transaction it erased the caller's `FlowRun`, which is how the app saw FR-64. Not covered, and recorded: an app handler that calls `rollback()` on the session itself, and `MemoryNodeDAO.save()`'s own `rollback()` on a database error, both still roll back everything (a savepoint can't stop a session-level rollback). `memory.write` and `memory.link` still commit a caller's session through their DAO, as routes rely on; unchanged.
+
+### DEC-125
+**Status:** `accepted` (2026-11-09 — the owner, on FR-66's D3: "I agree it'll need a new release")
+
+**Decision — FR-66's streamable HTTP transport is built in `nodus-mcp`, as `NodusServer.streamable_http_app()` (0.1.6), not in the runtime. The runtime asks for it in `docs/handoffs/NODUS_HANDOFF_mcp_streamable_http.md`, and its `--transport http` waits on that release. The app the method returns runs the SDK session manager in its own lifespan and takes the host's `routes` and `middleware`, so the runtime's OAuth endpoints and bearer check go into the same app instead of mounting it.**
+
+**Why**
+nodus-mcp already owns the SDK-major branching and the per-call header context the runtime's `auth_hook` reads. A runtime-side copy would reach into `NodusServer._server`, a private attribute, and would have to repeat the branching for every SDK major. Declined: building it in the runtime now (kept as the fallback if nodus-mcp can't ship it), and mounting a nodus-mcp app inside a runtime app (Starlette does not run a mounted app's lifespan, so the session manager would never start). D1, D2 and D4–D7 of the design are not decided by this entry.

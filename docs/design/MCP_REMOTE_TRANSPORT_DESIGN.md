@@ -8,7 +8,7 @@ owner: "platform-team"
 
 # FR-66 — an MCP server that ChatGPT and claude.ai can add — design
 
-**PROPOSED 2026-11-09, awaiting the owner's decisions in §9. Nothing is built.** A proposal under
+**PROPOSED 2026-11-09. D3 ACCEPTED 2026-11-09 (DEC-125): the transport goes in nodus-mcp, asked for in `docs/handoffs/NODUS_HANDOFF_mcp_streamable_http.md`. D1, D2 and D4–D7 still await the owner. Nothing is built.** A proposal under
 `AGENT_WORKING_RULES.md` §8: it adds an internet-facing authentication surface, stores new credentials, and needs a
 schema step.
 
@@ -73,7 +73,7 @@ Three pieces. All are off until an operator turns them on.
 
 ## 4. The transport
 
-**Recommended: a nodus-mcp release** that adds `NodusServer.run_streamable_http_app()` beside `run_sse_app()` (an
+**Accepted (DEC-125): a nodus-mcp release** that adds `NodusServer.streamable_http_app()` beside `run_sse_app()` (an
 outbound handoff under `docs/handoffs/`).
 - The SDK-major branching (`_SDK_V2`) and the per-call header context the `auth_hook` reads
   (`_request_meta` → `headers`) already live there.
@@ -198,7 +198,7 @@ The second check applies to **every** identity that carries scopes, on every tra
 |---|---|---|
 | D1 | Who issues tokens | **The runtime, for the MCP endpoint only.** An external identity provider (resource server only) stays possible later, with an explicit account link |
 | D2 | Token shape | **A 1-hour signed access token with a domain-separated key, plus a rotating refresh token on a revocable grant row.** Not platform API keys |
-| D3 | Where the transport is built | **nodus-mcp** (`run_streamable_http_app`), with a runtime-side fallback if it can't ship soon |
+| D3 | Where the transport is built | **ACCEPTED (DEC-125): nodus-mcp**, as `streamable_http_app()` in 0.1.6 (the handoff). The runtime-side fallback stays only if it can't ship |
 | D4 | Dynamic client registration | **Open, capped and rate-limited**, because both target clients register this way. An operator can close it (`AINDY_MCP_OAUTH_CLIENTS=closed`) and pre-register clients with a CLI command |
 | D5 | Writes in an explicit tool list | **Refused unless `ALLOW_WRITES`**, on every transport (a behaviour change) |
 | D6 | Default | **Off** (`AINDY_MCP_OAUTH` unset). The transport is usable with header auth without OAuth |
@@ -208,7 +208,7 @@ The second check applies to **every** identity that carries scopes, on every tra
 
 | Phase | What | Usable by |
 |---|---|---|
-| 0 | nodus-mcp `run_streamable_http_app` (handoff), or the fallback | — |
+| 0 | nodus-mcp `streamable_http_app()` in 0.1.6 (`docs/handoffs/NODUS_HANDOFF_mcp_streamable_http.md`), or the fallback | — |
 | 1 | `--transport http` with header identity; scope enforcement on every transport (§7.2); D5 | Claude Code and any client that can send a header |
 | 2 | OAuth: Alembic `0022`, DCR, authorize with login and consent, token, refresh, revoke, metadata; connected-apps routes. Off by default | ChatGPT and claude.ai, once exposed |
 | 3 | Evidence (D7) on the app's stack; any fixes it finds; a SPA card for connected apps | — |
