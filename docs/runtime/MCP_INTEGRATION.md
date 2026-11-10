@@ -225,6 +225,7 @@ Then add `https://mcp.example.com/mcp` as a connector. The client finds everythi
     - `superseded`: the user consented to the same client again;
     - `refresh_replay`: a rotated refresh token was reused;
     - `account_changed`: a refresh after a password change or a disabled account.
+  - Retention class `audit`: never pruned by age.
   - Never a code, a token or a secret. Outside the route, the event is written after the
     change commits, so a failed audit write never undoes a revocation.
   - A grant that just expires, or a password change before the next refresh, records nothing
