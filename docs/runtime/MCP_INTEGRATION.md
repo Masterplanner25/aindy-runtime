@@ -98,6 +98,9 @@ Claude Desktop config (`claude_desktop_config.json`) points `command`/`args` at 
 - **Read-only by default.** Exposes `memory.read/search/list/tree/trace`. Set
   `AINDY_MCP_SERVER_ALLOW_WRITES=true` to also expose `memory.write`, `memory.delete`,
   `flow.run`, `event.emit`. `AINDY_MCP_SERVER_TOOLS` overrides the allowlist explicitly.
+- **An explicit list cannot bring in a write without that flag (DEC-128).** A syscall counts as
+  a read only when it is registered with `read_only=True`; the server refuses to start naming
+  any other. An app syscall that reads must declare it: `register_syscall(..., read_only=True)`.
 - **How it dispatches.** Each exposed syscall becomes an MCP tool whose handler calls
   `dispatch_syscall(name, args, user_id=<identity>)` — which grants the syscall its own
   capability (least-privilege, SDK-SYSCALL-GRANT-1) and manages its own DB session. The

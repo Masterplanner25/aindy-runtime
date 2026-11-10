@@ -2376,9 +2376,25 @@ nodus-mcp already owns the SDK-major branching and the per-call header context t
 The multi-tenant hook resolved a platform key to its owner only, and each tool then ran with the capability its syscall declares (DEC-112), so the key's scopes decided nothing. The same key got two answers to one authority question from two doors. One map, not a copy, so they can't drift apart. Declined: gating session JWTs here (`POST /platform/syscall` doesn't, and a session already holds the user's authority), and allowing unmapped capabilities to any key (no scope names them, so there is nothing to check against; fail closed). Folded into FR-66 phase 1, because phase 1 is where per-call credentials meet a new transport, and phase 2's OAuth tokens carry scopes held to the same rule.
 
 ### DEC-127
-**Status:** `provisional` (2026-11-09 — chosen while building FR-66 phase 1; awaiting the owner)
+**Status:** `accepted` (2026-11-09 — chosen while building FR-66 phase 1; accepted by the owner the same day: "accept D-127")
 
 **Decision — `mcp-server --transport http` checks `Host` and `Origin` and fails closed. It binds `127.0.0.1` by default, where only loopback names are accepted. On any other bind it refuses to start unless `AINDY_MCP_SERVER_ALLOWED_HOSTS` lists the public host name(s); `AINDY_MCP_SERVER_ALLOWED_ORIGINS` lists browser origins, and a request with no `Origin` passes. SSE keeps its historical `0.0.0.0` default and no check.**
 
 **Why**
 nodus-mcp 0.1.6's `streamable_http_app()` passes `security_settings` through, and with none it checks nothing (its own `run()` protects only a loopback bind). Behind a proxy the public name is not known to the process, so the only safe default without it is to refuse. Declined: starting unchecked with a warning (a log line is not a control), and changing SSE's defaults in the same PR (a behaviour change for existing deployments, not asked for).
+
+### DEC-128
+**Status:** `accepted` (2026-11-09 — the owner, on FR-66's D5: "refuse write tools unless ALLOW_WRITES is set"; and on how a write is known: "Declared read_only")
+
+**Decision — the MCP server refuses to start with a write in its tool list unless `AINDY_MCP_SERVER_ALLOW_WRITES` is set, whether the list is the default or `AINDY_MCP_SERVER_TOOLS`. A syscall is a read only when it declares `read_only=True` (a new `register_syscall` / `SyscallEntry` argument, default `False`); anything undeclared counts as a write. The runtime declares its ten reads. Checked when the server is built, after the app's syscalls are registered; the error names each refused syscall.**
+
+**Why**
+`AINDY_MCP_SERVER_TOOLS` replaced the allowlist outright, writes included, and only the app's own launcher refused that. Syscalls carried no read/write marker, and capability names don't say (`work.context`, `research.query`, `external_api_call`), so a guess would either refuse a read or pass a write. Declared and fail-closed means a misclassification can only refuse. Declined: refusing only the runtime's four known writes (an app write would pass unflagged) and inferring from capability names. The app must declare `read_only=True` on the read tools its launcher exposes (`sys.v1.work.context`, `sys.v1.work.facts`) when it adopts the release, or its launcher refuses to start.
+
+### DEC-129
+**Status:** `accepted` (2026-11-09 — the owner took every recommendation for FR-66's D1, D2, D4, D6 and D7)
+
+**Decision — FR-66 phase 2 (OAuth for the MCP endpoint) is built as the design proposes. D1: the runtime is its own authorization server, for the MCP endpoint only, on the `mcp` SDK's handlers; users sign in with their existing account on a server-rendered consent page that never registers anyone. D2: a 1-hour access JWT signed with a domain-separated key (never a session token, and a session token never one of these), behind a revocable grant row with a rotating refresh token (reuse revokes the grant); a password change ends every grant; two tables, Alembic `0022`. D4: dynamic client registration is open, with a cap on clients, a rate limit, and unused clients pruned after 30 days; an operator can close it and pre-register. D6: off by default (`AINDY_MCP_OAUTH` unset); on needs `AINDY_MCP_PUBLIC_URL` over https. D7: FR-66 closes when a real claude.ai connector and a real ChatGPT connector each read one memory node on the app's stack through its HTTPS — not on tests.**
+
+**Why**
+The reasoning is the design's (`docs/design/MCP_REMOTE_TRANSPORT_DESIGN.md` §5–§9). In short: an external identity provider would make every operator run one and would need an explicit account link (INITIATOR-IDENTITY-1); reusing platform keys as access tokens would mint a key row per refresh and give a token every HTTP route; both target clients register themselves, so closed registration may not work with them; capabilities ship default-off until evidence; and both products change often enough that only a real connector is evidence.

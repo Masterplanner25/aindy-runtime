@@ -201,7 +201,7 @@ def bootstrap():
     os.write(1, b"fr53 raw fd write\n")
     from AINDY.kernel.syscall_registry import register_syscall
 
-    register_syscall("sys.v1.fr53probe.echo", _handler, capability="fr53probe.echo")
+    register_syscall("sys.v1.fr53probe.echo", _handler, capability="fr53probe.echo", read_only=True)  # DEC-128
 '''
 
 

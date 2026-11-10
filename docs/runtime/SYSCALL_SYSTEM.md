@@ -1,6 +1,6 @@
 ---
 title: "Syscall System"
-last_verified: "2026-11-04"
+last_verified: "2026-11-09"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -211,7 +211,13 @@ class SyscallEntry:
     replacement:    str | None   # e.g. "sys.v2.memory.read"
     compensate:     Callable | None  # undo hook; None = the effect is irreversible
     execution_guarantee: str     # defaults to "AT_LEAST_ONCE"
+    read_only:      bool         # True = only reads; default False counts as a write (DEC-128)
 ```
+
+**`read_only`.** Declare `read_only=True` when the syscall creates, changes and deletes nothing a
+user would call their data. It is never inferred: an undeclared syscall counts as a write. The MCP
+server refuses to start with a write in its tool list unless `AINDY_MCP_SERVER_ALLOW_WRITES` is set,
+so a read you expose over MCP must declare it (`MCP_INTEGRATION.md`).
 
 **`compensate` and `sys.v1.agent.undo`.** Only `sys.v1.memory.write` declares a compensator in the
 runtime's own registry; a consumer adds others with `compensate=`. It receives `(effect, context)`,

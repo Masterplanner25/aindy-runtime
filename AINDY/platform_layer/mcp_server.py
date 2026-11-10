@@ -29,7 +29,9 @@ Design (verified against the runtime seams):
         `POST /platform/syscall` uses). A session JWT is not scope-gated, as on that route.
   * **Read-only by default.** Writes (memory.write/delete, flow.run, event.emit) require
     ``AINDY_MCP_SERVER_ALLOW_WRITES=true``. ``AINDY_MCP_SERVER_TOOLS`` overrides the allowlist
-    with an explicit comma-separated list.
+    with an explicit comma-separated list, and **cannot bring in a write without that flag**
+    (DEC-128): a syscall counts as a read only when it declares ``read_only=True``, and the
+    server refuses to start naming any other.
   * **Per-session identity requires SSE or HTTP** — over stdio the MCP request context carries
     no per-request headers, so multi-tenant is meaningful only over SSE or streamable HTTP
     (nodus-mcp>=0.1.2: ``/messages/`` mount #7 + ``auth_hook`` header context #8; streamable
@@ -124,6 +126,29 @@ class SessionPrincipal(NamedTuple):
 
     user_id: str
     scopes: Optional[frozenset]
+
+
+def refuse_unflagged_writes(allowlist: list[str]) -> None:
+    """DEC-128 — refuse to serve a write unless ``AINDY_MCP_SERVER_ALLOW_WRITES`` is set.
+
+    A syscall is a read only when it declares ``read_only=True``; anything else counts as a write,
+    so an app syscall that never said is refused, not guessed at. Checked after the app's syscalls
+    are registered. A name that is not registered is left to ``build_registry``, which skips it.
+    """
+    if _writes_enabled():
+        return
+    from AINDY.kernel.syscall_registry import SYSCALL_REGISTRY
+
+    writes = [
+        name for name in allowlist
+        if (entry := SYSCALL_REGISTRY.get(name)) is not None and not getattr(entry, "read_only", False)
+    ]
+    if writes:
+        raise RuntimeError(
+            f"[mcp-server] refusing to expose {', '.join(writes)}: not declared read-only, so "
+            "treated as a write. Set AINDY_MCP_SERVER_ALLOW_WRITES=true to serve writes, or "
+            "register the syscall with read_only=True if it only reads (DEC-128)."
+        )
 
 
 def _resolve_session_principal(context: dict) -> Optional[SessionPrincipal]:
@@ -383,7 +408,9 @@ def _build_server(*, name: str = "aindy-runtime"):
     load_app_syscalls()  # FR-53 (a) — before the allowlist is resolved against the registry
     # In multi-tenant mode the identity is per-session, so a configured fallback is optional.
     configured = os.getenv("AINDY_MCP_SERVER_USER_ID", "").strip() or None
-    registry = build_registry(configured, resolve_allowlist())
+    allowlist = resolve_allowlist()
+    refuse_unflagged_writes(allowlist)  # DEC-128, after the app's syscalls are registered
+    registry = build_registry(configured, allowlist)
     if not registry.names():
         raise RuntimeError(
             "[mcp-server] no tools to expose — check AINDY_MCP_SERVER_TOOLS / the allowlist"

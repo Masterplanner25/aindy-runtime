@@ -218,7 +218,7 @@ class SyscallEntry:
         "handler", "capability", "description",
         "input_schema", "output_schema",
         "stable", "deprecated", "deprecated_since", "replacement",
-        "compensate", "execution_guarantee",
+        "compensate", "execution_guarantee", "read_only",
     )
 
     def __init__(
@@ -234,8 +234,13 @@ class SyscallEntry:
         replacement: str | None = None,
         compensate: Callable[[dict, "SyscallContext"], dict | None] | None = None,
         execution_guarantee: str = "AT_LEAST_ONCE",
+        read_only: bool = False,
     ) -> None:
         self.handler = handler
+        # DEC-128: the syscall changes nothing a user would call data (it reads). Declared,
+        # never inferred: undeclared counts as a write, and the MCP server refuses to expose a
+        # write unless AINDY_MCP_SERVER_ALLOW_WRITES is set.
+        self.read_only = bool(read_only)
         self.capability = capability
         self.description = description
         self.input_schema: dict = input_schema or {}
@@ -1553,6 +1558,7 @@ SYSCALL_REGISTRY: VersionedSyscallRegistry = VersionedSyscallRegistry()
 # ── v1 built-in syscalls ──────────────────────────────────────────────────────
 
 SYSCALL_REGISTRY["sys.v1.memory.read"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_memory_read,
     capability="memory.read",
     description="Recall memory nodes for the calling user.",
@@ -1632,6 +1638,7 @@ SYSCALL_REGISTRY["sys.v1.memory.delete"] = SyscallEntry(
     },
 )
 SYSCALL_REGISTRY["sys.v1.memory.search"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_memory_search,
     capability="memory.read",
     description="Semantic search over user memory nodes.",
@@ -1649,6 +1656,7 @@ SYSCALL_REGISTRY["sys.v1.memory.search"] = SyscallEntry(
     },
 )
 SYSCALL_REGISTRY["sys.v1.memory.list"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_memory_list,
     capability="memory.read",
     description="List nodes at a MAS path prefix.",
@@ -1663,6 +1671,7 @@ SYSCALL_REGISTRY["sys.v1.memory.list"] = SyscallEntry(
     stable=False,
 )
 SYSCALL_REGISTRY["sys.v1.memory.tree"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_memory_tree,
     capability="memory.read",
     description="Return a hierarchical tree of nodes under a path.",
@@ -1677,6 +1686,7 @@ SYSCALL_REGISTRY["sys.v1.memory.tree"] = SyscallEntry(
     stable=False,
 )
 SYSCALL_REGISTRY["sys.v1.memory.trace"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_memory_trace,
     capability="memory.read",
     description="Follow the causal chain from a node at a path.",
@@ -1727,6 +1737,7 @@ SYSCALL_REGISTRY["sys.v1.event.emit"] = SyscallEntry(
 # v2 extends v1 capabilities without removing or changing existing fields.
 
 SYSCALL_REGISTRY["sys.v2.memory.read"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_memory_read_v2,
     capability="memory.read",
     description="Enhanced memory recall with structured field filters (v2).",
@@ -1836,6 +1847,7 @@ SYSCALL_REGISTRY["sys.v1.agent.execute"] = SyscallEntry(
     },
 )
 SYSCALL_REGISTRY["sys.v1.agent.count_runs"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_agent_count_runs,
     capability="agent.read",
     description="Count AgentRun rows for a user, optionally filtered by status.",
@@ -1852,6 +1864,7 @@ SYSCALL_REGISTRY["sys.v1.agent.count_runs"] = SyscallEntry(
     stable=False,
 )
 SYSCALL_REGISTRY["sys.v1.agent.list_recent_runs"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_agent_list_recent_runs,
     capability="agent.read",
     description="List recent AgentRun rows for a user as plain dicts.",
@@ -1952,6 +1965,7 @@ SYSCALL_REGISTRY["sys.v1.agent.simulate"] = SyscallEntry(
     },
 )
 SYSCALL_REGISTRY["sys.v1.execution.get"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_execution_get,
     capability="execution.read",
     description="Return status and resource metrics for an execution unit.",
@@ -1971,6 +1985,7 @@ SYSCALL_REGISTRY["sys.v1.execution.get"] = SyscallEntry(
 
 
 SYSCALL_REGISTRY["sys.v1.observability.support_metrics"] = SyscallEntry(
+    read_only=True,  # DEC-128
     handler=_handle_observability_support_metrics,
     capability="execution.read",
     description=(
@@ -2017,6 +2032,7 @@ def register_syscall(
     replacement: str | None = None,
     compensate: Callable[[dict, SyscallContext], dict | None] | None = None,
     execution_guarantee: str = "AT_LEAST_ONCE",
+    read_only: bool = False,
 ) -> None:
     """Register a syscall at runtime.
 
@@ -2068,6 +2084,11 @@ def register_syscall(
 
             Declaring this is inert unless the gate is engaged: ``AINDY_SYSCALL_IDEMPOTENCY``
             must be on, or the run must be a durable continuation.
+        read_only:        **DEC-128.** ``True`` when the syscall only reads: it creates,
+            changes and deletes nothing a user would call their data. Default ``False``, so an
+            undeclared syscall counts as a write. The MCP server refuses to start with a write
+            in its tool list unless ``AINDY_MCP_SERVER_ALLOW_WRITES`` is set, so a read-only
+            tool you expose over MCP must say so here.
 
     Raises:
         ValueError: If name does not start with ``"sys."``, is already registered
@@ -2098,6 +2119,7 @@ def register_syscall(
         deprecated_since=deprecated_since,
         replacement=replacement,
         compensate=compensate,
+        read_only=read_only,
     )
     logger.debug(
         "[syscall_registry] registered '%s' (capability=%s, deprecated=%s)",
