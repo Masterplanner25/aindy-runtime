@@ -56,6 +56,18 @@ MAX_PATH_DEPTH = 6
 LEGACY_NAMESPACE = "_legacy"
 
 _DOUBLE_SLASH = re.compile(r"/+")
+
+
+class InvalidMemoryPath(ValueError):
+    """A path that can never name a memory node, whatever is retried.
+
+    A ``ValueError`` so every existing ``except ValueError`` keeps catching it. It declares its
+    failure class (RETRY-CLASSIFY-1) because the syscall dispatcher otherwise classifies a
+    handler's exception by its message, and this one matched nothing, so it went out as
+    ``transient``: an MCP client was told to retry a call that cannot succeed (FR-66).
+    """
+
+    failure_class = "invalid"
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9_\-\.]+$")
 
 
@@ -75,13 +87,13 @@ def normalize_path(path: str) -> str:
         ValueError: If path does not start with /memory/.
     """
     if not path:
-        raise ValueError("MAS path must not be empty")
+        raise InvalidMemoryPath("MAS path must not be empty")
 
     # Collapse duplicate slashes (but not in **)
     cleaned = _DOUBLE_SLASH.sub("/", path.strip())
 
     if not cleaned.startswith(MAS_ROOT):
-        raise ValueError(
+        raise InvalidMemoryPath(
             f"MAS path must start with {MAS_ROOT!r}; got {path!r}"
         )
 
