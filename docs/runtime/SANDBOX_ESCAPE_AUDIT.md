@@ -1745,6 +1745,45 @@ inside it:**
 
 ---
 
+## Entry 059 — 2026-11-10
+
+**Trigger:** `v2.35.0` release tag (`sandbox-escape-linux.yml`, run `42932214451`).
+**Commit:** `4bcdf9d` (release PR #954's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 058**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 7.69s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `42932214451`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.34.0..v2.35.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- FR-66 (#951, #952, #953) adds a network surface: `mcp-server --transport http` at `/mcp`, and an OAuth authorization
+  server for it. Both are off by default. It is authentication and authorization at the MCP edge:
+  - platform keys held to their scopes (DEC-126);
+  - a fail-closed `Host` check (DEC-127);
+  - writes refused without a `read_only` declaration (DEC-128);
+  - OAuth tokens (DEC-129, DEC-130).
+
+  What a dispatched syscall can reach is unchanged, and this gate does not test any of it. Its own suites are
+  `test_mcp_*`.
+- #947 changes a failure classification; #950 moves FastAPI to 0.162. Neither is isolation.
+
+**Schema:** Alembic `0021` → `0022` (`mcp_oauth_clients`, `mcp_oauth_grants`), contract `2026-11-09`. The `Upgrade Path
+Guard` ran a real upgrade from the previous release: exit `3`, then
+`stamped … from revision 0021 to 0022 (the schema report matched the packaged models)`. It passed on `4bcdf9d` before
+the tag, along with Runtime CI (all eight jobs), Boot Smoke (PostgreSQL) and the auth CVE audit.
+
+**Publish (run `42932214447`):**
+- The owner approved the `production` environment gate.
+- `pip` resolved `2.35.0` from PyPI's simple index (wheel sha256 `39bfc2ed817ceeb7…`).
+- Boot Smoke on the published wheel installed on **attempt 1**.
+- The GitHub release is non-draft (00:45Z on 2026-11-11).
+- `publish.yml` is unchanged from `v2.34.0`.
+- The published wheel was read: version 2.35.0, Alembic head `0022`, `mcp_oauth.py`, `mcp_grants_router.py`, the
+  `mcp_grant.*` event types, and the Connected Apps panel in the SPA bundle.
+
 ## Entry 058 — 2026-11-08
 
 **Trigger:** `v2.34.0` release tag (`sandbox-escape-linux.yml`, run `42520421244`).
