@@ -9267,6 +9267,31 @@ key in each tool dict.
 
 ---
 
+## FR-68 — behind a proxy, the MCP consent page's rate limit is one bucket for everyone 🟡 P3 (app-filed 2026-11-11, runtime 2.35.0)
+
+**Status: OPEN.** Filed by the app (their register, `## FR-68`) from FR-66's D7 run. `mcp_oauth.py`
+limits sign-in attempts on `/oauth/consent` to `CONSENT_ATTEMPTS_PER_MINUTE` (10) per
+`request.client.host`. `--transport http` is documented to sit behind an HTTPS proxy, and behind one
+that host is the proxy's address, so the limit is global: ten bad sign-ins a minute from anyone keep
+the owner from connecting a client. **Ask:** an opt-in trusted-proxy setting (CIDRs) under which the
+limit keys on the right-most untrusted `X-Forwarded-For` hop, as uvicorn's `--forwarded-allow-ips`
+does; unset keeps today's behaviour. Never trust the header without the setting — that would let any
+caller pick its own bucket.
+
+---
+
+## FR-67 — a memory node written through the address-space resolver is stored under an id its path does not name 🟡 P3 (app-filed 2026-11-11, runtime 2.35.0)
+
+**Status: OPEN.** Filed by the app (their register, `## FR-67`); claude.ai noticed it reading a node
+over MCP during FR-66's D7. Paths are documented as `/memory/{tenant}/{namespace}/{type}/{node_id}`;
+81 of the app's 1,863 pathed nodes do not match. **Verified in source:** both branches of the
+write-path resolver in `memory/memory_address_space.py` do `full_path, _ = generate_node_path(...)`,
+dropping the UUID minted for the leaf, and the row is then saved under its own id. Reads by path work;
+anything that takes the id from the path gets an id that does not exist. **Ask:** store the node under
+the path's id (or build the path from the row's id), plus a backfill for existing rows.
+
+---
+
 ## JOB-STALE-CLEANUP-1 — the stale-log cleanup failed the job row and left everything else 🟡 P3 (found 2026-11-03 from the app's 2.29.1 adoption)
 
 **Status: CLOSED (2026-11-03) — #882, DEC-105; ships in 2.29.2.** `_cleanup_stale_logs` set `failed` on a

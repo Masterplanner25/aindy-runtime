@@ -1,7 +1,7 @@
 ---
 title: "MCP Remote Transport and OAuth (FR-66) — Design"
 api_version: "1.0"
-last_verified: "2026-11-10"
+last_verified: "2026-11-11"
 status: current
 owner: "platform-team"
 ---
@@ -12,7 +12,9 @@ owner: "platform-team"
 
 - **Phase 1 is built (#951)** on nodus-mcp 0.1.6: `--transport http`, platform keys held to their scopes on every transport (DEC-126), a fail-closed `Host` check (DEC-127), and writes refused without `ALLOW_WRITES` (DEC-128).
 - **Phase 2 (OAuth) is built.** Its build-time choices are DEC-130 (accepted 2026-11-10): exact-capability scopes for OAuth grants only, a missing `resource` accepted (a foreign one refused), client secrets sealed under derived keys, and `/mcp` accepting only MCP tokens when OAuth is on.
-- **FR-66 stays open** until D7's two real connectors work.
+- **FR-66 CLOSED 2026-11-11 by D7.** The app ran a temporary `--transport http` server with OAuth behind an HTTPS
+  tunnel; a real claude.ai and a real ChatGPT connector each discovered, registered, consented and read a memory node
+  (the app's `RUNTIME_FEATURE_REQUESTS.md`, `## FR-66`). Not exercised: `/revoke` on mcp 1.x. Found: FR-67, FR-68.
 
 Originally a proposal under
 `AGENT_WORKING_RULES.md` §8: it adds an internet-facing authentication surface, stores new credentials, and needs a
