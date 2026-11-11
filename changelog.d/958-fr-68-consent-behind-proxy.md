@@ -1,0 +1,3 @@
+### Added — guidance for the MCP consent page behind a proxy (FR-68) (#958)
+
+- **Behind an HTTPS proxy, set `FORWARDED_ALLOW_IPS` on the `mcp-server` process to the proxy's address or network.** The consent page limits sign-in attempts per client address. Behind a proxy, every request comes from the proxy, so without this everyone shares one bucket, and ten bad sign-ins a minute from anyone lock the owner out of connecting a client. This is uvicorn's own setting (IPs and CIDRs); the runtime adds none of its own (DEC-132). Never set it to `*` on a server clients can reach directly. See `docs/runtime/MCP_INTEGRATION.md`, "OAuth for `/mcp`".

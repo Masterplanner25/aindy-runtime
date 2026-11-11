@@ -1,7 +1,7 @@
 ---
 title: "MCP Integration (client-side)"
 api_version: "1.0"
-last_verified: "2026-11-10"
+last_verified: "2026-11-11"
 status: current
 owner: "platform-team"
 ---
@@ -205,6 +205,22 @@ Then add `https://mcp.example.com/mcp` as a connector. The client finds everythi
     whatever it registered.
   - Read scopes are pre-ticked; a write scope is offered only when the server exposes writes
     (DEC-128), and is never pre-ticked.
+  - Sign-in attempts are limited to 10 a minute per client address.
+- **★ Behind a proxy, tell uvicorn which proxy to trust (FR-68, DEC-132).** The consent page's
+  limit keys on the client address, and behind your HTTPS proxy every request comes *from the
+  proxy*. Unless uvicorn trusts it, everyone shares one bucket, and ten bad sign-ins a minute from
+  anyone lock the owner out of connecting a client. Set uvicorn's own variable on the
+  `mcp-server` process to the proxy's address or network:
+
+  ```bash
+  FORWARDED_ALLOW_IPS=172.19.0.0/16   # the proxy container's network; IPs and CIDRs, comma-separated
+  ```
+
+  uvicorn then takes the right-most `X-Forwarded-For` hop it does not trust as the client, so a
+  forged hop to the left of it buys nothing. Its default trusts only loopback (`127.0.0.1,::1`),
+  which already covers a proxy on the same host. **Never set it to `*` on a server a client can
+  reach directly**: any caller could then pick its own bucket. The runtime adds no setting of its
+  own for this; one trust list cannot disagree with another.
 - **With OAuth on, `/mcp` accepts only its own access tokens.** A session JWT or a platform key
   sent to `/mcp` gets `401`, and an MCP token is never a session token anywhere else.
 - **Tokens and grants:**

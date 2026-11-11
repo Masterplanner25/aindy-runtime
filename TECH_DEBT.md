@@ -9269,7 +9269,13 @@ key in each tool dict.
 
 ## FR-68 — behind a proxy, the MCP consent page's rate limit is one bucket for everyone 🟡 P3 (app-filed 2026-11-11, runtime 2.35.0)
 
-**Status: OPEN.** Filed by the app (their register, `## FR-68`) from FR-66's D7 run. `mcp_oauth.py`
+**Status: ANSWERED (2026-11-11) — DEC-132, no runtime code.** uvicorn's `ProxyHeadersMiddleware`
+(on by default under `serve_http`'s `uvicorn.run`) already does the ask: `FORWARDED_ALLOW_IPS`
+(IPs/CIDRs) names the trusted proxy and the client becomes the right-most untrusted hop. Documented
+in `MCP_INTEGRATION.md`; pinned by `test_fr68_consent_behind_proxy.py` (unset reproduces the
+lockout; mutation-tested). **Remaining:** the app sets it on its `public-mcp` server and confirms.
+
+Filed by the app (their register, `## FR-68`) from FR-66's D7 run. `mcp_oauth.py`
 limits sign-in attempts on `/oauth/consent` to `CONSENT_ATTEMPTS_PER_MINUTE` (10) per
 `request.client.host`. `--transport http` is documented to sit behind an HTTPS proxy, and behind one
 that host is the proxy's address, so the limit is global: ten bad sign-ins a minute from anyone keep
