@@ -2416,3 +2416,13 @@ The reasoning is the design's (`docs/design/MCP_REMOTE_TRANSPORT_DESIGN.md` §5�
 The write resolver minted a leaf and threw it away, and the DAO stored the row under a uuid4 of its own, so 81 of the app's nodes had a path naming an id that did not exist; claude.ai found it reading a node over MCP. Every caller stores the returned `node.id` (the app's release handoff and agent tool, `POST /memory/nodes`), and links and embeddings name it, so the id is the stable value and the path must follow it. Putting the rule in `save()` makes it hold for every writer, not only the one that drifted.
 
 **Declined:** (a) honouring a caller-supplied UUID leaf as the row id — the primary key is global, so a collision would tell a caller that another tenant's node id exists; no runtime or app caller supplies a leaf. (b) Swapping a supplied leaf for the assigned id — it silently stores something other than what was asked. (c) Re-keying old rows to their path's leaf — it would break every stored id. (d) Leaving old rows as they are — the documented shape would stay false for them. The cost of (3) is that a repaired node's old address stops resolving.
+
+### DEC-132
+**Status:** `accepted` (2026-11-11 — the owner chose "docs + tests, no new knob" for FR-68)
+
+**Decision — FR-68 is answered with uvicorn's own `FORWARDED_ALLOW_IPS`, not a runtime setting. Behind a proxy, the operator names the proxy's address or network there, on the `mcp-server` process; uvicorn's `ProxyHeadersMiddleware` (on by default) then rewrites the client address to the right-most untrusted `X-Forwarded-For` hop, which is what the consent page's limit keys on. The runtime documents it (`MCP_INTEGRATION.md`, OAuth section) and pins it with tests that drive the real OAuth app under uvicorn: unset reproduces the lockout, set gives each client its own bucket, a forged left-hand hop buys nothing, and `serve_http` passes uvicorn no override.**
+
+**Why**
+The app asked for `AINDY_MCP_TRUSTED_PROXIES`. uvicorn already does exactly that, with CIDRs and the right-most-untrusted rule, and `serve_http` runs under `uvicorn.run` without overriding it. A second setting for the same trust would need a rule for when the two disagree, and a proxy trusted in one but not the other is the kind of mismatch that fails open.
+
+**Declined:** `AINDY_MCP_TRUSTED_PROXIES` mapped onto `forwarded_allow_ips`. It would match the `AINDY_*` naming, but it is a second name for one list. Revisit if the server ever runs under something other than uvicorn.
