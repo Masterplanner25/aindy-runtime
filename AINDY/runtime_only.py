@@ -490,16 +490,28 @@ def _backfill_memory_paths(*, yes: bool, batch_size: int) -> NoReturn:
         db.close()
 
     skipped = f"left alone: {report['skipped_no_owner']} with no owner."
+    # FR-67 (DEC-131): the same run repairs paths whose last segment is not the node's id.
+    unrepairable = (
+        f" {report['leaf_unrepairable']} stored path(s) are not addresses and were left alone."
+        if report["leaf_unrepairable"] else ""
+    )
     if not yes:
-        if not report["would_fill"]:
-            print(f"ok: no memory nodes need a path ({skipped})")
+        if not report["would_fill"] and not report["would_fix_leaf"]:
+            print(f"ok: no memory nodes need a path, and every stored path ends with its node's id ({skipped}){unrepairable}")
             raise SystemExit(0)
-        print(f"dry-run: {report['would_fill']} node(s) would get a stored path; {skipped} Re-run with --yes.")
+        print(
+            f"dry-run: {report['would_fill']} node(s) would get a stored path; "
+            f"{report['would_fix_leaf']} path(s) would be rewritten to end with their node's id "
+            f"(the old address stops resolving; ids do not change); {skipped}{unrepairable} Re-run with --yes."
+        )
         raise SystemExit(0)
     if report["not_filled"]:
         print(f"error: stored a path on {report['filled']} node(s); {report['not_filled']} still have none. {skipped}", file=sys.stderr)
         raise SystemExit(1)
-    print(f"ok: stored a path on {report['filled']} node(s) in {report['batches']} batch(es); {skipped}")
+    print(
+        f"ok: stored a path on {report['filled']} node(s) in {report['batches']} batch(es); "
+        f"rewrote {report['fixed_leaf']} path(s) to end with their node's id; {skipped}{unrepairable}"
+    )
     raise SystemExit(0)
 
 
@@ -1186,14 +1198,16 @@ def main() -> None:
 
     backfill_paths_parser = memory_sub.add_parser(
         "backfill-paths",
-        help="Store a path on memory nodes saved without one (MEM-PATH-NULL-1).",
+        help="Store a path on memory nodes saved without one, and end every stored path with its node's id (MEM-PATH-NULL-1, FR-67).",
         description=(
             "One-time fill for deployments that ran a version before 2.31.6, where most memory "
             "nodes were saved without a path and so could not be found by memory.tree or a "
             "wildcard memory.list. Stores exactly the path readers were already shown "
             "(/memory/{user}/_legacy/{memory_type}/{id}), so no path changes. Nodes with no owner "
-            "are left alone. Commits per batch. Reports without changing anything unless --yes. "
-            "Requires DATABASE_URL."
+            "are left alone. Also rewrites a stored path whose last segment is not the node's id "
+            "(written through memory.write before FR-67's fix) to end with the id; the id never changes "
+            "and the old address stops resolving. Commits per batch. Reports without changing "
+            "anything unless --yes. Requires DATABASE_URL."
         ),
     )
     backfill_paths_parser.add_argument("--yes", action="store_true", default=False, help="Store the paths (without this, only report).")

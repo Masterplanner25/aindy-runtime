@@ -186,8 +186,9 @@ def test_the_backfill_stores_the_shown_path_in_batches(factory):
 def test_the_backfill_leaves_ownerless_and_already_pathed_rows_alone(factory):
     from AINDY.memory.memory_path_backfill import backfill_memory_paths
 
+    kept_path = f"/memory/{USER}/notes/idea/{uuid.uuid4()}"
     kept = _save(factory, content="has a path", user_id=USER, node_type="insight",
-                 path=f"/memory/{USER}/notes/idea/x1", namespace="notes", addr_type="idea")
+                 path=kept_path, namespace="notes", addr_type="idea")
     ownerless = _save(factory, content="system", user_id=None, node_type="insight")
     _seed_null_path_rows(factory, 1)
 
@@ -201,7 +202,8 @@ def test_the_backfill_leaves_ownerless_and_already_pathed_rows_alone(factory):
     assert report["filled"] == 1
     assert report["would_fill"] == 1, "FR-62: a writing run still says what it found to do"
     assert report["skipped_no_owner"] == 1
-    assert paths[kept["id"]] == f"/memory/{USER}/notes/idea/x1"
+    assert paths[kept["id"]] == kept_path
+    assert report["would_fix_leaf"] == 0, "a path that already ends with its id is not touched"
     assert paths[ownerless["id"]] is None
 
 

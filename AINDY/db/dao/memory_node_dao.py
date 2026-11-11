@@ -297,7 +297,14 @@ class MemoryNodeDAO:
         # MEM-PATH-NULL-1 (DEC-119) — a node saved without a path stores the one every reader
         # already showed for it, so the path tools can find it. The id is chosen here because
         # the path ends with it. A node with no owner has no tenant to address it under.
-        node_id = uuid.uuid4()
+        # FR-67 (DEC-131) — a node saved WITH a path is stored under the id its leaf names, so
+        # the path's last segment is the row id for every writer. Refused if the leaf is no id.
+        if path is not None:
+            from AINDY.memory.memory_address_space import node_id_from_path
+
+            node_id = node_id_from_path(path)
+        else:
+            node_id = uuid.uuid4()
         resolved_memory_type = self._normalize_memory_type(memory_type, node_type)
         owner = parse_user_id(user_id)
         if path is None and owner is not None:

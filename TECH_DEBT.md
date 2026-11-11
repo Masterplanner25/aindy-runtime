@@ -9282,7 +9282,14 @@ caller pick its own bucket.
 
 ## FR-67 — a memory node written through the address-space resolver is stored under an id its path does not name 🟡 P3 (app-filed 2026-11-11, runtime 2.35.0)
 
-**Status: OPEN.** Filed by the app (their register, `## FR-67`); claude.ai noticed it reading a node
+**Status: BUILT (2026-11-11), unreleased — DEC-131.** `MemoryNodeDAO.save` takes the row id from the
+leaf of the path it is given and refuses a path with no UUID leaf; `memory.write` refuses a supplied
+leaf (`invalid`); `memory backfill-paths` also rewrites drifted paths to end with their id (ids never
+change, the old address stops resolving). `test_fr67_path_leaf_is_id.py`, private engine,
+mutation-tested. **Remaining:** the app runs the backfill after upgrading and reports the count
+(expected 81). Closes then.
+
+Filed by the app (their register, `## FR-67`); claude.ai noticed it reading a node
 over MCP during FR-66's D7. Paths are documented as `/memory/{tenant}/{namespace}/{type}/{node_id}`;
 81 of the app's 1,863 pathed nodes do not match. **Verified in source:** both branches of the
 write-path resolver in `memory/memory_address_space.py` do `full_path, _ = generate_node_path(...)`,

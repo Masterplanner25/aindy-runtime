@@ -37,6 +37,13 @@ A node written without a path is shown at derive_legacy_path(node):
 that path is also STORED: MemoryNodeDAO.save stores it for an owned node, and
 `aindy-runtime memory backfill-paths` stores it on older rows, because the path
 tools filter on the stored column. A node with no owner has no stored path.
+
+The leaf IS the id
+------------------
+A stored path ends with its node's id (FR-67, DEC-131). MemoryNodeDAO.save takes the
+row id from the path it is given (``node_id_from_path``), so the two cannot drift; a
+caller names the namespace and type and never the leaf. Rows written before the fix
+are repaired by the same `memory backfill-paths`.
 """
 from __future__ import annotations
 
@@ -210,6 +217,24 @@ def generate_node_path(tenant_id: str, namespace: str, addr_type: str) -> tuple[
     return full_path, node_id
 
 
+def node_id_from_path(path: str) -> uuid.UUID:
+    """The node id a stored path names: its leaf, which must be a UUID (FR-67, DEC-131).
+
+    ``MemoryNodeDAO.save`` stores a node under this id, so a path's leaf and the row's id are
+    one value. Before, the write resolver minted a leaf and the DAO minted a different row id,
+    and anything that took the id from the path got one that did not exist.
+    """
+    leaf = parse_path(path)["node_id"]
+    if not leaf:
+        raise InvalidMemoryPath(f"a stored MAS path must end with the node's id; got {path!r}")
+    try:
+        return uuid.UUID(leaf)
+    except ValueError:
+        raise InvalidMemoryPath(
+            f"a stored MAS path must end with the node's id (a UUID); got leaf {leaf!r}"
+        ) from None
+
+
 def derive_legacy_path(node_dict: dict) -> str:
     """Derive a stable path for a legacy node (path == NULL).
 
@@ -294,7 +319,9 @@ def path_from_write_payload(payload: dict, tenant_id: str) -> tuple[str, str, st
     """Extract or construct a full path from a write payload.
 
     The payload may supply:
-    1. A pre-built path: ``{"path": "/memory/user/entities/updated"}``
+    1. A pre-built path: ``{"path": "/memory/user/entities/updated"}``, which names the
+       namespace and type only. A path that also names a leaf is refused (FR-67, DEC-131):
+       the node's id is assigned at write, and the leaf is that id.
     2. Namespace + addr_type: ``{"namespace": "entities", "addr_type": "updated"}``
     3. Neither (fall back to defaults: namespace="general", addr_type=node_type)
 
@@ -302,7 +329,8 @@ def path_from_write_payload(payload: dict, tenant_id: str) -> tuple[str, str, st
         (full_path, namespace, addr_type)
 
     Raises:
-        ValueError: If path is supplied but violates tenant isolation.
+        InvalidMemoryPath: If the supplied path names a leaf (a ``ValueError``,
+            ``failure_class`` ``invalid``).
         PermissionError: If path crosses tenant boundary.
     """
     node_type = payload.get("node_type", "general")
@@ -313,9 +341,14 @@ def path_from_write_payload(payload: dict, tenant_id: str) -> tuple[str, str, st
         parsed = parse_path(raw)
         ns = parsed["namespace"] or "general"
         at = parsed["addr_type"] or node_type
-        # If path already has a node_id, use it as-is; otherwise generate
+        # FR-67 (DEC-131): the leaf is the node's id, assigned here. A caller-chosen leaf was
+        # stored verbatim under a row with a different id. Honouring a UUID leaf instead would
+        # make a primary-key collision tell the caller another tenant's node id exists.
         if parsed["node_id"]:
-            return raw, ns, at
+            raise InvalidMemoryPath(
+                f"a memory.write path names the namespace and type only; the node id is "
+                f"assigned at write (drop the last segment of {raw!r})"
+            )
         full_path, _ = generate_node_path(tenant_id, ns, at)
         return full_path, ns, at
 
