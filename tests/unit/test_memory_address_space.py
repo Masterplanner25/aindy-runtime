@@ -337,10 +337,15 @@ class TestPathFromWritePayload:
         assert (ns, addr) == ("entities", "updated")
         assert uuid.UUID(parse_path(path)["node_id"])
 
-    def test_prebuilt_path_with_node_id_is_preserved_verbatim(self):
-        supplied = "/memory/t1/entities/updated/keep-me"
-        path, _, _ = path_from_write_payload({"path": supplied}, "t1")
-        assert path == supplied
+    def test_prebuilt_path_with_a_leaf_is_refused_as_invalid(self):
+        """FR-67 (DEC-131): the leaf is the node's id, assigned at write. It used to be kept
+        verbatim while the row was stored under a different id."""
+        from AINDY.memory.memory_address_space import InvalidMemoryPath
+
+        for leaf in ("keep-me", str(uuid.uuid4())):
+            with pytest.raises(InvalidMemoryPath) as refused:
+                path_from_write_payload({"path": f"/memory/t1/entities/updated/{leaf}"}, "t1")
+            assert refused.value.failure_class == "invalid"
 
     def test_cross_tenant_path_is_refused(self):
         with pytest.raises(PermissionError, match="TENANT_VIOLATION"):

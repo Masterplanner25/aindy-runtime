@@ -109,7 +109,7 @@ Persist a new memory node for the calling user.
 | `tags` | list[string] | no | Classification tags. |
 | `node_type` | string | no | Default: `"execution"`. |
 | `significance` | float | no | Relevance weight 0.0–1.0. Default: 0.5. |
-| `path` | string | no | MAS path. Auto-generated if omitted. |
+| `path` | string | no | MAS path naming the namespace and type, `/memory/{you}/{namespace}/{type}`; the node's id is assigned and becomes the last segment. A path that names a leaf is refused (`invalid`, FR-67 / DEC-131). Auto-generated if omitted. |
 | `namespace` | string | no | Optional namespace segment. |
 | `addr_type` | string | no | Optional sub-category segment. |
 
