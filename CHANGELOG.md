@@ -4,6 +4,123 @@
 
 _Nothing yet._
 
+## 2.35.0 — 2026-11-10
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.35.0.md`.
+No ui-kit release; `@aindy/ui-kit` 2.1.1 stays current. Pairs with `aindy-sdk` 1.2.1 (the watcher's half of FR-65; 1.2.0 breaks a launcher that replaces `classifier.classify`).
+
+- **★ Schema step: Alembic `0022`** (`mcp_oauth_clients`, `mcp_oauth_grants`), schema contract `2026-11-09`. A bare `bootstrap-schema` exits `3`; run `bootstrap-schema --reconcile` once. It only adds two tables.
+- **★ An MCP server that exposes a syscall not registered with `read_only=True` refuses to start without `AINDY_MCP_SERVER_ALLOW_WRITES`** (DEC-128). The runtime declares its own reads. An app syscall you expose that only reads must declare it, in the same change as the upgrade (`read_only=` is new in this release).
+- **A platform key calling the MCP server multi-tenant is held to its scopes** (DEC-126). stdio and single-identity SSE are unchanged.
+- **FastAPI 0.141 → 0.162**: a literal `null` JSON body for a non-nullable `Body(...)` parameter is now 422 (#950 below).
+- New, all off by default: `mcp-server --transport http` (streamable HTTP at `/mcp`), and OAuth for it (`AINDY_MCP_OAUTH=on`).
+
+### Changed — an MCP call made with a platform key is held to the key's scopes (DEC-126, #951)
+
+- **Read before upgrading if you run `mcp-server` multi-tenant** (`AINDY_MCP_SERVER_MULTI_TENANT=true`) and callers use
+  `X-Platform-Key`. Each call's tool must now be one the key's scopes authorize, by the map `POST /platform/syscall`
+  already used (`memory.read` with `memory.read` or `memory.write`; `memory.write` with `memory.write`; …).
+  `platform.admin` authorizes everything, and a capability the map doesn't list needs it.
+- **Why it was wrong:** the key's owner was resolved and its scopes ignored, so a key scoped for something else could
+  call any exposed tool, and the same key got different answers from MCP and `/platform/syscall`.
+- A refused call returns `failure_class: permission`. A key that worked before and is now refused needs the scope added,
+  or a new key minted with it.
+- Session JWTs and the single configured identity (stdio, or single-identity SSE) are unchanged.
+
+### Added — `aindy-runtime mcp-server --transport http`: streamable HTTP at `/mcp` (FR-66 phase 1, #951)
+
+- The transport ChatGPT and claude.ai connect to. It has the same identity modes and scope rule as SSE, and is stateless,
+  so it needs no sticky sessions. Built on nodus-mcp 0.1.6's `streamable_http_app()` (DEC-125); the `[mcp]` extra now
+  requires `nodus-mcp>=0.1.6`.
+- **It checks `Host` and `Origin` and fails closed (DEC-127):**
+  - It binds `127.0.0.1` by default, where only loopback names are accepted.
+  - Any other bind refuses to start unless `AINDY_MCP_SERVER_ALLOWED_HOSTS` names the public host.
+  - `AINDY_MCP_SERVER_ALLOWED_ORIGINS` lists browser origins.
+- **ChatGPT and claude.ai still can't connect:** their connectors send no header, so they need OAuth, which is phase 2.
+  A client that can send a header (Claude Code, the SDKs) can use it now.
+- **CI fails instead of skipping when the MCP stack doesn't import.** `Runtime Contracts` sets `AINDY_REQUIRE_MCP=1`,
+  and `test_mcp_stack_required.py` then fails if the stack is missing. Before this, eight MCP test files could skip
+  together while the job stayed green.
+
+### Changed — the MCP server refuses to expose a write unless `AINDY_MCP_SERVER_ALLOW_WRITES` is set (DEC-128, #951)
+
+- **Read before upgrading if you set `AINDY_MCP_SERVER_TOOLS`.** An explicit tool list could include writes
+  whatever `ALLOW_WRITES` said. Now the server refuses to start, naming each one.
+- A syscall counts as a read only when it is registered with `read_only=True` (new on `register_syscall`, default
+  `False`). The runtime declares its ten reads. **An app syscall you expose over MCP that only reads must now declare
+  it**, or a launcher without `ALLOW_WRITES` refuses to start.
+
+### Added — OAuth for the MCP endpoint, so ChatGPT and claude.ai can add the server (FR-66 phase 2, DEC-129, #952)
+
+- **Schema step: Alembic `0022`** adds `mcp_oauth_clients` and `mcp_oauth_grants`. Schema contract `2026-11-09`.
+  Nothing reads them until `AINDY_MCP_OAUTH` is on.
+- With `AINDY_MCP_OAUTH=on` and `AINDY_MCP_PUBLIC_URL=https://…`, `mcp-server --transport http` is its own OAuth
+  authorization server for `/mcp`:
+  - discovery from a `401`, dynamic client registration, `/authorize` with PKCE S256, `/token`, `/revoke`;
+  - a server-rendered sign-in and consent page at `/oauth/consent`, which never creates an account.
+- **Tokens:**
+  - An access token is a 1-hour JWT under its own derived key, never valid as a session token, and held to its scopes
+    like a platform key (DEC-126).
+  - A refresh token lasts 30 days and rotates on every use; replaying an old one ends the grant.
+  - A password change, a disabled account, or ending the grant stops them.
+  - Codes and refresh tokens are stored hashed; client secrets are stored sealed.
+- **Users see and end their connected apps** at `GET` / `DELETE /auth/mcp-grants`, from a signed-in session.
+- **Registration is open but capped** (`AINDY_MCP_OAUTH_MAX_CLIENTS`, `AINDY_MCP_OAUTH_REGISTRATIONS_PER_HOUR`).
+  `AINDY_MCP_OAUTH_CLIENTS=closed` turns it off; then register clients with
+  `aindy-runtime mcp-oauth register-client`.
+- **With OAuth on, `/mcp` accepts only its own access tokens** (DEC-130). Header keys still work on SSE, or over HTTP
+  with OAuth off.
+- `key_scopes_authorize` takes `exact_capability=` (default off): an OAuth grant may name a tool's capability as its
+  scope when no runtime scope covers it. Platform keys are unchanged.
+- FR-66 stays open until a real claude.ai connector and a real ChatGPT connector each read a memory node (D7).
+
+### Fixed — a bad memory path is refused as `invalid`, not `transient` (FR-66 side note, #947)
+
+- A memory read, list, tree or search with a path outside `/memory` (`/`, say) was refused correctly, but the
+  envelope said `failure_class: "transient"`, so an MCP client was told to retry a call that can never succeed.
+  The dispatcher classified a handler's exception by its message, which matched nothing in the fallback table.
+- The dispatcher now keeps a `failure_class` the exception declares, the convention the tool seam already
+  followed (RETRY-CLASSIFY-1). `normalize_path` raises `InvalidMemoryPath`, a `ValueError` declaring `invalid`,
+  so every existing `except ValueError` still catches it and `GET /platform/memory` still answers 400. An
+  exception that declares nothing is classified as before.
+
+### Fixed — `GET /watcher/signals` filters by the types `POST /watcher/signals` stores (FR-65, #947)
+
+- The query service kept its own signal-type list, which had drifted: filtering by `focus_achieved`,
+  `context_switch` or `heartbeat` answered 422, while `app_focus`, `app_switch` and `idle_detected`, which the
+  ingest route refuses, were allowed. Both now read `AINDY.watcher.constants.VALID_SIGNAL_TYPES`.
+- The rest of FR-65 (idle detection, `session_ended` on stop, the focused-seconds sum) is the `aindy-sdk`
+  watcher's. Its first ask, sending a per-user key as `X-Platform-Key`, shipped in `aindy-sdk` 1.1.0.
+
+### Changed — dependency batch of 2026-11-09 (#950)
+
+- Runtime pins (`pyproject.toml` and `AINDY/requirements.txt`): `fastapi` 0.141.1 → 0.162.0, `pydantic` 2.14.2 → 2.14.3,
+  `anyio` 4.15.1 → 4.16.0, `jiter` 0.17.0 → 0.19.0 (drops Python 3.10; this package requires >= 3.11),
+  `pytest-asyncio` 1.4.0 → 1.4.1.post1 (test only).
+- ★ **FastAPI 0.162 is 42 releases, several with breaking changes, and it reaches every app on this runtime.**
+  - Unknown keyword arguments to `Query`, `Path`, `Header`, `Cookie`, `Body`, `Form`, `File` and `FastAPI()` now raise
+    `TypeError` at import (0.145, 0.155). None in this repo or the app's.
+  - A JSON body that is literally `null` for a non-nullable `Body(...)` parameter is now 422, not its default (0.151).
+    Here that is `POST /client/error`, `POST /client/vitals` and `PUT /provider-keys/{provider}`, which all expect an
+    object; an empty body still gets the default.
+  - FastAPI's own OpenTelemetry exporter setup is opt-in (0.143). The runtime builds its own provider and exporter
+    (`platform_layer/otel.py`), so nothing changes here; an app that relied on FastAPI reading `OTEL_*` must set
+    `FASTAPI_OTEL_AUTO_CONFIGURE=true`.
+  - `FastAPI(root_path=...)` is deprecated (0.146); validation errors for header models name the HTTP header (0.152);
+    form fields changed how omitted booleans, empty strings and empty file inputs are read (0.147–0.150, 0.162).
+- Native crate: `uuid` 1.29.1, `cc` 1.11.1. Platform UI: `vite` 8.3.6, `tailwindcss` and `@tailwindcss/postcss` 4.3.5,
+  `@vitejs/plugin-react` 6.2.1 (dev).
+- None is a security fix; no open Dependabot alerts at the time of the batch.
+
+### Added — MCP grant audit events and a Connected Apps panel (FR-66) (#953)
+
+- **Each MCP OAuth grant is now recorded when it is made and when it ends.** Before this, a grant left only log lines, so nothing durable showed who connected which app, or why a connection ended.
+  - `mcp_grant.created` is written on consent.
+  - `mcp_grant.revoked` is written when a grant ends, with a `reason`: `user`, `client`, `superseded`, `refresh_replay` or `account_changed`.
+  - The payloads hold ids, the client, scopes and the reason. They never hold a code, a token or a secret.
+- **The platform console has a Connected Apps panel** (`/platform/connected-apps`). It lists the signed-in user's connected MCP apps and can end one, which stops its tokens within seconds. Until now, a user could see or end a connection only by calling `/auth/mcp-grants` directly.
+
+
 ## 2.34.0 — 2026-11-08
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.34.0.md`.
