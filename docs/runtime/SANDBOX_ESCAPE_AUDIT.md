@@ -1745,6 +1745,40 @@ inside it:**
 
 ---
 
+## Entry 060 — 2026-11-11
+
+**Trigger:** `v2.36.0` release tag (`sandbox-escape-linux.yml`, run `43142781100`).
+**Commit:** `5f9a11d` (release PR #960's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:bb1d70c1df30d8ee1e05214dbe82d6cdfd29833c1f47ce917f20991aca93acaa`, **the same as Entry 059**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 6.45s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `43142781100`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.35.0..v2.36.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #959 moves nodus-lang 5.15.1 → 5.16.0, the language guest scripts run in. Not a security release. It adds durable
+  coroutines (opt-in, unused here), a faster dispatch loop, changed error columns, and a warning when a Nodus rebuild
+  re-runs a top-level effect. The runtime never asks Nodus to rebuild a run. Guest confinement is the runtime's
+  `NodusRuntime` configuration, which did not change; this gate does not run Nodus.
+- #957 (FR-67, DEC-131) changes how a memory node's id is chosen; #958 (FR-68, DEC-132) is docs and tests for the MCP
+  consent page behind a proxy. Neither is isolation.
+
+**Schema:** no migration (Alembic `0022`, contract `2026-11-09`), so the `Upgrade Path Guard` passed trivially and its
+negative control carried the meaning. It passed on `5f9a11d` before the tag, along with Runtime CI, Boot Smoke
+(PostgreSQL) and the auth CVE audit.
+
+**Publish (run `43142781117`):**
+- The owner approved the `production` environment gate.
+- `pip` resolved `2.36.0` from PyPI's simple index (wheel sha256 `4568c4b7b2228533…`).
+- Boot Smoke on the published wheel installed on **attempt 2** (the simple index lagged the JSON API by one try).
+- The GitHub release is non-draft (02:53Z on 2026-11-12).
+- `publish.yml` is unchanged from `v2.35.0`.
+- The published wheel was read: version 2.36.0, `Requires-Dist: nodus-lang==5.16.0`, Alembic head `0022`,
+  `node_id_from_path` in the address space and the DAO, and `_repair_leaves` in the path backfill.
+
 ## Entry 059 — 2026-11-10
 
 **Trigger:** `v2.35.0` release tag (`sandbox-escape-linux.yml`, run `42932214451`).
