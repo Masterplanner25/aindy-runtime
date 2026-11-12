@@ -232,7 +232,7 @@ jobs:
         # silently resolve to whatever is newest on PyPI while the wheel pins something
         # else. Bump this line with the other two.
         # nodus-mcp >=0.1.6: `streamable_http_app()` for --transport http (FR-66, DEC-125).
-        run: python -m pip install "nodus-lang==5.15.1" "nodus-mcp>=0.1.6" "mcp>=1.0.0"
+        run: python -m pip install "nodus-lang==5.16.0" "nodus-mcp>=0.1.6" "mcp>=1.0.0"
 
       # ── Native scorer: build it HERE so its tests actually execute ──────────────
       #
@@ -428,7 +428,7 @@ jobs:
           python -m pip install fakeredis
           # FR-66 phase 2: `mcp-oauth register-client` is tested from a fresh interpreter here.
           # Same specs as Runtime Contracts' MCP step; bump them together (NODUS-UPGRADE-1).
-          python -m pip install "nodus-lang==5.15.1" "nodus-mcp>=0.1.6" "mcp>=1.0.0"
+          python -m pip install "nodus-lang==5.16.0" "nodus-mcp>=0.1.6" "mcp>=1.0.0"
 
       - name: Verify schema bootstrap on PostgreSQL
         run: |

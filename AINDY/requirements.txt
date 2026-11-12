@@ -24,7 +24,7 @@ Mako==1.4.3
 MarkupSafe==3.0.4
 maturin
 numpy==2.4.6
-nodus-lang==5.15.1
+nodus-lang==5.16.0
 openai==2.54.0
 pendulum==3.3.0
 psycopg2==2.9.13
