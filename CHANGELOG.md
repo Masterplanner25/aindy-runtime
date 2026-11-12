@@ -4,6 +4,34 @@
 
 _Nothing yet._
 
+## 2.36.0 — 2026-11-11
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.36.0.md`.
+No schema step (Alembic `0022`, contract `2026-11-09`, both unchanged). No ui-kit or aindy-sdk release.
+
+- **★ Run `aindy-runtime memory backfill-paths` once** (dry run first, then `--yes`). It rewrites stored memory paths whose last segment is not the node's id (FR-67, DEC-131). Ids never change; the old address stops resolving.
+- **`memory.write` now refuses a `path` that names its own last segment** (`failure_class: invalid`). Pass `/memory/{you}/{namespace}/{type}`; the id is assigned.
+- **Behind an HTTPS proxy, set `FORWARDED_ALLOW_IPS` on `mcp-server`** to the proxy's network (FR-68, DEC-132), or the consent page's rate limit is one bucket for everyone.
+- **nodus-lang 5.16.0**: column numbers in a script's error messages change.
+
+### Fixed — a memory node's path now ends with its own id (FR-67) (#957)
+
+- **A node written through `sys.v1.memory.write` is now stored under the id its path names.** Paths are documented as `/memory/{tenant}/{namespace}/{type}/{node_id}`, but the write resolver minted a UUID for the leaf and dropped it, and the row was stored under a different one. Reading by path worked. Taking the id from the path, as an MCP client did, gave an id that did not exist. `MemoryNodeDAO.save` now takes the row id from the path's leaf, so this holds for every writer (DEC-131).
+- **Changed: `memory.write` refuses a `path` that names a leaf** (`failure_class: invalid`). Name the namespace and type (`/memory/{you}/{namespace}/{type}`); the id is assigned. Before, the caller's leaf was stored as given under a row with another id. No runtime or known app caller passes one.
+- **`aindy-runtime memory backfill-paths` also repairs nodes written before this fix.** It rewrites each stored path whose last segment is not the node's id so that it ends with the id. **Ids never change.** The old address stops resolving. Like before, it is a dry run unless `--yes`. A stored path that isn't an address is counted and left alone.
+
+### Added — guidance for the MCP consent page behind a proxy (FR-68) (#958)
+
+- **Behind an HTTPS proxy, set `FORWARDED_ALLOW_IPS` on the `mcp-server` process to the proxy's address or network.** The consent page limits sign-in attempts per client address. Behind a proxy, every request comes from the proxy, so without this everyone shares one bucket, and ten bad sign-ins a minute from anyone lock the owner out of connecting a client. This is uvicorn's own setting (IPs and CIDRs); the runtime adds none of its own (DEC-132). Never set it to `*` on a server clients can reach directly. See `docs/runtime/MCP_INTEGRATION.md`, "OAuth for `/mcp`".
+
+### Changed — nodus-lang 5.16.0 (#959)
+
+- **Error columns in a Nodus script's errors and stack traces change** (nodus #921). An error raised by a call used to point at the call's last argument; it now points at what is called (`len` in `len(...)`). Lines are unchanged. Anything that parses the column out of a failed run's error will see new numbers.
+- **A Nodus rebuild that re-runs a top-level effect now warns** (`StagedFlipWarning`, nodus #917), and nodus 6.0.0 will refuse it. The runtime never asks Nodus to rebuild a run (it re-drives runs itself), so this reaches us only through a guest's own `resume_workflow`. No script in this repo or the app does that, or uses `checkpoint`, whose rules also changed.
+- Also in 5.16.0, opt-in and unused here: durable coroutines (`durable_spawn`), a faster dispatch loop (~1.6x on CPython), and `nodus workflow resume`/`replay` exiting 1 on failure. Not a security release.
+- Bumped at all three sites: `pyproject.toml`, `AINDY/requirements.txt`, and both CI install steps. `nodus-mcp` is unchanged (`>=0.1.6`, current).
+
+
 ## 2.35.0 — 2026-11-10
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.35.0.md`.
