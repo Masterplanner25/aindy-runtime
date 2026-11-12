@@ -9,6 +9,8 @@ pointers, never the narrative. Companions:
 - **`docs/governance/TRUSTING_A_GREEN_CHECK.md`** — the 15-variant catalogue of checks that looked
   green and were not, plus the vendored-shim and test-mode-short-circuit rules. **Read before citing
   CI as evidence.**
+- **`docs/governance/AGENT_EXPERIENCE.md`** — problems agents hit here, keyed by the error text.
+  **On an unfamiliar failure, grep it for the message first**; add an entry when you solve a reusable one.
 - **`TECH_DEBT.md`** — the full record behind every registry id below. `docs/governance/DECISION_LOG.md` — the `DEC-NNN` record.
 - **`docs/archive/CLAUDE_md_2026-09-16_pre_trim.md`** — this file before it was trimmed from
   153 KB (2026-09-16). Every rule below that reads terse had a paragraph of evidence there.
@@ -192,9 +194,6 @@ and re-fetch, never a db handle.
   liveness control. `caplog` cannot see a worker thread — assert on the Prometheus counter.
 - Mutation-test a new suite (verify the mutation bites). Never pipe a flaky run through `tail`. A
   partial local sweep is not evidence — check host memory first (want > ~1500 MB free).
-- A version read from an interpreter is cwd-sensitive — print `AINDY.__path__` beside it, in the
-  container. A check read a minute after a push is the PREVIOUS commit's — compare
-  `gh pr view --json headRefOid` with `git rev-parse HEAD` before merging.
 - Module-import-time env reads are invisible to behavioural tests — grep the source when auditing
   env handling. MCP `call_tool()` never raises; check `result.isError`.
 
