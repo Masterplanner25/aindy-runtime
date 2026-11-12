@@ -266,7 +266,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-69** (check the app's register AND its open PRs first). Open: FR-14 recurrence half, FR-55, FR-67 (memory path leaf ≠ node id; built, DEC-131), FR-68 (answered by docs + tests, DEC-132; closes when the app sets `FORWARDED_ALLOW_IPS`). Closed: FR-43..54, FR-56..66 (FR-66 by the app's D7, 2026-11-11).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-69** (check the app's register AND its open PRs first). Open: FR-14 recurrence half, FR-55, FR-67 (memory path leaf ≠ node id; 2.36.0, DEC-131; closes on the app's backfill count), FR-68 (docs + tests, 2.36.0, DEC-132; closes when the app sets `FORWARDED_ALLOW_IPS`). Closed: FR-43..54, FR-56..66 (FR-66 by the app's D7, 2026-11-11).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
