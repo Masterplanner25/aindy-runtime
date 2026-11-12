@@ -9274,6 +9274,8 @@ key in each tool dict.
 (IPs/CIDRs) names the trusted proxy and the client becomes the right-most untrusted hop. Documented
 in `MCP_INTEGRATION.md`; pinned by `test_fr68_consent_behind_proxy.py` (unset reproduces the
 lockout; mutation-tested). **Remaining:** the app sets it on its `public-mcp` server and confirms.
+Released in 2.36.0 (#958). Asked in `APP_HANDOFF_v2.36.0.md` §2: the `mcp` service, set to the
+compose subnet (the app's ngrok container was `172.19.0.8`), never `*`.
 
 Filed by the app (their register, `## FR-68`) from FR-66's D7 run. `mcp_oauth.py`
 limits sign-in attempts on `/oauth/consent` to `CONSENT_ATTEMPTS_PER_MINUTE` (10) per
@@ -9288,12 +9290,13 @@ caller pick its own bucket.
 
 ## FR-67 — a memory node written through the address-space resolver is stored under an id its path does not name 🟡 P3 (app-filed 2026-11-11, runtime 2.35.0)
 
-**Status: BUILT (2026-11-11), unreleased — DEC-131.** `MemoryNodeDAO.save` takes the row id from the
+**Status: RELEASED in 2.36.0 (2026-11-11, #957) — DEC-131.** `MemoryNodeDAO.save` takes the row id from the
 leaf of the path it is given and refuses a path with no UUID leaf; `memory.write` refuses a supplied
 leaf (`invalid`); `memory backfill-paths` also rewrites drifted paths to end with their id (ids never
 change, the old address stops resolving). `test_fr67_path_leaf_is_id.py`, private engine,
 mutation-tested. **Remaining:** the app runs the backfill after upgrading and reports the count
-(expected 81). Closes then.
+(expected ≥ 81: every `memory.write` until they upgrade drifted too). Closes then.
+Asked in `APP_HANDOFF_v2.36.0.md` §1.
 
 Filed by the app (their register, `## FR-67`); claude.ai noticed it reading a node
 over MCP during FR-66's D7. Paths are documented as `/memory/{tenant}/{namespace}/{type}/{node_id}`;
