@@ -35,7 +35,7 @@ pymongo==4.19.0
 pyphen==0.18.1
 python-dateutil==3.0.0
 python-dotenv==1.2.3
-regex==2026.9.29
+regex==2026.11.9
 requests==2.34.2
 setuptools==84.1.0
 six==1.17.0
