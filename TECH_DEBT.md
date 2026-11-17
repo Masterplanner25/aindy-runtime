@@ -9295,7 +9295,9 @@ Their phase B waits on it.
 
 ## FR-69 — `dnspython==2.9.0` is an exact pin with GHSA-vvf4-9x63-8xvv (CVE-2026-128089, high); the fix is 2.9.2 🟡 P3 (app-filed 2026-11-16, runtime 2.36.0)
 
-**Status: OPEN — building.** Filed by the app (their register, `## FR-69`); also Dependabot alerts #28/#29 here.
+**Status: MERGED (2026-11-16, #975), ships in 2.36.1 — exact pin `==2.9.2` (owner's choice: DEC-102's range
+exception stays certifi-only, so no range as the app asked). Closes when the app adopts 2.36.1 and drops its
+audit ignore.** Filed by the app (their register, `## FR-69`); also Dependabot alerts #28/#29 here.
 `pyproject.toml` and `AINDY/requirements.txt` pin `dnspython==2.9.0`; `from_text()` does not bound a WKS record's
 service number, so crafted zone-file text allocates without limit. The app's pip cannot move past our exact pin,
 so it carries an audit ignore. Not reachable in the runtime (nothing imports `dns`; pymongo uses the resolver

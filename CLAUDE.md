@@ -266,7 +266,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-71** (check the app's register AND its open PRs first). Open: FR-14 recurrence half, FR-55, FR-69 (dnspython floor), FR-70 (narrow credential for app routes; needs a DEC). Closed: FR-43..54, FR-56..68 (FR-67/68 on the app's 2.36.0 report, 2026-11-13).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-71** (check the app's register AND its open PRs first). Open: FR-14 recurrence half, FR-55, FR-69 (dnspython `==2.9.2`, #975; closes on app adoption), FR-70 (narrow credential for app routes; needs a DEC). Closed: FR-43..54, FR-56..68 (FR-67/68 on the app's 2.36.0 report, 2026-11-13).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
