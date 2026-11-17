@@ -4,6 +4,37 @@
 
 _Nothing yet._
 
+## 2.36.1 — 2026-11-16
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.36.1.md`.
+**Security patch: rebuild the image.** No schema step (Alembic `0022`, contract `2026-11-09`, both unchanged).
+No runtime behaviour, route, scope or default changed. No ui-kit or aindy-sdk release.
+
+- **★ `dnspython` 2.9.2** (CVE-2026-128089 / GHSA-vvf4-9x63-8xvv, high). Exposure nil in practice, but every pip-audit flags a 2.36.0 image. Drop any audit ignore you added for it.
+- **`python-dateutil` 4.0.0**: `isoparse` now refuses numeric fields that are not exactly the expected digits (`2014- 4-21`, `20200728121240`). The runtime does not import it; check your own `isoparse` callers.
+
+### Fixed — `dnspython` 2.9.0 → 2.9.2 for CVE-2026-128089 / GHSA-vvf4-9x63-8xvv (FR-69, #975)
+
+- `dns.rdata.from_text()` did not bound a WKS record's service number, so crafted zone-file text
+  allocated memory without limit (high, availability only). The exact pin held every downstream
+  install on 2.9.0: the app could not constrain past it and carried an audit ignore (its FR-69).
+- The runtime's exposure is nil in practice: nothing in `AINDY/` imports `dns`, and pymongo uses
+  only dnspython's resolver (wire format, for `mongodb+srv`), never zone-file text. Still an exact
+  pin: DEC-102's range exception is for the CA bundle only.
+
+### Changed — dependency batch of 2026-11-16 (#975)
+
+- Runtime pins: `python-dateutil` 3.0.0 → 4.0.0 (requires Python >= 3.11, which this package
+  already does; drops its `six` dependency; `isoparse` is stricter about numeric fields; nothing in
+  `AINDY/` imports it), `idna` 3.19 → 3.20 (Unicode 18), `regex` 2026.9.29 → 2026.11.9, `tzlocal`
+  5.4.4 → 5.4.5.
+- Native crate: `cc` 1.11.1 → 1.11.2, `uuid` 1.29.1 → 1.29.2. Platform UI (dev): `vite` 8.3.6 →
+  8.3.8, `@vitejs/plugin-react` 6.2.1 → 6.3.0, `postcss` 8.5.32 → 8.5.33.
+- `SQLAlchemy` stays on 2.0.x: 2.1 resolves a bare `postgresql://` URL to psycopg 3 rather than the
+  `psycopg2` this package ships, so engine creation fails on PostgreSQL. Deferred under
+  DEP-UPGRADE-DEFERRED-1.
+
+
 ## 2.36.0 — 2026-11-11
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.36.0.md`.
