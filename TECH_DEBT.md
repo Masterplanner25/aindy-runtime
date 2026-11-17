@@ -9278,9 +9278,38 @@ key in each tool dict.
 
 ---
 
+## FR-70 — an app route cannot accept a watcher-only key, so a laptop-side activity source has no narrow credential 🟡 P3 (app-filed 2026-11-16, runtime 2.36.0)
+
+**Status: OPEN — not scoped.** Filed by the app (their register, `## FR-70`; their spec
+`DIRECTING_TIME_SPEC.md` decision 6). An unattended laptop hook posts "directing events" (prompt timestamps and
+ids, never text) to an app route, and needs a credential that sits in a file. **Verified in source:** the only
+narrow one, the watcher key (`watcher.signals`, DEC-117), is refused everywhere but `/watcher`:
+`get_current_user` resolves platform keys with `allow_watcher_only=False`, and the one opt-in is
+`routes/watcher_router.py::_watcher_caller`, which calls the private `_resolve_platform_key_as_user(…,
+allow_watcher_only=True)`. Any wider key reaches almost every app route. **Ask (runtime chooses):** (1) a public
+dependency admitting a watcher-only key (the `_watcher_caller` logic) for routes that ingest the person's own
+activity; or (2) an app-registrable exclusive scope, refused everywhere except routes that name it. Needs a DEC.
+Their phase B waits on it.
+
+---
+
+## FR-69 — `dnspython==2.9.0` is an exact pin with GHSA-vvf4-9x63-8xvv (CVE-2026-128089, high); the fix is 2.9.2 🟡 P3 (app-filed 2026-11-16, runtime 2.36.0)
+
+**Status: OPEN — building.** Filed by the app (their register, `## FR-69`); also Dependabot alerts #28/#29 here.
+`pyproject.toml` and `AINDY/requirements.txt` pin `dnspython==2.9.0`; `from_text()` does not bound a WKS record's
+service number, so crafted zone-file text allocates without limit. The app's pip cannot move past our exact pin,
+so it carries an audit ignore. Not reachable in the runtime (nothing imports `dns`; pymongo uses the resolver
+for `mongodb+srv`, wire format). **Ask:** `>=2.9.2` as a lower bound, as certifi (DEC-102), so the next patch
+needs no runtime release.
+
+---
+
 ## FR-68 — behind a proxy, the MCP consent page's rate limit is one bucket for everyone 🟡 P3 (app-filed 2026-11-11, runtime 2.35.0)
 
-**Status: ANSWERED (2026-11-11) — DEC-132, no runtime code.** uvicorn's `ProxyHeadersMiddleware`
+**Status: CLOSED (2026-11-13) — the app set `FORWARDED_ALLOW_IPS: 172.19.0.0/16` (its compose subnet, not
+the tunnel container's address) on `mcp`; through the tunnel the access log records the caller's own public
+address, so the consent limit keys per caller (app `RUNTIME_2_36_0_UPGRADE.md` §2, app #610). Remains: nothing.**
+**Answered (2026-11-11) — DEC-132, no runtime code.** uvicorn's `ProxyHeadersMiddleware`
 (on by default under `serve_http`'s `uvicorn.run`) already does the ask: `FORWARDED_ALLOW_IPS`
 (IPs/CIDRs) names the trusted proxy and the client becomes the right-most untrusted hop. Documented
 in `MCP_INTEGRATION.md`; pinned by `test_fr68_consent_behind_proxy.py` (unset reproduces the
@@ -9301,7 +9330,11 @@ caller pick its own bucket.
 
 ## FR-67 — a memory node written through the address-space resolver is stored under an id its path does not name 🟡 P3 (app-filed 2026-11-11, runtime 2.35.0)
 
-**Status: RELEASED in 2.36.0 (2026-11-11, #957) — DEC-131.** `MemoryNodeDAO.save` takes the row id from the
+**Status: CLOSED (2026-11-13) — the app's backfill on 2.36.0 rewrote N = 81 paths (exactly the filed count,
+so nothing drifted between filing and upgrade); the re-run reports every stored path ends with its id, and
+Postgres reads 0 that do not (app `RUNTIME_2_36_0_UPGRADE.md` §1, app #610). Skipped: 1,904 nodes with no
+owner, which the backfill leaves alone by design, reported not asked. Remains: nothing.**
+**Released in 2.36.0 (2026-11-11, #957) — DEC-131.** `MemoryNodeDAO.save` takes the row id from the
 leaf of the path it is given and refuses a path with no UUID leaf; `memory.write` refuses a supplied
 leaf (`invalid`); `memory backfill-paths` also rewrites drifted paths to end with their id (ids never
 change, the old address stops resolving). `test_fr67_path_leaf_is_id.py`, private engine,
