@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-11-04"
+last_verified: "2026-11-16"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1742,6 +1742,40 @@ inside it:**
   Request-side transaction discipline, nothing the sandbox sees.
 
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
+
+---
+
+## Entry 061 — 2026-11-16
+
+**Trigger:** `v2.36.1` release tag (`sandbox-escape-linux.yml`, run `44022973869`).
+**Commit:** `dd477fb` (release PR #976's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:7fbad8e4652eae0186429a6f26cf5b23e27e8c6fd7ac4d0cfd7a6988cdeea1e1`. **★ The digest MOVED**
+(`Downloaded newer image`): Entries 059 and 060 ran on `bb1d70c1df30…`. Nothing in this repository selects a
+digest, and the 17 tests pass on the new image. Compare future entries against 061.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 8.57s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `44022973869`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.36.0..v2.36.1` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #975 is a dependency batch: `dnspython` 2.9.0 → 2.9.2 (CVE-2026-128089 / GHSA-vvf4-9x63-8xvv, FR-69; nothing in
+  `AINDY/` imports `dns`), `python-dateutil` 4.0.0, `idna` 3.20, `regex`, `tzlocal`, two native-crate build deps and
+  three SPA dev deps. None is isolation code. SQLAlchemy 2.1 was not taken.
+
+**Schema:** no migration (Alembic `0022`, contract `2026-11-09`), so the `Upgrade Path Guard` passed trivially and its
+negative control carried the meaning. It passed on `dd477fb` before the tag, along with Runtime CI, Boot Smoke
+(PostgreSQL) and the auth CVE audit.
+
+**Publish (run `44022973977`):**
+- The owner approved the `production` environment gate.
+- The wheel read back from PyPI (sha256 `0a77e41aae99a8e4…`) carries `Version: 2.36.1`, `dnspython==2.9.2` and the
+  prebuilt SPA (`platform/dist`).
+- Boot Smoke on the published wheel installed on **attempt 1**.
+- The GitHub release is non-draft (05:28Z on 2026-11-17).
+- `publish.yml` is unchanged from `v2.36.0`.
 
 ---
 
