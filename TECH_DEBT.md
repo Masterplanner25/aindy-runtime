@@ -5176,7 +5176,7 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, UI major unit)
 
-**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); `openai` 3.x added 2026-10-27; the UI major unit
+**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); `openai` 3.x added 2026-10-27; `SQLAlchemy` 2.1 added 2026-11-16; the UI major unit
 remains, now blocked on `LOCKFILE-PLATFORM-1`. Dependency maintenance; each is a deliberate
 upgrade, not a drop-in bump. Surfaced during the 2026-07-18 dependabot triage.
 
@@ -5367,8 +5367,19 @@ which reads exactly like a genuine resolution failure.
   second HTTP stack, since `httpx` stays (FastAPI `TestClient`, other callers). No security alert
   drives this; the ignore covers 3.x only, so 2.x bumps keep arriving.
 
+- **`SQLAlchemy` 2.0 → 2.1 — deferred 2026-11-16 (#966 closed, `@dependabot ignore this minor
+  version`).** 2.0.52 → 2.1.8 failed Integration Tests, Boot Smoke and Upgrade Path with
+  `ModuleNotFoundError: No module named 'psycopg'`: the traceback shows `create_engine` on our bare
+  `postgresql://` URL loading `sqlalchemy/dialects/postgresql/psycopg.py`, so 2.1 resolves a bare
+  `postgresql://` to psycopg 3, and we ship `psycopg2`. Unit tests (SQLite) stayed green, which is
+  why only the PG jobs saw it. **The migration:** choose between spelling every URL
+  `postgresql+psycopg2://` (operators' `DATABASE_URL`s too, so normalise at engine creation, not in
+  docs) and moving to psycopg 3 (`psycopg[binary]`; pgvector, alembic env and the advisory-lock
+  paths need re-testing on real PG); then read the 2.1 migration notes in full. No security alert
+  drives it; 2.0.x bumps keep arriving.
+
 **Reopen/resolve:** when the OTel line is bumped as a group. The UI unit is done; the
-`pydantic` train is grouped. The `openai` 3.x half resolves when the migration above lands.
+`pydantic` train is grouped. The `openai` 3.x and `SQLAlchemy` 2.1 halves each resolve when their migration above lands.
 
 ---
 

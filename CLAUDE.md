@@ -259,7 +259,7 @@ A soak assertion must not be stricter than the contract.
 - **DISPATCH-ADMISSION-1** — deferred. Do NOT build a general hook system in the kernel process (Tier 1 only).
 - **MEM-EXPAND-DEAD-1** — `expand()`'s similar half returned `[]`. Built on 0.5.1, switched off (DEC-122); open for the flip.
 - **LOCKFILE-PLATFORM-1** — a Windows lockfile cannot satisfy Linux `npm ci`; `Platform Lockfile` workflow regenerates. Verify with `npm ci`, never `npm install` + build.
-- **DEP-UPGRADE-DEFERRED-1** — otel packages are version-locked; hand-align and `pip install --dry-run`. react-router 7→8 waits on a ui-kit release. openai 3.x: `httpx2` breaks the `respx` contract tests.
+- **DEP-UPGRADE-DEFERRED-1** — otel packages are version-locked; hand-align and `pip install --dry-run`. react-router 7→8 waits on a ui-kit release. openai 3.x: `httpx2` breaks the `respx` contract tests. SQLAlchemy 2.1: bare `postgresql://` now means psycopg 3.
 - **C3** — non-Linux strong sandbox (C2 closed). `C3_NON_LINUX_STRONG_SANDBOX_PLAN.md`.
 - **SYSMAX-3** — per-EU memory deferred: `ru_maxrss` is a process peak, never per unit (DEC-091; guest half `AINDY_NODUS_MAX_MEMORY_MB`).
 - **CLI-1 · CLI-SANDBOX-FORMAT-1 · TIER3-10 · DEPLOY-TARGET-1/2 · BILLING-1..5 · LAYER-1..5 · ROUTE-EXTRACT-\* · PACK-DEBT-\* · TENANT-\* · COMPAT-\* · DATA-\* · LOCAL-\*** — deferred; see `TECH_DEBT.md`.
