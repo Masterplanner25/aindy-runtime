@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from AINDY.config import settings
+from AINDY.config import normalize_database_url, settings
 from AINDY.platform_layer.deployment_contract import (
     deployment_contract_summary,
     event_bus_required,
@@ -313,7 +313,7 @@ def _postgres_probe_engine(timeout: float):
     if url.get_backend_name().startswith("postgres"):
         connect_args["connect_timeout"] = max(1, int(timeout))
     return create_engine(
-        settings.DATABASE_URL,
+        normalize_database_url(settings.DATABASE_URL),
         connect_args=connect_args,
         pool_pre_ping=True,
     )
@@ -565,7 +565,7 @@ def check_mongo(timeout: float = 2.0) -> DependencyStatus:
 def check_schema() -> DependencyStatus:
     engine = None
     try:
-        engine = create_engine(settings.DATABASE_URL)
+        engine = create_engine(normalize_database_url(settings.DATABASE_URL))
         report = ensure_runtime_schema(engine, allow_bootstrap=False)
         metadata = {
             "schema_state": report.state,

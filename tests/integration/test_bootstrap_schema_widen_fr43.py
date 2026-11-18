@@ -22,7 +22,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.postgres]
 
 @pytest.fixture
 def fresh_pg(monkeypatch):
-    url = os.getenv("DATABASE_URL", "")
+    from AINDY.config import normalize_database_url
+
+    url = normalize_database_url(os.getenv("DATABASE_URL", ""))
     if not url.startswith("postgresql"):
         pytest.skip("FR-43 reproduces on PostgreSQL only")
     admin = create_engine(url, isolation_level="AUTOCOMMIT")

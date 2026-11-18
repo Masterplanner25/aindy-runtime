@@ -278,7 +278,9 @@ _initialize_runtime_bootstrap()
 def _check_runtime_schema() -> None:
     """Warn at startup if the runtime-owned schema does not match packaged metadata."""
     try:
-        engine = create_engine(settings.DATABASE_URL)
+        from AINDY.config import normalize_database_url
+
+        engine = create_engine(normalize_database_url(settings.DATABASE_URL))
         report = ensure_runtime_schema(engine, allow_bootstrap=False)
         if report.ok:
             logger.info("[startup] Runtime-owned schema matches packaged metadata.")

@@ -21,7 +21,9 @@ def pg():
     url = os.getenv("DATABASE_URL", "")
     if not url.startswith("postgresql"):
         pytest.skip("savepoints are measured on the real driver")
-    engine = create_engine(url)
+    from AINDY.config import normalize_database_url
+
+    engine = create_engine(normalize_database_url(url))
     trace = f"dec124-{uuid.uuid4().hex[:10]}"
     from AINDY.db.models.user import User
 
