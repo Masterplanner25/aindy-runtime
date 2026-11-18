@@ -7573,7 +7573,16 @@ visible, deliberate break rather than a surprise.
 
 ## FR-14 — the blessed deploy primitive breaks on every additive runtime schema release
 
-**Status: PARTIALLY CLOSED (2026-08-16, #450)** — filed by the app team 2026-08-15 from the
+**Status: CLOSED (2026-11-18, #982).** The two registers named different open halves; both are done.
+**Ours, the recurrence half** (an upgrade run against an existing production database): the app has
+since run four schema steps on its live stack, Alembic `0019` (2.20.0), `0020` (2.22.0, which found
+FR-43, fixed), `0021` (2.32.0) and `0022` (2.35.0), each stopping on exit 3 as designed and reconciled
+(app `RUNTIME_2_20/22/32/35_0_UPGRADE.md`). **Theirs, the entrypoint-pattern half** (the runtime still
+recommended the bare form): the `init` scaffold had already stopped (its Dockerfile runs only `serve`);
+the README's deploy section was the last place, and #982 rewrote it with the exit-code table, the
+"4 wins over 3" precedence and an entrypoint recipe that branches on the code (each branch exercised
+against a stub, codes 0/1/3/4/5 with the gate on and off). Remains: nothing.
+**Was: PARTIALLY CLOSED (2026-08-16, #450)** — filed by the app team 2026-08-15 from the
 2.1.0 upgrade, verified here, and one part of their write-up corrected in the runtime's favour
 and against it.
 
@@ -9419,6 +9428,31 @@ gone; the sweep closes an open row for each node it embeds; `aindy-runtime memor
 settle-embedding-logs` settles stranded rows as `success` with `result.superseded_by`, only when
 an operator runs it. **Remaining:** the app runs the command after upgrading (dry-run first).
 Execution units of the stranded rows are walked to `completed` by the same command.
+
+---
+
+## FR-55 — a guest Nodus wait can only end on an event or in failure 🟢 P3 (app-filed 2026-10-22, runtime 2.28.1)
+
+**Status: OPEN — filed here 2026-11-18 (#982); until then it was only mentioned under FR-56, never triaged.**
+No defect: nothing that runs today needs it. It blocks the app porting tick-driven jobs (its
+Resolution Check: ask 6 of ~54 questions a minute, from a 1-minute APScheduler tick) to `.nd`, where
+the job would be "ask 6, sleep a minute, repeat". Filed by the app (their register, `## FR-55`).
+**Verified in source**, three asks:
+- **(a) a wait cannot resume at its deadline.** `await_event` (DEC-017) parks on an event; the only other
+  exit is the deadline, and `platform_layer/recovery_jobs.py` sets `status=failed`,
+  `error_message="WAIT_TIMEOUT"`. The app reports nodus-lang's own runner has `on_timeout: "resume"`;
+  nothing passes it to a guest. Ask: a wait that resumes at its deadline with a timeout marker in
+  `nodus_received_events` (or `sleep_until(ts)` on it).
+- **(b) a resume re-runs from the top without its `set_state`.** `runtime/nodus_adapter.py` seeds only
+  `nodus_received_events`; `nodus_output_state` stays readable on the waiting run but is not handed back.
+  ★ **This is DEC-012 (`declined`, #677)**: seeding would re-apply phase 1's effects on every re-run
+  unless the author guards them. Building (b) means revisiting DEC-012 with a new DEC (e.g. an explicit
+  `get_state(key)` read rather than seeding the namespace, which keeps run-from-the-top intact). Owner's call.
+- **(c) the 30-minute deadline is fixed.** Guest scripts run under the runtime-owned `nodus_execute`
+  flow, whose definition sets no `wait_timeout_minutes` (`runtime/flow_engine/runner_steps.py::
+  _get_flow_wait_timeout`), so `FLOW_WAIT_TIMEOUT_MINUTES` (30) applies to all. Ask: per workflow, or
+  per wait as in (a), which makes (c) moot.
+**Order if built:** (a) first (it subsumes (c)); (b) only after a DEC on DEC-012.
 
 ---
 
