@@ -549,13 +549,9 @@ The extracted runtime is self-hostable for its own database surface.
 - on incompatible drift, startup fails closed when `AINDY_ENFORCE_SCHEMA=true`
 - app-owned tables and the monolith Alembic history remain app-repo concerns
 
-**Blessed deploy primitive — `aindy-runtime bootstrap-schema`.** A deploy entrypoint
-that wants a clean ownership split (rather than replaying the full app migration
-history onto a fresh database) can run:
-
-```bash
-aindy-runtime bootstrap-schema      # idempotent; requires DATABASE_URL + pgvector
-```
+**Deploy primitive — `aindy-runtime bootstrap-schema`.** A deploy entrypoint that wants a
+clean ownership split (rather than replaying the full app migration history onto a fresh
+database) runs it before `serve`. Requires `DATABASE_URL` and pgvector.
 
 This does two things the server also does at startup, but as an explicit, standalone,
 idempotent step: (a) builds the **runtime-owned** tables from packaged ORM metadata —
@@ -563,16 +559,55 @@ scoped to the runtime's own table set, never app tables — and (b) stamps the r
 `alembic_version_runtime` table to the runtime head revision. Step (b) is the half an
 app-side bootstrap cannot do correctly: it gives a `create_all`-built database a proper
 Alembic baseline, so a later runtime schema upgrade migrates from a stamped line instead
-of replaying the whole chain onto live tables. The recommended split is:
+of replaying the whole chain onto live tables. On an already-current database the command is
+a no-op that re-stamps the same head.
 
-```bash
-aindy-runtime bootstrap-schema      # runtime tables + runtime Alembic baseline
-# then, in the app deploy step: build only the app-owned tables
+**In a container entrypoint, branch on the exit code. Never run it bare under `set -e`.** On
+an existing database, any release that adds a runtime column makes a bare call exit non-zero;
+`set -e` turns that into an exit and `restart: unless-stopped` into a crash loop (FR-14). The
+exit codes are a stable public contract:
+
+| Code | Meaning | Who acts |
+|---|---|---|
+| 0 | success | — |
+| 1 | configuration error (e.g. `DATABASE_URL` unset) | fix the environment; never retry |
+| 2 | the database layer could not be imported | a packaging/install problem |
+| 3 | additive reconcile required | **the only code safe to automate**: `--reconcile` adds tables, columns and indexes and widens columns; it never drops or narrows |
+| 4 | offline migration required | a person; `--reconcile` will not help |
+| 5 | manual repair required | a person |
+
+**4 wins over 3.** When a schema needs both an additive reconcile and an offline migration,
+the command exits 4, so a recipe that auto-reconciles on 3 never touches a database that
+needs a person. An entrypoint that copies this shape:
+
+```sh
+set -e
+rc=0
+aindy-runtime bootstrap-schema || rc=$?
+case "$rc" in
+  0) ;;
+  3)
+    if [ -n "$AINDY_BOOTSTRAP_RECONCILE" ]; then
+      aindy-runtime bootstrap-schema --reconcile      # additive only
+    else
+      echo "exit 3: additive reconcile required; set AINDY_BOOTSTRAP_RECONCILE=1 or run" >&2
+      echo "  aindy-runtime bootstrap-schema --reconcile   (out of band)" >&2
+      exit 3
+    fi ;;
+  4|5)
+    echo "exit $rc: a person must act; no flag fixes this" >&2
+    exit "$rc" ;;
+  *) exit "$rc" ;;
+esac
+# then the app's own deploy step builds only the app-owned tables
+exec aindy-runtime serve
 ```
 
-Pass `--reconcile` to also apply additive column/index fixes if the runtime schema is
-out of date. On an already-current database the command is a no-op that re-stamps the
-same head.
+Whether exit 3 reconciles unattended is the operator's call (the gate variable above is
+illustrative, not a runtime setting). With it off, a restart policy still restarts the
+container on exit 3 until someone reconciles; that loop is a stop sign with a precise
+message, not a crash. Run it bare interactively, where you want to be told before anything is
+altered.
 
 ## Docs
 
