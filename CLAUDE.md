@@ -266,7 +266,7 @@ A soak assertion must not be stricter than the contract.
 
 ### Open — programs and multi-item prefixes
 
-- **APP-FR-\*** — app-side feature requests. **Next: FR-71** (check the app's register AND its open PRs first). Open: FR-14 recurrence half, FR-55, FR-69 (dnspython `==2.9.2`, #975; closes on app adoption), FR-70 (`get_activity_caller`, DEC-133; closes on app adoption). Closed: FR-43..54, FR-56..68 (FR-67/68 on the app's 2.36.0 report, 2026-11-13).
+- **APP-FR-\*** — app-side feature requests. **Next: FR-71** (check the app's register AND its open PRs first). Open: FR-14 recurrence half, FR-55, FR-70 (`get_activity_caller`, DEC-133; closes on app adoption). Closed: FR-43..54, FR-56..69 (FR-69 on the app's 2.36.1 report, 2026-11-18).
 - **ECOGAP-\*** — ECOGAP-1 ph1–3 and ECOGAP-4 G4b shipped opt-in; G4a built-but-INERT until a policy is registered. ECOGAP-2 is C2/C3, ECOGAP-3 is MEMORY-EMBEDDING-PROVIDER-1 — don't double-track.
 - **RTR-\*** — 1/5/6 closed; 2/3/4/7 harden-halves done. RTR-4 remaining: soak + flip `AINDY_DELEGATION_PRIVATE_MEMORY`; delegate writes take the deferred path, so `MemoryNodeDAO.save` is the chokepoint.
 - **DOCS-\*** — check `APP_ROUTERS` + `ROUTE_OWNERSHIP_INVENTORY.md`, never file presence, before calling a route runtime-owned.
@@ -362,7 +362,7 @@ Adding a `SystemEventTypes` value: regenerate `tests/baselines/system_event_cont
 | Runtime contracts (idempotency, sandbox, connector, SDK, UI, invariants, durable-state ownership) | `docs/runtime/*_CONTRACT.md`, `EXECUTION_INVARIANTS.md`, `SECURITY_MATRIX.md`, `SYSCALL_REFERENCE.md`, `NODUS_DEVELOPER_GUIDE.md` |
 | Design records index (every scope/design doc + status) | `docs/design/README.md` |
 | Comparative research index (8 systems; what is settled) | `docs/governance/COMPARATIVE_RESEARCH_INDEX.md` |
-| Release checklist; upgrades index; latest app handoff | `docs/governance/RELEASE_CHECKLIST.md`; `docs/upgrades/README.md`; `docs/upgrades/APP_HANDOFF_v2.36.1.md` |
+| Release checklist; upgrades index; latest app handoff | `docs/governance/RELEASE_CHECKLIST.md`; `docs/upgrades/README.md`; `docs/upgrades/APP_HANDOFF_v2.37.0.md` |
 | Outbound handoffs to Nodus | `docs/handoffs/README.md` |
 | Route ownership; deployment targets | `docs/runtime/ROUTE_OWNERSHIP_INVENTORY.md`; `docs/operations/DEPLOYMENT_TARGETS.md` |
 | Sibling repos | ui-kit `C:\dev\aindy-ui-kit\src\`; apps monolith `C:\dev\aindy-apps-monolith\CLAUDE.md` |

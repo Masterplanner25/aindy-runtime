@@ -9280,7 +9280,7 @@ key in each tool dict.
 
 ## FR-70 — an app route cannot accept a watcher-only key, so a laptop-side activity source has no narrow credential 🟡 P3 (app-filed 2026-11-16, runtime 2.36.0)
 
-**Status: BUILT (2026-11-17) — DEC-133, option 1.** `AINDY.services.auth_service.get_activity_caller` takes a
+**Status: BUILT (2026-11-17, #978), released in 2.37.0 — DEC-133, option 1.** `AINDY.services.auth_service.get_activity_caller` takes a
 session or a key holding `watcher.signals`/`platform.admin` (the watcher-only key included), never the shared
 `X-API-Key`; `_watcher_caller` shares its rule (`_resolve_activity_key`). `test_fr70_activity_caller.py` mounts real
 routes on the runtime app, private engine, mutation-tested (3/3). **Remaining:** the app swaps `_directing_caller`
@@ -9300,7 +9300,9 @@ Their phase B waits on it.
 
 ## FR-69 — `dnspython==2.9.0` is an exact pin with GHSA-vvf4-9x63-8xvv (CVE-2026-128089, high); the fix is 2.9.2 🟡 P3 (app-filed 2026-11-16, runtime 2.36.0)
 
-**Status: MERGED (2026-11-16, #975), ships in 2.36.1 — exact pin `==2.9.2` (owner's choice: DEC-102's range
+**Status: CLOSED (2026-11-18) — the app adopted 2.36.1 (app #620/#621, `RUNTIME_2_36_1_UPGRADE.md`), removed its
+audit ignore, and its `Python Dependency Audit` passed without it. Remains: nothing.**
+**Released in 2.36.1 (2026-11-16, #975) — exact pin `==2.9.2` (owner's choice: DEC-102's range
 exception stays certifi-only, so no range as the app asked). Closes when the app adopts 2.36.1 and drops its
 audit ignore.** Filed by the app (their register, `## FR-69`); also Dependabot alerts #28/#29 here.
 `pyproject.toml` and `AINDY/requirements.txt` pin `dnspython==2.9.0`; `from_text()` does not bound a WKS record's
