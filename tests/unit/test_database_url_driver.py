@@ -102,6 +102,24 @@ def test_every_engine_the_runtime_creates_names_its_driver():
     )
 
 
+def test_workflow_inline_scripts_name_the_driver_too():
+    """CI runs Python inline in workflow YAML; #981's first run failed on one such `create_engine`.
+
+    `psycopg2.connect(...)` is deliberately not covered: it is libpq, not SQLAlchemy, and takes the
+    bare URL (a `+psycopg2` scheme would break it).
+    """
+    workflows = sorted((_ROOT / ".github" / "workflows").glob("*.yml"))
+    sites = [
+        (str(path.relative_to(_ROOT)), number, line.strip())
+        for path in workflows
+        for number, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1)
+        if any(f"{factory}(" in line for factory in _ENGINE_FACTORIES)
+    ]
+    assert sites, "no engine sites found in workflows; the scan is broken"
+    unwrapped = [f"{path}:{number}" for path, number, line in sites if "normalize_database_url(" not in line]
+    assert unwrapped == [], unwrapped
+
+
 def test_alembic_get_url_normalizes():
     """`get_url` is accepted above on the strength of this check."""
     tree = ast.parse((_ROOT / "alembic" / "env.py").read_text(encoding="utf-8"))

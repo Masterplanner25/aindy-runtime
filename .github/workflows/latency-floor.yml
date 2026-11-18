@@ -90,7 +90,8 @@ jobs:
           from tests.helpers.runtime import import_runtime_model_registry
 
           import_runtime_model_registry()
-          engine = create_engine(os.environ["DATABASE_URL"])
+          from AINDY.config import normalize_database_url
+          engine = create_engine(normalize_database_url(os.environ["DATABASE_URL"]))
           with engine.begin() as conn:
               conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
           report = ensure_runtime_schema(engine, allow_bootstrap=True, allow_reconcile=True)
