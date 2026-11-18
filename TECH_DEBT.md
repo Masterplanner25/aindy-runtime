@@ -9289,7 +9289,12 @@ key in each tool dict.
 
 ## FR-70 — an app route cannot accept a watcher-only key, so a laptop-side activity source has no narrow credential 🟡 P3 (app-filed 2026-11-16, runtime 2.36.0)
 
-**Status: BUILT (2026-11-17, #978), released in 2.37.0 — DEC-133, option 1.** `AINDY.services.auth_service.get_activity_caller` takes a
+**Status: CLOSED (2026-11-18) — the app adopted 2.37.0 (app #622/#623, `RUNTIME_2_37_0_UPGRADE.md`; live 05:34:09Z)
+and `_directing_caller` depends on `get_activity_caller`. Its phase-B hook (app #624) posted with the owner's own
+watcher-only key (`{watcher.signals}`) and got a 2xx at 05:51:47Z, the backfill stored 696 more with it, and the same
+key on `GET /apps/goals` is a 403 (the control). Their earlier probe with a fresh test key also showed 401 with no
+credential and 401 after `DELETE /watcher/keys/{id}`. Remains: nothing.**
+**BUILT (2026-11-17, #978), released in 2.37.0 — DEC-133, option 1.** `AINDY.services.auth_service.get_activity_caller` takes a
 session or a key holding `watcher.signals`/`platform.admin` (the watcher-only key included), never the shared
 `X-API-Key`; `_watcher_caller` shares its rule (`_resolve_activity_key`). `test_fr70_activity_caller.py` mounts real
 routes on the runtime app, private engine, mutation-tested (3/3). **Remaining:** the app swaps `_directing_caller`
