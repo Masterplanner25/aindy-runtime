@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-11-17"
+last_verified: "2026-11-18"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1742,6 +1742,39 @@ inside it:**
   Request-side transaction discipline, nothing the sandbox sees.
 
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
+
+---
+
+## Entry 063 — 2026-11-18
+
+**Trigger:** `v2.38.0` release tag (`sandbox-escape-linux.yml`, run `44376796250`).
+**Commit:** `482142e` (release PR #984's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:7fbad8e4652eae0186429a6f26cf5b23e27e8c6fd7ac4d0cfd7a6988cdeea1e1`, **the same as Entries 061 and 062**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 7.53s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `44376796250`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.37.0..v2.38.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #981 (DEC-134) moves SQLAlchemy 2.0.52 → 2.1.8 and adds `AINDY.config.normalize_database_url`, which names the
+  psycopg2 driver at every engine the runtime creates. This is how the runtime reaches its own database, not
+  isolation of what guest code may do; the sandbox suite needs no database.
+
+**Schema:** no migration (Alembic `0022`, contract `2026-11-09`), so the `Upgrade Path Guard` passed trivially and its
+negative control carried the meaning. It passed on `482142e` before the tag, along with Runtime CI, Boot Smoke
+(PostgreSQL) and the auth CVE audit, each on attempt 1.
+
+**Publish (run `44376797105`):**
+- The owner approved the `production` environment gate.
+- The wheel read back from PyPI (sha256 `95aa1308f46963f8…`) carries `Version: 2.38.0`,
+  `Requires-Dist: SQLAlchemy==2.1.8`, `normalize_database_url`, and the prebuilt SPA (`platform/dist`).
+- Boot Smoke on the published wheel installed on **attempt 3** (PyPI's simple index lagged the JSON API twice; the
+  retry exists for this).
+- The GitHub release is non-draft (19:12Z on 2026-11-18).
+- `publish.yml` is unchanged from `v2.37.0`.
 
 ---
 
