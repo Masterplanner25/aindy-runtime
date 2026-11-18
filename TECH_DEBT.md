@@ -5176,7 +5176,7 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, UI major unit)
 
-**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); `openai` 3.x added 2026-10-27; `SQLAlchemy` 2.1 added 2026-11-16 and resolved 2026-11-17 (DEC-134); the UI major unit
+**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); `openai` 3.x added 2026-10-27; `SQLAlchemy` 2.1 added 2026-11-16, resolved 2026-11-17 (DEC-134, #981) and released in 2.38.0; the UI major unit
 remains, now blocked on `LOCKFILE-PLATFORM-1`. Dependency maintenance; each is a deliberate
 upgrade, not a drop-in bump. Surfaced during the 2026-07-18 dependabot triage.
 
