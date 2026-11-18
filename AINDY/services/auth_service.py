@@ -726,6 +726,47 @@ def _resolve_platform_key_as_user(
     }
 
 
+def _resolve_activity_key(raw_key: str, db: Session) -> dict:
+    """A user's own key on a route that takes the user's activity (DEC-117, DEC-133).
+
+    A watcher-only key is admitted here, so the key must hold `watcher.signals` (or
+    `platform.admin`). Any other key is refused, even one `get_current_user` would take: an
+    activity route is narrower than a session, not wider.
+    """
+    from AINDY.auth.api_key_auth import Scopes
+
+    principal = _resolve_platform_key_as_user(raw_key, db, allow_watcher_only=True)
+    scopes = set(principal.get("api_key_scopes") or [])
+    if not scopes.intersection({Scopes.WATCHER_SIGNALS, Scopes.PLATFORM_ADMIN}):
+        raise HTTPException(
+            status_code=403,
+            detail=f"API key scope '{Scopes.WATCHER_SIGNALS}' required.",
+        )
+    return principal
+
+
+def get_activity_caller(
+    credentials: HTTPAuthorizationCredentials = Security(bearer_scheme),
+    platform_key: str | None = Security(_platform_key_header),
+    db: Session = Depends(get_db),
+) -> dict:
+    """FastAPI dependency for a route that ingests the caller's OWN activity (FR-70, DEC-133).
+
+    Takes a signed-in session, or a platform key in `X-Platform-Key` holding `watcher.signals`
+    (or `platform.admin`), including the watcher-only key a user mints at `POST /watcher/keys`.
+    That key is refused everywhere else (DEC-117); a route opts in by using this dependency, so
+    the key's reach grows by exactly the routes that name it. It never takes the shared
+    `X-API-Key`: the caller is always a user, and the principal has the same shape as
+    `get_current_user`'s (`sub` is the user id).
+
+    Use it in place of `get_current_user`, never beside it, or beside a dependency built on it
+    (`enforce_api_key_scope`): that one refuses a watcher-only key and the route would too.
+    """
+    if platform_key:
+        return _resolve_activity_key(platform_key, db)
+    return get_current_user(credentials=credentials, platform_key=None, db=db)
+
+
 def get_optional_user(
     credentials: HTTPAuthorizationCredentials = Security(bearer_scheme),
 ) -> Optional[dict]:

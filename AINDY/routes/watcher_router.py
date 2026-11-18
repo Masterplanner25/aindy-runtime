@@ -32,7 +32,7 @@ from AINDY.platform_layer.rate_limiter import limiter
 from AINDY.routes.path_params import UUIDPath
 from AINDY.services.auth_service import (
     _platform_key_header,
-    _resolve_platform_key_as_user,
+    _resolve_activity_key,
     api_key_header,
     get_current_user,
     is_api_key_principal,
@@ -57,14 +57,7 @@ def _watcher_caller(
 ) -> Optional[str]:
     """The user a platform key belongs to, or None for the shared service key."""
     if platform_key:
-        principal = _resolve_platform_key_as_user(platform_key, db, allow_watcher_only=True)
-        scopes = set(principal.get("api_key_scopes") or [])
-        if not scopes.intersection({Scopes.WATCHER_SIGNALS, Scopes.PLATFORM_ADMIN}):
-            raise HTTPException(
-                status_code=403,
-                detail=f"API key scope '{Scopes.WATCHER_SIGNALS}' required.",
-            )
-        return str(principal["sub"])
+        return str(_resolve_activity_key(platform_key, db)["sub"])
     verify_api_key(api_key)
     return None
 
