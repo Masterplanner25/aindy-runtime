@@ -2426,3 +2426,14 @@ The write resolver minted a leaf and threw it away, and the DAO stored the row u
 The app asked for `AINDY_MCP_TRUSTED_PROXIES`. uvicorn already does exactly that, with CIDRs and the right-most-untrusted rule, and `serve_http` runs under `uvicorn.run` without overriding it. A second setting for the same trust would need a rule for when the two disagree, and a proxy trusted in one but not the other is the kind of mismatch that fails open.
 
 **Declined:** `AINDY_MCP_TRUSTED_PROXIES` mapped onto `forwarded_allow_ips`. It would match the `AINDY_*` naming, but it is a second name for one list. Revisit if the server ever runs under something other than uvicorn.
+
+### DEC-133
+**Status:** `accepted` (2026-11-17 — FR-70; decided by the owner: "yes" to option 1, a public dependency, over option 2, an app-registrable exclusive scope)
+
+**Decision — `AINDY.services.auth_service.get_activity_caller` is the public FastAPI dependency for an app route that ingests the caller's own activity. It takes a signed-in session, or a platform key in `X-Platform-Key` holding `watcher.signals` or `platform.admin`, including the watcher-only key from `POST /watcher/keys`. It never takes the shared `X-API-Key`. A key without one of those scopes is refused there even if `get_current_user` would take it. `_watcher_caller` and `get_activity_caller` share one rule, `_resolve_activity_key`.**
+The resolver still refuses a watcher-only key everywhere else (DEC-117); a route opts in by naming this dependency, so the key's reach grows by exactly the routes that do. The principal has `get_current_user`'s shape (`sub` is the user id). It is used instead of `get_current_user`, never beside it: `enforce_api_key_scope` resolves through `get_current_user`, so a route that adds one refuses the watcher key again (pinned by a test).
+
+**Why**
+The app's laptop hook runs unattended, so its key sits in a file. The watcher key is the only narrow key a user can mint, and every app route refused it. The alternative, an ordinary platform key, reaches almost every app route, since few check a scope. Option 1 reuses the watcher routes' existing rule and adds no vocabulary. It keeps one kind of narrow key a user can hold, which is easier to reason about than one per app.
+
+**Declined:** (2) `register_key_scope(name, exclusive=True)`, a scope an app registers that works only on routes naming it. It would give one key per purpose, but it needs a registration API, minting for app scopes, and a rule for how exclusive scopes meet the resolver's watcher check. Revisit if a second app needs a narrow key the person should hold separately from their watcher key. Also declined: taking the shared `X-API-Key`, as `_watcher_caller` does: it names no user, and an activity route must know whose activity it stores.

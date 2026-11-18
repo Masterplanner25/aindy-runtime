@@ -1,6 +1,6 @@
 ---
 title: "Public Runtime Surfaces"
-last_verified: "2026-09-26"
+last_verified: "2026-11-17"
 api_version: "1.0"
 status: current
 owner: "platform-team"
@@ -221,6 +221,11 @@ Surfaces in scope:
   field in it) before `execute_tool` on both backends. It is validated at plan time; an
   unresolvable reference fails the step `invalid`. Design:
   `docs/design/FR46_STEP_REFERENCES_DESIGN.md`
+- `AINDY.services.auth_service.get_activity_caller` (FR-70, DEC-133): the auth dependency for an
+  app route that ingests the caller's own activity. It takes a session, or a key holding
+  `watcher.signals` (the watcher-only key a user mints at `POST /watcher/keys`, refused by every
+  route that doesn't name this dependency) or `platform.admin`; never the shared `X-API-Key`. Use
+  it instead of `get_current_user`, not beside it or beside `enforce_api_key_scope`
 - dynamic plugin nodes via
   `AINDY.platform_layer.node_registry.register_external_node(type="plugin")`
 - webhook nodes via
