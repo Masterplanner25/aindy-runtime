@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-11-16"
+last_verified: "2026-11-17"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1742,6 +1742,38 @@ inside it:**
   Request-side transaction discipline, nothing the sandbox sees.
 
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
+
+---
+
+## Entry 062 — 2026-11-17
+
+**Trigger:** `v2.37.0` release tag (`sandbox-escape-linux.yml`, run `44240631003`).
+**Commit:** `3aea846` (release PR #979's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:7fbad8e4652eae0186429a6f26cf5b23e27e8c6fd7ac4d0cfd7a6988cdeea1e1`, **the same as Entry 061**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 5.36s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `44240631003`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.36.1..v2.37.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #978 (FR-70, DEC-133) adds `auth_service.get_activity_caller`, an HTTP auth dependency an app route can use to
+  admit the user's watcher-only key; the key is still refused on every route that doesn't name it (DEC-117). This is
+  authentication of who is calling, not isolation of what code may do. No dependency pin moved.
+
+**Schema:** no migration (Alembic `0022`, contract `2026-11-09`), so the `Upgrade Path Guard` passed trivially and its
+negative control carried the meaning. It passed on `3aea846` before the tag, along with Runtime CI, Boot Smoke
+(PostgreSQL) and the auth CVE audit.
+
+**Publish (run `44240630052`):**
+- The owner approved the `production` environment gate.
+- The wheel read back from PyPI (sha256 `0a594622754f6720…`) carries `Version: 2.37.0`, `get_activity_caller`, and
+  the prebuilt SPA (`platform/dist`).
+- Boot Smoke on the published wheel installed on **attempt 1**.
+- The GitHub release is non-draft (05:00Z on 2026-11-18).
+- `publish.yml` is unchanged from `v2.36.1`.
 
 ---
 
