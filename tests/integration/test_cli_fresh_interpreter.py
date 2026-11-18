@@ -27,6 +27,13 @@ def pg_url():
     return url
 
 
+def _driver_url(url: str) -> str:
+    """The test's own engine names the driver; `_run` passes the operator's bare URL on."""
+    from AINDY.config import normalize_database_url
+
+    return normalize_database_url(url)
+
+
 def _run(url: str, *args: str) -> subprocess.CompletedProcess:
     env = dict(os.environ, DATABASE_URL=url)
     return subprocess.run(
@@ -39,7 +46,7 @@ def test_backfill_paths_writes_from_a_fresh_interpreter(pg_url):
     from AINDY.db.models.user import User
     from AINDY.memory.memory_persistence import MemoryNodeModel
 
-    engine = create_engine(pg_url)
+    engine = create_engine(_driver_url(pg_url))
     with Session(engine) as s:
         user = User(email=f"cli-{uuid.uuid4().hex[:8]}@aindy.test", username=f"cli-{uuid.uuid4().hex[:8]}",
                     hashed_password="x", is_active=True)
@@ -73,7 +80,7 @@ def test_backfill_call_users_writes_from_a_fresh_interpreter(pg_url):
     """FR-61's one-time command, run as the operator runs it."""
     from AINDY.db.models.user import User
 
-    engine = create_engine(pg_url)
+    engine = create_engine(_driver_url(pg_url))
     trace = f"fr61-{uuid.uuid4().hex[:10]}"
     with Session(engine) as s:
         user = User(email=f"cli-{uuid.uuid4().hex[:8]}@aindy.test", username=f"cli-{uuid.uuid4().hex[:8]}",
@@ -111,7 +118,7 @@ def test_mcp_oauth_register_client_writes_from_a_fresh_interpreter(pg_url):
 
     import mcp  # noqa: F401  — fail, don't skip: this job installs it
 
-    engine = create_engine(pg_url)
+    engine = create_engine(_driver_url(pg_url))
     made = _run(pg_url, "mcp-oauth", "register-client", "--name", "Fresh CLI client",
                 "--redirect-uri", "https://connector.example/cb")
     assert made.returncode == 0, made.stderr[-2000:]

@@ -52,6 +52,24 @@ def _read_version() -> str:
         return "1.0.0"
 
 
+def normalize_database_url(url: str) -> str:
+    """Name the PostgreSQL driver this package ships: a bare `postgresql://` → `postgresql+psycopg2://`.
+
+    SQLAlchemy 2.1 resolves a bare `postgresql://` to psycopg 3, which is not installed, so
+    engine creation fails. Operators' `DATABASE_URL`s and every doc use the bare form, so the
+    driver is named here rather than in their settings. Every engine the runtime creates passes
+    its URL through this function (`test_database_url_driver.py` derives the census from source).
+
+    The scheme is rewritten as text, never through `make_url`: 2.1 also changed how `str(URL)`
+    escapes the database part. An explicit driver (`postgresql+psycopg://`), SQLite, and anything
+    else pass through unchanged, as does an empty string. Idempotent.
+    """
+    scheme, sep, rest = (url or "").partition("://")
+    if sep and scheme.lower() == "postgresql":
+        return "postgresql+psycopg2://" + rest
+    return url
+
+
 # --------------------------------------------------------------------
 # Base Settings
 # --------------------------------------------------------------------

@@ -14,7 +14,7 @@ import os
 import threading
 import time
 
-from AINDY.config import settings
+from AINDY.config import normalize_database_url, settings
 from AINDY.core.observability_events import emit_observability_event
 
 # --------------------------------------------------------------------
@@ -72,7 +72,7 @@ else:
             f"{_test_timeout_ms('DB_IDLE_IN_TRANSACTION_TIMEOUT_MS')}"
         )
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args, **pool_kwargs)
+engine = create_engine(normalize_database_url(DATABASE_URL), connect_args=connect_args, **pool_kwargs)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 logger = logging.getLogger(__name__)

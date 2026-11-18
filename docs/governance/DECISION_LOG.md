@@ -2437,3 +2437,14 @@ The resolver still refuses a watcher-only key everywhere else (DEC-117); a route
 The app's laptop hook runs unattended, so its key sits in a file. The watcher key is the only narrow key a user can mint, and every app route refused it. The alternative, an ordinary platform key, reaches almost every app route, since few check a scope. Option 1 reuses the watcher routes' existing rule and adds no vocabulary. It keeps one kind of narrow key a user can hold, which is easier to reason about than one per app.
 
 **Declined:** (2) `register_key_scope(name, exclusive=True)`, a scope an app registers that works only on routes naming it. It would give one key per purpose, but it needs a registration API, minting for app scopes, and a rule for how exclusive scopes meet the resolver's watcher check. Revisit if a second app needs a narrow key the person should hold separately from their watcher key. Also declined: taking the shared `X-API-Key`, as `_watcher_caller` does: it names no user, and an activity route must know whose activity it stores.
+
+### DEC-134
+**Status:** `accepted` (2026-11-17 — DEP-UPGRADE-DEFERRED-1; decided by the owner: "build option A", naming psycopg2 in the URL, over option B, moving to psycopg 3)
+
+**Decision — The runtime takes SQLAlchemy 2.1 and stays on psycopg2. `AINDY.config.normalize_database_url` rewrites a bare `postgresql://` to `postgresql+psycopg2://` as text, and every engine the runtime creates (`AINDY/` and `alembic/env.py`) passes its URL through it. Operators change nothing: their bare `DATABASE_URL` keeps working. An explicit driver in the URL is left alone.**
+The rewrite is done at the engine sites, not in the settings validator, so `settings.DATABASE_URL` still reads as the operator wrote it. `test_database_url_driver.py` derives the census of engine sites from source and fails on any that skips the function.
+
+**Why**
+SQLAlchemy 2.1 changed the default PostgreSQL driver from psycopg2 to psycopg 3, which this package does not install, so the bump failed every PG job. Every URL in operators' settings and the docs is the bare form. SQLAlchemy's 2.1 notes say psycopg2 "remains fully supported" when named in the URL, so naming it takes 2.1 with no change to the driver's behaviour under the runtime.
+
+**Declined:** (B) moving to psycopg 3 now. It is the actively developed driver, but it changes the layer under every query: pgvector's integration, how Postgres arrays come back (`auth_service.py` relies on psycopg2's), the advisory locks behind exactly-once execution, and error wrapping. That needs real-PG re-testing and the soak, and nothing forces it. Also declined: asking operators to change their `DATABASE_URL`, which would break every existing deployment on upgrade, and rewriting through `make_url`, whose `str()` escaping also changed in 2.1.

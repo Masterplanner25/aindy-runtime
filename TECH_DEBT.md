@@ -5176,7 +5176,7 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, UI major unit)
 
-**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); `openai` 3.x added 2026-10-27; `SQLAlchemy` 2.1 added 2026-11-16; the UI major unit
+**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); `openai` 3.x added 2026-10-27; `SQLAlchemy` 2.1 added 2026-11-16 and resolved 2026-11-17 (DEC-134); the UI major unit
 remains, now blocked on `LOCKFILE-PLATFORM-1`. Dependency maintenance; each is a deliberate
 upgrade, not a drop-in bump. Surfaced during the 2026-07-18 dependabot triage.
 
@@ -5378,8 +5378,17 @@ which reads exactly like a genuine resolution failure.
   paths need re-testing on real PG); then read the 2.1 migration notes in full. No security alert
   drives it; 2.0.x bumps keep arriving.
 
+  **RESOLVED 2026-11-17 — option A (DEC-134).** `AINDY.config.normalize_database_url` rewrites a bare
+  `postgresql://` to `postgresql+psycopg2://` as text (never via `make_url`, whose `str()` escaping changed in
+  2.1). Every engine in `AINDY/` and `alembic/env.py` wraps its URL in it, and `test_database_url_driver.py`
+  derives that census from source (mutation-tested: unwrapping `database.py` fails it). The three PG integration
+  fixtures that build engines from the raw env do the same; `test_cli_fresh_interpreter` still hands the CLI the
+  bare URL. 2.1 notes read in full: no enum types, computed columns or dataclass mappings here; `greenlet` is
+  pinned explicitly; **autoflush now also fires before raw `text()` queries**, judged on real PG by CI. psycopg 3
+  stays a separate decision (pgvector, ARRAY results, advisory locks, error wrapping).
+
 **Reopen/resolve:** when the OTel line is bumped as a group. The UI unit is done; the
-`pydantic` train is grouped. The `openai` 3.x and `SQLAlchemy` 2.1 halves each resolve when their migration above lands.
+`pydantic` train is grouped. The `openai` 3.x half resolves when its migration above lands; the `SQLAlchemy` 2.1 half is resolved.
 
 ---
 

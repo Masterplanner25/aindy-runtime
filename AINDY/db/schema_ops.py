@@ -7,7 +7,7 @@ from typing import Sequence
 
 from sqlalchemy import create_engine
 
-from AINDY.config import settings
+from AINDY.config import normalize_database_url, settings
 from AINDY.db.schema_contract import inspect_runtime_schema_payload
 
 
@@ -77,7 +77,7 @@ def _render_text(payload: dict[str, object]) -> str:
 
 
 def inspect_command(*, database_url: str = "", output_format: str = "json") -> dict[str, object]:
-    engine = create_engine(database_url or settings.DATABASE_URL)
+    engine = create_engine(normalize_database_url(database_url or settings.DATABASE_URL))
     try:
         payload = inspect_runtime_schema_payload(engine)
     finally:

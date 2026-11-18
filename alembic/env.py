@@ -85,7 +85,9 @@ def include_object(obj, name, type_, reflected, compare_to):
 
 
 def get_url() -> str:
-    return os.environ["DATABASE_URL"]
+    from AINDY.config import normalize_database_url
+
+    return normalize_database_url(os.environ["DATABASE_URL"])
 
 
 def run_migrations_offline() -> None:
