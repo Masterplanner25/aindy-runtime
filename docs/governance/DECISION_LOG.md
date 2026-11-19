@@ -2328,6 +2328,8 @@ The path tools filter on the stored column, so 1,371 of the app's 1,397 nodes we
 
 **Not decided here:** invite-only registration, and FR-59 (per-user provider keys), which gets a design for the owner's sign-off first.
 
+(3) narrowed 2026-11-19 by DEC-137: a scoped graph also keeps an edge to the caller's own event in another trace, dangling.
+
 ### DEC-121
 **Status:** `accepted` (2026-11-08 — the owner: "go with your recommendations on D1-D6", for `docs/design/PROVIDER_KEYS_PER_USER_DESIGN.md`)
 
@@ -2481,3 +2483,18 @@ nodus-lang's own runner already has these semantics (`on_timeout: "resume"`), an
 
 **Related Docs**
 - `NODUS_DEVELOPER_GUIDE.md` §4; `TECH_DEBT.md` `FR-55`; DEC-017, DEC-135
+
+---
+
+### DEC-137
+**Status:** `accepted` (2026-11-19 — the app's 2.34.0 report, §6 item 5, asked; the owner chose "keep, pointing outside" and "decide + build")
+
+**Decision — A trace graph scoped to one user (`build_trace_graph(..., user_id=…)`, FR-60) also keeps an edge whose far end is that SAME user's event in another trace, dangling, as the unscoped graph keeps it. The far event is not added as a node: the nodes stay this trace's events and the caller's memory nodes. An edge whose far end is another user's event, a userless event, or a memory node not kept is still dropped. Root and terminal detection run over the kept edges unchanged (so a node that queued the caller's own work is no longer terminal, as in the unscoped graph); scoped depth counts only edges between two nodes.**
+
+**Why**
+Queued work runs under its own trace, so every `async_child` edge crosses traces. On the app's trace `d534a3fd…` the scoped graph dropped 290 such edges, each to the owner's own `execution.started`, and the scoped and unscoped graphs disagreed on what was terminal. FR-60's rule ("both ends kept") was there to keep other users' events out; hiding the caller's own events from the caller protects nobody. Keeping the edge dangling, rather than adding the event, gives the scoped graph the unscoped graph's shape minus other users, and leaves `node_count` meaning "events of this trace".
+
+**Declined:** adding the far event as a node (nodes would span traces; `node_count` and root detection would read events of other traces). Leaving the rule as it was (the caller loses the link to its own queued work, and terminal counts disagree between the two views). Following the edge into the other trace for depth, as unscoped `calculate_depth` does (scoped depth stays inside the trace, per DEC-120 (3)).
+
+**Related Docs**
+- `AINDY/platform_layer/event_trace_service.py`; DEC-120

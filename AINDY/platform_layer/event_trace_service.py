@@ -81,6 +81,12 @@ def build_trace_graph(db, trace_id: str, user_id: str | None = None) -> dict[str
     FR-60 — with ``user_id``, only that user's events and memory nodes, and only edges whose both
     ends are kept. Nothing today puts two users' events in one trace; this makes the graph not
     depend on that.
+
+    DEC-137 — one exception: an edge to or from the SAME user's event in another trace (an
+    ``async_child`` edge to the work it queued, which runs under its own trace) is kept, dangling,
+    as the unscoped graph keeps it. The far event is not added as a node: the nodes stay this
+    trace's events. An edge whose far end is another user's event, a userless one, or a memory
+    node not kept is still dropped.
     """
     owner = uuid.UUID(str(user_id)) if user_id else None
     events_query = db.query(SystemEvent).filter(SystemEvent.trace_id == trace_id)
@@ -120,10 +126,33 @@ def build_trace_graph(db, trace_id: str, user_id: str | None = None) -> dict[str
     serialized_edges = [_serialize_edge(row, resolved_memory_targets.get(row.id)) for row in edges]
     if owner is not None:
         kept = {node["id"] for node in nodes}
+        own_elsewhere = _own_events_outside(db, serialized_edges, kept, owner)
         serialized_edges = [
-            edge for edge in serialized_edges if edge.get("source") in kept and edge.get("target") in kept
+            edge
+            for edge in serialized_edges
+            if _end_kept(edge.get("source"), kept, own_elsewhere)
+            and _end_kept(edge.get("target"), kept, own_elsewhere, edge.get("target_kind"))
         ]
     return {"nodes": nodes, "edges": serialized_edges}
+
+
+def _end_kept(end, kept: set[str], own_elsewhere: set[str], kind: str = "system_event") -> bool:
+    if end in kept:
+        return True
+    return kind == "system_event" and end in own_elsewhere
+
+
+def _own_events_outside(db, edges: list[dict[str, Any]], kept: set[str], owner: uuid.UUID) -> set[str]:
+    """DEC-137 — the far ends of these edges that are the owner's own events (in another trace)."""
+    far: set[uuid.UUID] = set()
+    for edge in edges:
+        for end, kind in ((edge.get("source"), "system_event"), (edge.get("target"), edge.get("target_kind"))):
+            if end and end not in kept and kind == "system_event":
+                far.add(uuid.UUID(str(end)))
+    if not far:
+        return set()
+    rows = db.query(SystemEvent.id).filter(SystemEvent.id.in_(far), SystemEvent.user_id == owner).all()
+    return {str(row.id) for row in rows}
 
 
 def get_downstream_effects(db, event_id: str | uuid.UUID) -> list[dict[str, Any]]:
@@ -211,10 +240,15 @@ def calculate_trace_span(db, trace_id: str, user_id: str | None = None) -> dict[
 
 
 def _depth_within(graph: dict[str, list[dict[str, Any]]], root_id: str) -> int:
-    """``calculate_depth`` over an already-scoped graph's own edges."""
+    """``calculate_depth`` over an already-scoped graph's own edges.
+
+    Only edges between two of its nodes count: a DEC-137 edge out of the trace adds no depth.
+    """
+    node_ids = {str(node["id"]) for node in graph["nodes"]}
     children: dict[str, list[str]] = {}
     for edge in graph["edges"]:
-        children.setdefault(str(edge.get("source")), []).append(str(edge.get("target")))
+        if str(edge.get("target")) in node_ids:
+            children.setdefault(str(edge.get("source")), []).append(str(edge.get("target")))
     visited: set[str] = set()
     queue: deque[tuple[str, int]] = deque([(str(root_id), 0)])
     max_depth = 0
