@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-11-18"
+last_verified: "2026-11-19"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1742,6 +1742,41 @@ inside it:**
   Request-side transaction discipline, nothing the sandbox sees.
 
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
+
+---
+
+## Entry 064 — 2026-11-19
+
+**Trigger:** `v2.39.0` release tag (`sandbox-escape-linux.yml`, run `44475996149`).
+**Commit:** `7bc592f` (release PR #988's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:7fbad8e4652eae0186429a6f26cf5b23e27e8c6fd7ac4d0cfd7a6988cdeea1e1`, **the same as Entries 061 to 063**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 4 warnings in 8.55s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `44475996149`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.38.0..v2.39.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #986 (DEC-135) adds the guest function `prior_state(key)` to the Nodus worker: a read-only copy of what the same
+  node saved before it parked. It hands the guest its own earlier state, never another run's, and grants no
+  capability.
+- #987 (DEC-136) adds `await_event_for(event_type, schema, seconds)` and a leader-only scheduler job that resumes a
+  run at its own deadline. This is when a parked run wakes, not what guest code may do once it runs.
+
+**Schema:** no migration (Alembic `0022`, contract `2026-11-09`), so the `Upgrade Path Guard` passed trivially and its
+negative control carried the meaning. It passed on `7bc592f` before the tag, along with Runtime CI, Boot Smoke
+(PostgreSQL) and the auth CVE audit, each on attempt 1.
+
+**Publish (run `44475996053`):**
+- The owner approved the `production` environment gate.
+- The wheel read back from PyPI (sha256 `33702734d4c8a8d3…`) carries `Version: 2.39.0`, `AINDY/core/wait_on_timeout.py`,
+  and `await_event_for` and `prior_state` in `nodus_worker.py`.
+- Boot Smoke on the published wheel installed on **attempt 2** (PyPI's simple index lagged the JSON API; the retry
+  exists for this).
+- The GitHub release is non-draft (13:17Z on 2026-11-19).
+- `publish.yml` is unchanged from `v2.38.0`.
 
 ---
 
