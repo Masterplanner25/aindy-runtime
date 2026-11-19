@@ -1,4 +1,4 @@
-### Added — `prior_state(key)`: a resumed Nodus script reads what it saved before it waited (FR-55 (b), DEC-135)
+### Added — `prior_state(key)`: a resumed Nodus script reads what it saved before it waited (FR-55 (b), DEC-135) (#986)
 
 - **New guest host function `prior_state(key)`.** A script that waits runs again from the top when it is resumed,
   with an empty namespace. Before, what it had saved with `set_state` was recorded on the run but unreachable from
