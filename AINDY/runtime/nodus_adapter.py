@@ -885,6 +885,36 @@ NodusAgentAdapter.execute_with_flow.__aindy_compat_wrapper__ = True
 # Node name: "nodus.execute"
 # Flow definition: NODUS_SCRIPT_FLOW  (importable from nodus_runtime_adapter)
 
+# FR-55 (b), DEC-135 — the run-state key that carries what a node's earlier runs saved with
+# set_state, for the guest's `prior_state(key)`. Shape: {"node": <node name>, "saved": {...}}.
+# Scoped to the node so a second nodus node in the same flow never reads the first one's.
+PRIOR_STATE_KEY = "nodus_prior_state"
+
+
+def _carryable_state(output_state: dict | None) -> dict:
+    """What a parked run saved that its next run may read back through `prior_state`.
+
+    The runtime's own wire keys stay out: `nodus_*` (the wait keys, `nodus_received_events`)
+    and `__*` (compiled-plan internals). Handing a wait key back would make the resumed run
+    look as if it had already asked to wait again.
+    """
+    if not isinstance(output_state, dict):
+        return {}
+    return {
+        str(k): v
+        for k, v in output_state.items()
+        if not str(k).startswith("nodus_") and not str(k).startswith("__")
+    }
+
+
+def _prior_state_for(state: dict, node_name: str) -> dict:
+    carried = (state or {}).get(PRIOR_STATE_KEY)
+    if not isinstance(carried, dict) or str(carried.get("node") or "") != node_name:
+        return {}
+    saved = carried.get("saved")
+    return dict(saved) if isinstance(saved, dict) else {}
+
+
 def _dur_effect_scope(context: dict, state: dict) -> str:
     """DUR-1/DUR-2b — the deferred-memory dedup discriminator for a nodus execution.
 
@@ -1083,6 +1113,11 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         _agent_run_id = str(run_id or "")
         _continuation = False
 
+    # FR-55 (b), DEC-135 — what this node saved before it last parked. Merged forward on
+    # every park below, so a key saved in any earlier run stays readable until the node ends.
+    _node_name = str(context.get("node_name") or "")
+    _prior_saved = _prior_state_for(state, _node_name)
+
     # ── Execute via NodusRuntimeAdapter ──────────────────────────────────────
     nodus_result = execute_nodus_runtime(
         db=db,
@@ -1104,6 +1139,7 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
         simulate=_simulate,
         virtual_tools=_virtual_tools,
         continuation=_continuation,
+        prior_state=_prior_saved,
         event_sink=_build_event_sink(
             db=db,
             user_id=user_id,
@@ -1162,10 +1198,14 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
             #   in flow_history) — `nodus_wait_event_type` is what the resume bridge above keys
             #   on. `nodus_output_state` rides along so what the script set before it parked is
             #   readable on the run while it waits; it is NOT seeded back into the re-run's
-            #   namespace (only `nodus_received_events` is) — whether a re-run starts fresh or
-            #   with its prior state is `WAIT-TYPED-CONTRACT-1`'s decision.
+            #   namespace (only `nodus_received_events` is; DEC-012). The re-run reads it back
+            #   through `prior_state(key)` instead, from PRIOR_STATE_KEY (DEC-135).
             "output_patch": {
                 "nodus_status": "waiting",
+                PRIOR_STATE_KEY: {
+                    "node": _node_name,
+                    "saved": {**_prior_saved, **_carryable_state(nodus_result.output_state)},
+                },
                 "nodus_wait_event_type": wait_for,
                 "nodus_output_state": nodus_result.output_state,
                 "nodus_events": nodus_result.emitted_events,
@@ -1221,6 +1261,8 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
     # runner's live dict, so the pop persists; without it a payload-less wake followed by a
     # completing re-run would leave a stale pending type for a later nodus node to mis-bridge.
     state.pop("nodus_wait_event_type", None)
+    # FR-55 (b) — the same for what it saved: a finished node's prior state is not the next one's.
+    state.pop(PRIOR_STATE_KEY, None)
 
     if success:
         logger.info(

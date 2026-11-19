@@ -308,6 +308,7 @@ author guards them. What the script set before it parked stays readable on the w
 
 **Related Docs**
 - `NODUS_DEVELOPER_GUIDE.md` §4; `TECH_DEBT.md` `NODUS-RESUME-BRIDGE-1` (the question's origin)
+- Narrowed 2026-11-18 by DEC-135: a resumed script reads its saved state through `prior_state(key)`; the namespace stays as decided here.
 
 ---
 
@@ -2448,3 +2449,35 @@ The rewrite is done at the engine sites, not in the settings validator, so `sett
 SQLAlchemy 2.1 changed the default PostgreSQL driver from psycopg2 to psycopg 3, which this package does not install, so the bump failed every PG job. Every URL in operators' settings and the docs is the bare form. SQLAlchemy's 2.1 notes say psycopg2 "remains fully supported" when named in the URL, so naming it takes 2.1 with no change to the driver's behaviour under the runtime.
 
 **Declined:** (B) moving to psycopg 3 now. It is the actively developed driver, but it changes the layer under every query: pgvector's integration, how Postgres arrays come back (`auth_service.py` relies on psycopg2's), the advisory locks behind exactly-once execution, and error wrapping. That needs real-PG re-testing and the soak, and nothing forces it. Also declined: asking operators to change their `DATABASE_URL`, which would break every existing deployment on upgrade, and rewriting through `make_url`, whose `str()` escaping also changed in 2.1.
+
+---
+
+### DEC-135
+**Status:** `accepted` (2026-11-18 — FR-55 (b); decided by the owner: "separate accessor", over keeping DEC-012 as is and over reversing it)
+
+**Decision — A resumed Nodus guest reads what its node saved before it parked through a new read-only host function, `prior_state(key)`. `get_state` and the namespace are unchanged: a re-run still starts empty plus `nodus_received_events` (DEC-012 stands for that). Every park carries the node's saved keys forward, merged over what earlier parks saved, under the run-state key `nodus_prior_state` (`{"node": <node name>, "saved": {...}}`). The runtime's own wire keys (`nodus_*`, `__*`) are never carried. The key is scoped to its node and dropped when the node finishes.**
+`prior_state` returns nil on a first run and for a key never saved, and returns a copy: changing it changes nothing, and it reaches the run's output only if the script saves it again.
+
+**Why**
+DEC-012 declined seeding saved state back because it "would re-apply phase 1's effects on every re-run". Read against the code, that is backwards: the effects re-run anyway, because the whole script re-runs from the top; saved state is what lets a script skip them. FR-55's loop (ask a batch, sleep, repeat) showed the cost: without it a resumed loop starts again at the first batch, so every wake repeats every earlier batch's external calls. What DEC-012 protects is real but different: changing what `get_state` returns would break existing scripts (`set_state("n", get_state("n") + 1)` counts twice; any "is this key nil yet?" check flips), would hand the wait keys back (`nodus_wait_requested`), and would reach compiled agent plans' `__step_N_result` keys. A separate accessor gives scripts their progress without touching any of that, so DEC-012 is narrowed, not reversed.
+
+**Declined:** keeping DEC-012 unqualified (loops rebuild progress from the app's own tables, or encode it in distinct wait names: workable, but it is the state machine a workflow port exists to remove). Reversing DEC-012 by seeding `get_state` (the breakage above). Carrying only the last park's keys instead of merging (a key saved once and not re-saved would vanish two parks later, a silent loss that is hard to see in a script).
+
+**Related Docs**
+- `NODUS_DEVELOPER_GUIDE.md` §4; `TECH_DEBT.md` `FR-55`; DEC-012, DEC-017
+
+---
+
+### DEC-136
+**Status:** `accepted` (2026-11-18 — FR-55 (a) and (c); decided by the owner with DEC-135: "decide + build (a)+(b)")
+
+**Decision — A guest wait can end at its own deadline and resume instead of failing. A new host function `await_event_for(event_type, schema, seconds)` parks like `await_event` and returns either the delivered payload or, once `seconds` pass, `{"timed_out": true, "deadline": <ISO-8601>}` on the resumed run. The deadline is the run's existing `wait_deadline` column, set from the wait itself; the policy (`on_timeout: "resume"`) rides the run's state. A dedicated scheduler job (leader-only, every 15 s) delivers the marker through the same per-run resume path a `POST …/resume` uses, without the wait's resume-schema check (the marker is runtime-authored). `await_event` keeps today's behaviour exactly: the flow-level deadline, and failure at it. FR-55 (c), a per-workflow timeout, is answered by the per-wait deadline and gets no separate knob.**
+Bounds: 1 second to 30 days; precision is the job's interval. The two scans that fail a waiting run past a deadline skip a run whose policy is `resume`, and the stuck-run scan stops dead-lettering a waiting run whose own `wait_deadline` is still in the future (today it applies the global 30 minutes to every wait, whatever the run's deadline says).
+
+**Why**
+nodus-lang's own runner already has these semantics (`on_timeout: "resume"`), and FR-55's loop needs exactly them: the sleep is a wait that nothing will ever wake. Building on `wait_deadline` and the per-run resume path keeps one source of truth (the run row, which survives restarts and needs no new rehydration) and one wake mechanism, which already scopes the wake to the run across instances. A new function rather than a third argument because nodus fixes `await_event`'s arity at 2. The marker is a payload, not an exception, because nodus swallows host exceptions (DEC-017's finding).
+
+**Declined:** a `sleep_until(ts)` builtin (it is `await_event_for` with a name nothing emits; one primitive is enough). A per-workflow `wait_timeout_minutes` on `register_nodus_workflow` for (c) (a per-wait deadline is finer and the script decides what a timeout means). Folding the resume into the 5-minute `expire_timed_out_waits` job (a 1-minute sleep would wait up to 6). Running the marker through the resume schema (a typed wait would refuse its own deadline).
+
+**Related Docs**
+- `NODUS_DEVELOPER_GUIDE.md` §4; `TECH_DEBT.md` `FR-55`; DEC-017, DEC-135

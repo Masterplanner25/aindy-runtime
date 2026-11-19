@@ -282,6 +282,25 @@ on every re-run; what the script set before it parked is readable on the waiting
 (`if (get_state("nodus_received_events") == nil)`) unless they are mediated and deduplicated
 (DUR-1/2) — `await_event` makes the wait linear, not the effects idempotent.
 
+**Reading back what you saved: `prior_state(key)`** (DEC-135, 2.39.0). The namespace stays empty, but
+a resumed script can ask for what this node saved with `set_state` before it parked, in any earlier
+run: `prior_state(key)` returns it, or `nil` on a first run and for a key never saved. Keys saved in
+earlier parks are kept until the node finishes, even if a later run does not save them again; the
+runtime's own keys (`nodus_*`, `__*`) are never handed back. The value is a copy, so to carry
+progress forward, save it again. This is how a loop picks up where it left off instead of
+repeating every earlier step on every wake:
+
+```nd
+let done = prior_state("batches_done")
+if (done == nil) { done = 0i }          // `0i` is an integer; a bare `0` is a float in nodus
+// ... do batch number `done`, once ...
+set_state("batches_done", done + 1i)
+let next = await_event("batch." + str(done), nil)   // a distinct name per iteration
+```
+
+Use a **distinct event name per iteration**: `await_event` returns at once for a name already in
+`nodus_received_events`, so a loop that waits on one name parks only the first time.
+
 ### Declaring what may resume you (`nodus_wait_resume_schema`)
 
 A resume payload is **checked, not trusted** (`WAIT-TYPED-CONTRACT-1`, 2026-09-15). Set a third

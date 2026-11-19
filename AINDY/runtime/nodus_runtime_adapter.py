@@ -128,6 +128,10 @@ class NodusExecutionContext:
     # RECOVERY-GRANULARITY-1 — this execution re-drives a crashed run (set by
     # `continue_crashed_agent_runs`); the worker replays recorded `success` steps.
     continuation: bool = False
+    # FR-55 (b), DEC-135 — what this node's earlier runs saved with set_state before they
+    # parked. Read by the guest through `prior_state(key)` only; never seeded into the
+    # namespace `get_state` reads (DEC-012 stands for that).
+    prior_state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -241,6 +245,8 @@ class NodusRuntimeAdapter:
                     "effect_scope": str(context.effect_scope or ""),
                     # RECOVERY-GRANULARITY-1 — a continued run replays recorded steps.
                     "continuation": bool(context.continuation),
+                    # FR-55 (b), DEC-135 — read by the guest's `prior_state(key)`.
+                    "prior_state": dict(getattr(context, "prior_state", None) or {}),
                     # SYSMAX-4 — the unit the worker's dispatches are charged to, and its usage so far.
                     "quota": _quota_handoff(context),
                 },
