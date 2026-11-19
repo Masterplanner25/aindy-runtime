@@ -1194,6 +1194,9 @@ def nodus_execute_node(state: dict, context: dict) -> dict:
             "status": "WAIT",
             "wait_for": wait_for,
             "resume_schema": resume_schema,
+            # FR-55 (a), DEC-136 — set only by `await_event_for`; the runner turns it into this
+            # wait's own deadline and a resume (not a failure) when it passes.
+            "wait_timeout_seconds": raw.get("wait_timeout_seconds"),
             # ★ This patch is MERGED into the run's state by the flow runner (not only recorded
             #   in flow_history) — `nodus_wait_event_type` is what the resume bridge above keys
             #   on. `nodus_output_state` rides along so what the script set before it parked is

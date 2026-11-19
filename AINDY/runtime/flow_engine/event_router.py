@@ -8,8 +8,14 @@ def route_event(
     db: Session,
     user_id: str = None,
     run_id: str | None = None,
+    *,
+    check_schema: bool = True,
 ) -> list[dict]:
     """Deliver *payload* to waiting run(s) on *event_type* and wake them.
+
+    ``check_schema=False`` is for a runtime-authored payload only: the timeout marker a
+    deadline-resumed wait receives (FR-55 (a), DEC-136, `core/wait_on_timeout.py`). A typed wait
+    would otherwise refuse its own deadline. No route passes it.
 
     ★ **With ``run_id`` this is a PER-RUN resume: the payload is injected into that run only and
     the wake is scoped to it end to end** (local scan, Redis broadcast, cross-instance fallback).
@@ -88,6 +94,9 @@ def route_event(
     # a broadcast skips exactly the runs whose declaration refuses this payload.
     admitted: list = []
     for run in query_runs:
+        if not check_schema:
+            admitted.append(run)
+            continue
         try:
             outcome = check_resume_payload(
                 run.state, payload, run_id=str(run.id), event_type=event_type

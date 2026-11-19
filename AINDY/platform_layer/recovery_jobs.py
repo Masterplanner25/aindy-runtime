@@ -111,9 +111,14 @@ async def expire_timed_out_waits(db: AsyncSession) -> int:
     if not expired_runs:
         return 0
 
+    from AINDY.core.wait_on_timeout import resumes_at_deadline
+
     expired_count = 0
     try:
         for flow_run in expired_runs:
+            # FR-55 (a), DEC-136 — this wait resumes at its deadline; `resume_due_deadline_waits` owns it.
+            if resumes_at_deadline(flow_run):
+                continue
             deadline = flow_run.wait_deadline
             flow_run.status = FlowRunStatus.FAILED.value
             flow_run.waiting_for = None
@@ -140,6 +145,8 @@ async def expire_timed_out_wait_flows(db: AsyncSession) -> int:
     Rows with ``max_wait_seconds IS NULL`` preserve legacy behavior and are
     ignored by this scan.
     """
+    from AINDY.core.wait_on_timeout import resumes_at_deadline
+
     now = _run_now()
     waiting_rows = await _select_flow_runs(
         db,
@@ -161,6 +168,9 @@ async def expire_timed_out_wait_flows(db: AsyncSession) -> int:
                 select(FlowRun).where(FlowRun.id == waiting_row.run_id),
             )
             flow_run = flow_run[0] if flow_run else None
+            # FR-55 (a), DEC-136 — resumed at its deadline, not failed; its backup row stays until it wakes.
+            if flow_run is not None and resumes_at_deadline(flow_run):
+                continue
 
             _emit_wait_timeout_system_event(
                 db=db,
@@ -249,6 +259,23 @@ def run_expire_timed_out_waits_job() -> int:
         return expired
     except Exception as exc:
         logger.warning("WAIT timeout recovery job failed (non-fatal): %s", exc)
+        return 0
+    finally:
+        db.close()
+
+
+def run_resume_deadline_waits_job() -> int:
+    """Scheduler wrapper for FR-55 (a), DEC-136: resume waits whose own deadline passed."""
+    db = SessionLocal()
+    try:
+        from AINDY.core.wait_on_timeout import resume_due_deadline_waits
+
+        handled = resume_due_deadline_waits(db)
+        if handled:
+            logger.info("Resumed %d wait(s) at their deadline", handled)
+        return handled
+    except Exception as exc:
+        logger.warning("Deadline-resume job failed (non-fatal): %s", exc)
         return 0
     finally:
         db.close()

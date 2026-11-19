@@ -909,9 +909,25 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         The keys remain the wire contract underneath — a script may still set them directly —
         so nothing about the runner, the adapter or the resume route changes.
         """
+        return _park_or_return(event_type, schema, None, "await_event")
+
+    def _await_event_for(event_type: Any, schema: Any, seconds: Any) -> Any:
+        """FR-55 (a), DEC-136 — `await_event` that resumes at its own deadline instead of failing.
+
+        Parks exactly like `await_event`. On the resumed run the same call returns the delivered
+        payload, or, if `seconds` passed first, ``{"timed_out": true, "deadline": <ISO-8601>}``.
+        With nothing that will ever emit the event, it is a durable sleep. `seconds` is a number
+        in [1, 30 days], rounded up; the deadline is checked every 15 s, so that is its precision.
+        Use a distinct event name per iteration of a loop: a name already delivered returns at once.
+        """
+        from AINDY.core.wait_on_timeout import validate_wait_seconds
+
+        return _park_or_return(event_type, schema, validate_wait_seconds(seconds), "await_event_for")
+
+    def _park_or_return(event_type: Any, schema: Any, seconds: int | None, fn: str) -> Any:
         name = str(event_type or "").strip()
         if not name:
-            raise ValueError("await_event() needs a non-empty event type")
+            raise ValueError(f"{fn}() needs a non-empty event type")
         received = state.get("nodus_received_events") or {}
         if isinstance(received, dict) and name in received:
             payload = received[name]
@@ -920,12 +936,15 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         state["nodus_wait_event_type"] = name
         if schema is not None:
             state["nodus_wait_resume_schema"] = _json_safe(schema)
+        if seconds is not None:
+            state["nodus_wait_timeout_seconds"] = int(seconds)
         raise _AwaitHalt(name)
 
     runtime.register_function("set_state", _set_state, arity=2)
     runtime.register_function("get_state", _get_state, arity=1)
     runtime.register_function("prior_state", _prior_state, arity=1)
     runtime.register_function("await_event", _await_event, arity=2)
+    runtime.register_function("await_event_for", _await_event_for, arity=3)
     runtime.register_function("sys", _sys_dispatch, arity=2)
     # arity (2, 3): `call_tool(name, args)` for scripts, `call_tool(name, args, step_index)` for
     # compiled plans (RECOVERY-GRANULARITY-1).
@@ -1075,6 +1094,9 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                     # it. Forwarded verbatim; the adapter turns it into the node's
                     # `resume_schema` and the runner records it on the run.
                     "resume_schema": _json_safe(state.get("nodus_wait_resume_schema")),
+                    # FR-55 (a), DEC-136 — set only by `await_event_for`: this wait resumes,
+                    # rather than fails, when these seconds pass.
+                    "wait_timeout_seconds": state.get("nodus_wait_timeout_seconds"),
                 }
             else:
                 result_payload = {

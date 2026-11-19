@@ -381,6 +381,17 @@ def _register_system_jobs(scheduler: BackgroundScheduler) -> None:
     )
 
     scheduler.add_job(
+        _resume_deadline_waits,
+        trigger=IntervalTrigger(seconds=15),
+        id="resume_deadline_waits",
+        executor="recovery",  # SYSMAX-5
+        name="Resume waits at their own deadline (FR-55 (a))",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
+    scheduler.add_job(
         _expire_timed_out_wait_flows,
         trigger=IntervalTrigger(seconds=60),
         id="expire_timed_out_wait_flows",
@@ -787,6 +798,15 @@ def _expire_timed_out_waits() -> None:
         run_expire_timed_out_waits_job()
     except Exception as exc:
         logger.warning("Timed-out WAIT recovery dispatch failed: %s", exc)
+
+
+def _resume_deadline_waits() -> None:
+    try:
+        from AINDY.platform_layer.recovery_jobs import run_resume_deadline_waits_job
+
+        run_resume_deadline_waits_job()
+    except Exception as exc:
+        logger.warning("Deadline-resume dispatch failed: %s", exc)
 
 
 def _expire_timed_out_wait_flows() -> None:
