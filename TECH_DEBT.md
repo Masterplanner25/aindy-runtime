@@ -9433,7 +9433,10 @@ Execution units of the stranded rows are walked to `completed` by the same comma
 
 ## FR-55 — a guest Nodus wait can only end on an event or in failure 🟢 P3 (app-filed 2026-10-22, runtime 2.28.1)
 
-**Status: OPEN — filed here 2026-11-18 (#982); until then it was only mentioned under FR-56, never triaged.**
+**Status: OPEN — (b) BUILT 2026-11-18 (DEC-135: `prior_state(key)`, DEC-012 narrowed, not reversed); (a) and (c) DECIDED
+(DEC-136: `await_event_for(type, schema, seconds)` resumes at its deadline; (c) answered by the per-wait deadline),
+build next. Closes when (a) ships and the app reports a ported loop.** Filed here 2026-11-18 (#983); until then it was
+only mentioned under FR-56, never triaged.
 No defect: nothing that runs today needs it. It blocks the app porting tick-driven jobs (its
 Resolution Check: ask 6 of ~54 questions a minute, from a 1-minute APScheduler tick) to `.nd`, where
 the job would be "ask 6, sleep a minute, repeat". Filed by the app (their register, `## FR-55`).

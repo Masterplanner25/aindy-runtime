@@ -1495,6 +1495,7 @@ def execute_nodus_runtime(
     virtual_tools: dict[str, Any] | None = None,
     effect_scope: str = "",
     continuation: bool = False,
+    prior_state: dict[str, Any] | None = None,
 ):
     """
     Canonical Nodus runtime entrypoint used by both route helpers and flow nodes.
@@ -1534,6 +1535,7 @@ def execute_nodus_runtime(
         virtual_tools=virtual_tools or {},
         effect_scope=str(effect_scope or ""),
         continuation=bool(continuation),
+        prior_state=dict(prior_state or {}),
     )
     adapter = adapter_cls(db=db)
     if script is not None:

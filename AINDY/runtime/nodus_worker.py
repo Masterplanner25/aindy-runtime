@@ -719,6 +719,20 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
     def _get_state(key: str) -> Any:
         return state.get(key)
 
+    # FR-55 (b), DEC-135 — what this node's EARLIER runs saved with set_state before they
+    # parked, read-only and separate from `state`. A resumed script runs from the top with an
+    # empty namespace (DEC-012 stands); this is how it finds where it got to, e.g.
+    # `let done = prior_state("batches_done")`. nil on a first run and for a key never saved.
+    # Returned as a copy: mutating it changes nothing, and it never reaches `output_state`
+    # unless the script set_state()s it again.
+    _prior_state_saved = ctx.get("prior_state")
+    if not isinstance(_prior_state_saved, dict):
+        _prior_state_saved = {}
+
+    def _prior_state(key: str) -> Any:
+        value = _prior_state_saved.get(key)
+        return _json_safe(value) if value is not None else None
+
     def _sys_dispatch(name: str, payload_arg: Any) -> Any:
         """Dispatch a Nodus sys() call through the AINDY syscall layer.
 
@@ -910,6 +924,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
 
     runtime.register_function("set_state", _set_state, arity=2)
     runtime.register_function("get_state", _get_state, arity=1)
+    runtime.register_function("prior_state", _prior_state, arity=1)
     runtime.register_function("await_event", _await_event, arity=2)
     runtime.register_function("sys", _sys_dispatch, arity=2)
     # arity (2, 3): `call_tool(name, args)` for scripts, `call_tool(name, args, step_index)` for
