@@ -4,6 +4,48 @@
 
 _Nothing yet._
 
+## 2.39.0 — 2026-11-19
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.39.0.md`.
+No schema step (Alembic `0022`, contract `2026-11-09`, both unchanged). No dependency pin moved. No ui-kit or aindy-sdk
+release. Nothing to do on upgrade.
+
+- **FR-55: two new Nodus guest functions.** `prior_state(key)` reads what a resumed script saved before it waited
+  (DEC-135; `get_state` unchanged). `await_event_for(event_type, schema, seconds)` is a wait that resumes at its own
+  deadline with `{"timed_out": true, …}` instead of failing (DEC-136). Together they let a workflow loop and sleep.
+- **One behaviour change for existing waits:** the stuck-run watchdog no longer dead-letters a waiting run whose own
+  `wait_deadline` is still ahead (it applied the global `FLOW_WAIT_TIMEOUT_MINUTES` to every wait). Only a flow with
+  `wait_timeout_minutes` above the global value is affected, and it now gets the wait it declared.
+
+### Added — `prior_state(key)`: a resumed Nodus script reads what it saved before it waited (FR-55 (b), DEC-135) (#986)
+
+- **New guest host function `prior_state(key)`.** A script that waits runs again from the top when it is resumed,
+  with an empty namespace. Before, what it had saved with `set_state` was recorded on the run but unreachable from
+  the script, so a loop that waits between batches could not tell where it had got to: every wake started again at
+  the first batch and repeated its external calls. `prior_state` returns what this node saved in any earlier run,
+  or `nil`.
+- **`get_state` is unchanged** (DEC-012 is narrowed, not reversed): seeding saved values into it would double-count
+  `set_state("n", get_state("n") + 1)`, flip "is this key nil yet?" checks in existing scripts, and hand the wait
+  keys back. The runtime's own keys (`nodus_*`, `__*`) are never returned.
+- Saved keys carry across parks until the node finishes, under the run-state key `nodus_prior_state`, scoped to the
+  node. Nothing changes for a script that doesn't call it.
+
+### Added — `await_event_for`: a Nodus wait that resumes at its own deadline (FR-55 (a)/(c), DEC-136) (#987)
+
+- **New guest host function `await_event_for(event_type, schema, seconds)`.** A guest wait could end only on its
+  event or in failure: the deadline failed the run with `WAIT_TIMEOUT`, so a workflow could not sleep between
+  batches. It parks like `await_event` with its own deadline (1 second to 30 days), and when that passes the run is
+  resumed and the call returns `{"timed_out": true, "deadline": …}`. A new leader-only scheduler job,
+  `resume_deadline_waits` (every 15 s, the recovery lane), delivers it through the per-run resume path.
+- **A per-wait deadline instead of the global 30 minutes** answers the per-workflow timeout ask without raising it
+  for everyone. `await_event` is unchanged.
+
+### Fixed — the stuck-run watchdog ignored a waiting run's own deadline (#987)
+
+- It dead-lettered every run waiting longer than `FLOW_WAIT_TIMEOUT_MINUTES`, even one whose `wait_deadline` (from a
+  flow's `wait_timeout_minutes`) was still ahead. It now leaves those, and the runs `await_event_for` resumes, alone.
+
+
 ## 2.38.0 — 2026-11-18
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.38.0.md`.
