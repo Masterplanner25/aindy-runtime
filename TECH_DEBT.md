@@ -9436,7 +9436,7 @@ Execution units of the stranded rows are walked to `completed` by the same comma
 **Status: BUILT 2026-11-18, all three asks — (b) `prior_state(key)` (#986, DEC-135: DEC-012 narrowed, not reversed);
 (a) `await_event_for(type, schema, seconds)` resumes at its own deadline with `{"timed_out": true, …}` (#987, DEC-136; a
 15 s leader job, the three fail-scans skip such runs, and the stuck-run scan now respects a run's own deadline); (c)
-answered by the per-wait deadline. Closes when a release carries both and the app reports a ported loop.** Filed here 2026-11-18 (#983); until then it was
+answered by the per-wait deadline. Released in 2.39.0. Closes when the app reports a ported loop.** Filed here 2026-11-18 (#983); until then it was
 only mentioned under FR-56, never triaged.
 No defect: nothing that runs today needs it. It blocks the app porting tick-driven jobs (its
 Resolution Check: ask 6 of ~54 questions a minute, from a 1-minute APScheduler tick) to `.nd`, where
