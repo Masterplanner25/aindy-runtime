@@ -301,6 +301,32 @@ let next = await_event("batch." + str(done), nil)   // a distinct name per itera
 Use a **distinct event name per iteration**: `await_event` returns at once for a name already in
 `nodus_received_events`, so a loop that waits on one name parks only the first time.
 
+**A wait with its own deadline: `await_event_for(event_type, schema, seconds)`** (DEC-136, 2.39.0).
+`await_event` fails the run when the flow's wait deadline passes (`WAIT_TIMEOUT`, 30 minutes by
+default). `await_event_for` parks the same way but sets **this wait's** deadline, and when it passes
+the run is resumed, not failed: the same call returns `{"timed_out": true, "deadline": "<ISO-8601>"}`
+instead of a payload. If the event arrives first you get its payload, as with `await_event`. With a
+name nothing will ever emit, it is a durable sleep that survives restarts:
+
+```nd
+let done = prior_state("batches_done")
+if (done == nil) { done = 0i }
+// ... ask batch `done` ...
+set_state("batches_done", done + 1i)
+if (done + 1i < 9i) {
+    let r = await_event_for("resolution.batch." + str(done), nil, 60i)   // sleep a minute
+}
+```
+
+- `seconds` is a number from 1 to 30 days (2,592,000), rounded up; outside that the script fails.
+- **Precision is about 15 seconds**: a scheduler job checks for due deadlines on that interval.
+- A typed wait (`schema` not `nil`) still accepts its own timeout marker; only callers' payloads are
+  checked against the schema.
+- If the event and the deadline land in the same window, either may be the one you get: check
+  `r["timed_out"]`.
+- Nothing changes for `await_event`. The per-wait deadline also answers a longer wait than the flow's
+  default, without raising it for every workflow.
+
 ### Declaring what may resume you (`nodus_wait_resume_schema`)
 
 A resume payload is **checked, not trusted** (`WAIT-TYPED-CONTRACT-1`, 2026-09-15). Set a third

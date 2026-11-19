@@ -26,6 +26,7 @@ RECOVERY_JOBS = {
     "queue_backend_reconnect",
     "expire_timed_out_waits",
     "expire_timed_out_wait_flows",
+    "resume_deadline_waits",
     "recover_stuck_flow_runs",
     "recover_orphaned_approved_runs",
 }

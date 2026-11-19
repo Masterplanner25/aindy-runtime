@@ -473,10 +473,35 @@ def _handle_node_status(
         else:
             # This wait declared nothing; a record from an earlier wait must not type it.
             state.pop(PENDING_REQUEST_KEY, None)
+        # FR-55 (a), DEC-136 — a wait that declared its own seconds (`await_event_for`) gets its
+        # own deadline and resumes at it; every other wait keeps the flow-level deadline and
+        # fails at it. The record names the event, so it never applies to a later wait.
+        from AINDY.core.wait_on_timeout import (
+            WAIT_ON_TIMEOUT_KEY,
+            build_record,
+            deadline_after,
+            validate_wait_seconds,
+        )
+
+        _own_seconds = result.get("wait_timeout_seconds")
+        if _own_seconds is not None:
+            try:
+                _own_seconds = validate_wait_seconds(_own_seconds)
+            except ValueError as exc:
+                return self._fail_execution(
+                    str(exc),
+                    failed_node=current_node,
+                    parent_event_id=str(node_started_event_id) if node_started_event_id else None,
+                )
         run.status = "waiting"
         run.waiting_for = wait_for
-        _timeout = _get_flow_wait_timeout(run.flow_name)
-        run.wait_deadline = _default_wait_deadline(_timeout)
+        if _own_seconds is not None:
+            run.wait_deadline = deadline_after(_own_seconds)
+            state[WAIT_ON_TIMEOUT_KEY] = build_record(wait_for, _own_seconds)
+        else:
+            _timeout = _get_flow_wait_timeout(run.flow_name)
+            run.wait_deadline = _default_wait_deadline(_timeout)
+            state.pop(WAIT_ON_TIMEOUT_KEY, None)
         run.state = _json_safe(state)
         run.current_node = current_node
         self.db.commit()

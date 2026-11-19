@@ -51,6 +51,15 @@ def _recovery_error_detail(*, detected_at: datetime) -> dict[str, str]:
     }
 
 
+def _deadline_ahead(flow_run, now: datetime) -> bool:
+    deadline = getattr(flow_run, "wait_deadline", None)
+    if deadline is None:
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return deadline > now
+
+
 def _default_threshold_minutes() -> int:
     from AINDY.config import settings
 
@@ -335,14 +344,23 @@ def scan_and_recover_stuck_runs(
         )
         waiting_runs = []
         if include_wait_timeouts:
-            waiting_runs = (
-                db.query(FlowRun)
-                .filter(
-                    FlowRun.status == FlowRunStatus.WAITING.value,
-                    FlowRun.updated_at < timeout_threshold,
+            from AINDY.core.wait_on_timeout import resumes_at_deadline
+
+            waiting_runs = [
+                run
+                for run in (
+                    db.query(FlowRun)
+                    .filter(
+                        FlowRun.status == FlowRunStatus.WAITING.value,
+                        FlowRun.updated_at < timeout_threshold,
+                    )
+                    .all()
                 )
-                .all()
-            )
+                # FR-55 (a), DEC-136 — a run's own deadline wins over the global one: a wait
+                # whose `wait_deadline` is still ahead is not timed out, and one that resumes
+                # at its deadline is the deadline-resume job's, never the dead-letter queue's.
+                if not resumes_at_deadline(run) and not _deadline_ahead(run, now)
+            ]
 
         if not stuck_runs and not waiting_runs:
             logger.info(
