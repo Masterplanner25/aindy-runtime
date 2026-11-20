@@ -4,6 +4,42 @@
 
 _Nothing yet._
 
+## 2.40.0 — 2026-11-20
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.40.0.md`.
+No schema step (Alembic `0022`, contract `2026-11-09`, both unchanged). No ui-kit or aindy-sdk release.
+
+- **openai 2.54.0 → 3.57.0, and four new pins** (`httpx2`, `httpcore2`, `truststore`; `httpx` stays). A constraints
+  file that pins `openai` must move with it.
+- **Custom CAs only:** OpenAI, DeepSeek and Azure OpenAI calls now verify TLS against the OS trust store, not
+  `certifi` (DEC-138). A deployment behind a TLS-intercepting proxy or a private CA needs that CA in the OS store, or
+  `SSL_CERT_FILE` / `SSL_CERT_DIR`. A stock deployment needs nothing.
+- **Trace graphs scoped to one user** keep that user's edges to their own events in other traces (DEC-137).
+
+### Changed — openai 3.57.0: the SDK's HTTP transport is httpx2, and its TLS trusts the OS store (#991)
+
+- **Operator note (custom CAs):** OpenAI, DeepSeek and Azure OpenAI calls now verify TLS against the operating
+  system's trust store (in the published image, Debian's `ca-certificates`), not the `certifi` bundle. A deployment
+  that reaches these providers through a TLS-intercepting proxy or a private CA must have that CA in the OS store, or
+  set `SSL_CERT_FILE` / `SSL_CERT_DIR`. A stock deployment needs nothing. The `certifi` floor (DEC-102) no longer
+  applies to these calls; they pick up CA updates when the image is rebuilt (DEC-138).
+- openai 2.54.0 → 3.57.0. 3.0's only breaking change moves the SDK's transport from `httpx` to `httpx2`; new pins
+  `httpx2==2.16.2`, `httpcore2==2.16.2`, `truststore==0.10.5`. `httpx` stays for the other callers.
+- The OpenAI and DeepSeek contract tests were mocked with `respx`, which patches only `httpx`: on openai 3 they reached
+  the real API. They now use an `httpx2.MockTransport` on the client the adapter builds, and fail on any request they
+  did not route.
+
+### Changed — a trace graph scoped to one user keeps that user's edges to their own events in other traces (#990)
+
+- Filtered to one user (`build_trace_graph(..., user_id=…)`, FR-60), the trace graph kept only edges whose both ends
+  were nodes. Queued work runs under its own trace, so every `async_child` edge to it crosses traces: filtered to
+  its owner, one app trace lost 290 such edges, all to the owner's own events. The unfiltered graph keeps them, so the
+  two views also disagreed on which events are terminal.
+- Such an edge is now kept, pointing to the event in the other trace, which is not added as a node (DEC-137).
+  An edge to another user's event, or to an event with no user, is still dropped. The filtered depth counts only edges
+  between two nodes.
+
+
 ## 2.39.0 — 2026-11-19
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.39.0.md`.
