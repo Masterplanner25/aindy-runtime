@@ -5176,7 +5176,7 @@ runtime_callback_host.py` (the sibling 10s callback subprocess).
 
 ## DEP-UPGRADE-DEFERRED-1 — Deferred deliberate dependency upgrades (OTel group, UI major unit)
 
-**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); `openai` 3.x added 2026-10-27; `SQLAlchemy` 2.1 added 2026-11-16, resolved 2026-11-17 (DEC-134, #981) and released in 2.38.0; the UI major unit
+**Status:** Open — **OTel half resolved 2026-08-01** (bumped to 1.44.0); `openai` 3.x added 2026-10-27, resolved 2026-11-19 (DEC-138, #991); `SQLAlchemy` 2.1 added 2026-11-16, resolved 2026-11-17 (DEC-134, #981) and released in 2.38.0; the UI major unit
 remains, now blocked on `LOCKFILE-PLATFORM-1`. Dependency maintenance; each is a deliberate
 upgrade, not a drop-in bump. Surfaced during the 2026-07-18 dependabot triage.
 
@@ -5366,6 +5366,19 @@ which reads exactly like a genuine resolution failure.
   must still assert the request wire shape; (3) resolve the `_RETRYABLE` fallback; (4) accept a
   second HTTP stack, since `httpx` stays (FastAPI `TestClient`, other callers). No security alert
   drives this; the ignore covers 3.x only, so 2.x bumps keep arriving.
+
+  **★ RESOLVED 2026-11-19 (DEC-138, #991): `openai==3.57.0`.** (1) The release notes: 3.0.0's ONLY
+  breaking change is the httpx2 transport; 3.1–3.57 are features and fixes. `respx` (0.23.1, April)
+  still patches `httpx` only. (2) The contract tests use `tests/fixtures/sdk_transport.py`: it wraps
+  the adapter module's `OpenAI` so the client the ADAPTER builds gets an `httpx2.MockTransport`
+  (keeping `base_url`, which the DeepSeek test pins); an unrouted request is recorded, answered
+  599 and fails the test at teardown, so a contract test can no longer reach the network.
+  Mutation: drop DeepSeek's `base_url` → fails; do not inject the transport → all three fail.
+  (3) `_RETRYABLE` now names `httpx2` types. (4) Pinned `httpx2`/`httpcore2==2.16.2` and
+  `truststore==0.10.5` beside `httpx`. **Behaviour change:** httpx2 verifies TLS against the OS
+  trust store (Debian `ca-certificates` in the image), not certifi, so DEC-102's `certifi` floor
+  no longer covers the OpenAI/DeepSeek/Azure calls; `SSL_CERT_FILE`/`SSL_CERT_DIR` override it.
+  After the merge, comment `@dependabot unignore openai` on the next Dependabot PR.
 
 - **`SQLAlchemy` 2.0 → 2.1 — deferred 2026-11-16 (#966 closed, `@dependabot ignore this minor
   version`).** 2.0.52 → 2.1.8 failed Integration Tests, Boot Smoke and Upgrade Path with

@@ -11,11 +11,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
-import respx
 
+from AINDY.platform_layer import deepseek_client
 from AINDY.platform_layer.deepseek_client import DeepSeekLLMClient
+from tests.fixtures.sdk_transport import sdk_transport  # noqa: F401 — fixture
 
 pytestmark = pytest.mark.runtime_only
 
@@ -26,11 +27,14 @@ def _cassette(name: str) -> dict:
     return json.loads((_CASSETTES / name).read_text(encoding="utf-8"))
 
 
-@respx.mock
-def test_deepseek_chat_hits_deepseek_host_contract():
-    route = respx.post("https://api.deepseek.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=_cassette("deepseek_chat_completion.json"))
+def test_deepseek_chat_hits_deepseek_host_contract(sdk_transport, monkeypatch):  # noqa: F811
+    # Only api.deepseek.com is routed: a request to api.openai.com (the bug this guards) is
+    # recorded as unexpected and fails the test at teardown.
+    sdk_transport.add(
+        "POST", "https://api.deepseek.com/v1/chat/completions",
+        httpx2.Response(200, json=_cassette("deepseek_chat_completion.json")),
     )
+    sdk_transport.install(monkeypatch, deepseek_client)
     client = DeepSeekLLMClient(api_key="sk-deepseek-contract")
 
     text = client.chat([{"role": "user", "content": "hi"}], model="deepseek-chat")
@@ -39,8 +43,8 @@ def test_deepseek_chat_hits_deepseek_host_contract():
     assert text == "Hello from DeepSeek contract!"
 
     # Wire shape — the endpoint host is the contract this guards.
-    assert route.called
-    request = route.calls.last.request
+    assert len(sdk_transport.calls) == 1
+    request = sdk_transport.calls[-1]
     assert request.url.host == "api.deepseek.com"
     assert request.headers["authorization"] == "Bearer sk-deepseek-contract"
     body = json.loads(request.content)
