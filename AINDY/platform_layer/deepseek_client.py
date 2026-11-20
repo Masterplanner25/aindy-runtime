@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
+import httpx2
 from openai import OpenAI
 from tenacity import (
     retry,
@@ -36,10 +36,13 @@ try:
 except Exception:  # pragma: no cover
     _METRICS_AVAILABLE = False
 
+# openai 3.x wraps these in APIConnectionError / APITimeoutError (matched by name in
+# _is_retryable); this is the fallback for one that escapes unwrapped. The SDK's transport is
+# httpx2, not httpx (DEC-138), so an httpx type here would never match.
 _RETRYABLE = (
-    httpx.TimeoutException,
-    httpx.ConnectError,
-    httpx.RemoteProtocolError,
+    httpx2.TimeoutException,
+    httpx2.ConnectError,
+    httpx2.RemoteProtocolError,
 )
 
 _deepseek_breaker = CircuitBreaker(

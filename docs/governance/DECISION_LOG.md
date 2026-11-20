@@ -2498,3 +2498,18 @@ Queued work runs under its own trace, so every `async_child` edge crosses traces
 
 **Related Docs**
 - `AINDY/platform_layer/event_trace_service.py`; DEC-120
+
+---
+
+### DEC-138
+**Status:** `accepted` (2026-11-19 — `DEP-UPGRADE-DEFERRED-1`'s openai half; the owner: "yes build it", after the check found 3.0's only breaking change is the transport)
+
+**Decision — The runtime moves to `openai==3.57.0`, whose transport is `httpx2`, and pins `httpx2`, `httpcore2` (2.16.2) and `truststore` (0.10.5) beside `httpx`, which stays for FastAPI's `TestClient` and the other callers: two HTTP stacks. The OpenAI/DeepSeek/Azure calls therefore verify TLS against the operating system's trust store (in the image, Debian's `ca-certificates`), not certifi; `SSL_CERT_FILE` / `SSL_CERT_DIR` still override it. The SDK's contract tests mock the boundary with `httpx2.MockTransport` on the client the adapter builds (`tests/fixtures/sdk_transport.py`), failing closed on an unrouted request, never with `respx`.**
+
+**Why**
+3.0.0's only breaking change is the transport; nothing in 3.1–3.57 touches our call sites, and 216 unit tests over the LLM and embedding paths passed on 3.57 unchanged. Staying on 2.x meant an ignored major that drifts further each week. `respx` (last release April 2026) patches only `httpx`, so on openai 3 a respx-mocked contract test silently reaches the real API; openai's migration guide names `MockTransport` as the replacement. The OS trust store is the normal source for a container and is refreshed by every image rebuild; it is what `httpx2` does by default, and overriding it back to certifi would be our own TLS configuration to maintain.
+
+**Declined:** staying on 2.x (no advisory forces it today, but the ignore only grows). openai's legacy-`httpx` escape hatch (runtime-only, may be discontinued, and keeps respx's silent fall-through alive). Forcing certifi into the SDK's client (`verify=certifi.where()` at every construction site, a second trust policy beside the one `httpx2` documents). DEC-102 stands for what still uses certifi; it no longer governs these three providers.
+
+**Related Docs**
+- `TECH_DEBT.md` `DEP-UPGRADE-DEFERRED-1`; DEC-102
