@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-11-19"
+last_verified: "2026-11-20"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1742,6 +1742,41 @@ inside it:**
   Request-side transaction discipline, nothing the sandbox sees.
 
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
+
+---
+
+## Entry 065 — 2026-11-20
+
+**Trigger:** `v2.40.0` release tag (`sandbox-escape-linux.yml`, run `44680290998`).
+**Commit:** `ba73bd5` (release PR #992's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:7fbad8e4652eae0186429a6f26cf5b23e27e8c6fd7ac4d0cfd7a6988cdeea1e1`, **the same as Entries 061 to 064**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 3 warnings in 8.06s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `44680290998`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.39.0..v2.40.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py` and `tests/sandbox/` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside:**
+- #991 (DEC-138) moves `openai` 2.54.0 → 3.57.0, whose transport is `httpx2` (new pins `httpx2`, `httpcore2`,
+  `truststore`). TLS for the OpenAI, DeepSeek and Azure calls now trusts the OS store instead of `certifi`. This is how
+  the runtime reaches model providers, not isolation of guest code; the sandbox suite makes no provider call.
+- #990 (DEC-137) changes which edges a user-scoped trace graph returns. It reads the caller's own events only.
+
+**Schema:** no migration (Alembic `0022`, contract `2026-11-09`), so the `Upgrade Path Guard` passed trivially and its
+negative control carried the meaning. It passed on `ba73bd5` before the tag, along with Runtime CI, Boot Smoke
+(PostgreSQL) and the auth CVE audit, each on attempt 1.
+
+**Publish (run `44680291022`):**
+- The owner approved the `production` environment gate.
+- The wheel read back from PyPI (sha256 `8a41b22d0f3ab282…`) carries `Version: 2.40.0`, `Requires-Dist: openai==3.57.0`,
+  `httpx2==2.16.2`, `httpcore2==2.16.2`, `truststore==0.10.5`, the DEC-137 change in `event_trace_service.py`, and the
+  prebuilt SPA (`platform/dist`).
+- Boot Smoke on the published wheel installed on **attempt 2** (PyPI's simple index lagged the JSON API; the retry
+  exists for this).
+- The GitHub release is non-draft (05:25Z on 2026-11-20).
+- `publish.yml` is unchanged from `v2.39.0`.
 
 ---
 
