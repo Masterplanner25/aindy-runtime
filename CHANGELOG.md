@@ -4,6 +4,34 @@
 
 _Nothing yet._
 
+## 2.41.0 — 2026-11-23
+
+**Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.41.0.md`.
+No schema step (Alembic `0022`, contract `2026-11-09`, both unchanged). No ui-kit or aindy-sdk release.
+
+- **nodus-lang 5.16.0 → 5.17.0.** A guest's time limit (`AINDY_NODUS_MAX_EXECUTION_MS`) and memory ceiling now hold
+  inside stdlib and imported module calls. A script that spends long there can now stop with `Execution timed out`
+  where it used to finish; raise the limit if a script you trust does.
+- **Guest `import` works in the runtime's Docker image** (it failed with `Errno 13` for the non-root user), and
+  `import "memory"` reaches the runtime's memory module in any install (DEC-139). Nothing to do on upgrade.
+
+### Changed — nodus-lang 5.17.0: a guest's time and memory bounds now hold inside stdlib and imported modules (#994)
+
+- **Through nodus-lang 5.16.0, a guest script could step past its bounds by doing its work inside a module call.** Each call into an imported or stdlib module (`import "std:strings"`, ...) ran on a child VM that kept the guest's authority but not its bounds: no deadline, no step limit, no memory ceiling. The runtime's inner script clock (`AINDY_NODUS_MAX_EXECUTION_MS`, default 30 s) and the guest memory ceiling (`AINDY_NODUS_MAX_MEMORY_MB` / `resources.memory_bytes`, SYSMAX-3) did not reach that work. The worker's outer subprocess timeout still applied; the memory ceiling had no second line in the runtime (only an OS-level limit, if the deployment sets one). nodus 5.17.0 hands every child VM the caller's remaining bounds and charges its steps back; the time bound is tested here, the memory bound rests on nodus's own notes. Pinned by `tests/unit/test_nodus_guest_bounds_in_stdlib.py`, which drives `nodus_worker.run_one`: a 100 ms budget now stops a `std:strings.repeat` call, and on 5.16.0 the same run reports `success`.
+- **Operators: a guest that spends long in stdlib or imported functions can now stop with `Execution timed out`** where it used to finish. Its work was always this large; it was not measured. Raise `AINDY_NODUS_MAX_EXECUTION_MS`, or the run's declared budget, if a script you trust now stops.
+- **Guest scripts can behave differently in three narrow cases** (all were nodus bugs that silently gave `nil` or wrong values): `let` is now lexical (`fn f(x) { let x = x + 1i }` reads the parameter; a local closure bound by `let` can recurse; two local closures that call each other now fail with `Undefined function`); a parameter keeps its argument when a later block reuses its name; and a `return` from inside a `for ... in` loop or a `match` no longer leaves values on the caller's stack. The bytecode optimizer runs again after being dead since nodus v1.0 (cached bytecode is `BYTECODE_VERSION` 5 and recompiles once).
+- **Embedders:** `register_function` now refuses `substring`, `str_substring`, `str_span` and `str_span_until` (new builtins). The runtime registers none of them.
+- Not affected: nodus durable coroutines refuse a continuation saved by an earlier version, but the runtime never uses them (its crash continuation and FR-55 waits re-run the script from the top).
+- Bumped at all sites: `pyproject.toml`, `AINDY/requirements.txt`, and both CI install steps. `nodus-mcp` is unchanged (`>=0.1.6`, current).
+
+### Fixed — guest module imports work in the Docker image, and `import "memory"` reaches the runtime (NODUS-STDLIB-ROOT-1) (#995)
+
+- **In the runtime's Docker image every guest `import` failed** with `[Errno 13] Permission denied: …/AINDY/nodus/stdlib/.nodus/cache`: `import "std:strings"`, `std:json`, `memory`, any of them. nodus writes its bytecode cache under the guest's `project_root` on every module import, and that root was the installed stdlib directory in site-packages, read-only for the image's non-root `aindy` user. Each worker process now gets its own temp directory as the root (DEC-139). A deployment running as root was writing into site-packages instead, and a checkout into the repo; both stop.
+- **An installed guest's `import "memory"` never reached the runtime's memory module.** `memory.nd` was never packaged (only `*.json` was), so the import fell through to nodus's own `std:memory`, a local key/value store with different signatures: `memory.recall_from(...)` as documented failed with `recall_from expected 2 args, got 4`. It ships now, and the import resolves to it.
+- **Removed:** the wheel and sdist no longer carry `AINDY/nodus/stdlib/.nodus/deps.json`, nodus's per-machine cache file (it held a developer's absolute path). It is regenerated per process.
+- **What a green check means:** Install Smoke now makes the installed stdlib read-only and runs guest `std:` imports and the `memory` resolution against the built wheel. Before, no CI job ran a guest that imports, and the job's venv was writable.
+
+
 ## 2.40.0 — 2026-11-20
 
 **Operator notes — read before upgrading.** Handoff: `docs/upgrades/APP_HANDOFF_v2.40.0.md`.
