@@ -56,7 +56,7 @@ dependencies = [
   "alembic==1.20.1",
   "Mako==1.4.3",
   "MarkupSafe==3.0.4",
-  "nodus-lang==5.16.0",
+  "nodus-lang==5.17.0",
   "numpy==2.4.6",
   "limits==5.8.0",
   "openai==3.57.0",
