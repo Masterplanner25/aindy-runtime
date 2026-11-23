@@ -9,6 +9,12 @@ recursive-include docs/governance *.md
 # the repo — the audience that needed them least.
 recursive-include AINDY llms*.txt
 
+# NODUS-STDLIB-ROOT-1: the runtime's own Nodus modules (`import "memory"`). They never shipped
+# (only *.json did), so an installed guest's `import "memory"` fell through to nodus's
+# unrelated `std:memory`. Their `.nodus/` is nodus's per-machine cache, never shipped.
+recursive-include AINDY/nodus/stdlib *.nd
+prune AINDY/nodus/stdlib/.nodus
+
 # Rust source travels in the sdist so the optional native scorer can be built from it.
 # The compiled artifact is deliberately NOT shipped: the backend produces a pure-Python
 # `py3-none-any` wheel, and a `.pyd`/`.so` inside one would install a broken binary for

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import atexit
 import contextlib
 import io
 import json
 import logging
 import os
 import re
+import shutil
 import sys
 import tempfile
+import threading
 import uuid
 from typing import Any, Optional
 
@@ -23,6 +26,46 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 _STDLIB_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "nodus", "stdlib"))
+
+# NODUS-STDLIB-ROOT-1 — the guest's nodus `project_root`, one per worker process.
+_guest_root_lock = threading.Lock()
+_guest_root: Optional[tuple[int, str]] = None  # (creating pid, path)
+
+
+def _remove_guest_root(pid: int, path: str) -> None:
+    # A forked child inherits this handler; only the process that made the directory removes it.
+    if os.getpid() == pid:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _guest_project_root() -> str:
+    """A writable directory holding the runtime's ``.nd`` modules, for ``NodusRuntime(project_root=)``.
+
+    ★ ``project_root`` is where nodus resolves a bare ``import "memory"`` (``<root>/memory.nd``)
+    AND where it WRITES its bytecode cache and ``deps.json`` on every module import, with no error
+    handling. It used to be ``AINDY/nodus/stdlib`` itself, which in an installed runtime is
+    site-packages: read-only for the Docker image's ``aindy`` user, so every guest ``import``
+    (``std:strings``, ``std:json``, ``memory``) failed with ``[Errno 13] Permission denied:
+    …/.nodus/cache``. Running as root it succeeded by writing into site-packages; in a checkout it
+    wrote into the repo.
+
+    So each worker process copies the ``.nd`` files once into its own temp directory and points
+    nodus there. A guest cannot write it (its ``allowed_paths`` is its scratch root). One per
+    process because nodus writes ``deps.json`` non-atomically: two workers sharing it would race.
+    Nodus resolves only modules and the cache against this root; run state follows the cwd.
+    """
+    global _guest_root
+    with _guest_root_lock:
+        if _guest_root is not None and _guest_root[0] == os.getpid() and os.path.isdir(_guest_root[1]):
+            return _guest_root[1]
+        root = tempfile.mkdtemp(prefix="aindy-nodus-root-")
+        if os.path.isdir(_STDLIB_DIR):
+            for name in os.listdir(_STDLIB_DIR):
+                if name.endswith(".nd"):
+                    shutil.copy2(os.path.join(_STDLIB_DIR, name), os.path.join(root, name))
+        atexit.register(_remove_guest_root, os.getpid(), root)
+        _guest_root = (os.getpid(), root)
+        return root
 
 
 class _AwaitHalt(Exception):
@@ -800,7 +843,7 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
                 "stdout_log": "",
             }
     runtime = NodusRuntime(
-        project_root=_STDLIB_DIR if os.path.isdir(_STDLIB_DIR) else None,
+        project_root=_guest_project_root(),
         **env_kwargs,
     )
     def _call_tool(tool_name: Any, args: Any, step_index: Any = None) -> Any:

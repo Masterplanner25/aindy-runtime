@@ -47,11 +47,14 @@ def test_runtime_package_metadata_declares_console_entrypoints():
         # moving them under `AINDY/` was part of the same change.
         "llms.txt",
         "llms-full.txt",
+        # NODUS-STDLIB-ROOT-1: the runtime's own Nodus modules (`import "memory"`) never shipped.
+        "nodus/stdlib/*.nd",
     ]
     # Cargo build output must never be package data. `**/*.json` above would otherwise be
     # free to pick up fingerprint files if a stale `build/lib` carries them across builds.
     assert pyproject["tool"]["setuptools"]["exclude-package-data"]["AINDY"] == [
         "memory/native/memory_bridge_rs/target/**",
+        "nodus/stdlib/.nodus/**",
     ]
     assert pyproject["project"]["optional-dependencies"]["release"] == [
         "build==1.6.1",
@@ -110,7 +113,9 @@ def test_runtime_build_artifacts_include_runtime_owned_assets(tmp_path):
     assert "AINDY/runtime_plugins.json" in wheel_names
     assert "AINDY/version.json" in wheel_names
     assert "AINDY/system_manifest.json" in wheel_names
-    assert "AINDY/nodus/stdlib/.nodus/deps.json" in wheel_names
+    # NODUS-STDLIB-ROOT-1: the runtime's .nd modules ship; nodus's per-machine cache never does.
+    assert "AINDY/nodus/stdlib/memory.nd" in wheel_names
+    assert not [n for n in wheel_names if "/.nodus/" in n], sorted(n for n in wheel_names if "/.nodus/" in n)
     assert "aindy-runtime = AINDY.runtime_only:main" in entry_points
     # setuptools >=78 (Metadata-Version 2.4) drops the legacy ``Home-page:`` field
     # in favour of ``Project-URL: Homepage, …``. Accept either so the assertion
@@ -127,7 +132,8 @@ def test_runtime_build_artifacts_include_runtime_owned_assets(tmp_path):
     sdist_root = f"aindy_runtime-{runtime_package_version}"
     assert f"{sdist_root}/docs/operations/DEPLOYMENT_PROFILES.md" in sdist_names
     assert f"{sdist_root}/AINDY/runtime_plugins.json" in sdist_names
-    assert f"{sdist_root}/AINDY/nodus/stdlib/.nodus/deps.json" in sdist_names
+    assert f"{sdist_root}/AINDY/nodus/stdlib/memory.nd" in sdist_names
+    assert not [n for n in sdist_names if "/.nodus/" in n], sorted(n for n in sdist_names if "/.nodus/" in n)
 
 
 def test_installed_cli_help():

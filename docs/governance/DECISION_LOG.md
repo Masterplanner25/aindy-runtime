@@ -2513,3 +2513,18 @@ Queued work runs under its own trace, so every `async_child` edge crosses traces
 
 **Related Docs**
 - `TECH_DEBT.md` `DEP-UPGRADE-DEFERRED-1`; DEC-102
+
+---
+
+### DEC-139
+**Status:** `accepted` (2026-11-22 — `NODUS-STDLIB-ROOT-1`; the owner: "yes, build the fix", after the investigation reproduced every guest import failing in the 2.40.0 image)
+
+**Decision — A Nodus guest's `project_root` is a directory each worker process creates once in the system temp dir and fills with a copy of the runtime's own `.nd` modules (`nodus_worker._guest_project_root`), removed at exit by the process that made it; never the installed `AINDY/nodus/stdlib`. Those `.nd` modules ship in the wheel and sdist; nodus's `.nodus/` cache under them is neither shipped nor tracked.**
+
+**Why**
+nodus writes its bytecode cache and `deps.json` under `project_root/.nodus/` on every module import, with no error handling and no switch to turn it off. With `project_root` in site-packages, the image's non-root `aindy` user got `[Errno 13] Permission denied` on every guest `import`; root wrote into site-packages; a checkout wrote into the repo. `project_root` also resolves a bare `import "memory"`, so it must hold `memory.nd`, which had never shipped (package-data was `*.json` only), leaving installed guests on nodus's unrelated `std:memory`. One root per process because nodus saves `deps.json` non-atomically, so two workers sharing a root would race. A guest cannot write the root: its `allowed_paths` is its own scratch directory. nodus resolves only modules and this cache against `project_root`; run state follows the working directory, so nothing durable moves.
+
+**Declined:** keeping `AINDY/nodus/stdlib` and falling back to a temp root only when it is unwritable (dev keeps writing into the repo, root installs into site-packages, and the `deps.json` race stays). One shared, fixed cache directory (the race again, and a second location to configure). `project_root=None` (nodus then falls back to `NODUS_PROJECT_ROOT`, a `nodus.toml` found above the base directory, or the base directory itself, so the cache lands wherever that resolves). Asking nodus for a cache switch first (the image is broken today; the fix does not need one).
+
+**Related Docs**
+- `TECH_DEBT.md` `NODUS-STDLIB-ROOT-1`; `AINDY/runtime/nodus_worker.py`; Install Smoke step "Guest module imports with a read-only installed package"

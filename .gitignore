@@ -26,6 +26,8 @@ Session Handoff Summary.md
 
 # Nodus stdlib compiled bytecode cache (regenerated on demand)
 .nodus/cache/
+# NODUS-STDLIB-ROOT-1: nodus's per-machine cache + deps.json for the runtime's .nd modules
+AINDY/nodus/stdlib/.nodus/
 
 # Nodus workflow runtime state (graphs/checkpoints) written when workflows run
 /.nodus/

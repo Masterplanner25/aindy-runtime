@@ -133,3 +133,26 @@ def test_contributors_file_exists_and_is_declared_for_both_artifacts():
     assert '"CONTRIBUTORS.md"' in _PYPROJECT, (
         "CONTRIBUTORS.md is not in license-files, so the wheel would not carry it"
     )
+
+
+# --------------------------------------------------------------------------------------
+# NODUS-STDLIB-ROOT-1 — the runtime's own Nodus modules ship; nodus's cache never does
+# --------------------------------------------------------------------------------------
+
+
+def test_runtime_nodus_modules_are_declared_for_both_artifacts():
+    """Only `*.json` used to ship, so `AINDY/nodus/stdlib/memory.nd` reached no install, and an
+    installed guest's `import "memory"` fell through to nodus's unrelated `std:memory` (a local
+    key/value store whose `recall_from` takes 2 args, not 4). Derived from the tree: every `.nd`
+    the runtime owns must be covered, and there must be at least one."""
+    modules = sorted((_ROOT / "AINDY" / "nodus" / "stdlib").glob("*.nd"))
+    assert modules, "no runtime .nd modules found; the glob below would cover nothing"
+    assert '"nodus/stdlib/*.nd"' in _PYPROJECT, "wheel would not carry the runtime's .nd modules"
+    assert "recursive-include AINDY/nodus/stdlib *.nd" in _MANIFEST, "sdist would not carry them"
+
+
+def test_nodus_cache_directory_is_excluded_from_both_artifacts():
+    """`.nodus/` under the stdlib is nodus's per-machine bytecode cache and `deps.json`, written
+    on every module import. One shipped for months holding a developer's absolute path."""
+    assert '"nodus/stdlib/.nodus/**"' in _PYPROJECT, "wheel exclude-package-data is missing"
+    assert "prune AINDY/nodus/stdlib/.nodus" in _MANIFEST, "sdist prune is missing"
