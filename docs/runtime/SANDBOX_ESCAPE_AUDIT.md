@@ -1,7 +1,7 @@
 ---
 title: "Sandbox Escape Audit Log"
 api_version: "1.0"
-last_verified: "2026-11-20"
+last_verified: "2026-11-23"
 schema_version: "2026-06-04"
 status: current
 owner: "platform-team"
@@ -1742,6 +1742,47 @@ inside it:**
   Request-side transaction discipline, nothing the sandbox sees.
 
 **Schema:** none. No dependency pin moved. Boot Smoke installed the published wheel on attempt 1.
+
+---
+
+## Entry 066 — 2026-11-23
+
+**Trigger:** `v2.41.0` release tag (`sandbox-escape-linux.yml`, run `45097377221`).
+**Commit:** `3fad2e6` (release PR #996's merge commit).
+**Platform:** GitHub `ubuntu-latest`, native Linux containers backend.
+**Image:** `python:3.11-alpine` (`SANDBOX_ESCAPE_IMAGE`), digest
+`sha256:7fbad8e4652eae0186429a6f26cf5b23e27e8c6fd7ac4d0cfd7a6988cdeea1e1`, **the same as Entries 061 to 065**.
+**Summary:** 17 / 17 PASS — 0 FAIL — 0 SKIP (`17 passed, 3 warnings in 7.14s`)
+**Artifact:** `linux-sandbox-escape-results` (`sandbox_escape_results.json`, run `45097377221`).
+
+**Nothing inside the certified boundary moved.** `git diff v2.40.0..v2.41.0` over
+`sandbox_runner.py`, `sandbox_certification.py`, `plugin_host.py`, `tests/sandbox/` and `publish.yml` is empty.
+
+**Near the boundary, recorded so nobody reads it as inside.** Both changes are to the Nodus guest VM, which runs in the
+worker process, not in the certified container sandbox:
+- #994 moves `nodus-lang` 5.16.0 → 5.17.0. Through 5.16.0 a call into a stdlib or imported module ran on a child VM
+  without the guest's bounds, so the inner script clock (`AINDY_NODUS_MAX_EXECUTION_MS`) and the guest memory ceiling
+  did not reach work done there; the worker's outer subprocess timeout still applied. 5.17.0 carries the bounds into
+  every child VM. Pinned by `tests/unit/test_nodus_guest_bounds_in_stdlib.py`, mutation-checked against 5.16.0.
+- #995 (DEC-139, NODUS-STDLIB-ROOT-1) moves the guest's nodus `project_root` out of the installed package into a
+  per-process temp directory, because nodus writes its bytecode cache there on every import (in the image every guest
+  `import` failed with `Errno 13` for the non-root user). The guest's filesystem bound is unchanged: its
+  `allowed_paths` is its own scratch directory, which does not include the new root. `memory.nd` now ships.
+
+**Schema:** no migration (Alembic `0022`, contract `2026-11-09`), so the `Upgrade Path Guard` passed trivially and its
+negative control carried the meaning. It passed on `3fad2e6` before the tag, along with Runtime CI, Boot Smoke
+(PostgreSQL) and the auth CVE audit, each on attempt 1.
+
+**Publish (run `45097377231`):**
+- The owner approved the `production` environment gate.
+- The wheel read back from PyPI (sha256 `1ab444bcd023390f…`) carries `Version: 2.41.0`, `Requires-Dist:
+  nodus-lang==5.17.0`, `openai==3.57.0`, `httpx2==2.16.2`, `AINDY/nodus/stdlib/memory.nd`, no `.nodus/` entry, the
+  per-process root in `nodus_worker.py`, and Alembic head `0022`.
+- Boot Smoke on the published wheel installed on **attempt 1**.
+- The GitHub release is non-draft (02:03Z on 2026-11-23).
+- The image built from the release Dockerfile (`aindy-runtime==2.41.0` from PyPI), run as `aindy`, imported
+  `std:strings` and `std:json` with the installed stdlib read-only, and resolved `import "memory"` to the runtime's
+  module; on 2.40.0 the same check failed.
 
 ---
 
