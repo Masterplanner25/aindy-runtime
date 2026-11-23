@@ -31,7 +31,7 @@ openai==3.57.0
 pendulum==3.3.0
 psycopg2==2.9.13
 pgvector==0.5.1
-pydantic==2.14.3
+pydantic==2.14.4
 pydantic-settings==2.15.0
 pymongo==4.19.0
 pyphen==0.18.1
