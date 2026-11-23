@@ -17484,3 +17484,34 @@ without the gate" or refuses under `AT_MOST_ONCE`. The action id is unchanged.
 
 **Remaining.** Four integration tests used a random user per call on a shared unit and had to be corrected. Any future test
 or caller that does the same will see refusals, which is the point.
+
+## NODUS-STDLIB-ROOT-1 — every guest `import` failed in the Docker image, and `import "memory"` never reached the runtime
+
+**Status: CLOSED (2026-11-22)** — #995, DEC-139. Present in every release up to and including 2.40.0.
+
+**What was wrong.** Two defects, found while bumping nodus-lang to 5.17.0 (#994):
+- **The image's `aindy` user could not import any module.** The worker passed the installed `AINDY/nodus/stdlib` as
+  nodus's `project_root`. nodus writes its bytecode cache and `deps.json` under `project_root/.nodus/` on every module
+  import, unguarded. In site-packages that is read-only for a non-root user, so `import "std:strings"`, `std:json` and
+  `memory` all failed with `[Errno 13] Permission denied: …/AINDY/nodus/stdlib/.nodus/cache` (reproduced in the 2.40.0
+  image). A guest with no import ran. As root it wrote into site-packages; in a checkout it wrote into the repo.
+- **`memory.nd` never shipped.** package-data was `*.json` only, so the wheel carried
+  `AINDY/nodus/stdlib/.nodus/deps.json` (a cache file holding a developer's absolute path, asserted present by
+  `test_runtime_packaging.py`) and not the module. An installed guest's `import "memory"` fell through to nodus's own
+  `std:memory`, a local key/value store: the `NODUS_DEVELOPER_GUIDE.md` calls failed loudly (`recall_from expected 2
+  args, got 4`), never silently.
+- **The earlier record was wrong.** `NODUS_HANDOFF_v5.0.1.md` and the 5.0.1 changelog entry say `deps.json` is "read at
+  import … never written". The host rewrites it on every stdlib import.
+
+**Why nothing caught it.** Install Smoke and Boot Smoke never ran a guest that imports, and Install Smoke owns a
+writable venv. The app runs its container as root and its guests import nothing, so it never saw either.
+
+**What shipped.** `nodus_worker._guest_project_root()`: one temp directory per worker process holding a copy of the
+runtime's `.nd` modules, removed at exit by its creator (fork-safe). `nodus/stdlib/*.nd` ships in wheel and sdist;
+`.nodus/` is excluded from both and untracked. Tests: `test_nodus_guest_project_root.py` (mutation-checked: the old
+root fails it), `test_packaging_contents.py`, the built-artifact assertions, and a new Install Smoke step that makes
+the installed stdlib read-only and runs `std:` imports plus the `memory` resolution against the real wheel.
+
+**Remaining.** A local `build/lib` from before this change still holds `deps.json`, and `bdist_wheel` ships whatever is
+there; `exclude-package-data` does not reach it. CI and releases build clean. nodus has no switch to turn the cache
+off; if one appears, the per-process root still stands (it also resolves `import "memory"`).

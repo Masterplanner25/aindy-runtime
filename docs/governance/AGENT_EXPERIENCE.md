@@ -1,7 +1,7 @@
 ---
 title: "Working Agent Experience — problems agents hit here, keyed by what they saw"
 api_version: "1.0"
-last_verified: "2026-11-11"
+last_verified: "2026-11-22"
 status: current
 owner: "platform-team"
 ---
@@ -62,6 +62,7 @@ links to it. `CLAUDE.md` is held under 40 KB; this file is how it stays there.
 | EXP-017 | A green check on a PR that is not the commit you are about to merge | CI | Verified |
 | EXP-018 | `git commit -m` from PowerShell 5.1 mangles quotes or splits the message | Tooling · Windows host | Verified |
 | EXP-019 | SPA: agent run `status` is `PENDING_APPROVAL` in one response, `pending_approval` in another | Platform UI | Verified |
+| EXP-020 | A guest `import` fails with `[Errno 13] Permission denied: …/AINDY/nodus/stdlib/.nodus/cache` | Runtime · Nodus | Guarded |
 
 ---
 
@@ -251,3 +252,12 @@ links to it. `CLAUDE.md` is held under 40 KB; this file is how it stays there.
 - **Cause:** two serializers. `POST /apps/agent/run` returns `to_execution_response` (uppercase status, no top-level
   `run_id`, result under `result.plan`); `GET /apps/agent/runs` returns `run_to_dict` (lowercase, flat).
 - **Resolution:** after create, approve or reject, reload from the list endpoint and use that object for UI state.
+
+## EXP-020 — a guest `import` fails with `[Errno 13] Permission denied: …/AINDY/nodus/stdlib/.nodus/cache`
+
+**Status:** Guarded · **Category:** Runtime · Nodus
+
+- **Cause:** nodus writes its bytecode cache under the guest's `project_root` on every module import. Before #995 that
+  root was the installed stdlib directory, read-only for a non-root container user (NODUS-STDLIB-ROOT-1).
+- **Resolution:** upgrade past 2.40.0; the root is now a per-process temp directory (DEC-139). If you see it again, find
+  what passes `project_root` to `NodusRuntime`. A guest with no import working while an importing one fails is the tell.

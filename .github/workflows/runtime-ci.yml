@@ -692,6 +692,56 @@ jobs:
           print(f"Platform UI dist OK: {dist_html.parent}")
           PY
 
+      - name: Guest module imports with a read-only installed package (NODUS-STDLIB-ROOT-1)
+        # nodus writes its bytecode cache under the guest's project_root on every module import.
+        # That root was the installed AINDY/nodus/stdlib, read-only for the Docker image's
+        # non-root user, so every guest `import` failed with Errno 13 while this job (owning a
+        # writable venv) stayed green. The dir is made read-only here first. Runs outside the
+        # checkout so `AINDY` is the installed wheel.
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$GITHUB_WORKSPACE/smoke_venv/bin/python" - <<'PY'
+          import os, stat, uuid
+          from AINDY.runtime import nodus_worker as w
+          from nodus.runtime.module_loader import resolve_import_path
+
+          stdlib = w._STDLIB_DIR
+          assert "site-packages" in stdlib, f"not the installed package: {stdlib}"
+          assert os.path.isfile(os.path.join(stdlib, "memory.nd")), "memory.nd did not ship"
+          # Read-only, as for the Docker image's non-root user (who cannot chmod it: it already is).
+          try:
+              for d, _, files in os.walk(stdlib):
+                  for f in files:
+                      os.chmod(os.path.join(d, f), stat.S_IREAD)
+                  os.chmod(d, stat.S_IREAD | stat.S_IEXEC)
+          except PermissionError:
+              pass
+          probe = os.path.join(stdlib, ".probe")
+          try:
+              open(probe, "w").close()
+              os.remove(probe)
+              raise SystemExit("stdlib dir is still writable; this check would prove nothing (running as root?)")
+          except PermissionError:
+              pass
+
+          def run(script):
+              return w.run_one({"script": script, "filename": "smoke.nd", "state": {}, "memory_context": {},
+                                "input_payload": {}, "max_execution_ms": 20000,
+                                "context": {"user_id": str(uuid.uuid4()), "execution_unit_id": str(uuid.uuid4()), "trace_id": "smoke"}})
+
+          for script, key, want in [
+              ('import "std:strings" as s\nset_state("v", s.upper("ab"))', "v", "AB"),
+              ('import "std:json" as j\nset_state("v", j.stringify({"a": 1i}))', "v", '{"a": 1}'),
+          ]:
+              r = run(script)
+              assert r["status"] == "success" and r["output_state"].get(key) == want, r
+          root = w._guest_project_root()
+          resolved = resolve_import_path("memory", root, {"project_root": root}, None, "<smoke>")
+          assert "__memory_stdlib_share" in open(resolved, encoding="utf-8").read(), f"import \"memory\" resolved to {resolved}"
+          assert not os.path.exists(os.path.join(stdlib, ".nodus")), "nodus wrote into the installed package"
+          print("Guest module imports OK with a read-only package; memory ->", resolved)
+          PY
+
       - name: aindy-runtime sandbox exit code check
         run: |
           smoke_venv/bin/aindy-runtime sandbox; code=$?
