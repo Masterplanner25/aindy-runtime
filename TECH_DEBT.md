@@ -9446,10 +9446,17 @@ Execution units of the stranded rows are walked to `completed` by the same comma
 
 ## FR-55 — a guest Nodus wait can only end on an event or in failure 🟢 P3 (app-filed 2026-10-22, runtime 2.28.1)
 
-**Status: BUILT 2026-11-18, all three asks — (b) `prior_state(key)` (#986, DEC-135: DEC-012 narrowed, not reversed);
+**Status: CLOSED (2026-11-23) — the app reported a ported loop.** apps-monolith #635 (`b2f834f`, on 2.41.0 via #633)
+runs its Resolution Check as `resolution_check_v1.nd`: six pairs per wake, `await_event_for` sleeping 30 s between
+wakes, each wake reading its progress through `prior_state`; behind the app's `AINDY_RESOLUTION_NODUS` (off in code, on
+in its compose), with the APScheduler tick as fallback. Proven on the app's live stack first: wakes 2–11 s after their
+deadlines, `success`, `prior_state` carried. App-side finding: it registers the loop as a plain script, not a
+`workflow {}` step, because a step's retry would catch the exception the wait raises to park. **Remaining:** none here.
+
+**Built 2026-11-18, all three asks — (b) `prior_state(key)` (#986, DEC-135: DEC-012 narrowed, not reversed);
 (a) `await_event_for(type, schema, seconds)` resumes at its own deadline with `{"timed_out": true, …}` (#987, DEC-136; a
 15 s leader job, the three fail-scans skip such runs, and the stuck-run scan now respects a run's own deadline); (c)
-answered by the per-wait deadline. Released in 2.39.0. Closes when the app reports a ported loop.** Filed here 2026-11-18 (#983); until then it was
+answered by the per-wait deadline. Released in 2.39.0.** Filed here 2026-11-18 (#983); until then it was
 only mentioned under FR-56, never triaged.
 No defect: nothing that runs today needs it. It blocks the app porting tick-driven jobs (its
 Resolution Check: ask 6 of ~54 questions a minute, from a 1-minute APScheduler tick) to `.nd`, where
