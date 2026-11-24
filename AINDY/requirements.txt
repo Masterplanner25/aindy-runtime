@@ -31,7 +31,7 @@ openai==3.57.0
 pendulum==3.3.0
 psycopg2==2.9.13
 pgvector==0.5.1
-pydantic==2.14.3
+pydantic==2.14.4
 pydantic-settings==2.15.0
 pymongo==4.19.0
 pyphen==0.18.1
@@ -46,13 +46,13 @@ SQLAlchemy==2.1.8
 starlette==1.7.0
 tqdm==4.70.1
 truststore==0.10.5
-typing-inspection==0.4.4
+typing-inspection==0.4.5
 typing_extensions==4.16.0
-tzdata==2026.5
+tzdata==2026.6
 urllib3==2.8.0
 uvicorn==0.54.0
 pytest==9.2.0
-pytest-mock==3.15.1
+pytest-mock==3.17.0
 pytest-asyncio==1.4.1.post1
 respx==0.23.1
 PyJWT[crypto]==2.15.1
@@ -63,7 +63,7 @@ slowapi==0.1.10
 pytest-cov==7.1.0
 ruff==0.17.2
 apscheduler==3.11.3
-tenacity==9.1.4
+tenacity==9.2.1
 tzlocal==5.4.5
 python-json-logger==4.2.0
 prometheus-fastapi-instrumentator==8.1.0

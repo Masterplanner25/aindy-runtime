@@ -12,8 +12,8 @@
     "@aindy/ui-kit": "^2.1.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "react-router-dom": "^7.18.5",
-    "recharts": "^3.10.0"
+    "react-router-dom": "^7.18.6",
+    "recharts": "^3.11.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.5",
